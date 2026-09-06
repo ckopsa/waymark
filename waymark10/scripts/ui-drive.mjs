@@ -1615,10 +1615,11 @@ async function dayStory({H, post, tag}) {
   await evaljs(`localStorage.setItem("wm10.principal", "colton");
                 location.hash = ""; location.reload(); true`);
   await sleep(1500);
-  await waitFor(`!!document.querySelector(".feed-head")`, "home, which is the feed");
+  await waitFor(`!!document.querySelector(".feed-head, .day-head")`,
+                "home, which is the day (or the feed, on a house without one)");
   ok("home is the feed document when its door answers",
      await evaljs(`!document.querySelector(".dash-grid") &&
-                   !!document.querySelector(".feed-head")`));
+                   !!document.querySelector(".feed-head, .day-head")`));
   await evaljs(`document.querySelector(".nav-more").click(); true`);
   await waitFor(`!!document.querySelector('.nav-menu a[data-nav="dashboard"]')`,
                 "the Dashboard item in ⋯");
@@ -1626,8 +1627,11 @@ async function dayStory({H, post, tag}) {
   await waitFor(`location.hash === "#dashboard" &&
                  !!document.querySelector(".dash-grid")`, "the dashboard at #dashboard");
   ok("the dashboard is one tap away behind ⋯, and keeps an address", true);
+  await evaljs(`location.hash = "feed"; true`);
+  await waitFor(`!!document.querySelector(".feed-head")`, "the feed at #feed");
+  ok("the census keeps an address of its own (waymark-i89n.14)", true);
   await evaljs(`location.hash = ""; true`);
-  await waitFor(`!!document.querySelector(".feed-head")`, "home again");
+  await waitFor(`!!document.querySelector(".feed-head, .day-head")`, "home again");
 
   const doc = await (await fetch(BASE + "/api/-/feed", {headers: H("colton")})).json();
   const dp = doc && doc.day;
@@ -1718,10 +1722,13 @@ async function dayStory({H, post, tag}) {
   ok("the document now reads execute", d2.mode === "execute");
   await waitFor(`!!document.querySelector('.day-head[data-day-mode="execute"]')`,
                 "the execute header");
-  ok("the timeline lists every block, and marks the current one when there is one",
-     await evaljs(`document.querySelectorAll(".day-tl-block").length`) === (d2.blocks || []).length
+  ok("the list has a row for every block, and marks the current one when there is one",
+     await evaljs(`document.querySelectorAll(".day-row").length`) === (d2.blocks || []).length
      && (!d2.current_block_id ||
-         await evaljs(`!!document.querySelector(".day-tl-block.current")`)));
+         await evaljs(`!!document.querySelector(".day-row.current")`)));
+  ok("home is the day alone: no census under it, one link to the feed",
+     await evaljs(`!document.querySelector(".feed-head")
+                   && !!document.querySelector('.day-feed-link a[href="#feed"]')`));
   const blocks = d2.blocks || [];
   const blk = blocks.find(b => b.id === d2.current_block_id) || blocks[0];
   if (!blk) {
@@ -1748,16 +1755,21 @@ async function dayStory({H, post, tag}) {
       if (k) window.__keys.push([String(u), k]); return f(u, o); };
     render(); true`);
   await waitFor(`!!document.querySelector('.day-head[data-day-mode="execute"]') &&
-                 document.querySelectorAll(".day-tl-block").length > 0`,
+                 document.querySelectorAll(".day-row").length > 0`,
                 "the fresh read");
-  if (!inHeader) {
-    await evaljs(`document.querySelector(
-       '.day-tl-block[data-block=${JSON.stringify(blk.id)}]').click(); true`);
-    await waitFor(`!!document.querySelector(".day-tl-detail")`, "the block, opened inline");
-  }
   const rowSel = `[...document.querySelectorAll(".day-decision")]
     .find(li => li.querySelector(".day-decision-text").textContent.includes(${JSON.stringify(text)}))`;
   await waitFor(`!!(${rowSel})`, "the decision on the card");
+  if (!inHeader) {
+    /* between blocks the decision previews in its block's row — the
+       sentence alone, no launch and no chip until the block's turn */
+    ok("a block still ahead previews its decisions in the list, without a tap",
+       await evaljs(`(() => { const li = ${rowSel};
+         return li.classList.contains("compact")
+           && !!li.closest('.day-row[data-block=${JSON.stringify(blk.id)}]')
+           && !li.querySelector("button.chip"); })()`));
+    return;
+  }
   ok("a text launch is the sentence itself, the text a link to the row's own screen",
      await evaljs(`(() => { const li = ${rowSel};
        return li.querySelector(".day-decision-launch").textContent === "Two lines, no more."

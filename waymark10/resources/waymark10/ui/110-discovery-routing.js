@@ -121,6 +121,9 @@ async function render() {
      dashboard keeps an address of its own, behind ⋯. */
   if (!href) { lawStamp(null); return renderLanding(view, seq); }
   if (href === "dashboard") { lawStamp(null); return renderHome(view, seq); }
+  /* the census, behind its own address since the day stands alone on
+     home (waymark-i89n.14) */
+  if (href === "feed") { lawStamp(null); return renderFeedRoute(view, seq); }
   if (href === "access") {
     lawStamp(null);
     return renderAccess(view, seq);

@@ -89,12 +89,21 @@ async function renderNav(current) {
      for this reader (feedDoor, one probe a load). */
   /* …and since waymark-i89n.8 the feed IS home: the link points at the
      empty hash, and the dashboard it displaced moves behind ⋯ */
-  if (hasFeed)
+  /* …and since waymark-i89n.14 home is the day ALONE: the census keeps
+     an address at #feed — a Feed link on the desktop nav, an item
+     behind ⋯ on a phone, where the tab bar has no room */
+  if (hasFeed) {
     nav.append(el("a", {href: "#",
       style: (!current || current === "/api/-/feed") ? "font-weight:700" : "",
-      title: "the day — the block you are in, then the feed: what to do"
-           + " now, what to answer, what the house already finished"},
-      MOBILE ? "Home" : "Feed"));
+      title: "the day — the block you are in, and the rest of the day"},
+      "Home"));
+    if (!MOBILE)
+      nav.append(el("a", {href: "#feed",
+        style: current === "feed" ? "font-weight:700" : "",
+        title: "the feed: what to do now, what to answer, what the house"
+             + " already finished"},
+        "Feed"));
+  }
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
   if (w.resources && w.resources.member && w.resources.approval_request)
     nav.append(el("a", {href: "#access",
@@ -107,7 +116,9 @@ async function renderNav(current) {
     && (!r.domain || r.domain === active));
   if (tucked.length || hasFeed)
     nav.append(overflowMenu(tucked, {dashboard: hasFeed,
-                                     here: current === "dashboard"}));
+                                     here: current === "dashboard",
+                                     feed: hasFeed && MOBILE,
+                                     feedHere: current === "feed"}));
 }
 
 function overflowMenu(tuckedEntries, extra = {}) {
@@ -139,6 +150,11 @@ function overflowMenu(tuckedEntries, extra = {}) {
   const system = tuckedEntries.filter(([, r]) => navTier(r) === "system");
   /* the dashboard, displaced from home by the day (waymark-i89n.8):
      still one tap away and still deep-linkable at #dashboard */
+  if (extra.feed)
+    menu.append(el("a", {href: "#feed", role: "menuitem", onclick: close,
+                         "data-nav": "feed",
+                         style: extra.feedHere ? "font-weight:700" : ""},
+      "Feed"));
   if (extra.dashboard)
     menu.append(el("a", {href: "#dashboard", role: "menuitem", onclick: close,
                          "data-nav": "dashboard",
