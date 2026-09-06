@@ -165,9 +165,14 @@
                     :help "The row ids, in the order the worker should take them; refusals are recorded per row and never stop the rest."}}
              [:vector [:string {:min 1}]]]
             ;; the per-item action input, wire-shaped, verbatim
+            ;; waymark-2hd0: the free-form fields below say why no form
+            ;; offers them — a job is minted by the deferring call and
+            ;; written by the worker; the create door refuses a person
+            ;; in a sentence rather than hiding, so the battery reads it
             [:input {:optional true
                      :x-display
-                     {:label "The input every row gets"}}
+                     {:label "The input every row gets"
+                      :spelled-by-hand "The per-item input, wire-shaped and verbatim — whatever the target door takes; the deferring call writes it, never a form."}}
              :any]
             ;; the items shape deferred (waymark-pywy.4): each row's
             ;; own input and acknowledged guard names, index-aligned
@@ -175,12 +180,14 @@
             [:inputs {:optional true
                       :x-display
                       {:label "Each row's own input"
-                       :help "Index-aligned with the ids: the input each row gets when the call gave every row its own."}}
+                       :help "Index-aligned with the ids: the input each row gets when the call gave every row its own."
+                       :spelled-by-hand "Each row's input, wire-shaped and verbatim — whatever the target door takes; the deferring call writes them, never a form."}}
              [:maybe [:vector :any]]]
             [:acknowledged {:optional true
                             :x-display
                             {:label "Each row's acknowledged warnings"
-                             :help "Index-aligned with the ids: the guard names each item acknowledged when it was queued."}}
+                             :help "Index-aligned with the ids: the guard names each item acknowledged when it was queued."
+                             :spelled-by-hand "A list of lists — each row's acknowledged guard names — copied from the deferring call's items; the call writes it, never a form."}}
              [:maybe [:vector [:vector :string]]]]
             ;; the deferring call's own Idempotency-Key (waymark-pywy.5):
             ;; not a record — a deferred call keeps none — but the
@@ -192,19 +199,23 @@
                                 :label "The deferring call's idempotency key"
                                 :help "Stamped on every item's transition as the call that queued it; the job row, not this key, is the deferred call's record."}}
              [:maybe :string]]
-            [:requested_by {:x-display {:label "Who asked for it"}}
+            [:requested_by {:x-display {:label "Who asked for it"
+                                        :spelled-by-hand "The principal as the call saw it — id, type, display — stamped by the engine when the job is queued."}}
              :any]
             [:progress {:x-display
                         {:label "How far along"
                          :help "Written by the worker as it goes — done, total, and the rows that refused with their reasons."}}
              [:map
-              [:done :int]
-              [:total :int]
-              [:refusals [:vector :any]]]]
+              [:done {:x-display {:label "Rows done"}} :int]
+              [:total {:x-display {:label "Rows in all"}} :int]
+              [:refusals {:x-display {:label "The rows that refused"
+                                      :spelled-by-hand "Each refusal as its door said it, verbatim — the worker writes these as it goes."}}
+               [:vector :any]]]]
             ;; the job artifact (batch F): the final per-item report,
             ;; persisted by the worker just before :complete fires
             [:report {:optional true
-                      :x-display {:label "The finished report"}}
+                      :x-display {:label "The finished report"
+                                  :spelled-by-hand "The final per-item report, persisted by the worker just before the job completes."}}
              :any]]
    :filterable {:state #{:eq :in}
                 :kind #{:eq}}

@@ -338,8 +338,8 @@
   (let [page (sut/assemble)]
     (is (str/includes? page "function subformWidget"))
     (is (str/includes? page "return subformWidget(name, prop, value);"))
-    (is (str/includes? page "placeholder: \"JSON object\"")
-        "the property-less object keeps its box")
+    (is (str/includes? page "placeholder: xd[\"spelled-by-hand\"] || \"JSON object\"")
+        "the property-less object keeps its box, wearing the declaration's reason when it has one")
     (is (str/includes? page "(values[parent] = values[parent] || {})[child] = v;")
         "parent.child folds back into the parent's object")
     (is (str/includes? page ".subform {") "its own CSS survives assembly")))

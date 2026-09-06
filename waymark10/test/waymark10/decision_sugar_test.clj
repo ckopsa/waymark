@@ -73,6 +73,7 @@
              [:string {:min 1 :max 240}]]
             [:scope {:examples [grants/scope-example]
                      :x-display {:label "What you are asking for"
+                                 :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
                                  :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this."}}
              grants/scope-schema]
             [:expires_at {:optional true
@@ -96,6 +97,7 @@
                     [:string {:min 1 :max 240}]]
                    [:scope {:examples [grants/scope-example]
                             :x-display {:label "What you are asking for"
+                                        :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
                                         :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this."}}
                     grants/scope-schema]
                    [:expires_at {:optional true
