@@ -88,11 +88,6 @@
 
 (defn- row [kind id] (dev/row *eng* kind id))
 
-(defn- blocks-of [plan-id]
-  (->> (dev/rows *eng* :block)
-       (filter #(= plan-id (get-in % [:data :plan_id])))
-       (sort-by :created-at)))
-
 (defn- spans-of
   ([plan-id] (spans-of plan-id nil))
   ([plan-id block-id]
@@ -102,6 +97,20 @@
         (sort-by #(get-in % [:data :starts_at])))))
 
 (defn- window [s] [(get-in s [:data :starts_at]) (get-in s [:data :ends_at])])
+
+(defn- blocks-of
+  "A plan's blocks in the order they were minted. Births from one
+  materialisation can share a created-at to the millisecond (the gate
+  saw Shop read before Rest once, waymark-i89n.12), so the tie breaks
+  the way the day reads them: by the block's first window, and a block
+  with no window yet sorts first."
+  [plan-id]
+  (let [first-start (fn [b] (or (some-> (first (spans-of plan-id (:id b)))
+                                        (get-in [:data :starts_at]))
+                                java.time.Instant/EPOCH))]
+    (->> (dev/rows *eng* :block)
+         (filter #(= plan-id (get-in % [:data :plan_id])))
+         (sort-by (juxt :created-at first-start)))))
 
 (defn- block-named [plan-id nm]
   (some #(when (= nm (get-in % [:data :context_name])) %) (blocks-of plan-id)))

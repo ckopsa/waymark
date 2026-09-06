@@ -125,6 +125,11 @@
         "the one chip is the projected primary verb, never a named door")
     (is (str/includes? page "props.shape ? schemaProp(props.shape) : null")
         "the shape toggle is the form's own enum")
+    (is (str/includes? page "const create = block.create || null;")
+        "an open block offers the create door the document put on it
+         (waymark-i89n.12) — and none when none was projected")
+    (is (str/includes? page "const tmpl = dp.template_create || null;")
+        "…and the plan panel the template's")
     (is (str/includes? page ".day-head {") "its CSS survives assembly")
     (is (str/includes? page "html[data-ui=\"mobile\"] .day-head"))
     (is (< (str/index-of page "async function renderFeedScreen")

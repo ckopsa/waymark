@@ -586,6 +586,17 @@ been a card with no row behind it, which the census refuses elsewhere. The
 `day` key is the date string on a deployment without dayplan10 and the
 object on one with it — `date` inside the object is the same string.
 
+*Amended 2026-09-06 (waymark-i89n.12).* The first walk of the deployed
+screen found the loop open: the day could be planned and executed from
+home, but a template or a decision had to be made on the plain collection
+screens. The `day` key now carries two more projected create doors — the
+`context` create as `template_create`, beside the defaults, and the
+`decision` create as `create` on every block — and the screen wears them
+as chips: *new template* on the plan panel, *add a decision* on an open
+block with the block answered. Same rule as the plan's `create`: a leash
+that does not confer the door projects no door, and the screen shows no
+chip.
+
 ### (h) Nothing from laws v3 applies inside a block
 
 The current block's decisions are a handful of candidates with an `order`
