@@ -408,6 +408,10 @@
   at declaration, not warned about."
   (-> compliant
       (dissoc :views)
+      ;; done is now a non-terminal dead end, which check-reachability
+      ;; refuses without this — the fail-fast gate is not the battery,
+      ;; and the battery is what is under test here
+      (assoc :allow-dead #{:done})
       (update :actions dissoc :reopen)
       (update-in [:actions :finish] dissoc :undo)
       (assoc-in [:actions :finish :safety]
