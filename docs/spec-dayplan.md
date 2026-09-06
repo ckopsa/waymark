@@ -483,6 +483,17 @@ on `planned` (the verdict is a fresh Go), and `changed` stays the one tomb,
 because it holds two sentences and a door out would unsay one. The `:over`
 reading is unchanged: `done` is still the work accomplished.
 
+*Amended 2026-09-06 (waymark-4an5).* From `started` the only doors were Done,
+Skip and Change; Reopen led to `planned` only from `skipped` and `done`, so
+un-going was two taps. `[cheap-reverse]` let it stand because `start` has a
+handler and a handler counts as a visible cost — wrong twice: un-starting
+does not unfire a Home Assistant call, it restates the record while the log
+keeps that a launch fired; and for a link or a note decision Go fires nothing
+at all. **`unstart`** ("Not yet") leads from `started` back to `planned`, an
+ordinary one-way door rather than an `:undo` pair, since Go's handler makes
+it no byte-for-byte reverse. The undo stack offers it unasked — it lands
+exactly where the row was — so a mis-tapped Go is one tap back.
+
 ## The forks decided, with reasons
 
 ### (a) Spans are rows, not a vector on the block

@@ -916,6 +916,15 @@ sentence is not a silencer — the one-way check requires it everywhere, so
 it carries no signal about cost. A door the clock opens (a guard reading
 `:now`) is exempt: nobody undoes the time.
 
+*Refined 2026-09-06 (waymark-4an5).* A handler is a visible cost only when
+the reverse would have to undo what the handler did. `decision.start` fires
+a launch, and un-starting does not unfire it — the record says planned again
+and the log keeps the launch — so the door was costless to reverse and the
+policy's silence was wrong. The proxy stays (the declaration cannot read
+what a handler does, so a handler still silences the warning) and the blind
+spot is recorded: an author reading `[cheap-reverse]`'s silence on a handler
+door owes the same question by hand. `decision.unstart` is the first answer.
+
 ### `:final` — an ending that is final on purpose
 
 An ending is final on purpose when reopening it would make the record lie,

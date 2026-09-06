@@ -282,6 +282,18 @@
    "prepare" "Prepare — get this ready (the bag by the door)"
    "work" "Work — do this (the porch railing)"})
 
+(defscenario a-started-decision-comes-back-as-planned
+  "Go is the verdict, and Not yet takes it back (waymark-4an5): the
+   record reads planned again, and a launch that fired stays in the
+   log — un-starting unfires nothing, which is why it costs nothing."
+  {:kind    :decision
+   :attempt :unstart
+   :row     {:state :started
+             :data {:block_id a-block :kind "work" :text "Porch lights on"
+                    :order 1}}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 (def ^:private launch-form
   [:map
    [:type {:x-display {:label "What Go does"
@@ -421,7 +433,8 @@
                a-link-fires-nothing-and-needs-no-wiring
                change-keeps-both-sentences
                a-finished-decision-reopens
-               a-changed-decision-stays-changed]
+               a-changed-decision-stays-changed
+               a-started-decision-comes-back-as-planned]
    :on-create stamp-day-and-member
    :actions
    {:start
@@ -429,9 +442,22 @@
      :guards [home-assistant-is-wired]
      :handler fire-launch
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "Starting is the verdict: the record says you went, and a service launch has fired."}
+              :one-way "Starting is the verdict: the record says you went, and a service launch has fired; Not yet takes the verdict back, and the launch stays fired in the record."}
      :display {:label "Go" :style :primary :order 1
                :description "Tapping Go is the verdict — the record says you went; a link opens, a service fires, a note shows"}}
+
+    ;; the way back from started (waymark-4an5): an ordinary door, not
+    ;; an :undo — Go's handler fired a launch that un-starting does not
+    ;; unfire; the record says planned again and the log keeps the
+    ;; launch. For a link or a note Go fired nothing at all, and this
+    ;; is the costless reverse the owner's rule asks for. It lands
+    ;; exactly where the row was, so the undo stack offers it unasked.
+    :unstart
+    {:from #{:started} :to :planned
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Not yet puts the decision back as planned; a launch that already fired stays fired, and the log keeps that it did."}
+     :display {:label "Not yet" :order 5
+               :description "You did not go after all — the decision reads as planned again"}}
 
     :finish
     {:from #{:started :planned} :to :done
