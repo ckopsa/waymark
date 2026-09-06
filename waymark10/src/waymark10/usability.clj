@@ -485,7 +485,9 @@
     (:handler a) (conj "a handler")
     (:input a) (conj "an input")
     (get-in a [:safety :confirm]) (conj "a confirm gate")
-    (some (fn [[_ edge]] (contains? (set (keys (:on edge))) (:name a)))
+    ;; :owns is normalized to a VECTOR of edge maps (resource.clj's
+    ;; aggregate sugar), each carrying its :on {owner-action child-action}
+    (some (fn [edge] (and (map? edge) (contains? (:on edge) (:name a))))
           (:owns r))
     (conj "a cascade through :owns")
     (let [m (:mirror r)] (and m (or (:push-on-write m) (:create-push m))))
