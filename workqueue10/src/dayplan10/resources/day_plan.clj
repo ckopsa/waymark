@@ -153,6 +153,14 @@
     (assoc-in row [:data :shape] shape)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
+;;
+;; Reshape's wall reads the input against the row and nothing else, so
+;; its scenario is CHECK-tier; replan's reads the day's spans and the
+;; clock (:reads [:span :now]), so its scenario is CONFORMANCE-tier —
+;; the plan is staged through the real door (its blocks and spans
+;; materialising from whatever workday templates the engine holds, all
+;; of them in 2020 and so all of them passed), walked to set, and
+;; replanned as a client would.
 
 (defscenario reshape-names-the-other-shape
   "Reshaping a workday into a workday would skip and re-mint every
@@ -238,6 +246,8 @@
                                         :help "Anything that shapes the whole day and no one block."}}
                     [:maybe [:string {:max 2000}]]]]
    :on-create materialise-blocks
+   :scenarios [reshape-names-the-other-shape
+               a-spent-day-is-not-replanned]
    :owns {:blocks {:kind :block :via :plan_id}}
    :links [{:rel "blocks" :owns :block :embed true
             :summary "The day's blocks, each a context's presence on the day"}]

@@ -250,11 +250,23 @@
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
-;; Every door here reads the plan's other spans (:reads [:span]), so
-;; these are CONFORMANCE-tier: staged through the real doors and judged
-;; by the real clock. Windows are therefore spelled in 2099 (ahead) or
-;; 2020 (passed), and each scenario's plan id is its own, so the spans
-;; it stages are the only ones no-overlap can see.
+;; The create, move, swap and extend doors read the plan's other spans
+;; (:reads [:span]), so their scenarios are CONFORMANCE-tier: staged
+;; through the real doors by the :core/law-scenarios obligation and
+;; judged by the real clock. Windows are therefore spelled in 2099
+;; (ahead) or 2020 (passed), and each scenario's plan id is its own,
+;; so the spans it stages are the only ones no-overlap can see. The
+;; block and plan ids are hand-written and name no row: a ref is a
+;; string at the door, a dangling label copies nothing, and the doors
+;; these scenarios judge never read the parent — the block's own wall
+;; (on-an-open-days-plan) is proved on block.
+;;
+;; Split's door reads the clock and nothing else (still-ahead,
+;; at-inside-window), so its two scenarios are CHECK-tier: judged over
+;; the literal row with no storage, in `make check-queue`'s breath.
+;; The check tier decodes nothing, so those two spell their instants
+;; as Instants (composition_request's a-standing-request spelling) —
+;; a string would reach the guard's `.isAfter` as a string.
 
 (def ^:private a-plan "01HZQ7Y7F2R3W4V5X6Y7Z8A9E0")
 (def ^:private another-plan "01HZQ7Y7F2R3W4V5X6Y7Z8A9E1")
@@ -262,6 +274,12 @@
 
 (defn- window [plan from to]
   {:block_id a-block :plan_id plan :starts_at from :ends_at to})
+
+(defn- decoded-window
+  "The same window as the check tier's literal row carries it —
+  instants, not their wire strings."
+  [plan from to]
+  (window plan (Instant/parse from) (Instant/parse to)))
 
 (defscenario an-overlap-is-refused
   "Two spans of one day never share a minute: a window that intersects
@@ -367,9 +385,9 @@
   {:kind    :span
    :attempt :split
    :row     {:state :planned
-             :data (window "01HZQ7Y7F2R3W4V5X6Y7Z8A9E9"
-                           "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
-   :input   {:at "2099-01-06T14:00:00Z"}
+             :data (decoded-window "01HZQ7Y7F2R3W4V5X6Y7Z8A9E9"
+                                   "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+   :input   {:at (Instant/parse "2099-01-06T14:00:00Z")}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
    :expect  {:refused :at-inside-window
@@ -381,9 +399,9 @@
   {:kind    :span
    :attempt :split
    :row     {:state :planned
-             :data (window "01HZQ7Y7F2R3W4V5X6Y7Z8A9EA"
-                           "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
-   :input   {:at "2099-01-06T11:30:00Z" :gap_minutes 60}
+             :data (decoded-window "01HZQ7Y7F2R3W4V5X6Y7Z8A9EA"
+                                   "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+   :input   {:at (Instant/parse "2099-01-06T11:30:00Z") :gap_minutes 60}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
    :expect  {:refused :at-inside-window}})
@@ -437,6 +455,16 @@
               :expr '(<= (var :ends_at) (var :now))}}
 
    :create-guards [ends-after-starts no-overlap-in-plan]
+
+   :scenarios [an-overlap-is-refused
+               a-gap-is-not-an-overlap
+               a-past-window-does-not-move
+               a-window-ends-after-it-starts
+               swap-needs-a-partner-on-this-day
+               extend-never-squeezes-a-neighbour-to-nothing
+               extend-reaches-later
+               a-split-happens-inside-the-window
+               a-gap-may-not-swallow-the-rest]
 
    :actions
    {:move

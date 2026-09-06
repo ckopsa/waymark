@@ -176,6 +176,19 @@
   (assoc row :data (as-revised row inp)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
+;;
+;; ALL FIVE are CONFORMANCE-tier, the grammar ones included: the shape
+;; wall sits on the create door and reads the other templates (:reads
+;; [:context]), and the tier is read off every guard on the attempted
+;; door, never off the guard a scenario expects. So each is staged and
+;; attempted through the real HTTP door by the :core/law-scenarios
+;; obligation (dayplan10.conformance-test, and workqueue10's, whose
+;; registry folds this kind in) and the verdict is the one a client
+;; sees. The one template that is admitted — Workday, nine to five —
+;; is therefore a REAL row for the rest of that run: its name is
+;; :unique and its windows are daytime, clear of the one-minute night
+;; windows the walker mints and of the evening the two :given
+;; scenarios below spell.
 
 (def ^:private a-workday-template
   {:name "Workday"
@@ -218,12 +231,12 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
-;; the shape wall reads the other templates (:reads [:context]), so
-;; these two are CONFORMANCE-tier: the given row is staged through the
-;; real door and the verdict is the one a client sees. Their windows
-;; sit in the evening of a day OFF, clear of the workday the scenarios
-;; above spell and of the one-minute night windows the conformance
-;; walker mints (dayplan10.conformance-test).
+;; the two that need a neighbour stage one as a :given row. Their
+;; windows sit in the evening of a day OFF, clear of the workday the
+;; scenarios above spell and of the one-minute night windows the
+;; conformance walker mints (dayplan10.conformance-test); their names
+;; are fixed, so the suite that runs them owns a fresh contexts table
+;; (both conformance fixtures drop it).
 
 (defscenario two-templates-of-one-shape-never-share-a-minute
   "A second template of a day off whose window reaches into the
@@ -322,6 +335,11 @@
    ;; the grammar first, then the shape wall — a window the clock
    ;; cannot read is refused before anything is compared to it
    :create-guards [windows-read-as-clock-times no-overlap-in-shape]
+   :scenarios [a-window-is-a-pair-of-clock-times
+               a-template-does-not-overlap-itself
+               a-well-formed-template-is-admitted
+               two-templates-of-one-shape-never-share-a-minute
+               touching-windows-are-not-an-overlap]
    :actions
    {:revise
     {:from #{:active} :to :active

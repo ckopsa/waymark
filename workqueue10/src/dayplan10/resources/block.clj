@@ -86,6 +86,10 @@
   (assoc-in row [:data :stance] (:stance inp)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
+;;
+;; The create wall reads the plan (:reads [:day_plan]), so this is
+;; CONFORMANCE-tier: attempted through the real door, where the plan
+;; id below names nothing and the refusal is the one a client sees.
 
 (defscenario a-block-sits-on-a-plan-that-exists
   "A block for a plan nobody made is refused naming the fix — create
@@ -160,6 +164,7 @@
                                           :help "The windows the block opens with, each a start and an end on the day; leave it empty to add spans one at a time."}}
                     [:maybe [:vector window-form]]]]
    :create-guards [on-an-open-days-plan]
+   :scenarios [a-block-sits-on-a-plan-that-exists]
    :on-create stamp-and-mint
    ;; skipping the block lets its planned spans — and its planned or
    ;; started decisions — go with it

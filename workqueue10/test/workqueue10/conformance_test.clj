@@ -80,6 +80,17 @@
    ;; a value is never terminal, so it outlives everything.
    "composition_requests" "outcome_pieces" "outcomes" "values" "people"
    "hypotheses"
+   ;; …and the day plan's five (waymark-i89n.9), for the first reason
+   ;; and one more of its own. The :core/law-scenarios obligation
+   ;; walks EVERY kind this registry folds in, and dayplan10's
+   ;; conformance-tier scenarios stage :given rows with FIXED names
+   ;; and fixed (member, date) pairs — a context is :unique by name,
+   ;; a day_plan by member and date — so a shard that ran
+   ;; dayplan10.conformance-test first would hand this run a
+   ;; "Scenario shop" that already stands, and the scenario would
+   ;; report "could not be staged" for a law that held. The scenarios
+   ;; own a fresh table here, as they do there.
+   "contexts" "day_plans" "blocks" "spans" "decisions"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 

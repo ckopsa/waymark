@@ -26,10 +26,18 @@
     a context and a block; no subject and no launch, so the walk
     asks nothing of the wiring.
 
-  The conformance-tier scenarios span.clj, day_plan.clj, block.clj
-  and decision.clj declare (every span door reads the plan's other
-  spans; a decision's subject reads the row it names) are proved here
-  too, through the HTTP door, by the :core/law-scenarios obligation.
+  The conformance-tier scenarios the five kinds declare and attach
+  through :scenarios — every one of context's (the shape wall on the
+  create door reads the other templates), span's create, move, swap
+  and extend (each reads the plan's other spans), day_plan's replan
+  (the day's spans), block's create (the plan) and decision's create
+  (the subject's row, the block) — are proved here too, through the
+  HTTP door, by the :core/law-scenarios obligation; the check tier
+  (`make check-queue`) judges the rest with no database. The two
+  context scenarios that stage a :given row use FIXED names, and
+  workqueue10.conformance-test's registry folds these kinds in, so
+  both fixtures drop the day tables: a name that already stands would
+  read as a staging failure, not a verdict.
 
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.test :refer [deftest use-fixtures]]
