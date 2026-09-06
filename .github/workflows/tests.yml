@@ -262,6 +262,11 @@ jobs:
       # `changes` job above so a diff touching only them still runs it.
       - name: movements fixture — the reading's log-odds, over synthetic atoms
         run: bash scripts/movements-fixture.sh
+      - name: JVM crash report
+        if: failure()
+        uses: ./.github/actions/jvm-crash-report
+        with:
+          name: quick
 
   # The matrix is built from the tree, so adding a test file needs no
   # edit here. Namespaces come from paths: test/a/b_test.clj is
@@ -450,6 +455,13 @@ jobs:
           fi
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
           cd waymark10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+      # A JVM that died says so in hs_err_pid*.log next to the suite;
+      # the banner in the log above is eight lines of it. Keep the rest.
+      - name: JVM crash report
+        if: failure()
+        uses: ./.github/actions/jvm-crash-report
+        with:
+          name: test10-${{ matrix.shard.id }}
 
       # The timings, at the END of the log, where a `tail` finds them.
       # The artifact keeps the full output; this keeps the part anyone
@@ -551,6 +563,11 @@ jobs:
           fi
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
           cd workqueue10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+      - name: JVM crash report
+        if: failure()
+        uses: ./.github/actions/jvm-crash-report
+        with:
+          name: test-queue-${{ matrix.shard.id }}
 
       # The timings, at the END of the log, where a `tail` finds them.
       # The artifact keeps the full output; this keeps the part anyone
