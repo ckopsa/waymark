@@ -1028,8 +1028,27 @@ sub-form renders it under that label or under its bare token.
 
 ### The first run
 
-Recorded from CI's reading once the policy lands; the framework's own
-free-form fields carry their sentences in the same change (the tally pin
-keeps every enrolled kind silent), and the applications' three — the
-decision's service data, the hypothesis's atoms, the outcome piece's
-prepared map — follow in their own change so each sentence is read.
+CI's first reading (PR #99, the quick job's check-queue) printed eight doors
+across the house, every one a list of maps or a free map:
+
+- **framework**, sentences landed in the same PR so the enrolled-kind tally
+  stayed silent: `grant` and `approval_request` create → `scope`; `job`
+  create → `input`, `inputs`, `acknowledged`, `requested_by`, `report`, and
+  `progress.refusals` inside the now-labelled `progress` map; `definition`
+  create → `fingerprint`, `diff`, `population`, `measure`, and `pilot` →
+  `where`; `feed_recipe` → `order`; `recipe_proposal` create → `order`,
+  `current_order`; `worksheet` → `tally`.
+- **applications**, sentences in the follow-up (waymark-1nns): `block` create →
+  `windows`; `context` create and `revise` → `default_spans`; `decision`
+  create → `launch` — its `data` sub-field, a map-of with no sentence, made
+  the whole labelled map a box, which is the nested rule doing its job;
+  `product` create → `sightings`; `outcome_piece` create → `prepared`.
+
+`hypothesis.atoms` was not flagged: its door is not a person's. The first
+census, grepped by hand for two shapes, had missed `windows`,
+`default_spans` and `sightings` — the third shape — which is the argument
+for the rule over the grep. Three of the eight are lists of maps a household
+member can meet (the block's windows, the context's usual windows, the
+product's sightings); each sentence points at the one-at-a-time door beside
+it, and a sub-form for lists of maps is the bead that would take them out of
+the box for good. The tally is zero.

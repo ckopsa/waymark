@@ -91,7 +91,10 @@
 
 (def sightings-display
   {:label "Prices seen"
-   :help "Every price we've seen this package at, one entry per day — at creation that's just the receipt in your hand; later ones come in through Record price."})
+   :help "Every price we've seen this package at, one entry per day — at creation that's just the receipt in your hand; later ones come in through Record price."
+   ;; waymark-1nns: a list of maps has no sub-form yet; Record price is the
+   ;; form-shaped way in
+   :spelled-by-hand "A list of sightings is a list of maps, which no sub-form offers yet: one entry, the receipt in your hand — {\"seen_on\": \"2026-09-06\", \"price_cents\": 499} — or leave it empty and use Record price, which asks one at a time."})
 
 (def notes-display
   {:widget "prose"

@@ -2951,7 +2951,10 @@
    :prepared
    {:x-display
     {:label "The input, already filled in"
-     :help "Exactly the body the door will take — the create model for a create, the action's own input for an invoke, and {} for a door that takes none. This is where the friction is pre-paid, and it is checked against that very door when the piece is staged rather than when somebody taps it."}}
+     :help "Exactly the body the door will take — the create model for a create, the action's own input for an invoke, and {} for a door that takes none. This is where the friction is pre-paid, and it is checked against that very door when the piece is staged rather than when somebody taps it."
+     ;; waymark-1nns: the shape is the TARGET door's, read off the registry
+     ;; at staging — no one form can offer it
+     :spelled-by-hand "The body the target door takes, in that door's own shape — the create model for a create, the action's input for an invoke — judged against it when the piece is staged; a composer writes this, and a person tapping the piece never does."}}
    :impact
    {:x-display
     {:widget "prose"
