@@ -342,7 +342,16 @@
         "the property-less object keeps its box, wearing the declaration's reason when it has one")
     (is (str/includes? page "(values[parent] = values[parent] || {})[child] = v;")
         "parent.child folds back into the parent's object")
-    (is (str/includes? page ".subform {") "its own CSS survives assembly")))
+    (is (str/includes? page ".subform {") "its own CSS survives assembly")
+    ;; waymark-jtd7: a list of maps is rows of the item's sub-form, unless
+    ;; an item field carries an option recipe — those keep the box and
+    ;; its chips, because a recipe's {sibling} holes resolve by bare name
+    (is (str/includes? page "function listWidget"))
+    (is (str/includes? page "!itemOptionFields(rawProp).length"))
+    (is (str/includes? page "return listWidget(name, prop, itemSchema, value);"))
+    (is (str/includes? page "(bag[idx] = bag[idx] || {})[child] = v;")
+        "parent[i].child folds into the i-th entry")
+    (is (str/includes? page ".subform.list .listrow {") "the rows' CSS survives assembly")))
 
 (deftest the-undo-stack-rides-the-page-and-names-no-kind
   ;; waymark-qmo6, docs/spec-undo.md. The stack holds the last few taps

@@ -87,6 +87,15 @@ function fieldWidget(name, rawProp, value) {
        rides as the placeholder here for the same reason it does on a
        prose box — a grant's scope is the last form in the building
        that should open as a blank rectangle */
+    /* a list of maps with declared fields is ROWS of a sub-form
+       (waymark-jtd7) — unless an item field carries an option recipe:
+       a recipe's {sibling} holes resolve by bare name against the form
+       and cannot yet see an indexed row, so those lists keep the box
+       and the chips beside it */
+    const itemSchema = schemaProp(items);
+    if (itemSchema.properties && Object.keys(itemSchema.properties).length &&
+        !itemOptionFields(rawProp).length)
+      return listWidget(name, prop, itemSchema, value);
     const ex = (prop.examples || rawProp.examples || [])[0];
     return el("textarea", {name, "data-array": "json",
                            placeholder: ex !== undefined
@@ -123,6 +132,7 @@ function subformWidget(name, prop, value) {
   for (const [sub, subRaw] of Object.entries(prop.properties)) {
     const subProp = schemaProp(subRaw);
     const xd = subRaw["x-display"] || subProp["x-display"] || {};
+    if (xd.hidden) continue;             /* nobody's form, one level down too */
     const path = name + "." + sub;
     box.append(el("div", {class: "field", "data-field": path},
       el("label", {title: path}, el("b", {}, xd.label || sub),
@@ -132,6 +142,40 @@ function subformWidget(name, prop, value) {
     if (xd.help) box.append(el("div", {class: "muted",
       style: "font-size:11px;margin:-6px 0 8px"}, xd.help));
   }
+  return box;
+}
+/* A list of maps is rows of the item's sub-form (waymark-jtd7): one row
+   per entry, its fields named parent[i].child, a ✕ to drop the row and
+   a chip to add one; minItems rows to start, maxItems capping the add.
+   collectValues folds parent[i].child back into an array and drops a
+   row left blank. The window a block opens with, a context's usual
+   windows, a product's price sightings — each was a JSON box wearing a
+   sentence until this. */
+function listWidget(name, prop, items, value) {
+  const box = el("div", {class: "subform list", "data-list": name});
+  const rows = el("div", {class: "listrows"});
+  const min = prop.minItems || 0;
+  const max = prop.maxItems;
+  const add = el("button", {type: "button", class: "chip listadd"}, "Add another");
+  const refresh = () => {
+    add.style.display = (max !== undefined && rows.childElementCount >= max) ? "none" : "";
+  };
+  let seq = 0;
+  const addRow = (seed) => {
+    const i = seq++;
+    const row = el("div", {class: "listrow", "data-row": i});
+    row.append(subformWidget(name + "[" + i + "]", items, seed));
+    row.append(el("button", {type: "button", class: "listdrop",
+                             "aria-label": "remove this entry",
+                             onclick: () => { row.remove(); refresh(); }}, "✕"));
+    rows.append(row);
+    refresh();
+  };
+  add.addEventListener("click", () => addRow(undefined));
+  for (const v of (Array.isArray(value) ? value : [])) addRow(v);
+  while (rows.childElementCount < min) addRow(undefined);
+  box.append(rows, add);
+  refresh();
   return box;
 }
 /* a waymark-ref field offers the target kind's rows, labeled by summary.
@@ -634,13 +678,28 @@ function coerceValue(node, prop, raw) {
   if (prop.type === "boolean") return raw === "true";
   return raw;
 }
+const LIST_FIELD = /^([^\[.]+)\[(\d+)\]\.(.+)$/;
 function collectValues(form, schema) {
   const values = {};
+  const lists = {};
   const props = (schema || {}).properties || {};
   for (const node of form.querySelectorAll("[name]")) {
     const name = node.getAttribute("name");
     const raw = node.value;
     if (raw === "" || raw === null) continue;
+    /* a list row's field (waymark-jtd7): parent[i].child folds into
+       the i-th entry of the parent's array, typed by the item schema;
+       a row left blank never reaches here and the array closes over it */
+    const m = LIST_FIELD.exec(name);
+    if (m) {
+      const [, parent, idx, child] = m;
+      const itemProps = schemaProp(schemaProp(props[parent] || {}).items || {}).properties || {};
+      const v = coerceValue(node, schemaProp(itemProps[child] || {}), raw);
+      if (v === undefined) continue;
+      const bag = (lists[parent] = lists[parent] || {});
+      (bag[idx] = bag[idx] || {})[child] = v;
+      continue;
+    }
     /* a sub-form's field (waymark-au42): parent.child folds back into
        the parent's object, typed by the nested schema; a sub-form left
        blank never reaches here, so the parent is simply absent */
@@ -655,6 +714,10 @@ function collectValues(form, schema) {
     }
     const v = coerceValue(node, schemaProp(props[name] || {}), raw);
     if (v !== undefined) values[name] = v;
+  }
+  for (const [parent, bag] of Object.entries(lists)) {
+    const arr = Object.keys(bag).map(Number).sort((a, b) => a - b).map(i => bag[i]);
+    if (arr.length) values[parent] = arr;
   }
   return values;
 }

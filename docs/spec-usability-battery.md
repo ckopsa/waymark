@@ -1061,3 +1061,21 @@ member can meet (the block's windows, the context's usual windows, the
 product's sightings); each sentence points at the one-at-a-time door beside
 it, and a sub-form for lists of maps is the bead that would take them out of
 the box for good. The tally is zero.
+
+### Lists of maps as rows (waymark-jtd7)
+
+That bead, the same evening. An array whose items are a map with declared
+fields renders as **rows** of the item's sub-form: one row per entry, its
+fields named `parent[i].child`, a ✕ to drop a row, an "Add another" chip,
+`minItems` rows to start and `maxItems` capping the add; the collector
+folds `parent[i].child` back into an array, drops a row left blank, and
+omits an empty list. The block's windows, the context's usual windows and
+the product's price sightings leave the box, and their sentences come off.
+
+The rule stops where the item-options chips begin. An item field carrying
+`:x-options` — the grant scope's `kind`, the feed recipe's `population` —
+keeps the JSON box beside its chips, because an option recipe's `{sibling}`
+holes resolve by bare name against the form and cannot yet see an indexed
+row. `[spelled-by-hand]` mirrors that exactly: a list of maps is formable
+when every item field is and none carries a recipe. Wiring recipes into
+rows is the bead that would take scope and order out of the box too.

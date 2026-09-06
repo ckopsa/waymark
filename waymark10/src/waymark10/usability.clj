@@ -582,10 +582,12 @@
 (defn- formable?
   "Can a generic form OFFER this projected property — a widget a person
   fills without spelling structure? A scalar, an enum, a const, a list
-  of scalars, or a nested map whose every field is itself formable. A
-  map with no declared keys, a bare :any, a list of maps: no — the one
-  widget left is a box that wants JSON. A sub-field carrying its own
-  :spelled-by-hand sentence has answered for itself."
+  of scalars, a nested map whose every field is itself formable, or a
+  list of such maps whose item fields carry no option recipe. A map
+  with no declared keys, a bare :any, a list of maps with a recipe
+  inside: no — the one widget left is a box that wants JSON. A
+  sub-field carrying its own :spelled-by-hand sentence has answered for
+  itself."
   [prop]
   (let [p (unwrap-maybe prop)
         t (:type p)]
@@ -598,7 +600,20 @@
                    (let [it (unwrap-maybe (:items p))]
                      (and (map? it)
                           (or (contains? it :enum)
-                              (contains? scalar-types (:type it))))))
+                              (contains? scalar-types (:type it))
+                              ;; a list of maps renders as rows (waymark-jtd7)
+                              ;; when every item field is formable and none
+                              ;; carries an option recipe — the client's own
+                              ;; rule, mirrored: a recipe's {sibling} holes
+                              ;; resolve by bare name and cannot yet see an
+                              ;; indexed row, so that list keeps its box
+                              (and (seq (:properties it))
+                                   (not-any? (fn [[_ sp]] (:x-options sp))
+                                             (:properties it))
+                                   (every? (fn [[_ sp]]
+                                             (or (get-in sp [:x-display :spelled-by-hand])
+                                                 (formable? sp)))
+                                           (:properties it)))))))
               (and (= "object" t)
                    (seq (:properties p))
                    (every? (fn [[_ sp]]
