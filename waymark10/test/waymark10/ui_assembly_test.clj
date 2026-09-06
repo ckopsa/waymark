@@ -327,6 +327,23 @@
     (is (empty? (re-seq #"\b(rgba?|hsla?)\(" outside))
         "no literal rgb()/hsl() outside the palette")))
 
+(deftest a-nested-map-is-a-form-within-the-form
+  ;; waymark-au42. A decision's launch is a :map of four labelled
+  ;; fields, and the projection carries every label to the wire; the
+  ;; generic form used to hand the person a textarea reading "JSON
+  ;; object" regardless. A nested map with declared properties renders
+  ;; as a sub-form of its own widgets, named parent.child, and the
+  ;; collector folds them back into one object. The JSON box survives
+  ;; only for an object the schema left property-less.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "function subformWidget"))
+    (is (str/includes? page "return subformWidget(name, prop, value);"))
+    (is (str/includes? page "placeholder: \"JSON object\"")
+        "the property-less object keeps its box")
+    (is (str/includes? page "(values[parent] = values[parent] || {})[child] = v;")
+        "parent.child folds back into the parent's object")
+    (is (str/includes? page ".subform {") "its own CSS survives assembly")))
+
 (deftest the-undo-stack-rides-the-page-and-names-no-kind
   ;; waymark-qmo6, docs/spec-undo.md. The stack holds the last few taps
   ;; this page made and offers each row's own way-back door — and the
