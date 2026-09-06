@@ -44,7 +44,10 @@
   {:kind :evening_session
    :states [:staged :preparing :active :complete]
    :initial :staged
-   :terminal #{:complete}
+   ;; complete is no tomb (waymark-e6bj): finish and reopen are an
+   ;; :undo pair, and :over keeps reading complete as the evening done
+   :terminal #{}
+   :over {:accomplished #{:complete}}
    :summary "Session: {data.date} — {state}"
    ;; one session per date, so the date IS the name; without this a ref
    ;; picker and the plan's embedded list both show a raw id
@@ -115,5 +118,13 @@
 
     :finish
     {:from #{:active} :to :complete
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "Finishing closes out the session; the record stays as history."}}}})
+     :undo :reopen
+     :safety {:idempotent true :reversible true :confirm false}}
+
+    ;; the honest reverse: finishing costs nothing the declaration can
+    ;; see, so a session closed a tap too early is one tap back
+    :reopen
+    {:from #{:complete} :to :active
+     :undo :finish
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Reopen" :order 3}}}})

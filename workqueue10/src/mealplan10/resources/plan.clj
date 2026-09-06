@@ -296,7 +296,11 @@
   {:kind :plan
    :states [:draft :planned :active :done :abandoned]
    :initial :draft
-   :terminal #{:done :abandoned}
+   ;; done is no tomb (waymark-e6bj): complete and resume are an :undo
+   ;; pair, and :over keeps reading done as the week accomplished;
+   ;; abandoned stays the tomb — its cascade cancels the prep tasks
+   :terminal #{:abandoned}
+   :over {:accomplished #{:done} :let-go #{:abandoned}}
    ;; the week keeps its reasons (spec-decision-record): "why was this
    ;; plan allowed to finalize" is the household's own audit question —
    ;; the gates read counts that change hourly (open_tasks,
@@ -446,8 +450,11 @@
         :display {:label "Start the week" :style :primary :order 1}}]
       [:active  :complete :done
        {:requires [no-open-tasks]
-        :one-way "Completing records a finished week; the plan remains readable as history."
+        :undo :resume
         :display {:label "Week done" :style :primary :order 1}}]
+      [:done    :resume   :active
+       {:undo :complete
+        :display {:label "Resume the week" :order 2}}]
       [:draft   :abandon  :abandoned discard]
       [:planned :abandon  :abandoned discard]
       [:active  :abandon  :abandoned discard]])})

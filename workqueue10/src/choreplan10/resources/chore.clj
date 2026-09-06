@@ -110,7 +110,10 @@
   {:kind :chore
    :states [:active :paused :retired]
    :initial :active
-   :terminal #{:retired}
+   ;; retired is no tomb (waymark-e6bj): restore walks it back, and
+   ;; :over keeps reading it as the chore let go
+   :terminal #{}
+   :over {:let-go #{:retired}}
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
    :schema [:map
@@ -162,4 +165,12 @@
     :retire
     {:from #{:active :paused} :to :retired
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "Retiring removes the chore from the rotation for good; its runs stay readable as a record."}}}})
+              :one-way "Retiring takes the chore out of the rotation; its runs stay readable as a record, and Restore puts it back."}}
+
+    ;; retire leaves from two states, so its reverse is an ordinary
+    ;; door rather than an :undo — the inversion rule wants one origin
+    :restore
+    {:from #{:retired} :to :active
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Restoring puts the chore back in the rotation as active; nothing a retire did needs unpicking, and its runs were never touched."}
+     :display {:label "Restore" :order 3}}}})

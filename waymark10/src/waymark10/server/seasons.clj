@@ -104,8 +104,16 @@
         ;; exactly as it did — the household teaches the difference,
         ;; the framework infers none of it.
         let-go (set (when-not (:field (:over rdef)) (:let-go (:over rdef))))
+        ;; and the endings it stands behind that are NOT terminal
+        ;; (waymark-e6bj): an evening finished is done even though
+        ;; reopen leads back out of complete — :over says so, and a
+        ;; door into such a state finishes exactly as a door into a
+        ;; tomb does
+        accomplished (set (when-not (:field (:over rdef))
+                            (:accomplished (:over rdef))))
         closing (into #{"complete" "close" "accept"}
-                      (comp (filter #(and (contains? terminal (:to (val %)))
+                      (comp (filter #(and (or (contains? terminal (:to (val %)))
+                                              (contains? accomplished (:to (val %))))
                                           (not (contains? let-go (:to (val %))))))
                             (map (comp name key)))
                       (:actions rdef))
@@ -150,10 +158,26 @@
                                       counts)]))
                      (get tallies start {}))}))))
 
+(defn open-states
+  "The states a row of this kind is still OPEN in: every state the
+  machine does not call terminal, less the endings the kind declared
+  through `:over` (waymark-e6bj) — a retired chore that restore could
+  bring back is over, not work still waiting, and a finished evening
+  that reopen could resume is done. A mirror's endings live in a data
+  field, so for it only the terminal set is subtracted. Public for
+  the feed's fuel `cleared`, which asks the same question and must
+  not hold a second opinion about it."
+  [rdef]
+  (let [o (:over rdef)
+        over (cond-> (set (:terminal rdef))
+               (and o (not (:field o)))
+               (into (concat (:accomplished o) (:let-go o))))]
+    (remove over (:states rdef))))
+
 (defn- aging-shape
   "The :aging vector: per projected kind, among its non-terminal
-  rows (the declaration's own reading of open — a kind declaring no
-  terminal states ages everything), how many were created more than
+  rows (the declaration's own reading of open, `open-states` — a kind
+  declaring no ending at all ages everything), how many were created more than
   aging-cutoff-days ago and the age of the oldest. Kinds with
   nothing aging are absent — compact, and zero is not attention."
   [st kinds ^Instant now]
@@ -161,8 +185,7 @@
     (into []
           (keep
            (fn [[kind rdef]]
-             (let [terminal (set (:terminal rdef))
-                   open-states (remove terminal (:states rdef))
+             (let [opens (open-states rdef)
                    rows (store/with-tx st
                           (fn [tx]
                             (into []
@@ -170,7 +193,7 @@
                                    #(store/query-rows st tx kind {:state %}
                                                       {:limit aging-page
                                                        :order-by :created_at}))
-                                  open-states)))
+                                  opens)))
                    old (filterv #(some-> ^Instant (:created-at %)
                                          (.isBefore cutoff))
                                 rows)]

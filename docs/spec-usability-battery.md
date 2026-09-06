@@ -948,3 +948,39 @@ cost and no way out: `chore.retire`, `day.close`, `day_plan.close`,
 — `decision.finish` gets `reopen`, `definition.withdraw` gets `:final` —
 and the rest are the next audit's fix-list: by the taxonomy above, six
 want a `:final` sentence and ten want a restore door.
+
+### The second run (waymark-e6bj)
+
+The owner asked the next day whether every undoable ending was undoable
+yet; it was not, and the fourteen remaining doors were read again against
+the taxonomy above. The first-run count of six `:final`s was too many: on
+inspection only `outcome_piece.rework` has something built on its ending —
+the replacement piece stands where the reworked one stood, so un-reworking
+would set two pieces over one slot — and it gets the `:final` sentence.
+The other thirteen are filing decisions or endings the household can
+honestly take back, and every one gets a door:
+
+- **an `:undo` pair** where exactly one door lands in the tomb, so the
+  reverse returns exactly where it began: `day.close`/`reopen`,
+  `evening_plan.archive`/`restore`, `evening_session.finish`/`reopen`,
+  `meal_line.remove`/`restore`, `plan.complete`/`resume`;
+- **an ordinary door** where the tomb has two origins or two doors land in
+  it, because the inversion rule refuses a multi-origin `:undo`:
+  `chore.restore` (retire leaves from active and paused),
+  `day_plan.reopen` (close leaves from drafting and set, lands on set),
+  `prep_task.reopen` (complete leaves from pending and scheduled, lands on
+  pending and says what a kept calendar pointer means), and `restore` on
+  `ingredient`, `meal`, `substitution` and `product`, where `decline` and
+  `retire`/`discontinue` both land in the tomb — the door lands in the
+  in-use state either way, because Restore is the person's own verdict, a
+  declined suggestion included.
+
+Every de-tombed kind declares `:over` — `{:accomplished #{:closed}}` for a
+day, `{:let-go #{:retired}}` for a catalog row — so `open?`, `work-over?`
+and `accomplished?` read the ending exactly as they did when it was
+terminal; `chore_run` and `decision` were the precedent. Two feed readers
+that took "open" straight off the terminal set — fuel's `cleared` and the
+seasons report's aging — now read `:over` as well, so a restorable
+ending does not count as work still open. `plan.abandoned` and
+`prep_task.cancelled` stay tombs: both sit behind a confirm gate, and the
+plan's cascades a cancel through its prep tasks. The tally is zero.

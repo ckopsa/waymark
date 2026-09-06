@@ -260,7 +260,10 @@
   {:kind :product
    :states [:suggested :tracked :discontinued]
    :initial :suggested
-   :terminal #{:discontinued}
+   ;; discontinued is no tomb (waymark-e6bj): restore walks it back,
+   ;; and :over keeps reading discontinued as the product let go
+   :terminal #{}
+   :over {:let-go #{:discontinued}}
    :summary "{data.name} · {data.store} · {state}"
    :nav :secondary
    :schema [:map
@@ -375,7 +378,13 @@
       :display {:label "Not a real product" :order 2}}]
     [:tracked :discontinue :discontinued
      {:confirm "The product leaves the store-trip math; its price history stays readable."
-      :display {:label "Discontinue" :style :danger :order 9}}]]
+      :display {:label "Discontinue" :style :danger :order 9}}]
+    ;; two doors land in discontinued, so the way back is an ordinary
+    ;; door landing in tracked: Restore is the person's own verdict, a
+    ;; dismissed suggestion included
+    [:discontinued :restore :tracked
+     {:one-way "Restoring tracks the product again — a dismissed suggestion included, since Restore is the person's own verdict; its price history was never touched, and Rematch moves it if the match was wrong."
+      :display {:label "Restore" :order 3}}]]
    :actions
    {:rematch rematch
     :record_sighting record-sighting-action

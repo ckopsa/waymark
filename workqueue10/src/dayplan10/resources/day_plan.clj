@@ -196,7 +196,10 @@
    :nav :primary
    :states [:drafting :set :closed]
    :initial :drafting
-   :terminal #{:closed}
+   ;; closed is no tomb (waymark-e6bj): reopen walks it back, and :over
+   ;; keeps reading closed as the day accomplished
+   :terminal #{}
+   :over {:accomplished #{:closed}}
    :summary "{data.date} · {data.shape} · {state}"
    :label-template "{data.date}"
    :unique [[:member :date]]
@@ -288,5 +291,15 @@
     :close
     {:from #{:drafting :set} :to :closed
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "Closing ends the day; its blocks and spans stay readable as the record."}
-     :display {:label "Close the day" :order 9}}}})
+              :one-way "Closing ends the day; its blocks and spans stay readable as the record, and Reopen puts the plan back as set."}
+     :display {:label "Close the day" :order 9}}
+
+    ;; close leaves from two states, so its reverse is an ordinary door
+    ;; rather than an :undo: the plan comes back as set — nothing a
+    ;; close did needs unpicking — and replan is the door to edit it
+    ;; while a window is still ahead
+    :reopen
+    {:from #{:closed} :to :set
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Reopening puts the plan back as set; nothing a close did needs unpicking, and replan opens it for editing while a window is still ahead."}
+     :display {:label "Reopen the day" :order 8}}}})

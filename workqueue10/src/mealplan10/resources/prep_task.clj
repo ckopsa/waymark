@@ -45,7 +45,11 @@
 (defresource prep-task
   {:kind :prep_task
    :initial :pending
-   :terminal #{:done :cancelled}
+   ;; done is no tomb (waymark-e6bj): reopen walks it back, and :over
+   ;; keeps reading done as the step accomplished; cancelled stays the
+   ;; tomb behind its confirm gate
+   :terminal #{:cancelled}
+   :over {:accomplished #{:done} :let-go #{:cancelled}}
    :summary "{data.task_type} · {data.meal_name} ({data.date}) · {state}"
    ;; the step and the dinner it serves — "thaw: Chicken curry" is how
    ;; the kitchen says it, and meal_name is stated with every task, so
@@ -114,7 +118,7 @@
    :filterable {:state #{:eq :in}}
    :display {:title "{data.task_type}: {data.meal_name}"}
    :deviations
-   ["No :undo pointers — every edge here is honestly one-way or confirmed, and nothing walks a task back."
+   ["No :undo pointers — complete leaves from two states, so reopen is an ordinary door back to pending rather than its :undo; every other edge is honestly one-way or confirmed."
     "task_type carries no field default — the AI states it with each task."
     "The with_plan profile has no v10 spelling."]
    ;; the whole machine as rows — the rows name the states
@@ -131,5 +135,12 @@
       :display {:label "Put on calendar" :style :primary :order 1}}]
     [:pending   :complete :done      step-done]
     [:scheduled :complete :done      step-done]
+    ;; the way back from done (waymark-e6bj): an ordinary door, because
+    ;; complete leaves from two states and an :undo must return exactly
+    ;; where it began; it lands in pending, the lower claim, and says
+    ;; what a kept calendar pointer means
+    [:done      :reopen   :pending
+     {:one-way "Reopening puts the step back in the kitchen's queue as pending; a calendar event it already holds stays pointed at, so Put on calendar would make a second one."
+      :display {:label "Reopen" :order 3}}]
     [:pending   :cancel   :cancelled drop-task]
     [:scheduled :cancel   :cancelled drop-task]]})

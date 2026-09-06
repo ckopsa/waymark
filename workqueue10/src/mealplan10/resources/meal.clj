@@ -228,7 +228,10 @@
   {:kind :meal
    :states [:suggested :on_list :retired]
    :initial :suggested
-   :terminal #{:retired}
+   ;; retired is no tomb (waymark-e6bj): restore walks it back, and
+   ;; :over keeps reading retired as the meal let go
+   :terminal #{}
+   :over {:let-go #{:retired}}
    :shape 2
    :upcasts {1 fold-theme}
    :summary "{data.name} · {state}"
@@ -290,7 +293,7 @@
    :deviations
    ["accept_many stays a declared action — bulk has no flow-row spelling."
     "The on-list editors stay def'd actions — :fields would mint one all-optional writer, but apply-recipe writes conditionally and apply-themes dedupes: a different law under different names."
-    "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
+    "No :undo pointers — nothing here is declared reversible; restore walks retired back as an ordinary door, because decline and retire both land there and an :undo must return exactly where it began."
     "v10 summary templates carry no |join filter — the summary names the meal and its state only."
     "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."
     "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."]
@@ -306,7 +309,13 @@
       :display {:label "No thanks" :order 2}}]
     [:on_list   :retire  :retired
      {:confirm "The meal leaves the family list and can no longer be assigned to plan days."
-      :display {:label "Retire" :style :danger :order 9}}]]
+      :display {:label "Retire" :style :danger :order 9}}]
+    ;; two doors land in retired, so the way back is an ordinary door
+    ;; (waymark-e6bj) landing on the list: Restore is the person's own
+    ;; verdict, a declined suggestion included
+    [:retired   :restore :on_list
+     {:one-way "Restoring puts the meal back on the family list — a declined suggestion included, since Restore is the person's own verdict; plan days it once held were never touched."
+      :display {:label "Restore" :order 3}}]]
    :actions
    {:accept_many {:from #{:suggested} :to :on_list
                   :bulk {:max-items 200 :defer-over 50}

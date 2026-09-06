@@ -21,7 +21,10 @@
   {:kind :day
    :states [:open :closed]
    :initial :open
-   :terminal #{:closed}
+   ;; closed is no tomb (waymark-e6bj): close and reopen are an :undo
+   ;; pair, and :over keeps reading closed as the day accomplished
+   :terminal #{}
+   :over {:accomplished #{:closed}}
    :summary "{data.date} · {state}"
    :label-template "{data.date}"
    :filterable {:state #{:eq :in} :date #{:eq :range}}
@@ -44,9 +47,17 @@
    :actions
    {:close
     {:from #{:open} :to :closed
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "Closing the day just ends the sheet; every run keeps its own record."}
-     :display {:label "Close the day" :order 9}}}})
+     :undo :reopen
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Close the day" :order 9}}
+
+    ;; the honest reverse: closing costs nothing the declaration can
+    ;; see — every run keeps its own record — so reopening is one tap
+    :reopen
+    {:from #{:closed} :to :open
+     :undo :close
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Reopen the day" :order 8}}}})
 
 (def day-board
   "The housekeeper's screen (phase 9b surface, the week-board

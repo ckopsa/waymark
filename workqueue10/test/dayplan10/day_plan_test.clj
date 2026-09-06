@@ -276,7 +276,14 @@
     (act! :day_plan pid :close nil)
     (is (= :closed (:state (row :day_plan pid))))
     (is (every? #(= :planned (:state %)) (spans-of pid))
-        "closing the day leaves its spans as the record")))
+        "closing the day leaves its spans as the record")
+    ;; waymark-e6bj: closing cost nothing the declaration can see, so
+    ;; closed is no tomb — reopen puts the plan back as set, and the
+    ;; spent day's spans are still the record
+    (act! :day_plan pid :reopen nil)
+    (is (= :set (:state (row :day_plan pid))))
+    (is (every? #(= :planned (:state %)) (spans-of pid))
+        "reopening moves nothing but the plan's own state")))
 
 ;; ── § 4 the span doors ──────────────────────────────────────────────
 

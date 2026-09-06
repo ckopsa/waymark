@@ -8,7 +8,8 @@
   rollups are engine-maintained sums over the owns edge.
 
   Removing is a transition, not a delete — the row stays as history;
-  the meal's rollups count only on_recipe lines.
+  the meal's rollups count only on_recipe lines, and restore walks the
+  line back onto the recipe (an :undo pair, waymark-e6bj).
 
   Pricing is write-time: a line prices itself the moment it exists
   ((ingredient, grams) is enough), from the cheapest unit-priceable
@@ -234,7 +235,10 @@
   {:kind :meal_line
    :states [:on_recipe :removed]
    :initial :on_recipe
-   :terminal #{:removed}
+   ;; removed is no tomb: remove and restore are an :undo pair, and
+   ;; :over keeps reading removed as the line let go
+   :terminal #{}
+   :over {:let-go #{:removed}}
    :summary "{data.grams} g {data.ingredient_name} · {data.meal_name}"
    ;; a line has no name of its own — it IS the pairing, so the card
    ;; wears both engine-maintained ref-label copies rather than a raw
@@ -284,8 +288,12 @@
    ["The pricing arithmetic (unit price × grams ÷ 100, ratio math) is handler code, not law — division and argmax sit outside the expression grammar, the boundary v9 drew with price_line; the declared laws are priced, the meal's sums, and the substitutions' own machine."]
    :flow
    [[:on_recipe :remove :removed
-     {:one-way "The line leaves the recipe and its meal's totals; the row stays as history."
-      :display {:label "Remove" :style :danger :order 9}}]]
+     {:undo :restore
+      :display {:label "Remove" :style :danger :order 9
+                :description "The line leaves the recipe and its meal's totals; Restore puts it back"}}]
+    [:removed :restore :on_recipe
+     {:undo :remove
+      :display {:label "Restore" :order 3}}]]
    :actions
    {:set_grams set-grams-action
     :substitute substitute

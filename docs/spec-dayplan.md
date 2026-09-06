@@ -263,6 +263,19 @@ sentence naming what would open it, once the day is spent. **`close`**
 retires the blocks through the `:owns` edge's `:on` map, advertised by
 `:touches` with `:may true` (an already-retired block has nothing to do).
 
+*Amended 2026-09-06 (waymark-e6bj).* The `:on {:close :retire}` cascade
+the sketch above shows never landed: the declaration's `:owns` edge carries
+no `:on` map, and `day_plan_test` pins that closing leaves the spans as the
+record. So `close` costs nothing the declaration can see, and under
+`[cheap-reverse]` `closed` was a tomb with no cost. It is no longer
+terminal: **`reopen`** leads back from `closed` to `set` — an ordinary door
+rather than an `:undo`, because `close` leaves from two states and the
+inversion rule wants one origin — and `replan` is then the door to edit
+the plan while a window is still ahead. `:over {:accomplished #{:closed}}`
+keeps the feed reading a closed day exactly as before. `day.close` in
+choreplan10 took the same step as an `:undo` pair (`reopen`), since it
+leaves from one state.
+
 ### block — one context on this day
 
 ```clojure
