@@ -1,6 +1,7 @@
 (ns waymark10.usability
-  "The usability battery: five declaration-time policies that hold
-  every kind to inputs a person can actually answer (waymark-0ee).
+  "The usability battery: six declaration-time policies that hold
+  every kind to inputs a person can actually answer (waymark-0ee),
+  and to endings a person can come back from (waymark-9u10).
 
   The motivating complaint, recorded so the policies keep their
   reason: creating a saved view offered no hints for the right and
@@ -17,6 +18,7 @@
       3 composition scaffolding a blank textarea has something in it
       4 gesture duties          a swipe is short, cheap and undoable
       5 card completeness       a row can name itself
+      6 cheap reverses          a costless ending has a way back
 
   WHY THIS IS NOT waymark10.checks. The fail-fast gate in
   waymark10.checks runs inside `defresource`, at import, and prints
@@ -459,13 +461,84 @@
           " :label-template")]
     []))
 
+;; ── 6 · cheap reverses ──────────────────────────────────────────────
+;;
+;; waymark-9u10, the owner's rule after the first planned Sunday: "if
+;; it costs nothing to undo, we should be able to undo." The fail-fast
+;; battery already demands a :one-way sentence on every non-reversible
+;; door (checks/check-one-way), and a sentence about MEANING passes
+;; it: decision.finish said "Done is the record; a finished decision
+;; stays finished" while the declaration showed no cost at all — no
+;; handler, no input, no cascade, no push — and no door out of done.
+;; So this policy reads what the declaration can SEE, and the sentence
+;; is not a silencer: the one-way check requires it everywhere, so it
+;; carries no signal about cost. Two things silence it — a visible
+;; cost, or a door out of the landing state — and one thing exempts a
+;; door: the clock opened it.
+
+(defn- visible-costs
+  "What the declaration itself shows a door doing beyond moving the
+  row — the things a reverse would have to unpick, as words. Empty
+  when it shows nothing."
+  [r a]
+  (cond-> []
+    (:handler a) (conj "a handler")
+    (:input a) (conj "an input")
+    (get-in a [:safety :confirm]) (conj "a confirm gate")
+    (some (fn [[_ edge]] (contains? (set (keys (:on edge))) (:name a)))
+          (:owns r))
+    (conj "a cascade through :owns")
+    (let [m (:mirror r)] (and m (or (:push-on-write m) (:create-push m))))
+    (conj "a push to its source")))
+
+(defn- clocks-door?
+  "A door the clock opens — a leaf guard reading :now — is the world
+  moving, not a person's snap judgment; nobody undoes the time."
+  [a]
+  (boolean (some #(some #{:now} (:reads %)) (leaf-guards a))))
+
+(defn- leaves-state?
+  "Is there a door out of `state` that lands somewhere else? A
+  self-loop restates the row where it stands and frees nothing."
+  [r state]
+  (boolean (some (fn [b] (and (contains? (set (:from b)) state)
+                              (not= (:to b) state)))
+                 (machine/actions-seq r))))
+
+(defn cheap-reverse
+  "A one-way door whose cost the declaration cannot see, into a state
+  no door leaves, is a checkbox wearing a tomb's name. Declared
+  terminal is not a reason — it is the claim being questioned."
+  [r]
+  (into []
+        (keep (fn [a]
+                (let [to (:to a) aname (name (:name a))]
+                  (when (and (some #(not= % to) (:from a))
+                             (not (get-in a [:safety :reversible]))
+                             (human-invokable? a)
+                             (not (clocks-door? a))
+                             (empty? (visible-costs r a))
+                             (not (leaves-state? r to)))
+                    (str "[cheap-reverse] action " aname " ends a row in "
+                         (name to)
+                         (when (contains? (set (:terminal r)) to) ", a declared tomb,")
+                         " and nothing the declaration can see makes coming"
+                         " back costly — no handler, no input, no cascade, no"
+                         " push, no confirm gate — yet no door leads out of "
+                         (name to) "; a tomb with no cost is a checkbox wearing"
+                         " a tomb's name. Declare the honest reverse (an :undo"
+                         " pair when " aname " leaves from one state, an"
+                         " ordinary door when it leaves from several), or give"
+                         " the door the handler that makes its cost visible")))))
+        (machine/actions-seq r)))
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
 (def policies
-  "The five, in the bead's order — a vector so the report reads the
-  same way twice and a sixth policy arrives visibly."
+  "The six, in the beads' order — a vector so the report reads the
+  same way twice and a seventh policy arrives visibly."
   [#'effort-honesty #'display-prose #'composition-scaffolding
-   #'gesture-duties #'card-completeness])
+   #'gesture-duties #'card-completeness #'cheap-reverse])
 
 (defn warnings
   "Every usability opinion this battery holds about one normalized

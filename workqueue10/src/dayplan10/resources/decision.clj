@@ -42,10 +42,12 @@
 
   Two endings said out loud through :over — done and changed are the
   work accomplished (the decision said *this*, the day said *that*,
-  and change keeps both), skipped is the work let go — and done and
-  changed are tombs: a finished decision stays finished, and reopen is
-  skip's honest reverse alone. Skipping the block cascades here
-  through its :owns edge.
+  and change keeps both), skipped is the work let go. Changed is the
+  one tomb: it holds two sentences and a door out would unsay one.
+  Done is not (waymark-9u10, the owner's rule: if it costs nothing to
+  undo, we should be able to undo): reopen is the honest reverse of
+  finish as it is of skip, landing on planned either way — the tap is
+  a fresh Go. Skipping the block cascades here through its :owns edge.
 
   Spelled :schema + :create-schema + :actions (block's dialect): the
   optional fields at create have no :fields spelling, and changed_to
@@ -249,14 +251,26 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
-(defscenario a-finished-decision-stays-finished
-  "Done is a tomb: there is no door out of it, and the machine itself
-   says so."
+(defscenario a-finished-decision-reopens
+  "Done is not a tomb (waymark-9u10): finishing cost nothing the
+   declaration can see, so reopen leads back out, to planned — the
+   verdict is a fresh Go."
   {:kind    :decision
-   :attempt :start
+   :attempt :reopen
    :row     {:state :done
              :data {:block_id a-block :kind "work" :text "The porch railing"
                     :order 1}}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-changed-decision-stays-changed
+  "Changed IS a tomb: it holds two sentences, and a door out would
+   unsay one — the machine itself refuses."
+  {:kind    :decision
+   :attempt :start
+   :row     {:state :changed
+             :data {:block_id a-block :kind "work" :text "The porch railing"
+                    :changed_to "The fence instead" :order 1}}
    :as      {:id "colton" :type :person}
    :expect  {:refused :out-of-state}})
 
@@ -298,9 +312,10 @@
    :nav :secondary
    :states [:planned :started :done :skipped :changed]
    :initial :planned
-   ;; done and changed are where a decision's story ends; skipped is
-   ;; not — reopen is skip's honest reverse
-   :terminal #{:done :changed}
+   ;; changed is where a decision's story ends — two sentences, and a
+   ;; door out would unsay one. done and skipped are not: reopen is
+   ;; the honest reverse of finish and of skip (waymark-9u10)
+   :terminal #{:changed}
    :over {:accomplished #{:done :changed} :let-go #{:skipped}}
    :summary "{data.text} · {state}"
    :label-template "{data.text}"
@@ -402,7 +417,8 @@
                go-needs-the-room-wired
                a-link-fires-nothing-and-needs-no-wiring
                change-keeps-both-sentences
-               a-finished-decision-stays-finished]
+               a-finished-decision-reopens
+               a-changed-decision-stays-changed]
    :on-create stamp-day-and-member
    :actions
    {:start
@@ -417,14 +433,15 @@
     :finish
     {:from #{:started :planned} :to :done
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "Done is the record; a finished decision stays finished."}
+              :one-way "Done is the record; Reopen puts it back as planned if the day says otherwise."}
      :display {:label "Done" :order 2}}
 
-    ;; skip departs from two states and an :undo must land exactly
-    ;; where it began (checks.clj § undo), so the pair is not declared
-    ;; as one: reopen is an ordinary door back to planned — a started
-    ;; decision skipped and reopened reads as planned again, which is
-    ;; the honest word for it (the launch is a fresh tap)
+    ;; finish and skip each depart from two states and an :undo must
+    ;; land exactly where it began (checks.clj § undo), so neither
+    ;; pair is declared as one: reopen is an ordinary door back to
+    ;; planned from either ending — a started decision finished or
+    ;; skipped and reopened reads as planned again, which is the
+    ;; honest word for it (the launch is a fresh tap)
     :skip
     {:from #{:planned :started} :to :skipped
      :safety {:idempotent true :reversible false :confirm false
@@ -432,9 +449,9 @@
      :display {:label "Skip" :order 3}}
 
     :reopen
-    {:from #{:skipped} :to :planned
+    {:from #{:skipped :done} :to :planned
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "Reopening puts a skipped decision back as planned; Skip sets it aside again."}
+              :one-way "Reopening puts a skipped or finished decision back as planned; Skip or Done ends it again."}
      :display {:label "Reopen" :order 4}}
 
     :change

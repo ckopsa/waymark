@@ -1,5 +1,5 @@
 (ns waymark10.usability-test
-  "The usability battery (waymark-0ee): five policies, each proved
+  "The usability battery (waymark-0ee; waymark-9u10's sixth): six policies, each proved
   twice — a declaration that earns the warning and reads the fix in
   it, and a compliant declaration the battery has nothing to say
   about. The silent case is the load-bearing one: a policy that
@@ -391,3 +391,59 @@
   (testing "a :system kind is on nobody's nav"
     (is (= [] (warns (-> compliant (dissoc :label-template) (assoc :nav :system))
                      "card-completeness")))))
+
+;; ── 6 · cheap reverses ──────────────────────────────────────────────
+
+(g/defguard past-the-hour
+  {:reads [:now]
+   :explain "The hour has not struck."}
+  [_row _inp _ctx]
+  (t/allow))
+
+(def ^:private tomb
+  "compliant with finish's way back torn out: reopen gone, the :undo
+  gone, and a :one-way sentence about meaning in its place — exactly
+  decision.finish as it stood on the first planned Sunday. The deck
+  view goes too, because a gesture bound to a one-way door is refused
+  at declaration, not warned about."
+  (-> compliant
+      (dissoc :views)
+      (update :actions dissoc :reopen)
+      (update-in [:actions :finish] dissoc :undo)
+      (assoc-in [:actions :finish :safety]
+                {:idempotent true :confirm false
+                 :one-way "Done is the record; a finished errand stays finished."})))
+
+(deftest cheap-reverse-warns-when-a-costless-door-leads-nowhere
+  ;; waymark-9u10: "if it costs nothing to undo, we should be able to
+  ;; undo" — read off the declaration alone, the sentence notwithstanding
+  (let [ws (warns tomb "cheap-reverse")]
+    (is (= 1 (count ws)))
+    (is (str/includes? (first ws) "action finish ends a row in done"))
+    (is (str/includes? (first ws) "no door leads out of done"))
+    (is (str/includes? (first ws) "Declare the honest reverse")))
+
+  (testing "a declared tomb is the claim being questioned, not a reason"
+    (let [ws (warns (assoc tomb :terminal #{:done}) "cheap-reverse")]
+      (is (= 1 (count ws)))
+      (is (str/includes? (first ws) "done, a declared tomb,"))))
+
+  (testing "a handler makes the cost visible"
+    (is (= [] (warns (assoc-in tomb [:actions :finish :handler]
+                               (fn [row _inp _ctx] row))
+                     "cheap-reverse"))))
+
+  (testing "a door out — to anywhere the row can still be acted on — is a way back"
+    (is (= [] (warns (assoc-in tomb [:actions :shelve]
+                               {:from #{:done} :to :dropped
+                                :safety {:idempotent true :confirm false
+                                         :one-way "Shelved; Back on returns it."}
+                                :display {:label "Shelve"}})
+                     "cheap-reverse"))))
+
+  (testing "the clock's door is exempt — nobody undoes the time"
+    (is (= [] (warns (assoc-in tomb [:actions :finish :guards] [past-the-hour])
+                     "cheap-reverse"))))
+
+  (testing "the compliant kind, with its pairs, has nothing owing"
+    (is (= [] (warns compliant "cheap-reverse")))))
