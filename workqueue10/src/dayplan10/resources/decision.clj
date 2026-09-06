@@ -397,6 +397,12 @@
    ;; SHAPE FIRST, WORLD NEXT: the launch pairing reads nothing; the
    ;; subject reads the row it names; the block wall reads the day
    :create-guards [launch-says-how subject-resolves on-a-planned-block]
+   :scenarios [a-subject-is-a-row-that-stands
+               a-launch-says-how
+               go-needs-the-room-wired
+               a-link-fires-nothing-and-needs-no-wiring
+               change-keeps-both-sentences
+               a-finished-decision-stays-finished]
    :on-create stamp-day-and-member
    :actions
    {:start
