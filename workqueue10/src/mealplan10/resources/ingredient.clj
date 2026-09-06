@@ -266,7 +266,10 @@
   {:kind :ingredient
    :states [:suggested :active :retired]
    :initial :suggested
-   :terminal #{:retired}
+   ;; retired is no tomb (waymark-e6bj): restore walks it back, and
+   ;; :over keeps reading retired as the ingredient let go
+   :terminal #{}
+   :over {:let-go #{:retired}}
    :summary "{data.name} · {state}"
    :nav :secondary
    :schema [:map
@@ -359,5 +362,13 @@
     :retire {:from #{:active} :to :retired
              :guards [no-tracked-products]
              :safety {:idempotent true :reversible false :confirm false
-                      :one-way "Retired ingredients stay retired — absorb points a duplicate at its survivor instead."}
-             :display {:label "Retire" :style :danger :order 9}}}})
+                      :one-way "Retiring takes the ingredient out of the pantry; Restore brings it back, and absorb points a duplicate at its survivor instead."}
+             :display {:label "Retire" :style :danger :order 9}}
+    ;; two doors land in retired (decline, retire), so the way back is
+    ;; an ordinary door rather than an :undo — the inversion rule wants
+    ;; one origin — and it lands in active either way: Restore is the
+    ;; person's own verdict, a declined suggestion included
+    :restore {:from #{:retired} :to :active
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "Restoring puts the ingredient back in the pantry as active — a declined suggestion included, since Restore is the person's own verdict; nothing a retire did needs unpicking."}
+              :display {:label "Restore" :order 3}}}})

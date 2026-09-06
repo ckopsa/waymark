@@ -79,7 +79,10 @@
   {:kind :meal
    :states [:suggested :on_list :retired]
    :initial :suggested
-   :terminal #{:retired}
+   ;; retired is no tomb (waymark-e6bj): restore walks it back, and
+   ;; :over keeps reading retired as the meal let go
+   :terminal #{}
+   :over {:let-go #{:retired}}
    :shape 2
    :upcasts {1 meal/fold-theme}
    :summary "{data.name} · {state}"
@@ -155,7 +158,7 @@
    :deviations
    ["accept_many stays a declared action — bulk has no flow-row spelling."
     "The on-list editors stay def'd actions — :fields would mint one all-optional writer, but apply-recipe writes conditionally and apply-themes dedupes: a different law under different names."
-    "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
+    "No :undo pointers — nothing here is declared reversible; restore walks retired back as an ordinary door, because decline and retire both land there and an :undo must return exactly where it began."
     "v10 summary templates carry no |join filter — the summary names the meal and its state only."
     "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."
     "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."]
@@ -173,6 +176,10 @@
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "Declining a suggestion is cheap — the AI can suggest it again any time."}
               :display {:label "No thanks" :order 2}}
+    :restore {:from #{:retired} :to :on_list
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "Restoring puts the meal back on the family list — a declined suggestion included, since Restore is the person's own verdict; plan days it once held were never touched."}
+              :display {:label "Restore" :order 3}}
     :update_recipe {:from #{:on_list} :to :on_list
                     :input [:map
                             [:recipe {:x-display
@@ -336,7 +343,8 @@
   {:kind :plan
    :states [:draft :planned :active :done :abandoned]
    :initial :draft
-   :terminal #{:done :abandoned}
+   :terminal #{:abandoned}
+   :over {:accomplished #{:done} :let-go #{:abandoned}}
    ;; the decision record's retention (waymark-442.5) rides both
    ;; spellings — and rides them WITHOUT moving the hash, which is the
    ;; proof this key is not law: fingerprint-of's whitelist never
@@ -459,9 +467,11 @@
             :display {:label "Start the week" :style :primary :order 1}}
     :complete {:from #{:active} :to :done
                :guards [plan/no-open-tasks]
-               :safety {:idempotent true :reversible false :confirm false
-                        :one-way "Completing records a finished week; the plan remains readable as history."}
+               :safety {:idempotent true :reversible true :confirm false}
                :display {:label "Week done" :style :primary :order 1}}
+    :resume {:from #{:done} :to :active
+             :safety {:idempotent true :reversible true :confirm false}
+             :display {:label "Resume the week" :order 2}}
     :abandon {:from #{:draft :planned :active} :to :abandoned
               :touches [{:kind :prep_task :action :cancel :may true}]
               :safety {:idempotent true :reversible false :confirm true
@@ -727,7 +737,8 @@
   {:kind :prep_task
    :states [:pending :scheduled :done :cancelled]
    :initial :pending
-   :terminal #{:done :cancelled}
+   :terminal #{:cancelled}
+   :over {:accomplished #{:done} :let-go #{:cancelled}}
    :summary "{data.task_type} · {data.meal_name} ({data.date}) · {state}"
    ;; the picker/card/badge name for a step — advertisement, not law,
    ;; so it rides both spellings without moving the hash (the literal
@@ -788,7 +799,7 @@
    :sortable {:fields [:due_at] :default "due_at"}
    :display {:title "{data.task_type}: {data.meal_name}"}
    :deviations
-   ["No :undo pointers — every edge here is honestly one-way or confirmed, and nothing walks a task back."
+   ["No :undo pointers — complete leaves from two states, so reopen is an ordinary door back to pending rather than its :undo; every other edge is honestly one-way or confirmed."
     "task_type carries no field default — the AI states it with each task."
     "The with_plan profile has no v10 spelling."]
    :actions
@@ -807,6 +818,10 @@
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "Marking a prep step done records kitchen reality; nothing external changes."}
                :display {:label "Done" :order 2}}
+    :reopen {:from #{:done} :to :pending
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "Reopening puts the step back in the kitchen's queue as pending; a calendar event it already holds stays pointed at, so Put on calendar would make a second one."}
+             :display {:label "Reopen" :order 3}}
     :cancel {:from #{:pending :scheduled} :to :cancelled
              :safety {:idempotent true :reversible false :confirm true
                       :consequence "The task is dropped; any calendar event for it should be removed by hand."}
@@ -838,11 +853,17 @@
   ;; sentence retired, its law now the sum option itself — an
   ;; intentional law change whose promote backfill restamps the
   ;; stored 0s
-  {:meal      "fafa6d152fa12f33f1ef2a66109ab9c939e518da872d9343027fb3a0e0df9390"
+  ;; re-pinned 2026-09-06 (waymark-e6bj): retired left :terminal for
+  ;; :over {:let-go #{:retired}} and restore walks it back — an
+  ;; intentional law change, not style drift
+  {:meal      "e7fcf84baedab0ba11ae3b35e399d0df43dfa179e6a6360345fb528cc7db2796"
    ;; re-pinned 2026-07-24: :date gained :filter #{:eq :range} — the
    ;; day board's related join (one engine since waymark-bwu.2) needs
-   ;; the promoted column; an intentional law change, not style drift
-   :prep_task "5c1327a83e776803fa294dd8beb871e0c766a59d840628fa31aa7a8eae8d9463"})
+   ;; the promoted column; an intentional law change, not style drift.
+   ;; Re-pinned again 2026-09-06 (waymark-e6bj): done left :terminal
+   ;; for :over {:accomplished #{:done} :let-go #{:cancelled}} and
+   ;; reopen walks it back — an intentional law change, not style drift
+   :prep_task "ba3a159402e7eb112787a87f04649df7b871efde9b75e3159eefe43c19ece324"})
 
 (deftest the-canonical-residue-hashes-are-pinned-as-literals
   (is (= (:meal the-canonical-hashes) (hash-of-resource meal/meal)))

@@ -3578,7 +3578,12 @@
     {:from #{:offered} :to :reworked
      :guards [(reworks-wall :outcome_piece) the-parent-invited-a-rework]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "You are pulling this piece back so a better one can stand in its place — it leaves the bundle without being declined or set aside, so the household never reads it as a verdict on the idea, and it lands nothing if the outcome is later accepted. Stage the replacement as a new piece."}
+              :one-way "You are pulling this piece back so a better one can stand in its place — it leaves the bundle without being declined or set aside, so the household never reads it as a verdict on the idea, and it lands nothing if the outcome is later accepted. Stage the replacement as a new piece."
+              ;; final on purpose (waymark-e6bj): something is built on
+              ;; this ending — the replacement piece stands where this
+              ;; one stood, so un-reworking would set two pieces over
+              ;; one slot of the bundle
+              :final "The replacement piece stands where this one stood the moment it is pulled back; un-reworking would set two pieces over one slot of the bundle, and the household would read the old one as offered again. The way forward is the replacement, never this piece."}
      :display {:label "Rework" :order 4
                :description "Withdraw your own piece from an outcome under an open iterate request, to replace it"}}}
    :scenarios [the-composer-does-not-answer-its-own-piece

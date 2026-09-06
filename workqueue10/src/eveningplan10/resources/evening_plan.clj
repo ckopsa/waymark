@@ -23,7 +23,10 @@
   {:kind :evening_plan
    :states [:draft :archived]
    :initial :draft
-   :terminal #{:archived}
+   ;; archived is no tomb (waymark-e6bj): archive and restore are an
+   ;; :undo pair, and :over keeps reading archived as the plan let go
+   :terminal #{}
+   :over {:let-go #{:archived}}
    :summary "Plan {data.start_date} → {data.end_date} · {state}"
    ;; a plan is a stretch of evenings and has no name of its own; the
    ;; two dates ARE how the household says which one it means, and the
@@ -49,5 +52,11 @@
             :summary "The plan's evening sessions" :embed true}]
    :actions
    {:archive {:from #{:draft} :to :archived
-              :safety {:idempotent true :reversible false :confirm false
-                       :one-way "Archiving retires the plan; its evenings stay readable as a record."}}}})
+              :undo :restore
+              :safety {:idempotent true :reversible true :confirm false}}
+    ;; the honest reverse: archiving costs nothing the declaration can
+    ;; see — its evenings were never touched — so restoring is one tap
+    :restore {:from #{:archived} :to :draft
+              :undo :archive
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Restore" :order 2}}}})

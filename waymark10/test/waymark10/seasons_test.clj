@@ -67,6 +67,29 @@
     {:complete {:from #{:open} :to :open :safety quiet}
      :archive {:from #{:open} :to :done :safety quiet}}}))
 
+(def ^:private evening
+  ;; :finish lands NON-terminal, in a state :over calls accomplished,
+  ;; with :reopen leading back out (waymark-e6bj) — the declaration's
+  ;; :over, not the terminal set, must classify it :completed, and
+  ;; open-states must not count complete (or the let-go shelved) as
+  ;; work still open
+  (r/resource
+   {:kind :season_evening
+    :plural "season_evenings"
+    :states [:open :complete :shelved]
+    :initial :open
+    :terminal #{}
+    :over {:accomplished #{:complete} :let-go #{:shelved}}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 80}]]]
+    :actions
+    {:finish {:from #{:open} :to :complete :undo :reopen
+              :safety {:idempotent true :reversible true :confirm false}}
+     :reopen {:from #{:complete} :to :open :undo :finish
+              :safety {:idempotent true :reversible true :confirm false}}
+     :shelve {:from #{:open} :to :shelved :safety quiet}
+     :unshelve {:from #{:shelved} :to :open :safety quiet}}}))
+
 (def ^:private memo
   ;; never granted to the agent — the byte-level-absence control
   (r/resource
@@ -184,6 +207,20 @@
                  (get-in cur [:kinds :member]))
               "the registrar's create and the set_handle — and neither
                curtain touch"))))))
+
+;; ── :over — an ending the terminal set does not hold (waymark-e6bj) ─
+
+(deftest over-reads-an-ending-the-terminal-set-does-not-hold
+  (let [classify (seasons/classify evening)]
+    (is (= :completed (classify "finish"))
+        "a door into a state :over calls accomplished finishes, terminal or not")
+    (is (= :other (classify "reopen")))
+    (is (= :other (classify "shelve"))
+        "a door into a let-go state is not a deed")
+    (is (= [:open] (vec (seasons/open-states evening)))
+        "complete and shelved are endings, not work still open")
+    (is (= [:open] (vec (seasons/open-states task)))
+        "unspelled, the terminal set is the reading it always was")))
 
 ;; ── aging: current rows, the declaration's reading of open ──────────
 

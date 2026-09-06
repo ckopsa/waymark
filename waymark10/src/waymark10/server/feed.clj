@@ -3464,8 +3464,13 @@
   (let [{:keys [field accomplished]} (over-vocabulary rdef)]
     (if field [] (mapv name accomplished))))
 
-(defn- open-state-names [rdef]
-  (into [] (comp (remove (set (:terminal rdef))) (map name)) (:states rdef)))
+(defn- open-state-names
+  "The STATE names a row is still open in — the seasons door's own
+  reading (`seasons/open-states`), so a restorable ending a kind
+  declared through `:over` (waymark-e6bj) is not counted as work left
+  in the queue."
+  [rdef]
+  (mapv name (seasons/open-states rdef)))
 
 (defn- in-states
   "Rows of one kind in the named states, through the ORDINARY

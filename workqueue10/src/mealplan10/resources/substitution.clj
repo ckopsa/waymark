@@ -63,7 +63,10 @@
   {:kind :substitution
    :states [:suggested :accepted :retired]
    :initial :suggested
-   :terminal #{:retired}
+   ;; retired is no tomb (waymark-e6bj): restore walks it back, and
+   ;; :over keeps reading retired as the claim let go
+   :terminal #{}
+   :over {:let-go #{:retired}}
    :summary "{data.from_ingredient_name} → {data.to_ingredient_name} · ×{data.ratio} · {state}"
    ;; a claim has no name of its own — it IS the directed pair, so the
    ;; card wears both engine-maintained ref-label copies
@@ -112,5 +115,11 @@
       :display {:label "No thanks" :order 2}}]
     [:accepted :retire :retired
      {:one-way "Future pricing and swaps stop; estimates already stamped through this stand-in keep their honest priced_via mark."
-      :display {:label "Retire" :style :danger :order 9}}]]
+      :display {:label "Retire" :style :danger :order 9}}]
+    ;; two doors land in retired, so the way back is an ordinary door
+    ;; landing in accepted: Restore is the person's own verdict, a
+    ;; declined suggestion included
+    [:retired :restore :accepted
+     {:one-way "Restoring puts the substitution back in use as accepted — a declined suggestion included, since Restore is the person's own verdict; estimates stamped while it was retired keep their own priced_via mark."
+      :display {:label "Restore" :order 3}}]]
    :actions {:update_details update-details}})
