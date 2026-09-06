@@ -186,7 +186,8 @@
             [:acknowledged {:optional true
                             :x-display
                             {:label "Each row's acknowledged warnings"
-                             :help "Index-aligned with the ids: the guard names each item acknowledged when it was queued."}}
+                             :help "Index-aligned with the ids: the guard names each item acknowledged when it was queued."
+                             :spelled-by-hand "A list of lists — each row's acknowledged guard names — copied from the deferring call's items; the call writes it, never a form."}}
              [:maybe [:vector [:vector :string]]]]
             ;; the deferring call's own Idempotency-Key (waymark-pywy.5):
             ;; not a record — a deferred call keeps none — but the

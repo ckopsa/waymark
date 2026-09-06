@@ -905,11 +905,13 @@
    {:examples [feed-recipe/order-example]
     :x-display
     {:label "The order the house reads today"
+     :spelled-by-hand "A list of lines is a list of maps, which no sub-form offers yet: the example is the whole shape — copy the current order and edit a line; the chips beside the box offer every section and population word."
      :help "What you are staging against, copied out of the feed document at recipe.order — exactly the shape it rides there. This is not decoration: the diff is computed from it, and a proposal that disagrees with what the house actually reads is refused here rather than applied on top of somebody else's edit."}}
    :order
    {:examples [feed-recipe/order-example]
     :x-display
     {:label "The order you propose in its place"
+     :spelled-by-hand "A list of lines is a list of maps, which no sub-form offers yet: the example is the whole shape — copy the current order and edit a line; the chips beside the box offer every section and population word."
      :help "The whole feed, top to bottom, as it would read once this is applied — one entry per line, and the vector's order IS the page's order. Start from the order above and change what you mean to change. Exactly one line is the seam; the bottomless line is last; the sections keep census order; every population is one this engine holds."}}
    :evidence
    {:x-display
