@@ -458,7 +458,14 @@ subject's `source_ui_href` or `source_href` — projection, not storage.
 becomes a task (below). *Amended 2026-09-06 (waymark-au42): the generic
 form rendered `launch` as a textarea reading "JSON object"; a nested map
 with declared fields is now a sub-form of its own labelled widgets, and the
-JSON box is kept only for a property-less object such as `data`.* **`changed_to`** is written by `change` and by no
+JSON box is kept only for a property-less object such as `data`.* *Amended
+again the same night (waymark-ylat): "launch has service data and it's json
+too." `data` is now a nested map of its own — `entity_id` and a list of
+`settings` rows, each a name and a value — so the sub-form and the rows
+widget render it with no JSON anywhere; `fire-launch` builds the service
+call's map from it, sending a value that reads as a number or true/false as
+one, and the decision is shape 2 with an upcast that folds the old free-form
+map (the entity stays; every other key becomes a row).* **`changed_to`** is written by `change` and by no
 form: the decision said *this*, the day said *that*, and both are kept.
 
 **`start` is the verdict.** It takes no input, so `demand/effort` renders it

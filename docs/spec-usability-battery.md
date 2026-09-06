@@ -1079,3 +1079,12 @@ holes resolve by bare name against the form and cannot yet see an indexed
 row. `[spelled-by-hand]` mirrors that exactly: a list of maps is formable
 when every item field is and none carries a recipe. Wiring recipes into
 rows is the bead that would take scope and order out of the box too.
+
+The launch's service data followed the same night (waymark-ylat): "launch
+has service data and it's json too." The census had called it the one
+honest box — whatever the service takes — and that was a judgment about
+Home Assistant's payloads, not about what a person needs. It is now an
+entity and a list of settings rows, two levels down inside the launch, and
+the collector learned that a widget's name is a path of keys and indices
+rather than one dotted pair. No field a household member meets is a JSON
+box any more; the two that remain are the operators' scope and order.

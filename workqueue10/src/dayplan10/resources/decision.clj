@@ -138,6 +138,50 @@
       (t/deny {:vars {:service (str service)}})
       (t/allow))))
 
+;; ── the service call, as a person spells it (waymark-ylat) ──────────
+
+(defn- read-setting
+  "A setting's value as Home Assistant wants it: brightness_pct wants
+  40 and not \"40\", a switch wants true, a color name stays a word."
+  [v]
+  (let [s (str/trim (str v))]
+    (cond
+      (contains? #{"true" "false"} s) (= "true" s)
+      (re-matches #"-?\d+" s) (parse-long s)
+      (re-matches #"-?\d+\.\d+" s) (parse-double s)
+      :else s)))
+
+(defn service-data
+  "The map a Home Assistant service call takes, from the launch's data
+  as a person fills it in: the entity, then every settings row as a
+  key. Nil-safe — a service that names its own entity sends {}."
+  [data]
+  (into (if (str/blank? (str (:entity_id data)))
+          {}
+          {:entity_id (:entity_id data)})
+        (keep (fn [{:keys [name value]}]
+                (when-not (str/blank? (str name))
+                  [(keyword (str/trim name)) (read-setting value)])))
+        (:settings data)))
+
+(defn fold-launch-data
+  "shape 1 → 2: the free-form service-data map — whatever the service
+  took, spelled as JSON — becomes the entity and a list of settings
+  rows a form can offer. entity_id stays; every other key becomes a
+  row with its value as a string. Idempotent: an already-folded
+  document (settings present, or nothing but entity_id) passes through."
+  [data]
+  (let [d (get-in data [:launch :data])]
+    (if (and (map? d)
+             (not (contains? d :settings))
+             (seq (dissoc d :entity_id)))
+      (assoc-in data [:launch :data]
+                (cond-> {:settings (into []
+                                         (map (fn [[k v]] {:name (name k) :value (str v)}))
+                                         (sort-by (comp str key) (dissoc d :entity_id)))}
+                  (:entity_id d) (assoc :entity_id (str (:entity_id d)))))
+      data)))
+
 ;; ── the handlers ────────────────────────────────────────────────────
 
 (defhandler fire-launch [row _inp ctx]
@@ -157,7 +201,7 @@
                                "reached the engine's :services — " service
                                " cannot fire")
                           {:service service})))
-        (fire! service (or data {}))))
+        (fire! service (service-data data))))
     row))
 
 (defhandler record-change [row inp _ctx]
@@ -309,13 +353,27 @@
               :x-display {:label "Service"
                           :help "The Home Assistant service, domain/service — light/turn_on."}}
     [:maybe [:string {:min 1 :max 120}]]]
+   ;; the service call as a person fills it in (waymark-ylat): the
+   ;; entity and a list of settings rows — a sub-form and rows in every
+   ;; client, never a JSON box; fire-launch builds the call's map from it
    [:data {:optional true
            :x-display {:label "Service data"
-                       :help "The service call's data — {entity_id light.porch}."
-                       ;; waymark-1nns: the one honest JSON box on a household
-                       ;; form — whatever the service takes
-                       :spelled-by-hand "Whatever the Home Assistant service takes — {\"entity_id\": \"light.porch\"} — and only its documentation can spell the keys; a link or a note never needs this."}}
-    [:maybe [:map-of :keyword :any]]]
+                       :help "What the service acts on and how — for a service launch only; a link or a note never needs this."}}
+    [:maybe [:map
+             [:entity_id {:optional true
+                          :x-display {:label "Entity"
+                                      :help "The Home Assistant entity the service acts on — light.porch, switch.fan. Leave it empty for a service that names its own."}}
+              [:maybe [:string {:max 200}]]]
+             [:settings {:optional true
+                         :x-display {:label "Settings"
+                                     :help "Anything else the service takes, one per row — brightness_pct 40, color_name red. A value that reads as a number or true/false is sent as one."}}
+              [:maybe [:vector [:map
+                                [:name {:x-display {:label "Setting"
+                                                    :help "The field the service reads — brightness_pct."}}
+                                 [:string {:min 1 :max 80}]]
+                                [:value {:x-display {:label "Value"
+                                                     :help "40, red, true."}}
+                                 [:string {:max 200}]]]]]]]]]
    [:text {:optional true
            :x-display {:label "Note"
                        :help "What the card shows when you go — 'the drill is in the blue case'."}}
@@ -325,6 +383,10 @@
   {:kind :decision
    :plural "decisions"
    :nav :secondary
+   ;; shape 2 (waymark-ylat): the launch's service data is an entity and
+   ;; settings rows; the upcast folds the free-form map that came before
+   :shape 2
+   :upcasts {1 fold-launch-data}
    :states [:planned :started :done :skipped :changed]
    :initial :planned
    ;; changed is where a decision's story ends — two sentences, and a

@@ -678,48 +678,56 @@ function coerceValue(node, prop, raw) {
   if (prop.type === "boolean") return raw === "true";
   return raw;
 }
-const LIST_FIELD = /^([^\[.]+)\[(\d+)\]\.(.+)$/;
+/* A widget's name is a PATH into the value — launch.data.settings[0].value
+   — map keys and list indices, as deep as the declaration nests
+   (waymark-au42 made one level, waymark-jtd7 the rows, waymark-ylat the
+   launch's service data two levels down). The schema is walked the
+   same way to type each leaf; a leaf left blank is never set, so a
+   blank row is a hole the compaction closes and a blank sub-form is a
+   parent that is simply absent. */
+function parsePath(name) {
+  const segs = [];
+  for (const m of name.matchAll(/([^.\[\]]+)|\[(\d+)\]/g))
+    segs.push(m[1] !== undefined ? m[1] : Number(m[2]));
+  return segs;
+}
+function schemaAt(props, segs) {
+  let cur = {properties: props};
+  for (const s of segs) {
+    cur = schemaProp(cur);
+    cur = typeof s === "number" ? (cur.items || {}) : ((cur.properties || {})[s] || {});
+  }
+  return schemaProp(cur);
+}
+function setAt(root, segs, v) {
+  let cur = root;
+  segs.forEach((s, i) => {
+    if (i === segs.length - 1) { cur[s] = v; return; }
+    if (cur[s] === undefined) cur[s] = typeof segs[i + 1] === "number" ? [] : {};
+    cur = cur[s];
+  });
+}
+function compact(x) {
+  if (Array.isArray(x)) return x.filter(e => e !== undefined).map(compact);
+  if (x && typeof x === "object") {
+    for (const k of Object.keys(x)) x[k] = compact(x[k]);
+    return x;
+  }
+  return x;
+}
 function collectValues(form, schema) {
   const values = {};
-  const lists = {};
   const props = (schema || {}).properties || {};
   for (const node of form.querySelectorAll("[name]")) {
     const name = node.getAttribute("name");
     const raw = node.value;
     if (raw === "" || raw === null) continue;
-    /* a list row's field (waymark-jtd7): parent[i].child folds into
-       the i-th entry of the parent's array, typed by the item schema;
-       a row left blank never reaches here and the array closes over it */
-    const m = LIST_FIELD.exec(name);
-    if (m) {
-      const [, parent, idx, child] = m;
-      const itemProps = schemaProp(schemaProp(props[parent] || {}).items || {}).properties || {};
-      const v = coerceValue(node, schemaProp(itemProps[child] || {}), raw);
-      if (v === undefined) continue;
-      const bag = (lists[parent] = lists[parent] || {});
-      (bag[idx] = bag[idx] || {})[child] = v;
-      continue;
-    }
-    /* a sub-form's field (waymark-au42): parent.child folds back into
-       the parent's object, typed by the nested schema; a sub-form left
-       blank never reaches here, so the parent is simply absent */
-    const dot = name.indexOf(".");
-    if (dot > 0) {
-      const parent = name.slice(0, dot), child = name.slice(dot + 1);
-      const subProps = schemaProp(props[parent] || {}).properties || {};
-      const v = coerceValue(node, schemaProp(subProps[child] || {}), raw);
-      if (v === undefined) continue;
-      (values[parent] = values[parent] || {})[child] = v;
-      continue;
-    }
-    const v = coerceValue(node, schemaProp(props[name] || {}), raw);
-    if (v !== undefined) values[name] = v;
+    const segs = parsePath(name);
+    const v = coerceValue(node, schemaAt(props, segs), raw);
+    if (v === undefined) continue;
+    setAt(values, segs, v);
   }
-  for (const [parent, bag] of Object.entries(lists)) {
-    const arr = Object.keys(bag).map(Number).sort((a, b) => a - b).map(i => bag[i]);
-    if (arr.length) values[parent] = arr;
-  }
-  return values;
+  return compact(values);
 }
 function prefillFromDoc(doc, input) {
   const out = {};
