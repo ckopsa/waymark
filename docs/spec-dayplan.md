@@ -597,6 +597,19 @@ block with the block answered. Same rule as the plan's `create`: a leash
 that does not confer the door projects no door, and the screen shows no
 chip.
 
+*Amended again 2026-09-06 (waymark-i89n.14), the first real Sunday.* The
+owner, having planned it in chat: "the rest of the feed is pointless to me
+right now and I'm tempted to get rid of it. also I'd love to preview what
+each block has within the feed maybe." So the day stands alone on home
+when the document carries a plan: the census moved behind `#feed` (a Feed
+link on the desktop nav, an item behind ⋯ on a phone) with one quiet link
+at the foot of the day, and a document without a plan still lands on the
+feed as it was. The timeline's tap-to-open row became a list — every block
+with its window, stance and decisions in order, read without a tap; the
+current block stays the header, past blocks read dim, the add chip rides
+every block still ahead. And the clock reads AM/PM, the meridiem said once
+across a window (7:00–8:35 AM), as asked.
+
 ### (h) Nothing from laws v3 applies inside a block
 
 The current block's decisions are a handful of candidates with an `order`

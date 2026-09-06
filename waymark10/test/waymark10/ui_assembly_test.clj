@@ -130,6 +130,17 @@
          (waymark-i89n.12) — and none when none was projected")
     (is (str/includes? page "const tmpl = dp.template_create || null;")
         "…and the plan panel the template's")
+    ;; waymark-i89n.14: the day stands alone on home, the census keeps
+    ;; #feed, every block is a row read without a tap
+    (is (str/includes? page "if (feedDayPlan(body)) return renderDayScreen(view, body);")
+        "home is the day alone when the document carries one")
+    (is (str/includes? page "if (href === \"feed\")")
+        "…and the feed keeps an address of its own")
+    (is (str/includes? page "href: \"#feed\""))
+    (is (str/includes? page "function dayList(dp, ctx"))
+    (is (not (str/includes? page "dayTimeline"))
+        "the tap-to-open timeline is gone")
+    (is (str/includes? page ".day-row {") "the list's CSS survives assembly")
     (is (str/includes? page ".day-head {") "its CSS survives assembly")
     (is (str/includes? page "html[data-ui=\"mobile\"] .day-head"))
     (is (< (str/index-of page "async function renderFeedScreen")

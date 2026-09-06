@@ -11,6 +11,13 @@
    HOME (#) IS THE DAY. render() lands here when the hash is empty:
    the feed document is the landing when the feed's door answers, and
    the dashboard — kept at #dashboard, behind ⋯ — when it does not.
+   Since waymark-i89n.14 the day stands ALONE on home when the document
+   carries a plan: the census moved behind #feed (the nav's Feed link,
+   ⋯ on a phone), one quiet link at the foot of the day leads there,
+   and a document without a plan still lands on the feed as it was.
+   Below the current block every block of the day is a row you read
+   without a tap — its window, its stance, its decisions in order —
+   and the clock reads AM/PM, the meridiem shared across a window.
 
    THE LOOP CLOSES HERE (waymark-i89n.12). An open block offers the
    create door the document put on it — 'add a decision', the form
@@ -56,15 +63,43 @@ async function renderLanding(view, seq) {
   lawStamp(ok ? body : null);
   if (!ok || !Array.isArray((body || {}).cards))
     return view.append(problemBox(body || {}));
+  /* the day alone when the document carries one (waymark-i89n.14);
+     the feed exactly as it was when it does not */
+  if (feedDayPlan(body)) return renderDayScreen(view, body);
   return renderFeedScreen(view, body);
+}
+/* #feed: the census for a reader who wants it — the day still heads
+   it, so the seam reads the block's own sentence */
+async function renderFeedRoute(view, seq) {
+  const {ok, body} = await api("/api/-/feed");
+  if (seq !== renderSeq) return;
+  clearLiveTimers();
+  view.textContent = "";
+  lawStamp(ok ? body : null);
+  if (!ok || !Array.isArray((body || {}).cards))
+    return view.append(problemBox(body || {}));
+  return renderFeedScreen(view, body);
+}
+/* the day screen: the header, then one quiet link to the feed */
+function renderDayScreen(view, doc) {
+  const day = feedDayDate(doc);
+  const col = el("div", {class: "feed-col day-screen"});
+  const node = dayHeader(feedDayPlan(doc), {day, reread: () => render()});
+  if (node) col.append(node);
+  col.append(el("p", {class: "muted day-feed-link"},
+    el("a", {href: "#feed",
+             title: "what to do now, what to answer, what the house already finished"},
+      "the feed →")));
+  view.append(col);
 }
 
 /* ── the clock, in the household's zone ──────────────────────────── */
 function dayClock(zone) {
-  const opts = {hour: "2-digit", minute: "2-digit", hourCycle: "h23"};
+  /* AM/PM (waymark-i89n.14): the house reads a 12-hour clock */
+  const opts = {hour: "numeric", minute: "2-digit", hour12: true};
   let fmt;
-  try { fmt = new Intl.DateTimeFormat("en-GB", {...opts, timeZone: zone || undefined}); }
-  catch { fmt = new Intl.DateTimeFormat("en-GB", opts); }
+  try { fmt = new Intl.DateTimeFormat("en-US", {...opts, timeZone: zone || undefined}); }
+  catch { fmt = new Intl.DateTimeFormat("en-US", opts); }
   return iso => {
     const d = new Date(iso);
     return Number.isNaN(d.getTime()) ? "" : fmt.format(d);
@@ -83,8 +118,11 @@ function dayAfter(date) {
   d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);
 }
+/* a window, the meridiem said once when both ends share it: 7:00–8:35 AM */
 function spanWindow(s, clock) {
-  return clock(s.starts_at) + "–" + clock(s.ends_at);
+  const a = clock(s.starts_at), b = clock(s.ends_at);
+  const half = t => (t.match(/([AP]M)$/) || [])[1] || "";
+  return (half(a) && half(a) === half(b) ? a.replace(/\s*[AP]M$/, "") : a) + "–" + b;
 }
 /* past, current or ahead — the server's `current` flag first, the
    span clock after; a block with no windows is ahead until it says */
@@ -177,14 +215,18 @@ function dayGoChip(d, verb, row, ctx) {
   }
   return chip;
 }
-function dayDecisionRow(d, ctx) {
+function dayDecisionRow(d, ctx, compact) {
   const launch = d.launch || {};
-  const row = el("li", {class: "day-decision", "data-decision": d.id || "",
+  const row = el("li", {class: "day-decision" + (compact ? " compact" : ""),
+                        "data-decision": d.id || "",
                         "data-state": d.state || ""});
   row.append(el("a", {class: "day-decision-text prose",
                       href: d.self ? "#" + d.self : null,
                       title: "the decision's own screen — skip or change it there"},
     d.text || "…"));
+  /* a preview row is the sentence alone: no launch, no chip — the
+     block's own turn brings those to the header */
+  if (compact) return row;
   if (launch.type === "text" && launch.text)
     row.append(el("div", {class: "day-decision-launch prose"}, launch.text));
   const verbs = el("div", {class: "day-verbs feed-verbs"});
@@ -216,61 +258,55 @@ function dayAddChip(block, ctx) {
   });
   return el("div", {class: "day-verbs feed-verbs"}, btn);
 }
-function dayDecisionList(block, ctx) {
+function dayDecisionList(block, ctx, {compact = false, addable = true} = {}) {
   const ds = [...(block.decisions || [])]
     .sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
-  const add = dayAddChip(block, ctx);
+  const add = addable ? dayAddChip(block, ctx) : null;
   const list = ds.length
-    ? el("ol", {class: "day-decisions"}, ds.map(d => dayDecisionRow(d, ctx)))
+    ? el("ol", {class: "day-decisions"}, ds.map(d => dayDecisionRow(d, ctx, compact)))
     : el("div", {class: "muted day-none"}, "nothing decided for this block");
   return add ? el("div", {class: "day-decided"}, list, add) : list;
 }
 
-/* ── the timeline: one line, every block, tap to open ─────────────── */
-function dayTimeline(dp, ctx) {
+/* ── the day, block by block: every block previewed, no tap ────────
+   (waymark-i89n.14) One row per block in window order — the name, the
+   window(s), the stance, and its decisions in the person's order,
+   read without a tap. The current block is the header above, so its
+   row is a marker; past blocks read dim; every block still ahead
+   carries the add chip the document projected. The plan's own verbs
+   — replan, reshape, whatever was projected — sit under the list. */
+function dayList(dp, ctx, {skipCurrent = true} = {}) {
   const now = Date.now(), clock = dayClock(dp.zone);
-  const line = el("div", {class: "day-timeline", role: "list"});
-  const open = el("div", {class: "day-tl-open"});
-  let shown = null;
+  const list = el("ol", {class: "day-list", role: "list"});
   for (const b of dp.blocks || []) {
+    const phase = blockPhase(b, now);
     const spans = b.spans || [];
-    const btn = el("button", {class: "day-tl-block " + blockPhase(b, now),
-                              type: "button", role: "listitem",
-                              "data-block": b.id || "", "aria-expanded": "false",
-                              title: spans.map(s => spanWindow(s, clock)).join(" · ")},
-      b.context_name || "block",
-      spans.length ? el("span", {class: "day-tl-when mono"},
-                        spanWindow(spans[0], clock)) : null);
-    btn.addEventListener("click", () => {
-      for (const x of line.querySelectorAll("[aria-expanded]"))
-        x.setAttribute("aria-expanded", "false");
-      if (shown === b.id) { shown = null; open.replaceChildren(); return; }
-      shown = b.id;
-      btn.setAttribute("aria-expanded", "true");
-      open.replaceChildren(el("div", {class: "day-tl-detail", "data-block": b.id || ""},
-        el("b", {}, b.context_name || "block"),
-        b.stance ? el("span", {class: "muted prose"}, " — " + b.stance) : null,
-        el("span", {class: "muted mono day-tl-spans"},
-          spans.map(s => spanWindow(s, clock)).join(" · ")),
-        dayDecisionList(b, ctx)));
-    });
-    line.append(btn);
+    const row = el("li", {class: "day-row " + phase, "data-block": b.id || ""});
+    row.append(el("div", {class: "day-row-head"},
+      el("b", {class: "day-row-name"}, b.context_name || "block"),
+      el("span", {class: "day-row-when mono muted"},
+        spans.map(s => spanWindow(s, clock)).join(" · ")),
+      phase === "current" ? el("span", {class: "day-row-now"}, "now") : null));
+    if (phase === "current" && skipCurrent) { list.append(row); continue; }
+    if (b.stance) row.append(el("div", {class: "day-row-stance muted prose"}, b.stance));
+    row.append(dayDecisionList(b, ctx, {compact: phase !== "current",
+                                        addable: phase !== "past"}));
+    list.append(row);
   }
-  /* the plan's own verbs — replan, reshape, whatever was projected —
-     on the line's right edge */
   const plan = dp.plan || null;
   const problem = el("div", {"data-day-problem": ""});
+  const out = [list, problem];
   if (plan && Object.keys(plan.actions || {}).length) {
-    const bar = el("div", {class: "day-tl-verbs feed-verbs"});
+    const bar = el("div", {class: "day-list-verbs feed-verbs"});
     const orderOf = e => (e.display || {}).order ?? 99;
     for (const [name, entry] of Object.entries(plan.actions)
            .sort(([a, ea], [b, eb]) => orderOf(ea) - orderOf(eb) || a.localeCompare(b)))
       bar.append(dayVerbChip({name, entry, subject: plan,
         cardId: "now/plan/" + String(plan.self || "").split("/").pop(),
         problem, ctx}));
-    line.append(bar);
+    out.push(bar);
   }
-  return [line, problem, open];
+  return out;
 }
 
 /* ── EXECUTE: the current block, then the line ───────────────────── */
@@ -293,7 +329,7 @@ function dayExecutePanel(dp, ctx) {
         "next: " + (next.context_name || "a block") + " at "
         + clock(next.spans[0].starts_at)));
   }
-  sec.append(...dayTimeline(dp, ctx));
+  sec.append(...dayList(dp, ctx));
   return sec;
 }
 
@@ -386,7 +422,8 @@ function dayPlanPanel(dp, ctx) {
     el("a", {href: "/api/-/welcome", target: "_blank", rel: "noopener",
              title: "the connector's own instructions — an agent plans the day through the ordinary doors"},
       "ask Claude to plan it")));
-  if (dp.plan && dp.blocks && dp.blocks.length) sec.append(...dayTimeline(dp, ctx));
+  if (dp.plan && dp.blocks && dp.blocks.length)
+    sec.append(...dayList(dp, ctx, {skipCurrent: false}));
   return sec;
 }
 

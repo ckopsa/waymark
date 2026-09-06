@@ -635,33 +635,36 @@
   .day-verbs button.chip.verb.small { font-size: 12.5px; min-height: 30px;
                                       padding: 3px 10px; }
   .day-head [data-day-problem]:empty { display: none; }
-  /* the timeline: one line, every block; past dim, current bold,
-     ahead plain — and the plan's own verbs on the right edge */
-  .day-timeline { display: flex; flex-wrap: wrap; align-items: center;
-                  gap: 4px 6px; margin: 12px 0 0; padding-top: 8px;
-                  border-top: 1px dashed var(--line); }
-  .day-tl-block { font-family: var(--sans); font-size: 12.5px; padding: 4px 10px;
-                  min-height: 30px; border-radius: 999px; background: transparent;
-                  border: 1px solid var(--line); color: var(--ink);
-                  display: inline-flex; align-items: center; gap: 6px;
-                  cursor: pointer; }
-  .day-tl-block:hover { background: var(--verdigris-wash);
-                        border-color: var(--verdigris); }
-  .day-tl-block.past { color: var(--muted); opacity: .7; }
-  .day-tl-block.current { font-weight: 700; border-color: var(--verdigris);
-                          background: var(--verdigris-wash);
-                          color: var(--verdigris-deep); }
-  .day-tl-block[aria-expanded="true"] { border-style: dashed; }
-  .day-tl-when { font-size: 11px; color: var(--muted); }
-  .day-tl-block.current .day-tl-when { color: var(--verdigris-deep); }
-  .day-tl-verbs { margin: 0 0 0 auto; }
-  .day-tl-verbs button.chip.verb { font-size: 12.5px; min-height: 30px;
-                                   padding: 3px 10px; }
-  .day-tl-open:empty { display: none; }
-  .day-tl-detail { margin: 8px 0 0; padding: 8px 10px 4px;
-                   background: var(--chipbg); border-radius: var(--radius);
-                   font-size: 13.5px; }
-  .day-tl-spans { display: block; font-size: 11.5px; margin-top: 2px; }
+  /* the day, block by block (waymark-i89n.14): every block a row you
+     read without a tap — past dim, current marked, ahead plain — and
+     the plan's own verbs under the list */
+  .day-list { list-style: none; margin: 12px 0 0; padding: 0;
+              border-top: 1px dashed var(--line); }
+  .day-row { padding: 8px 0 6px; border-bottom: 1px solid var(--line); }
+  .day-row.past { color: var(--muted); opacity: .75; }
+  .day-row-head { display: flex; flex-wrap: wrap; align-items: baseline;
+                  gap: 4px 10px; }
+  .day-row-name { font-size: 15px; }
+  .day-row.current .day-row-name { color: var(--verdigris-deep); }
+  .day-row-when { font-size: 12px; }
+  .day-row-now { font-family: var(--sans); font-size: 11px; font-weight: 700;
+                 text-transform: uppercase; letter-spacing: .06em;
+                 color: var(--verdigris-deep); }
+  .day-row-stance { font-size: 13.5px; margin: 2px 0 0; }
+  .day-row .day-decisions { margin-top: 4px; }
+  .day-row .day-decision { padding: 3px 0; border-top: none; }
+  .day-row .day-decision-text { font-size: 14px; }
+  .day-decision.compact[data-state="done"] .day-decision-text,
+  .day-decision.compact[data-state="skipped"] .day-decision-text,
+  .day-decision.compact[data-state="changed"] .day-decision-text {
+    text-decoration: line-through; color: var(--muted); }
+  .day-row .day-none { margin: 2px 0; font-size: 12.5px; }
+  .day-row .day-decided .day-verbs { margin: 2px 0 0; }
+  .day-list-verbs { margin: 10px 0 0; }
+  .day-list-verbs button.chip.verb { font-size: 12.5px; min-height: 30px;
+                                     padding: 3px 10px; }
+  .day-screen .day-head { border-bottom: none; }
+  .day-feed-link { font-size: 12.5px; margin: 6px 16px 16px; }
   /* plan mode: the defaults as quiet rows, the shape as chips */
   .day-default { display: flex; flex-wrap: wrap; align-items: baseline;
                  gap: 4px 10px; padding: 6px 0;
