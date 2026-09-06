@@ -350,7 +350,11 @@
         (is (contains? (set (keys (get-in day [:create :input :properties])))
                        :member)
             "the create form asks whose day — the screen prefills the
-             principal")))))
+             principal")
+        (is (= "/api/contexts" (str (get-in day [:template_create :href])))
+            "and the template's create door beside the defaults
+             (waymark-i89n.12) — a house with no contexts yet makes its
+             first one from the same screen")))))
 
 (deftest every-card-says-why-it-is-here
   ;; The read that started waymark-iqa.29: a movie in do-now, and no

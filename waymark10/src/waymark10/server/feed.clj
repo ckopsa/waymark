@@ -4037,8 +4037,12 @@
   "One block of the plan, projected, with its spans and its decisions
   — or nil when the grant conceals the block. `current` is whether
   this is the block under the clock; `seam` is the context's own
-  closing sentence, carried on the block as the ref's `:carry`."
-  [ctx current-bid spans-by-block raw]
+  closing sentence, carried on the block as the ref's `:carry`;
+  `create` is the decision's create door as its collection advertises
+  it, projected through the grant (waymark-i89n.12) — the screen offers
+  'add a decision' on the open block, with this block prefilled, and a
+  reader whose leash does not confer the create sees no chip."
+  [ctx current-bid spans-by-block decision-create raw]
   (when-some [{:keys [decoded body]} (projected ctx :block raw)]
     (let [d (:data decoded)
           bid (str (:id raw))]
@@ -4049,6 +4053,9 @@
        "seam" (some-> (:context_seam d) str not-empty)
        "state" (name (state-of raw))
        "current" (= bid current-bid)
+       "create" (when decision-create
+                  (assoc (p/wire-value decision-create)
+                         "display" {"label" "Add a decision"}))
        "spans" (into []
                      (keep #(day-read (str "span " (:id %)) nil
                                       (fn [] (span-doc ctx %))))
@@ -4093,7 +4100,10 @@
   the same arithmetic. `defaults` rides only in plan mode; `create` is
   the plan's create door as the collection advertises it, projected
   through the grant, whatever the mode — a house that may plan may
-  plan tomorrow too."
+  plan tomorrow too. `template_create` is the context's create door
+  the same way (waymark-i89n.12): the plan-mode screen offers 'new
+  template' beside the defaults, so the whole loop — a template, a
+  plan, a decision — lives on the one screen."
   [ctx recipe]
   (when (dayplan-kinds? ctx)
     (day-read "the day" nil
@@ -4110,17 +4120,22 @@
                             (or (some-> (get spans-by-block (str (:id b)))
                                         first (get-in [:data :starts_at]) str)
                                 "~"))
+              decision-create (coll/create-affordance (get (resources ctx) :decision)
+                                                      (:visibility ctx))
               blocks (when pid
                        (into []
                              (keep #(day-read (str "block " (:id %)) nil
-                                              (fn [] (block-doc ctx cur-bid spans-by-block %))))
+                                              (fn [] (block-doc ctx cur-bid spans-by-block
+                                                                decision-create %))))
                              (sort-by (juxt first-start #(str (:id %)))
                                       (rows-of ctx :block {:plan_id pid} 500))))
               mode (if (and plan (or (= :set (state-of plan-raw)) (seq blocks)))
                      "execute"
                      "plan")
               create (coll/create-affordance (get (resources ctx) :day_plan)
-                                             (:visibility ctx))]
+                                             (:visibility ctx))
+              template-create (coll/create-affordance (get (resources ctx) :context)
+                                                      (:visibility ctx))]
           (cond-> {"mode" mode
                    "date" day
                    "zone" (:zone recipe "UTC")
@@ -4135,7 +4150,10 @@
                    "blocks" (or blocks [])
                    "create" (when create
                               (assoc (p/wire-value create)
-                                     "display" {"label" "Plan today"}))}
+                                     "display" {"label" "Plan today"}))
+                   "template_create" (when template-create
+                                       (assoc (p/wire-value template-create)
+                                              "display" {"label" "New template"}))}
             (= "plan" mode) (assoc "defaults" (defaults-doc ctx (weekday-shape day)))))))))
 
 (def populations

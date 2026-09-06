@@ -6863,6 +6863,19 @@
        (conj (str "feed: day.create is the plan's create door for a reader who"
                   " may plan; read " (pr-str (:create day0))))
 
+       ;; waymark-i89n.12: the loop closes on the one screen — the
+       ;; template's door beside the defaults, the decision's on the block
+       (and (map? day0)
+            (not= "/api/contexts" (str (get-in day0 [:template_create :href]))))
+       (conj (str "feed: day.template_create is the context's create door for"
+                  " a reader who may make templates; read "
+                  (pr-str (:template_create day0))))
+
+       (and my-block (not= "/api/decisions" (str (get-in my-block [:create :href]))))
+       (conj (str "feed: a block in day.blocks carries the decision's create"
+                  " door for a reader who may decide; read "
+                  (pr-str (:create my-block))))
+
        ;; the fixture
        (and context-id (nil? plan-id))
        (conj (str "feed: creating today's plan answered " (:status plan-made)

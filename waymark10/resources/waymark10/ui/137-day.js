@@ -12,6 +12,12 @@
    the feed document is the landing when the feed's door answers, and
    the dashboard — kept at #dashboard, behind ⋯ — when it does not.
 
+   THE LOOP CLOSES HERE (waymark-i89n.12). An open block offers the
+   create door the document put on it — 'add a decision', the form
+   with this block answered — and the plan panel offers the template's
+   create door beside the defaults, so a template, a plan and a
+   decision are all made from the one screen.
+
    THREE THINGS THIS FILE DOES NOT DO. It invents no affordance: every
    chip is an action the document projected for this reader, and a
    decision whose verb was withheld shows its text and no chip. It
@@ -188,12 +194,36 @@ function dayDecisionRow(d, ctx) {
   else verbs.remove();
   return row;
 }
+/* the block's own create door, when the document projected one: the
+   ordinary action dialog over the create form with this block already
+   answered. No door projected (the leash does not confer it), no chip
+   — the list ends where the decisions end. */
+function dayAddChip(block, ctx) {
+  const create = block.create || null;
+  if (!create) return null;
+  const props = (create.input || {}).properties || {};
+  const kind = kindAtHref(wellKnownNow, String(create.href || "").split("?")[0]) || "";
+  const btn = el("button", {class: "chip verb small day-add", type: "button",
+                            "data-action": "create",
+                            title: (create.display || {}).description || ""},
+    (create.display || {}).label || "add one");
+  btn.addEventListener("click", () => {
+    const prefill = {};
+    if (props.block_id && block.id) prefill.block_id = block.id;
+    actionDialog({name: "create", entry: create, doc: {kind}, prefill,
+                  idemKey: feedOriginKey(ctx.day, "now/block/" + (block.id || "") + "/create"),
+                  onDone: () => ctx.reread()});
+  });
+  return el("div", {class: "day-verbs feed-verbs"}, btn);
+}
 function dayDecisionList(block, ctx) {
   const ds = [...(block.decisions || [])]
     .sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
-  if (!ds.length)
-    return el("div", {class: "muted day-none"}, "nothing decided for this block");
-  return el("ol", {class: "day-decisions"}, ds.map(d => dayDecisionRow(d, ctx)));
+  const add = dayAddChip(block, ctx);
+  const list = ds.length
+    ? el("ol", {class: "day-decisions"}, ds.map(d => dayDecisionRow(d, ctx)))
+    : el("div", {class: "muted day-none"}, "nothing decided for this block");
+  return add ? el("div", {class: "day-decided"}, list, add) : list;
 }
 
 /* ── the timeline: one line, every block, tap to open ─────────────── */
@@ -331,6 +361,25 @@ function dayPlanPanel(dp, ctx) {
       verbs.append(dayVerbChip({name, entry, subject: dp.plan,
         cardId: "now/plan/" + String(dp.plan.self || "").split("/").pop(),
         problem, ctx}));
+  }
+  /* the template's create door, when projected: a new default block
+     for the shape — the pressed shape, if any, seeds the form */
+  const tmpl = dp.template_create || null;
+  if (tmpl) {
+    const tprops = (tmpl.input || {}).properties || {};
+    const tkind = kindAtHref(wellKnownNow, String(tmpl.href || "").split("?")[0]) || "";
+    const tbtn = el("button", {class: "chip verb small day-add", type: "button",
+                               "data-action": "create",
+                               title: (tmpl.display || {}).description || ""},
+      (tmpl.display || {}).label || "new template");
+    tbtn.addEventListener("click", () => {
+      const prefill = {};
+      if (tprops.default_shapes && shape) prefill.default_shapes = [shape];
+      actionDialog({name: "create", entry: tmpl, doc: {kind: tkind}, prefill,
+                    idemKey: feedOriginKey(ctx.day, "now/template/create"),
+                    onDone: () => ctx.reread()});
+    });
+    verbs.append(tbtn);
   }
   if (verbs.childElementCount) sec.append(verbs, problem);
   sec.append(el("p", {class: "muted day-or"}, "or ",
