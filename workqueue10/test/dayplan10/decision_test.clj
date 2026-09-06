@@ -29,6 +29,7 @@
   Run: cd workqueue10 && clojure -M:test --focus dayplan10.decision-test"
   (:require [calendar10.source :as gcal]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [dayplan10.resources.decision :as dec]
             [dayplan10.zone :as zone]
             [next.jdbc :as jdbc]
             [waymark10.dev :as dev]
@@ -260,6 +261,40 @@
         (is (re-find #"502" (str (:message r) (:detail r))))
         (is (= :planned (:state (row :decision (:id d3))))
             "the record does not say 'went' while the room stayed dark")))))
+
+(deftest service-data-is-an-entity-and-settings-rows-not-json
+  ;; waymark-ylat: the owner met a JSON box under Launch → Service data;
+  ;; the form now asks for the entity and settings rows, and the call
+  ;; Home Assistant hears is the same map it always took
+  (reset! ha-calls [])
+  (let [[_ block] (workday-block!)
+        d (decide! block {:text "Porch lights, dim and red"
+                          :launch {:type "service" :service "light/turn_on"
+                                   :data {:entity_id "light.porch"
+                                          :settings [{:name "brightness_pct" :value "40"}
+                                                     {:name "color_name" :value " red "}
+                                                     {:name "flash" :value "true"}]}}})]
+    (act! :decision (:id d) :start nil)
+    (is (= [["light/turn_on" {:entity_id "light.porch" :brightness_pct 40
+                              :color_name "red" :flash true}]]
+           @ha-calls)
+        "a number is a number, true is true, a word is a word"))
+  (testing "the shape-1 free-form map folds into the same rows, once"
+    (let [old {:launch {:type "service" :service "light/turn_on"
+                        :data {:entity_id "light.porch" :brightness_pct 40 :color_name "red"}}}
+          folded (dec/fold-launch-data old)]
+      (is (= {:entity_id "light.porch"
+              :settings [{:name "brightness_pct" :value "40"}
+                         {:name "color_name" :value "red"}]}
+             (get-in folded [:launch :data])))
+      (is (= folded (dec/fold-launch-data folded)) "idempotent")
+      (is (= {:entity_id "light.porch" :brightness_pct 40 :color_name "red"}
+             (dec/service-data (get-in folded [:launch :data])))
+          "and the call it fires is the one the old map fired")
+      (let [bare (assoc-in old [:launch :data] {:entity_id "light.porch"})]
+        (is (= bare (dec/fold-launch-data bare))
+            "nothing but an entity has nothing to fold"))
+      (is (= {} (dec/service-data nil)) "a launch with no data sends {}"))))
 
 (deftest not-yet-takes-a-go-back-and-the-launch-stays-in-the-record
   ;; waymark-4an5: from started the only doors were Done, Skip and

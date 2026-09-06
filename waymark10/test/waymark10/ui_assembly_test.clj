@@ -340,8 +340,10 @@
     (is (str/includes? page "return subformWidget(name, prop, value);"))
     (is (str/includes? page "placeholder: xd[\"spelled-by-hand\"] || \"JSON object\"")
         "the property-less object keeps its box, wearing the declaration's reason when it has one")
-    (is (str/includes? page "(values[parent] = values[parent] || {})[child] = v;")
-        "parent.child folds back into the parent's object")
+    (is (str/includes? page "function parsePath")
+        "a widget's name is a path of keys and indices (waymark-ylat)")
+    (is (str/includes? page "setAt(values, segs, v);")
+        "each leaf lands at its path, typed by walking the schema")
     (is (str/includes? page ".subform {") "its own CSS survives assembly")
     ;; waymark-jtd7: a list of maps is rows of the item's sub-form, unless
     ;; an item field carries an option recipe — those keep the box and
@@ -349,8 +351,8 @@
     (is (str/includes? page "function listWidget"))
     (is (str/includes? page "!itemOptionFields(rawProp).length"))
     (is (str/includes? page "return listWidget(name, prop, itemSchema, value);"))
-    (is (str/includes? page "(bag[idx] = bag[idx] || {})[child] = v;")
-        "parent[i].child folds into the i-th entry")
+    (is (str/includes? page "return compact(values);")
+        "a blank row is a hole the compaction closes")
     (is (str/includes? page ".subform.list .listrow {") "the rows' CSS survives assembly")))
 
 (deftest the-undo-stack-rides-the-page-and-names-no-kind
