@@ -93,11 +93,43 @@ function fieldWidget(name, rawProp, value) {
                              ? JSON.stringify(ex, null, 1) : "JSON array"},
       value !== undefined && value !== null ? JSON.stringify(value, null, 1) : "");
   }
-  if (prop.type === "object")
+  if (prop.type === "object") {
+    /* a nested map with declared fields is a form within the form
+       (waymark-au42) — the JSON box is for the object nobody labelled */
+    if (prop.properties && Object.keys(prop.properties).length)
+      return subformWidget(name, prop, value);
     return el("textarea", {name, "data-array": "json", placeholder: "JSON object"},
       value !== undefined && value !== null ? JSON.stringify(value, null, 1) : "");
+  }
   return el("input", {type: "text", name, value: value ?? "",
     placeholder: prop.format || ""});
+}
+/* A nested map is a form within the form (waymark-au42), never a JSON
+   box: the declaration labelled every sub-field and said what each is
+   for, and the projection carried the labels here — asking a person to
+   spell the object by hand would throw that away. Each sub-field is its
+   own widget named parent.child (the enum a select wearing its choices,
+   a string an input, a property-less map-of still the JSON box), and
+   collectValues folds them back into one object, omitting a sub-form
+   left entirely blank. One level: a map inside a map inside a map has
+   not been declared anywhere in the house. */
+function subformWidget(name, prop, value) {
+  const box = el("div", {class: "subform", "data-subform": name});
+  const required = new Set((prop.required || []).map(String));
+  const seed = value && typeof value === "object" ? value : {};
+  for (const [sub, subRaw] of Object.entries(prop.properties)) {
+    const subProp = schemaProp(subRaw);
+    const xd = subRaw["x-display"] || subProp["x-display"] || {};
+    const path = name + "." + sub;
+    box.append(el("div", {class: "field", "data-field": path},
+      el("label", {title: path}, el("b", {}, xd.label || sub),
+         required.has(sub) ? el("span", {class: "req"}, " *") : ""),
+      fieldWidget(path, subRaw, seed[sub]),
+      el("div", {class: "err srv", "data-srverr": path})));
+    if (xd.help) box.append(el("div", {class: "muted",
+      style: "font-size:11px;margin:-6px 0 8px"}, xd.help));
+  }
+  return box;
 }
 /* a waymark-ref field offers the target kind's rows, labeled by summary.
    A guard-folded enum on the field is the ADMITTED set (the render
@@ -582,32 +614,44 @@ function buildForm(schema, prefill, kind) {
     attachItemOptions(form, widget, fs, es);
   return form;
 }
+/* one widget's raw string → the wire value its schema means; undefined
+   when the widget said nothing worth sending */
+function coerceValue(node, prop, raw) {
+  if (node.dataset.array === "csv") {
+    const arr = raw.split(",").map(s => s.trim()).filter(Boolean);
+    return arr.length ? arr : undefined;
+  }
+  if (node.dataset.array === "json") {
+    try { return JSON.parse(raw); }
+    catch (_e) { return raw; }              /* the server's 422 narrates */
+  }
+  if (node.type === "datetime-local") return new Date(raw).toISOString();
+  if (prop.type === "integer") return parseInt(raw, 10);
+  if (prop.type === "number") return parseFloat(raw);
+  if (prop.type === "boolean") return raw === "true";
+  return raw;
+}
 function collectValues(form, schema) {
   const values = {};
   const props = (schema || {}).properties || {};
   for (const node of form.querySelectorAll("[name]")) {
     const name = node.getAttribute("name");
-    const prop = schemaProp(props[name] || {});
-    let raw = node.value;
+    const raw = node.value;
     if (raw === "" || raw === null) continue;
-    if (node.dataset.array === "csv") {
-      const arr = raw.split(",").map(s => s.trim()).filter(Boolean);
-      if (arr.length) values[name] = arr;
+    /* a sub-form's field (waymark-au42): parent.child folds back into
+       the parent's object, typed by the nested schema; a sub-form left
+       blank never reaches here, so the parent is simply absent */
+    const dot = name.indexOf(".");
+    if (dot > 0) {
+      const parent = name.slice(0, dot), child = name.slice(dot + 1);
+      const subProps = schemaProp(props[parent] || {}).properties || {};
+      const v = coerceValue(node, schemaProp(subProps[child] || {}), raw);
+      if (v === undefined) continue;
+      (values[parent] = values[parent] || {})[child] = v;
       continue;
     }
-    if (node.dataset.array === "json") {
-      try { values[name] = JSON.parse(raw); }
-      catch (_e) { values[name] = raw; }    /* the server's 422 narrates */
-      continue;
-    }
-    if (node.type === "datetime-local") {
-      values[name] = new Date(raw).toISOString();
-      continue;
-    }
-    if (prop.type === "integer") values[name] = parseInt(raw, 10);
-    else if (prop.type === "number") values[name] = parseFloat(raw);
-    else if (prop.type === "boolean") values[name] = raw === "true";
-    else values[name] = raw;
+    const v = coerceValue(node, schemaProp(props[name] || {}), raw);
+    if (v !== undefined) values[name] = v;
   }
   return values;
 }

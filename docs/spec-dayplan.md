@@ -455,7 +455,10 @@ shows (*"the drill is in the blue case"*). When `subject` resolves to a
 `media` or `task` row and `launch` is absent, the card's launch href is the
 subject's `source_ui_href` or `source_href` — projection, not storage.
 **`prep`** is one sentence of what must be ready the evening before, and it
-becomes a task (below). **`changed_to`** is written by `change` and by no
+becomes a task (below). *Amended 2026-09-06 (waymark-au42): the generic
+form rendered `launch` as a textarea reading "JSON object"; a nested map
+with declared fields is now a sub-form of its own labelled widgets, and the
+JSON box is kept only for a property-less object such as `data`.* **`changed_to`** is written by `change` and by no
 form: the decision said *this*, the day said *that*, and both are kept.
 
 **`start` is the verdict.** It takes no input, so `demand/effort` renders it
