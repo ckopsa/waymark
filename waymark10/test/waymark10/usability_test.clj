@@ -480,8 +480,17 @@
                      [:map-of :keyword :any]]
                     [:blob {:x-display {:label "Blob" :help "Whatever it is."}}
                      :any]
+                    ;; a list of maps whose item carries an option recipe
+                    ;; keeps the box (waymark-jtd7) — the chips beside it
+                    ;; are the recipe's, and an indexed row cannot host them
                     [:rows {:x-display {:label "Rows" :help "Some rows."}}
-                     [:vector [:map [:n :int]]]]
+                     [:vector [:map [:kind {:x-options {:from :kinds}
+                                            :x-display {:label "Kind"}}
+                                     :string]]]]
+                    [:windows {:x-display {:label "Windows" :help "Start and end."}}
+                     [:vector [:map
+                               [:from {:x-display {:label "From"}} [:string {:min 5 :max 5}]]
+                               [:to {:x-display {:label "To"}} [:string {:min 5 :max 5}]]]]]
                     [:tags {:x-display {:label "Tags" :help "A few words."}}
                      [:vector :string]]
                     [:when {:optional true :x-display {:label "When" :help "The day."}}
@@ -489,7 +498,7 @@
                   "spelled-by-hand")]
     (is (= 1 (count ws)) "one sentence per door, every box listed")
     (is (str/includes? (first ws) "action annotate asks for [:extras :blob :rows]")
-        "the list of scalars and the date are forms; the three boxes are named")
+        "the list of scalars, the date and the list of labelled maps are forms; the three boxes are named")
     (is (str/includes? (first ws) "declare the keys as a nested :map")))
 
   (testing "a nested map with declared fields is a sub-form, not a box"
