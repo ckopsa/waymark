@@ -261,6 +261,28 @@
         (is (= :planned (:state (row :decision (:id d3))))
             "the record does not say 'went' while the room stayed dark")))))
 
+(deftest not-yet-takes-a-go-back-and-the-launch-stays-in-the-record
+  ;; waymark-4an5: from started the only doors were Done, Skip and
+  ;; Change, and un-going was two taps. Not yet is the one — and it
+  ;; unfires nothing, which is exactly why it costs nothing.
+  (reset! ha-calls [])
+  (let [[_ block] (workday-block!)
+        d (decide! block {:text "Porch lights on"
+                          :launch {:type "service" :service "light/turn_on"
+                                   :data {:entity_id "light.porch"}}})]
+    (act! :decision (:id d) :start nil)
+    (is (= 1 (count @ha-calls)))
+    (act! :decision (:id d) :unstart nil)
+    (is (= :planned (:state (row :decision (:id d)))) "the record reads planned again")
+    (is (= 1 (count @ha-calls)) "un-starting unfires nothing — the log keeps the launch")
+    (testing "and Go is a fresh verdict — the room hears it again"
+      (act! :decision (:id d) :start nil)
+      (is (= :started (:state (row :decision (:id d)))))
+      (is (= 2 (count @ha-calls))))
+    (testing "Not yet is a door out of started and nowhere else"
+      (let [d2 (decide! block {:text "The gutters" :order 2})]
+        (is (= :wrong-state (:problem (refusal #(act! :decision (:id d2) :unstart nil)))))))))
+
 ;; ── § 3 the other doors ─────────────────────────────────────────────
 
 (deftest change-records-what-it-became
