@@ -106,7 +106,10 @@ function renderUndoStack() {
     return;
   }
   box.append(el("div", {class: "undohead"}, "just now"));
-  box.append(undoStack.map(undoItemNode));
+  /* spread: Element.append takes nodes as separate arguments, and an
+     array handed to it is coerced to the string "[object HTMLDivElement]"
+     (waymark-q1an — the stack rendered that literal since it shipped) */
+  box.append(...undoStack.map(undoItemNode));
   box.style.display = "flex";
 }
 

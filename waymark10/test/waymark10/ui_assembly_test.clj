@@ -342,6 +342,13 @@
     (is (str/includes? page "a.effect?.to === backTo")
         "the inverse door is read off the envelope, never declared here")
     (is (str/includes? page "#undostack {") "its own CSS survives assembly")
+    ;; waymark-q1an: Element.append takes nodes as separate arguments —
+    ;; handed the array itself it renders "[object HTMLDivElement]",
+    ;; which is what the stack showed from the day it shipped until the
+    ;; owner's first reversible tap on a phone. The entries are spread.
+    (is (str/includes? page "box.append(...undoStack.map(undoItemNode));")
+        "the entries reach the DOM one by one, not as an array's toString")
+    (is (not (str/includes? page "box.append(undoStack.map(undoItemNode));")))
     (is (str/includes? page "id=\"undostack\"") "and its slot in the shell")
     (is (str/includes? page "html[data-ui=\"mobile\"] #undostack")
         "a fixed panel clears the tab bar on a phone")
