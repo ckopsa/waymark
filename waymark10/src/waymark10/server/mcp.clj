@@ -239,14 +239,41 @@
 
 ;; ── tool results ────────────────────────────────────────────────────
 
+(def ^:private not-found-hint
+  "The second content block EVERY 404 carries, word for word the same
+  whether the kind is unknown, the row is gone, the action is not
+  declared, or the caller was simply not granted it. The engine
+  conceals rather than refuses (router.clj's standing rule, byte-pinned
+  in batch_b_mint_test's concealment-404), so the problem document
+  cannot say which of those it is — and this block does not try. It
+  says only what a competent agent would do next if it EXPECTED the
+  thing: ask. One sentence on every 404 leaks nothing about any one
+  kind; a sentence on SOME 404s would be the hint the pin forbids."
+  (str "Not found is also what a kind, row or action outside your grant "
+       "answers: this engine conceals what you were not granted rather "
+       "than refusing it, and cannot tell you which of the two this is. "
+       "If you expected to find it, your grant may need widening — file "
+       "an approval_request (waymark_invoke with kind \"approval_request\", "
+       "action \"create\", no id: a `task` sentence saying what the access "
+       "is for, and a `scope` listing each kind and the actions you need, "
+       "[] for read-only) and a person approves it. waymark_discover's "
+       "doors.ask is the same door over HTTP."))
+
 (defn- result
   "A tool's answer: one text block carrying JSON, and whether it is a
   refusal. The text is the wire's own bytes wherever there are wire
   bytes to pass through — a refusal an agent reads here is
-  character-for-character the refusal it would have read over HTTP."
+  character-for-character the refusal it would have read over HTTP.
+  A 404 carries `not-found-hint` as a SECOND block, after the
+  untouched problem document: the remedy the concealed door cannot
+  name, said the same way for every not-found there is."
   ([text] (result text false))
-  ([text error?]
-   {:content [{:type "text" :text text}] :isError error?}))
+  ([text error?] (result text error? nil))
+  ([text error? status]
+   {:content (cond-> [{:type "text" :text text}]
+               (and error? (= 404 status))
+               (conj {:type "text" :text not-found-hint}))
+    :isError error?}))
 
 (defn- value-result
   ([v] (value-result v false))
@@ -256,7 +283,8 @@
   "A route's answer as a tool result: 2xx is content, anything else is
   a refusal carrying the engine's own problem document."
   [resp]
-  (result (body-text resp) (not (<= 200 (:status resp 500) 299))))
+  (let [status (:status resp 500)]
+    (result (body-text resp) (not (<= 200 status 299)) status)))
 
 (defn- refusal
   "A problem this namespace raises in its own voice — the confirm gate
@@ -265,7 +293,7 @@
   else."
   [e]
   (let [resp (p/->response e)]
-    (result (body-text resp) true)))
+    (result (body-text resp) true (:status resp))))
 
 ;; ── kind and action lookup ──────────────────────────────────────────
 
