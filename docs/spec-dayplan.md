@@ -542,9 +542,11 @@ address (`router/places-doc`, beside `/-/history`) and the application
 says what stands at it through `(:services eng) :places`, the seam
 `:passage-link` already rides: `workqueue10.main/places` asks the media
 confluence's own flickr — `sources.flickr/places` reads a film's, an
-audiobook's, an album's or a book's representative item
-(`GET /api/items/{id}`, `media_info.chapters` or `.sections`) and a show's
-episodes (`GET /api/works/{key}/items`), and `chapters->tokens` spells them
+audiobook's, an album's or a book's representative item (found in the
+work's items list, `GET /api/works/{key}/items`, the one read flickr serves
+with an item's `media_info.chapters` or `.sections`; there is no
+`GET /api/items/{id}`) and a show's episodes (the same list), and
+`chapters->tokens` spells them
 — so `waymark10` learns no application word. A hub row has no authority to
 ask and offers `[]`; so does a flickr that does not answer; the box still
 takes a typed place either way. What the picker needed of the *framework*

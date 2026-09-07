@@ -288,10 +288,14 @@
   read here rides — and spelled by chapters->tokens:
 
     show              GET /api/works/{key}/items — the episodes
-    everything else   GET /api/items/{representative id} — the item
-                      the row's deep link names — media_info.chapters
-                      (a film, an audiobook, an album), or
-                      media_info.sections (a book, a comic)
+    everything else   the same list, and in it the item the row's
+                      deep link names (else the first) —
+                      media_info.chapters (a film, an audiobook, an
+                      album), or media_info.sections (a book, a
+                      comic). flickr serves no GET /api/items/{id};
+                      the work's items list is the one read that
+                      carries an item's media_info (found 2026-09-07
+                      against the live engine, The Office S03E22).
 
   `src` is the FlickrSource (or the fake standing in for it); `doc` is
   the row's data as the hub holds it — :medium, :work_key,
@@ -303,19 +307,20 @@
   [src doc]
   (let [call (or (:call src) (get-in src [:source :call]))
         medium (str (:medium doc))]
-    (if (= "show" medium)
-      (if-some [key (some-> (:work_key doc) str not-empty)]
-        (chapters->tokens medium
-                          (answered-items
-                           (call "GET" (str "/api/works/" (fragment-encode key) "/items") {})))
-        [])
-      (if-some [id (item-id (:source_ui_href doc))]
-        (let [info (:media_info (call "GET" (str "/api/items/" id) {}))]
-          (chapters->tokens medium
-                            (if (contains? #{"book" "comic"} medium)
-                              (:sections info)
-                              (:chapters info))))
-        []))))
+    (if-some [key (some-> (:work_key doc) str not-empty)]
+      (let [items (answered-items
+                   (call "GET" (str "/api/works/" (fragment-encode key) "/items") {}))]
+        (if (= "show" medium)
+          (chapters->tokens medium items)
+          (let [id (item-id (:source_ui_href doc))
+                item (or (when id (some #(when (= (str id) (str (:id %))) %) items))
+                         (first items))
+                info (:media_info item)]
+            (chapters->tokens medium
+                              (if (contains? #{"book" "comic"} medium)
+                                (:sections info)
+                                (:chapters info))))))
+      [])))
 
 (defn work->doc
   "One feed work → the canonical media doc, under the chosen
@@ -570,14 +575,6 @@
     {:items (vec (:items work))}
     (throw (ex-info (str "no work " key) {:status 404}))))
 
-(defn- fake-item
-  "GET /api/items/{id} — one item off any seeded work's shelf, its
-  media_info (chapters, sections) intact; 404-shaped when unknown."
-  [{:keys [works]} id]
-  (or (some (fn [w] (some #(when (= (str id) (str (:id %))) %) (:items w)))
-            (vals works))
-      (throw (ex-info (str "no item " id) {:status 404}))))
-
 (defn- fake-call [state]
   (fn [method path {:keys [params]}]
     (swap! state update :requests conj
@@ -591,11 +588,12 @@
         (re-pattern (java.util.regex.Pattern/quote feed-path))
         (fake-feed s params)
 
+        ;; the one item read flickr serves: a work's items list, each
+        ;; with its media_info. There is no GET /api/items/{id}, and
+        ;; the fake speaks none either, so a read the real engine
+        ;; would 404 fails here the same way.
         #"/api/works/(.+)/items"
         :>> (fn [[_ key]] (fake-items s key))
-
-        #"/api/items/(\d+)"
-        :>> (fn [[_ id]] (fake-item s id))
 
         (throw (ex-info (str "the fake flickr speaks no " method " " path) {}))))))
 
@@ -635,7 +633,7 @@
   kind filter run). Returns the work_key. A test-only :items vector
   beside the feed fields is the work's shelf — {:id :season :episode
   :media_info {:chapters […] :sections […]}} — answered by the fake's
-  /api/works/{key}/items and /api/items/{id} (places), and stripped
+  /api/works/{key}/items (places), and stripped
   from the feed."
   [fake work]
   (stamp! (:state fake)
