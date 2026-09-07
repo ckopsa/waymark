@@ -184,9 +184,12 @@ function dayVerbChip({name, entry, subject, cardId, problem, ctx}) {
    The text links to the decision's own screen — skip and change live
    there, not on the card. The one chip is the launch wearing the
    primary verb: a link launch opens in a new tab AND fires the verb
-   (the tap is the verdict); a service launch fires the verb and the
-   server fires the device; a text launch is the sentence itself, and
-   the chip is small. No primary verb projected, no chip. */
+   (the tap is the verdict); a passage launch is the same chip over
+   the href the document projected for it (the subject's row at the
+   place — the server computes it, nothing here knows the grammar); a
+   service launch fires the verb and the server fires the device; a
+   text launch is the sentence itself, and the chip is small. No
+   primary verb projected, no chip. */
 function dayGoChip(d, verb, row, ctx) {
   if (!verb) return null;
   const {name, entry} = verb;
@@ -194,9 +197,9 @@ function dayGoChip(d, verb, row, ctx) {
   const problem = row.querySelector("[data-day-problem]");
   const cardId = d.card_id || "now/decision/" + (d.id || String(d.self || "").split("/").pop());
   const href = d.launch_href || launch.href || null;
-  if (launch.type === "href" && href) {
+  if ((launch.type === "href" || launch.type === "passage") && href) {
     const a = el("a", {class: "chip verb primary", href, target: "_blank",
-                       rel: "noopener", "data-action": name, "data-launch": "href",
+                       rel: "noopener", "data-action": name, "data-launch": launch.type,
                        title: (entry.display || {}).description ||
                               (entry.safety || {}).one_way || href},
       label(name, entry) + " ↗");
@@ -229,6 +232,13 @@ function dayDecisionRow(d, ctx, compact) {
   if (compact) return row;
   if (launch.type === "text" && launch.text)
     row.append(el("div", {class: "day-decision-launch prose"}, launch.text));
+  /* a passage reads under the title as the person spelled it —
+     "1:19:00 – 1:24:30 of 12 Angry Men" — the words verbatim, then
+     the subject's title when the document carried one */
+  if (launch.type === "passage" && launch.from)
+    row.append(el("div", {class: "day-decision-launch day-decision-passage"},
+      launch.from + (launch.to ? " – " + launch.to : "")
+      + (d.subject_title ? " of " + d.subject_title : "")));
   const verbs = el("div", {class: "day-verbs feed-verbs"});
   row.append(verbs, el("div", {"data-day-problem": ""}));
   const chip = dayGoChip(d, primaryVerb(d.actions), row, ctx);

@@ -416,11 +416,13 @@ The doors, and what each may touch:
                [:text     [:string {:min 1 :max 240}]]
                [:subject  {:optional true} [:maybe [:string {:max 200}]]]  ; an ADDRESS, /api/media/<id>
                [:launch   {:optional true}
-                          [:maybe [:map [:type [:enum "href" "service" "text"]]
+                          [:maybe [:map [:type [:enum "href" "service" "text" "passage"]]
                                         [:href {:optional true} :string]
                                         [:service {:optional true} :string]  ; "light/turn_on"
                                         [:data {:optional true} :map]
-                                        [:text {:optional true} :string]]]]
+                                        [:text {:optional true} :string]
+                                        [:from {:optional true} :string]     ; "1:19:00", "S02E05 0:12:00", "ch. 7"
+                                        [:to {:optional true} :string]]]]    ; the same words, later
                [:prep     {:optional true} [:maybe [:string {:max 240}]]]
                [:order    :int]]
   :open       #{:planned :started}
@@ -472,6 +474,59 @@ link", Service and Service data only under "Fires a Home Assistant service",
 Note only under "Shows a note"; a hidden field keeps what was typed and is
 not submitted, and `launch-says-how` still judges the pair at the door.* **`changed_to`** is written by `change` and by no
 form: the decision said *this*, the day said *that*, and both are kept.
+
+*Amended 2026-09-07 (waymark-35eb): the fourth launch.* `launch.type` gains
+**`passage`** — Go opens a scene, a chapter or a page range of something the
+house owns. The thing owned is the decision's existing **`subject`**, which
+for a passage must be the address of a `media` row; the passage adds only
+**`from`** and, optionally, **`to`**, two strings kept exactly as the person
+spelled them: `1:19:00` for a film, `S02E05 0:12:00` for a show, `ch. 7` /
+`p. 213` / `34%` for a book. The grammar is the fraction law read the other
+way round — every medium counts position in its own unit, so a person spells
+a place the way the medium counts — and it lives in one pure namespace,
+`dayplan10/passage.clj`: a *time* (`H:MM:SS` or `M:SS`, an episode
+`S<season>E<episode>` in front of it for a show), a *chapter* (`ch. 7`, `ch
+7`, `chapter 7`), a *page* (`p. 213`, `page 213`), a *percent* (`34%`, `pct
+0.34`). Two guards judge it, in the order the door already runs them.
+`launch-says-how` reads the words alone: `from` is present and reads in some
+grammar, `to` when given reads in the same one, and `from` precedes `to` (an
+episode orders before its clock, so `S02E05 0:50:00` precedes `S02E07
+0:01:00`). Then, after `subject-resolves` has proved the row stands, a new
+guard **`a-passage-reads-as-a-place`** reads the media row and refuses a
+grammar the medium does not count in — a film, a show and an audiobook are
+time (and a show's place names its episode), a book and a comic are chapter,
+page or percent — naming the row, the medium and the grammar in the
+sentence: *12 Angry Men is a movie, and the start 'ch. 7' reads as a chapter
+(ch. 7), and a movie's place is a time (1:19:00)*. Both carry `:open`, as
+`subject-resolves` does, and the deviation sentence records why: which of
+the four grammars a place wears is the row's to say, not the schema's.
+
+**The passage's link is a projection, stored nowhere.** `decision-doc` in
+`feed.clj` already computed `launch_href` for the card — the launch's own
+href, else the subject's `source_ui_href`. A passage's href is the media
+row's deep link *at the place*: `<source_ui_href>?t=<start seconds>&end=<end
+seconds>` for a film or an audiobook, `<base>/#/show/<title>?ep=S02E05&t=<s>
+&end=<s>` for a show (with `&until=S02E07` when the end is in a later
+episode), `<source_ui_href>?from=ch:7&to=pg:213` for a book or a comic, with
+locators `ch:<n>`, `pg:<n>`, `pct:<0..1>`. That URL grammar is flickr's, and
+so it lives beside `deep-link` in `sources/flickr.clj` (`passage-link`); the
+framework's feed reaches it through the engine's `:services` — the seam the
+service launch already rides for Home Assistant — as `:passage-link`, wired
+by `workqueue10.main`, so `waymark10` learns no application name. It is
+computed on every read from the row as it stands and the words the decision
+keeps; nothing writes it down, which is the point: a library rescan that
+moves a film's representative item or retitles a show moves the row's
+`source_ui_href`, and a stored link would have gone stale with it. The card
+shows the passage under the decision's title in the person's own words —
+*1:19:00 – 1:24:30 of 12 Angry Men* — off `from`, `to` and a projected
+`subject_title`, and its Go is the link chip the `href` launch already has,
+opening in a new tab and firing the verb in one tap. **Finishing the
+decision logs no progress on the media row.** A scene watched for a talk is
+not where you are in the film; `finish` has no handler, `fire-launch` fires
+nothing for a passage (as for a link or a note), and the row's
+`progress`/`progress_text` stay the authority's. Punted, as its own bead
+(waymark-z8u4): offering `from` and `to` from the work's own chapters and
+episodes instead of a blank box.
 
 **`start` is the verdict.** It takes no input, so `demand/effort` renders it
 `"assent"` — the class the household calls a tap — and it rides the card
@@ -840,6 +895,11 @@ line in one pair of files, a scope and two prose paragraphs in another.
 - **HA service discovery.** `launch.service` is a string the person or the
   chat spells; nothing reads HA's service registry to offer a picker. A
   wrong service refuses at `start` with HA's own status.
+- **A passage picker.** `launch.from`/`to` are strings in the medium's
+  grammar; nothing yet offers a show's episodes or a book's chapters as
+  choices (waymark-z8u4). A passage of a hub row with no `source_ui_href`
+  is admitted and reads on the card, and its Go is a plain verdict with no
+  link — there is nothing to open it in.
 
 ## Effort
 
