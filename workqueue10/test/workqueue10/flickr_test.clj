@@ -505,6 +505,7 @@
       (fk/down! f true)
       (is (thrown? clojure.lang.ExceptionInfo
                    (fk/places f {:medium "movie"
+                                 :work_key "movie:12-angry-men-1957"
                                  :source_ui_href "https://stream.kopsa.info/#/item/51"}))))))
 
 (deftest the-boots-hook-answers-for-every-row
