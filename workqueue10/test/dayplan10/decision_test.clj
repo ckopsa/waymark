@@ -462,6 +462,8 @@
   (testing "the medium decides the grammar"
     (is (nil? (passage/misfit (passage/parse "1:19:00") "movie")))
     (is (nil? (passage/misfit (passage/parse "4:12:00") "audiobook")))
+    (is (nil? (passage/misfit (passage/parse "41:10") "album"))
+        "an album counts in time, like a film")
     (is (nil? (passage/misfit (passage/parse "S02E05 0:12:00") "show")))
     (is (nil? (passage/misfit (passage/parse "ch. 7") "book")))
     (is (nil? (passage/misfit (passage/parse "34%") "comic")))
@@ -469,6 +471,8 @@
     (is (re-find #"a book's place is a chapter" (passage/misfit (passage/parse "1:19:00") "book")))
     (is (re-find #"names no episode" (passage/misfit (passage/parse "0:12:00") "show")))
     (is (re-find #"a movie has none" (passage/misfit (passage/parse "S02E05 0:12:00") "movie")))
+    (is (re-find #"an album has none" (passage/misfit (passage/parse "S02E05 0:12:00") "album")))
+    (is (re-find #"an album's place is a time" (passage/misfit (passage/parse "ch. 7") "album")))
     (is (nil? (passage/misfit (passage/parse "1:19:00") nil))
         "a row whose medium was never said has no opinion")))
 
@@ -483,7 +487,10 @@
       (is (= (str film "?t=4740") (flickr/passage-link film "movie" "1:19:00" nil))
           "no end, no end")
       (is (= (str film "?t=15120&end=16200")
-             (flickr/passage-link film "audiobook" "4:12:00" "4:30:00"))))
+             (flickr/passage-link film "audiobook" "4:12:00" "4:30:00")))
+      (is (= (str film "?t=161&end=330")
+             (flickr/passage-link film "album" "2:41" "5:30"))
+          "an album is time too — a track's stretch, seconds in and out"))
     (testing "a show: the episode, then the time inside it"
       (is (= (str show "?ep=S02E05&t=720&end=2700")
              (flickr/passage-link show "show" "S02E05 0:12:00" "S02E05 0:45:00")))

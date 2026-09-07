@@ -149,7 +149,7 @@
    :reads [:storage]
    :vars [:why]
    :open "A passage is a place in the subject, and which grammar a place is spelled in — a time, a chapter, a page — is the subject's medium to say; the schema can say from and to are strings and nothing about the row they read against, so the door reads the media row and this sentence names the grammar."
-   :explain "A passage is a place in something the house owns: the subject names the media row, and the place is spelled the way that medium counts — a time for a film, a show or an audiobook (1:19:00; S02E05 0:12:00 for a show), a chapter, a page or a percent for a book or a comic (ch. 7, p. 213, 34%). Here: {why}."}
+   :explain "A passage is a place in something the house owns: the subject names the media row, and the place is spelled the way that medium counts — a time for a film, a show, an audiobook or an album (1:19:00; S02E05 0:12:00 for a show), a chapter, a page or a percent for a book or a comic (ch. 7, p. 213, 34%). Here: {why}."}
   [_row inp ctx]
   (let [{:keys [type from to]} (:launch inp)
         subject (some-> (:subject inp) str str/trim not-empty)
@@ -175,7 +175,7 @@
               title (or (some-> (get-in media [:data :title]) str not-empty) subject)
               misfit (fn [word place]
                        (when-some [m (passage/misfit (passage/parse place) medium)]
-                         (str title " is a " medium ", and the " word " '" place "' " m)))]
+                         (str title " is " (passage/a medium) ", and the " word " '" place "' " m)))]
           (if-some [why (and media medium
                              (or (misfit "start" from)
                                  (when-not (str/blank? (str to)) (misfit "end" to))))]

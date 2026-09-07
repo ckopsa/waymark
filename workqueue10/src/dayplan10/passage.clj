@@ -16,8 +16,8 @@
     page     p. 213 · page 213 · pg 213
     percent  34% · pct 0.34
 
-  A film, a show and an audiobook are TIME; a book and a comic are
-  chapter, page or percent. Nothing here normalizes the person's
+  A film, a show, an audiobook and an album are TIME; a book and a
+  comic are chapter, page or percent. Nothing here normalizes the person's
   words away — the decision keeps `from` and `to` exactly as typed,
   and these fns only READ them: whether each reads at all, whether
   two count the same way, which comes first, and whether the grammar
@@ -128,8 +128,16 @@
   {"movie" #{:time}
    "show" #{:time}
    "audiobook" #{:time}
+   "album" #{:time}
    "book" #{:chapter :page :percent}
    "comic" #{:chapter :page :percent}})
+
+(defn a
+  "The medium with its article — 'a movie', 'an audiobook', 'an
+  album' — for a refusal that names it in a sentence."
+  [medium]
+  (let [m (str medium)]
+    (str (if (re-find #"^[aeiouAEIOU]" m) "an " "a ") m)))
 
 (defn medium-words
   "How a medium counts, in plain words — 'a time (1:19:00)' for a
@@ -139,6 +147,7 @@
   (case (str medium)
     "movie" "a time (1:19:00)"
     "audiobook" "a time (4:12:00)"
+    "album" "a time (41:10)"
     "show" "an episode and a time (S02E05 0:12:00)"
     ("book" "comic") "a chapter (ch. 7), a page (p. 213) or a percent (34%)"
     nil))
@@ -146,8 +155,8 @@
 (defn misfit
   "Why a parsed place does NOT read in a medium's grammar, in plain
   words — or nil when it does (or when the medium is one this grammar
-  has no opinion about). A show's place names its episode; a film's
-  and an audiobook's do not, because they have none."
+  has no opinion about). A show's place names its episode; a film's,
+  an audiobook's and an album's do not, because they have none."
   [place medium]
   (let [medium (str medium)
         allowed (get medium-grammars medium)]
@@ -155,13 +164,13 @@
       (cond
         (not (contains? allowed (:grammar place)))
         (str "reads as " (get grammar-words (:grammar place))
-             ", and a " medium "'s place is " (medium-words medium))
+             ", and " (a medium) "'s place is " (medium-words medium))
 
         (and (= "show" medium) (nil? (:episode place)))
         "names no episode, and a show's place is an episode and a time (S02E05 0:12:00)"
 
-        (and (contains? #{"movie" "audiobook"} medium) (some? (:episode place)))
-        (str "names an episode, and a " medium " has none — its place is "
+        (and (contains? #{"movie" "audiobook" "album"} medium) (some? (:episode place)))
+        (str "names an episode, and " (a medium) " has none — its place is "
              (medium-words medium))
 
         :else nil))))
