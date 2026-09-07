@@ -1507,9 +1507,44 @@
                       (if (contains? supported-versions asked)
                         asked
                         protocol-version))
-   :capabilities {:tools {:listChanged false}}
+   ;; true since the notice stream landed (routes/mcp.clj's GET): a
+   ;; grant that widens or narrows mid-session pushes
+   ;; notifications/tools/list_changed, and a client that believed
+   ;; the list frozen would never re-list after the person's tap
+   :capabilities {:tools {:listChanged true}}
    :serverInfo server-info
    :instructions instructions})
+
+;; ── the list-changed notice ─────────────────────────────────────────
+;;
+;; `tools/list` is computed per call from the visibility the router
+;; resolved for THIS request (listing, above), so a grant that moved
+;; is already on the wire the next time a client asks. What a client
+;; does not know is WHEN to ask: MCP's answer is the server pushing
+;; notifications/tools/list_changed, and the transport (routes/mcp.clj)
+;; pushes it on the GET stream whenever a transition below says so.
+
+(def list-changed
+  "The JSON-RPC notification the stream carries when the caller's
+  tool list may have changed — no params, by the protocol."
+  {:jsonrpc "2.0" :method "notifications/tools/list_changed"})
+
+(defn grant-moved-for?
+  "Did this transition's ROW move the tool list of principal `pid`?
+  The Gate tail of tools/list is a function of the grant the caller
+  wears, so the rows that can change it are the caller's own grants
+  (audience = pid: accept, extend, expire, revoke) and the caller's
+  own asks (requested_by = pid: an approve mints or widens). Any
+  other row — another principal's grant, a kind that is not a grant —
+  answers false, and the stream says nothing: a principal is told
+  about ITS leash and nobody else's."
+  [kind row pid]
+  (boolean
+   (and pid
+        (case (keyword kind)
+          :grant (= pid (get-in row [:data :audience]))
+          :approval_request (= pid (get-in row [:data :requested_by]))
+          false))))
 
 (defn message
   "One JSON-RPC message → the response to send, or nil when there is

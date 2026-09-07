@@ -72,6 +72,14 @@ it inherits the OIDC middleware and the identity gate untouched.
 - **Streaming.** SSE events (`server/events.clj`) map to MCP notifications, but
   the first cut is request/response only. A follow behaviour ("tell me when
   this row moves") wants [addressed notice](spec-addressed-notice.md) first.
+  *Narrowed 2026-09-07:* the GET half of the door now exists and carries
+  exactly one frame, `notifications/tools/list_changed`, pushed when a grant
+  the caller wears or an ask the caller filed moves (`routes/mcp.clj`,
+  `mcp_notice_test`). It landed because the ask-then-approve loop broke at
+  its last step: an agent filed an ask mid-session, the person approved it
+  within the minute, and the connector's tool list stayed frozen until a
+  reconnect, because `initialize` had said `listChanged: false`. Row events
+  are still not on this stream; the SSE doors carry those.
 - **Worksheets.** Binary upload through MCP is possible and unpleasant; the
   first cut points at the HTTP door instead.
 - **Tool descriptions.** Generated from `:display` prose, which was written for
@@ -175,8 +183,9 @@ that is code in this module.
 
 ### Punts kept, and one added
 
-Every punt above stayed put — no streaming (a `GET` on the door answers 405
-saying so out loud), no worksheet upload, tool descriptions still generated
+Every punt above stayed put — no row streaming (a `GET` on the door without
+the SSE accept answers 405 saying so out loud; with it, the door carries the
+one list-changed notice recorded above), no worksheet upload, tool descriptions still generated
 from prose written for humans. The **prompt-injection** punt was about
 mitigation only: saying so plainly was not deferred, and `/api/-/welcome` now
 carries a `trust` section naming row data untrusted input, with the same
