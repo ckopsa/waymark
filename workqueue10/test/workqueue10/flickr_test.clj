@@ -478,10 +478,13 @@
     (fk/seed! f the-wire)
     (fk/seed! f (assoc orwell :items [{:id 520 :media_info {:sections [{:title "Part One"}
                                                                        {:title "Part Two"}]}}]))
-    (testing "a film: the item the row's own deep link names, its chapters"
+    (testing "a film: the item the row's own deep link names, its
+              chapters — read off the work's items list, the one item
+              read flickr serves (no GET /api/items/{id})"
       (let [[doc] (conf/source-pull f "movie:12-angry-men-1957")]
         (is (= ["0:00" "1:19:00" "1:24:30"] (fk/places f doc)))
-        (is (= "/api/items/51" (:path (last (fk/requests f)))))))
+        (is (= "/api/works/movie%3A12-angry-men-1957/items"
+               (:path (last (fk/requests f)))))))
     (testing "a show: the work's items, by key — the key travels encoded"
       (let [[doc] (conf/source-pull f "show:the-wire")]
         (is (= ["S01E01 0:00" "S01E02 0:00" "S02E05 0:00"] (fk/places f doc)))
