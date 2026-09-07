@@ -465,7 +465,12 @@ too." `data` is now a nested map of its own — `entity_id` and a list of
 widget render it with no JSON anywhere; `fire-launch` builds the service
 call's map from it, sending a value that reads as a number or true/false as
 one, and the decision is shape 2 with an upcast that folds the old free-form
-map (the entity stays; every other key becomes a row).* **`changed_to`** is written by `change` and by no
+map (the entity stays; every other key becomes a row).* *And once more
+(waymark-x0aw): each launch field carries `:x-display {:when {:type …}}`
+naming the choice it belongs to, so the form shows Link only under "Opens a
+link", Service and Service data only under "Fires a Home Assistant service",
+Note only under "Shows a note"; a hidden field keeps what was typed and is
+not submitted, and `launch-says-how` still judges the pair at the door.* **`changed_to`** is written by `change` and by no
 form: the decision said *this*, the day said *that*, and both are kept.
 
 **`start` is the verdict.** It takes no input, so `demand/effort` renders it

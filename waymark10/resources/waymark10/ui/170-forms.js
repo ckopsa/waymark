@@ -134,15 +134,49 @@ function subformWidget(name, prop, value) {
     const xd = subRaw["x-display"] || subProp["x-display"] || {};
     if (xd.hidden) continue;             /* nobody's form, one level down too */
     const path = name + "." + sub;
-    box.append(el("div", {class: "field", "data-field": path},
+    const w = whenOf(xd);
+    box.append(el("div", {class: "field", "data-field": path,
+                          "data-when": w ? w.sib : null,
+                          "data-when-value": w ? w.val : null},
       el("label", {title: path}, el("b", {}, xd.label || sub),
          required.has(sub) ? el("span", {class: "req"}, " *") : ""),
       fieldWidget(path, subRaw, seed[sub]),
-      el("div", {class: "err srv", "data-srverr": path})));
-    if (xd.help) box.append(el("div", {class: "muted",
-      style: "font-size:11px;margin:-6px 0 8px"}, xd.help));
+      el("div", {class: "err srv", "data-srverr": path}),
+      xd.help ? el("div", {class: "muted",
+                           style: "font-size:11px;margin:2px 0 4px"}, xd.help) : null));
   }
+  wireWhen(box, name + ".");
   return box;
+}
+/* :x-display {:when {sibling value}} (waymark-x0aw): a field that belongs
+   to one of a sibling's choices stays hidden until the sibling holds it —
+   Link under "Opens a link", Service and its data under "Fires a Home
+   Assistant service", Note under "Shows a note". Typed values survive
+   while hidden, so flipping the choice back restores them; collectValues
+   skips a hidden field, so a flip never sends the other branch's data.
+   The server's own guard still judges the pair (launch-says-how) — the
+   form just stops offering the mismatch. Works at the top level and
+   inside a sub-form alike: the sibling is looked up by its full path. */
+function whenOf(xd) {
+  const w = xd && xd.when;
+  if (!w || typeof w !== "object") return null;
+  const [sib, val] = Object.entries(w)[0] || [];
+  return sib ? {sib, val: String(val)} : null;
+}
+function wireWhen(container, prefix) {
+  const gated = [...container.querySelectorAll(":scope > .field[data-when]")];
+  if (!gated.length) return;
+  const refresh = () => {
+    for (const f of gated) {
+      const sib = container.querySelector(`[name="${prefix}${f.dataset.when}"]`);
+      const on = !!sib && String(sib.value) === f.dataset.whenValue;
+      f.classList.toggle("off", !on);
+      f.style.display = on ? "" : "none";
+    }
+  };
+  container.addEventListener("change", refresh);
+  container.addEventListener("input", refresh);
+  refresh();
 }
 /* A list of maps is rows of the item's sub-form (waymark-jtd7): one row
    per entry, its fields named parent[i].child, a ✕ to drop the row and
@@ -637,15 +671,18 @@ function buildForm(schema, prefill, kind) {
       });
     }
     const xd = rawProp["x-display"] || prop["x-display"] || {};
-    form.append(el("div", {class: "field", "data-field": name},
+    const w = whenOf(xd);
+    form.append(el("div", {class: "field", "data-field": name,
+                           "data-when": w ? w.sib : null,
+                           "data-when-value": w ? w.val : null},
       el("label", {title: name}, el("b", {}, xd.label || name),
          required.has(name) ? el("span", {class:"req"}, " *") : "",
          vocabProp(rawProp) ? el("span", {class:"muted"}, " (vocab)") : ""),
       widget,
       errSlot,
-      el("div", {class: "err srv", "data-srverr": name})));
-    if (xd.help) form.append(el("div", {class:"muted",
-      style:"font-size:11px;margin:-6px 0 8px"}, xd.help));
+      el("div", {class: "err srv", "data-srverr": name}),
+      xd.help ? el("div", {class:"muted",
+                           style:"font-size:11px;margin:2px 0 4px"}, xd.help) : null));
     const xo = xoptionsOf(rawProp);
     if (xo && xo.href && widget.tagName === "INPUT")
       pendingOptions.push([widget, xo]);
@@ -659,6 +696,7 @@ function buildForm(schema, prefill, kind) {
   for (const [widget, xo] of pendingOptions) attachOptions(form, widget, xo);
   for (const [widget, fs, es] of pendingItemOptions)
     attachItemOptions(form, widget, fs, es);
+  wireWhen(form, "");
   return form;
 }
 /* one widget's raw string → the wire value its schema means; undefined
@@ -720,6 +758,7 @@ function collectValues(form, schema) {
   const props = (schema || {}).properties || {};
   for (const node of form.querySelectorAll("[name]")) {
     const name = node.getAttribute("name");
+    if (node.closest(".field.off")) continue;   /* the other branch's field */
     const raw = node.value;
     if (raw === "" || raw === null) continue;
     const segs = parsePath(name);
