@@ -13,6 +13,7 @@
   socket is missing."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [dayplan10.passage :as passage]
             [workqueue10.confluence :as conf]
             [workqueue10.main :as main]
             [workqueue10.sources.flickr :as fk]
