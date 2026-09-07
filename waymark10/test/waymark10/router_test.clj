@@ -60,7 +60,13 @@
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
       (binding [*h* (engine/handler
                      (engine/engine {:storage st
-                                     :resources [fx/meal fx/plan task]}))]
+                                     :resources [fx/meal fx/plan task]
+                                     ;; the places hook (waymark-z8u4):
+                                     ;; an application's opinion about
+                                     ;; one kind, none about the rest
+                                     :services {:places (fn [kind _data]
+                                                          (when (= :task kind)
+                                                            ["1:19:00" "1:24:30"]))}}))]
         (f))
       (finally (pg/close! st)))))
 
@@ -358,3 +364,24 @@
     (is (= 404 (:status (req :get "/api/widgets"))))
     (is (= 404 (:status (req :post "/api/widgets" {:x 1}))))
     (is (= 404 (:status (req :get "/nope"))))))
+
+;; ── the row's places (waymark-z8u4) ──────────────────────────────────
+
+(deftest the-places-document-is-the-hooks-answer
+  ;; GET /api/{plural}/{id}/-/places: the tokens a passage field may be
+  ;; offered, read through (:services eng) :places — core serves the
+  ;; address the :places option source names, the application says
+  ;; what stands at it
+  (let [tid (id-of (req :post "/api/tasks" {:title "twelve angry men"}))
+        resp (req :get (str "/api/tasks/" tid "/-/places"))
+        b (json resp)]
+    (is (= 200 (:status resp)))
+    (is (= (str "/api/tasks/" tid "/-/places") (:self b)))
+    (is (= ["1:19:00" "1:24:30"] (:places b)))
+    (testing "a kind the hook has no opinion about offers nothing — []
+              is a picker with no chips, never an error"
+      (let [pid (id-of (create-plan! "2026-07-14" ["2026-07-14"]))
+            b2 (json (req :get (str "/api/plans/" pid "/-/places")))]
+        (is (= [] (:places b2)))))
+    (testing "a row this engine never held is a 404, never an empty shelf"
+      (is (= 404 (:status (req :get "/api/tasks/nope/-/places")))))))

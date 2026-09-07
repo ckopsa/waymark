@@ -604,9 +604,11 @@
                               ;; a list of maps renders as rows (waymark-jtd7)
                               ;; when every item field is formable and none
                               ;; carries an option recipe — the client's own
-                              ;; rule, mirrored: a recipe's {sibling} holes
-                              ;; resolve by bare name and cannot yet see an
-                              ;; indexed row, so that list keeps its box
+                              ;; rule, mirrored: that list keeps its box and
+                              ;; the chips beside it. The hole lookup reaches
+                              ;; a row's own siblings since waymark-z8u4, so
+                              ;; this is the rows not yet taught to host the
+                              ;; chips, no longer a limit of the recipe
                               (and (seq (:properties it))
                                    (not-any? (fn [[_ sp]] (:x-options sp))
                                              (:properties it))

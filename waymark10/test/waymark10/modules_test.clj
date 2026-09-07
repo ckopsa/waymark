@@ -200,6 +200,7 @@
                "/api/:plural" "/api/:plural/-/worksheet"
                "/api/:plural/-/:action" "/api/:plural/:id"
                "/api/:plural/:id/-/events" "/api/:plural/:id/-/history"
+               "/api/:plural/:id/-/places"
                "/api/:plural/:id/-/:action"
                "/api/:plural/:id/-/:action/batch"
                "/api/:plural/:id/-/:action/draft"
@@ -238,6 +239,9 @@
     (testing "the history read precedes the invoke grammar that would
               shadow it (waymark-442.4)"
       (is (< (at "/api/:plural/:id/-/history")
+             (at "/api/:plural/:id/-/:action"))))
+    (testing "and the places read too (waymark-z8u4), for the same reason"
+      (is (< (at "/api/:plural/:id/-/places")
              (at "/api/:plural/:id/-/:action"))))))
 
 (deftest a-module-left-out-takes-its-routes-with-it

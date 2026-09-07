@@ -740,6 +740,37 @@
       (mark-read! eng req (str "/api/" plural "/" id))
       (json-response 200 (p/wire-value doc) "application/json" nil))))
 
+(defn- places-doc
+  "GET /api/{plural}/{id}/-/places — the places a row offers a passage
+  (waymark-z8u4): a film's chapters, a show's episodes, a book's
+  sections, as TOKENS a passage field accepts — 1:19:00, S02E05 0:00,
+  ch. 7 — never labels. The `:places` option source
+  (schema/option-sources) points a form here from a sibling holding
+  the row's address, so the chips a person picks from come off the row
+  in front of them.
+
+  CORE, like history, and for the same reason: the address is the
+  plural grammar's, and the recipe that names it is the framework's.
+  What the places ARE is the application's — read through the hook it
+  wired as (:services eng) :places, `(fn [kind data] → [token …])`,
+  the seam a decision's passage link already rides (:passage-link).
+  No hook, or a kind the hook has no opinion about, answers [] — a
+  picker with nothing to offer, and the box still takes a typed place.
+
+  Concealment is the row's, checked before the hook is asked."
+  [eng]
+  (fn [{{:keys [plural id]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)
+          _ (check-row! req rdef id)
+          row (load-decoded eng rdef id)
+          hook (get-in eng [:services :places])
+          places (or (when hook (hook (:kind rdef) (:data row))) [])]
+      (mark-read! eng req (str "/api/" plural "/" id))
+      (json-response 200 (p/wire-value
+                          {:self (str "/api/" plural "/" id "/-/places")
+                           :places (mapv str places)})
+                     "application/json" nil))))
+
 (defn- as-of-one
   "GET /api/{plural}/{id}?as-of=INSTANT (time travel tier 1). It does
   NOT load the row: the log is the record of a row that existed, and
@@ -1684,6 +1715,9 @@
    ;; collide with there, but position is the routing rule and this
    ;; line's order is not decorative
    ["/api/:plural/:id/-/history" {:get (history-doc eng)}]
+   ;; the row's places (waymark-z8u4) — a literal third segment too,
+   ;; for the same positional reason
+   ["/api/:plural/:id/-/places" {:get (places-doc eng)}]
    ["/api/:plural/:id/-/:action" {:post (invoke-action eng)}]
    ["/api/:plural/:id/-/:action/batch" {:post (batch-action eng)}]
    ["/api/:plural/:id/-/:action/draft" {:get (draft-get eng)

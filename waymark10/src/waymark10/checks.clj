@@ -52,6 +52,15 @@
         (when (and (vector? item) (= :map (first item)))
           item)))))
 
+(defn- nested-map-form
+  "The [:map …] form of a field holding a nested map — bare, or under
+  :maybe (field-schema unwraps it) — nil otherwise. The sub-form a
+  client renders for a labelled nested map (waymark-au42)."
+  [form k]
+  (when-some [s (schema/field-schema form k)]
+    (when (and (vector? s) (= :map (first s)))
+      s)))
+
 ;; ── the machine ─────────────────────────────────────────────────────
 
 (defn- check-tokens [r]
@@ -566,26 +575,46 @@
   annotation lands INSIDE the item, where the fields it interpolates
   from are each other's siblings. The `:of` refusal is what makes that
   honest rather than convenient: an item field naming a sibling one
-  level UP is refused here, because no client could fill a hole from
-  outside the entry in front of the person. `check-long-text`'s
+  level UP is refused here, because the client draws that list as a
+  JSON box and fills a hole from the entry alone. `check-long-text`'s
   `data.{field}[]` naming is reused so a refusal points at the right
-  box."
+  box.
+
+  A nested map is a surface too (waymark-z8u4): a decision's launch is
+  a sub-form of the create door, and its `from` reads the row named by
+  `subject` one level UP. The client resolves a hole from inside a
+  sub-form by the bare name at the top of the form first, then among
+  the sub-form's own siblings (ui/170-forms.js holeNode), so here `:of`
+  may name a field of the nested map OR of the form that holds it —
+  `data.{field}` naming, one level."
   [r]
-  (doseq [[where form] (mapcat
-                        (fn [[where form]]
-                          (cons [where form]
-                                (keep (fn [k]
-                                        (when-some [item (item-map-form form k)]
-                                          [(str where ", " (name k) "[]") item]))
-                                      (schema/entry-keys form))))
-                        (cons ["the create door" (or (:create-schema r) (:schema r))]
-                              (concat [["data" (:schema r)]]
-                                      (for [a (machine/actions-seq r)
-                                            :when (:input a)]
-                                        [(str "action " (name (:name a)))
-                                         (:input a)]))))
+  (doseq [[where form reach] (mapcat
+                              (fn [[where form]]
+                                (let [top (set (schema/entry-keys form))]
+                                  ;; [where form reach]: reach is the
+                                  ;; enclosing form's keys an :of may
+                                  ;; name from inside a nested map —
+                                  ;; nil for the form itself and for an
+                                  ;; item map (its box fills a hole
+                                  ;; from the entry alone)
+                                  (cons [where form nil]
+                                        (mapcat
+                                         (fn [k]
+                                           (if-some [item (item-map-form form k)]
+                                             [[(str where ", " (name k) "[]") item nil]]
+                                             (when-some [nested (nested-map-form form k)]
+                                               [[(str where ", " (name k)) nested top]])))
+                                         (schema/entry-keys form)))))
+                              (cons ["the create door" (or (:create-schema r) (:schema r))]
+                                    (concat [["data" (:schema r)]]
+                                            (for [a (machine/actions-seq r)
+                                                  :when (:input a)]
+                                              [(str "action " (name (:name a)))
+                                               (:input a)]))))
           :let [entries (schema/entry-map form)
-                declared (set (keys entries))]
+                ;; the names an :of may reach: this form's own, and —
+                ;; for a nested map — the enclosing form's too
+                declared (into (set (keys entries)) reach)]
           [k {:keys [properties]}] entries
           :let [{:keys [from of composes]} (:x-options properties)]
           :when (some? (:x-options properties))]
@@ -605,7 +634,9 @@
              (str where " field " k " declares :x-options {:of " of
                   "}, which " where " does not declare — the recipe is "
                   "interpolated from SIBLING values, so :of must name a "
-                  "field of the same form")))
+                  "field of the same form"
+                  (when (seq reach)
+                    " (or, from inside a nested map, of the form that holds it)"))))
       (when (and composes (not= :query composes))
         (err r :options
              (str where " field " k " declares :x-options {:composes "

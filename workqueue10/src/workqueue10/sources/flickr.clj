@@ -96,7 +96,7 @@
             [workqueue10.confluence :as conf]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
-  (:import (java.net URI URLEncoder)
+  (:import (java.net URI URLDecoder URLEncoder)
            (java.net.http HttpClient HttpRequest
                           HttpRequest$BodyPublishers
                           HttpResponse$BodyHandlers)
@@ -218,6 +218,104 @@
                (when b (str "&end=" (:seconds b)))))
         (str href "?from=" (locator a)
              (when b (str "&to=" (locator b))))))))
+
+;; ── the places a work offers (waymark-z8u4) ─────────────────────────
+
+(defn chapters->tokens
+  "The places a work offers a passage, spelled as the passage grammar
+  reads them (dayplan10.passage) — VALUES a decision's from/to accept,
+  never labels, so a chip spells the word and the guard still judges
+  it. Pure over what flickr already told us about the work:
+
+    movie, audiobook, album   its chapters — an item's
+                              media_info.chapters, {start_s title} —
+                              as times: 1:19:00, 4:30
+    show                      its episodes — the work's items,
+                              {season episode} — as S02E05 0:00, the
+                              first second of each, the place a scene
+                              inside it is counted from
+    book, comic               its sections — media_info.sections, in
+                              reading order — as ch. 1 … ch. n; the
+                              n-th section is chapter n, which is how
+                              flickr's own ch:<n> locator counts
+                              (passage-link)
+
+  In the work's own order (a show's episodes sorted by season and
+  number), duplicates dropped, and [] for a medium the grammar does
+  not know or a work with nothing to offer. The titles are not here:
+  a token must read back through the grammar, and '1:19:00 — The
+  Cellar' would not."
+  [medium xs]
+  (case (str medium)
+    ("movie" "audiobook" "album")
+    (into [] (comp (keep :start_s) (map passage/clock-text) (distinct)) xs)
+
+    "show"
+    (into []
+          (comp (map (fn [[season episode]]
+                       (str (passage/episode-text season episode) " 0:00"))))
+          (sort (into #{}
+                      (keep (fn [{:keys [season episode]}]
+                              (when (and (some? season) (some? episode))
+                                [(long season) (long episode)])))
+                      xs)))
+
+    ("book" "comic")
+    (into [] (map-indexed (fn [i _] (str "ch. " (inc i)))) xs)
+
+    []))
+
+(defn- item-id
+  "The representative item the row's own deep link names — #/item/<id>
+  (deep-link minted it, so reading it back is this namespace's own
+  grammar) — nil for a show's title link or a row with none."
+  [source-ui-href]
+  (when-some [[_ id] (re-find #"#/item/(\d+)$" (str source-ui-href))]
+    id))
+
+(defn- answered-items
+  "The items a works route answered, whichever shape it wears — a
+  bare list, or a document carrying them under :items."
+  [resp]
+  (cond
+    (sequential? resp) resp
+    (map? resp) (:items resp)
+    :else nil))
+
+(defn places
+  "The places a media row offers a passage, read from flickr through
+  the source's own call — (fn [method path opts]), the seam every
+  read here rides — and spelled by chapters->tokens:
+
+    show              GET /api/works/{key}/items — the episodes
+    everything else   GET /api/items/{representative id} — the item
+                      the row's deep link names — media_info.chapters
+                      (a film, an audiobook, an album), or
+                      media_info.sections (a book, a comic)
+
+  `src` is the FlickrSource (or the fake standing in for it); `doc` is
+  the row's data as the hub holds it — :medium, :work_key,
+  :source_ui_href. [] when the row names nothing flickr can be asked
+  about (a hub row, a show with no work key, a deep link with no
+  item). A flickr that does not answer THROWS, as every read here
+  does; the boot's hook decides what that silence is worth (a picker
+  with nothing to offer — the box still takes a typed place)."
+  [src doc]
+  (let [call (or (:call src) (get-in src [:source :call]))
+        medium (str (:medium doc))]
+    (if (= "show" medium)
+      (if-some [key (some-> (:work_key doc) str not-empty)]
+        (chapters->tokens medium
+                          (answered-items
+                           (call "GET" (str "/api/works/" (fragment-encode key) "/items") {})))
+        [])
+      (if-some [id (item-id (:source_ui_href doc))]
+        (let [info (:media_info (call "GET" (str "/api/items/" id) {}))]
+          (chapters->tokens medium
+                            (if (contains? #{"book" "comic"} medium)
+                              (:sections info)
+                              (:chapters info))))
+        []))))
 
 (defn work->doc
   "One feed work → the canonical media doc, under the chosen
@@ -448,26 +546,58 @@
                          " (want l<n>.s<n>)")
                     {:status 400}))))
 
+(defn- fake-feed
+  "GET /api/feed/media, as the live engine answers it."
+  [{:keys [works deletion-seq] :as s} params]
+  (let [n (:seq s)
+        since (some-> (:since params) parse-cursor)
+        ;; a cursor from before the deletion mark cannot know which
+        ;; works lost items, so the feed answers the WHOLE library —
+        ;; always correct, just not minimal (the live engine's rule)
+        resync? (or (nil? since) (> (long deletion-seq) (long (:lib since))))
+        out (cond->> (sort-by :work_key (vals works))
+              (not resync?) (filter #(> (long (:seq %))
+                                        (long (:state since)))))]
+    {:cursor (str "l" n ".s" n)
+     ;; :items is the fake's own shelf (seed!), never a feed field
+     :works (mapv #(dissoc % :seq :items) out)}))
+
+(defn- fake-items
+  "GET /api/works/{key}/items — the seeded work's items, a show's
+  episodes among them; 404-shaped for a key the library lacks."
+  [{:keys [works]} key]
+  (if-some [work (get works (URLDecoder/decode (str key) "UTF-8"))]
+    {:items (vec (:items work))}
+    (throw (ex-info (str "no work " key) {:status 404}))))
+
+(defn- fake-item
+  "GET /api/items/{id} — one item off any seeded work's shelf, its
+  media_info (chapters, sections) intact; 404-shaped when unknown."
+  [{:keys [works]} id]
+  (or (some (fn [w] (some #(when (= (str id) (str (:id %))) %) (:items w)))
+            (vals works))
+      (throw (ex-info (str "no item " id) {:status 404}))))
+
 (defn- fake-call [state]
   (fn [method path {:keys [params]}]
     (swap! state update :requests conj
            {:method method :path path :params params})
     (when (:down @state)
       (throw (ex-info "flickr unreachable" {})))
-    (when-not (and (= "GET" method) (= feed-path path))
+    (when-not (= "GET" method)
       (throw (ex-info (str "the fake flickr speaks no " method " " path) {})))
-    (let [{:keys [works deletion-seq]} @state
-          n (:seq @state)
-          since (some-> (:since params) parse-cursor)
-          ;; a cursor from before the deletion mark cannot know which
-          ;; works lost items, so the feed answers the WHOLE library —
-          ;; always correct, just not minimal (the live engine's rule)
-          resync? (or (nil? since) (> (long deletion-seq) (long (:lib since))))
-          out (cond->> (sort-by :work_key (vals works))
-                (not resync?) (filter #(> (long (:seq %))
-                                          (long (:state since)))))]
-      {:cursor (str "l" n ".s" n)
-       :works (mapv #(dissoc % :seq) out)})))
+    (let [s @state]
+      (condp (fn [re p] (re-matches re p)) (str path)
+        (re-pattern (java.util.regex.Pattern/quote feed-path))
+        (fake-feed s params)
+
+        #"/api/works/(.+)/items"
+        :>> (fn [[_ key]] (fake-items s key))
+
+        #"/api/items/(\d+)"
+        :>> (fn [[_ id]] (fake-item s id))
+
+        (throw (ex-info (str "the fake flickr speaks no " method " " path) {}))))))
 
 (defrecord FakeFlickr [state source]
   ;; a thin delegation on purpose: the fake's whole value is that the
@@ -502,7 +632,11 @@
 (defn seed!
   "Put a FEED-shaped work in the fake library (not a canonical doc —
   the point of this twin is that the real translation and the real
-  kind filter run). Returns the work_key."
+  kind filter run). Returns the work_key. A test-only :items vector
+  beside the feed fields is the work's shelf — {:id :season :episode
+  :media_info {:chapters […] :sections […]}} — answered by the fake's
+  /api/works/{key}/items and /api/items/{id} (places), and stripped
+  from the feed."
   [fake work]
   (stamp! (:state fake)
           (fn [s n]
