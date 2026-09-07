@@ -111,7 +111,9 @@
         _ (doseq [[k v] (assoc headers "content-type" "application/json")]
             (.header b k v))
         req (.build (.POST b (HttpRequest$BodyPublishers/ofString
-                              (if (string? body) body (wire/write-json body)))))
+                              (cond (nil? body) ""
+                                    (string? body) body
+                                    :else (wire/write-json body)))))
         resp (.send ^HttpClient @client req (HttpResponse$BodyHandlers/ofString))]
     {:status (.statusCode resp)
      :doc (let [s (.body resp)] (when-not (str/blank? s) (wire/read-json s)))}))
