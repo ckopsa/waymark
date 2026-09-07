@@ -319,3 +319,39 @@
           (is (= ["envelope" "summary"] (:enum d))))))
     (testing "the refusal wrote nothing"
       (is (= "suggested" (:state (doc (tool eng "waymark_get" {:kind "rs_dish" :id id}))))))))
+
+;; ── every 404 says how to ask, and says it the same way ─────────────
+
+(deftest a-not-found-carries-the-ask-hint-uniformly
+  (let [eng (boot)
+        id (create! eng {:name "tacos"})
+        hint (fn [out] (get-in out [:content 1 :text]))
+        ;; a grant that admits no kind at all: rs_dish is CONCEALED
+        blind {:kind? (constantly false)
+               :row? (constantly true)
+               :action? (constantly true)
+               :arg? (constantly true)
+               :field? (constantly true)}
+        unknown (tool eng "waymark_schema" {:kind "no_such_kind"})
+        gone (tool eng "waymark_get" {:kind "rs_dish" :id "not-a-row"})
+        concealed (tool eng {:principal elena :visibility blind}
+                        "waymark_query" {:kind "rs_dish"})]
+    (doseq [[label out] [["an unknown kind" unknown]
+                         ["a row that is not there" gone]
+                         ["a kind the grant conceals" concealed]]]
+      (testing label
+        (is (true? (:isError out)))
+        (is (= 404 (:status (doc out))))
+        (is (string? (hint out)) "the second block is the hint")
+        (is (re-find #"approval_request" (hint out)))
+        (is (re-find #"grant" (hint out)))))
+    (testing "the hint is ONE sentence for all three — it leaks nothing"
+      (is (= (hint unknown) (hint gone) (hint concealed))))
+    (testing "the problem document itself is untouched"
+      (is (= (text gone) (route-get eng "/api/rs_dishes/not-a-row"))
+          "block 0 is still the route's own 404, byte for byte"))
+    (testing "a refusal that is not a 404 carries no hint"
+      (let [out (tool eng "waymark_get" {:kind "rs_dish" :id id :return "brief"})]
+        (is (true? (:isError out)))
+        (is (= 422 (:status (doc out))))
+        (is (= 1 (count (:content out))))))))

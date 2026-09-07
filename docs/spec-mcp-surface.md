@@ -137,7 +137,13 @@ that is code in this module.
   the wrong trade — the six are a *promise*.
 - **The confirm gate is the one refusal MCP issues in its own voice.**
   Everything else an agent is told here is the engine's own RFC 9457 document,
-  passed through byte for byte. The gate reads `display.description` — the same
+  passed through byte for byte. One thing rides *beside* it: every 404 carries
+  a second content block, the same sentence for every not-found there is,
+  saying that a concealed kind, row or action answers this way too and that
+  the remedy is an `approval_request`. The problem document itself is not
+  touched, and the hint is uniform on purpose — a hint on *some* 404s would
+  tell a principal which kinds exist, which is exactly what concealment
+  withholds (`batch_b_mint_test`'s byte-pinned 404 stays byte-pinned). The gate reads `display.description` — the same
   accessor `waymark10.client` uses, deliberately, because two readings of one
   sentence is a gate that can be walked around — and compares exactly. A
   paraphrase is a gate a model talks its way through.
