@@ -38,11 +38,22 @@
   work lands within the window. Cheap at a few hundred works; the
   addendum records the order-of-magnitude revisit.
 
-  ONLY MOVIE AND SHOW KINDS MIRROR. flickr honestly projects
-  unidentified media as per-file works (322 at verification);
-  mirroring them would flood the queue with inventory — the
-  parent spec's line between mirroring intent and rebuilding the
-  catalog badly. A work that stops being movie/show reads as gone.
+  THE WORKS OF INTENT MIRROR — movie, show, audiobook, album, book
+  — and nothing else. flickr honestly projects unidentified media
+  as per-file works (322 at verification); mirroring them would
+  flood the queue with inventory — the parent spec's line between
+  mirroring intent and rebuilding the catalog badly. A work that
+  stops being one of the mirrored kinds reads as gone.
+
+  TWO WORDS FOR \"WHAT IT IS\". flickr's `kind` is the thing a person
+  says out loud (movie, show, audiobook, album, book) and lands in
+  :medium — the doc's differentiating tag, spec-media.md's word.
+  flickr's own `medium` is the FILE's nature (video, audio, text)
+  and lands in :format, a second fact beside the first, never a
+  translation of it: an audiobook is audio, a book is text, and the
+  passage grammar keys on the kind word (dayplan10.passage), not on
+  the format. `author` — the author of a book or an audiobook, the
+  artist of an album — is :creator, spec-media.md's open vocabulary.
 
   THE AUDIENCE RULE (the parent punt, observed): the feed emits
   per-audience progress, PLURAL, on one work — the household's
@@ -73,9 +84,13 @@
   RECORDED GAPS, from the addendum, all healable without a change
   here: slug-form work keys until the authority's TMDB credential
   lands (expect rare row churn on library reorganization);
-  :creator/:genres/:overview arrive empty today and fill in
-  authority-side; explicit watched-marking is flickr's own issue
-  and the first honest push target when wanted."
+  :genres/:overview arrive empty today and fill in authority-side
+  (:creator arrives only for the kinds whose library path names an
+  author or an artist); a book's progress arrives as a position
+  with no words and no fraction until flickr's reader lands, and
+  blank words are read here as silence, never as a position;
+  explicit watched-marking is flickr's own issue and the first
+  honest push target when wanted."
   (:require [clojure.string :as str]
             [dayplan10.passage :as passage]
             [workqueue10.confluence :as conf]
@@ -97,18 +112,21 @@
 (def feed-path "/api/feed/media")
 
 (def mirrored-kinds
-  "The work kinds that become rows. \"file\" — flickr's honest
-  projection of not-yet-identified media — is excluded by decision
-  (recorded gap #2): intent, not inventory."
-  #{"movie" "show"})
+  "The work kinds that become rows — the units of intent flickr
+  speaks (its README's vocabulary table: movie, show, audiobook,
+  album, book). \"file\" — flickr's honest projection of
+  not-yet-identified media — is excluded by decision (recorded gap
+  #2): intent, not inventory."
+  #{"movie" "show" "audiobook" "album" "book"})
 
 (def translation-rev
   "This namespace's translation version, composed into every etag it
   reports. flickr mints no document version, so the etag is a content
   hash — which can see the authority moving and can never see US
   moving; bump this whenever work->doc's output changes shape and
-  every stored row re-observes on its next pull."
-  "f1")
+  every stored row re-observes on its next pull. f2: :format and
+  :creator joined the doc, blank progress words became silence."
+  "f2")
 
 ;; ── the translation ─────────────────────────────────────────────────
 
@@ -134,8 +152,14 @@
 
 (defn deep-link
   "The verified hash deep link back to the engine's own UI — the
-  :origin affordance: #/item/<representative_item_id> for a movie's
-  detail pane, #/show/<title> for a show's episode list."
+  :origin affordance, in the UI's own route grammar (flickr's README,
+  Deep links and passages): #/show/<title> for a show's episode list;
+  #/item/<representative_item_id> for everything else — a movie's
+  detail pane, a book, a single-file audiobook, and a multi-part
+  audiobook or an album too, whose representative item opens the
+  audio pane listing the work's parts or tracks. There is no album or
+  audiobook listing route, so none is invented here: the day flickr
+  grows one, this fn learns it."
   [base work]
   (if (= "show" (:kind work))
     (str base "/#/show/" (fragment-encode (:title work)))
@@ -158,7 +182,7 @@
   appended in flickr's passage grammar — the query the engine's UI
   reads to open a work AT a place rather than at its start.
 
-    movie, audiobook  <href>?t=<start seconds>&end=<end seconds>
+    movie, audiobook, album  <href>?t=<start seconds>&end=<end seconds>
     show              <href>?ep=S02E05&t=<s>&end=<s>[&until=S02E07]
                       (end is the time inside the episode `until`
                       names, when the passage crosses episodes)
@@ -197,24 +221,40 @@
 
 (defn work->doc
   "One feed work → the canonical media doc, under the chosen
-  audience's slice. A work with no watch state says nothing about
+  audience's slice. :medium is flickr's kind word, :format its
+  medium (video/audio/text), :creator its author when the library
+  path named one. A work with no watch state says nothing about
   status or position — under the kind's :partial contract that
   silence keeps the hub's own words (queued, abandoned, a logged
   position) intact. A third status fails loudly rather than mapping
-  silently; a nil fraction beside intact text is the fraction law's
-  own gap (an ongoing show has a moving denominator)."
+  silently.
+
+  Progress is the fraction law pre-obeyed, and the words pass
+  through UNTRANSLATED in every shape flickr spells them — 1:19 for
+  a film, S02E05 · 12:30 for a show, part 3 of 12 · 41:10 for an
+  audiobook set or an album (track 3 of 12 · …), ch. 7 · 1:19:22 /
+  11:30:00 for a chaptered single file, ch. 7 · 34% for a book once
+  its reader lands. Two gaps the law itself names: a nil fraction
+  beside intact text (an ongoing show has a moving denominator), and
+  BLANK words — a book today, which flickr reports as a position with
+  no locator (text \"\", fraction 0) — which are silence, not a
+  position: neither field is asserted, so a place the hub logged by
+  hand for that book stands."
   [work preferred]
-  (let [a (pick-audience (:audiences work) preferred)]
+  (let [a (pick-audience (:audiences work) preferred)
+        words (some-> (:progress_text a) str not-empty)]
     (cond-> {:title (:title work)
              :medium (:kind work)
              :work_key (:work_key work)}
       (some? (:year work)) (assoc :year (:year work))
+      (some-> (:medium work) str not-empty) (assoc :format (:medium work))
+      (some-> (:author work) str not-empty) (assoc :creator (:author work))
       a (assoc :status (case (:status a)
                          "active" "active"
                          "finished" "finished")
                :audience_name (:name a))
-      (some? (:progress_text a)) (assoc :progress_text (:progress_text a))
-      (some? (:progress a)) (assoc :progress (:progress a)))))
+      words (assoc :progress_text words)
+      (and words (some? (:progress a))) (assoc :progress (:progress a)))))
 
 (defn- content-etag
   "flickr mints no version, so the version is the translated content

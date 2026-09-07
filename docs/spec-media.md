@@ -2,8 +2,8 @@
 
 **Thesis.** RSS did not host the news; it named a canonical envelope — title,
 guid, pointer, date — and every kind of content that fit it became one feed.
-The household's media life (movies, shows, books, audiobooks, comics) is
-five catalogs today and zero queues. The waymark move is the RSS move: **do
+The household's media life (movies, shows, books, audiobooks, albums,
+comics) is five catalogs today and zero queues. The waymark move is the RSS move: **do
 not build a library, mirror the intent.** One `:media` kind, one canonical
 doc, every catalog an authority behind the confluence — the same declaration
 that just made four task engines into one queue.
@@ -56,7 +56,8 @@ envelope unifies, the `:medium` tag differentiates.
 {:kind :media
  :schema
  [:title      string]
- [:medium     enum: "movie" "show" "book" "audiobook" "comic"]   ; filterable
+ [:medium     enum: "movie" "show" "book" "audiobook" "album" "comic"]   ; filterable — the kind as a person says it
+ [:format     enum: "video" "audio" "text", optional]              ; the file's nature, when an authority speaks it — beside the kind word, never derived from it
  [:status     enum: "queued" "active" "finished" "abandoned"]    ; domain state IS data
  [:creator    open vocab]     ; author, director, showrunner — text, not a ref
  [:year       int]
@@ -96,7 +97,7 @@ reviews are a different feature wearing this one's coat; see punts.
 
 | authority | media | position fact | change feed | note |
 |---|---|---|---|---|
-| ~~Jellyfin~~ **flickr** | movie, show | per-audience, pre-derived | **yes** — cursored | the household's own engine superseded Jellyfin; verified live — see [`spec-media-flickr.md`](spec-media-flickr.md) |
+| ~~Jellyfin~~ **flickr** | movie, show, audiobook, album, book | per-audience, pre-derived | **yes** — cursored | the household's own engine superseded Jellyfin; verified live — see [`spec-media-flickr.md`](spec-media-flickr.md) |
 | Trakt | movie, show | watched history, watchlist | **yes** — `/sync/last_activities` | the second `waymark-8si` feed; watchlist accepts writes → `create-push` candidate |
 | Audiobookshelf | audiobook | seconds / duration | no (poll) | progress API is read-write; `finish` pushes |
 | Komga / Kavita | comic | page / pages per book | no (poll) | series-vs-issue is the hierarchy punt, again |

@@ -14,19 +14,51 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [workqueue10.confluence :as conf]
+            [workqueue10.main :as main]
             [workqueue10.sources.flickr :as fk]
             [workqueue10.sources.hub :as hub]
+            [waymark10.schema :as schema]
             [waymark10.server.mirror :as mirror]))
 
 (def ^:private movie
-  ;; the verified live shape, byte for byte (spec-media-flickr.md)
-  {:work_key "movie:12-angry-men-1957" :kind "movie"
+  ;; the verified live shape, byte for byte (spec-media-flickr.md);
+  ;; medium joined the work in flickr's design note 13
+  {:work_key "movie:12-angry-men-1957" :kind "movie" :medium "video"
    :title "12 Angry Men" :year 1957 :genres [] :overview ""
    :episode_count 0 :item_count 1 :representative_item_id 51})
 
 (def ^:private colton
   {:name "Colton" :status "active"
    :progress 0.0137M :progress_text "1:19" :updated_at 1785133261.301})
+
+;; the three kinds design note 13 grew, in the README's library-layout
+;; grammar: an audiobook SET (parts), a single chaptered m4b, an album
+;; (tracks), and a book — each with the author or artist its path names
+(def ^:private dune
+  {:work_key "audiobook:frank-herbert/dune-1965" :kind "audiobook" :medium "audio"
+   :title "Dune" :author "Frank Herbert" :year 1965 :genres [] :overview ""
+   :episode_count 0 :part_count 12 :item_count 12 :representative_item_id 301})
+
+(def ^:private dispossessed
+  {:work_key "audiobook:ursula-k-le-guin/the-dispossessed" :kind "audiobook" :medium "audio"
+   :title "The Dispossessed" :author "Ursula K. Le Guin" :genres [] :overview ""
+   :episode_count 0 :item_count 1 :representative_item_id 340})
+
+(def ^:private ok-computer
+  {:work_key "album:radiohead/ok-computer-1997" :kind "album" :medium "audio"
+   :title "OK Computer" :author "Radiohead" :year 1997 :genres [] :overview ""
+   :episode_count 0 :track_count 12 :item_count 12 :representative_item_id 410})
+
+(def ^:private orwell
+  {:work_key "book:george-orwell/1984" :kind "book" :medium "text"
+   :title "1984" :author "George Orwell" :genres [] :overview ""
+   :episode_count 0 :item_count 1 :representative_item_id 520})
+
+(defn- heard
+  "One audience entry in flickr's own progress words."
+  [text frac]
+  {:name "Colton" :status "active" :progress frac :progress_text text
+   :updated_at 1786000000.0})
 
 ;; ── the translation ─────────────────────────────────────────────────
 
@@ -70,6 +102,64 @@
                                       [(assoc colton :status "paused")])
                                nil)))))
 
+(deftest two-words-for-what-it-is
+  ;; flickr's `kind` is the word a person says (→ :medium, the
+  ;; envelope's tag); its `medium` is the file's nature (→ :format);
+  ;; `author` is the author or the artist (→ :creator)
+  (testing "an audiobook: the kind word, audio, and its author"
+    (let [d (fk/work->doc dune nil)]
+      (is (= "audiobook" (:medium d)))
+      (is (= "audio" (:format d)))
+      (is (= "Frank Herbert" (:creator d)))
+      (is (= 1965 (:year d)))))
+  (testing "an album by an artist"
+    (let [d (fk/work->doc ok-computer nil)]
+      (is (= "album" (:medium d)))
+      (is (= "audio" (:format d)))
+      (is (= "Radiohead" (:creator d)))))
+  (testing "a book is text"
+    (let [d (fk/work->doc orwell nil)]
+      (is (= "book" (:medium d)))
+      (is (= "text" (:format d)))
+      (is (= "George Orwell" (:creator d)))))
+  (testing "a movie is video and names no creator yet — absence, not
+            an empty string, so the hub's own word would stand"
+    (let [d (fk/work->doc movie nil)]
+      (is (= "video" (:format d)))
+      (is (not (contains? d :creator)))))
+  (testing "a work from before the field existed carries no :format —
+            the wire's omission is silence here too"
+    (is (not (contains? (fk/work->doc (dissoc movie :medium) nil) :format)))))
+
+(deftest progress-words-pass-through-in-every-shape
+  ;; the fraction law's second half: the authority's words are kept
+  ;; exactly as spelled, whatever grammar the work's shape gave them
+  (testing "an audiobook set: part n of m and the clock inside it"
+    (let [d (fk/work->doc (assoc dune :audiences [(heard "part 3 of 12 · 41:10" 0.21M)]) nil)]
+      (is (= "part 3 of 12 · 41:10" (:progress_text d)))
+      (is (= 0.21M (:progress d)))))
+  (testing "a chaptered single file: the chapter, then position over the whole"
+    (let [d (fk/work->doc (assoc dispossessed :audiences
+                                 [(heard "ch. 7 · 1:19:22 / 11:30:00" 0.115M)]) nil)]
+      (is (= "ch. 7 · 1:19:22 / 11:30:00" (:progress_text d)))))
+  (testing "an album: track n of m"
+    (is (= "track 3 of 12 · 2:41"
+           (:progress_text (fk/work->doc (assoc ok-computer :audiences
+                                                [(heard "track 3 of 12 · 2:41" 0.19M)]) nil)))))
+  (testing "a book, once the reader lands: the chapter and a percent"
+    (let [d (fk/work->doc (assoc orwell :audiences [(heard "ch. 7 · 34%" 0.34M)]) nil)]
+      (is (= "ch. 7 · 34%" (:progress_text d)))
+      (is (= 0.34M (:progress d)))))
+  (testing "a book TODAY: flickr reports a position with no locator —
+            text \"\", fraction 0 — and blank words are silence, not a
+            position: status lands, neither progress field is asserted,
+            so a place the hub logged by hand stands"
+    (let [d (fk/work->doc (assoc orwell :audiences [(heard "" 0.0)]) nil)]
+      (is (= "active" (:status d)))
+      (is (= "Colton" (:audience_name d)))
+      (is (not (contains? d :progress_text)))
+      (is (not (contains? d :progress))))))
+
 (deftest the-audience-rule
   ;; the parent spec's punt, observed: per-audience progress, PLURAL,
   ;; on one work — the addendum's rule maps it without redesigning
@@ -97,21 +187,46 @@
     (is (= "https://stream.kopsa.info/#/show/Colton%27s%20Minecraft%20Adventure"
            (fk/deep-link "https://stream.kopsa.info"
                          {:kind "show"
-                          :title "Colton's Minecraft Adventure"})))))
+                          :title "Colton's Minecraft Adventure"}))))
+  (testing "the README's route table has no album or audiobook listing,
+            so every other kind opens at its representative item — a
+            set's or an album's item pane lists the parts or tracks"
+    (is (= "https://stream.kopsa.info/#/item/301"
+           (fk/deep-link "https://stream.kopsa.info" dune))
+        "a multi-part audiobook")
+    (is (= "https://stream.kopsa.info/#/item/340"
+           (fk/deep-link "https://stream.kopsa.info" dispossessed))
+        "a single-file audiobook")
+    (is (= "https://stream.kopsa.info/#/item/410"
+           (fk/deep-link "https://stream.kopsa.info" ok-computer))
+        "an album")
+    (is (= "https://stream.kopsa.info/#/item/520"
+           (fk/deep-link "https://stream.kopsa.info" orwell))
+        "a book")))
 
 ;; ── discovery and the kind filter ───────────────────────────────────
 
-(deftest only-movie-and-show-kinds-mirror
+(deftest the-works-of-intent-mirror
   (let [f (fk/fake-source)]
     (fk/seed! f movie)
     (fk/seed! f {:work_key "show:ninjago" :kind "show" :title "Ninjago"})
+    (doseq [w [dune dispossessed ok-computer orwell]] (fk/seed! f w))
     (fk/seed! f {:work_key "file:250" :kind "file"
                  :title "'Pocalypse Preppin' - Checkers.mkv"})
-    (testing "discovery names the works of intent and never the
-              per-file inventory — 322 unidentified files at
-              verification, excluded by decision"
-      (is (= #{"movie:12-angry-men-1957" "show:ninjago"}
+    (testing "discovery names the works of intent — movie, show,
+              audiobook, album, book — and never the per-file
+              inventory: 322 unidentified files at verification,
+              excluded by decision"
+      (is (= #{"movie:12-angry-men-1957" "show:ninjago"
+               (:work_key dune) (:work_key dispossessed)
+               (:work_key ok-computer) (:work_key orwell)}
              (set (conf/source-discover f)))))
+    (testing "the new kinds pull as whole docs, deep link and all"
+      (let [[doc etag] (conf/source-pull f (:work_key ok-computer))]
+        (is (= "album" (:medium doc)))
+        (is (= "Radiohead" (:creator doc)))
+        (is (= "https://stream.kopsa.info/#/item/410" (:source_ui_href doc)))
+        (is (str/ends-with? etag (str "|" fk/translation-rev)))))
     (testing "a file-kind work is gone to the batch and 404 to the
               singular pull — never a row candidate by any door"
       (is (= :gone (get (conf/source-pull-many f ["file:250"]) "file:250")))
@@ -225,6 +340,28 @@
       (fk/delete! f id)
       (is (= 404 (:status (ex-data (try (conf/source-push f id {:status "finished"})
                                         (catch clojure.lang.ExceptionInfo e e)))))))))
+
+(deftest the-media-declaration-admits-every-mirrored-kind
+  ;; the source's kind filter and the kind's :medium enum are two
+  ;; spellings of one vocabulary; a work the source lets through that
+  ;; the schema refuses would fail at observe, row by row
+  (let [media (first (filter #(= :media (:kind %)) (main/check-resources)))
+        [tag & admitted] (schema/field-schema (:schema media) :medium)
+        [ctag & birth] (schema/field-schema (:create-schema media) :medium)
+        choices (get-in (schema/entry-map (:create-schema media))
+                        [:medium :properties :x-display :choices])]
+    (is (= :enum tag))
+    (is (every? (set admitted) fk/mirrored-kinds)
+        (str "the enum is missing a mirrored kind: "
+             (pr-str (remove (set admitted) fk/mirrored-kinds))))
+    (is (contains? (set admitted) "album") "album joined the vocabulary")
+    (testing "the birth door offers the same words, each with a sentence"
+      (is (= :enum ctag))
+      (is (= (set admitted) (set birth)))
+      (is (= (set birth) (set (keys choices)))))
+    (testing ":format is the file's nature beside the kind word"
+      (is (= [:enum "video" "audio" "text"]
+             (schema/field-schema (:schema media) :format))))))
 
 (deftest flickr-takes-no-births
   (is (thrown-with-msg? Exception #"flickr takes no births"

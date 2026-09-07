@@ -1,7 +1,7 @@
 (ns workqueue10.resources.media
   "The Media resource: the household's consumption queue — movies,
-  shows, books, audiobooks, comics — as ONE Mirror kind over its own
-  confluence. The RSS move, made again: do not build a library,
+  shows, books, audiobooks, albums, comics — as ONE Mirror kind over
+  its own confluence. The RSS move, made again: do not build a library,
   mirror the intent. One canonical envelope, the :medium tag
   differentiating, every catalog an authority behind the same
   TaskSource protocol the task queue already runs (spec-media.md;
@@ -25,9 +25,21 @@
   THE FRACTION LAW: every medium measures position in its own unit
   and none of them compare, so :progress is the canonical fraction
   of the whole beside :progress_text — the authority's own words,
-  untranslated (\"S02E05 · 12:30\" beside 0.43). A source that knows
-  position but not extent leaves the fraction nil beside intact
-  text.
+  untranslated (\"S02E05 · 12:30\" beside 0.43, \"part 3 of 12 ·
+  41:10\" beside an audiobook's heard-over-whole, \"ch. 7 · 34%\"
+  beside a book's). A source that knows position but not extent
+  leaves the fraction nil beside intact text.
+
+  TWO WORDS FOR WHAT A ROW IS. :medium is the kind as a person says
+  it — movie, show, book, audiobook, album, comic — the envelope's
+  differentiating tag, and the word the passage grammar keys on
+  (dayplan10.passage: a film, a show, an audiobook and an album are
+  time; a book and a comic are chapter, page or percent). :format is
+  the file's nature as an authority speaks it — video, audio, text —
+  a second fact carried beside the first, never derived from it, and
+  optional: a hub row need not say, and rows from before the field
+  existed simply lack it (no stored field changed meaning, so the
+  shape stands at 1).
 
   :document :partial IS THE HUB'S SHIELD, carrying three facts no
   authority speaks: :priority (\"what do we watch tonight?\" — the
@@ -128,15 +140,22 @@
               ;; RSS's lesson, one tag
               [:medium {:optional true :filter #{:eq :in}
                         :x-display {:showcase true}}
-               [:maybe [:enum "movie" "show" "book" "audiobook" "comic"]]]
+               [:maybe [:enum "movie" "show" "book" "audiobook" "album" "comic"]]]
+              ;; the file's nature, as the authority speaks it — a fact
+              ;; beside the kind word, never a translation of it (an
+              ;; audiobook is audio, a book is text); optional because
+              ;; a hub row need not know
+              [:format {:optional true
+                        :x-display {:label "Format (video, audio or text)"}}
+               [:maybe [:enum "video" "audio" "text"]]]
               ;; the consumption lifecycle, as data; abandoned is a
               ;; first-class state, never a deletion
               [:status {:optional true :filter #{:eq :in}
                         :x-display {:showcase true}}
                [:maybe [:enum "queued" "active" "finished" "abandoned"]]]
-              ;; author, director, showrunner — text, not a ref: an
-              ;; open vocabulary, because a creator is a label to
-              ;; filter by, not an account to resolve
+              ;; author, director, showrunner, artist — text, not a
+              ;; ref: an open vocabulary, because a creator is a label
+              ;; to filter by, not an account to resolve
               [:creator {:optional true :filter #{:eq}}
                [:maybe [:waymark/vocab {:open true}]]]
               [:year {:optional true}
@@ -203,12 +222,13 @@
                                           "show" "Show — episodes we work through"
                                           "book" "Book — read on paper or a screen"
                                           "audiobook" "Audiobook — listened to"
+                                          "album" "Album — a record, played through"
                                           "comic" "Comic — issues, or a graphic novel"}}}
-                      [:enum "movie" "show" "book" "audiobook" "comic"]]
+                      [:enum "movie" "show" "book" "audiobook" "album" "comic"]]
                      [:creator {:optional true
                                 :x-display
                                 {:label "Who made it"
-                                 :help "The author, director or showrunner — the name we would go looking under later; leave it empty if nobody remembers."}}
+                                 :help "The author, director, showrunner or artist — the name we would go looking under later; leave it empty if nobody remembers."}}
                       [:maybe [:waymark/vocab {:open true}]]]
                      [:year {:optional true
                              :x-display {:label "Year it came out"}}
