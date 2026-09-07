@@ -221,6 +221,29 @@
   [media from to]
   (flickr/passage-link (:source_ui_href media) (:medium media) from to))
 
+(defn places
+  "The passage's second hook (waymark-z8u4, the chapter picker): a
+  media row's data → the places it offers a passage's from and to —
+  a film's chapters, a show's episodes, a book's sections — as tokens
+  in the grammar the decision's guards read (1:19:00, S02E05 0:00,
+  ch. 7), spelled by the row's own authority. The framework serves
+  them at GET /api/media/{id}/-/places (router/places-doc reads
+  (:services eng) :places), and the decision form's :places recipe
+  points there from the subject in front of the person, so the chips
+  come off the row and waymark10 never learns flickr's name.
+
+  A hub row has no authority to ask and offers nothing; so does a row
+  of any other kind, and so does a flickr that does not answer — the
+  chips are advertisement, the box still takes a typed place, and the
+  guard still judges it (sources.flickr/places throws on a dark
+  socket; here that is [] and nothing else)."
+  [media-srcs kind data]
+  (or (when (and (= :media kind) (= "flickr" (str (:source data))))
+        (when-some [src (get media-srcs "flickr")]
+          (try (vec (flickr/places src data))
+               (catch Exception _ nil))))
+      []))
+
 (defn services
   "The engine's :services — what a handler or a guard may read of the
   household's wiring through (:services ctx). Home Assistant rides it
@@ -233,9 +256,14 @@
   configured, so a service launch refuses at the door rather than
   no-oping. :passage-link is the feed's projection hook for a
   decision's passage launch (passage-link above), always wired: it
-  reads rows, not a boundary."
-  [ha-src]
-  (cond-> {:features [] :passage-link passage-link}
+  reads rows, not a boundary. :places is its picker half (places
+  above), over the media confluence's sources — the same map the
+  :media kind drinks from, so the row and its chapters come from one
+  flickr."
+  [ha-src media-srcs]
+  (cond-> {:features []
+           :passage-link passage-link
+           :places (partial places media-srcs)}
     ha-src (-> (update :features conj "home_assistant")
                (assoc :home-assistant
                       (fn fire-home-assistant! [service data]
@@ -829,6 +857,10 @@
         ;; engine's :services (a decision's service launch fires
         ;; through it) — built once, or nil when unconfigured
         ha-src (home-assistant)
+        ;; the media confluence's sources, built once: the :media kind
+        ;; drinks them and :services :places asks the same flickr for
+        ;; a row's chapters (waymark-z8u4)
+        media-srcs (media-sources)
         ;; with-push: task declares :push-on-write, and engine boot
         ;; does not auto-wire the post-commit push pass (the recorded
         ;; seam in mirror/with-push) — the embedding wraps
@@ -836,7 +868,7 @@
              (engine/engine {:storage storage
                              :resources (resources
                                          (sources ha-src)
-                                         (media-sources)
+                                         media-srcs
                                          (thread-sources)
                                          (calendar-adapter)
                                          (connections/fan-reporter engine-ref))
@@ -872,7 +904,7 @@
                              ;; and the hashed disposition's salt
                              ;; (waymark-rci) — a real secret in
                              ;; production; absent = the dev constant
-                             :services (assoc (services ha-src)
+                             :services (assoc (services ha-src media-srcs)
                                               :field-hash-salt
                                               (System/getenv
                                                "WAYMARK10_FIELD_HASH_SALT"))}))

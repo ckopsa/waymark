@@ -39,11 +39,25 @@
 (def ^:private percent-re #"^(\d{1,3}(?:\.\d+)?)\s*%$")
 (def ^:private pct-re #"(?i)^pct\s*(0(?:\.\d+)?|1(?:\.0+)?)$")
 
-(defn- episode-text
+(defn episode-text
   "The episode as flickr spells it, S02E05 — two digits each, more
-  when the numbers ask."
+  when the numbers ask. Public since waymark-z8u4: the chapter picker
+  spells a show's episodes as places in this grammar's own words."
   [season episode]
   (format "S%02dE%02d" (long season) (long episode)))
+
+(defn clock-text
+  "Seconds as this grammar spells a time — H:MM:SS past the hour, M:SS
+  under it (1:19:00, 4:30); both read back through `parse`. Whole
+  seconds: a chapter atom's fraction is not a place anyone names."
+  [seconds]
+  (let [s (long (Math/floor (double seconds)))
+        h (quot s 3600)
+        m (quot (rem s 3600) 60)
+        sec (rem s 60)]
+    (if (pos? h)
+      (format "%d:%02d:%02d" h m sec)
+      (format "%d:%02d" m sec))))
 
 (defn parse
   "One place, read. nil when the words read in no grammar; else a map

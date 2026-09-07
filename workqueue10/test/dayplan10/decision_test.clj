@@ -38,6 +38,7 @@
             [dayplan10.zone :as zone]
             [next.jdbc :as jdbc]
             [waymark10.dev :as dev]
+            [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mirror :as mirror]
@@ -588,3 +589,31 @@
             "a show's passage names its episodes")
         (is (nil? (refusal #(decide! block (assoc (passage (at book) "ch. 7" nil) :order 3))))
             "a book's passage with no end opens at the chapter and goes on")))))
+
+;; ── the chapter picker (waymark-z8u4) ───────────────────────────────
+
+(defn- non-null
+  "The non-null branch of a :maybe's projection — X | null arrives as
+  oneOf/anyOf, and the form judges by the branch that is not null."
+  [prop]
+  (or (some #(when (not= "null" (:type %)) %)
+            (concat (:oneOf prop) (:anyOf prop)))
+      prop))
+
+(deftest from-and-to-are-offered-off-the-subjects-own-places
+  ;; the create door's launch sub-form carries the :places recipe on
+  ;; from and to, its hole renamed to the subject field ONE LEVEL UP
+  ;; — the form resolves {subject} at the top of the form and reads
+  ;; the media row's /-/places document, where main/places answers the
+  ;; row's chapters or episodes. Pure: the published schema alone.
+  (let [js (schema/json-schema (:create-schema dec/decision))
+        launch (non-null (get-in js [:properties :launch]))
+        recipe {:from "places" :of "subject"
+                :href "{subject}/-/places" :at ["places"]
+                :note "the places inside the row named in subject — its chapters, episodes or sections, spelled the way this field reads a place"}]
+    (is (= recipe (get-in launch [:properties :from :x-options])))
+    (is (= recipe (get-in launch [:properties :to :x-options])))
+    (is (= {:type "passage"} (get-in launch [:properties :from :x-display :when]))
+        "…and each still shows only under the passage choice")
+    (is (nil? (get-in js [:properties :subject :x-options]))
+        "the subject itself is typed or linked, not picked from a shelf")))

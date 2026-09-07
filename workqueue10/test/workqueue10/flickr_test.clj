@@ -410,3 +410,114 @@
                               :medium "book" :status "queued"})]
         (is (str/starts-with? xid "hub:"))
         (is (= hub/etag etag))))))
+
+;; ── the places a work offers (waymark-z8u4) ─────────────────────────
+;; The chapter picker: a decision's passage launch offers from and to
+;; off the media row's own chapters and episodes. The tokens are
+;; VALUES the passage grammar reads back — a chip spells a place, the
+;; guard still judges it — so every token here is parsed as well as
+;; compared.
+
+(def ^:private cellar-chapters
+  ;; an item's media_info.chapters, {start_s title}; the fraction on
+  ;; the last one is a chapter atom's, not a place anyone names
+  [{:start_s 0 :title "Opening"}
+   {:start_s 4740 :title "The Cellar"}
+   {:start_s 5070.5 :title "The Verdict"}])
+
+(def ^:private the-wire
+  {:work_key "show:the-wire" :kind "show" :medium "video"
+   :title "The Wire" :genres [] :overview ""
+   :episode_count 3 :item_count 3 :representative_item_id 61
+   ;; the fake's shelf (seed!): the episodes, one of them twice, and
+   ;; an extra that is no episode at all
+   :items [{:id 63 :season 2 :episode 5}
+           {:id 61 :season 1 :episode 1}
+           {:id 62 :season 1 :episode 2}
+           {:id 64 :season 2 :episode 5}
+           {:id 99 :title "extras"}]})
+
+(deftest places-are-tokens-in-the-passage-grammar
+  (testing "a film's chapters are times — H:MM:SS past the hour, M:SS
+            under it — and every one reads back"
+    (is (= ["0:00" "1:19:00" "1:24:30"] (fk/chapters->tokens "movie" cellar-chapters)))
+    (doseq [t (fk/chapters->tokens "movie" cellar-chapters)]
+      (is (= :time (:grammar (passage/parse t))) t)
+      (is (nil? (passage/misfit (passage/parse t) "movie")) t)))
+  (testing "a chaptered m4b is an audiobook's chapters the same way;
+            an album's tracks too"
+    (is (= ["0:00" "41:10" "1:19:22"]
+           (fk/chapters->tokens "audiobook" [{:start_s 0 :title "Part 1"}
+                                             {:start_s 2470 :title "Part 2"}
+                                             {:start_s 4762 :title "Part 3"}])))
+    (is (= ["2:41"] (fk/chapters->tokens "album" [{:start_s 161 :title "Airbag"}]))))
+  (testing "a show's episodes are S02E05 0:00 — sorted by season and
+            number, each once, an item that is no episode skipped —
+            and each reads as an episode and a time"
+    (let [toks (fk/chapters->tokens "show" (:items the-wire))]
+      (is (= ["S01E01 0:00" "S01E02 0:00" "S02E05 0:00"] toks))
+      (is (= "S02E05" (get-in (passage/parse (last toks)) [:episode :text])))
+      (is (nil? (passage/misfit (passage/parse (last toks)) "show")))))
+  (testing "a book's sections are ch. 1 … ch. n in reading order — the
+            n-th section is chapter n, as flickr's ch:<n> locator counts"
+    (is (= ["ch. 1" "ch. 2" "ch. 3"]
+           (fk/chapters->tokens "book" [{:title "I"} {:title "II"} {:title "III"}])))
+    (is (nil? (passage/misfit (passage/parse "ch. 3") "book")))
+    (is (= ["ch. 1"] (fk/chapters->tokens "comic" [{:title "Issue 1"}]))))
+  (testing "nothing to offer is []"
+    (is (= [] (fk/chapters->tokens "movie" [])))
+    (is (= [] (fk/chapters->tokens "movie" nil)))
+    (is (= [] (fk/chapters->tokens nil cellar-chapters)) "a medium never said")
+    (is (= [] (fk/chapters->tokens "file" cellar-chapters))
+        "a medium the grammar does not know")))
+
+(deftest places-are-read-off-the-row-through-the-source
+  (let [f (fk/fake-source)]
+    (fk/seed! f (assoc movie :items [{:id 51 :media_info {:chapters cellar-chapters}}]))
+    (fk/seed! f the-wire)
+    (fk/seed! f (assoc orwell :items [{:id 520 :media_info {:sections [{:title "Part One"}
+                                                                       {:title "Part Two"}]}}]))
+    (testing "a film: the item the row's own deep link names, its chapters"
+      (let [[doc] (conf/source-pull f "movie:12-angry-men-1957")]
+        (is (= ["0:00" "1:19:00" "1:24:30"] (fk/places f doc)))
+        (is (= "/api/items/51" (:path (last (fk/requests f)))))))
+    (testing "a show: the work's items, by key — the key travels encoded"
+      (let [[doc] (conf/source-pull f "show:the-wire")]
+        (is (= ["S01E01 0:00" "S01E02 0:00" "S02E05 0:00"] (fk/places f doc)))
+        (is (= "/api/works/show%3Athe-wire/items" (:path (last (fk/requests f)))))))
+    (testing "a book: the item's sections"
+      (let [[doc] (conf/source-pull f (:work_key orwell))]
+        (is (= ["ch. 1" "ch. 2"] (fk/places f doc)))))
+    (testing "the feed never carries the shelf"
+      (is (not-any? #(contains? % :items)
+                    (:works ((:call (:source f)) "GET" fk/feed-path {})))))
+    (testing "a row with nothing to ask about offers nothing, and asks nothing"
+      (let [before (count (fk/requests f))]
+        (is (= [] (fk/places f {:medium "movie" :title "A hub film"})))
+        (is (= [] (fk/places f {:medium "show" :title "A hub show"})))
+        (is (= before (count (fk/requests f))))))
+    (testing "a flickr that does not answer throws — the boot's hook,
+              not this read, decides what silence is worth"
+      (fk/down! f true)
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (fk/places f {:medium "movie"
+                                 :source_ui_href "https://stream.kopsa.info/#/item/51"}))))))
+
+(deftest the-boots-hook-answers-for-every-row
+  ;; main/places, the fn (:services eng) :places carries: the media
+  ;; confluence's own flickr answers a flickr row; a hub row, a row of
+  ;; another kind, and a dark socket all answer [] — the chips are
+  ;; advertisement, and the form's box still takes a typed place
+  (let [f (fk/fake-source)
+        srcs {"flickr" f "hub" (hub/source)}]
+    (fk/seed! f (assoc movie :items [{:id 51 :media_info {:chapters cellar-chapters}}]))
+    (let [[doc] (conf/source-pull f "movie:12-angry-men-1957")
+          row (assoc doc :source "flickr")]
+      (is (= ["0:00" "1:19:00" "1:24:30"] (main/places srcs :media row)))
+      (is (= [] (main/places srcs :media (assoc row :source "hub")))
+          "a hub row has no authority to ask")
+      (is (= [] (main/places srcs :task row))
+          "a row of another kind names no places")
+      (fk/down! f true)
+      (is (= [] (main/places srcs :media row))
+          "a flickr that does not answer offers nothing, and nothing throws"))))

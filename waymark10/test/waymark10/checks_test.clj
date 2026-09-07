@@ -7,6 +7,7 @@
             [waymark10.fixtures :as fx]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
+            [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
 ;; ── the valid base and helpers ──────────────────────────────────────
@@ -533,3 +534,63 @@
                                :safety {:idempotent true :reversible false
                                         :confirm false
                                         :one-way "Reopening is cheap."}}}))))
+
+;; ── a nested map is a surface too (waymark-z8u4) ─────────────────────
+;; A decision's launch is a sub-form of the create door, and its `from`
+;; reads the row named by `subject` one level UP. The client resolves a
+;; hole from inside a sub-form by the bare name at the top of the form
+;; first, then among the sub-form's own siblings, so the check walks
+;; nested maps as surfaces and lets an :of reach either level — and a
+;; misspelling inside one is refused like any other.
+
+(deftest options-inside-a-nested-map
+  (let [prose (fn [label] {:label label :help (str label ", in a sentence.")})]
+    (testing "a nested map's field may name a field of the form that holds it"
+      (is (= [] (warnings-of
+                 (assoc base :schema
+                        [:map
+                         [:name {:x-display (prose "Name")} [:string {:max 100}]]
+                         [:subject {:x-display (prose "Subject")} [:string {:max 200}]]
+                         [:launch {:optional true :x-display (prose "Launch")}
+                          [:maybe [:map
+                                   [:from {:x-options {:from :places :of :subject}
+                                           :x-display (prose "From")}
+                                    [:string {:max 80}]]]]]])))))
+    (testing "…or its own sibling"
+      (is (= [] (warnings-of
+                 (assoc base :schema
+                        [:map
+                         [:name {:x-display (prose "Name")} [:string {:max 100}]]
+                         [:launch {:x-display (prose "Launch")}
+                          [:map
+                           [:kind {:x-options {:from :kinds}
+                                   :x-display (prose "Kind")}
+                            [:string {:max 60}]]
+                           [:verbs {:x-options {:from :actions :of :kind :each true}
+                                    :x-display (prose "Verbs")}
+                            [:vector [:string {:max 60}]]]]]])))))
+    (testing "a misspelled source inside a nested map is refused like any other"
+      (breaks :options
+              (assoc base :schema
+                     [:map
+                      [:name [:string {:max 100}]]
+                      [:launch [:map [:kind {:x-options {:from :everything}}
+                                      [:string {:max 60}]]]]])))
+    (testing "and an :of neither level declares is refused"
+      (breaks :options
+              (assoc base :schema
+                     [:map
+                      [:name [:string {:max 100}]]
+                      [:launch [:map [:from {:x-options {:from :places :of :nowhere}}
+                                      [:string {:max 80}]]]]])))))
+
+(deftest the-places-source-projects-the-rows-own-address
+  ;; the one source that answers out of a row: {of} stands at the head
+  ;; of the href, renamed to the sibling holding the address, and the
+  ;; row document /-/places behind it
+  (is (= {:from "places"
+          :of "subject"
+          :href "{subject}/-/places"
+          :at ["places"]
+          :note "the places inside the row named in subject — its chapters, episodes or sections, spelled the way this field reads a place"}
+         (schema/option-props {:x-options {:from :places :of :subject}}))))

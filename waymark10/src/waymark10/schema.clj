@@ -392,6 +392,15 @@
   No new route was minted for this, on purpose — a picker that costs a
   second endpoint is a picker somebody turns off.
 
+  One source answers out of a ROW instead (waymark-z8u4, :places):
+  the places a row offers a passage — a film's chapters, a show's
+  episodes, a book's sections — are the row's own, so the recipe's
+  href is the sibling's value itself, an ADDRESS, with the row
+  document `/-/places` behind it (router/places-doc serves it for
+  every plural; the application's `:services :places` hook fills it,
+  and a kind nobody wired answers []). The hole stands at the head of
+  the href and a client fills an address unescaped — it IS the path.
+
   :href and each :at segment may carry `{of}`, replaced at PROJECTION
   time by the name of the sibling field that names the target kind
   (`{target}`), and at FETCH time by that field's current value. :at
@@ -415,7 +424,11 @@
    :filters {:href "/api/.well-known/waymark"
              :at ["resources" "{of}" "filters"]
              :needs-of true
-             :note "the field names a filter over the kind named in {of} may name"}})
+             :note "the field names a filter over the kind named in {of} may name"}
+   :places  {:href "{of}/-/places"
+             :at ["places"]
+             :needs-of true
+             :note "the places inside the row named in {of} — its chapters, episodes or sections, spelled the way this field reads a place"}})
 
 (defn option-props
   "The x-options advertisement of one schema entry's properties, or nil

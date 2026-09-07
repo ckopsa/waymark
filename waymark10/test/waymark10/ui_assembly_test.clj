@@ -423,3 +423,42 @@
     (doseq [word ["hypothes" "unretire" "fifteen"]]
       (is (not (str/includes? page word))
           (str "the generic page must not learn " word)))))
+
+(deftest a-recipe-reaches-a-sibling-inside-a-sub-form
+  ;; waymark-z8u4: a decision's launch.from carries an :x-options
+  ;; recipe whose {subject} hole names a field one level UP. A hole is
+  ;; resolved by the bare name at the top of the form first, then among
+  ;; the sub-form's own siblings by the last segment of their path
+  ;; (scope[2].kind answers {kind} from its own row — the list-of-maps
+  ;; limit, lifted by the same lookup); an address filling a hole is
+  ;; the path it is, never escaped, because the :places recipe's href
+  ;; IS the row with /-/places behind it. A sub-field's recipe waits
+  ;; for the whole form like a top-level one, and the chips follow the
+  ;; hole when the subject is retyped. The page learns no application
+  ;; word for any of it.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "function holeNode"))
+    (is (str/includes? page "const top = form.querySelector('[name=\"' + hole + '\"]');")
+        "the bare name at the top of the form first")
+    (is (str/includes? page "const box = input.closest(\"[data-subform]\");")
+        "then the sub-form's own siblings")
+    (is (str/includes? page "if (lastSeg(n.getAttribute(\"name\")) === hole) return n;")
+        "…by the last segment of their path")
+    (is (str/includes? page "return encode && !isAddress(v) ? encodeURIComponent(v) : String(v);")
+        "an address fills a hole as the path it is")
+    (is (str/includes? page "function markOptions"))
+    (is (str/includes? page "function wireOptions"))
+    (is (str/includes? page "markOptions(widget, subRaw);")
+        "a sub-field's recipe waits for the whole form")
+    (is (str/includes? page "wireOptions(form, form);")
+        "…and one walk wires the finished form")
+    (is (str/includes? page "if (root) wireOptions(root, row);")
+        "a list row landing later is wired as it lands")
+    (is (str/includes? page "const form = el(\"div\", {\"data-form\": \"\"});")
+        "the root a hole resolves against")
+    (is (str/includes? page "const sib = holeNode(form, input, f);")
+        "the chips follow the hole")
+    (is (str/includes? page "optionTokens(xo, holeValues(form, input, xo))"))
+    (is (not (str/includes? page "pendingOptions")))
+    (is (not (str/includes? page "flickr"))
+        "the generic page never learns whose chapters these are")))

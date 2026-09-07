@@ -10,7 +10,10 @@
   Assistant service with its data, a note the card shows, or a PASSAGE
   of the subject (waymark-35eb: a scene, a chapter, a page range of a
   media row, spelled from/to in the medium's own grammar — the link
-  that opens it is a projection the feed computes and nothing stores);
+  that opens it is a projection the feed computes and nothing stores;
+  waymark-z8u4: from and to are OFFERED off the row's own chapters
+  and episodes through the :places recipe, the form's chips spelling
+  what the guards still judge);
   prep is one sentence of what must be ready the evening before; order
   is where it sits among the block's decisions. A decision belongs to
   the block, never to a span (fork b): a span door never moves one.
@@ -506,15 +509,22 @@
    ;; the passage (waymark-35eb): a place in the SUBJECT — the media
    ;; row the decision already names — spelled in the medium's own
    ;; grammar and kept exactly as typed. The link that opens it is the
-   ;; feed's projection off the row's deep link, stored nowhere.
+   ;; feed's projection off the row's deep link, stored nowhere. Each
+   ;; end is OFFERED from the row's own places (waymark-z8u4, the
+   ;; :places recipe reading {subject} one level up — the media row's
+   ;; chapters, episodes or sections as tokens the grammar reads), so
+   ;; a person types a time only for a scene no chapter names; the two
+   ;; guards below still judge the words, a chip only spells them
    [:from {:optional true
+           :x-options {:from :places :of :subject}
            :x-display {:label "From"
-                       :help "Where it starts — 1:19:00 for a film, S02E05 0:12:00 for a show, ch. 7 / p. 213 / 34% for a book. The subject names the film, show or book."
+                       :help "Where it starts — a chapter or an episode of the subject from the chips, or typed: 1:19:00 for a film, S02E05 0:12:00 for a show, ch. 7 / p. 213 / 34% for a book. The subject names the film, show or book."
                        :when {:type "passage"}}}
     [:maybe [:string {:max 80}]]]
    [:to {:optional true
+         :x-options {:from :places :of :subject}
          :x-display {:label "To"
-                     :help "Where it ends, in the same words — 1:24:30 for a film, S02E05 0:31:00 for a show, ch. 9 / p. 240 / 40% for a book. Leave it empty to open at the start and go on."
+                     :help "Where it ends, in the same words — a chip, or 1:24:30 for a film, S02E05 0:31:00 for a show, ch. 9 / p. 240 / 40% for a book. Leave it empty to open at the start and go on."
                      :when {:type "passage"}}}
     [:maybe [:string {:max 80}]]]])
 

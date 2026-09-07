@@ -414,6 +414,25 @@ design:
   `:help` and `:choices` and does **not** read `x-options` yet. Filed
   as a follow-up rather than done badly here.
 
+*Amended 2026-09-07 (waymark-z8u4): a hole inside a sub-form, and a
+source that answers out of a row.* A decision's `launch.from` carries a
+recipe whose `{subject}` names a field one level *up*, and a sub-form's
+widgets are named by path (`launch.from`), so the bare-name lookup found
+nothing. `holeNode` in `170-forms.js` now resolves a hole by the bare name
+at the top of the form first, then among the sub-form's own siblings by
+the last segment of their path — which is the same lookup a list row
+needs (`scope[2].kind` answering `{kind}`), so the list-of-maps limit
+recorded below is lifted at the lookup; the rows are not yet taught to
+host the chips, and that list keeps its box for now. `check-options`
+walks nested maps as surfaces and lets an `:of` name either level. The
+sixth source, `:places`, is the first to answer out of a **row**: the
+`:of` sibling holds an address, the href is `{subject}/-/places` (an
+address fills a hole unescaped — it *is* the path), and core serves
+`GET /api/{plural}/{id}/-/places` off an application hook, `[]` where
+none is wired. It is the one exception to *no new route*, and the reason
+is that the vocabulary is the row's own: a film's chapters are in no
+document a client already holds.
+
 ### The composition kinds, cleared
 
 `saved_view`, `dashboard` and `dashboard_slot` — the three kinds a

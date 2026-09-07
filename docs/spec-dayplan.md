@@ -524,9 +524,41 @@ opening in a new tab and firing the verb in one tap. **Finishing the
 decision logs no progress on the media row.** A scene watched for a talk is
 not where you are in the film; `finish` has no handler, `fire-launch` fires
 nothing for a passage (as for a link or a note), and the row's
-`progress`/`progress_text` stay the authority's. Punted, as its own bead
-(waymark-z8u4): offering `from` and `to` from the work's own chapters and
-episodes instead of a blank box.
+`progress`/`progress_text` stay the authority's.
+
+*Amended 2026-09-07 (waymark-z8u4): the chapter picker.* `from` and `to`
+are **offered off the work's own chapters and episodes**, so a person types
+a time only for a scene no chapter names. Each carries `:x-options {:from
+:places :of :subject}` — the one option source that answers out of a *row*
+rather than a document the client already holds: the recipe's href is the
+subject's own address with `/-/places` behind it (`{subject}/-/places`,
+which a client fills unescaped because an address *is* the path), and
+`GET /api/media/{id}/-/places` answers `{"places": [token …]}`. The tokens
+are **values the field accepts**, in the grammar `passage.clj` reads —
+`1:19:00` for a film's chapter, `S02E05 0:00` for a show's episode, `ch. 7`
+for a book's section — never labels; a chip spells a place and the two
+guards still judge it exactly as they judge a typed one. Core serves the
+address (`router/places-doc`, beside `/-/history`) and the application
+says what stands at it through `(:services eng) :places`, the seam
+`:passage-link` already rides: `workqueue10.main/places` asks the media
+confluence's own flickr — `sources.flickr/places` reads a film's, an
+audiobook's, an album's or a book's representative item
+(`GET /api/items/{id}`, `media_info.chapters` or `.sections`) and a show's
+episodes (`GET /api/works/{key}/items`), and `chapters->tokens` spells them
+— so `waymark10` learns no application word. A hub row has no authority to
+ask and offers `[]`; so does a flickr that does not answer; the box still
+takes a typed place either way. What the picker needed of the *framework*
+was one thing the list-of-maps sub-form had already met: a recipe's `{hole}`
+resolved against the form by bare name, and inside the launch sub-form a
+field's name is a path. `ui/170-forms.js` now resolves a hole by the bare
+name at the top of the form first, then among the sub-form's own siblings by
+the last segment of their path; `checks/check-options` walks nested maps as
+surfaces and lets an `:of` name either level. Recorded, not done: the
+chips carry the token alone (the recipe has no label slot, and *1:19:00 —
+The Cellar* would not read back through the grammar); a multi-part
+audiobook set offers its representative item's chapters, not its parts; and
+no MCP tool serves the `/-/places` document yet — an agent reads it over
+HTTP or types the place.
 
 **`start` is the verdict.** It takes no input, so `demand/effort` renders it
 `"assent"` — the class the household calls a tap — and it rides the card
@@ -895,11 +927,12 @@ line in one pair of files, a scope and two prose paragraphs in another.
 - **HA service discovery.** `launch.service` is a string the person or the
   chat spells; nothing reads HA's service registry to offer a picker. A
   wrong service refuses at `start` with HA's own status.
-- **A passage picker.** `launch.from`/`to` are strings in the medium's
-  grammar; nothing yet offers a show's episodes or a book's chapters as
-  choices (waymark-z8u4). A passage of a hub row with no `source_ui_href`
-  is admitted and reads on the card, and its Go is a plain verdict with no
-  link — there is nothing to open it in.
+- **A passage of a hub row.** One with no `source_ui_href` is admitted
+  and reads on the card, and its Go is a plain verdict with no link — there
+  is nothing to open it in; its picker offers nothing, for the same reason.
+  (The picker itself landed with waymark-z8u4, amended above; its own punts
+  — token-only chips, an audiobook set's parts, no MCP door to `/-/places`
+  — are recorded there.)
 
 ## Effort
 

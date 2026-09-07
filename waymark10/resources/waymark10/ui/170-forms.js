@@ -89,9 +89,10 @@ function fieldWidget(name, rawProp, value) {
        that should open as a blank rectangle */
     /* a list of maps with declared fields is ROWS of a sub-form
        (waymark-jtd7) — unless an item field carries an option recipe:
-       a recipe's {sibling} holes resolve by bare name against the form
-       and cannot yet see an indexed row, so those lists keep the box
-       and the chips beside it */
+       those lists keep the box and the chips beside it. The hole
+       lookup can reach a row's own siblings since waymark-z8u4
+       (holeNode), so this is the rows not yet taught to host the
+       chips, no longer a limit of the recipe — a follow-up, recorded */
     const itemSchema = schemaProp(items);
     if (itemSchema.properties && Object.keys(itemSchema.properties).length &&
         !itemOptionFields(rawProp).length)
@@ -135,12 +136,18 @@ function subformWidget(name, prop, value) {
     if (xd.hidden) continue;             /* nobody's form, one level down too */
     const path = name + "." + sub;
     const w = whenOf(xd);
+    const widget = fieldWidget(path, subRaw, seed[sub]);
+    /* a sub-field's option recipe waits for the whole form like a
+       top-level one does (waymark-z8u4): its {hole} may name a field
+       one level up — launch.from reads {subject} — so the widget
+       carries the recipe until wireOptions walks the finished form */
+    markOptions(widget, subRaw);
     box.append(el("div", {class: "field", "data-field": path,
                           "data-when": w ? w.sib : null,
                           "data-when-value": w ? w.val : null},
       el("label", {title: path}, el("b", {}, xd.label || sub),
          required.has(sub) ? el("span", {class: "req"}, " *") : ""),
-      fieldWidget(path, subRaw, seed[sub]),
+      widget,
       el("div", {class: "err srv", "data-srverr": path}),
       xd.help ? el("div", {class: "muted",
                            style: "font-size:11px;margin:2px 0 4px"}, xd.help) : null));
@@ -203,6 +210,10 @@ function listWidget(name, prop, items, value) {
                              "aria-label": "remove this entry",
                              onclick: () => { row.remove(); refresh(); }}, "✕"));
     rows.append(row);
+    /* a row added to a form already standing is wired as it lands;
+       the rows a form opens with wait for buildForm's own walk */
+    const root = box.closest("[data-form]");
+    if (root) wireOptions(root, row);
     refresh();
   };
   add.addEventListener("click", () => addRow(undefined));
@@ -399,10 +410,15 @@ function xoptionsOf(rawProp) {
 const OPT_HOLE = /\{([A-Za-z_][A-Za-z_0-9]*)\}/g;
 /* {target} in an href or an :at segment is the CURRENT value of the
    sibling field of that name — the recipe is resolved against the form
-   in front of the person, not against anything the server remembers */
+   in front of the person, not against anything the server remembers.
+   A hole holding an ADDRESS (/api/media/01H…, the whole value or it is
+   not one — WM_ADDRESS) is filled as the path it is, never escaped:
+   the :places recipe's href is the row itself with /-/places behind */
 function optFill(s, values, encode) {
-  return String(s).replace(OPT_HOLE, (_m, f) =>
-    encode ? encodeURIComponent(values[f] ?? "") : String(values[f] ?? ""));
+  return String(s).replace(OPT_HOLE, (_m, f) => {
+    const v = values[f] ?? "";
+    return encode && !isAddress(v) ? encodeURIComponent(v) : String(v);
+  });
 }
 function optHoles(xo) {
   const out = [];
@@ -434,6 +450,51 @@ async function optionTokens(xo, values) {
   if (node && typeof node === "object") return Object.keys(node).map(String);
   return [];
 }
+/* {hole} names a field of the form in front of the person. From inside
+   a sub-form (launch.from reading {subject}) the bare name is looked up
+   at the TOP of the form first, then among the sub-form's own siblings
+   by the last segment of their path — launch.type answers {type},
+   scope[2].kind answers {kind} from its own row — so one hole reaches
+   the form's top-level fields and a row's siblings alike, and a hole
+   nothing answers reads as unanswered (waymark-z8u4). */
+function lastSeg(name) {
+  const segs = parsePath(name);
+  return String(segs[segs.length - 1]);
+}
+function holeNode(form, input, hole) {
+  const top = form.querySelector('[name="' + hole + '"]');
+  if (top) return top;
+  const box = input.closest("[data-subform]");
+  if (!box) return null;
+  for (const n of box.querySelectorAll("[name]"))
+    if (lastSeg(n.getAttribute("name")) === hole) return n;
+  return null;
+}
+function holeValues(form, input, xo) {
+  const out = {};
+  for (const f of optHoles(xo)) {
+    const n = holeNode(form, input, f);
+    if (n) out[f] = n.value;
+  }
+  return out;
+}
+/* a recipe waits for the WHOLE form: a hole may name a field declared
+   later, or one level up. The widget carries the recipe as data-xoptions
+   until wireOptions walks a finished form (buildForm's own, or a list
+   row landing in one) and attaches it — once, the attribute leaving
+   with the wiring */
+function markOptions(widget, rawProp) {
+  const xo = xoptionsOf(rawProp);
+  if (xo && xo.href && widget.tagName === "INPUT")
+    widget.setAttribute("data-xoptions", JSON.stringify(xo));
+}
+function wireOptions(form, scope) {
+  for (const w of scope.querySelectorAll("input[data-xoptions]")) {
+    const xo = JSON.parse(w.getAttribute("data-xoptions"));
+    w.removeAttribute("data-xoptions");
+    attachOptions(form, w, xo);
+  }
+}
 let optionListSeq = 0;
 function attachOptions(form, input, xo) {
   const listId = "opts-" + (++optionListSeq);
@@ -443,12 +504,6 @@ function attachOptions(form, input, xo) {
   form.append(list);
   const chips = el("div", {class: "opt-chips"});
   input.after(chips);
-  const siblings = () => {
-    const out = {};
-    for (const n of form.querySelectorAll("[name]"))
-      out[n.getAttribute("name")] = n.value;
-    return out;
-  };
   /* a chip writes the token the way THIS field spells one: a whole
      value, one entry of a comma list, or a name= waiting for its
      value in a filter string */
@@ -472,7 +527,7 @@ function attachOptions(form, input, xo) {
   let seq = 0;
   const refresh = async () => {
     const mine = ++seq;
-    const tokens = await optionTokens(xo, siblings());
+    const tokens = await optionTokens(xo, holeValues(form, input, xo));
     if (mine !== seq) return;              /* a later keystroke won the race */
     list.replaceChildren();
     if (tokens === null) {
@@ -496,8 +551,9 @@ function attachOptions(form, input, xo) {
         : [el("span", {class: "muted"}, "nothing offered — " + xo.note)]));
   };
   refresh();
+  /* the chips follow the hole: a subject retyped re-reads its places */
   for (const f of optHoles(xo)) {
-    const sib = form.querySelector('[name="' + f + '"]');
+    const sib = holeNode(form, input, f);
     if (sib) { sib.addEventListener("change", refresh);
                sib.addEventListener("input", refresh); }
   }
@@ -622,11 +678,13 @@ function attachItemOptions(form, textarea, fields, enums) {
   textarea.addEventListener("input", refresh);
 }
 function buildForm(schema, prefill, kind) {
-  const form = el("div", {});
+  /* data-form marks the root a hole resolves against (holeNode) and a
+     list row landing later finds its way back up to (listWidget) */
+  const form = el("div", {"data-form": ""});
   const required = new Set((schema.required || []).map(String));
   /* x-options wiring waits for the whole form: a recipe interpolates
-     SIBLING values, and a sibling declared later is not in the DOM yet */
-  const pendingOptions = [];
+     SIBLING values, and a sibling declared later is not in the DOM yet
+     — a widget carries its recipe (markOptions) until the walk below */
   const pendingItemOptions = [];
   for (const [name, rawProp] of Object.entries(schema.properties || {})) {
     if (name === "ids") continue;           /* bulk ids ride the selection */
@@ -685,7 +743,7 @@ function buildForm(schema, prefill, kind) {
                            style:"font-size:11px;margin:2px 0 4px"}, xd.help) : null));
     const xo = xoptionsOf(rawProp);
     if (xo && xo.href && widget.tagName === "INPUT")
-      pendingOptions.push([widget, xo]);
+      markOptions(widget, rawProp);
     else if (widget.dataset && widget.dataset.array === "json") {
       const fields = itemOptionFields(rawProp);
       const enums = itemEnumFields(rawProp);
@@ -693,7 +751,9 @@ function buildForm(schema, prefill, kind) {
         pendingItemOptions.push([widget, fields, enums]);
     }
   }
-  for (const [widget, xo] of pendingOptions) attachOptions(form, widget, xo);
+  /* one walk wires every marked widget — the top level's and the
+     sub-forms' alike, the rows a list opened with included */
+  wireOptions(form, form);
   for (const [widget, fs, es] of pendingItemOptions)
     attachItemOptions(form, widget, fs, es);
   wireWhen(form, "");
