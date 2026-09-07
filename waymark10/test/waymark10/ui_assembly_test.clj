@@ -353,6 +353,13 @@
     (is (str/includes? page "return listWidget(name, prop, itemSchema, value);"))
     (is (str/includes? page "return compact(values);")
         "a blank row is a hole the compaction closes")
+    ;; waymark-x0aw: a field that belongs to one of a sibling's choices
+    ;; shows only under it, at the top level and inside a sub-form; a
+    ;; hidden field keeps its typed values and is not collected
+    (is (str/includes? page "function wireWhen"))
+    (is (str/includes? page "\"data-when\": w ? w.sib : null,"))
+    (is (str/includes? page "if (node.closest(\".field.off\")) continue;")
+        "the other branch's field is never sent")
     (is (str/includes? page ".subform.list .listrow {") "the rows' CSS survives assembly")))
 
 (deftest the-undo-stack-rides-the-page-and-names-no-kind

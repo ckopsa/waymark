@@ -345,20 +345,26 @@
                                  "service" "Fires a Home Assistant service"
                                  "text" "Shows a note"}}}
     [:enum "href" "service" "text"]]
+   ;; each field below belongs to one of the type's choices and shows
+   ;; only under it (:when, waymark-x0aw); launch-says-how still judges
+   ;; the pair at the door
    [:href {:optional true
            :x-display {:label "Link"
-                       :help "The address the card opens — for a link launch."}}
+                       :help "The address the card opens."
+                       :when {:type "href"}}}
     [:maybe [:string {:max 500}]]]
    [:service {:optional true
               :x-display {:label "Service"
-                          :help "The Home Assistant service, domain/service — light/turn_on."}}
+                          :help "The Home Assistant service, domain/service — light/turn_on."
+                          :when {:type "service"}}}
     [:maybe [:string {:min 1 :max 120}]]]
    ;; the service call as a person fills it in (waymark-ylat): the
    ;; entity and a list of settings rows — a sub-form and rows in every
    ;; client, never a JSON box; fire-launch builds the call's map from it
    [:data {:optional true
            :x-display {:label "Service data"
-                       :help "What the service acts on and how — for a service launch only; a link or a note never needs this."}}
+                       :help "What the service acts on and how."
+                       :when {:type "service"}}}
     [:maybe [:map
              [:entity_id {:optional true
                           :x-display {:label "Entity"
@@ -376,7 +382,8 @@
                                  [:string {:max 200}]]]]]]]]]
    [:text {:optional true
            :x-display {:label "Note"
-                       :help "What the card shows when you go — 'the drill is in the blue case'."}}
+                       :help "What the card shows when you go — 'the drill is in the blue case'."
+                       :when {:type "text"}}}
     [:maybe [:string {:max 500}]]]])
 
 (defresource decision
