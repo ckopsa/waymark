@@ -123,6 +123,22 @@
         "a document without a day plan renders the feed as it was")
     (is (str/includes? page "dayGoChip(d, primaryVerb(d.actions), row, ctx)")
         "the one chip is the projected primary verb, never a named door")
+    ;; waymark-35eb: a passage launch is the link chip over the href the
+    ;; document projected (the subject's row at the place — the server
+    ;; computes it, the page knows no grammar), and the row reads the
+    ;; passage under the title in the person's own words
+    (is (str/includes? page "if ((launch.type === \"href\" || launch.type === \"passage\") && href) {")
+        "a passage opens like a link — the projected href, in a new tab, and the tap is the verdict")
+    (is (str/includes? page "\"data-launch\": launch.type,")
+        "…wearing its own launch type, not the link's")
+    (is (str/includes? page "if (launch.type === \"passage\" && launch.from)")
+        "the passage reads under the title")
+    (is (str/includes? page "launch.from + (launch.to ? \" – \" + launch.to : \"\")")
+        "…from and to exactly as typed")
+    (is (str/includes? page "+ (d.subject_title ? \" of \" + d.subject_title : \"\")")
+        "…then ' of ' and the subject's title the document projected")
+    (is (not (str/includes? page "passage-link"))
+        "the page never learns where the href comes from")
     (is (str/includes? page "props.shape ? schemaProp(props.shape) : null")
         "the shape toggle is the form's own enum")
     (is (str/includes? page "const create = block.create || null;")

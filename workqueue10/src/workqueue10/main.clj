@@ -207,6 +207,20 @@
       :zone (System/getenv "WORKQUEUE10_HA_ZONE")
       :capture-list (System/getenv "WORKQUEUE10_HA_CAPTURE")})))
 
+(defn passage-link
+  "The feed's hook for a decision's PASSAGE launch (waymark-35eb,
+  dayplan10.resources.decision): the media row's data and the
+  decision's from/to words → the href that opens the row AT that
+  place, or nil. The framework's feed (waymark10.server.feed/
+  decision-doc) reads this off (:services eng) :passage-link so it
+  never learns flickr's name; the URL grammar is flickr's
+  (sources.flickr/passage-link) because the deep link it extends is
+  flickr's. A projection, stored nowhere — computed off the row on
+  every read, so a rescan that moves the row's deep link moves this
+  with it."
+  [media from to]
+  (flickr/passage-link (:source_ui_href media) (:medium media) from to))
+
 (defn services
   "The engine's :services — what a handler or a guard may read of the
   household's wiring through (:services ctx). Home Assistant rides it
@@ -217,9 +231,11 @@
   start handler fires — (fn [service data]) over
   sources.homeassistant/call-service!. Both absent when no HA is
   configured, so a service launch refuses at the door rather than
-  no-oping."
+  no-oping. :passage-link is the feed's projection hook for a
+  decision's passage launch (passage-link above), always wired: it
+  reads rows, not a boundary."
   [ha-src]
-  (cond-> {:features []}
+  (cond-> {:features [] :passage-link passage-link}
     ha-src (-> (update :features conj "home_assistant")
                (assoc :home-assistant
                       (fn fire-home-assistant! [service data]

@@ -3975,13 +3975,12 @@
     "off"
     "workday"))
 
-(defn- subject-launch-href
-  "Where a decision's subject would OPEN, when the subject is the
-  address of a media or task row this reader may see: the row's
-  `source_ui_href`, else its `source_href` — the authority's own screen
-  for a mirrored row — and nil for every other subject. The address is
-  parsed against this engine's own plurals, so a kind it does not
-  serve answers nil rather than a guess."
+(defn- subject-row
+  "The raw media or task row a decision's subject names, when this
+  reader may see it — `[kind raw]`, or nil for every other subject.
+  The address is parsed against this engine's own plurals, so a kind
+  it does not serve answers nil rather than a guess, and a row the
+  grant conceals is absent here as everywhere."
   [ctx subject]
   (when-some [[_ plural id] (re-matches #"/api/([A-Za-z0-9_]+)/([A-Za-z0-9_.:-]+)"
                                         (str subject))]
@@ -3991,20 +3990,47 @@
         (let [vis (:visibility ctx)]
           (when (or (nil? vis) ((:row? vis) kind id))
             (when-some [raw (load-raw ctx kind id)]
-              (or (some-> (get-in raw [:data :source_ui_href]) str not-empty)
-                  (some-> (get-in raw [:data :source_href]) str not-empty)))))))))
+              [kind raw])))))))
+
+(defn- subject-launch-href
+  "Where a decision's subject would OPEN: the row's `source_ui_href`,
+  else its `source_href` — the authority's own screen for a mirrored
+  row — and nil when the row has neither."
+  [raw]
+  (or (some-> (get-in raw [:data :source_ui_href]) str not-empty)
+      (some-> (get-in raw [:data :source_href]) str not-empty)))
+
+(defn- passage-href
+  "Where a decision's PASSAGE launch opens: the subject's media row at
+  the place the launch's `from`/`to` name, through the hook the
+  application wired as (:services eng) :passage-link — `(fn [media-data
+  from to] → href-or-nil)`. The framework knows nothing of the
+  authority's URL grammar (workqueue10.main wires flickr's), and the
+  href is a PROJECTION computed on every read off the row as it stands
+  now — stored nowhere, so a rescan that moves the row's deep link
+  cannot leave a stale one behind. nil when no hook is wired, when the
+  subject is not a media row, or when the hook has no link for it."
+  [ctx kind raw launch]
+  (when (= :media kind)
+    (when-some [link (get-in (:eng ctx) [:services :passage-link])]
+      (some-> (link (:data raw) (:from launch) (:to launch)) str not-empty))))
 
 (defn- decision-doc
   "One decision of a block, projected — or nil when the grant conceals
   it. `launch_href` is the projection a screen taps: the launch's own
-  href, else the subject's screen when the subject is a media or task
-  row. `card_id` is the id the same row wears in the `:now` section,
-  so a screen can line the skeleton up with the cards."
+  href; a passage launch's place in the subject's media row (the
+  application's hook, `passage-href`); else the subject's screen when
+  the subject is a media or task row. `subject_title` is that row's
+  title, so a passage can read '1:19:00 – 1:24:30 of 12 Angry Men'
+  without a second request. `card_id` is the id the same row wears in
+  the `:now` section, so a screen can line the skeleton up with the
+  cards."
   [ctx raw]
   (when-some [{:keys [decoded body]} (projected ctx :decision raw)]
     (let [d (:data decoded)
           launch (:launch d)
-          subject (some-> (:subject d) str not-empty)]
+          subject (some-> (:subject d) str not-empty)
+          [skind srow] (when subject (subject-row ctx subject))]
       {"id" (str (:id raw))
        "self" (get body "self")
        "card_id" (card-id :now :decision (:id raw))
@@ -4014,8 +4040,11 @@
        "order" (:order d)
        "launch" (when (map? launch) (p/wire-value launch))
        "subject" subject
+       "subject_title" (when srow (some-> (get-in srow [:data :title]) str not-empty))
        "launch_href" (or (some-> (:href launch) str not-empty)
-                         (when subject (subject-launch-href ctx subject)))
+                         (when (and srow (= "passage" (str (:type launch))))
+                           (passage-href ctx skind srow launch))
+                         (when srow (subject-launch-href srow)))
        "actions" (get body "actions")
        "meta" (get body "meta")})))
 

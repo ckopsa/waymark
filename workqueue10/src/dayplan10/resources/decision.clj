@@ -7,9 +7,12 @@
   sentence; subject is an optional ADDRESS (/api/media/01H…,
   /api/tasks/01H…) that must name a row this house serves; launch is
   what Go does beyond recording — a link the card opens, a Home
-  Assistant service with its data, or a note the card shows; prep is
-  one sentence of what must be ready the evening before; order is
-  where it sits among the block's decisions. A decision belongs to
+  Assistant service with its data, a note the card shows, or a PASSAGE
+  of the subject (waymark-35eb: a scene, a chapter, a page range of a
+  media row, spelled from/to in the medium's own grammar — the link
+  that opens it is a projection the feed computes and nothing stores);
+  prep is one sentence of what must be ready the evening before; order
+  is where it sits among the block's decisions. A decision belongs to
   the block, never to a span (fork b): a span door never moves one.
 
   START IS THE VERDICT. It takes no input, so demand/effort renders
@@ -53,6 +56,7 @@
   optional fields at create have no :fields spelling, and changed_to
   is written by change and by no form."
   (:require [clojure.string :as str]
+            [dayplan10.passage :as passage]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.types :as t]
@@ -60,13 +64,47 @@
 
 ;; ── the create walls ────────────────────────────────────────────────
 
+(defn- passage-misspelled
+  "Why a passage's own words do not read as a place — or nil when they
+  do (dayplan10.passage): a start is required; each end that is given
+  must read in the grammar; both must count the same way; and the
+  start must come first. Pure over the words alone — which medium they
+  must count in is the subject's to say (a-passage-reads-as-a-place)."
+  [from to]
+  (let [from' (some-> from str str/trim not-empty)
+        to' (some-> to str str/trim not-empty)
+        a (passage/parse from')
+        b (passage/parse to')]
+    (cond
+      (nil? from')
+      "a passage with no start — say where it begins"
+
+      (nil? a)
+      (str "a passage whose start '" from' "' reads in no grammar — "
+           "a place is " passage/the-grammar)
+
+      (and to' (nil? b))
+      (str "a passage whose end '" to' "' reads in no grammar — "
+           "a place is " passage/the-grammar)
+
+      (and b (not (passage/same-grammar? a b)))
+      (str "a passage that starts at " (get passage/grammar-words (:grammar a))
+           " and ends at " (get passage/grammar-words (:grammar b))
+           " — the start and the end count the same way")
+
+      (and b (not (passage/precedes? a b)))
+      (str "a passage that ends (" to' ") "
+           (if (= a b) "where" "before") " it starts (" from' ")")
+
+      :else nil)))
+
 (defguardfn launch-says-how
   {:judges [:launch]
    :vars [:why]
-   :open "A launch is a type and the one field its type reads; the schema can say which keys exist and nothing about which pair agrees, so the door judges the pairing and this sentence names it."
-   :explain "A launch says what Go does: a link carries its href, a service names the Home Assistant service it fires (light/turn_on), a note carries its text. Here: {why}."}
+   :open "A launch is a type and the fields its type reads; the schema can say which keys exist and nothing about which pair agrees, so the door judges the pairing — and, for a passage, that from and to read as places in one grammar with the start first — and this sentence names it."
+   :explain "A launch says what Go does: a link carries its href, a service names the Home Assistant service it fires (light/turn_on), a note carries its text, a passage says where it starts — 1:19:00 or S02E05 0:12:00 for a film or a show, ch. 7 / p. 213 / 34% for a book — and, when it says where it ends, ends after that in the same words. Here: {why}."}
   [_row inp _ctx]
-  (let [{:keys [type href service text]} (:launch inp)]
+  (let [{:keys [type href service text from to]} (:launch inp)]
     (cond
       (nil? (:launch inp)) (t/allow)
 
@@ -78,6 +116,11 @@
 
       (and (= "text" type) (str/blank? (str text)))
       (t/deny {:vars {:why "a note with no text"}})
+
+      (= "passage" type)
+      (if-some [why (passage-misspelled from to)]
+        (t/deny {:vars {:why why}})
+        (t/allow))
 
       :else (t/allow))))
 
@@ -92,6 +135,52 @@
     (if (and s (seq (insight/unresolved-addresses [s] ctx)))
       (t/deny {:vars {:subject s}})
       (t/allow))))
+
+(defn- media-address
+  "The id a subject names when it is a media row's address, nil for
+  every other subject — the one plural this launch reads, so a passage
+  of a task or a plan is refused by name rather than read."
+  [subject]
+  (when-some [[_ id] (re-matches #"/api/media/([A-Za-z0-9_.:-]+)" (str subject))]
+    id))
+
+(defguardfn a-passage-reads-as-a-place
+  {:judges [:launch :subject]
+   :reads [:storage]
+   :vars [:why]
+   :open "A passage is a place in the subject, and which grammar a place is spelled in — a time, a chapter, a page — is the subject's medium to say; the schema can say from and to are strings and nothing about the row they read against, so the door reads the media row and this sentence names the grammar."
+   :explain "A passage is a place in something the house owns: the subject names the media row, and the place is spelled the way that medium counts — a time for a film, a show or an audiobook (1:19:00; S02E05 0:12:00 for a show), a chapter, a page or a percent for a book or a comic (ch. 7, p. 213, 34%). Here: {why}."}
+  [_row inp ctx]
+  (let [{:keys [type from to]} (:launch inp)
+        subject (some-> (:subject inp) str str/trim not-empty)
+        read' (:read ctx)]
+    (if (not= "passage" type)
+      (t/allow)
+      (cond
+        (nil? subject)
+        (t/deny {:vars {:why "a passage with no subject — name the media row it is a place in (/api/media/01H…)"}})
+
+        (nil? (media-address subject))
+        (t/deny {:vars {:why (str "the subject " subject " is not a media row — a passage is a place "
+                                  "in something the house owns (/api/media/01H…)")}})
+
+        ;; the render probe carries no :read — advertise optimistically;
+        ;; a row that does not stand is subject-resolves' refusal
+        (nil? read')
+        (t/allow)
+
+        :else
+        (let [media (read' :media (media-address subject))
+              medium (some-> (get-in media [:data :medium]) str not-empty)
+              title (or (some-> (get-in media [:data :title]) str not-empty) subject)
+              misfit (fn [word place]
+                       (when-some [m (passage/misfit (passage/parse place) medium)]
+                         (str title " is a " medium ", and the " word " '" place "' " m)))]
+          (if-some [why (and media medium
+                             (or (misfit "start" from)
+                                 (when-not (str/blank? (str to)) (misfit "end" to))))]
+            (t/deny {:vars {:why why}})
+            (t/allow)))))))
 
 (defguardfn on-a-planned-block
   {:judges [:block_id] :reads [:block]
@@ -189,8 +278,9 @@
   ;; the caller the boot wired — inside the write, so a Home Assistant
   ;; that answers 4xx or does not answer refuses the start and nothing
   ;; is recorded. Exactly once: start is idempotent, so a replay is the
-  ;; stored answer and never re-fires. A link or a note fires nothing
-  ;; here — the card carries it.
+  ;; stored answer and never re-fires. A link, a note or a passage
+  ;; fires nothing here — the card carries it (a passage's link is
+  ;; the feed's projection off the media row; nothing here has it).
   (let [{:keys [type service data]} (get-in row [:data :launch])]
     (when (= "service" type)
       (let [fire! (get-in ctx [:services :home-assistant])]
@@ -258,6 +348,33 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :launch-says-how
              :because "names no service"}})
+
+(def ^:private a-film "/api/media/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0")
+
+(defscenario a-passage-ends-after-it-starts
+  "A passage is a place with a start and, when it says so, an end
+   after it: 1:24:30 to 1:19:00 runs backwards, and the door refuses
+   it before the subject is even read — the fix is the two words."
+  {:kind    :decision
+   :attempt :create
+   :input   {:block_id a-block :kind "pick" :text "The jury-room scene, for the talk"
+             :subject a-film
+             :launch {:type "passage" :from "1:24:30" :to "1:19:00"} :order 1}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :launch-says-how
+             :because "before it starts"}})
+
+(defscenario a-passage-counts-one-way
+  "A start and an end count the same way — a chapter to a time has no
+   order between them, and the door names the two grammars it read."
+  {:kind    :decision
+   :attempt :create
+   :input   {:block_id a-block :kind "pick" :text "The chapter on the jury"
+             :subject a-film
+             :launch {:type "passage" :from "ch. 7" :to "1:24:30"} :order 1}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :launch-says-how
+             :because "count the same way"}})
 
 (defscenario go-needs-the-room-wired
   "Go on a service launch fires Home Assistant, and an engine with no
@@ -343,8 +460,9 @@
    [:type {:x-display {:label "What Go does"
                        :choices {"href" "Opens a link"
                                  "service" "Fires a Home Assistant service"
-                                 "text" "Shows a note"}}}
-    [:enum "href" "service" "text"]]
+                                 "text" "Shows a note"
+                                 "passage" "Opens a scene, a chapter or a page range of something the house owns"}}}
+    [:enum "href" "service" "text" "passage"]]
    ;; each field below belongs to one of the type's choices and shows
    ;; only under it (:when, waymark-x0aw); launch-says-how still judges
    ;; the pair at the door
@@ -384,7 +502,21 @@
            :x-display {:label "Note"
                        :help "What the card shows when you go — 'the drill is in the blue case'."
                        :when {:type "text"}}}
-    [:maybe [:string {:max 500}]]]])
+    [:maybe [:string {:max 500}]]]
+   ;; the passage (waymark-35eb): a place in the SUBJECT — the media
+   ;; row the decision already names — spelled in the medium's own
+   ;; grammar and kept exactly as typed. The link that opens it is the
+   ;; feed's projection off the row's deep link, stored nowhere.
+   [:from {:optional true
+           :x-display {:label "From"
+                       :help "Where it starts — 1:19:00 for a film, S02E05 0:12:00 for a show, ch. 7 / p. 213 / 34% for a book. The subject names the film, show or book."
+                       :when {:type "passage"}}}
+    [:maybe [:string {:max 80}]]]
+   [:to {:optional true
+         :x-display {:label "To"
+                     :help "Where it ends, in the same words — 1:24:30 for a film, S02E05 0:31:00 for a show, ch. 9 / p. 240 / 40% for a book. Leave it empty to open at the start and go on."
+                     :when {:type "passage"}}}
+    [:maybe [:string {:max 80}]]]])
 
 (defresource decision
   {:kind :decision
@@ -407,7 +539,7 @@
    ;; member and has_prep carry their own :filter (one home per concern)
    :filterable {:state #{:eq :in}}
    :deviations
-   ["subject is judged by subject-resolves and launch by launch-says-how, each with an :open acknowledging that an address and a launch pairing have no schema grammar — the effort-honesty check warns on both; the legal subjects are the house's own rows and the legal launches are the pairs the sentence names."]
+   ["subject is judged by subject-resolves and launch by launch-says-how, each with an :open acknowledging that an address and a launch pairing have no schema grammar — the effort-honesty check warns on both; the legal subjects are the house's own rows and the legal launches are the pairs the sentence names. A passage launch is judged twice more: launch-says-how reads its own words (a place, one grammar, the start first) and a-passage-reads-as-a-place reads the subject's media row for the grammar its medium counts in — the grammar lives in dayplan10.passage, not in the schema, because which of the four a place wears is the row's to say."]
    :schema [:map
             [:block_id {:kind :block :filter #{:eq}
                         :label :block_name
@@ -429,7 +561,7 @@
              [:maybe [:string {:max 200}]]]
             [:launch {:optional true
                       :x-display {:label "Launch"
-                                  :help "What Go does beyond recording: open a link, fire a Home Assistant service, or show a note."}}
+                                  :help "What Go does beyond recording: open a link, fire a Home Assistant service, show a note, or open a passage — a scene, a chapter, a page range — of the subject."}}
              [:maybe launch-form]]
             [:prep {:optional true
                     :examples ["Bag packed and by the door"]
@@ -483,7 +615,7 @@
                     [:maybe [:string {:max 200}]]]
                    [:launch {:optional true
                              :x-display {:label "Launch"
-                                         :help "What Go does beyond recording: open a link, fire a Home Assistant service, or show a note."}}
+                                         :help "What Go does beyond recording: open a link, fire a Home Assistant service, show a note, or open a passage — a scene, a chapter, a page range — of the subject."}}
                     [:maybe launch-form]]
                    [:prep {:optional true
                            :examples ["Bag packed and by the door"]
@@ -494,10 +626,15 @@
                                         :help "Where this sits among the block's decisions — lower comes first."}}
                     [:int {:min 0 :max 1000}]]]
    ;; SHAPE FIRST, WORLD NEXT: the launch pairing reads nothing; the
-   ;; subject reads the row it names; the block wall reads the day
-   :create-guards [launch-says-how subject-resolves on-a-planned-block]
+   ;; subject reads the row it names; a passage then reads that row's
+   ;; medium (after subject-resolves, so the row stands when it looks);
+   ;; the block wall reads the day
+   :create-guards [launch-says-how subject-resolves a-passage-reads-as-a-place
+                   on-a-planned-block]
    :scenarios [a-subject-is-a-row-that-stands
                a-launch-says-how
+               a-passage-ends-after-it-starts
+               a-passage-counts-one-way
                go-needs-the-room-wired
                a-link-fires-nothing-and-needs-no-wiring
                change-keeps-both-sentences
@@ -513,7 +650,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Starting is the verdict: the record says you went, and a service launch has fired; Not yet takes the verdict back, and the launch stays fired in the record."}
      :display {:label "Go" :style :primary :order 1
-               :description "Tapping Go is the verdict — the record says you went; a link opens, a service fires, a note shows"}}
+               :description "Tapping Go is the verdict — the record says you went; a link or a passage opens, a service fires, a note shows"}}
 
     ;; the way back from started (waymark-4an5): an ordinary door, not
     ;; an :undo — Go's handler fired a launch that un-starting does not

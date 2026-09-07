@@ -77,6 +77,7 @@
   authority-side; explicit watched-marking is flickr's own issue
   and the first honest push target when wanted."
   (:require [clojure.string :as str]
+            [dayplan10.passage :as passage]
             [workqueue10.confluence :as conf]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
@@ -139,6 +140,60 @@
   (if (= "show" (:kind work))
     (str base "/#/show/" (fragment-encode (:title work)))
     (str base "/#/item/" (:representative_item_id work))))
+
+;; ── the passage link (waymark-35eb) ─────────────────────────────────
+
+(defn- locator
+  "A text place in flickr's locator grammar: ch:<n>, pg:<n>,
+  pct:<0..1>."
+  [{:keys [grammar n]}]
+  (case grammar
+    :chapter (str "ch:" n)
+    :page (str "pg:" n)
+    :percent (str "pct:" (.toPlainString ^java.math.BigDecimal (bigdec n)))))
+
+(defn passage-link
+  "Where a decision's PASSAGE launch opens: the media row's own deep
+  link (`source_ui_href`, the :origin affordance above) with the place
+  appended in flickr's passage grammar — the query the engine's UI
+  reads to open a work AT a place rather than at its start.
+
+    movie, audiobook  <href>?t=<start seconds>&end=<end seconds>
+    show              <href>?ep=S02E05&t=<s>&end=<s>[&until=S02E07]
+                      (end is the time inside the episode `until`
+                      names, when the passage crosses episodes)
+    book, comic       <href>?from=<locator>&to=<locator>
+                      with locators ch:<n>, pg:<n>, pct:<0..1>
+
+  `end`/`to` are left off when the passage has no `to`. A PROJECTION,
+  stored nowhere: computed on every read from the row the subject
+  names and the words the decision keeps, so a rescan that moves the
+  representative item or retitles a show cannot leave a stale link
+  behind — the row's `source_ui_href` moves, and this moves with it.
+  nil when the row has no deep link, the medium is one the grammar
+  does not know, or the words do not read (the decision's create
+  door refuses those before they are stored — dayplan10.passage —
+  so nil here is a row the house never had a link for)."
+  [source-ui-href medium from to]
+  (let [href (some-> source-ui-href str not-empty)
+        a (passage/parse from)
+        b (some-> to passage/parse)
+        grammars (get passage/medium-grammars (str medium))]
+    (when (and href a (contains? grammars (:grammar a))
+               (or (nil? to) (and b (passage/same-grammar? a b))))
+      (case (:grammar a)
+        :time
+        (if (= "show" (str medium))
+          (let [ep (get-in a [:episode :text])
+                ep' (get-in b [:episode :text])]
+            (when ep
+              (str href "?ep=" ep "&t=" (:seconds a)
+                   (when b (str "&end=" (:seconds b)))
+                   (when (and ep' (not= ep ep')) (str "&until=" ep')))))
+          (str href "?t=" (:seconds a)
+               (when b (str "&end=" (:seconds b)))))
+        (str href "?from=" (locator a)
+             (when b (str "&to=" (locator b))))))))
 
 (defn work->doc
   "One feed work → the canonical media doc, under the chosen
