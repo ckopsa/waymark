@@ -221,7 +221,17 @@
                       {:name "waymark_discover" :arguments {}})
             text (get-in (json resp) [:result :content 0 :text])]
         (is (= 200 (:status resp)))
-        (is (str/includes? (str text) "plan") text)))))
+        (is (str/includes? (str text) "plan") text)
+        ;; waymark-r1m7: doors.ask carries what an ask needs beyond the
+        ;; names — the anchor (the grant this session wears, so the ask
+        ;; widens instead of replacing) and the powers Gate serves
+        (let [ask (get-in (wire/read-json text) [:doors :ask])]
+          (is (= "grant-connector-3" (get-in ask [:anchor :grant_id])))
+          (is (some #{"messages.read"} (:powers ask)))
+          (is (str/includes? (str (:posture ask)) "approval_request")))))
+    (testing "and the connect-time instructions say asking is the default, anchored"
+      (is (str/includes? mcp/instructions "grant_id"))
+      (is (str/includes? mcp/instructions "ASKING IS THE DEFAULT")))))
 
 (deftest invited-only-admits-a-delegate-exactly-when-its-person-is-a-member
   (let [eng (fresh-engine {:members :invited-only})
