@@ -354,8 +354,10 @@
    {:module :openapi :routes openapi-routes/routes :pack packs/openapi}
    {:module :ui :routes ui-routes/routes :pack packs/ui}
 
-   ;; the MCP surface (waymark-4mk): six fixed tools over whatever the
-   ;; caller's grant projects, and the first module built on these
+   ;; the MCP surface (waymark-4mk): a fixed tool list — the spec's
+   ;; six, the batch lookup, and the two Gate power tools
+   ;; (waymark-912p) — over whatever the caller's grant projects, the
+   ;; list itself never moving with the leash; the first module built on these
    ;; seams rather than retrofitted onto them. It enrols no kind and
    ;; starts nothing — an engine that leaves it out simply has no
    ;; /api/-/mcp, which is what a deployment that does not want to be
