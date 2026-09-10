@@ -45,16 +45,25 @@
 
   ── the gate projection (waymark-q95, the second surface) ──
 
-  The seventh-through-Nth tools are not this engine's own:
-  `tools/list` APPENDS the caller's grant-admitted Gate tools —
-  gate-proxy's survivors, Gate's live tools ∩ the grant, recomputed
-  per list — after the six, each wearing Gate's own inputSchema with
-  `__why` surfaced as `why`; and `tools/call` on a name in
-  gate-proxy's tool→capability map dispatches to `invoke-for`, which
-  judges the grant IN-PROCESS and answers Gate's CallToolResult
-  verbatim. Same stateless core and same leash as the hypermedia
-  door at /api/-/gate; a caller wearing no gate grant sees exactly
-  the six, and Gate is never contacted on its behalf. The Gate
+  Two FIXED tools carry the external powers (waymark-912p):
+  `waymark_powers` answers gate-proxy's affordance document — Gate's
+  live tools ∩ the caller's grant, recomputed per call, each wearing
+  Gate's own inputSchema with `__why` surfaced as `why` — and
+  `waymark_power` takes a tool name and its arguments and dispatches
+  to `invoke-for`, which judges the grant IN-PROCESS and answers
+  Gate's CallToolResult verbatim. Same stateless core and same leash
+  as the hypermedia door at /api/-/gate; a caller wearing no gate
+  grant reads an empty powers document, and Gate is never contacted
+  on its behalf.
+
+  The list used to APPEND the admitted Gate tools after the fixed
+  ones, which made the tool list a function of the grant — and a
+  grant approved mid-conversation then needed the client to honour
+  tools/list_changed before the agent could see what it had just
+  been given (claude.ai did not, reliably). Now the list is the same
+  for every caller from the first connect and an approval takes
+  effect on the very next waymark_powers call: the surface is DATA
+  the agent reads, not a tool list the client caches. The Gate
   caller (`gate-rpc`) rides in from the transport, which builds it
   once per engine via gate-proxy/rpc-of — the engine-opt seam
   ((:gate eng): the tests' :rpc, the deployment's :url) — never
@@ -190,6 +199,11 @@
        "(dotted tokens such as messages.read — a scope entry names a "
        "power in its `kind` field, exactly as it names a kind), and "
        "doors.ask.anchor names the grant you are wearing right now. "
+       "External powers are used through two fixed tools: "
+       "waymark_powers reads what your grant admits right now (Gate's "
+       "live tools, each with its input schema — empty until a power "
+       "is granted, filled the moment one is, no reconnect needed) and "
+       "waymark_power invokes one by name. "
        "ALWAYS pass that anchor as `grant_id`: an anchored ask WIDENS "
        "the grant you hold, while an anchorless one mints a fresh grant "
        "that REPLACES it and you lose what you already had. Ask for "
@@ -797,30 +811,65 @@
     :required ["kind" "by" "values"]
     :additionalProperties false}})
 
+(def ^:private powers-tool
+  {:name "waymark_powers"
+   :title "The external powers your grant admits"
+   :description
+   (str "External powers reached THROUGH this engine — Gate's live tools "
+        "intersected with your grant, recomputed on every call, nothing "
+        "stored here. Reads under `links`, mutations under `actions`; each "
+        "entry names its capability token, its description and its input "
+        "schema (Gate's own, with Gate's `__why` spelled `why`). Invoke "
+        "one with waymark_power. Before any power is granted this "
+        "document is empty and carries the ask door; the moment an ask "
+        "naming a dotted token (messages.read, email.read …) is "
+        "approved, the same call fills in — no reconnect, no tool list "
+        "change. waymark_discover's doors.ask.powers lists the tokens.")
+   :input-schema {:type "object" :properties {} :additionalProperties false}})
+
+(def ^:private power-tool
+  {:name "waymark_power"
+   :title "Use one external power"
+   :description
+   (str "Invoke one of the tools waymark_powers lists, by name, with the "
+        "arguments its input schema names. The grant is judged here "
+        "before any wire is touched: an ungranted tool refuses naming "
+        "the exact scope entry to ask for, and a tool outside this "
+        "engine's policy does not exist. A granted call forwards to Gate "
+        "and answers Gate's result VERBATIM — its content, its isError, "
+        "its own approval refusals. Mutations carry a `why`: one "
+        "sentence the human who approves the action reads.")
+   :input-schema
+   {:type "object"
+    :properties
+    {:tool {:type "string"
+            :description "A tool name from waymark_powers (links or actions)."}
+     :arguments {:type "object"
+                 :description "The tool's arguments, per its input schema in waymark_powers."
+                 :additionalProperties true}}
+    :required ["tool"]
+    :additionalProperties false}})
+
 (def tools
-  "The fixed tools, in the order an agent meets them: the spec's six
-  and waymark_resolve (waymark-pywy.3), the batch lookup — a seventh
+  "The fixed tools, in the order an agent meets them: the spec's six,
+  waymark_resolve (waymark-pywy.3), the batch lookup — a seventh
   generic tool rather than a per-kind one, still a call onto a route
-  that already exists."
+  that already exists — and the two power tools (waymark-912p), the
+  MCP surface of the Gate door. The list is the same for every caller
+  and never moves with a grant."
   [discover-tool schema-tool query-tool get-tool invoke-tool history-tool
-   resolve-tool])
+   resolve-tool powers-tool power-tool])
 
 (defn listing
-  "The `tools/list` payload — the MCP spelling of the six, camelCase
-  and all. The definitions above stay kebab-cased because that is this
-  codebase's spelling; the translation happens once, here.
-
-  The two-arg arity is the gate projection (waymark-q95): the
-  caller's grant-admitted Gate tools APPENDED after the six, so the
-  fixed list still never grows with the law — only with the leash
-  this caller is actually wearing. No gate grant, no wire: the
-  appended seq is empty and Gate was never contacted."
-  ([]
-   (mapv (fn [t]
-           (-> t (dissoc :input-schema) (assoc :inputSchema (:input-schema t))))
-         tools))
-  ([gate-rpc vis]
-   (into (listing) (gate/tool-listing-for gate-rpc vis))))
+  "The `tools/list` payload — the MCP spelling of the fixed tools,
+  camelCase and all. The definitions above stay kebab-cased because
+  that is this codebase's spelling; the translation happens once,
+  here. It takes no caller: the list is static (waymark-912p) — what
+  a grant admits is read through waymark_powers, not off this list."
+  []
+  (mapv (fn [t]
+          (-> t (dissoc :input-schema) (assoc :inputSchema (:input-schema t))))
+        tools))
 
 ;; ── tool bodies ─────────────────────────────────────────────────────
 
@@ -844,8 +893,10 @@
            :powers (vec (sort (distinct (vals gate/tool-capability))))
            :powers_note (str "external powers, asked for by naming the "
                              "dotted token in a scope entry's `kind` "
-                             "(actions []); each is enforced by Gate "
-                             "through this same door once granted")}
+                             "(actions []); once granted, waymark_powers "
+                             "lists the tools it admits and waymark_power "
+                             "invokes one — the tool list itself never "
+                             "changes")}
     (and vis (:grant vis))
     (assoc :anchor {:grant_id (:grant-id vis)
                     :note (str "the grant you are wearing — pass it as "
@@ -1525,11 +1576,15 @@
   `session` is {:principal :visibility}, resolved by whichever
   transport let the caller in.
 
-  A name in gate-proxy's tool→capability map is the second surface
-  (waymark-q95): it dispatches to `gate/invoke-for` wearing the
-  session's visibility, and the answer is Gate's CallToolResult
-  VERBATIM — the grant judged in-process before any wire, a refusal
-  arriving as isError tool output like every other refusal here.
+  The two power tools are the second surface (waymark-q95,
+  waymark-912p): `waymark_powers` answers gate-proxy's affordance
+  document for the session's visibility, and `waymark_power`
+  dispatches its named tool to `gate/invoke-for` wearing that
+  visibility, answering Gate's CallToolResult VERBATIM — the grant
+  judged in-process before any wire, a refusal (ungranted 403, a
+  tool outside the policy 404) arriving as isError tool output like
+  every other refusal here. They take the Gate caller, which is why
+  they are dispatched here rather than from `bodies`.
 
   A refusal the engine raised comes back as tool output with isError
   set — never as a protocol error, because an agent learns from a
@@ -1544,10 +1599,14 @@
      (attempt tool-name
               #((get bodies tool-name) eng call session (or args {})))
 
-     (contains? gate/tool-capability tool-name)
+     (= "waymark_powers" tool-name)
+     (attempt tool-name
+              #(value-result (gate/affordances-for gate-rpc (:visibility session))))
+
+     (= "waymark_power" tool-name)
      (attempt tool-name
               #(gate/invoke-for gate-rpc (:visibility session)
-                                tool-name (or args {})))
+                                (str (:tool args)) (or (:arguments args) {})))
 
      :else ::unknown-tool)))
 
@@ -1602,9 +1661,11 @@
   {:jsonrpc "2.0" :method "notifications/tools/list_changed"})
 
 (defn grant-moved-for?
-  "Did this transition's ROW move the tool list of principal `pid`?
-  The Gate tail of tools/list is a function of the grant the caller
-  wears, so the rows that can change it are the caller's own grants
+  "Did this transition's ROW move the powers of principal `pid`?
+  What waymark_powers answers is a function of the grant the caller
+  wears (the tool list itself is static since waymark-912p; the
+  notice stays as the nudge to read the powers document again), so
+  the rows that can change it are the caller's own grants
   (audience = pid: accept, extend, expire, revoke) and the caller's
   own asks (requested_by = pid: an approve mints or widens). Any
   other row — another principal's grant, a kind that is not a grant —
@@ -1644,7 +1705,7 @@
        "initialize" (rpc-result id (initialize params))
        "ping" (rpc-result id {})
        "tools/list"
-       (rpc-result id {:tools (listing gate-rpc (:visibility session))})
+       (rpc-result id {:tools (listing)})
        "tools/call"
        (let [out (call-tool eng call gate-rpc session
                             (:name params) (:arguments params))]
@@ -1653,8 +1714,7 @@
                       (str "Unknown tool " (pr-str (:name params))
                            " — this engine serves exactly "
                            (mapv :name tools)
-                           " plus whatever Gate tools your grant admits"
-                           " (tools/list names them)."))
+                           "; external powers go through waymark_power."))
            (rpc-result id out)))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))

@@ -369,23 +369,14 @@
                       "the words) mint the grant this door reads.")}}))
 
 ;; ── the MCP projection (the second surface) ─────────────────────────
-
-(defn tool-listing-for
-  "The MCP surface's half of the bead's TWO THIN SURFACES, ONE CORE:
-  the same survivors `affordances-for` keeps, rendered as MCP tool
-  entries for server/mcp.clj's `tools/list` to APPEND after the six
-  fixed waymark_* tools. Each entry is Gate's own inputSchema with
-  the `__why` convention surfaced as `why` (`present-schema`), so
-  the two surfaces advertise one vocabulary and `invoke-for`
-  translates it back on the forward. A grant admitting no token
-  appends nothing — and Gate is never contacted for it, so an
-  agent's ordinary tools/list costs no wire."
-  [rpc vis]
-  (mapv (fn [tool]
-          {:name (str (:name tool))
-           :description (str (:description tool))
-           :inputSchema (present-schema (:inputSchema tool))})
-        (survivors rpc vis)))
+;;
+;; server/mcp.clj's two fixed tools are this door's other surface
+;; (waymark-912p): waymark_powers answers `affordances-for` and
+;; waymark_power calls `invoke-for`, both wearing the session's
+;; visibility. Nothing is projected per tool any more — the list used
+;; to append each survivor as its own MCP tool, and a grant approved
+;; mid-conversation then waited on the client honouring
+;; tools/list_changed. One document, read live, needs no such thing.
 
 ;; ── invoke ──────────────────────────────────────────────────────────
 
