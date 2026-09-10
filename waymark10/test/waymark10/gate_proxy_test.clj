@@ -411,7 +411,10 @@
   ["waymark_discover" "waymark_schema" "waymark_query"
    "waymark_get" "waymark_invoke" "waymark_history"
    ;; the seventh fixed tool (waymark-pywy.3)
-   "waymark_resolve"])
+   "waymark_resolve"
+   ;; the two power tools (waymark-912p): the Gate door's MCP surface,
+   ;; present for every caller from the first connect
+   "waymark_powers" "waymark_power"])
 
 (defn- mcp!
   "One JSON-RPC message at /api/-/mcp through the real handler —
@@ -425,49 +428,69 @@
     (assoc r :result (get-in r [:doc :result])
            :rpc-error (get-in r [:doc :error]))))
 
+(defn- powers!
+  "waymark_powers through the real handler: the affordance document
+  as the tool answered it (the text block parsed back), plus the raw
+  result for isError checks."
+  [eng headers]
+  (let [r (mcp! eng headers "tools/call" {:name "waymark_powers" :arguments {}})
+        out (:result r)]
+    (assoc r :powers (some-> (get-in out [:content 0 :text]) wire/read-json))))
+
 (deftest the-mcp-surface-projects-the-same-core
   (let [log (atom [])
         eng (boot log)]
     (mint-capabilities! eng)
 
-    (testing "no gate grant: tools/list is EXACTLY the six fixed
-              tools, and Gate is never contacted for the list"
+    (testing "no gate grant: tools/list is EXACTLY the fixed tools —
+              the power tools included — and Gate is never contacted;
+              waymark_powers reads an empty document carrying the ask"
       (let [r (mcp! eng as-claude "tools/list" nil)
             names (mapv :name (:tools (:result r)))]
         (is (= 200 (:status r)) (pr-str (:doc r)))
-        (is (= the-fixed names)
-            "the projection appends only what a grant admits — none
-             worn, none appended")
-        (is (= [] @log) "no admitted token, no wire")))
+        (is (= the-fixed names) "the list is static: nothing appended, ever")
+        (is (= [] @log) "no admitted token, no wire"))
+      (let [{:keys [status result powers]} (powers! eng as-claude)]
+        (is (= 200 status))
+        (is (false? (:isError result)))
+        (is (= {} (:links powers)))
+        (is (= {} (:actions powers)))
+        (is (= "/api/approval_requests" (get-in powers [:ask :href])))
+        (is (= [] @log) "an empty document costs no wire either")))
 
-    (testing "a grant appends its admitted Gate tools AFTER the six,
-              each wearing Gate's own schema, why-translated"
+    (testing "a grant does NOT change tools/list; waymark_powers shows
+              the admitted Gate tools, each wearing Gate's own schema,
+              why-translated"
       (let [worn (wear! eng [{:kind "email.read" :actions []}
                              {:kind "ynab.read" :actions []}])
-            tools (:tools (:result (mcp! eng worn "tools/list" nil)))
-            names (mapv :name tools)]
-        (is (= the-fixed (vec (take (count the-fixed) names)))
-            "the six fixed tools come first, in their order")
-        (is (= #{"emila__inbox" "emila__search" "ynab__transactions"}
-               (set (drop (count the-fixed) names)))
+            names (mapv :name (:tools (:result (mcp! eng worn "tools/list" nil))))
+            {:keys [powers]} (powers! eng worn)]
+        (is (= the-fixed names)
+            "the same list the ungranted caller saw — a grant is read
+             through waymark_powers, not off the tool list")
+        (is (= #{:emila__inbox :emila__search :ynab__transactions}
+               (set (keys (:links powers))))
             "Gate's live tools ∩ the grant — no email.send means no
              emila__send, no ynab.write means no ynab__update_transaction,
              and gsd__agenda (outside the map) does not exist here")
-        (let [ynab (some #(when (= "ynab__transactions" (:name %)) %) tools)]
+        (is (= {} (:actions powers)) "no mutation token, no forms")
+        (let [ynab (get-in powers [:links :ynab__transactions])]
           (is (= "List budget transactions." (:description ynab)))
-          (is (contains? (get-in ynab [:inputSchema :properties]) :budget_id)
+          (is (= "ynab.read" (:capability ynab)))
+          (is (contains? (get-in ynab [:input :properties]) :budget_id)
               "the input schema is Gate's own")
-          (is (contains? (get-in ynab [:inputSchema :properties]) :why))
-          (is (not (contains? (get-in ynab [:inputSchema :properties]) :__why))
+          (is (contains? (get-in ynab [:input :properties]) :why))
+          (is (not (contains? (get-in ynab [:input :properties]) :__why))
               "Gate's __why convention crosses this surface as `why`,
                exactly as it does the hypermedia door"))))
 
-    (testing "tools/call on a granted gate tool answers Gate's
+    (testing "waymark_power on a granted gate tool answers Gate's
               CallToolResult VERBATIM"
       (let [worn (wear! eng [{:kind "ynab.read" :actions []}])
             r (mcp! eng worn "tools/call"
-                    {:name "ynab__transactions"
-                     :arguments {:budget_id "b1"}})
+                    {:name "waymark_power"
+                     :arguments {:tool "ynab__transactions"
+                                 :arguments {:budget_id "b1"}}})
             out (:result r)]
         (is (= 200 (:status r)) (pr-str (:doc r)))
         (is (= "gate answered ynab__transactions"
@@ -477,15 +500,16 @@
           (is (= "ynab__transactions" (get-in call [:params :name])))
           (is (= {:budget_id "b1"} (get-in call [:params :arguments]))))))
 
-    (testing "tools/call on an UNGRANTED gate tool refuses as isError
+    (testing "waymark_power on an UNGRANTED gate tool refuses as isError
               TOOL OUTPUT — the surface's standing posture, never a
               thrown HTTP problem — and never reaches Gate"
       (let [worn (wear! eng [{:kind "ynab.read" :actions []}])
             before (count (gate-calls log))
             r (mcp! eng worn "tools/call"
-                    {:name "ynab__update_transaction"
-                     :arguments {:transaction_id "t1"
-                                 :why "fix the category"}})
+                    {:name "waymark_power"
+                     :arguments {:tool "ynab__update_transaction"
+                                 :arguments {:transaction_id "t1"
+                                             :why "fix the category"}}})
             out (:result r)]
         (is (= 200 (:status r))
             "the transport answered a tool RESULT, not a problem status")
@@ -499,9 +523,10 @@
               Gate's own `__why`, verbatim answer back"
       (let [worn (wear! eng [{:kind "ynab.write" :actions []}])
             r (mcp! eng worn "tools/call"
-                    {:name "ynab__update_transaction"
-                     :arguments {:transaction_id "t1"
-                                 :why "the household asked"}})
+                    {:name "waymark_power"
+                     :arguments {:tool "ynab__update_transaction"
+                                 :arguments {:transaction_id "t1"
+                                             :why "the household asked"}}})
             out (:result r)]
         (is (= 200 (:status r)) (pr-str (:doc r)))
         (is (false? (:isError out)))
@@ -511,12 +536,20 @@
           (is (= "the household asked" (:__why args)))
           (is (not (contains? args :why))))))
 
-    (testing "a gate tool OUTSIDE the map is unknown to this surface —
-              the MCP spec's own protocol error, whatever Gate serves"
+    (testing "a gate tool OUTSIDE the map does not exist through
+              waymark_power — a not-found refusal as tool output,
+              whatever Gate serves — and a Gate tool NAME is no longer
+              a tool of this surface at all: the spec's protocol error"
       (let [worn (wear! eng [{:kind "ynab.read" :actions []}])
-            r (mcp! eng worn "tools/call" {:name "gsd__agenda" :arguments {}})]
-        (is (some? (:rpc-error r)))
-        (is (nil? (:result r)))
+            r (mcp! eng worn "tools/call"
+                    {:name "waymark_power"
+                     :arguments {:tool "gsd__agenda" :arguments {}}})
+            bare (mcp! eng worn "tools/call"
+                       {:name "ynab__transactions" :arguments {:budget_id "b1"}})]
+        (is (= 200 (:status r)))
+        (is (true? (get-in r [:result :isError])))
+        (is (some? (:rpc-error bare)) "the appended spelling is gone")
+        (is (nil? (:result bare)))
         (is (= [] (filterv #(= "gsd__agenda" (get-in % [:params :name]))
                            (gate-calls log))))))))
 
@@ -536,11 +569,14 @@
           (is (= "ynab.read"
                  (get-in doc [:links :ynab__transactions :capability])))))
 
-      (testing "the MCP surface: the same tool, appended after the six"
+      (testing "the MCP surface: the same tool, in waymark_powers —
+                and the tool list untouched"
         (let [names (mapv :name (:tools (:result (mcp! eng worn
-                                                       "tools/list" nil))))]
-          (is (= the-fixed (vec (take (count the-fixed) names))))
-          (is (= ["ynab__transactions"] (vec (drop (count the-fixed) names))))))
+                                                       "tools/list" nil))))
+              {:keys [powers]} (powers! eng worn)]
+          (is (= the-fixed names))
+          (is (= [:ynab__transactions] (vec (keys (:links powers)))))
+          (is (= {} (:actions powers)))))
 
       (testing "a granted read forwards through the hypermedia door"
         (let [r (call! eng :post "/api/-/gate/ynab__transactions"
@@ -556,8 +592,10 @@
                           :headers worn
                           :body {:transaction_id "t1" :why "because"})
               mcp (mcp! eng worn "tools/call"
-                        {:name "ynab__update_transaction"
-                         :arguments {:transaction_id "t1" :why "because"}})]
+                        {:name "waymark_power"
+                         :arguments {:tool "ynab__update_transaction"
+                                     :arguments {:transaction_id "t1"
+                                                 :why "because"}}})]
           (is (= 403 (:status http))
               "the hypermedia door's posture: a thrown 403 problem")
           (is (str/includes? (str (get-in http [:doc :detail])) "ynab.write"))

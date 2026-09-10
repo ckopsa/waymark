@@ -15,7 +15,11 @@
   inside a session, the person tapped approve within the minute, the
   grant widened at once — and the connector's tool list stayed the
   seven fixed tools until it reconnected, because the client had been
-  told the list never changes. Row events stay the SSE doors' business
+  told the list never changes. Since waymark-912p the tool list IS
+  static — the admitted Gate tools are read through waymark_powers,
+  live, so an approval needs no re-list at all — and the notice
+  remains as the nudge that the powers document is worth reading
+  again. Row events stay the SSE doors' business
   (/api/-/events and /api/{plural}/{id}/-/events); a GET without the
   SSE accept still answers 405, saying where the streams are.
 

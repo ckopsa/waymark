@@ -1181,7 +1181,11 @@
     "waymark_get" "waymark_invoke" "waymark_history"
     ;; the seventh fixed tool (waymark-pywy.3): generic, still no
     ;; route of its own
-    "waymark_resolve"})
+    "waymark_resolve"
+    ;; the two power tools (waymark-912p): the Gate door's MCP
+    ;; surface, fixed for every caller — what a grant admits is read
+    ;; through waymark_powers, never appended to this list
+    "waymark_powers" "waymark_power"})
 
 (defn- mcp-rpc
   "One JSON-RPC message at the MCP door, as whichever principal the
@@ -1248,29 +1252,30 @@
       (conj "initialize: an unknown protocol version was refused rather than negotiated"))))
 
 (defn- mcp-six-tools-violations
-  "tools/list is the six fixed tools, PLUS — since waymark-q95's
-  second surface — the caller's grant-admitted Gate tools appended
-  after them. The design decision stands: the fixed list does NOT
-  grow with the law, so an engine with fifty kinds advertises exactly
-  what an engine with one does, and anything past the six must be a
-  row of gate-proxy's tool→capability map, worn by a grant. This
-  probe wears no gate grant at all, so the projection must append
-  NOTHING: exactly the six, and any extra is a leak."
+  "tools/list is EXACTLY the fixed tools — the spec's six,
+  waymark_resolve, and the two power tools — for every caller. The
+  design decision stands and has hardened: the list does NOT grow
+  with the law, so an engine with fifty kinds advertises exactly what
+  an engine with one does, and since waymark-912p it does not grow
+  with the leash either — what a grant admits is read live through
+  waymark_powers, never appended here (the appended tail was the
+  reason a mid-conversation approval waited on the client honouring
+  tools/list_changed). Any extra name is a leak; a Gate tool name
+  among them is the old projection come back."
   [ctx]
   (let [tools (:tools (:result (mcp-rpc ctx nil "tools/list" nil)))
         names (into #{} (map :name) tools)
         extras (vec (sort (remove mcp-tool-names names)))]
     (cond-> []
       (not (every? names mcp-tool-names))
-      (conj (str "tools/list: the six fixed tools must all be advertised "
+      (conj (str "tools/list: the fixed tools must all be advertised "
                  (vec (sort mcp-tool-names)) ", got " (vec (sort names))))
       (seq extras)
-      (conj (str "tools/list: this probe wears no gate grant, so the "
-                 "waymark-q95 gate projection must append nothing — got "
-                 extras
+      (conj (str "tools/list: the list is static — nothing is appended "
+                 "for any caller (waymark-912p) — got " extras
                  (if (every? #(contains? gate-proxy/tool-capability %) extras)
-                   " (gate tools projected without a grant)"
-                   " (names outside gate-proxy's tool→capability map)")))
+                   " (Gate tools projected onto the list: the retired tail)"
+                   " (names outside the fixed set)")))
       (some #(not= "object" (get-in % [:inputSchema :type])) tools)
       (conj "tools/list: every tool needs an object inputSchema a client can fill")
       (not= (count tools) (count names))

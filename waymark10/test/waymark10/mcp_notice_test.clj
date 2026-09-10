@@ -16,12 +16,13 @@
   • GET /api/-/mcp with Accept: text/event-stream is a 200 SSE stream
     for a named principal; without the accept it is still the 405;
   • an ask approved for the streaming principal pushes
-    notifications/tools/list_changed on that stream, and a fresh
-    tools/list wearing the minted grant carries the Gate tools the
-    new capability admits — Gate's own tools, through the fake rpc
-    seam gate_proxy_test uses;
-  • revoking the grant pushes the notice again, and the Gate tail is
-    gone from the next tools/list;
+    notifications/tools/list_changed on that stream, and wearing the
+    minted grant waymark_powers carries the Gate tools the new
+    capability admits — Gate's own tools, through the fake rpc seam
+    gate_proxy_test uses — while tools/list itself is unchanged
+    (waymark-912p: the list is static, the powers are read live);
+  • revoking the grant pushes the notice again, and the powers are
+    gone from the next waymark_powers;
   • another principal's grant moving pushes nothing to this stream —
     a principal is told about ITS leash and nobody else's;
   • on a never-started engine the stream GET answers the events
@@ -174,6 +175,15 @@
     (is (= 200 (:status r)) (pr-str (:doc r)))
     (mapv :name (get-in r [:doc :result :tools]))))
 
+(defn- power-names
+  "The Gate tools waymark_powers admits right now — the keys of the
+  document's links and actions, as names."
+  [port headers]
+  (let [r (rpc! port headers "tools/call" {:name "waymark_powers" :arguments {}})
+        _ (is (= 200 (:status r)) (pr-str (:doc r)))
+        doc (some-> (get-in r [:doc :result :content 0 :text]) wire/read-json)]
+    (set (map name (concat (keys (:links doc)) (keys (:actions doc)))))))
+
 ;; ── the acceptance ──────────────────────────────────────────────────
 
 (deftest an-approval-tapped-mid-session-reaches-the-stream
@@ -229,11 +239,13 @@
                 (is (>= (await-count lines notice-line? 1 20000) 1)
                     (pr-str @lines)))
 
-              (testing "and a fresh tools/list wearing the grant carries the Gate tail"
-                (let [names (tool-names port (assoc planner "x-waymark-grant" gid))]
-                  (is (= the-fixed (vec (take (count the-fixed) names))))
+              (testing "and wearing the grant, tools/list is UNCHANGED while
+                        waymark_powers now carries the Gate tools — the
+                        approval took effect with no re-list (waymark-912p)"
+                (let [worn (assoc planner "x-waymark-grant" gid)]
+                  (is (= the-fixed (tool-names port worn)))
                   (is (= #{"messa__threads" "messa__read_messages" "messa__reset"}
-                         (set (drop (count the-fixed) names))))))
+                         (power-names port worn)))))
 
               (testing "the bystander's stream heard nothing of it"
                 (is (>= (await-count (:lines bystander) #(str/starts-with? % ": hb") 1 15000) 1)
@@ -246,9 +258,10 @@
                 (testing "revoke pushes the notice again"
                   (is (>= (await-count lines notice-line? (inc seen) 20000) (inc seen))
                       (pr-str @lines)))
-                (testing "and the Gate tail is gone"
-                  (let [names (tool-names port (assoc planner "x-waymark-grant" gid))]
-                    (is (not-any? #(str/starts-with? % "messa__") names)))))))
+                (testing "and the powers are gone, the tool list still the same"
+                  (let [worn (assoc planner "x-waymark-grant" gid)]
+                    (is (= the-fixed (tool-names port worn)))
+                    (is (= #{} (power-names port worn))))))))
           (finally
             (engine/stop! eng server)))))))
 
