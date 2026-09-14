@@ -3365,3 +3365,32 @@ both write doors (a data edit can move a generated column into
 collision). roles/definitions keep their guards — the nicer refusal
 sentence — with adoption a named follow-up.
 Proof: `waymark10/test/waymark10/unique_index_test.clj`.
+
+## `:process` — the workflow as a resource
+
+The owner's question (2026-09-14): *a process that touches multiple
+resources in a cohesive way, like sagas in microservices — how would we
+represent that?* The house's standing answer, stated in the worksheet
+framing and reproduced by hand in `outcome.make_it_so`,
+`recipe_proposal` and `plan-on-create`, is that a workflow is a
+resource: a row with its own machine, applied through the target kinds'
+own doors. What was missing was the noun. `:process`
+([spec](spec-process.md), `waymark10.process`) is that noun, spelled the
+way `:decision` was — a key that desugars, first in
+`normalize-resource`'s thread, into ordinary states, doors, handlers,
+schema entries and `:touches`; nothing downstream learns a new word.
+Two modes: `:atomic` (one `run` door, every step through the cross-write
+doors in one transaction, a refusal anywhere rolling all of it back —
+outcome's rule generalized) and `:durable` (one door per step, each its
+own logged transition; `roll_back` newest-first through the declared
+`:undo` doors from every landing before the `:pivot`, with undo coverage
+checked at the def site). Derived rather than typed: the touches, the
+handler's stateable form, the ref entries, the one-way sentences.
+`checks_assembly/check-process` judges the cross-kind half — the target
+door exists, is neither bulk nor fenced, takes what the step sends, and
+the undo departs from where the do landed. Deliberately absent: branches,
+loops, conditions, and any log-consumer choreography.
+Proof: `waymark10/test/waymark10/process_sugar_test.clj` (memory twin).
+Follow-up beads: respell `outcome.make_it_so` through `:process :atomic`
+(the `approval_request` proof shape), and advertise the steps on the
+envelope.

@@ -31,6 +31,7 @@
             [waymark10.checks :as checks]
             [waymark10.declaration :as declaration]
             [waymark10.expr :as expr]
+            [waymark10.process :as process]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
@@ -1809,7 +1810,10 @@
   ;; before fields, in turn, because a :flow declaration may derive
   ;; :states, which the :fields groups read (open-state validation,
   ;; support editors)
-  (let [rmap (-> rmap desugar-decision desugar-flow desugar-fields)
+  ;; process before decision: the two are refused together (one
+  ;; machine per kind), and the process's projected doors must exist
+  ;; before :flow can be told it collides with them
+  (let [rmap (-> rmap process/desugar desugar-decision desugar-flow desugar-fields)
         {:keys [kind states initial summary]} rmap]
     (doseq [[k v] {:kind kind :states states :initial initial :summary summary
                    :schema (:schema rmap)}]

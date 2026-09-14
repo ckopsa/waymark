@@ -549,6 +549,56 @@ EMPTY rather than dropping it. Embedded collections (`embed.<rel>.*`) take
 no default filters — their href is the parent's, and their advertised
 columns drop the `default` the parent will not apply.
 
+## 14 · `:process` — the workflow as a resource
+
+One key that projects a whole step machine ([spec](spec-process.md)) —
+for a story that touches several kinds in order and should be a row a
+person can look at, rather than a handler's author's memory:
+
+```clojure
+:process
+{:mode  :durable                              ; or :atomic (the default)
+ :binds {:plan_id :plan}                      ; the subjects, as refs — create input
+ :steps [{:name :close
+          :do   [:plan :plan_id :finalize]    ; invoke the row plan_id points at
+          :undo [:plan :plan_id :reopen]}     ; the door that reverses it
+         {:name  :compile
+          :do    [:grocery_list :create {:plan_id (data :plan_id)}]
+          :binds :list_id                     ; the born id, stamped on this row
+          :undo  [:grocery_list :list_id :discard]}
+         {:name  :open_next
+          :do    [:plan :create {:previous_plan (data :plan_id)}]
+          :binds :next_plan_id
+          :pivot true}]}                      ; irreversible from here on
+```
+
+It desugars FIRST in `normalize-resource`'s thread — ahead of `:decision`
+(the two refuse together: *one machine per kind*) and `:flow` — into
+ordinary states, doors, handlers, schema entries and `:touches`. A
+**durable** process is `:staged → <step>_done → … → :done`, one door per
+step, each firing one write through the handler's cross-write door
+(`ctx :invoke` / `ctx :create`, §9) as the tapping principal; `roll_back`
+walks the completed steps newest-first through their `:undo` doors, in one
+transaction, from every landing before the `:pivot` — and every step a
+roll-back could reach must spell its `:undo`, or the declaration refuses
+naming the step. An **atomic** process is `:staged → :done` through one
+`run` door: every step in one transaction, a refusal anywhere rolling all
+of it back, so `:undo` and `:pivot` refuse there (no partial completion
+exists to describe). Both get `abandon` from `:staged`.
+
+What is derived, never typed: each door's `:touches` (the roll-back's
+every entry `:may`), the handler's stateable form (the fingerprint moves
+exactly when a step does), the `:waymark/ref` entries for `:binds` and
+each step's `:binds` (the former the create input, the latter engine-stamped),
+and a `:one-way` sentence per door. Step input values are scalar literals
+or law forms reading `(data :field)` of the process row and `(now)` —
+`input`, `var` and `it` refuse at the def site. The assembly battery
+(`check-process`) then judges the cross-kind half where every kind is
+known: the target door exists, is neither bulk nor fenced, takes the input
+the step sends (and no less), and the undo departs from where the do
+landed. The normalized `:process` map stays on the declaration for that
+check; `fingerprint-of` names no facet for it.
+
 ## 13 · The two runs — a sitting and a reading
 
 Not declaration vocabulary, but the two words every composer file uses,

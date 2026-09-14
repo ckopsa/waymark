@@ -56,6 +56,11 @@
    ;; pacing — a spelling, never a mechanism, resolved before the
    ;; check battery and before the fingerprint
    :decision
+   ;; the workflow as a resource (spec-process): one key desugaring
+   ;; into the step machine, one door per step (or one `run` door),
+   ;; the roll-back door and its derived :touches — a spelling, never
+   ;; a mechanism, resolved ahead of :decision and :flow
+   :process
    ;; who sees their OWN rows of this kind with no grant at all
    ;; (spec-decision-kind seam 2): the negotiation courtesy that used
    ;; to be a literal set of kind names in grants.clj, relocated to

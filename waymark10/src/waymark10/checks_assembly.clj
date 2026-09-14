@@ -626,6 +626,93 @@
                  "[{:kind " (:kind edge) " :action " child-action
                  " :may true}]")))))
 
+;; ── process: the steps name real doors ──────────────────────────────
+
+(defn- ref-field?
+  "Is `f` a :waymark/ref entry of `r`'s data schema pointing at `tk`?"
+  [r f tk]
+  (let [entry (get (schema/entry-map (:schema r)) f)]
+    (and entry
+         (= :waymark/ref (head (:schema entry)))
+         (= tk (get-in entry [:properties :kind])))))
+
+(defn- check-process-door
+  "One step door (a :do or an :undo), judged where the target is
+  known: the kind is registered, the field the step reads is a ref at
+  that kind, the action exists and is one the cross-write door can
+  open body-less where the step sends no input — never bulk, never
+  fenced (the process holds no etag, exactly as the cascade runner
+  does not)."
+  [kinds kind r sname what {:keys [door id-field action input] :as d}]
+  (let [tk (:kind d)
+        where (str "process step " (name sname) " " what ": ")
+        target (get kinds tk)]
+    (when-not target
+      (err kind :process (str where "kind " tk " is not registered on this engine")))
+    (if (= :create door)
+      (when-not (contains? (or (:create-action-names target) #{:create}) :create)
+        (err kind :process (str where (name tk) " births through a create door "
+                                "named " (vec (sort (:create-action-names target)))
+                                ", not :create — the process can only reach a "
+                                "kind whose create door is named :create")))
+      (let [act (get-in target [:actions action])]
+        (when-not (ref-field? r id-field tk)
+          (err kind :process (str where "field " id-field " must be a :waymark/ref "
+                                  "entry of " (name kind) " whose :kind is " tk)))
+        (when-not act
+          (err kind :process (str where (name tk) "." (name action)
+                                  " is not an action of that kind")))
+        (when (:bulk act)
+          (err kind :process (str where (name tk) "." (name action)
+                                  " is a bulk door — a collection affordance, "
+                                  "not a row's")))
+        (when (get-in act [:safety :fence])
+          (err kind :process (str where (name tk) "." (name action)
+                                  " is fenced — the process holds no etag")))
+        (when (and (some? input) (nil? (:input act)))
+          (err kind :process (str where (name tk) "." (name action)
+                                  " takes no input, but the step sends one")))
+        (when (and (nil? input) (:input act)
+                   (seq (schema/entry-keys (:input act))))
+          ;; a door with a required input the step does not spell
+          ;; would refuse every run — say so here
+          (let [required (into []
+                               (keep (fn [[k e]] (when-not (:optional e) k)))
+                               (sort-by key (schema/entry-map (:input act))))]
+            (when (seq required)
+              (err kind :process (str where (name tk) "." (name action)
+                                      " requires input " required
+                                      ", and the step sends none")))))))))
+
+(defn- check-process
+  "The :process sugar's cross-kind half (its single-kind half ran at
+  the def site, waymark10.process/desugar). Every step's :do and
+  :undo name a real door the cross-write doors can open; an undo
+  departs from where its do landed, so the compensation is honest
+  the same way verify-undo-pointers keeps a plain :undo honest."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            :let [p (:process r)]
+            :when p
+            s (:steps p)]
+      (let [sname (:name s)
+            d (:do s)]
+        (check-process-door kinds kind r sname ":do" d)
+        (when-some [u (:undo s)]
+          (check-process-door kinds kind r sname ":undo" u)
+          (let [target (get kinds (:kind u))
+                undo (get-in target [:actions (:action u)])
+                landed (if (= :create (:door d))
+                         (when (= (:kind d) (:kind u)) (:initial target))
+                         (get-in kinds [(:kind d) :actions (:action d) :to]))]
+            (when (and undo landed (not (contains? (:from undo) landed)))
+              (err kind :process
+                   (str "process step " (name sname) " :undo "
+                        (name (:kind u)) "." (name (:action u))
+                        " does not depart from " landed ", where the step's "
+                        ":do lands — it is not this step's reverse")))))))))
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
 ;; punt: check-compounds (compound inputs) — its declaration shape is
@@ -633,11 +720,13 @@
 
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
-  refs' targets, v10's own), owns, related, derived-cycles, touches.
+  refs' targets, v10's own), owns, related, derived-cycles, touches —
+  and process, v10's own, whose steps name doors of other kinds.
   Throws the first error, returns {:warnings [str …]}."
   [reg]
   {:warnings
    (into []
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
-          check-derived-cycles check-touches check-pick check-link-where])})
+          check-derived-cycles check-touches check-process check-pick
+          check-link-where])})
