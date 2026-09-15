@@ -12,11 +12,72 @@ function parseFrame(frame) {
   try { return {event, id, data: JSON.parse(data)}; } catch { return null; }
 }
 let sseRefusalToldFor = null;   // one narration per cause, not per retry
+/* ── a hidden tab holds NO connection (waymark-dxnp) ────────────────
+   http-kit is HTTP/1.1 and Chromium caps 6 connections per host, so
+   this page's three boot streams (/api/-/events, /api/-/presence,
+   /api/-/intents) plus any per-document history stream already sit at
+   the cap: open a SECOND tab and its plain GETs — .well-known,
+   collections — queue behind connections that will never finish, and
+   the screen stays blank. curl answers in milliseconds meanwhile,
+   which is why this reads as a server hang and is not one.
+
+   So: while document.hidden, every sse() fetch is ABORTED and its
+   retry loop parks (no backoff timer either — a paused loop that
+   still reconnected every 2s would hold the same pool). On
+   visibilitychange back to visible each stream reopens, resuming from
+   the last id it saw where the route honours Last-Event-ID (the
+   firehose does; presence and intents carry no ids at all and send a
+   fresh snapshot on connect instead). A stream that cannot prove it
+   resumed missed nothing costs the screen ONE refetch on return.
+
+   Not fixed here: two VISIBLE tabs still collide — that is the
+   multiplexed-stream bead (waymark-p5tg), filed alongside. */
+const SSE_STREAMS = new Set();
+let ssePaused = typeof document !== "undefined" && !!document.hidden;
+let sseResumeTimer = null;
+function ssePause() {
+  if (ssePaused) return;
+  ssePaused = true;
+  /* abort the in-flight body: the loop wakes in its catch, sees the
+     pause and parks instead of backing off */
+  for (const s of SSE_STREAMS) { try { if (s.ctl) s.ctl.abort(); } catch (_e) {} }
+}
+function sseResume() {
+  if (!ssePaused) return;
+  ssePaused = false;
+  let blind = false;   // any stream that cannot replay what it missed
+  for (const s of SSE_STREAMS) {
+    if (s.lastId == null) blind = true;
+    const wake = s.wake; s.wake = null;
+    if (wake) wake();
+  }
+  /* …and for those, the screen itself is the resume point: one
+     refetch, debounced so the three streams ask for it once */
+  if (blind && typeof render === "function") {
+    clearTimeout(sseResumeTimer);
+    sseResumeTimer = setTimeout(render, 0);
+  }
+}
+if (typeof document !== "undefined" && document.addEventListener)
+  document.addEventListener("visibilitychange",
+    () => (document.hidden ? ssePause() : sseResume()));
 async function sse(href, onFrame) {
+  /* lastId is this stream's resume point — set only by frames that
+     actually carry an id line, which is how a resumable route
+     (the firehose) tells itself apart from an ephemeral one */
+  const stream = {href, ctl: null, lastId: null, wake: null};
+  SSE_STREAMS.add(stream);
   while (true) {
+    while (ssePaused) await new Promise(r => { stream.wake = r; });
     let refused = false;
+    const ctl = typeof AbortController === "function"
+      ? new AbortController() : null;
+    stream.ctl = ctl;
     try {
-      const res = await fetch(href, {headers: principalHeaders()});
+      const headers = principalHeaders();
+      if (stream.lastId != null) headers["Last-Event-ID"] = String(stream.lastId);
+      const res = await fetch(href, ctl ? {headers, signal: ctl.signal}
+                                        : {headers});
       if (!res.ok) {
         /* a live surface answering a problem is a CAUSE, not noise —
            the classic: a leftover grant selector conceals the SSE
@@ -46,11 +107,15 @@ async function sse(href, onFrame) {
           while ((idx = buf.indexOf("\n\n")) >= 0) {
             const f = parseFrame(buf.slice(0, idx));
             buf = buf.slice(idx + 2);
-            if (f) onFrame(f);
+            if (f) { if (f.id) stream.lastId = f.id; onFrame(f); }
           }
         }
       }
-    } catch (_e) { /* server restarting */ }
+    } catch (_e) { /* server restarting, or the hide-abort landed */ }
+    stream.ctl = null;
+    /* aborted by the hide: park at the top of the loop with no timer
+       pending, rather than sleeping and reconnecting into a hidden tab */
+    if (ssePaused) continue;
     await new Promise(r => setTimeout(r, refused ? 15000 : 2000));
   }
 }

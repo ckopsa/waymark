@@ -179,6 +179,10 @@
     (testing "every address the hand-written vector carried, still here"
       (is (= #{"/" "/api/.well-known/waymark" "/api/openapi.json"
                "/api/schemas/:kind" "/api/-/events" "/api/-/seasons"
+               ;; the realtime bundle's combined stream (waymark-p5tg):
+               ;; one socket carrying all three live surfaces, beside
+               ;; the three it does not replace
+               "/api/-/live"
                "/api/-/presence" "/api/-/intents" "/api/-/intents/abandon"
                "/api/-/intents/answer" "/api/-/collab-ticket"
                "/api/-/mirrors/:plural/:action" "/api/-/welcome" "/api/-/mcp"
