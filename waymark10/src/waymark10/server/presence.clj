@@ -773,7 +773,11 @@
    "Cache-Control" "no-cache"
    "X-Accel-Buffering" "no"})
 
-(defn- frame-str ^String [payload]
+(defn frame
+  "One frame as the wire bytes — the SAME renderer the combined
+  stream /api/-/live uses, so a frame is byte-for-byte what it is
+  on this route (waymark-p5tg)."
+  ^String [payload]
   (str "event: presence\n"
        "data: " (wire/write-json (p/wire-value payload)) "\n\n"))
 
@@ -792,7 +796,7 @@
       (fn [ch]
         (http/send! ch {:status 200 :headers sse-headers
                         :body (str ": stream open\n\n"
-                                   (frame-str
+                                   (frame
                                     {:event "snapshot"
                                      :presences (snapshot reg (:visible? sub))}))}
                     false)
@@ -810,7 +814,7 @@
                            (nil? evt) (when (and (http/send! ch ": hb\n\n" false)
                                                  (events/channel-alive? ch))
                                         (recur))
-                           :else (when (and (http/send! ch (frame-str evt) false)
+                           :else (when (and (http/send! ch (frame evt) false)
                                             (events/channel-alive? ch))
                                    (recur)))))
                      (finally (unsubscribe reg sub))))

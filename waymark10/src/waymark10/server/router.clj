@@ -426,6 +426,16 @@
                                     :note "who is looking where (SSE / POST)"}
                          :events {:href "/api/-/events"
                                   :note "the firehose (SSE; unscoped only — a recorded punt)"}
+                         ;; one socket instead of three (waymark-p5tg)
+                         :live {:href "/api/-/live"
+                                :note (str "all three live surfaces on ONE "
+                                           "SSE connection — dispatch on the "
+                                           "frame's event name (transition, "
+                                           "derivation, presence, intent); "
+                                           "Last-Event-ID resumes the row "
+                                           "events, and a scoped caller gets "
+                                           "the presence and intent frames "
+                                           "with the firehose half absent")}
                          :seasons {:href "/api/-/seasons"
                                    :note "the last weeks as a shape — what moved, what ages"}}
                   (get-in eng [:oidc :rp])
@@ -1092,18 +1102,34 @@
                                          hooks)
                             req)))))
 
+(defn firehose-admission
+  "The firehose's OWN admission and subscription options — ONE
+  decision with two doors on it (waymark-p5tg).
+
+  nil means REFUSED: the firehose spans kinds and projecting it per
+  grant is a named punt, so a scoped request gets the concealment
+  answer. /api/-/events spells that refusal as a 404; the combined
+  stream /api/-/live spells it as ABSENCE — it simply carries no
+  transition or derivation frames for that caller. Neither door
+  re-derives the rule; both ask here, which is the whole point of
+  this being a function and not a repeated `when`.
+
+  Otherwise {:dispatcher :kinds :since} — the ?kinds= projection and
+  the Last-Event-ID resume point, read exactly once."
+  [eng req]
+  (when-not (visibility-of req)
+    {:dispatcher (events-dispatcher eng)
+     :kinds (some->> (get (query-params req) "kinds") csv
+                     (map keyword) set not-empty)
+     :since (last-event-id req)}))
+
 (defn- firehose-events [eng]
   (fn [req]
-    ;; the firehose spans kinds; projecting it per grant is a named
-    ;; punt — a scoped request gets the concealment answer
-    (when (visibility-of req)
-      (throw (p/problem :not-found 404 "Not found" {:detail "No such route."})))
-    (let [d (events-dispatcher eng)
-          kinds (some->> (get (query-params req) "kinds") csv
-                         (map keyword) set not-empty)]
-      (events/sse-handler eng d {:kinds kinds
-                                 :since (last-event-id req)}
-                          req))))
+    (let [{:keys [dispatcher kinds since]}
+          (or (firehose-admission eng req)
+              (throw (p/problem :not-found 404 "Not found"
+                                {:detail "No such route."})))]
+      (events/sse-handler eng dispatcher {:kinds kinds :since since} req))))
 
 ;; ── welcome home: the returning-inhabitant payload (waymark-4zj.2) ──
 ;;
@@ -1432,6 +1458,24 @@
                               "present; silence fades you out in ~45s). "
                               "The reference client (waymark10.client) "
                               "beats it for you on every read.")}
+        ;; the combined stream (waymark-p5tg): a client that wants to
+        ;; WATCH rather than be watched opens this one, not three
+        :live {:href "/api/-/live"
+               :method "GET"
+               :note (str "one SSE connection carrying every live "
+                          "surface — `event: transition` and "
+                          "`event: derivation` (the firehose's row "
+                          "events, resumable by Last-Event-ID), "
+                          "`event: presence` and `event: intent` (the "
+                          "ephemeral ones, snapshot first). Dispatch "
+                          "on the event name. Browsers cap connections "
+                          "per host, so a tab that opened /api/-/events, "
+                          "/api/-/presence and /api/-/intents separately "
+                          "spent three of its six on watching; those "
+                          "three still serve, unchanged, for anyone who "
+                          "wants only one of them. Under a grant the "
+                          "firehose half is absent (it is unscoped-only, "
+                          "the same recorded punt) and the rest flows.")}
          ;; the prompt-injection sentence (waymark-4mk, the spec's own
          ;; recorded punt): nothing about waymark's posture changes
          ;; because an agent reads rows — but with the MCP surface a

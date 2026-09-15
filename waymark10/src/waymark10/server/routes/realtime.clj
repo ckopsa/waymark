@@ -1,6 +1,7 @@
 (ns waymark10.server.routes.realtime
-  "The live surfaces' six routes: presence, intents (three doors),
-  the collab ticket, and the collab websocket itself.
+  "The live surfaces' seven routes: the combined stream, presence,
+  intents (three doors), the collab ticket, and the collab websocket
+  itself.
 
   One module, four namespaces — presence, curtain, intents and collab
   are the spec's `realtime` bundle, and they are bundled because they
@@ -18,6 +19,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.intents :as intents]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.live :as live]
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]))
@@ -188,6 +190,34 @@
                         eng (router/visibility-of req)))
       {:status 204 :headers {}})))
 
+;; ── the combined stream (waymark-p5tg) ──────────────────────────────
+
+(defn- live-stream
+  "GET /api/-/live: the firehose's row events, presence and intents on
+  ONE connection, each frame tagged by its own SSE event name
+  (transition / derivation / presence / intent). A tab opened three
+  streams and a second tab hit the browser's six-per-host cap; this is
+  the one stream it opens instead.
+
+  Composition only — every admission decision below is the standalone
+  route's, called: router/firehose-admission (nil for a scoped caller,
+  so the row events are absent exactly as /api/-/events 404s them) and
+  presence/self-visible? for both ephemeral sources, the same
+  predicate the two GETs above build. This route therefore cannot
+  carry a frame across a boundary the frame's own route would hold.
+
+  It lives in the realtime module, not core, because two of its three
+  sources do — an engine without this module has no presence or
+  intents registry to combine, and /api/-/live 404s beside them."
+  [eng]
+  (fn [req]
+    (let [visible? (presence/self-visible? eng (router/visibility-of req))]
+      (live/sse-handler eng
+                        [(live/firehose-source eng req)
+                         (live/presence-source (presence-registry eng) visible?)
+                         (live/intents-source (intents-registry eng) visible?)]
+                        req))))
+
 ;; ── live collab (websockets, phase 9b) ──────────────────────────────
 
 (defn- draft-collab [eng]
@@ -224,14 +254,15 @@
      router/media-type nil)))
 
 (defn routes
-  "Five static doors and one plural suffix. The suffix is seven
+  "Six static doors and one plural suffix. The suffix is seven
   segments deep, one past the draft it hangs off, so no core route
   can match it — but it stays in the :plural bucket where it belongs,
   because that is where a reader looks for it and where the next
   route on that grammar will have to go."
   [eng]
   {:module :realtime
-   :static [["/api/-/presence" {:get (presence-stream eng)
+   :static [["/api/-/live" {:get (live-stream eng)}]
+            ["/api/-/presence" {:get (presence-stream eng)
                                 :post (presence-report eng)}]
             ["/api/-/intents" {:get (intents-stream eng)
                                :post (intents-report eng)}]

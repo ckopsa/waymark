@@ -159,7 +159,14 @@ function tickerLine(t) {
 }
 
 const seen = new Set();  // dedupe — at-least-once delivery
-sse("/api/-/events", ({event, id, data: ev}) => {
+/* The ROW-EVENT half of the one live stream (waymark-p5tg). It used to
+   own an sse("/api/-/events") of its own; the tab now opens ONE
+   connection (220-boot.js, at the foot of the file) and hands each
+   frame to the handler its event name names. The body is unchanged,
+   including the `event !== "transition"` guard — the dispatcher is
+   explicit, but this handler has never trusted a frame's name blindly
+   and this is not the commit to start. */
+function onRowFrame({event, id, data: ev}) {
   const feed = $("#feed");
   if (event === "derivation") {
     const key = `d:${ev.kind}#${ev.self}#${ev.at}`;
@@ -219,5 +226,4 @@ sse("/api/-/events", ({event, id, data: ev}) => {
     clearTimeout(refetchTimer);
     refetchTimer = setTimeout(render, 350);
   }
-});
-
+}

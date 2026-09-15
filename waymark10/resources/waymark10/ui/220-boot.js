@@ -25,7 +25,7 @@ function paintPresence() {
       ` ${p.principal.display || p.principal.id} is here`)));
 }
 let followMoveTimer = null;
-sse("/api/-/presence", ({event, data: f}) => {
+function onPresenceFrame({event, data: f}) {
   if (event !== "presence") return;
   if (f.event === "snapshot") {
     PRESENCE.clear();
@@ -58,7 +58,7 @@ sse("/api/-/presence", ({event, data: f}) => {
       }
     }, 250);
   }
-});
+}
 async function presenceBeat() {
   /* the curtain (wm10.curtain, set by the toggle below): a drawn
      curtain stops the client beating as COURTESY traffic reduction
@@ -219,7 +219,7 @@ function paintIntents() {
     ...(more > 0 ? [el("div", {class: "intent-more"},
                       `… and ${more} more`)] : []));
 }
-sse("/api/-/intents", ({event, data: f}) => {
+function onIntentFrame({event, data: f}) {
   if (event !== "intent") return;
   if (f.event === "snapshot") {
     INTENTS.clear();
@@ -227,7 +227,7 @@ sse("/api/-/intents", ({event, data: f}) => {
   } else if (f.event === "close") INTENTS.delete(f.id);
   else INTENTS.set(f.id, f);   // open | update
   paintIntents();
-});
+}
 
 /* ── the theme control (waymark-88k) ───────────────────────────────
    Three states, and only ONE of them is a colour: "system" is the
@@ -269,4 +269,34 @@ for (const b of themeSeats())
 applyTheme(storedTheme());
 
 $("#apphost").textContent = location.host;  // the honest app identity
+
+/* ── ONE live stream (waymark-p5tg) ───────────────────────────────
+   This tab used to open three: sse("/api/-/events") in 210-ledger.js
+   and sse("/api/-/presence") / sse("/api/-/intents") up this file.
+   http-kit speaks HTTP/1.1 and a browser allows six connections per
+   host, so the SECOND tab of the same app spent its whole budget on
+   watching and every ordinary fetch behind it hung.
+
+   The frames were always tagged — `event: transition`,
+   `event: derivation`, `event: presence`, `event: intent` — so one
+   socket carrying all four needs nothing but a dispatch. The three
+   handlers are exactly the callbacks those three sse() calls held;
+   only the door they arrive through changed. GET /api/-/live composes
+   the same three sources server-side, each still judging admission
+   its own way, so under a grant the row events are simply absent and
+   presence and intents flow on as they did.
+
+   The per-document history streams (fetchReplay on
+   /api/{plural}/{id}/-/events) are deliberately NOT folded in: those
+   are short, opened on purpose, and carry the implicit presence
+   registration this stream does not. */
+sse("/api/-/live", frame => {
+  switch (frame.event) {
+    case "transition":
+    case "derivation": return onRowFrame(frame);
+    case "presence":   return onPresenceFrame(frame);
+    case "intent":     return onIntentFrame(frame);
+  }
+});
+
 render();

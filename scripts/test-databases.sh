@@ -5,7 +5,7 @@
 #   scripts/test-databases.sh | psql -h host -p port -U user -d waymark10_test -f -
 #
 # WHY THIS EXISTS. `make db10` created waymark10_test and stopped, but
-# the suites reach for EIGHT databases: the batch-B, batch-D, grants,
+# the suites reach for NINE databases: the batch-B, batch-D, grants,
 # intents, meal-plan, presence and UI tests each open their own, on
 # purpose — a suite that drops tables by name must not share a database
 # with one that does the same (waymark10.test.db/with-test-engine).
@@ -31,6 +31,7 @@ DATABASES=(
   waymark10_d_test        # batch_d_relay_test, batch_d_collab_test, collab_ticket_test
   waymark10_grants_test   # batch_b_mint_test
   waymark10_intents_test  # intents_test
+  waymark10_live_test     # live_test (the combined stream)
   waymark10_mp_test       # coherence_test
   waymark10_presence_test # presence_test
   waymark10_test          # the default WAYMARK10_TEST_DSN target
