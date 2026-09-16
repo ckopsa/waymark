@@ -88,6 +88,8 @@ seats.clj`, `:nav :system`, beside `:grant` and `:role`.
           [:never       {:optional true} [:vector [:string {:max 240}]]] ; advice, not law
           [:scope       scope-schema]                    ; the authority
           [:substitute_drop {:optional true} scope-schema] ; removed for a substitute
+          [:held_for   {:optional true} [:vector :waymark/ref]] ; models that may sit (section 10)
+          [:substitute_for {:optional true} [:vector :waymark/ref]] ; models that may substitute
           [:standing_ttl_seconds {:optional true} [:int {:min 60}]]
           [:stale       {:optional true} [:vector scope-entry]] ; written by the sweep
           [:merged_into {:optional true :kind :seat} :waymark/ref]]}
@@ -108,6 +110,10 @@ The fields, one sentence each:
 - `scope` is the seat's authority, in the scope schema grants use.
 - `substitute_drop` lists the entries a substitute sitter does not
   get. Each entry must be inside `scope`.
+- `held_for` lists the models that can sit as the full sitter. An
+  empty list means any model. Section 10 has the model kind.
+- `substitute_for` lists the models that can sit as a substitute. An
+  empty list means any model.
 - `standing_ttl_seconds` is the longest leash a grant in this seat
   can request. The cap is `reentry-standing-ttl-seconds`, seven
   days. An empty field means the 24-hour default.
@@ -159,11 +165,22 @@ visibility from the seat row at each request:
 1. Load the seat. If the seat is not `active`, the grant scopes to
    nothing. A parked seat serves nothing, and a merged or retired
    seat serves nothing.
-2. Take the seat's `scope`.
-3. If the grant has `substitute` set, remove the `substitute_drop`
+2. Read the session's model (section 10). If the seat has a
+   `held_for` list and the grant is a full grant, the model must be
+   in it. If the seat has a `substitute_for` list and the grant is a
+   substitute grant, the model must be in it. A model not in the
+   list scopes the grant to nothing, and `doors.ask.seat` says why.
+3. Take the seat's `scope`.
+4. If the grant has `substitute` set, remove the `substitute_drop`
    entries.
-4. Remove the `stale` entries.
-5. Resolve as a scope grant resolves today.
+5. Remove the `stale` entries.
+6. Resolve as a scope grant resolves today.
+
+The seat row is own-surface for its sitters, read-only: a grant's
+audience can GET the seat the grant cites, with no scope entry. The
+sitter reads its charter, its must list, and its never list there.
+The precedent is the grant, which its audience reads without a
+grant.
 
 The grant load already happens once per request. The seat load is
 one more row in the same read. A grant with `seat` set refuses a
@@ -319,6 +336,73 @@ Substitutes are the exception, by name.
 at assignment. A seat is an office with authority. The two do not
 merge in this leg.
 
+### 10. The model kind, and the seat held for a model
+
+The essay says any model can sit, and also that a seat can be tied
+to one model. Both are true here. A model is a row, so a new model
+arrives with no deploy, and a lean week moves a seat from one model
+to another with one `restate`.
+
+`:model` is a framework kind in `seats.clj`, `:nav :system`.
+
+```clojure
+{:kind :model
+ :states [:active :retired]
+ :initial :active
+ :terminal #{}
+ :schema [:map
+          [:name    [:string {:min 1 :max 64}]]   ; the API model id, one spelling
+          [:display [:string {:min 1 :max 80}]]
+          [:vendor  [:string {:min 1 :max 40}]]
+          [:tier    [:enum "frontier" "strong" "economy"]]
+          [:notes   {:optional true} [:maybe [:string {:max 480}]]]]}
+```
+
+`name` is the identifier the harness spells, for example
+`claude-fable-5-1`, `claude-opus-5`, `claude-sonnet-5`, or
+`claude-haiku-4-5`. The `one-spelling` guard applies. `tier` is the
+person's own grouping for fuel decisions, not a fact the vendor
+publishes. `retire` and `reactivate` are the two actions, with the
+`role` kind's shape.
+
+**Where the model is declared.** The engine cannot see the model on
+the other end of a request. The harness can. The driver starts the
+model, so the driver declares it. `POST /auth/agent` and
+`POST /auth/agent/renew` accept `model` in the body, and the session
+records it. The MCP `initialize` accepts the same field in
+`clientInfo`. A session with no model declared has model null.
+
+This is a claim, and the spec says so. The claim comes from the
+owner's own harness, not from the model. The failure it catches is
+the harness bug in the essay: a seat that stayed on an economy model
+into its next turn. With the check, that session sees nothing, and
+discover says "this seat is held for claude-fable-5-1; you are
+claude-haiku-4-5". The sitting stops with a sentence, not with a
+coma.
+
+**Where it is checked.** Three places, one rule:
+
+- At the ask. `model-may-sit` on `approval_request/create` refuses a
+  seat ask whose requester's session model is not in the seat's
+  list for the ask's kind, full or substitute. The refusal names the
+  list.
+- At each request. Step 2 of section 3. The session's model can
+  change at a renew, so the check runs each time.
+- At the seat. `held-for-active-models` on `create` and `restate`
+  refuses a list that names a retired model.
+
+**What the record holds.** The principal gains `model`. The actor
+on each transition carries it, in the `actor` column that already
+exists, so no migration is needed for the log. Each journal entry,
+each task, and each insight then says which member wrote it and as
+which model. That is the essay's "writing memories as Astra", made
+visible.
+
+**The lean week, with models.** The person restates the composer
+seat: `held_for` from `claude-fable-5-1` to `claude-opus-5`. The
+driver's next tick starts the new model and declares it. No deploy,
+no new grant, no tap. When fuel returns, one more restate.
+
 ## The essay's requirements, mapped
 
 The essay defines a seat as an office with expectations, context,
@@ -372,9 +456,11 @@ Two findings from the map:
 - The `approval_request` and `grant` fingerprints move, because both
   schemas gain fields. The pinned hash in
   `waymark10.decision-sugar-test` must be updated with the change.
-- The model tier that sits in the seat is the next leg. This leg
-  records only `substitute`. `preferred_model` on the seat comes with
-  it, as advice the driver reads.
+- The model is a claim the harness makes. The engine cannot verify
+  it. A cross-check against the MCP client name is a follow-up, and
+  it verifies the client, not the model.
+- A model row carries no price. The tier is the person's grouping.
+  A spend ledger would need the harness to report tokens.
 - Trust that accrues by rule (a longer leash after N clean sittings)
   is not designed. The person sets `standing_ttl_seconds` by hand.
 - A spend ledger per seat is not designed. The tick script can count
@@ -407,14 +493,25 @@ A test namespace `waymark10.seat-test` with these cases:
    substitute is not.
 10. A seat ask can request up to the seat's ceiling. A scope ask is
     still capped at 24 hours.
+11. A seat held for one model refuses a seat ask from a session that
+    declares another model, and names the list. A session that
+    declares the held-for model sees the scope. A renew that changes
+    the model to one not in the list makes the next request see
+    nothing.
+12. A transition written under a seat grant carries the session's
+    model in its actor.
+13. A `restate` whose `held_for` names a retired model is refused.
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass.
 
 ## Effort
 
-**Medium.** The new kind is one file with six actions and five
-guards, plus one guard on three own-surface doors. The scope schema, the four scope guards, `merge-scope`,
+**Medium.** The seat kind is one file with six actions and five
+guards, plus one guard on three own-surface doors. The model kind is
+two actions and one guard in the same file. The session gains one
+field, the principal gains one field, and two auth doors and the MCP
+initialize accept it. The scope schema, the four scope guards, `merge-scope`,
 `no-self-dealing`, and `one-spelling` all exist and are reused. The
 router gains one row load in the visibility resolve. `boot-revise!`
 gains one step. The migration adds one table and four nullable
