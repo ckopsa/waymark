@@ -1,38 +1,93 @@
 # Spec — the seat: requirements
 
 **Purpose.** This document gives the requirements for the seat, the
-model, and the sitting in waymark10. A seat is an office that an
-agent occupies. A person opens it, changes it, parks it, merges it,
-and retires it with no deploy. The engine reads the seat at each
-request, enforces its budget, and records who sat in it, as which
-model, and at what cost.
+model, and the sitting in waymark10. A seat is the unit of the bill:
+it groups work that needs one level of judgment, it names the
+cheapest model that can hold that work, and it records what the
+work cost. Waymark is the machine that lowers the bill: it speaks
+the law at the door, so the model does not have to know it ahead of
+time. The seat measures. Waymark lowers. This document gives the
+rules that tie the two together.
 
 This document is written in ASD-STE100 Simplified Technical English.
 Technical names from the codebase keep their spelling: grant, scope,
 leash, ask, anchor, door, kind, sitter, sitting. "Must" gives a
 requirement. "Can" gives a permission. "Is" gives a fact.
 
-Source: Yegge, "Seats and Sunsets", 2026-09-15. Bead: waymark-fp62.1,
-leg 1 of the epic waymark-fp62.
+Source: Yegge, "Seats and Sunsets", 2026-09-15. The owner's
+statement of the goal, 2026-09-16: "Waymark is really about just in
+time context for AI agents. The agent doesn't need to know the law
+ahead of time, because waymark will tell it the law when it attempts
+to do something against the law." Bead: waymark-fp62.1, leg 1 of
+the epic waymark-fp62.
 
-## 1. Definitions
+## 1. The bill
+
+A model turn pays for three things.
+
+| item | what the model must hold | who can hold it instead |
+|---|---|---|
+| the rules | what is allowed, what a field means, which door comes next, what the house forbids | the engine, at the door |
+| the situation | what is in the queue, what this row says, what happened last time | the row, the filter, the envelope |
+| the judgment | is this an action item, is this sentence in the owner's voice, is this change safe | nobody. This is the model's work. |
+
+The first two items are the bulk of most sessions, and they are
+where a frontier model is wasted. A frontier model that reads a
+rules file spends frontier tokens on a lookup. Waymark's end state
+is to take all of the first item and most of the second off the
+model. The envelope shows only the doors that are open now. The 409
+speaks the rule at the moment it matters. The filter hides what is
+not relevant. The row holds the state, so no turn needs the last
+turn's context. When that is done, a turn's cost is judgment alone.
+
+That is why the seat is the right unit. A seat groups work that
+needs one kind of judgment at one level, and its model is set by
+that judgment alone. The question "what must be true for a cheaper
+model to do this work as well" has a mechanical answer: each fact
+the model now derives from context must move into law the engine
+speaks at the door. Each fence the engine enforces is a piece of
+intelligence the house no longer rents.
+
+The loop between the two halves is the point. The sitting records
+where a seat's tokens went. When a seat spends tokens on a refused
+door, on a rule it did not know, or on a queue it could have
+filtered, that is not a model problem. It is a waymark defect: a
+place where the law was not spoken at the door. So the sitting's
+refusal count is waymark's backlog. Success has one visible shape:
+seats move down the tier list over time, and their outcomes hold.
+
+## 2. Definitions
 
 | term | meaning |
 |---|---|
-| seat | an office: a name, a charter, an authority, a budget, and a lifecycle. A row of kind `seat`. |
+| seat | an office: a name, a charter, an authority, a budget, a model floor, and a lifecycle. A row of kind `seat`. |
 | sitter | the member that holds an accepted grant that cites a seat |
 | substitute | a sitter whose grant has `substitute` set. It reads the seat's memory and does not write it. |
 | model | a row of kind `model`: one model identifier, its tier, and its prices |
-| sitting | one wake of a seat: a row of kind `sitting` with its token counts and its cost |
+| sitting | one wake of a seat: a row of kind `sitting` with its token counts, its cost, and its counts of transitions and refusals |
+| judgment | the part of a seat's work that the engine cannot say at a door |
+| the residual | the charter: the judgment, written in the person's words, and nothing else |
+| the floor | the cheapest model that holds a seat with its outcomes intact |
+| the ladder | the path of a seat from a frontier model down to its floor, one `restate` of `held_for` per step |
+| refusal | a 409 served to a sitter. Fuel spent on law the model did not know. |
+| correction | a person's transition on a row that the seat's sitter moved last |
 | memory | the sitter's own-surface kinds: `self`, `journal`, `letter` |
 | scope | the list of kinds, actions, rows, fields, and filters a grant admits. The scope schema in `grants.clj`. |
 | the four scope guards | `scope-names-real-kinds`, `scope-names-real-actions`, `scope-filters-are-filterable`, `scope-omits-private-kinds` |
 | the harness | the owner's driver script, which starts the model and speaks to the engine for it |
 
-## 2. The problem on record
+## 3. The problem on record
 
-A grant's scope is a copy of an ask. Each extend-ask copies it
-forward again. The copy drifted three times:
+**Fuel, first.** The owner's account, 2026-09-16: with the usage
+habits of the summer, a week's allowance is gone by midweek on the
+newest frontier model. The house has no ledger that says which work
+took it. A seat that costs more than it returns cannot be found,
+because nothing records what a seat costs or what it returned.
+Every lever the essay names, a cheaper model, a smaller task, an
+earlier hand-off, a longer cadence, is pulled blind.
+
+**Drift, second.** A grant's scope is a copy of an ask. Each
+extend-ask copies it forward again. The copy drifted three times:
 
 - waymark-ycp: the extend fold appended, and one grant reached 74
   entries for 20 kinds. The ask door refused the next ask. The leash
@@ -48,53 +103,58 @@ fuel is plentiful, and parks or merges seats when fuel runs short.
 And a seat has a fixed cost, because a wake costs money with no
 work.
 
-## 3. Requirements: the seat kind
+## 4. Requirements: the seat kind
 
-**R-3.1** The engine must serve a framework kind `seat`, in
+**R-4.1** The engine must serve a framework kind `seat`, in
 `waymark10/src/waymark10/server/seats.clj`, with `:nav :system`.
 
-**R-3.2** A seat must have these fields.
+**R-4.2** A seat must have these fields.
 
 | field | type | meaning |
 |---|---|---|
 | `name` | string, 1 to 40 | the token a grant and an ask spell. One spelling per seat. |
-| `charter` | string, to 480 | what the seat is for, in the person's words |
-| `must` | list of strings | the seat's standing duties, one sentence each |
-| `never` | list of strings | advice to the sitter. Prose. Not enforced. |
+| `charter` | string, 1 to 1200 | the residual: the seat's judgment, in the person's words. R-4.10. |
 | `scope` | scope schema | the seat's authority |
 | `substitute_drop` | scope schema | the entries a substitute does not get |
-| `held_for` | list of model refs | the models that can sit as the full sitter. Empty means any. |
+| `held_for` | list of model refs | the models that can sit as the full sitter. Empty means any. The seat's place on the ladder. |
 | `substitute_for` | list of model refs | the models that can sit as a substitute. Empty means any. |
 | `standing_ttl_seconds` | int | the longest leash a grant in this seat can request |
-| `cadence_seconds` | int | how often the driver wakes the seat |
+| `cadence_seconds` | int | how often the driver wakes the seat. The fixed wake cost. |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
-| `walk` | kind name, optional | the queue this seat walks: one model turn per queued row of that kind. Section 11.11. |
+| `walk` | kind name, optional | the queue this seat walks: one model turn per queued row of that kind. Section 12.7. |
 | `stale` | list of scope entries | written by the sweep. A person never writes it. |
 | `merged_into` | seat ref | the seat this one merged into |
 
-**R-3.3** A seat must have the states `active`, `parked`, `merged`,
+There is no `must` list and no `never` list. The first draft had
+both. Each sentence the model must pre-load is fuel, and each rule
+in prose is a fence the engine is not yet speaking. One field holds
+the residual, and its cap is the priming budget: 1200 characters is
+near 300 tokens, and a cache read of it costs a fraction of a cent
+per turn.
+
+**R-4.3** A seat must have the states `active`, `parked`, `merged`,
 and `retired`. `merged` and `retired` are terminal.
 
-**R-3.4** A seat must have these actions.
+**R-4.4** A seat must have these actions.
 
 | action | from | to | actor | effect |
 |---|---|---|---|---|
 | `create` | — | active | a person, not a sitter | opens the seat |
-| `restate` | active | active | a person, not a sitter | changes charter, must, never, scope, drop-list, held-for lists, ttl, cadence, budgets |
+| `restate` | active | active | a person, not a sitter | changes charter, scope, drop-list, held-for lists, ttl, cadence, budgets, walk |
 | `park` | active | parked | a person | the seat serves nothing. Grants stay. |
 | `unpark` | parked | active | a person | the seat serves again |
 | `merge` | active, parked | merged | a person, not a sitter | folds this scope into `into`. This seat closes. |
 | `retire` | active, parked | retired | a person | the seat closes for good |
 
-**R-3.5** `park` must have `:confirm false` and `:reversible true`.
+**R-4.5** `park` must have `:confirm false` and `:reversible true`.
 It is the cheap lever, and it must cost nothing to pull.
 
-**R-3.6** `merge` must have `:confirm true` with this consequence
+**R-4.6** `merge` must have `:confirm true` with this consequence
 sentence: "This seat closes. Its scope folds into {into}. Each
 sitter of this seat loses its grant and must ask to sit in {into}."
 
-**R-3.7** These guards must judge the seat's doors.
+**R-4.7** These guards must judge the seat's doors.
 
 | guard | doors | rule |
 |---|---|---|
@@ -105,22 +165,35 @@ sitter of this seat loses its grant and must ask to sit in {into}."
 | `ttl-within-standing` | create, restate | `standing_ttl_seconds` is not more than `reentry-standing-ttl-seconds` |
 | `held-for-active-models` | create, restate | each model in the two lists is active |
 | `walk-names-a-kind-in-scope` | create, restate | `walk` names a kind the scope admits, and the kind declares `:default-filters` over state |
+| `step-carries-a-note` | restate | a restate that changes `held_for` or `substitute_for` carries `note`, 1 to 240 characters |
 | `merge-target-is-active` | merge | `into` is active, and is not this seat |
 
-**R-3.8** `not-a-sitter` is the human verdict the grant law requires.
+**R-4.8** `not-a-sitter` is the human verdict the grant law requires.
 A sitter must not widen its own seat.
 
-**R-3.9** The seat row must be own-surface for its sitters, read-only:
+**R-4.9** The seat row must be own-surface for its sitters, read-only:
 a grant's audience can read the seat the grant cites, with no scope
 entry. The precedent is the grant, which its audience reads.
 
-## 4. Requirements: the grant and the ask
+**R-4.10** The charter is the residual. It must hold the judgment
+the engine cannot say at a door, and nothing else. A sentence that
+names a door the scope does not open is redundant: the door is
+absent from the envelope, and absence is the rule. A sentence that
+tells the model which door comes next is redundant: the envelope
+offers only the open doors. A sentence that repeats a correction
+the person has made more than once is a fence not yet written: the
+fix is a guard, a filter, a door, or a reason string, and then the
+sentence leaves the charter. The engine does not judge the charter's
+words. The person does, with the sitting's counts in hand (section
+11).
 
-**R-4.1** The `grant` kind must gain two optional fields: `seat`, a
+## 5. Requirements: the grant and the ask
+
+**R-5.1** The `grant` kind must gain two optional fields: `seat`, a
 seat ref, and `substitute`, a boolean. A grant with `seat` set must
 hold no `scope`. A grant with `scope` must hold no `seat`.
 
-**R-4.2** The router must resolve a seat grant's visibility from the
+**R-5.2** The router must resolve a seat grant's visibility from the
 seat row at each request, in this order.
 
 1. Load the seat. If the seat is not `active`, the grant scopes to
@@ -138,10 +211,10 @@ seat row at each request, in this order.
 6. Remove the `stale` entries.
 7. Resolve as a scope grant resolves today.
 
-**R-4.3** The `extend` transition on a seat grant must change only
+**R-5.3** The `extend` transition on a seat grant must change only
 `expires_at`. There is no scope to merge.
 
-**R-4.4** The `approval_request` kind must gain two optional fields:
+**R-5.4** The `approval_request` kind must gain two optional fields:
 `seat` and `substitute`. The three shapes of an ask:
 
 | shape | fields | approval effect |
@@ -150,29 +223,29 @@ seat row at each request, in this order.
 | bootstrap, seat | task, seat, substitute?, expires_at | mints a seat grant with `audience` = requester |
 | extend | grant_id, task, expires_at | slides `expires_at` on the named grant |
 
-**R-4.5** The ask door must refuse: an ask with both `seat` and
+**R-5.5** The ask door must refuse: an ask with both `seat` and
 `scope`; an extend ask with a `scope` on a seat grant; an ask that
 names a seat that is not active.
 
-**R-4.6** `asks-are-short` must read the seat's
+**R-5.6** `asks-are-short` must read the seat's
 `standing_ttl_seconds` for a seat ask, and the 24-hour ceiling for a
 scope ask.
 
-**R-4.7** `model-may-sit` on `approval_request/create` must refuse a
+**R-5.7** `model-may-sit` on `approval_request/create` must refuse a
 seat ask whose requester's session model is not in the seat's list
 for the ask's kind, full or substitute. The refusal names the list.
 
-**R-4.8** `seat-has-one-sitter` on `approve` must refuse a second
+**R-5.8** `seat-has-one-sitter` on `approve` must refuse a second
 accepted full grant that cites a seat while the first is live.
 Substitutes are not limited.
 
-**R-4.9** The approver's screen must show the seat's charter and
+**R-5.9** The approver's screen must show the seat's charter and
 scope beside a seat ask, through the seat link. The approver
 approves an office.
 
-## 5. Requirements: merge
+## 6. Requirements: merge
 
-**R-5.1** `merge` must take `into`, a seat ref. The handler must:
+**R-6.1** `merge` must take `into`, a seat ref. The handler must:
 
 1. fold `into`'s scope with this seat's scope through `merge-scope`,
    judge the fold with the four scope guards, and write it onto
@@ -182,40 +255,40 @@ approves an office.
    `budget_usd_per_week`;
 4. write `merged_into` on this seat and move it to `merged`.
 
-**R-5.2** `merge` must not revoke grants and must not mint grants. A
-grant that cites a merged seat scopes to nothing by R-4.2 and
+**R-6.2** `merge` must not revoke grants and must not mint grants. A
+grant that cites a merged seat scopes to nothing by R-5.2 and
 expires on its own clock. Each moved sitter files a bootstrap ask for
 `into`.
 
-## 6. Requirements: the sweep
+## 7. Requirements: the sweep
 
-**R-6.1** The registry changes only at boot. `boot-revise!` must
+**R-7.1** The registry changes only at boot. `boot-revise!` must
 judge each active or parked seat's `scope` with the four scope
 guards after the kind fingerprints.
 
-**R-6.2** For each seat that fails, the engine must write the failing
+**R-7.2** For each seat that fails, the engine must write the failing
 entries into `stale` through a concealed transition `mark_stale`,
 system actor, logged, with the guard's own sentence as the note.
 
-**R-6.3** A stale seat must still serve the entries that are not
+**R-7.3** A stale seat must still serve the entries that are not
 stale. The leash must not go dark.
 
-**R-6.4** A stale seat must not be quiet. `waymark_discover` must
+**R-7.4** A stale seat must not be quiet. `waymark_discover` must
 carry `doors.ask.seat` with `name`, `state`, `standing_ttl_seconds`,
 `stale`, and `budget` (spent, limit, resumes_at). The seat's envelope
 must carry a warning with the stale entries. The driver must print
 the stale entries and the budget line first, above the title.
 
-**R-6.5** `restate` must clear `stale` when the new scope passes the
+**R-7.5** `restate` must clear `stale` when the new scope passes the
 four guards. A `restate` whose scope still names a stale entry is
 refused by the guards, with the entry named.
 
-**R-6.6** The boot sweep must move a sitting left `open` for more
+**R-7.6** The boot sweep must move a sitting left `open` for more
 than two cadences to `abandoned`, with no tokens.
 
-## 7. Requirements: the substitute
+## 8. Requirements: the substitute
 
-**R-7.1** A substitute must not write the seat's memory. `self`,
+**R-8.1** A substitute must not write the seat's memory. `self`,
 `journal`, and `letter` are private own-surface kinds that no scope
 can name, so the bar is a guard, not a scope entry.
 
@@ -226,57 +299,57 @@ substitute, whatever its tier. The audit is different: the transition
 log records every act a substitute takes, with the model in the
 actor, and no sitter can opt out of it.
 
-**R-7.2** The visibility map must carry a `substitute` flag read
+**R-8.2** The visibility map must carry a `substitute` flag read
 from the grant. The guard `not-a-substitute` must judge
 `self/update`, `journal/create`, and `letter/create`. Its sentence:
 "A substitute reads the seat's memory and does not write it. The
 seat's own sitter writes here."
 
-**R-7.3** A substitute can read all three kinds.
+**R-8.3** A substitute can read all three kinds.
 
-## 8. Requirements: the model kind
+## 9. Requirements: the model kind
 
-**R-8.1** The engine must serve a framework kind `model` in
+**R-9.1** The engine must serve a framework kind `model` in
 `seats.clj`, `:nav :system`, with states `active` and `retired`.
 
-**R-8.2** A model must have these fields.
+**R-9.2** A model must have these fields.
 
 | field | type | meaning |
 |---|---|---|
 | `name` | string, 1 to 64 | the API identifier, for example `claude-fable-5-1`, `claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5`. One spelling. |
 | `display` | string | the name a person reads |
 | `vendor` | string | who serves it |
-| `tier` | enum frontier, strong, economy | the person's grouping for fuel decisions |
+| `tier` | enum frontier, strong, economy | the rung on the ladder. The ordering is frontier, then strong, then economy. |
 | `price_input_per_mtok` | decimal | dollars per million input tokens |
 | `price_output_per_mtok` | decimal | dollars per million output tokens |
 | `price_cache_read_per_mtok` | decimal | dollars per million cache-read tokens |
 | `price_cache_write_per_mtok` | decimal | dollars per million cache-write tokens |
 | `notes` | string | free prose |
 
-**R-8.3** A model must have the actions `retire`, `reactivate`, and
+**R-9.3** A model must have the actions `retire`, `reactivate`, and
 `reprice`. Each reprice is a transition, so the history of prices is
 on record.
 
-**R-8.4** The harness must declare the session's model. `POST
+**R-9.4** The harness must declare the session's model. `POST
 /auth/agent`, `POST /auth/agent/renew`, and the MCP `initialize`
 must accept `model`, and the session must record it. A session with
 no declaration has model null.
 
-**R-8.5** The principal must gain `model`, read from the session. The
+**R-9.5** The principal must gain `model`, read from the session. The
 actor on each transition then carries it, in the `actor` column that
 exists. No migration is needed for the log.
 
-**R-8.6** The model is a claim the harness makes. The engine cannot
+**R-9.6** The model is a claim the harness makes. The engine cannot
 verify it. The document says so, and the check is against the
 harness, which is the failure the essay describes.
 
-## 9. Requirements: the sitting kind
+## 10. Requirements: the sitting kind
 
-**R-9.1** The engine must serve a framework kind `sitting` in
+**R-10.1** The engine must serve a framework kind `sitting` in
 `seats.clj`, with states `open`, `closed`, and `abandoned`. `closed`
 and `abandoned` are terminal.
 
-**R-9.2** A sitting must have these fields.
+**R-10.2** A sitting must have these fields.
 
 | field | type | meaning |
 |---|---|---|
@@ -288,80 +361,139 @@ and `abandoned` are terminal.
 | `ended_at` | instant | when the model stopped |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | int | the harness's exact counts, summed over the sitting |
 | `turns` | int | the number of model turns |
+| `transitions` | int | committed transitions under the grant while the sitting was open. The engine counts. |
+| `refusals` | int | 409s served under the grant while the sitting was open. The engine counts. |
 | `cost_usd` | decimal | written at close |
 | `prices` | map | the four prices used at close |
 | `note` | string | one sentence on what the sitting did |
 
-**R-9.3** A sitting must be own-surface for its member, with the
+**R-10.3** A sitting must be own-surface for its member, with the
 actions `create`, `close`, and `abandon`. The driver opens it before
 the model starts and closes it when the model stops.
 
-**R-9.4** `close` must take the four token counts and the turn count.
+**R-10.4** `close` must take the four token counts and the turn count.
 The handler must read the model's prices at that moment, compute
 `cost_usd`, and write the prices used beside it. A reprice later
 must not change a closed sitting.
 
-**R-9.5** The engine must not estimate tokens. It records the
+**R-10.5** The engine must not estimate tokens. It records the
 harness's report.
 
-**R-9.6** The sitting collection must be filterable by `seat`,
+**R-10.6** The engine must count transitions and refusals. The
+router must find the open sitting for the request's grant, and it
+must add one to `transitions` on each committed transition and one
+to `refusals` on each 409 it serves. The harness does not report
+these. No refusal log exists today; this counter is the first record
+of a refusal as fuel.
+
+**R-10.7** The sitting collection must be filterable by `seat`,
 `model`, and `started_at` after, so these are each one query: fuel
-per seat per week against its budget; fuel per model; cost per
-outcome, by the grant and the window; the fixed cost of a seat, as
-the sittings that wrote nothing.
+per seat per week against its budget; fuel per model; refusals per
+seat per week; cost per transition; the fixed cost of a seat, as the
+sittings that wrote nothing.
 
-## 10. Requirements: the driver
+## 11. Requirements: the ladder
 
-**R-10.1** The driver must read `doors.ask.seat` before any sitting.
+**R-11.1** A seat opens on the model the person names. The advice
+of this document: a new seat, whose judgment is not yet known,
+opens on a frontier model. The first weeks find out what the
+judgment is.
+
+**R-11.2** A step is a `restate` that changes `held_for` or
+`substitute_for`. `step-carries-a-note` (R-4.7) makes each step a
+record: the model before, the model after, and the reason, in the
+transition log.
+
+**R-11.3** The house must answer these questions about a seat over
+a window, each as one query over rows that exist.
+
+| question | query |
+|---|---|
+| what did it cost | sum of `cost_usd` over closed sittings |
+| what did it do | sum of `transitions` |
+| where did it hit the law | sum of `refusals` |
+| what did it get wrong | corrections: transitions by a person on rows whose previous transition's actor is the seat's sitter |
+| what did each thing cost | cost divided by transitions |
+| which model did it | group by `model` |
+
+**R-11.4** A step down holds when corrections per transition do not
+rise across the sittings that follow it. The engine gives the
+numbers. The person judges the count of sittings; the advice of this
+document is five. A step down that does not hold is reversed by one
+`restate`, with a note.
+
+**R-11.5** A refusal is a waymark defect. A refused door is a rule
+the model paid to learn. The count per seat per week is the backlog
+for the fence census (leg 2, waymark-fp62.2) and for priming on
+demand (leg 3, waymark-fp62.3). A refusal that repeats has one of
+three fixes: the reason string says what to do instead, a filter
+hides the row the door does not apply to, or the door is absent
+from the envelope in that state. A line in the charter is not a
+fix.
+
+**R-11.6** A correction that repeats is a fence not yet written. The
+fix is law: a guard, a filter, a door, or a source that drops the
+row before the model sees it. After the fix, the charter loses the
+sentence that covered it (R-4.10). The frontier model's work in the
+house is this: it turns a repeated correction into a rule once, and
+the economy model obeys the rule at the price of a door.
+
+**R-11.7** The floor is reached when the next step down does not
+hold. The seat stays one rung above it. A seat whose floor is the
+frontier is not a failure; it is a seat whose judgment is real.
+
+## 12. Requirements: the driver
+
+**R-12.1** The driver must read `doors.ask.seat` before any sitting.
 If the seat is parked, over budget, or held for another model, the
 driver must print the reason first and exit before the model starts.
 It must still renew the session and the leash.
 
-**R-10.2** The driver must wake the seat at `cadence_seconds`.
+**R-12.2** The driver must wake the seat at `cadence_seconds`.
 
-**R-10.3** The driver must open a sitting before the model starts
+**R-12.3** The driver must open a sitting before the model starts
 and close it with the exact token counts when the model stops.
 
-**R-10.4** The driver must pass `sitting_budget_tokens` to the
+**R-12.4** The driver must pass `sitting_budget_tokens` to the
 harness as the task budget.
 
-**R-10.5** The driver must file an extend-ask as `{grant_id, task,
+**R-12.5** The driver must file an extend-ask as `{grant_id, task,
 expires_at}` with no scope when the grant cites a seat.
 
-**R-10.6** The driver must declare the model it starts, at bind and
+**R-12.6** The driver must declare the model it starts, at bind and
 at renew.
 
-**R-10.7** When the seat has `walk`, the driver must run the walk
+**R-12.7** When the seat has `walk`, the driver must run the walk
 mode: read the queue (the kind's collection under its default
 filter), and for each row start one fresh model turn whose prompt is
-the seat's charter, must list, and never list, then the row's
-envelope. The model takes one door the envelope offers. The turn
-ends. The driver moves to the next row until the queue is empty or
-the sitting's budget is spent. One sitting row covers the whole
-walk.
+the seat's charter, then the row's envelope. The model takes one
+door the envelope offers. The turn ends. The driver moves to the
+next row until the queue is empty or the sitting's budget is spent.
+One sitting row covers the whole walk.
 
-## 11. The email clerk: a worked example
+**R-12.8** The driver must give the model nothing beyond the charter
+and the engine's own answers: the envelope, the discover document,
+the schema, the refusal. No rules file, no document from `docs/`, no
+law ahead of time. When a sitting fails for want of a rule, the fix
+is in the engine (R-11.5), never a line in the prompt. This is the
+lazy-loading contract. Without it the ladder does not descend,
+because the prompt grows to cover what the engine should say.
+
+## 13. The email clerk: the descent
 
 The seat surfaces action items from the owner's inbox. Its name is
-`inbox-clerk`.
+`inbox-clerk`. This section follows it down the ladder over five
+weeks, from a frontier model with a prose charter to an economy
+model walking a tree. Each week is one section.
 
-### 11.1 The person opens the seat
+### 13.1 Week one: the person opens the seat
 
 One POST to `/api/seats`, by a person who will not sit in it.
 
 ```json
 {
   "name": "inbox-clerk",
-  "charter": "You read Colton's inbox and turn each request in it into a task in the queue. You do not answer mail.",
-  "must": [
-    "Read every unread message in each sitting.",
-    "Make one task for each request that names Colton, with the due date the sender named.",
-    "Write one journal entry at the end of each sitting."
-  ],
-  "never": [
-    "Do not make a task for a newsletter or a receipt.",
-    "Do not move or send mail. The scope does not open those doors."
-  ],
+  "charter": "You read Colton's inbox and turn each request in it into a task in the queue. Make one task for each request that names Colton, with the due date the sender named. Do not make a task for a newsletter or a receipt. You do not answer mail. Write one journal entry at the end of each sitting.",
   "scope": [
     {"kind": "email.read", "actions": []},
     {"kind": "task", "actions": ["create", "prioritize"], "filter": {"source": "todo"}},
@@ -387,25 +519,33 @@ the seat sees the todo tasks and not the chores or the meals.
 `insight.create` exists. The drop entry is inside the scope. Both
 model names are active model rows. Seven days is at the cap.
 
-### 11.2 The models exist as rows
+The first draft of this charter had a sixth sentence: "Do not move
+or send mail. The scope does not open those doors." It is cut. The
+doors are absent from `waymark_powers`, and absence is the rule
+(R-4.10). The charter starts on the strong tier, not the frontier,
+because the person already knows the judgment is small.
 
-Two rows of kind `model`, created once by the person and repriced
+### 13.2 The models exist as rows
+
+Four rows of kind `model`, created once by the person and repriced
 when the vendor moves. The prices are the first-party rates on the
 day of writing.
 
 | name | tier | input $/M | output $/M |
 |---|---|---|---|
+| `claude-fable-5-1` | frontier | 10.00 | 50.00 |
 | `claude-opus-5` | strong | 5.00 | 25.00 |
 | `claude-sonnet-5` | economy | 2.00 | 10.00 |
+| `claude-haiku-4-5` | economy | 1.00 | 5.00 |
 
-### 11.3 The sitter is a member
+### 13.3 The sitter is a member
 
 This exists today. The person mints an invite link. The agent opens
 the welcome document and binds. The result is a member row with
 `actor_type` agent and a re-entry credential. Its `self`, `journal`,
 and letters are its memory.
 
-### 11.4 The agent asks to sit
+### 13.4 The agent asks to sit
 
 The driver starts `claude-opus-5` and declares it at bind. The agent
 files one ask, with no scope.
@@ -433,7 +573,7 @@ charter and scope. The approver taps approve. The effect mints:
 
 There is no scope on this grant.
 
-### 11.5 One sitting
+### 13.5 One sitting
 
 At the cadence, the driver ticks.
 
@@ -441,86 +581,85 @@ At the cadence, the driver ticks.
 2. It calls `waymark_discover`. `doors.ask.seat` says: active, stale
    empty, budget spent 3.10 of 12.00, resumes null.
 3. It opens a sitting: seat, grant, started_at.
-4. It starts the model with a task budget of 40000 tokens.
-5. The model reads the seat row: the charter, the must list, the
-   never list.
+4. It starts the model with a task budget of 40000 tokens. The
+   prompt is the charter. Nothing else (R-12.8).
+5. The model reads the seat row for the charter.
 6. `waymark_powers` lists the emila read tools. Move and send are
    absent.
 7. The model reads the inbox through `waymark_power`.
 8. For each request it finds, it invokes `task.create` with the
    title, the due date, and source todo. Each create is a transition
-   with the member as actor and `claude-opus-5` as model.
-9. It invokes `insight.create` for a finding that cites a task it
-   made.
-10. It writes one journal entry.
+   with the member as actor and `claude-opus-5` as model. The router
+   adds one to the sitting's `transitions`.
+9. It tries `task.update` on a task it made, to add a note. The
+   door is absent. It tries `task.create` with a due date in the
+   past. The guard refuses, 409. The router adds one to
+   `refusals`.
+10. It invokes `insight.create` for a finding that cites a task it
+    made, and writes one journal entry.
 11. The driver closes the sitting with the usage the API returned:
     input 31200, output 2900, cache read 18000, cache write 0, turns
-    6. The handler writes `cost_usd` 0.23 and the prices used.
+    6. The handler writes `cost_usd` 0.23 and the prices used. The
+    row already holds transitions 4 and refusals 1.
 
-### 11.6 What the record holds
+### 13.6 What the record holds
 
 | row | points at | holds |
 |---|---|---|
-| seat `inbox-clerk` | two models | charter, must, never, scope, budgets, stale |
+| seat `inbox-clerk` | two models | charter, scope, budgets, stale |
 | grant | seat, member | expires_at, substitute |
 | member | — | display, roles, the re-entry credential |
 | self, journal, letter | member | the sitter's memory |
-| sitting | seat, member, model, grant | tokens, cost, prices used |
+| sitting | seat, member, model, grant | tokens, cost, prices used, transitions, refusals |
 | transitions on task and insight | member as actor, with model | the history |
 
 "Who sits in the inbox clerk seat" is one query: accepted grants that
 cite the seat. "What did the seat cost this week" is one query:
 closed sittings that cite the seat, started in the last seven days.
 
-### 11.7 A lean week
+### 13.7 Week one's ledger
 
-The person has four levers on the seat row, and none needs a deploy.
+At the end of the week the person reads the six questions of R-11.3
+for the seat.
 
-- `park`. The grant stays. The driver renews and exits. No model
-  wakes.
-- `restate` cadence from one hour to six hours.
-- `restate` `held_for` to `claude-sonnet-5`. The driver's next tick
-  starts the cheaper model and declares it.
-- Lower `budget_usd_per_week`. At the limit, the engine parks the
-  seat on its own, and discover says when it resumes.
+| question | week one, Opus, prose charter |
+|---|---|
+| cost | 9.80 |
+| transitions | 61 tasks, 12 insights, 7 journal entries |
+| refusals | 23 |
+| corrections | 9: the person deleted 9 tasks |
+| cost per transition | 0.12 |
 
-### 11.8 A substitute
+The refusals are of two shapes. Fourteen are a due date in the past,
+from mail that named a date already gone. Nine are a second task for
+a message the seat had already handled in an earlier sitting. The
+corrections are of one shape: receipts and newsletters that named
+Colton in the body.
 
-Opus is out of fuel. The driver starts `claude-sonnet-5` and the
-agent asks with `substitute: true`. `model-may-sit` passes on
-`substitute_for`. The substitute reads mail and makes tasks. It does
-not get `insight.create`, by the drop-list. It reads the journal and
-cannot write it, by `not-a-substitute`. Every task it makes carries
-`claude-sonnet-5` in the actor.
+None of these is a judgment problem. Each is the law spoken late.
+The past-date refusal is fuel spent on a rule the guard could have
+put in its reason string, with the fix named. The duplicate is a
+queue the seat rebuilt from the inbox on every wake, because nothing
+held which messages it had seen. The receipts are a filter, not a
+sentence in the charter.
 
-### 11.9 A leaner month
+### 13.8 Week two: the frontier model writes the law
 
-The person merges `inbox-clerk` into `composer`. The composer's
-scope becomes the fold of both. The inbox clerk seat closes. The
-clerk's sitter leaves a letter for the composer's sitter, with the
-sender rules it learned, and asks to sit in `composer`. One tap.
+The person spends frontier fuel once. A session on
+`claude-fable-5-1`, in code, turns the three repeated failures into
+law.
 
-### 11.10 The law moves
+**The decision tree is a kind.** The owner's design, 2026-09-16: an
+economy model comes online, its first prompt is the charter, and
+then it walks a decision tree until it reaches a leaf. For email: a
+queue of messages, and for each one three moves. Research opens the
+message and enables the other two. Yes states the action item. No
+dismisses it.
 
-A push retires `task.prioritize`. At the next boot, the sweep writes
-`[{"kind": "task", "actions": ["prioritize"]}]` into `stale`. The
-seat still serves the other three entries. Discover says stale. The
-driver prints it first. The person restates the scope without
-prioritize, and the stale list clears.
-
-### 11.11 The fixed walk: the clerk on an economy model
-
-The owner's question, 2026-09-16: an economy model comes online, its
-first prompt is the charter, and then it walks a decision tree until
-it reaches a leaf. For email: a queue of messages, and for each one
-three moves. Research opens the message and enables the other two.
-Yes states the action item. No dismisses it.
-
-**The decision tree is a kind.** A tree with branches is a state
-machine with two doors from one state. That is an ordinary
-`defresource`, not a `:process` (which has no branches by design).
-The tree lives in code, because it is law. The seat lives in a row,
-because it is fluid.
+A tree with branches is a state machine with two doors from one
+state. That is an ordinary `defresource`, not a `:process` (which
+has no branches by design). The tree lives in code, because it is
+law. The seat lives in a row, because it is fluid.
 
 ```clojure
 (defresource inbox_item
@@ -550,32 +689,46 @@ because it is fluid.
                :display {:label "Yes, action item" :order 2}}
     :no       {:from #{:researched} :to :dismissed
                :input [:map [:reason {:optional true} [:maybe [:string {:max 240}]]]]
-               :display {:label "No" :order 3}}}})
+               :display {:label "No" :order 3}}
+    :reopen   {:from #{:dismissed} :to :researched         ; the person's correction
+               :display {:label "Reopen" :order 4}}}})
 ```
 
 The tree is enforced by the machine, not by the prompt. At `queued`,
 the envelope offers one door: research. At `researched`, it offers
-two: yes and no. At a leaf, it offers none. The model cannot skip
-research, because the yes door is absent until it is done. It cannot
-make a task except through yes, which demands the action item in
-one sentence. `:touches` advertises the task birth, and the
-conformance library checks that it fired.
+two: yes and no. At a leaf, it offers none to the sitter. The model
+cannot skip research, because the yes door is absent until it is
+done. It cannot make a task except through yes, which demands the
+action item in one sentence. `:touches` advertises the task birth,
+and the conformance library checks that it fired. `reopen` is the
+person's door: a reopen after a `no` is a correction, and the query
+of R-11.3 finds it.
+
+**Three repeated failures, three pieces of law.**
+
+| week one failure | the law |
+|---|---|
+| a due date in the past, 14 refusals | the `yes` door accepts `due_at` in the past and the task guard's reason string says: "The due date has passed. Omit it, or set today." One refusal becomes zero. |
+| a second task for a handled message, 9 refusals | the queue. `inbox_item` holds `message_id`, and a leaf is never offered again. Zero refusals. |
+| a receipt or a newsletter, 9 corrections | the source. A message with a list-unsubscribe header is not minted. The sentence leaves the charter. |
 
 **The queue fills with no tokens.** A source in
 `workqueue10/sources/`, on the pattern of `gtasks.clj`, lists the
 inbox headers through the `email.read` power at the cadence and
-mints one `inbox_item` per new message id. Headers only. The body is
-never stored; the model reads it through `waymark_power` at
-research time.
+mints one `inbox_item` per new message id, and none for a message
+with a list-unsubscribe header. Headers only. The body is never
+stored; the model reads it through `waymark_power` at research
+time.
 
-**The seat, restated for the walk.**
+This is one deploy, and it is the last deploy in this section.
+
+### 13.9 Week three: the seat steps down to the walk
+
+The person restates the seat. No deploy.
 
 ```json
 {
-  "name": "inbox-clerk",
-  "charter": "You triage Colton's inbox. For each message the queue offers, take the one door the envelope shows. Research first. Then say yes with the action item in one sentence, or no.",
-  "must": ["Take one door per turn. When the envelope offers none, stop."],
-  "never": ["Do not say yes to a newsletter or a receipt."],
+  "charter": "You triage Colton's inbox. For each message the queue offers, take the one door the envelope shows. Research first. Then say yes with the action item in one sentence, or no. A request that names Colton and asks for something is a yes.",
   "scope": [
     {"kind": "email.read", "actions": []},
     {"kind": "inbox_item", "actions": ["research", "yes", "no"]}
@@ -584,23 +737,24 @@ research time.
   "walk": "inbox_item",
   "cadence_seconds": 3600,
   "budget_usd_per_week": 4.00,
-  "sitting_budget_tokens": 20000
+  "sitting_budget_tokens": 20000,
+  "note": "Week one's refusals and corrections are law now. The walk needs no judgment the envelope does not frame. Step from opus to sonnet."
 }
 ```
 
 The scope no longer names `task.create`. The task is born inside
 the yes handler through the cross-write door, under the outer
-principal, and `:touches` says so. The seat is held for an economy
-model as its full sitter, because the walk needs no judgment the
-envelope does not already frame.
+principal, and `:touches` says so. The charter lost the receipts
+sentence and the journal sentence. It is 234 characters. The seat is
+held for an economy model as its full sitter, and
+`step-carries-a-note` records why.
 
 **One walk, turn by turn.** The driver opens one sitting, then for
 each queued row:
 
-1. It starts a fresh model turn. The prompt is the charter, the must
-   list, the never list, and the row's envelope. The charter is a
-   stable prefix, so the prompt cache serves it on every turn after
-   the first.
+1. It starts a fresh model turn. The prompt is the charter and the
+   row's envelope. The charter is a stable prefix, so the prompt
+   cache serves it on every turn after the first.
 2. The model sees one door, research. It reads the message through
    `waymark_power`, then invokes research with a summary. The turn
    ends.
@@ -614,13 +768,93 @@ Each turn holds one row, never the queue. This is the essay's
 carries the member and `claude-sonnet-5` in the actor. The sitting
 closes with the sum of the turns' usage.
 
+**Week three's ledger, beside week one's.**
+
+| question | week one, Opus, prose | week three, Sonnet, walk |
+|---|---|---|
+| cost | 9.80 | 1.90 |
+| transitions | 80 | 148: 74 research, 58 yes, 16 no |
+| refusals | 23 | 0 |
+| corrections | 9 | 2 reopens |
+| cost per transition | 0.12 | 0.013 |
+
+The step holds: corrections per transition fell. The seat has not
+lost an outcome. It gained the count of what it declined, which the
+prose seat never recorded.
+
+### 13.10 Week five: the floor
+
+The person tries one more rung. `restate` with `held_for`
+`["claude-haiku-4-5"]` and the note "Try the last rung." Two weeks
+later:
+
+| question | week three, Sonnet | week five, Haiku |
+|---|---|---|
+| cost | 1.90 | 0.95 |
+| transitions | 148 | 151 |
+| refusals | 0 | 0 |
+| corrections | 2 | 11: 8 reopens, 3 tasks deleted |
+| cost per transition | 0.013 | 0.006 |
+
+Corrections per transition rose five times over. The step does not
+hold (R-11.4). The person restates `held_for` back to
+`["claude-sonnet-5"]` with the note "Haiku says yes to requests that
+are not for Colton. The judgment is real at this rung." The floor is
+Sonnet. Both steps are in the transition log with their reasons.
+
+The dollar saved on Haiku was not the point. The point is that the
+house can now say, with numbers, which rung this seat's judgment
+needs. The next question is not "which model" but "is there one more
+rule that would make Haiku hold", and that is a frontier session's
+question for another week.
+
+### 13.11 A lean week: the levers
+
+The person has four levers on the seat row, and none needs a deploy.
+
+- `park`. The grant stays. The driver renews and exits. No model
+  wakes.
+- `restate` cadence from one hour to six hours. The fixed wake cost
+  falls six times.
+- `restate` `held_for` down one rung, with a note. The driver's next
+  tick starts the cheaper model and declares it.
+- Lower `budget_usd_per_week`. At the limit, the engine parks the
+  seat on its own, and discover says when it resumes.
+
+### 13.12 A substitute
+
+Sonnet is unavailable for a day. The driver starts `claude-haiku-4-5`
+and the agent asks with `substitute: true`, because the person set
+`substitute_for` to `["claude-haiku-4-5"]` in week five.
+`model-may-sit` passes on `substitute_for`. The substitute walks the
+same tree. It reads the journal and cannot write it, by
+`not-a-substitute`. Every transition it makes carries
+`claude-haiku-4-5` in the actor, so the corrections of that day are
+on record against the substitute, not the seat's floor.
+
+### 13.13 A leaner month
+
+The person merges `inbox-clerk` into `composer`. The composer's
+scope becomes the fold of both. The inbox clerk seat closes. The
+clerk's sitter leaves a letter for the composer's sitter, with the
+sender rules it learned, and asks to sit in `composer`. One tap.
+
+### 13.14 The law moves
+
+A push retires `inbox_item.no` in favor of a `dismiss` with a
+reason. At the next boot, the sweep writes
+`[{"kind": "inbox_item", "actions": ["no"]}]` into `stale`. The seat
+still serves research and yes. Discover says stale. The driver
+prints it first. The person restates the scope with `dismiss`, and
+the stale list clears.
+
 **What the person tunes, and where.** The tree is a deploy: a new
 branch is a new door, and it is law. The seat is a row: which model
 walks, how often, with what budget, and the charter's words, all
 with no deploy. That is the right split: law in code, fluid things
 in rows.
 
-### 11.12 The composer: a frontier seat
+## 14. The composer: a frontier seat
 
 The clerk walks a tree. The composer holds an objective. That is the
 difference between an economy seat and a frontier seat, and the
@@ -630,8 +864,8 @@ agent (waymark-53u), the loop redesign of 2026-08-27 (bd memory
 the 74-entry grant that drifted (waymark-ycp). Its runs were retired
 in 2026-09. This seat is how they come back.
 
-**Why it is a frontier seat.** Four reasons, each one a thing a tree
-cannot hold.
+**Why its floor is the frontier.** Four reasons, each one a thing a
+tree cannot hold.
 
 1. The objective is a specification with a bright line, not a set of
    doors: "advance a specific arrival as far as the evidence honestly
@@ -654,18 +888,7 @@ cannot hold.
 ```json
 {
   "name": "composer",
-  "charter": "You read what arrived in the house since your last sitting and advance each arrival as far as the evidence honestly supports: enrich a bare task with an insight, link it to what it belongs with, and compose an outcome only when the goal is larger than any single row. A quiet sitting is lawful.",
-  "must": [
-    "Process the arrivals since the last snapshot: new tasks, remarks, mail, chat. Not a vague search.",
-    "For a bare task, attach the context and the concrete next step as an insight that cites the source. Do not change the task.",
-    "When a person iterates an outcome, rework its pieces in place. Do not stage a twin.",
-    "Write one journal entry per sitting that did work. Leave a letter when you learn a rule the next sitter needs."
-  ],
-  "never": [
-    "Do not compose an outcome that wraps a single task.",
-    "Do not offer a piece that marks something done. Only people decide.",
-    "Do not pad. A sitting with nothing to advance ends with nothing."
-  ],
+  "charter": "You read what arrived in the house since your last sitting and advance each arrival as far as the evidence honestly supports. Enrich a bare task with an insight that cites its source and names the concrete next step; do not change the task. Link it to what it belongs with. Compose an outcome only when the goal is larger than any single row, and never one that wraps a single task. When a person iterates an outcome, rework its pieces in place; do not stage a twin. Only people mark things done. A quiet sitting is lawful; do not pad. Write one journal entry per sitting that did work, and leave a letter when you learn a rule the next sitter needs.",
   "scope": [
     {"kind": "feed", "actions": [], "filter": {"preview_as": "composer"}},
     {"kind": "task", "actions": []},
@@ -692,12 +915,18 @@ cannot hold.
 }
 ```
 
+The charter is 650 characters. Two sentences from the first draft
+are gone, by the residual test: "only people decide" on tasks is the
+scope, which gives `task` no actions; "do not offer a piece that
+marks something done" is a guard on the outcome kind that already
+refuses it, and its reason string says so. The rest is judgment.
+
 Eleven scope entries, one per kind, where the drifted grant had 74.
 The scope is the ruling of 2026-08-27 written as law: reads on the
 evidence kinds, writes only on the knowledge kinds and the outcome.
-`task` has no actions, because only people decide. The substitute,
-on Opus, keeps enrichment and loses composition and the belief
-doors: it can annotate, and it cannot judge in the seat's name.
+The substitute, on Opus, keeps enrichment and loses composition and
+the belief doors: it can annotate, and it cannot judge in the seat's
+name.
 
 **The fuel story is already on record.** At a cadence of one wake
 every fifteen minutes with a floor of one outcome per sitting, the
@@ -707,12 +936,21 @@ gone by charter, the budget is a wall, and the sitting ceiling is
 passed to the harness. All four are on the row, and none is a
 deploy.
 
+**The ladder for a frontier seat.** The composer's first step down
+is the substitute: Opus on enrichment only, when Fable's fuel is
+short. Its second is a walk that does not exist yet: if the ledger
+shows that most of the composer's transitions are enrichments of the
+same shape, the enrichment is a tree, and a second seat on Sonnet
+can walk it. The composer keeps composition. The ledger tells the
+person whether that split is worth a deploy.
+
 **What to measure in a trial week.**
 
 | number | what it says |
 |---|---|
 | outcomes accepted, declined, iterated, expired | is the composition worth its cost |
 | enrichments written, and whether the task was actionable after | is the floor of the spectrum working |
+| refusals per sitting | is the law spoken late anywhere on this seat |
 | quiet sittings as a share of all sittings | is the seat padding, or is it waiting well |
 | dollars per accepted outcome | the price of one thing you wanted |
 | letters left, and whether the next sitter read them | is the memory a memory |
@@ -724,78 +962,106 @@ deploy.
 | what holds the decision | the kind's machine | the charter and the model |
 | a turn | one row, one door | the arrivals since the last snapshot |
 | memory writes | none | insight, hypothesis, journal, letter |
-| substitute | any economy model, same walk | Opus, enrichment only |
+| substitute | Haiku, same walk | Opus, enrichment only |
 | a quiet sitting | impossible; the queue is empty or it is not | lawful, and the point |
 | budget | four dollars | forty dollars |
+| the floor | Sonnet, found in week five | the frontier, by the four reasons |
 | what a person tunes | which model, how often | the charter's words, and the outcomes it iterates |
 
-## 12. Acceptance
+## 15. Acceptance
 
 A test namespace `waymark10.seat-test` must prove each requirement
 above. The cases:
 
 1. A seat whose scope names a missing action is refused at `create`
-   and at `restate`, with the entry named. (R-3.7)
-2. A sitter's `restate` on its own seat is refused. (R-3.8)
+   and at `restate`, with the entry named. (R-4.7)
+2. A sitter's `restate` on its own seat is refused. (R-4.8)
 3. A seat ask mints a grant with `seat` set and no scope. An ask with
-   both `seat` and `scope` is refused. (R-4.1, R-4.5)
+   both `seat` and `scope` is refused. (R-5.1, R-5.5)
 4. A request under a seat grant sees exactly the seat's scope. After
    a `restate`, the next request sees the new scope with no new
-   grant. (R-4.2)
+   grant. (R-5.2)
 5. A substitute grant does not see the drop entries. A substitute's
    write to `self`, `journal`, or `letter` is refused; its read is
-   served. (R-4.2, R-7)
+   served. (R-5.2, R-8)
 6. `park` makes the sitter's request see nothing. `unpark` restores
-   it. No grant moved. (R-3.4)
+   it. No grant moved. (R-4.4)
 7. `merge` writes the fold onto `into`, closes the source, and the
    source's sitter sees nothing. The fold has one entry per kind.
-   (R-5)
+   (R-6)
 8. A boot with a retired action marks the seat stale with the entry
    named. The sitter sees the surviving entries. Discover carries
-   `stale`. A `restate` that drops the entry clears it. (R-6)
+   `stale`. A `restate` that drops the entry clears it. (R-7)
 9. A second full sitter on one seat is refused at `approve`. A
-   substitute is not. (R-4.8)
+   substitute is not. (R-5.8)
 10. A seat ask can request up to the seat's ceiling. A scope ask is
-    capped at 24 hours. (R-4.6)
+    capped at 24 hours. (R-5.6)
 11. A seat held for one model refuses a seat ask from a session that
     declares another, and names the list. A renew that changes the
     model to one not in the list makes the next request see
-    nothing. (R-4.7, R-4.2)
+    nothing. (R-5.7, R-5.2)
 12. A transition written under a seat grant carries the session's
-    model in its actor. (R-8.5)
+    model in its actor. (R-9.5)
 13. A `restate` whose `held_for` names a retired model is refused.
-    (R-3.7)
+    (R-4.7)
 14. A `close` computes `cost_usd` from the model's prices and writes
     the prices used. A `reprice` afterwards does not change it.
-    (R-9.4)
+    (R-10.4)
 15. A seat whose closed sittings of the last seven days reach its
     budget serves nothing. Discover carries spent, limit, and
     resumes_at. A sitting closed eight days ago does not count.
-    (R-4.2, R-6.4)
+    (R-5.2, R-7.4)
 16. A sitting left open past two cadences is marked abandoned by the
-    boot sweep. (R-6.6)
+    boot sweep. (R-7.6)
 17. On a walk seat, a `queued` row's envelope offers only research,
     a `researched` row's offers only yes and no, and a leaf offers
-    none. A `yes` births exactly one task and stamps it. (R-10.7,
-    section 11.11)
+    none to the sitter. A `yes` births exactly one task and stamps
+    it. (R-12.7, section 13.8)
+18. While a sitting is open, a committed transition under its grant
+    adds one to `transitions`, and a 409 under its grant adds one to
+    `refusals`. A transition under another grant adds nothing. The
+    counts are frozen at `close`. (R-10.6)
+19. A `restate` that changes `held_for` with no `note` is refused. One
+    with a note is served, and the transition log holds the note.
+    (R-4.7, R-11.2)
+20. A `create` or `restate` whose charter is longer than 1200
+    characters is refused. (R-4.2)
+21. The corrections query returns a person's `reopen` on a row whose
+    last transition was the seat's sitter's `no`, and does not return
+    a person's transition on a row the sitter never moved. (R-11.3)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
 because both schemas gain fields; the pinned hash in
 `waymark10.decision-sugar-test` must be updated with the change.
 
-## 13. Decisions on record
+## 16. Decisions on record
 
 Each decision, its alternative, and the reason. The reversed drafts
 stay here, because a record that is rewritten is a record nobody
 trusts.
 
+- **The seat is the bill, and waymark lowers it.** The first three
+  drafts (2026-09-16) were written from the essay's seat downward:
+  an office, then its fields. The owner's statement the same evening
+  put cost first: seats exist because fuel is finite, and waymark
+  exists to make a cheaper model adequate by speaking the law at the
+  door. Section 1 is the result, and each field in section 4 was
+  kept only if it lowers the bill or measures it.
+- **The charter is the residual.** The first drafts had `must` and
+  `never` lists beside the charter. Each sentence a model pre-loads
+  is fuel, and a rule in prose is a fence not yet written. One field,
+  capped, holds the judgment and nothing else.
+- **Refusals are waymark's backlog.** A 409 served to a sitter is
+  fuel spent on law the model did not know. The engine counts them
+  on the sitting, because the harness cannot see them and the person
+  cannot fix what nobody counts.
 - **A seat is a resource, not a declaration in code.** The first
   draft (2026-09-16, morning) chose a declaration, because the
   declaration gate fails on the push that retires an action. The
   owner ruled the same day that a seat must change with no deploy,
   because the essay's seats are fluid. The gate's job moved to the
-  boot sweep (section 6).
+  boot sweep (section 7).
 - **Fuel is a ledger in the house.** The second draft punted tokens
   as "outside the house". The owner ruled the same day that the cost
   of models goes up and fuel is a high priority. The sitting kind,
@@ -821,16 +1087,24 @@ trusts.
   essay describes.
 - **The budget window is seven days from now,** not a calendar week.
   A declared window is a follow-up if the fixed one is wrong.
+- **A step down is judged by corrections, not by cost.** Cost always
+  falls on a step down. The only question is whether the outcomes
+  held, and a correction is the one record of an outcome that did
+  not.
 
-## 14. Recorded punts
+## 17. Recorded punts
 
 - A cross-check of the model claim against the MCP client name. It
   verifies the client, not the model.
-- A composed seat page that sums laurels, failures, and fuel. The
-  queries exist (R-9.6); the page is a surface declaration away, as
-  the member page was.
+- A composed seat page that answers the six questions of R-11.3 on
+  one screen, with the ladder's steps beside them. The queries exist;
+  the page is a surface declaration away, as the member page was.
 - Trust that accrues by rule, such as a longer leash after N clean
   sittings. The person sets the ceiling by hand.
+- A step down the engine proposes on its own, when refusals are zero
+  and corrections are flat for N sittings. The numbers are there.
+  The person pulls the lever, because the essay's caution is that a
+  fence nobody signed is a fence nobody trusts.
 - A seat that a person creates from a declared template. The
   substitute drop-list is already a narrowing of a scope, so the path
   is open.
@@ -841,16 +1115,22 @@ trusts.
   model never holds the power. `invoke-for` exists in
   `gate_proxy.clj`; a handler that reaches it is a new seam, and a
   follow-up.
+- A refusal log with the door, the guard, and the sentence, beyond
+  the count. The count is enough to find the seat. The log is what
+  the fence census (leg 2) reads to find the guard.
 
-## 15. Effort
+## 18. Effort
 
 **Medium.** One new file, `seats.clj`, with three kinds: the seat
-(six actions, seven guards), the model (three actions, one guard),
-and the sitting (three actions, one handler). One guard on three
-own-surface doors. Two optional fields on `grant` and two on
-`approval_request`. One field on the session and one on the
+(six actions, eight guards), the model (three actions, one guard),
+and the sitting (three actions, one handler, two counters). One
+guard on three own-surface doors. Two optional fields on `grant` and
+two on `approval_request`. One field on the session and one on the
 principal, accepted at two auth doors and the MCP initialize. The
-router's seat resolve gains one row load and one sum. `boot-revise!`
-gains two steps. The migration adds three tables and four nullable
-columns. The scope schema, the four scope guards, `merge-scope`,
-`no-self-dealing`, and `one-spelling` are reused as they are.
+router's seat resolve gains one row load and one sum, and the
+router's commit and refusal paths each gain one counter update on
+the open sitting. `boot-revise!` gains two steps. The migration adds
+three tables and four nullable columns. The scope schema, the four
+scope guards, `merge-scope`, `no-self-dealing`, and `one-spelling`
+are reused as they are. The delta from the third draft is two
+counters at close, one guard on one door, and the cut of two fields.
