@@ -91,6 +91,9 @@ seats.clj`, `:nav :system`, beside `:grant` and `:role`.
           [:held_for   {:optional true} [:vector :waymark/ref]] ; models that may sit (section 10)
           [:substitute_for {:optional true} [:vector :waymark/ref]] ; models that may substitute
           [:standing_ttl_seconds {:optional true} [:int {:min 60}]]
+          [:cadence_seconds {:optional true} [:int {:min 60}]] ; how often the driver wakes it
+          [:budget_usd_per_week {:optional true} [:decimal {:gt 0}]] ; the seat's fuel (section 11)
+          [:sitting_budget_tokens {:optional true} [:int {:min 20000}]] ; one sitting's ceiling
           [:stale       {:optional true} [:vector scope-entry]] ; written by the sweep
           [:merged_into {:optional true :kind :seat} :waymark/ref]]}
 ```
@@ -117,6 +120,13 @@ The fields, one sentence each:
 - `standing_ttl_seconds` is the longest leash a grant in this seat
   can request. The cap is `reentry-standing-ttl-seconds`, seven
   days. An empty field means the 24-hour default.
+- `cadence_seconds` is how often the driver wakes the seat. A parked
+  seat has no wakes. The person changes the cadence with `restate`.
+- `budget_usd_per_week` is the seat's fuel for seven days. When the
+  closed sittings of the last seven days reach it, the seat serves
+  nothing until the window moves. Section 11.
+- `sitting_budget_tokens` is one sitting's ceiling. The driver passes
+  it to the harness as the task budget, so the model paces itself.
 - `stale` is written by the sweep in section 6. A person never
   writes it.
 - `merged_into` names the seat this one merged into.
@@ -303,6 +313,10 @@ exits before any sitting, and prints "seat parked". When the seat is
 `unparked`, the next tick sits again, with no tap. This is the fixed
 cost of a seat reduced to two calls.
 
+The driver reads `cadence_seconds` and wakes the seat at that rate.
+It opens a sitting before the model starts and closes it with the
+token counts when the model stops. Section 11 has the sitting.
+
 ### 9. The forks, decided
 
 **The grant is a pointer, not a snapshot.** A snapshot is a copy,
@@ -355,15 +369,25 @@ to another with one `restate`.
           [:display [:string {:min 1 :max 80}]]
           [:vendor  [:string {:min 1 :max 40}]]
           [:tier    [:enum "frontier" "strong" "economy"]]
+          [:price_input_per_mtok  {:optional true} [:decimal {:min 0}]]
+          [:price_output_per_mtok {:optional true} [:decimal {:min 0}]]
+          [:price_cache_read_per_mtok  {:optional true} [:decimal {:min 0}]]
+          [:price_cache_write_per_mtok {:optional true} [:decimal {:min 0}]]
           [:notes   {:optional true} [:maybe [:string {:max 480}]]]]}
 ```
+
+The four prices are dollars per million tokens, as the vendor
+publishes them. The person writes them, and `reprice` is the action
+that changes them. Each reprice is a transition, so the ledger keeps
+the history of prices. The essay's complaint is that prices move
+often; this is where the move is recorded.
 
 `name` is the identifier the harness spells, for example
 `claude-fable-5-1`, `claude-opus-5`, `claude-sonnet-5`, or
 `claude-haiku-4-5`. The `one-spelling` guard applies. `tier` is the
 person's own grouping for fuel decisions, not a fact the vendor
-publishes. `retire` and `reactivate` are the two actions, with the
-`role` kind's shape.
+publishes. `retire`, `reactivate`, and `reprice` are the actions. The first two
+have the `role` kind's shape.
 
 **Where the model is declared.** The engine cannot see the model on
 the other end of a request. The harness can. The driver starts the
@@ -403,6 +427,86 @@ seat: `held_for` from `claude-fable-5-1` to `claude-opus-5`. The
 driver's next tick starts the new model and declares it. No deploy,
 no new grant, no tap. When fuel returns, one more restate.
 
+### 11. The sitting: fuel as a ledger in the house
+
+The first draft of this section was a punt: "tokens are outside the
+house". The owner ruled on 2026-09-16 that fuel is a high priority,
+because the cost of models goes up. The punt is reversed. The house
+keeps the ledger, and the seat has a budget the engine enforces.
+
+**The sitting kind.** One row per wake of a seat. The driver opens
+it before the model starts and closes it when the model stops.
+
+```clojure
+{:kind :sitting
+ :states [:open :closed :abandoned]
+ :initial :open
+ :terminal #{:closed :abandoned}
+ :own-surface {:by :member :actions #{"create" "close" "abandon"}}
+ :schema [:map
+          [:seat    {:kind :seat}   :waymark/ref]
+          [:member  {:kind :member} :waymark/ref]   ; stamped from the principal
+          [:model   {:kind :model}  :waymark/ref]   ; stamped from the session
+          [:grant   {:kind :grant}  :waymark/ref]
+          [:started_at :waymark/instant]
+          [:ended_at   {:optional true} [:maybe :waymark/instant]]
+          [:input_tokens       {:optional true} [:int {:min 0}]]
+          [:output_tokens      {:optional true} [:int {:min 0}]]
+          [:cache_read_tokens  {:optional true} [:int {:min 0}]]
+          [:cache_write_tokens {:optional true} [:int {:min 0}]]
+          [:turns  {:optional true} [:int {:min 0}]]
+          [:cost_usd {:optional true} [:decimal {:min 0}]]  ; written at close
+          [:prices {:optional true} :any]                    ; the four prices used at close
+          [:note   {:optional true} [:maybe [:string {:max 480}]]]]}
+```
+
+`close` takes the four token counts and the turn count. The handler
+reads the model's four prices at that moment, computes `cost_usd`,
+and writes the prices used beside it. A reprice later does not
+change a closed sitting. The record is the cost that was paid.
+
+The token counts are the harness's report. The API returns exact
+usage with each response, and the harness sums it over the sitting.
+The engine does not estimate. A sitting with no close after
+`cadence_seconds` times two is moved to `abandoned` by the boot
+sweep, with no tokens, so a crashed sitting is visible and never
+counted as free.
+
+**The seat's budget, enforced.** Step 2 of section 3 gains a
+clause. The router sums `cost_usd` over the seat's closed sittings
+of the last seven days. If the sum reaches `budget_usd_per_week`,
+the grant scopes to nothing, and `doors.ask.seat` carries
+`budget: {spent, limit, resumes_at}`. The driver prints that line
+first and exits before the model starts. This is the automatic
+park. The essay's dampers were a person standing at the engine; this
+one is a number on the seat.
+
+A budget applies to full sitters and substitutes together. A seat
+with no budget has no cap.
+
+**One sitting's ceiling.** The driver reads
+`sitting_budget_tokens` and passes it to the harness as the task
+budget, so the model paces itself inside one wake instead of being
+cut off. The engine does not enforce it; the close records what was
+spent, and a sitting over its ceiling is visible in the ledger.
+
+**What the ledger answers.** Each of these is one query on
+`sitting`, filterable by seat, model, and `started_at`:
+
+- fuel per seat per week, and against its budget;
+- fuel per model, so a reprice can be judged before it is paid;
+- cost per outcome, by joining sittings to the transitions written
+  under the same grant in the same window;
+- the fixed cost of a seat, as the sittings that wrote nothing.
+
+The seat page sums the first. The gate's census line (leg 5) prints
+the total for the week.
+
+**The lean week, with fuel.** The person has three levers on the
+seat row, and none needs a deploy: `restate` the cadence from ten
+minutes to an hour; `restate` `held_for` to a cheaper model; lower
+`budget_usd_per_week`. The engine enforces the third on its own.
+
 ## The essay's requirements, mapped
 
 The essay defines a seat as an office with expectations, context,
@@ -428,7 +532,7 @@ and what stays missing.
 | any model can sit | nothing binds a model; the principal has id, type, roles, display, locale | `substitute` on the grant | the model tier on the session and the actor (the next leg) |
 | a seat tied to a model | — | — | `preferred_model` as advice, with the next leg |
 | secondment | — | `substitute_drop` for granted kinds; `not-a-substitute` on self, journal, letter | — |
-| the fixed cost of a seat | the tick: renew, come home, ask | park: two HTTP calls and no wake | a spend ledger per seat |
+| the fixed cost of a seat | the tick: renew, come home, ask | park: two HTTP calls and no wake; the sitting ledger; a weekly budget the engine enforces; a cadence per seat | — |
 
 Two findings from the map:
 
@@ -459,12 +563,13 @@ Two findings from the map:
 - The model is a claim the harness makes. The engine cannot verify
   it. A cross-check against the MCP client name is a follow-up, and
   it verifies the client, not the model.
-- A model row carries no price. The tier is the person's grouping.
-  A spend ledger would need the harness to report tokens.
+- Token counts are the harness's report, as the model is. The engine
+  records what it is told and computes cost from the prices on the
+  model row.
 - Trust that accrues by rule (a longer leash after N clean sittings)
   is not designed. The person sets `standing_ttl_seconds` by hand.
-- A spend ledger per seat is not designed. The tick script can count
-  sittings; tokens are outside the house.
+- The budget window is a fixed seven days, not a calendar week. A
+  declared window is a follow-up if the fixed one is wrong.
 
 ## What proves it
 
@@ -501,6 +606,15 @@ A test namespace `waymark10.seat-test` with these cases:
 12. A transition written under a seat grant carries the session's
     model in its actor.
 13. A `restate` whose `held_for` names a retired model is refused.
+14. A `close` on a sitting computes `cost_usd` from the model's
+    prices and writes the prices used. A `reprice` afterwards does
+    not change it.
+15. A seat whose closed sittings of the last seven days reach its
+    budget serves nothing, and discover carries the spent amount,
+    the limit, and the resume instant. A sitting closed eight days
+    ago does not count.
+16. A sitting left open past two cadences is marked abandoned by the
+    boot sweep.
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass.
@@ -509,9 +623,10 @@ must pass.
 
 **Medium.** The seat kind is one file with six actions and five
 guards, plus one guard on three own-surface doors. The model kind is
-two actions and one guard in the same file. The session gains one
-field, the principal gains one field, and two auth doors and the MCP
-initialize accept it. The scope schema, the four scope guards, `merge-scope`,
+three actions and one guard in the same file. The sitting kind is
+three actions and one handler. The session gains one field, the
+principal gains one field, and two auth doors and the MCP initialize
+accept it. The router's seat resolve gains one sum over sittings. The scope schema, the four scope guards, `merge-scope`,
 `no-self-dealing`, and `one-spelling` all exist and are reused. The
 router gains one row load in the visibility resolve. `boot-revise!`
 gains one step. The migration adds one table and four nullable
