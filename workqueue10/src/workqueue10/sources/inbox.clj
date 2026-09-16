@@ -218,6 +218,13 @@
 
            :else nil)))))
 
+(defn- clamp
+  "The string, no longer than the kind's bound — the create door is
+  a closed map with a max on each word field, and a mint refused for
+  length is a message that never queues."
+  [^String s n]
+  (if (> (count s) n) (subs s 0 n) s))
+
 (defn message->doc
   "One listing entry → the `inbox_item` document: four fields, and
   the fourth is a time rather than a word anybody wrote.
@@ -253,10 +260,15 @@
   it never becomes a row, in a shorter coat or otherwise."
   [msg fallback]
   {:message_id (message-id msg)
-   :subject (or (some-> (present msg subject-keys) str str/trim not-empty)
-                "(no subject)")
-   :sender (or (some-> (present msg sender-keys) party-string not-empty)
-               "(unknown sender)")
+   ;; clamped to the kind's own bounds (subject 400, sender 240): a
+   ;; forwarded chain's subject would otherwise 422 at the create
+   ;; door and that message would never queue, in silence
+   :subject (clamp (or (some-> (present msg subject-keys) str str/trim not-empty)
+                       "(no subject)")
+                   400)
+   :sender (clamp (or (some-> (present msg sender-keys) party-string not-empty)
+                      "(unknown sender)")
+                  240)
    :received_at (or (instant-string (present msg received-keys)) fallback)})
 
 ;; ── the pass ────────────────────────────────────────────────────────

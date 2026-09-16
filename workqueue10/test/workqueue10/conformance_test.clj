@@ -80,6 +80,11 @@
    ;; a value is never terminal, so it outlives everything.
    "composition_requests" "outcome_pieces" "outcomes" "values" "people"
    "hypotheses"
+   ;; …and the doorstep (docs/spec-seat.md § 13.8): the inbox
+   ;; queue and the tree over it. A leaf row left behind is a
+   ;; message the next run's queue has already answered, and a
+   ;; queued one is work nobody in this suite asked for.
+   "inbox_items"
    ;; …and the day plan's five (waymark-i89n.9), for the first reason
    ;; and one more of its own. The :core/law-scenarios obligation
    ;; walks EVERY kind this registry folds in, and dayplan10's

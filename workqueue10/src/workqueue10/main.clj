@@ -665,9 +665,24 @@
        ;; arm), because every likelihood ratio in the table assumes the
        ;; evidence was typed by somebody who did not know what it would
        ;; do.
+       ;; :inbox_item rides last (docs/spec-seat.md § 13.8): the
+       ;; household's unanswered mail as rows, and the decision tree
+       ;; over them — queued, researched, then the action item or the
+       ;; dismissal. It is here because a seat that walks a TREE costs
+       ;; a fraction of one that reasons in prose: the envelope offers
+       ;; one door at a time, so the walk needs no judgment the machine
+       ;; does not frame, and a leaf is never offered again — which is
+       ;; week one's duplicate-task refusals turned into a queue rather
+       ;; than a sentence in a charter. Domainless for the family
+       ;; reason the rest are: whose mail wants what is not a domain of
+       ;; logistics beside queue/chores/meals, it is the doorstep in
+       ;; front of all of them. :nav :secondary for value's reason — an
+       ;; unread message is not a thing to DO, and the work it turns
+       ;; into is born through task's own create door inside the `yes`
+       ;; handler, under the sitter's own name.
        (into (into [saved-view capability connection self journal letter
                     permission-slip tickler insight value outcome outcome-piece
-                    person composition-request hypothesis
+                    person composition-request hypothesis inbox-item
                     (thread-resource (conf/thread-confluence thread-srcs
                                                              report-fn))]
                    dashboard/resources)))))

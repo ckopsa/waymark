@@ -56,7 +56,7 @@
    "saved_views" "dashboards" "dashboard_slots"
    "feed_recipes" "recipe_proposals" "feed_views" "feed_view_consents"
    "composition_requests" "outcome_pieces" "outcomes" "values" "people"
-   "hypotheses"
+   "hypotheses" "inbox_items"
    "contexts" "day_plans" "blocks" "spans" "decisions"
    "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
