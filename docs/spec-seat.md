@@ -84,6 +84,8 @@ seats.clj`, `:nav :system`, beside `:grant` and `:role`.
  :schema [:map
           [:name        [:string {:min 1 :max 40}]]      ; one spelling
           [:charter     [:string {:max 480}]]            ; what the seat is for
+          [:must        {:optional true} [:vector [:string {:max 240}]]] ; standing duties
+          [:never       {:optional true} [:vector [:string {:max 240}]]] ; advice, not law
           [:scope       scope-schema]                    ; the authority
           [:substitute_drop {:optional true} scope-schema] ; removed for a substitute
           [:standing_ttl_seconds {:optional true} [:int {:min 60}]]
@@ -97,6 +99,12 @@ The fields, one sentence each:
   seat, with the `one-spelling` guard from `roles.clj`.
 - `charter` is the sentence an agent reads at boot: who this seat
   is, and what it is for.
+- `must` lists the seat's standing duties, one sentence each. The
+  sitter reads them at boot. Example: "A sitting never ends with no
+  work done."
+- `never` lists the advice a person gives the sitter, one sentence
+  each. It is prose, and the engine does not enforce it. The enforced
+  never-list is the scope: a door the scope does not name is absent.
 - `scope` is the seat's authority, in the scope schema grants use.
 - `substitute_drop` lists the entries a substitute sitter does not
   get. Each entry must be inside `scope`.
@@ -185,7 +193,7 @@ scope ask.
 The approver's screen renders the seat's charter and scope beside
 the ask, through the `seat` link. The approver approves a seat, not a
 list. If a person changes the seat later, the sitter's authority
-changes with it. That is the design, and section 8 records it as a
+changes with it. That is the design, and section 9 records it as a
 fork.
 
 One full sitter per seat: the `seat-has-one-sitter` guard on
@@ -246,7 +254,27 @@ The sweep runs also when a seat is created or restated, as the four
 guards at the door. The boot sweep is the only path a seat can go
 stale without a write, so it is the only sweep the engine needs.
 
-### 7. The driver, and fuel
+### 7. The substitute cannot write the seat's memory
+
+The essay's secondment bars a substitute from the memories and the
+ledgers. In waymark the memories are `self`, `journal`, and `letter`.
+These are private own-surface kinds. No scope can name them, so the
+`substitute_drop` list cannot bar them. The bar must be a guard.
+
+The router's visibility map gains one flag, `substitute`, read from
+the grant. Three guards read the flag:
+
+- `not-a-substitute` on `self/update` and `journal/create`: a
+  substitute cannot write the sitter's self or journal.
+- `not-a-substitute` on `letter/create`: a substitute cannot leave a
+  letter for the next sitter.
+
+A substitute can read all three. The refusal sentence: "A substitute
+reads the seat's memory and does not write it. The seat's own sitter
+writes here." The `substitute_drop` list keeps its job for the
+granted kinds, such as `insight`.
+
+### 8. The driver, and fuel
 
 Step 4 of `standing-agent-tick.sh` reads `doors.ask.seat`. When the
 grant has a seat, the driver files `{grant_id, task, expires_at}` and
@@ -258,7 +286,7 @@ exits before any sitting, and prints "seat parked". When the seat is
 `unparked`, the next tick sits again, with no tap. This is the fixed
 cost of a seat reduced to two calls.
 
-### 8. The forks, decided
+### 9. The forks, decided
 
 **The grant is a pointer, not a snapshot.** A snapshot is a copy,
 and the copy is the failure on record. With a pointer, a person's
@@ -291,6 +319,45 @@ Substitutes are the exception, by name.
 at assignment. A seat is an office with authority. The two do not
 merge in this leg.
 
+## The essay's requirements, mapped
+
+The essay defines a seat as an office with expectations, context,
+history, memories, scope, authority, must-do lists, never-do lists,
+laurels, failures, and accomplishments. A new occupant inherits all
+of it. Any model can sit. A substitute cannot write the memories.
+The table maps each requirement to what exists, what this spec adds,
+and what stays missing.
+
+| requirement | exists today | this spec adds | still missing |
+|---|---|---|---|
+| an office, not an occupant | the `member` row: durable id, re-entry credential, bind; the session is the occupant | the `seat` kind; the member is the sitter, through the grant | nothing records which model occupies the session |
+| expectations | `self.about`, in the agent's own words; `role.description` | `charter`, in the person's words | — |
+| context at boot | `waymark_discover`, the MCP instructions, `self.working_notes`, the welcome `:home` with letters | `doors.ask.seat` | — |
+| history | the transition log with actor and law revision; `journal`; the member page and follow | — | a view keyed by seat across occupants |
+| memories | `self` (about, boundaries, lessons, working_notes), `journal`, both own-surface and private by construction | — | the repository's `bd` memories are outside the house |
+| scope | the grant's scope, as a copy | `scope` on the seat, one source | — |
+| authority | the grant, the guards, the 24-hour leash | `standing_ttl_seconds` per seat | trust that accrues by rule |
+| must-do list | one `bd` memory ("a sitting never has no work") and the retired driver | `must` | — |
+| never-do list | the scope (absent means cannot), the guards, `self.boundaries` | `never` as advice | — |
+| laurels, failures, accomplishments | the feed's outcomes and the owner's verdict words; the decision record (why it was allowed) | — | a page that sums them by seat |
+| inheritance | `self` and `journal` persist on the member; `letter` is the addressed handoff to the next sitter | park and merge keep the member and its memory | — |
+| any model can sit | nothing binds a model; the principal has id, type, roles, display, locale | `substitute` on the grant | the model tier on the session and the actor (the next leg) |
+| a seat tied to a model | — | — | `preferred_model` as advice, with the next leg |
+| secondment | — | `substitute_drop` for granted kinds; `not-a-substitute` on self, journal, letter | — |
+| the fixed cost of a seat | the tick: renew, come home, ask | park: two HTTP calls and no wake | a spend ledger per seat |
+
+Two findings from the map:
+
+1. **The member row is already half a seat.** It is durable, it
+   holds a re-entry credential, and its `self`, `journal`, and
+   letters are the memory that outlives a session. The `seat` kind
+   does not replace it. The member sits in the seat. On merge, the
+   source seat's sitter leaves a letter for the target's sitter. The
+   letter kind exists for that trip.
+2. **A drop-list cannot bar the memory.** `self`, `journal`, and
+   `letter` can never be granted, so the substitute bar is a guard,
+   not a scope entry. Section 7 is that correction.
+
 ## Recorded punts
 
 - `merge` does not mint an offered grant for each moved sitter.
@@ -306,7 +373,12 @@ merge in this leg.
   schemas gain fields. The pinned hash in
   `waymark10.decision-sugar-test` must be updated with the change.
 - The model tier that sits in the seat is the next leg. This leg
-  records only `substitute`.
+  records only `substitute`. `preferred_model` on the seat comes with
+  it, as advice the driver reads.
+- Trust that accrues by rule (a longer leash after N clean sittings)
+  is not designed. The person sets `standing_ttl_seconds` by hand.
+- A spend ledger per seat is not designed. The tick script can count
+  sittings; tokens are outside the house.
 
 ## What proves it
 
@@ -322,7 +394,8 @@ A test namespace `waymark10.seat-test` with these cases:
    a `restate`, the next request sees the new scope, with no new
    grant.
 5. A request under a substitute grant does not see the
-   `substitute_drop` entries.
+   `substitute_drop` entries. A substitute's write to `self`,
+   `journal`, or `letter` is refused; its read is served.
 6. `park` makes the sitter's request see nothing. `unpark` restores
    it. No grant moved.
 7. `merge` writes the fold onto `into`, closes the source, and the
@@ -341,7 +414,7 @@ must pass.
 ## Effort
 
 **Medium.** The new kind is one file with six actions and five
-guards. The scope schema, the four scope guards, `merge-scope`,
+guards, plus one guard on three own-surface doors. The scope schema, the four scope guards, `merge-scope`,
 `no-self-dealing`, and `one-spelling` all exist and are reused. The
 router gains one row load in the visibility resolve. `boot-revise!`
 gains one step. The migration adds one table and four nullable
