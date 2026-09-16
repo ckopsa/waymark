@@ -119,10 +119,11 @@ work.
 | `held_for` | list of model refs | the models that can sit as the full sitter. Empty means any. The seat's place on the ladder. |
 | `substitute_for` | list of model refs | the models that can sit as a substitute. Empty means any. |
 | `standing_ttl_seconds` | int | the longest leash a grant in this seat can request |
-| `cadence_seconds` | int | how often the driver wakes the seat. The fixed wake cost. |
+| `cadence_seconds` | int | how often the schedule fires the seat. The fixed wake cost. |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
-| `walk` | kind name, optional | the queue this seat walks: one model turn per queued row of that kind. Section 12.7. |
+| `walk` | kind name, optional | the queue this seat walks, one row at a time, in the order of its default sort. R-12.7. |
+| `rows_per_firing` | int, default 20 | the most rows one firing moves to a leaf. The walk's cap. |
 | `stale` | list of scope entries | written by the sweep. A person never writes it. |
 | `merged_into` | seat ref | the seat this one merged into |
 
@@ -277,8 +278,8 @@ stale. The leash must not go dark.
 **R-7.4** A stale seat must not be quiet. `waymark_discover` must
 carry `doors.ask.seat` with `name`, `state`, `standing_ttl_seconds`,
 `stale`, and `budget` (spent, limit, resumes_at). The seat's envelope
-must carry a warning with the stale entries. The driver must print
-the stale entries and the budget line first, above the title.
+must carry a warning with the stale entries. A firing must say the
+stale entries and the budget line first, before any other output.
 
 **R-7.5** `restate` must clear `stale` when the new scope passes the
 four guards. A `restate` whose scope still names a stale entry is
@@ -372,8 +373,9 @@ and `abandoned` are terminal.
 | `note` | string | one sentence on what the sitting did |
 
 **R-10.3** A sitting must be own-surface for its member, with the
-actions `create`, `close`, and `abandon`. The driver opens it before
-the model starts and closes it when the model stops.
+actions `create`, `close`, and `abandon`. The session opens it
+before it reads the queue, and the harness's hook closes it when the
+session ends (R-12.3).
 
 **R-10.4** `close` must take the four token counts and the turn count.
 The handler must read the model's prices at that moment, compute
@@ -458,53 +460,95 @@ frontier is not a failure; it is a seat whose judgment is real.
 
 ## 12. Requirements: the driver
 
-**R-12.0** The driver is new. `scripts/standing-agent-tick.sh`
-renews the session, files the extend-ask, and writes the cookie into
-the MCP config. It starts no model. The seat driver is a second
-script that does what this section says: it reads the seat, opens
-the sitting, starts the model with the charter, and closes the
-sitting with the usage the harness returns. The Claude Code CLI in
-print mode returns the usage in its JSON result, and the Agent SDK
-returns it per turn; either is exact, and the driver records it as
-returned (R-10.5).
+**R-12.0** The driver is the harness's own scheduler. The owner's
+ruling, 2026-09-16: use the native things. In Claude, that is a
+Routine: a named schedule that starts a fresh session on each
+firing, with a prompt and a model. In Jules, that is a scheduled
+session. The house does not write a loop script. It defines what the
+schedule needs, and the seat row holds it.
 
-**R-12.1** The driver must read `doors.ask.seat` before any sitting.
-If the seat is parked, over budget, or held for another model, the
-driver must print the reason first and exit before the model starts.
-It must still renew the session and the leash.
+| the schedule needs | the seat row holds it as |
+|---|---|
+| a name | `name` |
+| a cadence | `cadence_seconds`, spelled as the scheduler's cron |
+| a model | `held_for`, one model, set on the schedule |
+| a prompt | a pointer to the seat, not the charter. Section R-12.2. |
 
-**R-12.2** The driver must wake the seat at `cadence_seconds`.
+`scripts/standing-agent-tick.sh` stays as the leash keeper: it
+renews the session, files the extend-ask, and writes the cookie the
+scheduled session uses to reach the engine. It starts no model, and
+it does not need to.
 
-**R-12.3** The driver must open a sitting before the model starts
-and close it with the exact token counts when the model stops.
+**R-12.1** Each firing is one sitting. A firing must read
+`doors.ask.seat` first. If the seat is parked, over budget, or held
+for another model, the session must say the reason and stop before
+it reads anything else. The reason is the sitting's `note`.
 
-**R-12.4** The driver must pass `sitting_budget_tokens` to the
-harness as its ceiling, through whatever knob the harness has. If
-the harness has none, the driver must end the sitting when the
-running usage passes the ceiling and write the overrun in the
-sitting's `note`. A sitting must never close without its counts.
+**R-12.2** The schedule's prompt must be a pointer and a walk rule,
+not a copy of the charter. The prompt for a seat is this, with the
+seat's name in it:
 
-**R-12.5** The driver must file an extend-ask as `{grant_id, task,
-expires_at}` with no scope when the grant cites a seat.
+> You sit in the seat `{name}`. Read the seat row with `waymark_get`
+> and do what its charter says. Take only the doors the envelope
+> offers. When the seat says parked, over budget, or held for another
+> model, say why and stop.
 
-**R-12.6** The driver must declare the model it starts, at bind and
-at renew.
+The charter stays on the row, so a `restate` changes what the next
+firing does with no change to the schedule. A copy is the failure on
+record (section 3). The name, the cadence, and the model are the
+three things the schedule copies, and a `restate` of `cadence_seconds`
+or `held_for` is also an update of the schedule. The seat's
+`restate` handler must say so in its consequence: "The schedule
+named {name} must be updated to match." An engine effect that
+updates the schedule through the scheduler's API is the follow-up
+the owner named (section 17).
 
-**R-12.7** When the seat has `walk`, the driver must run the walk
-mode: read the queue (the kind's collection under its default
-filter), and for each row start one fresh model turn whose prompt is
-the seat's charter, then the row's envelope. The model takes one
-door the envelope offers. The turn ends. The driver moves to the
-next row until the queue is empty or the sitting's budget is spent.
-One sitting row covers the whole walk.
+**R-12.3** The session must open a sitting before it reads the
+queue, and the harness must close it with the exact token counts
+when the session ends. The session cannot count its own tokens, so
+the close is a hook of the harness (Claude Code's session-end hook
+reads the transcript's usage), not an act of the model. Until that
+hook exists (waymark-fp62.6.1), the harness's own session record is
+the ledger, and the sitting row is closed by hand from it.
 
-**R-12.8** The driver must give the model nothing beyond the charter
-and the engine's own answers: the envelope, the discover document,
-the schema, the refusal. No rules file, no document from `docs/`, no
-law ahead of time. When a sitting fails for want of a rule, the fix
-is in the engine (R-11.5), never a line in the prompt. This is the
-lazy-loading contract. Without it the ladder does not descend,
-because the prompt grows to cover what the engine should say.
+**R-12.4** `sitting_budget_tokens` is the schedule's ceiling, through
+whatever knob the scheduler has. If it has none, the prompt's walk
+rule caps the rows per firing (`rows_per_firing`, section R-12.7),
+and the sitting's `note` says when the cap was hit.
+
+**R-12.5** The leash keeper must file an extend-ask as `{grant_id,
+task, expires_at}` with no scope when the grant cites a seat.
+
+**R-12.6** The schedule's model is the declaration. The leash keeper
+must declare the same model at bind and at renew (R-9.4), read from
+the seat's `held_for`. A schedule whose model differs from the seat's
+`held_for` makes every firing stop at R-12.1, which is the harness
+bug the essay describes, caught at the door.
+
+**R-12.7** When the seat has `walk`, the firing walks. The session
+reads the queue (the kind's collection under its default filter),
+and for each row takes the one door the envelope offers, then the
+next door, until the row is at a leaf. Then the next row. It stops
+when the queue is empty or when it has moved `rows_per_firing` rows.
+`rows_per_firing` is a field on the seat, default 20. One sitting
+covers the firing.
+
+A native schedule gives one session per firing, not one turn per
+row, so the rows share one context. The essay's "smaller tasks" is
+kept by the cap and by the envelope, which holds one row at a time.
+The one-row-per-session form comes later through the scheduler's
+API: the source fires the schedule with the row's id as its text,
+and the firing walks that row alone. That is the "trigger via API"
+the owner named, and it is a change to the source, not to the seat.
+
+**R-12.8** The prompt must give the model nothing beyond the pointer,
+the walk rule, and the engine's own answers: the seat row, the
+envelope, the discover document, the schema, the refusal. No rules
+file, no document from `docs/`, no law ahead of time. When a firing
+fails for want of a rule, the fix is in the engine (R-11.5), never a
+line in the prompt. This is the lazy-loading contract. Without it
+the ladder does not descend, because the prompt grows to cover what
+the engine should say.
 
 ## 13. The email clerk: the descent
 
@@ -574,8 +618,8 @@ and letters are its memory.
 
 ### 13.4 The agent asks to sit
 
-The driver starts `claude-opus-5` and declares it at bind. The agent
-files one ask, with no scope.
+The leash keeper binds and declares `claude-opus-5`, the model the
+Routine will start. The agent files one ask, with no scope.
 
 ```json
 {
@@ -602,32 +646,33 @@ There is no scope on this grant.
 
 ### 13.5 One sitting
 
-At the cadence, the driver ticks.
+The leash keeper has renewed the session on its own cron and
+declared `claude-opus-5`. At the cadence, the Routine named
+`inbox-clerk` fires a fresh session on `claude-opus-5`. Its prompt
+is the pointer of R-12.2. Nothing else (R-12.8).
 
-1. It renews the session and declares `claude-opus-5`.
-2. It calls `waymark_discover`. `doors.ask.seat` says: active, stale
-   empty, budget spent 3.10 of 12.00, resumes null.
-3. It opens a sitting: seat, grant, started_at.
-4. It starts the model with a task budget of 40000 tokens. The
-   prompt is the charter. Nothing else (R-12.8).
-5. The model reads the seat row for the charter.
-6. `waymark_powers` lists the emila read tools. Move and send are
+1. The session calls `waymark_discover`. `doors.ask.seat` says:
+   active, stale empty, budget spent 3.10 of 12.00, resumes null.
+2. It opens a sitting: seat, grant, started_at.
+3. It reads the seat row with `waymark_get`, for the charter.
+4. `waymark_powers` lists the emila read tools. Move and send are
    absent.
-7. The model reads the inbox through `waymark_power`.
-8. For each request it finds, it invokes `task.create` with the
+5. The model reads the inbox through `waymark_power`.
+6. For each request it finds, it invokes `task.create` with the
    title, the due date, and source todo. Each create is a transition
    with the member as actor and `claude-opus-5` as model. The router
    adds one to the sitting's `transitions`.
-9. It tries `task.update` on a task it made, to add a note. The
+7. It tries `task.update` on a task it made, to add a note. The
    door is absent. It tries `task.create` with a due date in the
    past. The guard refuses, 409. The router adds one to
    `refusals`.
-10. It invokes `insight.create` for a finding that cites a task it
+8. It invokes `insight.create` for a finding that cites a task it
     made, and writes one journal entry.
-11. The driver closes the sitting with the usage the API returned:
-    input 31200, output 2900, cache read 18000, cache write 0, turns
-    6. The handler writes `cost_usd` 0.23 and the prices used. The
-    row already holds transitions 4 and refusals 1.
+9. The session ends. The harness's session-end hook closes the
+    sitting with the usage from the transcript: input 31200, output
+    2900, cache read 18000, cache write 0, turns 6. The handler
+    writes `cost_usd` 0.23 and the prices used. The row already
+    holds transitions 4 and refusals 1.
 
 ### 13.6 What the record holds
 
@@ -765,6 +810,7 @@ The person restates the seat. No deploy.
   "cadence_seconds": 3600,
   "budget_usd_per_week": 4.00,
   "sitting_budget_tokens": 20000,
+  "rows_per_firing": 20,
   "note": "Week one's refusals and corrections are law now. The walk needs no judgment the envelope does not frame. Step from opus to sonnet."
 }
 ```
@@ -776,24 +822,33 @@ sentence and the journal sentence. It is 234 characters. The seat is
 held for an economy model as its full sitter, and
 `step-carries-a-note` records why.
 
-**One walk, turn by turn.** The driver opens one sitting, then for
-each queued row:
+**The schedule.** The person updates the Routine to match the seat.
+Three fields change on it, and the prompt does not.
 
-1. It starts a fresh model turn. The prompt is the charter and the
-   row's envelope. The charter is a stable prefix, so the prompt
-   cache serves it on every turn after the first.
-2. The model sees one door, research. It reads the message through
-   `waymark_power`, then invokes research with a summary. The turn
-   ends.
-3. The driver starts a fresh turn on the same row. The envelope now
-   carries the summary and offers yes and no. The model takes one.
-   The turn ends.
-4. The row is at a leaf. The driver moves to the next row.
+| Routine field | value | from the seat |
+|---|---|---|
+| name | `inbox-clerk` | `name` |
+| schedule | `0 * * * *`, hourly | `cadence_seconds` 3600 |
+| model | `claude-sonnet-5` | `held_for` |
+| prompt | the pointer of R-12.2 | unchanged |
 
-Each turn holds one row, never the queue. This is the essay's
-"smaller tasks, less context", made mechanical. Each transition
-carries the member and `claude-sonnet-5` in the actor. The sitting
-closes with the sum of the turns' usage.
+**One firing, row by row.** The session opens one sitting, reads the
+seat row, then reads the queue:
+
+1. The envelope of the first row offers one door, research. The
+   model reads the message through `waymark_power`, then invokes
+   research with a summary.
+2. The envelope now carries the summary and offers yes and no. The
+   model takes one.
+3. The row is at a leaf. The model moves to the next row.
+4. After twenty rows, or an empty queue, the session says so and
+   ends. The hook closes the sitting.
+
+The envelope holds one row at a time, never the queue. The rows
+share one session's context, capped at twenty; the one-row-per-
+session form comes when the source fires the Routine with a row id
+(R-12.7). Each transition carries the member and `claude-sonnet-5`
+in the actor.
 
 **Week three's ledger, beside week one's.**
 
@@ -839,19 +894,21 @@ question for another week.
 
 The person has four levers on the seat row, and none needs a deploy.
 
-- `park`. The grant stays. The driver renews and exits. No model
-  wakes.
+- `park`. The grant stays. The next firing reads parked, says so,
+  and stops before it reads anything else. The cost is one short
+  turn, until the person pauses the Routine too.
 - `restate` cadence from one hour to six hours. The fixed wake cost
   falls six times.
-- `restate` `held_for` down one rung, with a note. The driver's next
-  tick starts the cheaper model and declares it.
+- `restate` `held_for` down one rung, with a note, and the same
+  model on the Routine. The next firing starts the cheaper model.
 - Lower `budget_usd_per_week`. At the limit, the engine parks the
   seat on its own, and discover says when it resumes.
 
 ### 13.12 A substitute
 
-Sonnet is unavailable for a day. The driver starts `claude-haiku-4-5`
-and the agent asks with `substitute: true`, because the person set
+Sonnet is unavailable for a day. The person sets the Routine's
+model to `claude-haiku-4-5`, and the agent asks with `substitute:
+true`, because the person set
 `substitute_for` to `["claude-haiku-4-5"]` in week five.
 `model-may-sit` passes on `substitute_for`. The substitute walks the
 same tree. It reads the journal and cannot write it, by
@@ -871,8 +928,8 @@ sender rules it learned, and asks to sit in `composer`. One tap.
 A push retires `inbox_item.no` in favor of a `dismiss` with a
 reason. At the next boot, the sweep writes
 `[{"kind": "inbox_item", "actions": ["no"]}]` into `stale`. The seat
-still serves research and yes. Discover says stale. The driver
-prints it first. The person restates the scope with `dismiss`, and
+still serves research and yes. Discover says stale. The firing
+says it first. The person restates the scope with `dismiss`, and
 the stale list clears.
 
 **What the person tunes, and where.** The tree is a deploy: a new
@@ -1118,6 +1175,14 @@ trusts.
   essay describes.
 - **The budget window is seven days from now,** not a calendar week.
   A declared window is a follow-up if the fixed one is wrong.
+- **The driver is the harness's scheduler, not a script of ours.**
+  The fourth draft had a shell loop that started one model turn per
+  row. The owner ruled (2026-09-16, late) to use the native things: a
+  Claude Routine, a scheduled Jules session. The seat row holds what
+  a schedule needs, the prompt is a pointer to the seat so the
+  charter is never copied, and the one-row-per-session form comes
+  through the scheduler's API later. The cost is a shared context
+  across the rows of one firing, capped by `rows_per_firing`.
 - **A step down is judged by corrections, not by cost.** Cost always
   falls on a step down. The only question is whether the outcomes
   held, and a correction is the one record of an outcome that did
@@ -1146,6 +1211,14 @@ trusts.
   model never holds the power. `invoke-for` exists in
   `gate_proxy.clj`; a handler that reaches it is a new seam, and a
   follow-up.
+- An engine effect that updates the schedule when a seat's `name`,
+  `cadence_seconds`, or `held_for` changes, through the scheduler's
+  API. Until then the `restate` consequence tells the person to do
+  it, and a firing on the wrong model stops at R-12.1.
+- The source fires the schedule with one row id, so one session
+  walks one row. The scheduler's API accepts a text with the firing.
+  This is the "trigger via API" path, and it changes the source, not
+  the seat.
 - A refusal log with the door, the guard, and the sentence, beyond
   the count. The count is enough to find the seat. The log is what
   the fence census (leg 2) reads to find the guard.
@@ -1165,6 +1238,7 @@ three tables and four nullable columns. The scope schema, the four
 scope guards, `merge-scope`, `no-self-dealing`, and `one-spelling`
 are reused as they are. The delta from the third draft is two
 counters at close, one guard on one door, and the cut of two fields.
-Two things the earlier drafts did not count: the seat driver script
-is new, because the tick script starts no model; and the ledger
-route with its corrections window is a new query.
+Two things the earlier drafts did not count: the ledger route with
+its corrections window is a new query; and the sitting's close is a
+harness hook, not engine code. There is no driver script: the
+scheduler is the harness's, and the tick script stays as it is.
