@@ -37,7 +37,7 @@
 (def ^:private declaring-namespaces
   "Every loaded namespace that declares a kind of this household —
   the ones a boot evaluates and this test re-evaluates."
-  #"^(?:workqueue10|mealplan10|choreplan10|eveningplan10|calendar10)\..*\.resources\.|^(?:mealplan10|choreplan10|eveningplan10|calendar10|workqueue10)\.resources\.")
+  #"^(?:workqueue10|mealplan10|choreplan10|calendar10)\..*\.resources\.|^(?:mealplan10|choreplan10|calendar10|workqueue10)\.resources\.")
 
 (defn- declaring-nses []
   (->> (all-ns)

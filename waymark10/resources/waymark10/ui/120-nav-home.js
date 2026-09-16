@@ -293,56 +293,6 @@ async function renderHome(view, seq) {
         }
       }).catch(() => {}));
 
-  /* the weather panel (waymark-tti.1): today's sky per inhabitant and
-     a one-touch setter for the viewer's own. Rows are append-only —
-     the newest per owner wins, so a wrong tap is corrected by tapping
-     again; no report today is simply absent. meta.updated_at stands
-     in for created_at on the wire: a weather row is never edited. */
-  const skyDot = {quiet: "var(--sky-quiet)", steady: "var(--verdigris)",
-                  loud: "var(--warn)"};
-  const weatherHref = collectionHref(w, "weather");
-  if (weatherHref) {
-    const box = el("div");
-    strip.after(box);
-    const fill = async () => {
-      let env;
-      try {
-        const r = await api(mergeParams(weatherHref,
-          {sort: "-created_at", "page[size]": "30"}));
-        if (!r.ok) return box.remove();   // degrade silently
-        env = r.body;
-      } catch { return box.remove(); }
-      const today = new Date().toDateString();
-      const latest = new Map();           // owner → its newest row TODAY
-      for (const it of env.data?.items || []) {
-        const o = it.fields?.owner, at = it.meta?.updated_at;
-        if (o && !latest.has(o) && at
-            && new Date(at).toDateString() === today)
-          latest.set(o, it.fields);
-      }
-      const create = env.actions?.create;
-      if (!latest.size && !create) return box.remove();
-      box.textContent = "";
-      box.append(el("h3", {class:"sect"}, "Weather"));
-      if (latest.size)
-        box.append(el("div", {class:"chips"}, [...latest].map(([o, f]) =>
-          el("span", {class:"chip static", title: f.note || ""},
-            el("span", {style: "color:" + (skyDot[f.sky] || "inherit")}, "● "),
-            `${o} — ${f.sky}`))));
-      /* one-touch: no owner in the body — the server stamps the caller */
-      if (create)
-        box.append(el("div", {class:"chips"},
-          ["quiet", "steady", "loud"].map(sky =>
-            el("button", {style: "font-size:12px;padding:3px 8px",
-                          onclick: async () => {
-              await api(create.href, {method: create.method || "POST",
-                                      body: JSON.stringify({sky})});
-              fill();                     // re-render this block only
-            }}, sky))));
-    };
-    settling.push(fill());
-  }
-
   /* seasons (waymark-tti.2): the last weeks as a shape — the rhythm
      door's weekly buckets as one compact line per moving kind (tiny
      text bars scaled off completed counts, no chart machinery), and

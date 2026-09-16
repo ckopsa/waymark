@@ -4,7 +4,7 @@
          ;; the calendar domain (waymark-6k5): its own module because
          ;; the calendar belongs to neither the meal plan nor the
          ;; queue — they both merely cite it. The chore, meal and
-         ;; evening namespaces live under THIS app's src/ since the
+         ;; day-plan namespaces live under THIS app's src/ since the
          ;; consolidation cleanup (waymark-26j) — module prefixes,
          ;; not separate apps.
          calendar10/calendar10    {:local/root "../calendar10"}}

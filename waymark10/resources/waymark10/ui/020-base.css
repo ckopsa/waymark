@@ -39,8 +39,6 @@
     --shadow: 0 1px 2px rgba(32,38,31,.06);
     --shadow-pop: 0 4px 14px rgba(0,0,0,.10);
     --row-hover: rgba(32,38,31,.018);
-    /* the weather dot's quiet sky (120-nav-home.js reads this one) */
-    --sky-quiet: #4A6B8A;
     --radius: 4px;
     --serif: Georgia, "Times New Roman", "Source Serif 4", serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, "IBM Plex Mono", monospace;
@@ -66,7 +64,6 @@
       --shadow: 0 1px 2px rgba(0,0,0,.45);
       --shadow-pop: 0 6px 18px rgba(0,0,0,.55);
       --row-hover: rgba(255,255,255,.045);
-      --sky-quiet: #8FB4D4;
     }
   }
   /* the explicit word — dark on a light system too */
@@ -84,7 +81,6 @@
     --shadow: 0 1px 2px rgba(0,0,0,.45);
     --shadow-pop: 0 6px 18px rgba(0,0,0,.55);
     --row-hover: rgba(255,255,255,.045);
-    --sky-quiet: #8FB4D4;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--paper); color: var(--ink);

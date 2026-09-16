@@ -28,7 +28,7 @@ The suites that do need the dockerized Postgres on `:5433`
 machines with guarded transitions), from which routing, serialization,
 validation, authorization, live events, documentation, and the conformance
 suite are mechanically projected. The application directories
-(`mealplan10/`, `eveningplan10/`, `choreplan10/`, `workqueue10/`,
+(`mealplan10/`, `choreplan10/`, `dayplan10/`, `workqueue10/`,
 `calendar10/`) are declarations driving that engine. Start with
 `README.md`, then `docs/waymark10-design.md` and
 `docs/waymark10-vocabulary.md`.

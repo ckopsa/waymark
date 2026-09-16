@@ -165,8 +165,8 @@
   half of waymark-xw3 and it is filed rather than built.
 
   LOVED ACTIVITIES ARE FREE WORDS, AND THAT SET IS THE VOCABULARY.
-  Two alternatives were weighed and both lose. Linking to
-  eveningplan10's `activity` kind borrows another domain's nouns for a
+  Two alternatives were weighed and both lose. Linking to a
+  dedicated activity kind (eveningplan10's, since retired) borrows another domain's nouns for a
   word like `the shop`. Minting a `loved_activity` kind is a row per
   word — a noun for a noun's sake. The household's own sentence — `I
   love the shop, I love building with the boys, I love cooking with a

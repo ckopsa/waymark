@@ -61,7 +61,6 @@
 1.043	mealplan10.plan-day-machine-test
 1.029	waymark10.reentry-door-test
 0.949	waymark10.batch-f-consumers-test
-0.946	eveningplan10.conformance-test
 0.932	waymark10.client-test
 0.890	waymark10.batch-f-webhooks-test
 0.800	workqueue10.task-queue-test
@@ -97,7 +96,6 @@
 0.375	choreplan10.queue-test
 0.368	waymark10.unique-index-test
 0.366	waymark10.batch-c-population-test
-0.357	workqueue10.weather-test
 0.355	workqueue10.permission-slip-test
 0.350	waymark10.drafts-test
 0.345	waymark10.batch-b-members-test
