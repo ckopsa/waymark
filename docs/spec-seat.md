@@ -620,6 +620,115 @@ walks, how often, with what budget, and the charter's words, all
 with no deploy. That is the right split: law in code, fluid things
 in rows.
 
+### 11.12 The composer: a frontier seat
+
+The clerk walks a tree. The composer holds an objective. That is the
+difference between an economy seat and a frontier seat, and the
+house already has the composer's history to draw on: the standing
+agent (waymark-53u), the loop redesign of 2026-08-27 (bd memory
+`no-floor-advance-one-arrival`), the iterate loop (waymark-9j2), and
+the 74-entry grant that drifted (waymark-ycp). Its runs were retired
+in 2026-09. This seat is how they come back.
+
+**Why it is a frontier seat.** Four reasons, each one a thing a tree
+cannot hold.
+
+1. The objective is a specification with a bright line, not a set of
+   doors: "advance a specific arrival as far as the evidence honestly
+   supports, no further". Enrich, then link, then compose. Compose an
+   outcome only when the goal is larger than any single evidence row.
+   Where an arrival stops on that spectrum is a judgment.
+2. A quiet sitting is lawful. The floor was retracted because a
+   vague floor was gamed. Knowing when not to act is the caution the
+   essay calls wisdom, and it is the one thing an economy model in a
+   walk never has to decide.
+3. It writes the house's knowledge and its own memory: insights,
+   hypotheses, its journal, and letters. This is the seat where the
+   voice matters, and where the substitute bar earns its keep.
+4. It converses. The iterate loop is a thread with a person: the
+   person says "the plan is wrong, the outcome is right", and the
+   composer reworks the pieces in place over turns.
+
+**The seat.**
+
+```json
+{
+  "name": "composer",
+  "charter": "You read what arrived in the house since your last sitting and advance each arrival as far as the evidence honestly supports: enrich a bare task with an insight, link it to what it belongs with, and compose an outcome only when the goal is larger than any single row. A quiet sitting is lawful.",
+  "must": [
+    "Process the arrivals since the last snapshot: new tasks, remarks, mail, chat. Not a vague search.",
+    "For a bare task, attach the context and the concrete next step as an insight that cites the source. Do not change the task.",
+    "When a person iterates an outcome, rework its pieces in place. Do not stage a twin.",
+    "Write one journal entry per sitting that did work. Leave a letter when you learn a rule the next sitter needs."
+  ],
+  "never": [
+    "Do not compose an outcome that wraps a single task.",
+    "Do not offer a piece that marks something done. Only people decide.",
+    "Do not pad. A sitting with nothing to advance ends with nothing."
+  ],
+  "scope": [
+    {"kind": "feed", "actions": [], "filter": {"preview_as": "composer"}},
+    {"kind": "task", "actions": []},
+    {"kind": "remark", "actions": []},
+    {"kind": "person", "actions": ["restate", "still_with_us"]},
+    {"kind": "thread", "actions": []},
+    {"kind": "outcome", "actions": ["create", "rework"]},
+    {"kind": "insight", "actions": ["create"]},
+    {"kind": "hypothesis", "actions": ["create", "restate", "still_stands", "dismiss"]},
+    {"kind": "email.read", "actions": []},
+    {"kind": "telegram.read", "actions": []},
+    {"kind": "messages.read", "actions": []}
+  ],
+  "substitute_drop": [
+    {"kind": "outcome", "actions": ["create", "rework"]},
+    {"kind": "hypothesis", "actions": ["create", "restate", "still_stands", "dismiss"]}
+  ],
+  "held_for": ["claude-fable-5-1"],
+  "substitute_for": ["claude-opus-5"],
+  "standing_ttl_seconds": 604800,
+  "cadence_seconds": 3600,
+  "budget_usd_per_week": 40.00,
+  "sitting_budget_tokens": 200000
+}
+```
+
+Eleven scope entries, one per kind, where the drifted grant had 74.
+The scope is the ruling of 2026-08-27 written as law: reads on the
+evidence kinds, writes only on the knowledge kinds and the outcome.
+`task` has no actions, because only people decide. The substitute,
+on Opus, keeps enrichment and loses composition and the belief
+doors: it can annotate, and it cannot judge in the seat's name.
+
+**The fuel story is already on record.** At a cadence of one wake
+every fifteen minutes with a floor of one outcome per sitting, the
+fleet padded: wrapper outcomes, twins, the banned piece. That was a
+damper problem. On this seat the cadence is a field, the floor is
+gone by charter, the budget is a wall, and the sitting ceiling is
+passed to the harness. All four are on the row, and none is a
+deploy.
+
+**What to measure in a trial week.**
+
+| number | what it says |
+|---|---|
+| outcomes accepted, declined, iterated, expired | is the composition worth its cost |
+| enrichments written, and whether the task was actionable after | is the floor of the spectrum working |
+| quiet sittings as a share of all sittings | is the seat padding, or is it waiting well |
+| dollars per accepted outcome | the price of one thing you wanted |
+| letters left, and whether the next sitter read them | is the memory a memory |
+
+**Economy and frontier, side by side.**
+
+| | the clerk | the composer |
+|---|---|---|
+| what holds the decision | the kind's machine | the charter and the model |
+| a turn | one row, one door | the arrivals since the last snapshot |
+| memory writes | none | insight, hypothesis, journal, letter |
+| substitute | any economy model, same walk | Opus, enrichment only |
+| a quiet sitting | impossible; the queue is empty or it is not | lawful, and the point |
+| budget | four dollars | forty dollars |
+| what a person tunes | which model, how often | the charter's words, and the outcomes it iterates |
+
 ## 12. Acceptance
 
 A test namespace `waymark10.seat-test` must prove each requirement
