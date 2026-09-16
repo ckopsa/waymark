@@ -738,7 +738,8 @@ law. The seat lives in a row, because it is fluid.
   {:kind :inbox_item
    :states [:queued :researched :action_item :dismissed]
    :initial :queued
-   :terminal #{:action_item :dismissed}
+   :terminal #{:action_item}                   ; dismissed keeps the person's door open
+   :over {:accomplished #{:action_item} :let-go #{:dismissed}}
    :default-filters {:state "queued"}          ; the queue is the collection
    :sortable {:fields [:received_at] :default "received_at"}
    :schema [:map
@@ -765,6 +766,13 @@ law. The seat lives in a row, because it is fluid.
     :reopen   {:from #{:dismissed} :to :researched         ; the person's correction
                :display {:label "Reopen" :order 4}}}})
 ```
+
+As built (commit 4d9b05f): the framework refuses a door out of a
+terminal state, and its one waiver is for an undo within minutes,
+not a person's correction days later. So `dismissed` is not
+terminal; `:over` carries the ending, and every reader that asks
+whether the work is over gets the same answer. The deviation is
+recorded on the kind in `:deviations`.
 
 The tree is enforced by the machine, not by the prompt. At `queued`,
 the envelope offers one door: research. At `researched`, it offers
