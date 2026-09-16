@@ -48,7 +48,7 @@ test10:  ## (moved to CI) waymark10 framework tests — GitHub Actions runs thes
 	@echo "To run THIS suite by hand anyway, call clojure directly:"
 	@echo "  make db10 && cd waymark10 && WAYMARK10_TEST_DSN=jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER) clojure -M:test"
 
-# The chore, meal and evening modules live under workqueue10/ since
+# The chore, meal and day-plan modules live under workqueue10/ since
 # the consolidation cleanup (waymark-26j): check-queue is their
 # declaration gate, test-queue their conformance run, dev-queue the
 # one dev server, migrate-queue the one schema plan.

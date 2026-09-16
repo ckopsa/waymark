@@ -52,7 +52,7 @@
   ["tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
-   "letters" "ticklers" "insights" "weathers" "permission_slips"
+   "letters" "ticklers" "insights" "permission_slips"
    "selves" "journals" "dwellings" "connections" "capabilities"
    "saved_views" "dashboards" "dashboard_slots"
    ;; the feed module's own pair (waymark-4yn, waymark-0k4): a stored
@@ -68,7 +68,6 @@
    ;; this test's page, and the value it serves is what keeps it there
    "composition_requests" "outcome_pieces" "outcomes" "values" "people"
    "hypotheses"
-   "activities" "evening_plans" "evening_sessions"
    "contexts" "day_plans" "blocks" "spans" "decisions"
    "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
@@ -303,7 +302,6 @@
         (is (not-any? #(= "ingredient" (str (:kind %))) fuel))
         (is (every? #(contains? #{"chore_run" "task" "plan" "media" "day"
                                   "event" "grocery_list" "meal" "insight"
-                                  "evening_plan" "evening_session"
                                   "chore" "task_list" "letter"}
                                 (str (:kind %)))
                     fuel)

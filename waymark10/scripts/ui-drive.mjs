@@ -808,11 +808,6 @@ async function feedStory() {
      telling the truth about a small deck, and a walk failing for a
      reason that has nothing to do with the law it is testing. */
   await post("/api/tasks", {title: `Water the front beds ${tag}`});
-  /* an activity carries a COMPOSITION verb (set_duration) beside its
-     assent one — the heavier half of the partition, which must render
-     as a link and never as a button */
-  await post("/api/activities", {title: `Sketch the porch ${tag}`,
-    physical_energy: "low", mental_energy: "low", location: "anywhere"});
   /* fuel + the archive: chores can END, so retiring them empties the
      kind (a `cleared` card) and leaves the rest as memories */
   /* EIGHT of them, and the number is load-bearing: the archive's line
@@ -922,13 +917,6 @@ async function feedStory() {
   ok("nothing on this screen binds a swipe (a sequential read takes none)",
      await evaljs(`!document.querySelector("[data-gesture]") &&
                    !document.querySelector(".deck-card")`));
-  ok("a composition verb rides as a LINK to the row's screen, never a button",
-     await evaljs(`(() => {
-       const a = [...document.querySelectorAll(".feed-verbs a.link-chip")]
-         .find(x => x.textContent.includes("Set duration"));
-       return !!a && a.getAttribute("href").startsWith("#/api/activities/") &&
-              !a.getAttribute("href").includes("/-/");
-     })()`));
   ok("a tickler offers all three verdicts and a way back to the row",
      await evaljs(`(() => {
        const c = document.querySelector('.fcard[data-kind="tickler"]');

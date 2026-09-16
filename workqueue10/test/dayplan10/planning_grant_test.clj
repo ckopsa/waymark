@@ -1,9 +1,9 @@
 (ns dayplan10.planning-grant-test
   "The planning chat's grant (waymark-i89n.6), lived in over the real
-  engine: an agent files the ONE ask the sitting driver builds
-  (scripts/sitting-run.sh § WHAT THE PLANNING CHAT NEEDS FROM THE
-  LEASH — the same kinds, the same doors, spelled the same), a person
-  approves it, and the minted grant is what Claude works the MCP with.
+  engine: an agent files the ONE ask the planning chat needs (the
+  day plan's kinds and doors, spelled the same way the chat spells
+  them), a person approves it, and the minted grant is what Claude
+  works the MCP with.
 
   What the grant must do, and this file proves through the MCP door
   and nothing else: waymark_discover shows the agent the day plan's
@@ -51,13 +51,12 @@
   ["tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
-   "letters" "ticklers" "insights" "weathers" "permission_slips"
+   "letters" "ticklers" "insights" "permission_slips"
    "selves" "journals" "dwellings" "connections" "capabilities"
    "saved_views" "dashboards" "dashboard_slots"
    "feed_recipes" "recipe_proposals" "feed_views" "feed_view_consents"
    "composition_requests" "outcome_pieces" "outcomes" "values" "people"
    "hypotheses"
-   "activities" "evening_plans" "evening_sessions"
    "contexts" "day_plans" "blocks" "spans" "decisions"
    "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"

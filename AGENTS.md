@@ -6,13 +6,6 @@ test, architecture and issue-tracking guide is **`CLAUDE.md`** — read
 it first; this file only adds the shell hygiene that keeps a
 non-interactive session from hanging.
 
-> **Running a composer *sitting* instead?** That is not software
-> engineering and none of this file applies. A sitting never edits the
-> repository — it acts on the live house at `https://work.kopsa.info`
-> over HTTP. Its whole instruction is **`SITTING.md`**, and the prompt
-> that queued you says so. Do not treat this file or `CLAUDE.md` as
-> your task.
-
 ## Build & Test
 
 See `CLAUDE.md` for the full picture and the `Makefile` for the

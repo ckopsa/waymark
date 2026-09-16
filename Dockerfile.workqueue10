@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Dependency layer: the deps.edn files first, so a source-only change
 # never re-downloads the world. -P prepares the full :dev classpath.
-# The chore, meal and evening modules live under workqueue10/src since
+# The chore, meal and day-plan modules live under workqueue10/src since
 # the consolidation cleanup (waymark-26j); calendar10 stays a module
 # since the calendar became its own writable domain (waymark-6k5.2).
 # EVERY :local/root in workqueue10/deps.edn must be copied here, or -P

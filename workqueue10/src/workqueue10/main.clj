@@ -62,10 +62,6 @@
             [dayplan10.resources.decision :refer [decision]]
             [dayplan10.resources.span :refer [span]]
             [dayplan10.zone :as zone]
-            [eveningplan10.consumers :as evening-consumers]
-            [eveningplan10.resources.activity :refer [activity]]
-            [eveningplan10.resources.evening-plan :refer [evening-plan]]
-            [eveningplan10.resources.evening-session :refer [evening-session]]
             [mealplan10.main :as mealplan]
             [mealplan10.scraper :as scraper]
             [workqueue10.confluence :as conf]
@@ -85,7 +81,6 @@
             [workqueue10.resources.tickler :refer [tickler]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
             [workqueue10.resources.value :refer [value]]
-            [workqueue10.resources.weather :refer [weather]]
             [workqueue10.sources.choreplan :as chores]
             [workqueue10.sources.dayplan :as dayplan]
             [workqueue10.sources.flickr :as flickr]
@@ -377,10 +372,10 @@
   "One domestic economics (waymark-bwu), across the household's
   domains: the queue's kind, the folded chore registry (chore,
   chore_run, day — bwu.1), the folded meal registry (bwu.2), the
-  calendar (waymark-6k5.2), and the folded evening registry
-  (activity, evening_plan, evening_session — waymark-26j, the last
-  standalone app), and the day plan's five (context, day_plan, block,
-  span, decision — waymark-i89n, the :day domain).
+  calendar (waymark-6k5.2), and the day plan's five (context,
+  day_plan, block, span, decision — waymark-i89n, the :day domain).
+  The evening fold (activity, evening_plan, evening_session —
+  waymark-26j) was retired in 2026-09.
 
   The calendar's event kind comes from calendar10, NOT from
   mealplan/resources: it stopped being a meals concern when it became
@@ -433,11 +428,6 @@
                                  (conf/confluence media-srcs report-fn))]))
        (into (in-domain :chores [chore chore-run day]))
        (into (in-domain :meals (mealplan/meal-resources)))
-       ;; the evening fold (waymark-26j): the last standalone app's
-       ;; three kinds join the one engine — the activity shelf, the
-       ;; plan, and its sessions; the plan-sessions consumer registers
-       ;; in start!, against the running dispatcher
-       (into (in-domain :evenings [activity evening-plan evening-session]))
        ;; the day plan (waymark-i89n, docs/spec-dayplan.md): the
        ;; template, the day, its blocks, their windows, and the
        ;; decisions made into the blocks — the spine the feed's current
@@ -475,11 +465,6 @@
        ;; privacy is the framework's own: humans unscoped see all,
        ;; agents default-deny see nothing but their OWN (the
        ;; own-surface addition in waymark10.server.grants).
-       ;; :weather (waymark-tti.1) sits beside them, domainless for the
-       ;; same reason — the hearth thermometer is the house's inner
-       ;; life, not a domain of family logistics. Household-SHARED,
-       ;; not own-surface: humans see all, agents read via the normal
-       ;; grant machinery.
        ;; :letter rides beside them (waymark-tti.3): the doorstep
        ;; shelf — addressed notes between inhabitants, two-party
        ;; own-surface (author OR recipient), never grantable.
@@ -605,7 +590,7 @@
        ;; arm), because every likelihood ratio in the table assumes the
        ;; evidence was typed by somebody who did not know what it would
        ;; do.
-       (into (into [saved-view capability connection self journal weather letter
+       (into (into [saved-view capability connection self journal letter
                     permission-slip tickler insight value outcome outcome-piece
                     person composition-request hypothesis
                     (thread-resource (conf/thread-confluence thread-srcs
@@ -921,20 +906,14 @@
         server (engine/start! eng port
                               {:wrap-handler
                                (comp (reconsent/wrap eng)
-                                     (oidc-rp/wrap-handler eng))})
-        ;; the evening fold's durable consumer (waymark-26j): a plan's
-        ;; sessions appear no matter who created the plan — registered
-        ;; against the RUNNING engine, like eveningplan10's own boot did
-        consumer (evening-consumers/register! eng)]
-    (reset! dev {:engine eng :server server :storage storage
-                 :consumer consumer})
+                                     (oidc-rp/wrap-handler eng))})]
+    (reset! dev {:engine eng :server server :storage storage})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))
     eng))
 
 (defn stop! []
-  (when-some [{:keys [engine server storage consumer]} @dev]
-    (when consumer (evening-consumers/stop! consumer))
+  (when-some [{:keys [engine server storage]} @dev]
     (engine/stop! engine server)
     (pg/close! storage)
     (reset! dev nil)))

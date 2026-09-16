@@ -37,7 +37,7 @@
 (def ^:private declaring-namespaces
   "Every loaded namespace that declares a kind of this household —
   the ones a boot evaluates and this test re-evaluates."
-  #"^(?:workqueue10|mealplan10|choreplan10|eveningplan10|calendar10)\..*\.resources\.|^(?:mealplan10|choreplan10|eveningplan10|calendar10|workqueue10)\.resources\.")
+  #"^(?:workqueue10|mealplan10|choreplan10|calendar10)\..*\.resources\.|^(?:mealplan10|choreplan10|calendar10|workqueue10)\.resources\.")
 
 (defn- declaring-nses []
   (->> (all-ns)
@@ -88,7 +88,7 @@
       ;; inexpressible in the card grammar; 33 since waymark-jfv.2's
       ;; :value, 32 since waymark-iqa.6's :insight, 31 since .4's
       ;; :tickler). The count is a census, not a law: it moves when the
-      ;; house gains a kind and never otherwise, which is exactly the
+      ;; house gains or loses a kind and never otherwise, which is exactly the
       ;; change it is here to notice.
       ;; …and 39 since waymark-bug's :hypothesis, the house's first row
       ;; that carries a NUMBER about the people in it: a claim, a shape,
@@ -97,7 +97,10 @@
       ;; block and span — the day as rows, so the feed can read the
       ;; block a person is in; 44 since .4's decision — the unit of
       ;; intention on a block, whose start is the verdict.
-      (is (= 44 (count before)) "the whole household is under the lens")
+      ;; …and 40 since the 2026-09 lean-down retired the evening fold
+      ;; (activity, evening_plan, evening_session) and weather — the
+      ;; census moves down as well as up, and this line says so.
+      (is (= 40 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)

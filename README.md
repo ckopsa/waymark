@@ -34,8 +34,8 @@ domain of family life, each a module of declarations under its
 authority, media, the household's conversations as addresses
 (`thread`), the breaker panel, the dwelling kinds), the meal
 plan (`mealplan10.*` — Tue→Tue themed weeks, grocery lists, prep
-tasks, rotations, the pantry), chores (`choreplan10.*`), and evening
-plans (`eveningplan10.*`). The calendar (`calendar10/`) stays its own
+tasks, rotations, the pantry), chores (`choreplan10.*`), and the day
+plan (`dayplan10.*`). The calendar (`calendar10/`) stays its own
 module — a writable domain the queue and the meal plan both cite.
 
 ## Quickstart
@@ -45,7 +45,7 @@ Everything runs against one dockerized Postgres on `:5433`
 
 ```bash
 make test10                # waymark10 framework tests
-make test-queue            # the household suite: queue + chores + meals + evenings
+make test-queue            # the household suite: queue + chores + meals + day plan
 make test-calendar         # calendar transport tests
 
 make check-queue           # declaration-time checks + usability warnings (no database)
