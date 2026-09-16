@@ -1,20 +1,20 @@
-# Spec — the seat: a declaration, not a copied grant
+# Spec — the seat: an office as a resource
 
-**Thesis.** A standing agent holds its authority in a grant. The
-grant's scope is a copy of an ask, and each extend-ask copies the
-scope forward again. A copy drifts. The seat replaces the copy: the
-application declares the seat's scope once, as data, beside its
-kinds. A grant minted from a seat reads the declaration at each mint.
-The declaration gate checks the seat before the engine serves it.
+**Thesis.** A seat is an office. A person creates it, edits its
+authority, parks it when fuel is short, merges it with another seat,
+and retires it. None of these needs a deploy. A grant that sits in a
+seat holds no scope of its own. It points at the seat, and the engine
+reads the seat's scope at each request. The scope has one source, so
+the copy that drifted is gone.
 
 This document is written in ASD-STE100 Simplified Technical English.
 Technical names from the codebase (grant, scope, leash, ask, anchor,
-door, kind) keep their spelling.
+door, kind, sitter) keep their spelling.
 
 ## Epistemic status
 
-The failure is on record three times. Each time, the stored scope
-was the cause.
+The failure is on record three times. Each time, a stored copy of a
+scope was the cause.
 
 - `spec-standing-agent.md` (waymark-ycp): the extend-ask copied the
   grant's scope, and the approval appended it. One grant reached 74
@@ -28,18 +28,19 @@ was the cause.
   default. The mint copies that value onto the grant. The person
   approves, and the access dies minutes later.
 
-The framework's rule is that the declaration is the only source. The
-law, the audit, the UI, and the agent surface all come from one
-spelling. The grant's scope is the one piece of authority that does
-not. It lives in a row. A row cannot fail the declaration gate. This
-spec moves the seat's authority to where the gate can see it.
-
 The essay this work answers (Yegge, "Seats and Sunsets", 2026-09-15)
-gives the cost. An agent with no seat must derive its authority in
-each session. An agent with a seat looks it up. Waymark already has
-the lookup: `waymark_discover` carries `doors.ask.anchor`. What it
-does not have is a durable answer to "what scope is this seat
-permitted". That answer is the seat declaration.
+adds two facts. A seat is fluid: when fuel is plentiful, a person
+opens a new seat, and when fuel runs short, the person parks seats
+and merges roles. And each seat has a fixed cost, because a wake
+costs money even when there is no work.
+
+**The first draft of this spec chose a declaration in code.** The
+owner ruled on 2026-09-16 that a seat must change with no deploy,
+because the essay's seats are fluid. This draft is the resource
+design. The first draft's reason was the declaration gate: a
+declaration fails `make check-queue` on the push that retires an
+action, and a row does not. That gap is real. Section 6 closes it
+with a sweep at boot.
 
 ## What exists
 
@@ -52,174 +53,296 @@ permitted". That answer is the seat declaration.
   Four create guards check a scope against the registry:
   `scope-names-real-kinds`, `scope-names-real-actions`,
   `scope-filters-are-filterable`, `scope-omits-private-kinds`.
+  `merge-scope` folds two scopes to one entry per kind.
+- The router resolves a grant's visibility once per request and
+  carries it as a closure map. A dead grant scopes to nothing.
 - `approval-effects!` runs after the approve commits. An anchorless
-  ask mints a grant with the ask's scope. An anchored ask extends the
-  named grant, and `merge-scope` folds the two scopes to one entry
-  per kind.
+  ask mints a grant. An anchored ask extends the named grant.
 - `asks-are-short` caps an ask at `grant-max-ttl-seconds`, 24 hours.
   `reentry-standing-ttl-seconds` in `members.clj` is a second,
-  longer ceiling: seven days for the standing re-entry credential.
-- `scripts/standing-agent-tick.sh`, step 4: the driver reads the
-  grant row, copies its scope, and files the extend-ask with that
-  copy.
-- `make check-queue` runs the declaration-time battery in
-  `waymark10/src/waymark10/checks.clj` with no database. A
-  declaration that fails the battery never serves a request.
+  longer ceiling of seven days.
+- `definitions.clj`: `boot-revise!` fingerprints each kind at boot
+  and compares it to the stored law. The registry changes only at
+  boot. This is the one moment a stored scope can go stale.
+- `scripts/standing-agent-tick.sh`, step 4: the driver copies the
+  grant's scope into the extend-ask.
+- `waymark_discover` carries `doors.ask.anchor`, the grant the
+  caller wears.
 
 ## The design
 
-### 1. The seat declaration
+### 1. The seat kind
 
-An application declares its seats beside its kinds. A seat is a map
-with a name, a scope, and a leash policy. The scope uses the scope
-schema that grants already use.
+`:seat` is a framework kind in `waymark10/src/waymark10/server/
+seats.clj`, `:nav :system`, beside `:grant` and `:role`.
 
 ```clojure
-(defseat composer
-  {:name "composer"
-   :description "Reads the feed and drafts outcomes for the household."
-   :scope [{:kind "outcome" :actions ["create" "restate"]}
-           {:kind "insight" :actions ["create"]}
-           {:kind "feed" :actions [] :filter {:preview_as "composer"}}]
-   ;; the longest leash an ask from this seat can request
-   :standing-ttl-seconds 604800
-   ;; a substitute sits in the seat with these doors removed
-   :substitute {:drop [{:kind "insight" :actions ["create"]}]}})
+{:kind :seat
+ :states [:active :parked :merged :retired]
+ :initial :active
+ :terminal #{:merged :retired}
+ :schema [:map
+          [:name        [:string {:min 1 :max 40}]]      ; one spelling
+          [:charter     [:string {:max 480}]]            ; what the seat is for
+          [:scope       scope-schema]                    ; the authority
+          [:substitute_drop {:optional true} scope-schema] ; removed for a substitute
+          [:standing_ttl_seconds {:optional true} [:int {:min 60}]]
+          [:stale       {:optional true} [:vector scope-entry]] ; written by the sweep
+          [:merged_into {:optional true :kind :seat} :waymark/ref]]}
 ```
 
-The engine registers seats the way it registers kinds. The engine
-options accept `:seats`, a map from seat name to declaration. The
-`:members` option is the precedent.
+The fields, one sentence each:
 
-### 2. The checks
+- `name` is the token a grant and an ask spell. One spelling per
+  seat, with the `one-spelling` guard from `roles.clj`.
+- `charter` is the sentence an agent reads at boot: who this seat
+  is, and what it is for.
+- `scope` is the seat's authority, in the scope schema grants use.
+- `substitute_drop` lists the entries a substitute sitter does not
+  get. Each entry must be inside `scope`.
+- `standing_ttl_seconds` is the longest leash a grant in this seat
+  can request. The cap is `reentry-standing-ttl-seconds`, seven
+  days. An empty field means the 24-hour default.
+- `stale` is written by the sweep in section 6. A person never
+  writes it.
+- `merged_into` names the seat this one merged into.
 
-The declaration battery gains one check, `check-seats`. It runs the
-four scope guards against each seat at declaration time. A seat that
-names a kind, an action, a filter field, or a private kind that the
-registry does not declare fails the check. The failure names the seat
-and the entry.
+### 2. The actions
 
-This is the whole point of the leg. When a kind retires an action,
-the seat that names it fails `make check-queue`. The gate goes red on
-the same push. Nobody finds out at 22:49Z from a dead leash.
+| action | from | to | who | what it does |
+|---|---|---|---|---|
+| `create` | — | active | a person, not a sitter | opens a seat |
+| `restate` | active | active | a person, not a sitter | edits charter, scope, ttl, drop-list |
+| `park` | active | parked | a person | sitters keep their grants; the seat serves nothing |
+| `unpark` | parked | active | a person | the seat serves again, with no new tap |
+| `merge` | active, parked | merged | a person, not a sitter | folds this scope into `into`; this seat closes |
+| `retire` | active, parked | retired | a person | the seat closes for good |
 
-`check-seats` also refuses:
+The guards:
 
-- a `:standing-ttl-seconds` above `reentry-standing-ttl-seconds`;
-- a `:substitute :drop` entry that the seat's scope does not contain;
-- two seats with one name.
+- **`not-a-sitter`** on `create`, `restate`, and `merge`. The actor
+  holds no live grant that cites this seat. A sitter cannot widen
+  its own seat. This is the human verdict the grant law requires.
+  The precedent is `no-self-dealing` on `:grant`.
+- **The four scope guards** on `create` and `restate`. A scope that
+  names a kind, an action, a filter field, or a private kind the
+  registry does not declare is refused at the door.
+- **`drop-inside-scope`** on `create` and `restate`. Each entry in
+  `substitute_drop` must be inside `scope`.
+- **`ttl-within-standing`** on `create` and `restate`.
+  `standing_ttl_seconds` must not exceed
+  `reentry-standing-ttl-seconds`.
+- **`merge-target-is-active`** on `merge`. The `into` seat must be
+  active, and not this seat.
 
-### 3. The ask names the seat
+`merge` has `:confirm true`. Its consequence sentence: "This seat
+closes. Its scope folds into {into}. Each sitter of this seat loses
+its grant and must ask to sit in {into}."
 
-`:approval_request` gains one optional field, `seat`. An ask that
-names a seat carries no scope of its own. The engine fills the ask's
-`scope` from the declaration at create time, so the approver reads the
-scope that the seat holds today. `requester-holds-the-grant` still
-judges the anchor.
+`park` has `:confirm false` and `:reversible true`. It is the cheap
+lever, and it must cost nothing to pull.
 
-An ask that names a seat can request a leash up to the seat's
-`:standing-ttl-seconds`. `asks-are-short` reads the seat's ceiling
-for a seat ask and the 24-hour ceiling for a scope ask. An ask with
-both `seat` and `scope` is refused at the door.
+### 3. The grant points at the seat
 
-### 4. The mint reads the declaration
+`:grant` gains two optional fields, `seat` and `substitute`. A grant
+with `seat` set holds no `scope`. The router resolves its
+visibility from the seat row at each request:
 
-`:grant` gains one optional field, `seat`. `approval-effects!` reads
-the seat declaration at approve time and mints or extends with that
-scope. The approved ask's stored scope is the record of what the
-person saw. The declaration is the source of what the grant holds.
+1. Load the seat. If the seat is not `active`, the grant scopes to
+   nothing. A parked seat serves nothing, and a merged or retired
+   seat serves nothing.
+2. Take the seat's `scope`.
+3. If the grant has `substitute` set, remove the `substitute_drop`
+   entries.
+4. Remove the `stale` entries.
+5. Resolve as a scope grant resolves today.
 
-If the declaration changed between the ask and the approval, the two
-scopes differ. The effect then refuses the mint and writes a warning
-that names the seat. The requester files a new ask. This keeps the
-rule that the approver approves the scope shown.
+The grant load already happens once per request. The seat load is
+one more row in the same read. A grant with `seat` set refuses a
+`scope` in its body, and the reverse. A grant is one or the other.
 
-An extend on a seat grant REPLACES the grant's scope with the seat's
-scope. It does not merge. The merge fold stays for scope asks. A seat
-grant has one source, so it has nothing to merge.
+The `:extend` transition on a seat grant changes only `expires_at`.
+There is no scope to merge. `merge-scope` stays for scope grants.
 
-### 5. The driver files one line
+### 4. The ask names the seat
 
-Step 4 of `standing-agent-tick.sh` reads the grant's `seat` field.
-When the field is set, the driver files
-`{grant_id, seat, task, expires_at}` and no scope. The copy is gone.
-When the field is empty, the driver keeps the current fold.
+`:approval_request` gains `seat` and `substitute`, both optional.
+The three shapes of an ask:
 
-### 6. Discover carries the seat
+| shape | fields | approval does |
+|---|---|---|
+| bootstrap, scope | task, scope, expires_at | mints a scope grant, as today |
+| bootstrap, seat | task, seat, substitute?, expires_at | mints a seat grant, `audience` = requester |
+| extend | grant_id, task, expires_at | slides `expires_at` on the named grant |
 
-`doors.ask` in `waymark_discover` gains `seat`: the seat name the
-caller's grant carries, or null. The MCP instructions add one
-sentence: "If doors.ask.seat is set, file the extend-ask with that
-seat name and no scope."
+An ask with both `seat` and `scope` is refused. An extend ask with a
+`scope` on a seat grant is refused, and the refusal says the seat
+holds the scope. An ask that names a parked, merged, or retired seat
+is refused. `asks-are-short` reads the seat's
+`standing_ttl_seconds` for a seat ask, and the 24-hour ceiling for a
+scope ask.
 
-### 7. The substitute
+The approver's screen renders the seat's charter and scope beside
+the ask, through the `seat` link. The approver approves a seat, not a
+list. If a person changes the seat later, the sitter's authority
+changes with it. That is the design, and section 8 records it as a
+fork.
 
-A seat ask can carry `substitute: true`. The engine mints the seat's
-scope minus the `:substitute :drop` entries. The grant records
-`substitute: true`. The actor on each transition already carries the
-member; the model tier on the actor is the next leg, not this one.
+One full sitter per seat: the `seat-has-one-sitter` guard on
+`approve` refuses a second accepted, non-substitute grant that cites
+the same seat while the first is live. Substitutes are not limited.
 
-## The forks, decided
+### 5. Merge, exactly
 
-**A seat is a declaration, not a role row.** A role row is data, and
-data cannot fail `make check-queue`. The stored scope on the grant is
-the failure this spec removes, so the seat cannot be stored the same
-way. The `:role` kind keeps its job: a name a member holds, checked
-at assignment.
+`merge` takes `into`, a seat ref. The handler:
 
-**The mint refuses on a changed declaration.** The alternative is to
-mint the current declaration and let the approver's view be stale.
-That breaks "the requester's grant gains exactly the scope shown".
-A refusal with a warning costs one more ask. A silent change costs
-trust.
+1. Folds `into`'s scope with this seat's scope through
+   `merge-scope`, and writes the fold onto `into`. The four scope
+   guards judge the fold before the write.
+2. Folds the two `substitute_drop` lists the same way.
+3. Takes the larger `standing_ttl_seconds`.
+4. Writes `merged_into` on this seat and moves it to `merged`.
 
-**The standing leash is a fork for the owner.** `spec-standing-agent`
-records that the daily tap is the law working. The essay's position
-is that trust in a seat is paid once and cached. This spec makes the
-seat's ceiling a declared number with a hard cap of seven days. The
-recommendation is seven days for the composer seat and 24 hours for
-every scope ask. The owner decides the number per seat, in the
-declaration, and the record shows the decision.
+Each grant that cites the merged seat scopes to nothing from step 4,
+by the rule in section 3. The grants are not revoked. They expire on
+their own clocks. Each sitter of the merged seat files a bootstrap
+ask for `into`, and the person who merged approves it in the same
+sitting. One tap per moved sitter. The recorded punt is that `merge`
+does not mint an offered grant for each sitter.
+
+The `into` seat widens by the fold. The person who invokes `merge`
+is not a sitter of either seat, by `not-a-sitter` on `merge` (judged
+against both). That person is the human verdict.
+
+### 6. The sweep: a seat cannot go stale in silence
+
+The registry changes only at boot. `boot-revise!` gains one step
+after the kind fingerprints: judge each active or parked seat's
+`scope` with the four scope guards. For each seat that fails, the
+engine writes the failing entries into `stale` through the concealed
+transition `:mark_stale` (active → active, system actor, logged),
+with the guard's own sentence as the transition's note.
+
+A stale seat still serves. Section 3 removes the `stale` entries at
+each request, so the sitter keeps the doors that still exist. The
+leash does not go dark. This is the opposite of waymark-enx, where
+one dead entry refused the whole ask.
+
+A stale seat cannot stay quiet:
+
+- `waymark_discover` carries `doors.ask.seat` with `name`, `state`,
+  `standing_ttl_seconds`, and `stale`. The MCP instructions gain one
+  sentence: "If doors.ask.seat.stale is not empty, tell your person
+  the seat needs a restate, and name the entries."
+- The seat's envelope carries a warning with the same entries.
+- `restate` clears `stale` when the new scope passes the four guards.
+  A `restate` whose scope still names a stale entry is refused by
+  the guards, with the entry named.
+- The driver prints the stale entries as its first line, above the
+  title. The rule is the one `grant_watch` already follows for NO
+  ASK STANDS.
+
+The sweep runs also when a seat is created or restated, as the four
+guards at the door. The boot sweep is the only path a seat can go
+stale without a write, so it is the only sweep the engine needs.
+
+### 7. The driver, and fuel
+
+Step 4 of `standing-agent-tick.sh` reads `doors.ask.seat`. When the
+grant has a seat, the driver files `{grant_id, task, expires_at}` and
+no scope. The copy is gone.
+
+When the seat is `parked`, the driver still renews the session and
+the leash. Those are two HTTP calls, and no model wakes. The driver
+exits before any sitting, and prints "seat parked". When the seat is
+`unparked`, the next tick sits again, with no tap. This is the fixed
+cost of a seat reduced to two calls.
+
+### 8. The forks, decided
+
+**The grant is a pointer, not a snapshot.** A snapshot is a copy,
+and the copy is the failure on record. With a pointer, a person's
+edit to the seat changes the sitter's authority at the next request.
+The grant law says scope widens only through a human verdict. The
+verdict is the person's `restate` or `merge`, judged by
+`not-a-sitter`. The approver of a seat ask approves an office and
+trusts the office's editors. The record shows every edit as a
+transition on the seat row.
+
+**A stale seat degrades, it does not die.** A dead leash was the
+disaster twice. A seat that serves the surviving entries and says so
+in three places keeps the agent working and gets the person's
+attention.
+
+**Park does not revoke.** Revoke is one-way, and an unpark would
+then cost a tap. The essay's park is a fuel lever a person pulls
+often, so it must be free in both directions.
+
+**Merge does not mint.** The person who merges is present, and each
+moved sitter costs one tap in the same sitting. A mint from the
+merge handler would be a second post-commit effect at the wire
+boundary, and waymark-442.14 is still open on the first.
+
+**One full sitter per seat.** "Who sits in this seat" must be a
+one-row answer, and the essay's seat does not want two occupants.
+Substitutes are the exception, by name.
+
+**The `:role` kind stays.** A role is a name a member holds, checked
+at assignment. A seat is an office with authority. The two do not
+merge in this leg.
 
 ## Recorded punts
 
-- The seat declaration is not yet fingerprinted as law. `check-seats`
-  runs at boot and at `make check-queue`. A law revision for seats is
-  a named follow-up.
-- A seat lives in application code. A seat that a person writes in
-  the UI, as a row, is not in this leg.
+- `merge` does not mint an offered grant for each moved sitter.
+- A seat has no `holder` field. The sitter is the accepted grant
+  that cites the seat, one query away, through the `grants` link.
+- The seat's own ledger from the essay (laurels, failures,
+  memories) is not a field. The transition log on the seat row and
+  the grants that cite it are the record. A composed seat page is a
+  surface declaration away, as the member page was.
 - The 30-minute default on an anchorless scope ask (waymark-h6y) is
-  unchanged here. A seat ask defaults its leash to the seat's
-  ceiling, which removes the trap for seat grants only.
+  unchanged. A seat ask defaults its leash to the seat's ceiling.
 - The `approval_request` and `grant` fingerprints move, because both
-  schemas gain a field. The pinned hash in
+  schemas gain fields. The pinned hash in
   `waymark10.decision-sugar-test` must be updated with the change.
+- The model tier that sits in the seat is the next leg. This leg
+  records only `substitute`.
 
 ## What proves it
 
 A test namespace `waymark10.seat-test` with these cases:
 
-1. A seat that names a retired action fails `check-seats`. The
-   failure names the seat and the entry.
-2. An ask that names a seat is created with the seat's scope filled
-   in. An ask with both `seat` and `scope` is refused.
-3. Approval of a seat ask mints a grant with the seat's scope and the
-   seat name stamped.
-4. An extend on a seat grant replaces the scope. After the extend,
-   the grant holds one entry per kind and exactly the seat's entries.
-5. A declaration change between ask and approval refuses the mint
-   and writes the warning.
-6. A substitute ask mints the seat's scope minus the drop entries.
-7. A seat ask can request up to the seat's ceiling. A scope ask is
-   still capped at 24 hours.
+1. A seat whose scope names a missing action is refused at `create`
+   and at `restate`, and the refusal names the entry.
+2. A sitter's `restate` on its own seat is refused by
+   `not-a-sitter`.
+3. A seat ask mints a grant with `seat` set and no scope. An ask
+   with both `seat` and `scope` is refused.
+4. A request under a seat grant sees exactly the seat's scope. After
+   a `restate`, the next request sees the new scope, with no new
+   grant.
+5. A request under a substitute grant does not see the
+   `substitute_drop` entries.
+6. `park` makes the sitter's request see nothing. `unpark` restores
+   it. No grant moved.
+7. `merge` writes the fold onto `into`, closes the source, and the
+   source's sitter sees nothing. The fold has one entry per kind.
+8. A boot with a retired action marks the seat stale, with the entry
+   named. The sitter's request sees the surviving entries. Discover
+   carries `stale`. A `restate` that drops the entry clears it.
+9. A second full sitter on one seat is refused at `approve`. A
+   substitute is not.
+10. A seat ask can request up to the seat's ceiling. A scope ask is
+    still capped at 24 hours.
 
 The conformance suite must invoke every new door. `make check-queue`
-must pass with the composer seat declared in `workqueue10`.
+must pass.
 
 ## Effort
 
-**Small to medium.** The scope schema, the four scope guards, the
-mint effect, and the discover door all exist. The new code is one
-check, two optional fields, one branch in the effect, one branch in
-the driver, and one sentence in the instructions. The migration adds
-two nullable columns.
+**Medium.** The new kind is one file with six actions and five
+guards. The scope schema, the four scope guards, `merge-scope`,
+`no-self-dealing`, and `one-spelling` all exist and are reused. The
+router gains one row load in the visibility resolve. `boot-revise!`
+gains one step. The migration adds one table and four nullable
+columns.
