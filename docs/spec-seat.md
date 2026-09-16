@@ -159,13 +159,14 @@ sitter of this seat loses its grant and must ask to sit in {into}."
 | guard | doors | rule |
 |---|---|---|
 | `one-spelling` | create | no active seat has this name. From `roles.clj`. |
+| `a-person` | create, restate, park, unpark, merge, retire | the principal's type is human. The precedent is the `actor_type` check on the member row in `members.clj`. |
 | `not-a-sitter` | create, restate, merge | the actor holds no live grant that cites this seat, or the `into` seat |
 | the four scope guards | create, restate | the scope names only kinds, actions, filter fields, and non-private kinds the registry declares |
 | `drop-inside-scope` | create, restate | each `substitute_drop` entry is inside `scope` |
 | `ttl-within-standing` | create, restate | `standing_ttl_seconds` is not more than `reentry-standing-ttl-seconds` |
 | `held-for-active-models` | create, restate | each model in the two lists is active |
 | `walk-names-a-kind-in-scope` | create, restate | `walk` names a kind the scope admits, and the kind declares `:default-filters` over state |
-| `step-carries-a-note` | restate | a restate that changes `held_for` or `substitute_for` carries `note`, 1 to 240 characters |
+| `step-carries-a-note` | restate | a restate that changes `held_for` or `substitute_for` carries `note`, 1 to 240 characters. `note` is a transition input; the log's `inputs` column holds it, and no column is added. |
 | `merge-target-is-active` | merge | `into` is active, and is not this seat |
 
 **R-4.8** `not-a-sitter` is the human verdict the grant law requires.
@@ -220,7 +221,7 @@ seat row at each request, in this order.
 | shape | fields | approval effect |
 |---|---|---|
 | bootstrap, scope | task, scope, expires_at | mints a scope grant, as today |
-| bootstrap, seat | task, seat, substitute?, expires_at | mints a seat grant with `audience` = requester |
+| bootstrap, seat | task, seat, substitute?, expires_at | mints a seat grant with `audience` = requester. The ask spells the seat's `name`; the mint resolves it to the seat ref and writes the ref on the grant. |
 | extend | grant_id, task, expires_at | slides `expires_at` on the named grant |
 
 **R-5.5** The ask door must refuse: an ask with both `seat` and
@@ -330,10 +331,13 @@ seat's own sitter writes here."
 `reprice`. Each reprice is a transition, so the history of prices is
 on record.
 
-**R-9.4** The harness must declare the session's model. `POST
-/auth/agent`, `POST /auth/agent/renew`, and the MCP `initialize`
-must accept `model`, and the session must record it. A session with
-no declaration has model null.
+**R-9.4** The harness must declare the session's model. A session
+is a signed token, not a row (`oidc.clj`, HS256), so the model is a
+claim in the token, beside `actor_type`. `POST /auth/agent` and
+`POST /auth/agent/renew` must accept `model` and mint it into the
+token. A token with no claim has model null. The MCP `initialize`
+cannot rewrite a cookie, so it is not a declaration door; the
+harness declares at bind and at renew only (R-12.6).
 
 **R-9.5** The principal must gain `model`, read from the session. The
 actor on each transition then carries it, in the `actor` column that
@@ -380,11 +384,13 @@ must not change a closed sitting.
 harness's report.
 
 **R-10.6** The engine must count transitions and refusals. The
-router must find the open sitting for the request's grant, and it
+router must find the open sitting for the request's grant, one
+lookup by `grant` and state `open` under an index on `grant`, and it
 must add one to `transitions` on each committed transition and one
-to `refusals` on each 409 it serves. The harness does not report
-these. No refusal log exists today; this counter is the first record
-of a refusal as fuel.
+to `refusals` on each 409 it serves. A request with no open sitting
+counts nothing. The harness does not report these. No refusal log
+exists today; this counter is the first record of a refusal as
+fuel.
 
 **R-10.7** The sitting collection must be filterable by `seat`,
 `model`, and `started_at` after, so these are each one query: fuel
@@ -416,6 +422,14 @@ a window, each as one query over rows that exist.
 | what did each thing cost | cost divided by transitions |
 | which model did it | group by `model` |
 
+**R-11.3a** The six answers must be one call. `GET
+/api/seats/{id}/ledger?since=` must return them for the window, and
+`waymark_discover` must name the route under `doors.ask.seat`. The
+corrections answer is a window over the transition log (each row's
+previous transition, by `resource_id` and `id`), which no query
+serves today; it is new, and it is the one query the ladder cannot
+do without.
+
 **R-11.4** A step down holds when corrections per transition do not
 rise across the sittings that follow it. The engine gives the
 numbers. The person judges the count of sittings; the advice of this
@@ -444,6 +458,16 @@ frontier is not a failure; it is a seat whose judgment is real.
 
 ## 12. Requirements: the driver
 
+**R-12.0** The driver is new. `scripts/standing-agent-tick.sh`
+renews the session, files the extend-ask, and writes the cookie into
+the MCP config. It starts no model. The seat driver is a second
+script that does what this section says: it reads the seat, opens
+the sitting, starts the model with the charter, and closes the
+sitting with the usage the harness returns. The Claude Code CLI in
+print mode returns the usage in its JSON result, and the Agent SDK
+returns it per turn; either is exact, and the driver records it as
+returned (R-10.5).
+
 **R-12.1** The driver must read `doors.ask.seat` before any sitting.
 If the seat is parked, over budget, or held for another model, the
 driver must print the reason first and exit before the model starts.
@@ -455,7 +479,10 @@ It must still renew the session and the leash.
 and close it with the exact token counts when the model stops.
 
 **R-12.4** The driver must pass `sitting_budget_tokens` to the
-harness as the task budget.
+harness as its ceiling, through whatever knob the harness has. If
+the harness has none, the driver must end the sitting when the
+running usage passes the ceiling and write the overrun in the
+sitting's `note`. A sitting must never close without its counts.
 
 **R-12.5** The driver must file an extend-ask as `{grant_id, task,
 expires_at}` with no scope when the grant cites a seat.
@@ -1029,6 +1056,10 @@ above. The cases:
 21. The corrections query returns a person's `reopen` on a row whose
     last transition was the seat's sitter's `no`, and does not return
     a person's transition on a row the sitter never moved. (R-11.3)
+22. A sitter's `create`, `park`, or `retire` on a seat is refused by
+    `a-person`. A person's is served. (R-4.7)
+23. The ledger route returns the six answers for a window, and
+    discover names the route. (R-11.3a)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
@@ -1134,3 +1165,6 @@ three tables and four nullable columns. The scope schema, the four
 scope guards, `merge-scope`, `no-self-dealing`, and `one-spelling`
 are reused as they are. The delta from the third draft is two
 counters at close, one guard on one door, and the cut of two fields.
+Two things the earlier drafts did not count: the seat driver script
+is new, because the tick script starts no model; and the ledger
+route with its corrections window is a new query.
