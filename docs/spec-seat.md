@@ -69,6 +69,7 @@ work.
 | `cadence_seconds` | int | how often the driver wakes the seat |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
+| `walk` | kind name, optional | the queue this seat walks: one model turn per queued row of that kind. Section 11.11. |
 | `stale` | list of scope entries | written by the sweep. A person never writes it. |
 | `merged_into` | seat ref | the seat this one merged into |
 
@@ -103,6 +104,7 @@ sitter of this seat loses its grant and must ask to sit in {into}."
 | `drop-inside-scope` | create, restate | each `substitute_drop` entry is inside `scope` |
 | `ttl-within-standing` | create, restate | `standing_ttl_seconds` is not more than `reentry-standing-ttl-seconds` |
 | `held-for-active-models` | create, restate | each model in the two lists is active |
+| `walk-names-a-kind-in-scope` | create, restate | `walk` names a kind the scope admits, and the kind declares `:default-filters` over state |
 | `merge-target-is-active` | merge | `into` is active, and is not this seat |
 
 **R-3.8** `not-a-sitter` is the human verdict the grant law requires.
@@ -329,6 +331,15 @@ expires_at}` with no scope when the grant cites a seat.
 **R-10.6** The driver must declare the model it starts, at bind and
 at renew.
 
+**R-10.7** When the seat has `walk`, the driver must run the walk
+mode: read the queue (the kind's collection under its default
+filter), and for each row start one fresh model turn whose prompt is
+the seat's charter, must list, and never list, then the row's
+envelope. The model takes one door the envelope offers. The turn
+ends. The driver moves to the next row until the queue is empty or
+the sitting's budget is spent. One sitting row covers the whole
+walk.
+
 ## 11. The email clerk: a worked example
 
 The seat surfaces action items from the owner's inbox. Its name is
@@ -497,6 +508,118 @@ seat still serves the other three entries. Discover says stale. The
 driver prints it first. The person restates the scope without
 prioritize, and the stale list clears.
 
+### 11.11 The fixed walk: the clerk on an economy model
+
+The owner's question, 2026-09-16: an economy model comes online, its
+first prompt is the charter, and then it walks a decision tree until
+it reaches a leaf. For email: a queue of messages, and for each one
+three moves. Research opens the message and enables the other two.
+Yes states the action item. No dismisses it.
+
+**The decision tree is a kind.** A tree with branches is a state
+machine with two doors from one state. That is an ordinary
+`defresource`, not a `:process` (which has no branches by design).
+The tree lives in code, because it is law. The seat lives in a row,
+because it is fluid.
+
+```clojure
+(defresource inbox_item
+  {:kind :inbox_item
+   :states [:queued :researched :action_item :dismissed]
+   :initial :queued
+   :terminal #{:action_item :dismissed}
+   :default-filters {:state "queued"}          ; the queue is the collection
+   :sortable {:fields [:received_at] :default "received_at"}
+   :schema [:map
+            [:message_id  [:string]]           ; the address in the inbox
+            [:subject     [:string]]
+            [:sender      [:string]]
+            [:received_at :waymark/instant]
+            [:summary     {:optional true} [:maybe [:string {:max 480}]]] ; written by research
+            [:task        {:optional true :kind :task} [:maybe :waymark/ref]] ; stamped by yes
+            [:reason      {:optional true} [:maybe [:string {:max 240}]]]]  ; written by no
+   :actions
+   {:research {:from #{:queued} :to :researched
+               :input [:map [:summary [:string {:min 1 :max 480}]]]
+               :display {:label "Research" :order 1}}
+    :yes      {:from #{:researched} :to :action_item
+               :input [:map [:action_item [:string {:min 1 :max 200}]]
+                             [:due_at {:optional true} [:maybe :waymark/instant]]]
+               :touches [{:kind :task :action :create}]   ; the task is born here
+               :handler yes->task                         ; ctx :create, outer principal
+               :display {:label "Yes, action item" :order 2}}
+    :no       {:from #{:researched} :to :dismissed
+               :input [:map [:reason {:optional true} [:maybe [:string {:max 240}]]]]
+               :display {:label "No" :order 3}}}})
+```
+
+The tree is enforced by the machine, not by the prompt. At `queued`,
+the envelope offers one door: research. At `researched`, it offers
+two: yes and no. At a leaf, it offers none. The model cannot skip
+research, because the yes door is absent until it is done. It cannot
+make a task except through yes, which demands the action item in
+one sentence. `:touches` advertises the task birth, and the
+conformance library checks that it fired.
+
+**The queue fills with no tokens.** A source in
+`workqueue10/sources/`, on the pattern of `gtasks.clj`, lists the
+inbox headers through the `email.read` power at the cadence and
+mints one `inbox_item` per new message id. Headers only. The body is
+never stored; the model reads it through `waymark_power` at
+research time.
+
+**The seat, restated for the walk.**
+
+```json
+{
+  "name": "inbox-clerk",
+  "charter": "You triage Colton's inbox. For each message the queue offers, take the one door the envelope shows. Research first. Then say yes with the action item in one sentence, or no.",
+  "must": ["Take one door per turn. When the envelope offers none, stop."],
+  "never": ["Do not say yes to a newsletter or a receipt."],
+  "scope": [
+    {"kind": "email.read", "actions": []},
+    {"kind": "inbox_item", "actions": ["research", "yes", "no"]}
+  ],
+  "held_for": ["claude-sonnet-5"],
+  "walk": "inbox_item",
+  "cadence_seconds": 3600,
+  "budget_usd_per_week": 4.00,
+  "sitting_budget_tokens": 20000
+}
+```
+
+The scope no longer names `task.create`. The task is born inside
+the yes handler through the cross-write door, under the outer
+principal, and `:touches` says so. The seat is held for an economy
+model as its full sitter, because the walk needs no judgment the
+envelope does not already frame.
+
+**One walk, turn by turn.** The driver opens one sitting, then for
+each queued row:
+
+1. It starts a fresh model turn. The prompt is the charter, the must
+   list, the never list, and the row's envelope. The charter is a
+   stable prefix, so the prompt cache serves it on every turn after
+   the first.
+2. The model sees one door, research. It reads the message through
+   `waymark_power`, then invokes research with a summary. The turn
+   ends.
+3. The driver starts a fresh turn on the same row. The envelope now
+   carries the summary and offers yes and no. The model takes one.
+   The turn ends.
+4. The row is at a leaf. The driver moves to the next row.
+
+Each turn holds one row, never the queue. This is the essay's
+"smaller tasks, less context", made mechanical. Each transition
+carries the member and `claude-sonnet-5` in the actor. The sitting
+closes with the sum of the turns' usage.
+
+**What the person tunes, and where.** The tree is a deploy: a new
+branch is a new door, and it is law. The seat is a row: which model
+walks, how often, with what budget, and the charter's words, all
+with no deploy. That is the right split: law in code, fluid things
+in rows.
+
 ## 12. Acceptance
 
 A test namespace `waymark10.seat-test` must prove each requirement
@@ -542,6 +665,10 @@ above. The cases:
     (R-4.2, R-6.4)
 16. A sitting left open past two cadences is marked abandoned by the
     boot sweep. (R-6.6)
+17. On a walk seat, a `queued` row's envelope offers only research,
+    a `researched` row's offers only yes and no, and a leaf offers
+    none. A `yes` births exactly one task and stamps it. (R-10.7,
+    section 11.11)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
@@ -600,6 +727,11 @@ trusts.
   is open.
 - The 30-minute default on an anchorless scope ask (waymark-h6y) is
   unchanged. A seat ask defaults its leash to the seat's ceiling.
+- Research as an engine step: the research handler could fetch the
+  message through the Gate proxy under the sitter's grant, so the
+  model never holds the power. `invoke-for` exists in
+  `gate_proxy.clj`; a handler that reaches it is a new seam, and a
+  follow-up.
 
 ## 15. Effort
 
