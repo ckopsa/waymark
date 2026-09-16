@@ -217,6 +217,13 @@ than two cadences to `abandoned`, with no tokens.
 `journal`, and `letter` are private own-surface kinds that no scope
 can name, so the bar is a guard, not a scope entry.
 
+The reason is continuity, not capability. The memory is the seat's
+voice across sessions. A substitute that writes it writes in another
+voice, and the next full sitter inherits it. The bar applies to every
+substitute, whatever its tier. The audit is different: the transition
+log records every act a substitute takes, with the model in the
+actor, and no sitter can opt out of it.
+
 **R-7.2** The visibility map must carry a `substitute` flag read
 from the grant. The guard `not-a-substitute` must judge
 `self/update`, `journal/create`, and `letter/create`. Its sentence:
