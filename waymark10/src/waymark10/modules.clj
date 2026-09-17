@@ -158,6 +158,7 @@
             [waymark10.ranking-note :as ranking-note]
             [waymark10.recipe-proposal :as recipe-proposal]
             [waymark10.server.roles :as roles]
+            [waymark10.server.seats :as seats]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.routes.feed :as feed-routes]
             [waymark10.server.routes.gate :as gate-routes]
@@ -169,6 +170,7 @@
             [waymark10.server.routes.seasons :as seasons-routes]
             [waymark10.server.routes.ui :as ui-routes]
             [waymark10.server.routes.worksheet :as worksheet-routes]
+            [waymark10.server.schedules :as schedules]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.server.worksheet :as worksheet]
             [waymark10.remark :as remark]
@@ -306,6 +308,44 @@
              {:kind :dashboard :enroll :app-opt-in}
              {:kind :dashboard_slot :enroll :app-opt-in}]
     :pack packs/dashboard}
+
+   ;; the seat's schedule (spec-seat.md §12): the means by which a
+   ;; sitting is created, one row per seat, mirrored out to the
+   ;; harness's own scheduler. `:always` for the seats module's reason
+   ;; — a schedule names a cron, a model and a provider, and none of
+   ;; that is any application's vocabulary — and for one more of its
+   ;; own: seats.clj records that it had to hold `schedule` as an
+   ;; opaque string because a typed ref refuses an engine whose target
+   ;; kind is absent, and a kind enrolled in every engine is exactly
+   ;; what makes that one line true again.
+   ;;
+   ;; Unlike :seats, this module RUNS things: the log consumer that
+   ;; mirrors a seat out, and the read-back sweep that reports drift.
+   ;; Both wear `:when` (the hook asks the REGISTRY, not this table)
+   ;; and `:elected` for the webhook deliverer's reason — two
+   ;; processes mirroring one seat write two copies at the provider,
+   ;; and the consumer's cursor is shared and unguarded.
+   {:module :schedules
+    :enrols [{:kind :schedule :enroll :always
+              :kinds (fn [_] [schedules/schedule])}]
+    :hooks [{:hook :schedules-mirror
+             :after [:dispatcher]
+             :elected :schedules-mirror
+             :when schedules/serving?
+             :start (fn [eng running]
+                      (schedules/start-mirror!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop schedules/stop-mirror!}
+            {:hook :schedules-drift
+             :elected :schedules-drift
+             :when schedules/serving?
+             :start (fn [eng _]
+                      (schedules/start-drift-sweeper!
+                       eng {:interval-ms
+                            (:schedule-drift-ms
+                             eng schedules/default-drift-interval-ms)}))
+             :stop schedules/stop-drift-sweeper!}]}
 
    ;; routes only, from here down — and their packs are route-shaped
    ;; to match: an obligation needing [:route m] is skipped, never
@@ -504,6 +544,31 @@
    ;; like. Its Gate address is an engine opt ((:gate eng) {:url …}),
    ;; read at route build with the deployment default.
    {:module :gate :routes gate-routes/routes}
+
+   ;; the seat, the model and the sitting (docs/spec-seat.md, leg 1 of
+   ;; waymark-fp62): the office an agent sits in, the price list its
+   ;; model is on, and the record of what one wake cost. `:always`, and
+   ;; the feed module's reason word for word — these three name no
+   ;; application vocabulary at all. A seat's scope names whatever
+   ;; kinds the house happens to serve, its model is an API identifier
+   ;; and a price, and its sitting is four token counts; nothing in
+   ;; them belongs to mealplan or to the queue. What they ARE is the
+   ;; engine's own answer to "what did this cost, and can a cheaper
+   ;; model hold it" — a question every deployment that lets an agent
+   ;; act has, so there is nothing left to opt into.
+   ;;
+   ;; It starts nothing and mounts no route here. The boot sweep
+   ;; (R-7.1/R-7.6), the router's seat resolve (R-5.2) and the ledger
+   ;; route (R-11.3a) are the NEXT wave's, and each lands where it
+   ;; belongs — in boot-revise!, in the router, and in a routes
+   ;; namespace — rather than as a fifth column on this table.
+   {:module :seats
+    :enrols [{:kind :seat :enroll :always
+              :kinds (fn [_] [seats/seat])}
+             {:kind :model :enroll :always
+              :kinds (fn [_] [seats/model])}
+             {:kind :sitting :enroll :always
+              :kinds (fn [_] [seats/sitting])}]}
 
    ;; named, contributing nothing through this seam
    {:module :postgres-store}

@@ -72,10 +72,23 @@
   ;; reason again — {subject_kind, subject_id}, no application
   ;; vocabulary, and the conversation is about the cards this module
   ;; minted.
+  ;; …and the seats module's three (spec-seat.md, waymark-fp62): the
+  ;; office, the price list and the record of one wake. :always for the
+  ;; feed module's reason once more — a seat's scope names whatever
+  ;; kinds the house serves, a model is an identifier and four prices,
+  ;; a sitting is four token counts, and none of it is any
+  ;; application's vocabulary. What they are is the engine's own answer
+  ;; to what an agent's work cost.
   (is (= #{:definition :member :role :grant :approval_request
            :attachment :subscription :job :feed_recipe :recipe_proposal
            :feed_view :feed_view_consent :verdict_reason :ranking_note
-           :remark}
+           :remark :seat :model :sitting
+           ;; …and the schedule (spec-seat.md §12), for the same
+           ;; reason a seat is always here: a cron, a model and a
+           ;; provider are nobody's application vocabulary, and the
+           ;; seat's own `schedule` field is dead weight in a house
+           ;; that cannot serve the kind it points at.
+           :schedule}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
