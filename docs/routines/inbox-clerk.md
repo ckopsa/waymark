@@ -1,10 +1,11 @@
 # Routine: inbox-clerk
 
-The clerk trial's driver (docs/spec-seat.md section 12, the owner's
-ruling of 2026-09-16: use the harness's native scheduler). This file
-is the record of what the schedule holds. A person creates the
-Routine from it, in Claude, and updates it from it. Nothing here runs
-on its own.
+The clerk trial's driver (docs/spec-seat.md section 12). For the
+trial, a person creates this Routine by hand from this file, because
+the `schedule` kind does not exist yet. When leg 1 lands, the engine
+owns a schedule row per seat and mirrors it out through an adapter;
+nobody edits a Routine by hand after that (the owner's ruling of
+2026-09-17). Nothing here runs on its own.
 
 Written in ASD-STE100 Simplified Technical English.
 
@@ -20,7 +21,7 @@ Written in ASD-STE100 Simplified Technical English.
 
 For the trial the prompt carries the charter itself, because no seat
 row exists yet. When the seat kind lands, the prompt becomes the
-pointer of R-12.2 and the charter moves to the row.
+pointer of R-12.3 and the charter moves to the row.
 
 ## The prompt
 
@@ -97,7 +98,8 @@ own leash. To resume, unpause it.
 
 ## Later
 
-- The source fires the Routine through the API with one row's id,
-  so one session walks one row (R-12.7).
-- An engine effect updates the Routine when the seat restates its
-  name, cadence, or model (section 17).
+- The `schedule` kind (spec-seat.md section 12) replaces this file:
+  the engine creates the Routine from the seat, pushes cadence and
+  model changes, pauses it on park, and reads it back for drift.
+- The source fires the schedule with one row's id, so one session
+  walks one row (R-12.9).
