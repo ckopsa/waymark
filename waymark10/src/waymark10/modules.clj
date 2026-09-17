@@ -172,6 +172,7 @@
             [waymark10.server.routes.ui :as ui-routes]
             [waymark10.server.routes.worksheet :as worksheet-routes]
             [waymark10.server.schedules :as schedules]
+            [waymark10.server.wakes :as wakes]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.server.worksheet :as worksheet]
             [waymark10.remark :as remark]
@@ -361,7 +362,24 @@
                        eng {:interval-ms
                             (:schedule-drift-ms
                              eng schedules/default-drift-interval-ms)}))
-             :stop schedules/stop-drift-sweeper!}]}
+             :stop schedules/stop-drift-sweeper!}
+            ;; R-12.22's third way a sitting begins: the transitions a
+            ;; seat asked to be woken by. A second durable consumer on
+            ;; its own cursor (`:wakes`), plus the tick that releases
+            ;; the wakes the damper held — `:elected` and `:when` for
+            ;; the two above's reasons, and `:after [:dispatcher]`
+            ;; because a log consumer rides it as its wake signal.
+            {:hook :wakes
+             :after [:dispatcher]
+             :elected :wakes
+             :when schedules/serving?
+             :start (fn [eng running]
+                      (wakes/start-wakes!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)
+                            :tick-ms (:wake-tick-ms
+                                      eng wakes/default-tick-ms)}))
+             :stop wakes/stop-wakes!}]}
 
    ;; routes only, from here down — and their packs are route-shaped
    ;; to match: an obligation needing [:route m] is skipped, never

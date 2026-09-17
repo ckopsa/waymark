@@ -338,10 +338,11 @@
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
-            ;; jobs and realtime in the inventory, and its two hooks
+            ;; jobs and realtime in the inventory, and its three hooks
             ;; take that place in the stable order: the mirror waits
-            ;; on :dispatcher only, the drift sweep on nothing
-            :schedules-mirror :schedules-drift
+            ;; on :dispatcher only, the drift sweep on nothing, and
+            ;; the wake consumer (R-12.22) on :dispatcher again
+            :schedules-mirror :schedules-drift :wakes
             :curtain :presence :intents
             :discovery
             ;; the feed module's two surfaces. :tickler-sweeper

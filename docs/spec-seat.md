@@ -523,6 +523,7 @@ loop script.
 | `last_fired_at` | instant, optional | when the engine last fired the Routine. Engine-written. |
 | `last_run_url` | string, optional | the provider's page for the last run. Engine-written. |
 | `wake_pending` | boolean, optional | a match waits for the damper to lift (R-12.22). Engine-written. |
+| `wake_fired_at` | instant, optional | when the engine last fired the seat for a matching transition (R-12.22). Engine-written. |
 
 States: `pending` (no copy yet), `live`, `paused`, `broken` (the
 adapter could not reach the provider; the note says why). The seat

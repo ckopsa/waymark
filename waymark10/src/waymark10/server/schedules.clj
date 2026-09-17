@@ -507,7 +507,17 @@
                     :x-display
                     {:label "A wake is waiting"
                      :help "Set by the engine when a transition matched this seat's wake_on inside the damper. The next fire after the damper lifts clears it."}}
-     [:maybe :boolean]]]
+     [:maybe :boolean]]
+    ;; The wake consumer's OWN clock. `last_fired_at` is stamped only
+    ;; after the provider answered, one consumer later; a burst of
+    ;; matches inside one drain would each read it unstamped and fire.
+    ;; So the wake stamps this the moment its fire goes out, and the
+    ;; damper reads the later of the two.
+    [:wake_fired_at {:optional true
+                     :x-display
+                     {:label "Last wake"
+                      :help "When the engine last fired this seat for a matching transition. Engine-written."}}
+     [:maybe :waymark/instant]]]
    :create-schema
    [:map
     [:seat {:kind :seat
