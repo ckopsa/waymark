@@ -1223,7 +1223,16 @@
    :sortable {:fields [:name] :default "name"}
    :links [{:rel "merged_into" :kind :seat
             :href "/api/seats/{data.merged_into}"
-            :summary "The seat this one folded into"}]
+            :summary "The seat this one folded into"}
+           ;; the office's own records, one hop from the row (owner's
+           ;; ask, 2026-09-17): the wakes it has sat, newest first, and
+           ;; the schedule that fires it
+           {:rel "sittings" :kind :sitting
+            :href "/api/sittings?seat={id}&sort=-started_at"
+            :summary "The sittings this seat has held, newest first"}
+           {:rel "schedule" :kind :schedule
+            :href "/api/schedules/{data.schedule}"
+            :summary "The schedule that fires this seat"}]
    :create-guards [a-person
                    not-a-sitter
                    key-not-written-by-hand
