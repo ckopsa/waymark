@@ -71,6 +71,40 @@
       (is (= ["suggested" "active"]
              (get-in js [:properties :target_id :x-ref :pick :state]))))))
 
+(deftest a-list-of-refs-publishes-its-picker-on-the-items
+  ;; waymark-fp62.7.8. :kind rides the ENTRY, so a [:vector
+  ;; :waymark/ref] field advertised its picker at the ARRAY level and
+  ;; the generic form built one select from it: the seed was a list of
+  ;; ids, no option ever equalled it, and the seat's held_for opened as
+  ;; an empty model chooser that had dropped its own prefill. The
+  ;; advertisement is carried onto the ITEMS, where the value one
+  ;; widget holds lives — and kept on the array, where the collection's
+  ;; filter param (which filters BY this field) reads it.
+  (let [js (schema/json-schema
+            [:map [:held_for {:kind :model} [:vector :waymark/ref]]])
+        prop (get-in js [:properties :held_for])]
+    (is (= "array" (:type prop)))
+    (is (= {:kind :model} (:x-ref prop))
+        "the array keeps the reading the filter param takes from it")
+    (is (= {:kind :model} (get-in prop [:items :x-ref]))
+        "…and one row of the list is one picker")
+    (is (= "waymark-ref" (get-in prop [:items :format]))
+        "the item is still the ref it always was"))
+  (testing "a nilable list carries it into the array arm of the oneOf"
+    (let [js (schema/json-schema
+              [:map [:participants {:kind :person :pick {:state :active}}
+                     [:maybe [:vector :waymark/ref]]]])
+          prop (get-in js [:properties :participants])
+          arm (first (filter :items (or (:oneOf prop) (:anyOf prop))))]
+      (is (some? arm) "a [:maybe [:vector …]] reaches the wire beside a null")
+      (is (= {:kind :person :pick {:state "active"}} (get-in arm [:items :x-ref]))
+          "the whole declaration rides down, pick and all")))
+  (testing "a single ref is untouched — it has no items to carry to"
+    (let [js (schema/json-schema
+              [:map [:target_id {:kind :pk_target} :waymark/ref]])]
+      (is (= {:kind :pk_target} (get-in js [:properties :target_id :x-ref])))
+      (is (nil? (get-in js [:properties :target_id :items]))))))
+
 ;; ── 2. presentation, never law ──────────────────────────────────────
 
 (deftest pick-is-not-fingerprinted

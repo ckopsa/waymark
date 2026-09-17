@@ -79,6 +79,12 @@ function fieldWidget(name, rawProp, value) {
                         value: instantToLocal(value)});
   if (prop.type === "array") {
     const items = prop.items || {};
+    /* a list of REFS is rows of pickers (waymark-fp62.7.8): the entry
+       declared :kind and the projection carries that advertisement
+       onto the ITEMS, so each row is the same labeled select a single
+       ref gets. A list of ref-shaped strings the declaration never
+       gave a :kind has no collection to offer and keeps its box. */
+    if (refItems(rawProp)) return refListWidget(name, prop, value);
     if ((items.type === "string" || items.type === undefined) && !items.properties)
       return el("input", {type: "text", name, "data-array": "csv",
         placeholder: "comma-separated",
@@ -192,8 +198,12 @@ function wireWhen(container, prefix) {
    row left blank. The window a block opens with, a context's usual
    windows, a product's price sightings — each was a JSON box wearing a
    sentence until this. */
-function listWidget(name, prop, items, value) {
+function listWidget(name, prop, items, value, makeRow) {
   const box = el("div", {class: "subform list", "data-list": name});
+  /* what one row holds: the item map's sub-form, or whatever the
+     caller builds — a list of refs builds one select per row */
+  const build = makeRow ||
+    ((rowName, seed) => subformWidget(rowName, items, seed));
   const rows = el("div", {class: "listrows"});
   const min = prop.minItems || 0;
   const max = prop.maxItems;
@@ -205,7 +215,7 @@ function listWidget(name, prop, items, value) {
   const addRow = (seed) => {
     const i = seq++;
     const row = el("div", {class: "listrow", "data-row": i});
-    row.append(subformWidget(name + "[" + i + "]", items, seed));
+    row.append(build(name + "[" + i + "]", seed));
     row.append(el("button", {type: "button", class: "listdrop",
                              "aria-label": "remove this entry",
                              onclick: () => { row.remove(); refresh(); }}, "✕"));
@@ -223,6 +233,38 @@ function listWidget(name, prop, items, value) {
   refresh();
   return box;
 }
+/* the items' own x-ref, when this property is a LIST of refs — the
+   advertisement schema.clj carries onto the items of a
+   [:vector :waymark/ref] entry. A picker is only fetchable when it
+   names a KIND, so a bare ref-shaped item is not one. */
+function refItems(rawProp) {
+  const prop = schemaProp(rawProp);
+  if (prop.type !== "array") return null;
+  const raw = prop.items || {};
+  const x = raw["x-ref"] || schemaProp(raw)["x-ref"];
+  return x && x.kind ? x : null;
+}
+/* A LIST of refs is one picker per ROW (waymark-fp62.7.8), never one
+   picker for the whole list. The advertisement used to ride the array
+   and the form built a single select from it: the seed was an array
+   of ids, no option ever equalled it, and the seat's held_for opened
+   as an empty model chooser that had silently dropped the prefill.
+   Each row is a select of its own, seeded from its own id; the
+   collection is fetched ONCE for the field and every row waits on
+   that one promise, so ten rows are still one request. */
+function refListWidget(name, prop, value) {
+  const items = prop.items || {};
+  /* prop.enum on the items is the guard-folded admitted set — honor it */
+  const choices = refEntries(items, schemaProp(items).enum)
+    .catch(() => ({entries: [], full: false}));
+  const makeRow = (rowName, seed) => {
+    const select = el("select", {name: rowName}, el("option", {value: ""}, "…"));
+    const current = seed === undefined || seed === null ? null : String(seed);
+    choices.then(c => seatRefSelect(select, c, current));
+    return select;
+  };
+  return listWidget(name, prop, items, value, makeRow);
+}
 /* a waymark-ref field offers the target kind's rows, labeled by summary.
    A guard-folded enum on the field is the ADMITTED set (the render
    layer's relation fold — e.g. which meals serve this day's theme):
@@ -230,18 +272,20 @@ function listWidget(name, prop, items, value) {
    had labels — the form never offers a value the server already knows
    it will refuse. Without labels (fetch failed, or an admitted id
    past the first page) the id keeps its seat raw rather than vanish. */
-async function refOptions(select, rawProp, current, admitted) {
+/* the fetch, apart from the seating: ONE field's options, which a
+   list of refs asks for once and seats in every row */
+async function refEntries(rawProp, admitted) {
   const prop = schemaProp(rawProp);
   const xref = (rawProp["x-ref"] || prop["x-ref"]) || {};
   const kind = xref.kind;
   const admit = admitted ? admitted.map(String) : null;
-  const append = (id, label) =>
-    select.append(el("option", {value: id, selected: id === current ? "" : null},
-                     label || id));
+  /* no well-known, no such collection, no answer: the admitted ids
+     keep their seats raw rather than vanish */
+  const bare = () => ({entries: (admit || []).map(id => [id, null]), full: false});
   let w;
-  try { w = await wellKnown(); } catch { (admit || []).forEach(id => append(id)); return; }
+  try { w = await wellKnown(); } catch { return bare(); }
   const href = kind && collectionHref(w, kind);
-  if (!href) { (admit || []).forEach(id => append(id)); return; }
+  if (!href) return bare();
   /* the declared pick query filters the picker — a,b spells in-list */
   const params = {"page[size]": "100"};
   for (const [f, v] of Object.entries(xref.pick || {}))
@@ -250,7 +294,7 @@ async function refOptions(select, rawProp, current, admitted) {
      until the edge (a kind past the sanity cap offers its first
      thousand — a picker that big wants a filter, not a scroll) */
   let {ok, body} = await api(mergeParams(href, params));
-  if (!ok) { (admit || []).forEach(id => append(id)); return; }
+  if (!ok) return bare();
   const summaries = new Map();
   for (let pages = 0; pages < 10; pages++) {
     for (const item of (body.data || {}).items || [])
@@ -260,13 +304,22 @@ async function refOptions(select, rawProp, current, admitted) {
     ({ok, body} = await api(next));
     if (!ok) break;
   }
-  const entries = (admit || [...summaries.keys()])
-    .map(id => [id, summaries.get(id) || id]);
-  entries.forEach(([id, label]) => append(id, label));
+  return {entries: (admit || [...summaries.keys()])
+            .map(id => [id, summaries.get(id) || id]),
+          full: true};
+}
+/* one select seated from options already fetched */
+function seatRefSelect(select, {entries, full}, current) {
+  for (const [id, label] of entries)
+    select.append(el("option", {value: id, selected: id === current ? "" : null},
+                     label || id));
   /* past a scrollable handful, a select is a haystack: upgrade to a
      combobox — the select stays as the hidden value carrier (its
      [name] is what collectValues reads), a filter input fronts it */
-  if (entries.length > 20) comboUpgrade(select, entries, current);
+  if (full && entries.length > 20) comboUpgrade(select, entries, current);
+}
+async function refOptions(select, rawProp, current, admitted) {
+  seatRefSelect(select, await refEntries(rawProp, admitted), current);
 }
 /* type-to-filter over an already-loaded ref picker: filtering is
    client-side (refOptions fetched the whole collection), selection
@@ -704,7 +757,11 @@ function buildForm(schema, prefill, kind) {
       ? (prefill || {})[name]
       : (rawProp.default !== undefined ? rawProp.default : prop.default);
     let widget;
-    if (xref(rawProp)) {
+    /* a LIST of refs is not one picker but a row of them, and
+       fieldWidget builds those (waymark-fp62.7.8). The entry-level
+       x-ref an array carries is for the filter that filters BY this
+       field; here an array is judged by its ITEMS. */
+    if (xref(rawProp) && prop.type !== "array") {
       widget = el("select", {name}, el("option", {value: ""}, "…"));
       /* prop.enum here is the guard-folded admitted set — honor it */
       refOptions(widget, rawProp, seed, prop.enum);

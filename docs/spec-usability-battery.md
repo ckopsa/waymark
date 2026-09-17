@@ -1107,3 +1107,25 @@ entity and a list of settings rows, two levels down inside the launch, and
 the collector learned that a widget's name is a path of keys and indices
 rather than one dotted pair. No field a household member meets is a JSON
 box any more; the two that remain are the operators' scope and order.
+
+### Lists of refs as rows of pickers (waymark-fp62.7.8)
+
+The seat's restate opened with `held_for` and `substitute_for` empty,
+although the door's `:edit :prefill` carried both. `:kind` rides the ENTRY,
+so `[:vector :waymark/ref]` published its picker at the ARRAY level, and the
+form built ONE select from it: the seed was a list of ids, no option ever
+equalled it, and the prefill was dropped on the way in.
+
+The projection carries the advertisement onto the **items**, where the value
+one widget holds lives, and keeps it on the array, where the collection's
+filter param — which filters BY the field — reads it. The form reads the
+items: a list of refs is the same rows the item maps get, each row a labeled
+select of its own, seeded from its own id. The collection is fetched once
+for the field, not once per row, and the collector reads the rows back as an
+array of ids with no rule of its own.
+
+`checks/check-ref-shape` closes the declaration side: `:kind` says the field
+holds the id of a row, so it may only sit on a ref, a nilable ref, or a list
+of refs. Anything else advertises a picker over a field that holds no id.
+No usability sentence is owed for the old shape — after the carry there is
+no list of refs left that a client cannot seat.
