@@ -329,6 +329,66 @@
         :else (t/allow)))
     (t/allow)))
 
+;; ── what wakes a seat is named the way its scope is (R-12.22) ───────
+;;
+;; A `wake_on` entry is a scope entry's shape, so it is judged the way
+;; a scope entry is: the kind must be one this engine serves, and each
+;; action must be one that kind actually has. The scope guards next
+;; door cannot be borrowed for it — a guard judges ONE named field
+;; (`:judges`), and theirs is `:scope` — so the law is stated again
+;; here over `:wake_on`, in their own two sentences. An entry nobody
+;; can match is a seat that never wakes and never says why.
+
+(defn- wake-on-unknown-kind
+  "The first `wake_on` entry naming something this engine does not
+  serve, or nil. `names-of` is the ctx's action-name lookup: nil for a
+  kind the registry has never heard of."
+  [names-of entries]
+  (first (for [e entries
+               :let [k (str (:kind e))]
+               :when (nil? (names-of k))]
+           k)))
+
+(defn- wake-on-unknown-action
+  "The first `wake_on` entry naming an action its own kind does not
+  have, as the refusal's vars, or nil."
+  [names-of entries]
+  (first (for [e entries
+               :let [known (names-of (str (:kind e)))]
+               :when known
+               a (:actions e)
+               :when (not (contains? known (str a)))]
+           {:kind (str (:kind e)) :action (str a)
+            :actions (str/join ", " (sort known))})))
+
+(g/defguard wake-on-names-real-kinds
+  {:judges [:wake_on]
+   :reads [:services]
+   :vars [:kind]
+   :open "The legal kind names are well-known's resources, one GET away; enumerating the registry into this form would duplicate it."
+   :explain "A seat is woken by a kind this surface serves; there is no kind {kind}."}
+  [_row inp ctx]
+  (if-some [names-of (:action-names ctx)]
+    (if-some [bad (wake-on-unknown-kind names-of (:wake_on inp))]
+      (t/deny {:vars {:kind bad}})
+      (t/allow))
+    ;; the pure render probe carries no registry — decline to guess,
+    ;; exactly as the scope guards do
+    (t/allow)))
+
+(g/defguard wake-on-names-real-actions
+  {:judges [:wake_on]
+   :reads [:services]
+   :vars [:kind :action :actions]
+   :open "Each kind's action vocabulary is well-known's actions list, one GET away; the refusal spells the kind's real actions when an entry misses."
+   :explain "There is no action {action} on {kind}; its actions are: {actions}. A wake_on entry with no actions wakes this seat for nothing."}
+  [_row inp ctx]
+  (if-some [names-of (:action-names ctx)]
+    (if-some [bad (wake-on-unknown-action names-of (:wake_on inp))]
+      (t/deny {:vars bad})
+      (t/allow))
+    (t/allow)))
+
 (g/defguard step-carries-a-note
   {:judges [:note]
    :explain "A step up or down the ladder is a record: a restate that changes held_for or substitute_for carries a note saying which model it was, which it is now, and why. Everything else about a seat may move silently; the model it is held for may not."}
@@ -465,7 +525,8 @@
   spelling per seat) and neither is anything the engine writes."
   [:charter :scope :substitute_drop :held_for :substitute_for
    :standing_ttl_seconds :cadence_seconds :budget_usd_per_week
-   :sitting_budget_tokens :walk :rows_per_firing])
+   :sitting_budget_tokens :walk :rows_per_firing
+   :wake_on :fire_interval_seconds])
 
 (defhandler restate-seat [row inp _ctx]
   ;; R-7.5: a restate whose scope passes the four guards CLEARS stale.
@@ -793,6 +854,28 @@
                        {:label "Rows per firing"
                         :help "The most rows one wake moves to a leaf. The walk's cap, and the lever you pull before you pull the model: fewer rows is a shorter sitting at the same judgment."}}
      [:int {:min 1 :max 200}]]
+    ;; ── the third way a sitting begins (R-12.22) ────────────────────
+    ;; The cadence is the first and a person's fire is the second.
+    ;; This is the third: the transitions this seat asked to be woken
+    ;; by, named the way its scope is. NO DEFAULT IS WRITTEN — a walk
+    ;; seat with nothing here behaves as one entry, its walk's kind
+    ;; with the action `create`, computed at read time by
+    ;; `effective-wake-on`. A default written into the row would be a
+    ;; value a person never chose, and a later restate of `walk` would
+    ;; leave it pointing at the queue the seat no longer walks.
+    [:wake_on {:optional true
+               :examples [grants/scope-example]
+               :x-display
+               {:label "What wakes it"
+                :spelled-by-hand scope-help
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
+     [:maybe grants/scope-schema]]
+    [:fire_interval_seconds {:default 300
+                             :examples [300]
+                             :x-display
+                             {:label "Quietest gap between wakes, in seconds"
+                              :help "The least time between two wakes the seat's own events start. A match inside the gap does not fire; it waits, and the first wake after the gap lifts walks the queue. Raise it for a busy queue: every wake costs one sitting's fuel."}}
+     [:int {:min 1 :max 86400}]]
     ;; ── engine-written from here down (absent from the create door
     ;;    and from restate; see the ns docstring's write fence) ───────
     [:stale {:optional true
@@ -918,6 +1001,19 @@
                        {:label "Rows per firing"
                         :help "The most rows one wake moves to a leaf — the lever you pull before you pull the model."}}
      [:int {:min 1 :max 200}]]
+    [:wake_on {:optional true
+               :examples [grants/scope-example]
+               :x-display
+               {:label "What wakes it"
+                :spelled-by-hand scope-help
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
+     [:maybe grants/scope-schema]]
+    [:fire_interval_seconds {:default 300
+                             :examples [300]
+                             :x-display
+                             {:label "Quietest gap between wakes, in seconds"
+                              :help "The least time between two wakes the seat's own events start. A match inside the gap waits for it to lift. Five minutes is the default."}}
+     [:int {:min 1 :max 86400}]]
     ;; the write fence, named so it can be refused (R-12.12): the
     ;; create door and the restate DECLARE sitter_key only so
     ;; `key-not-written-by-hand` may judge it — a guard judges a field
@@ -946,7 +1042,9 @@
                    drop-inside-scope
                    ttl-within-standing
                    held-for-active-models
-                   walk-names-a-kind-in-scope]
+                   walk-names-a-kind-in-scope
+                   wake-on-names-real-kinds
+                   wake-on-names-real-actions]
    :actions
    {:restate
     {:from #{:active} :to :active
@@ -1013,6 +1111,19 @@
                                 {:label "Rows per firing"
                                  :help "The most rows one wake moves to a leaf."}}
               [:int {:min 1 :max 200}]]
+             [:wake_on {:optional true
+                        :examples [grants/scope-example]
+                        :x-display
+                        {:label "What wakes it"
+                         :spelled-by-hand scope-help
+                         :help "The transitions that wake this seat, stated again in full. An entry naming a kind the scope above does not open still wakes the seat; the sitting then sees only what the scope opens."}}
+              [:maybe grants/scope-schema]]
+             [:fire_interval_seconds {:default 300
+                                      :examples [300]
+                                      :x-display
+                                      {:label "Quietest gap between wakes, in seconds"
+                                       :help "The least time between two wakes the seat's own events start. Raise it when a busy queue is waking this seat more often than the work deserves."}}
+              [:int {:min 1 :max 86400}]]
              ;; THE STEP'S RECORD (R-11.2). A transition input, so the
              ;; log's `inputs` column holds it and no column is added.
              [:note {:optional true
@@ -1037,7 +1148,7 @@
      :edit {:prefill [:charter :scope :substitute_drop :held_for
                       :substitute_for :standing_ttl_seconds :cadence_seconds
                       :budget_usd_per_week :sitting_budget_tokens :walk
-                      :rows_per_firing]
+                      :rows_per_firing :wake_on :fire_interval_seconds]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
@@ -1050,6 +1161,8 @@
               ttl-within-standing
               held-for-active-models
               walk-names-a-kind-in-scope
+              wake-on-names-real-kinds
+              wake-on-names-real-actions
               step-carries-a-note]
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
@@ -1256,6 +1369,8 @@
     "R-4.6's consequence sentence is kept verbatim, `{into}` included. The framework does not interpolate a consequence (render substitutes only a per-origin map, never a template), so the brace renders literally. The alternative was rewording the one sentence the spec pins, and a spec-pinned string is worth more than a tidy dialog."
     "`sitter_key` IS DECLARED on the create door and on `restate`, which reads at first like the opposite of this file's write fence. It is the fence: a guard may judge only a field of the door it stands on (checks/check-create-guards and check-guard-declarations are definition ERRORS otherwise), so a `key-not-written-by-hand` that could be READ had to have something to name — members.clj's `reentry-not-written-by-hand` has it for free, because that kind has no separate create-schema. Both spellings carry `{:secret true}`, so the advertised create body drops the field (collections.clj unions the row schema's secret set with the create model's for exactly this), no form asks for it, and the usability policies skip it. What the caller gains over silent omission is the refusal's own sentence, which names the door that writes the key instead."
     "`fire` declares `:idempotent false`, so every call must carry an Idempotency-Key (invoke's phase 2). That is the truthful spelling: a second fire starts a second run. It is also the safe one: an idempotent door is subject to invoke's natural replay, which compares only the row's LATEST transition, so a textless fire following a textless fire with nothing else on the seat would have been answered as a replay and never gone out — the wake's release fire (R-12.22) and a person's second press, both lost. The key costs nobody anything: the MCP door signs every invoke, and the wake consumer keys each fire by the transition it heard, which doubles as its own dedupe. The consumer's replay of the POST is deduped separately, where it happens: `schedules/already-fired?` compares `last_fired_at` against the transition's own instant."
+    "R-12.22's `wake_on` is judged by its OWN two guards, `wake-on-names-real-kinds` and `wake-on-names-real-actions`, which say what the scope guards next door already say. A guard grades the fields it names in `:judges` (checks/check-guard-declarations refuses anything else), and the scope guards name `:scope`; borrowing one for `wake_on` would have had it refuse a scope the caller never sent. The duplication is two short bodies over a shared helper, against a wake entry nobody can match — a seat that never wakes and never says why."
+    "`wake_on` has NO default in the row and `walk` is not copied into it. R-12.22 asks for exactly that: the walk seat's one entry is computed at read time by `effective-wake-on`. A default written at the create door would be a value a person never chose, and the first restate of `walk` would leave it naming the queue the seat no longer walks."
     "`fire` runs from `parked` as well as `active`, and the `not-parked` guard refuses it there. R-12.20 asks for the sentence \"The seat is parked. Unpark it first.\", and a door absent from a parked seat's envelope could only answer 409 with the machine's own words."
     "`mark_stale`, `mark_halted` and `clear_halt` are declared `active → active` only. A v10 action declares ONE `:to` (definitions.clj records the same wart for `measure`/`measure_pilot`), so covering `parked` would mean six doors instead of three — and a parked seat is already scoped to nothing by the person's own hand, so neither a stale entry nor a halt on it tells anybody anything they did not choose."]})
 
@@ -1628,6 +1743,30 @@
     "`harness_session` is on the BIRTH door as well as the close's (R-12.15, R-12.17), which no other count-bearing field is. The reason is that it is not a count: it is the only fact a session knows at the sit that the engine cannot derive, and the pairing it makes is what lets two overlapping wakes of one seat each end their own sitting. It is `:maybe`, so it is not filterable and the pairing reads one page of the seat's open sittings rather than querying — `model`'s recorded wall, one field over. The close writes it only onto a row that carries none: a report naming another run's id must not move a bill."]})
 
 ;; ── the seam wave two calls ─────────────────────────────────────────
+
+(def walk-create-action
+  "The action a walk seat's default `wake_on` entry names: a row
+  arriving in the queue is the work this seat exists to do."
+  "create")
+
+(defn effective-wake-on
+  "What actually wakes this seat (R-12.22), as scope-shaped entries.
+
+  The seat's own `wake_on` when it wrote one. A seat that walks a
+  queue and wrote none behaves as ONE entry — the walk's kind with
+  the action `create` — and that default is computed HERE, at read
+  time, because the spec says the engine writes nothing for it: a
+  default in the row would be a value nobody chose, and a restate of
+  `walk` would leave it naming the queue the seat no longer walks. A
+  seat with neither wakes on its cadence and a person's fire alone,
+  which is the empty vector."
+  [seat-row]
+  (let [written (get-in seat-row [:data :wake_on])
+        walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
+    (cond
+      (seq written) (vec written)
+      walk [{:kind walk :actions [walk-create-action]}]
+      :else [])))
 
 (defn open-sitting-for-grant
   "The open sitting a request under `grant-id` is counted against, or

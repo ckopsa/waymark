@@ -460,7 +460,7 @@
              ;; the fire link (R-12.18), and the damper's mark the wake
              ;; consumer writes (R-12.22)
              :fire_url :fire_token :last_fired_at :last_run_url
-             :wake_pending}
+             :wake_pending :wake_fired_at}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
       (doseq [a [:claim :observe :pause :resume :fail :end :fired]]

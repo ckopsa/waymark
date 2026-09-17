@@ -169,8 +169,13 @@
   lands in the item schema where a client meets it. A list whose ITEMS
   advertise has advertised."
   [prop]
-  (boolean (or (:x-options prop)
-               (some :x-options (vals (get-in prop [:items :properties]))))))
+  ;; an OPTIONAL list is the same list: `[:maybe …]` reaches the wire
+  ;; as a null arm beside the array, and the vocabulary sits on the
+  ;; array's items exactly as before, so the question is asked of that
+  ;; arm (the seat's `wake_on` is the case that found this)
+  (let [p (unwrap-maybe prop)]
+    (boolean (or (:x-options p)
+                 (some :x-options (vals (get-in p [:items :properties])))))))
 
 (defn effort-honesty
   "No recall where selection is possible.

@@ -1,0 +1,434 @@
+(ns waymark10.server.wakes
+  "The wake consumer (spec-seat.md R-12.22): the third way a sitting
+  begins.
+
+  The first two are the cadence, which the schedule's copy at the
+  provider fires, and a person's own `fire`. This is the third — a
+  transition the seat ASKED to be woken by. The seat says which ones
+  in `wake_on`, a list of scope-shaped entries; a committed
+  transition that matches one opens the seat's own `fire` door, with
+  the transition as the text, and the run walks that row (R-12.21).
+
+  ── why this is a consumer and not a subscription ──────────────────
+
+  R-12.22 says the engine already has the machine: the subscription
+  kind, a cursor per subscription, at-least-once delivery, and a fail
+  or skip policy. It also says the receiver of a `wake_on` entry is
+  not a URL — it is the seat's `fire` door. That second sentence is
+  the one that decides this file. A subscription row's whole surface
+  is an endpoint, a secret and a delivery log; a wake delivers
+  nothing over the wire and has nothing to sign. What it needs from
+  that machine is the cursor and the at-least-once discipline, which
+  `server/consumers` is exactly — one durable cursor, one function of
+  one transition, a replay tolerated. So the seat's wake rides a
+  named consumer (`:wakes`) beside the schedules mirror's, and no
+  subscription row is minted for a receiver that is a door.
+
+  ── the damper, and what it is for ─────────────────────────────────
+
+  A wake is fuel. R-12.22 gives the damper three parts and this file
+  keeps them in one place (`wake-seat!`):
+
+    1. the seat has an OPEN SITTING — the session already awake will
+       see the row when it walks its queue, and a second run would
+       pay twice for one piece of work;
+    2. the seat fired inside its own `fire_interval_seconds` — a busy
+       queue must not turn every row into a sitting;
+    3. either way the match is not lost: `wake_pending` goes onto the
+       schedule row, and the first fire after the damper lifts names
+       NO row, so the session walks the whole queue it missed.
+
+  The flag is a MAINTENANCE write — `store/update-data!`, no version
+  bump, no transition, the `stamp-seen!` pattern one file over. A
+  transition per damped match would be a log of the engine deciding
+  not to act, which is audit noise nobody reads.
+
+  Two things lift the damper and both land in `release!`: the sitting
+  that was open closes or is abandoned, and the tick thread, which
+  asks the same question of every pending row on a clock (the gap is
+  a duration, and nothing commits when a duration ends).
+
+  ── the replay ─────────────────────────────────────────────────────
+
+  At-least-once means the drain re-delivers, so every fire this file
+  opens carries an idempotency key made of the transition it heard
+  (`wake:<seat>:<transition>`). `fire` is declared not idempotent —
+  truthfully, since a second fire is a second run — so the key is
+  demanded anyway, and keying it by the transition makes the demand
+  free and the replay silent: invoke answers the stored result and no
+  second run starts. The POST itself is deduped a second time, where
+  it happens: `schedules/already-fired?` compares the row's stamp
+  against the fire transition's own instant.
+
+  Nothing here re-throws. A throwing consumer parks its cursor, and a
+  parked cursor stops every other seat in the house from being woken
+  by anything."
+  (:require [waymark10.server.consumers :as consumers]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.schedules :as schedules]
+            [waymark10.server.seats :as seats]
+            [waymark10.server.store :as store]
+            [waymark10.wire :as wire])
+  (:import (java.time Instant)
+           (java.util.concurrent CountDownLatch TimeUnit)))
+
+(set! *warn-on-reflection* true)
+
+;; ── the small tools ─────────────────────────────────────────────────
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 wakes: " parts))))
+
+(defn- now ^Instant [eng] ((:now-fn eng)))
+
+(defn- serves? [eng kind] (contains? (inv/resources eng) kind))
+
+(defn- raw-row [eng kind id]
+  (when (and id (serves? eng kind))
+    (store/with-tx (:storage eng)
+      (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))))
+
+(defn- rows-where [eng kind where limit]
+  (if (serves? eng kind)
+    (store/with-tx (:storage eng)
+      (fn [tx] (store/query-rows (:storage eng) tx kind where {:limit limit})))
+    []))
+
+(defn- instant-of
+  "An instant, however the row spells it — a stored string or an
+  Instant already. Unparsable is nil, which reads as \"never\"."
+  [v]
+  (cond
+    (instance? Instant v) v
+    (some-> v str not-empty) (try (Instant/parse (str v))
+                                  (catch Exception _ nil))
+    :else nil))
+
+;; ── what wakes which seat ───────────────────────────────────────────
+
+(def consumer-name
+  "The durable cursor's name in waymark10_cursors (consumer:wakes)."
+  :wakes)
+
+(def default-fire-interval-seconds
+  "R-12.22's own default, for a row written before the field existed."
+  300)
+
+(def ^:private own-kinds
+  "The kinds a wake never matches. `seat` and `schedule` are the
+  engine's own writing about the wake itself — a seat woken by its own
+  `fire` would wake itself forever — `sitting` is the run a wake
+  starts, and `subscription` is the other consumer's bookkeeping. A
+  person who wants a seat woken by a seat has asked for a loop."
+  #{:seat :sitting :schedule :subscription})
+
+(def ^:private seat-page
+  "The most active seats one match is judged against. A house past
+  this has more offices than the spec's ladder describes, and the
+  honest fix is a query per entry rather than a longer page."
+  500)
+
+(def ^:private pending-page
+  "The most pending schedules one tick releases."
+  200)
+
+(defn- interval-of [seat-row]
+  (long (or (get-in seat-row [:data :fire_interval_seconds])
+            default-fire-interval-seconds)))
+
+(defn- active-seats
+  "Every active seat, as the three facts a match needs: its id, what
+  wakes it (`effective-wake-on`, so a walk seat's computed default is
+  already in), and its own gap."
+  [eng]
+  (into []
+        (map (fn [row]
+               {:id (str (:id row))
+                :wake-on (seats/effective-wake-on row)
+                :interval (interval-of row)}))
+        (rows-where eng :seat {:state :active} seat-page)))
+
+(defn- seats-of
+  "The active seats, cached for the life of the registration and
+  rebuilt lazily after any seat transition. A query per transition
+  would be a query per write in the whole house."
+  [eng cache]
+  (or @cache (reset! cache (active-seats eng))))
+
+(defn matches?
+  "Does this transition match one of the seat's wake entries? The kind
+  and the action, both by name. An entry with an empty actions list
+  matches NOTHING — a wake is an action happening, not a kind
+  existing, and the read-only reading `actions []` carries in a scope
+  has no meaning here."
+  [entries kind action]
+  (let [k (name kind)
+        a (name action)]
+    (boolean (some (fn [e]
+                     (and (= k (str (:kind e)))
+                          (some #(= a (str %)) (:actions e))))
+                   entries))))
+
+(defn wake-text
+  "The transition, as the text the fire carries (R-12.22): the kind,
+  the row id, the action, the from state and the to state. The
+  provider puts it into the session in a payload block, and the
+  session walks that one row (R-12.21)."
+  [t]
+  (wire/write-json {:kind (name (:kind t))
+                    :id (str (:resource-id t))
+                    :action (name (:action t))
+                    :from (some-> (:from-state t) name)
+                    :to (some-> (:to-state t) name)}))
+
+;; ── the damper ──────────────────────────────────────────────────────
+
+(defn fired-recently?
+  "Is `at` inside the seat's own gap after the row's last fire? A row
+  that never fired is not recent, which is why a first wake goes out
+  the moment it matches."
+  [schedule-row interval-seconds ^Instant at]
+  ;; Two clocks, the later wins. `last_fired_at` is the schedules
+  ;; consumer's stamp, written after the provider answered — one
+  ;; consumer later, so a burst of matches inside one drain would all
+  ;; read it unstamped. `wake_fired_at` is this consumer's own stamp,
+  ;; written the moment its fire goes out, and closes that window.
+  (let [fired (->> [(get-in schedule-row [:data :last_fired_at])
+                    (get-in schedule-row [:data :wake_fired_at])]
+                   (keep instant-of)
+                   (sort)
+                   (last))]
+    (if fired
+      (.isBefore at (.plusSeconds ^Instant fired (long interval-seconds)))
+      false)))
+
+(defn- stamp-fired!
+  "The wake consumer's own clock (see `fired-recently?`), by the same
+  maintenance write as the pending flag: no version bump, no
+  transition. Clears the flag in the same write when asked."
+  [eng schedule-row ^Instant at clear-pending?]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                          (cond-> (assoc (:data schedule-row) :wake_fired_at (str at))
+                            clear-pending? (dissoc :wake_pending))
+                          (:next-flip-at schedule-row))))
+  nil)
+
+(defn- write-pending!
+  "Set or clear `wake_pending` by a MAINTENANCE write — no version
+  bump, no transition (schedules/stamp-seen!'s pattern, and its
+  reason: a transition per damped match would be a log of the engine
+  deciding not to act)."
+  [eng schedule-row pending?]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                          (if pending?
+                            (assoc (:data schedule-row) :wake_pending true)
+                            (dissoc (:data schedule-row) :wake_pending))
+                          (:next-flip-at schedule-row))))
+  nil)
+
+(defn- mark-pending! [eng schedule-row]
+  (when-not (true? (get-in schedule-row [:data :wake_pending]))
+    (write-pending! eng schedule-row true))
+  nil)
+
+;; ── the fire ────────────────────────────────────────────────────────
+
+(defn- fire!
+  "Open the seat's OWN `fire` door as the engine (R-12.19's door, and
+  a second concealed one would be the same law written twice). The
+  key is the replay dedupe: a drain that re-delivers the transition
+  invokes the same key, and invoke answers the stored result.
+
+  A refusal is a warning and nothing else. The door has four guards
+  and each of them is a wall this consumer must not argue with: a
+  parked seat, a halted seat and an unlinked schedule are all reasons
+  not to spend fuel. → true when a fire went out (or had already gone
+  out), nil when the door said no."
+  [eng seat-id text key]
+  (try
+    (inv/invoke! eng :seat (str seat-id) :fire
+                 (when text {:text text})
+                 {:principal schedules/system-actor
+                  :idempotency-key key})
+    true
+    (catch Exception e
+      (warn! "seat " seat-id " would not fire — " (ex-message e))
+      nil)))
+
+(defn- wake-seat!
+  "One active seat, one transition it asked to be woken by.
+
+  No schedule, or one nobody linked: silence, and the link is asked
+  BEFORE the damper. The `fire` door would refuse an unlinked seat
+  with its own sentence, and a refusal logged per matching transition
+  is that sentence a hundred times; remembering the match instead
+  would set a flag on a row that has no way to clear it, since the
+  release fires through the same refused door.
+
+  Damped — an open sitting, or a fire inside this seat's gap — the
+  match is REMEMBERED as `wake_pending` and nothing goes out.
+  → true when a fire went out."
+  [eng seat t ^Instant at]
+  (when-some [row (schedules/schedule-for-seat eng (:id seat))]
+    (when (schedules/linked? row)
+      (if (or (some? (seats/open-sitting-for-seat eng (:id seat)))
+              (fired-recently? row (:interval seat) at))
+        (mark-pending! eng row)
+        (when (fire! eng (:id seat) (wake-text t)
+                     (str "wake:" (:id seat) ":" (:id t)))
+          (stamp-fired! eng row at false)
+          true)))))
+
+(defn release!
+  "The pending wake of one seat, released now that the damper has
+  lifted: a fire with NO TEXT, so the session walks the queue rather
+  than one row (R-12.22), and then the flag is cleared.
+
+  Silence when there is nothing pending, when the seat is not active,
+  when a sitting is still open, when the gap has not passed, or when
+  nobody linked the row. The flag is cleared only after a fire went
+  out, so a seat behind a wall keeps its pending wake until the wall
+  lifts. → true when a fire went out."
+  [eng seat-row schedule-row key ^Instant at]
+  (when (and seat-row schedule-row
+             (get-in schedule-row [:data :wake_pending])
+             (= :active (:state seat-row))
+             (schedules/linked? schedule-row)
+             (not (fired-recently? schedule-row (interval-of seat-row) at))
+             (nil? (seats/open-sitting-for-seat eng (:id seat-row))))
+    (when (fire! eng (:id seat-row) nil key)
+      (stamp-fired! eng schedule-row at true)
+      true)))
+
+(defn- release-for-sitting!
+  "A sitting closed or abandoned: the seat it belonged to may have a
+  wake waiting on exactly that. Keyed by the sitting's own transition,
+  so a replayed close releases once."
+  [eng t ^Instant at]
+  (when-some [sitting (raw-row eng :sitting (:resource-id t))]
+    (when-some [seat-id (some-> (get-in sitting [:data :seat]) str not-empty)]
+      (release! eng
+                (raw-row eng :seat seat-id)
+                (schedules/schedule-for-seat eng seat-id)
+                (str "wake:" seat-id ":release:" (:id t))
+                at))))
+
+(defn sweep-pending!
+  "Every schedule row carrying a pending wake, released where the
+  damper has lifted. The tick's whole body, and the one call a test
+  makes instead of waiting for it. → the number of fires that went
+  out."
+  [eng]
+  (let [at (now eng)]
+    (reduce (fn [n row]
+              (let [seat-id (str (get-in row [:data :seat]))]
+                (if (release! eng (raw-row eng :seat seat-id) row
+                              (str "wake:" seat-id ":sweep:" at)
+                              at)
+                  (inc n)
+                  n)))
+            0
+            (rows-where eng :schedule {:wake_pending true} pending-page))))
+
+;; ── the consumer ────────────────────────────────────────────────────
+
+(defn handle-transition!
+  "One transition → the wake it implies, or nothing.
+
+      seat <anything>          the active-seat cache is stale; drop it
+      sitting close, abandon   release that seat's pending wake
+      seat, sitting, schedule,
+      subscription             nothing else — these are the engine's
+                               own writing about wakes, and a seat
+                               woken by its own fire wakes forever
+      everything else          match it against every active seat's
+                               effective wake_on, and wake the ones
+                               that asked
+
+  Never throws: a throwing consumer parks its cursor, and a parked
+  cursor stops the whole house from being woken by anything."
+  [eng cache t]
+  (try
+    (let [kind (:kind t)]
+      (cond
+        (= :seat kind) (reset! cache nil)
+
+        (and (= :sitting kind)
+             (contains? #{:close :abandon} (:action t)))
+        (release-for-sitting! eng t (now eng))
+
+        (contains? own-kinds kind) nil
+
+        :else
+        (let [at (now eng)]
+          (doseq [seat (seats-of eng cache)
+                  :when (matches? (:wake-on seat) kind (:action t))]
+            (wake-seat! eng seat t at)))))
+    (catch Exception e
+      (warn! "transition " (:id t) " could not be handled — " (ex-message e))
+      nil))
+  nil)
+
+(defn consumer-fn
+  "The consumer's function of one transition, with the active-seat
+  cache held for the life of the registration. Public because a test
+  drains it directly (`consumers/drain-consumer!`), which is how this
+  suite stays deterministic — schedules/consumer-fn's own shape."
+  [eng]
+  (let [cache (atom nil)]
+    (fn [t] (handle-transition! eng cache t))))
+
+;; ── the tick ────────────────────────────────────────────────────────
+
+(def default-tick-ms
+  "Thirty seconds. The damper is a duration and nothing commits when a
+  duration ends, so somebody has to ask; overridable per engine as
+  `:wake-tick-ms`."
+  30000)
+
+(defn start-tick!
+  "The release loop, on `start-drift-sweeper!`'s shape. ONE process
+  per database should run it, and that is not decided here: the
+  module's hook carries `:elected`."
+  [eng {:keys [interval-ms] :or {interval-ms default-tick-ms}}]
+  (let [stop (CountDownLatch. 1)
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop (long interval-ms)
+                                         TimeUnit/MILLISECONDS)
+                         (try (sweep-pending! eng)
+                              (catch Exception e
+                                (warn! "the pending sweep failed: "
+                                       (ex-message e))))
+                         (recur))))
+                   "waymark10-wakes-tick")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn stop-tick! [{:keys [^CountDownLatch stop]}]
+  (some-> stop .countDown)
+  nil)
+
+(defn start-wakes!
+  "Register the durable log consumer that wakes seats on the
+  transitions they asked for, and start the tick that releases the
+  wakes the damper held. Returns the handle `stop-wakes!` takes.
+  opts: :dispatcher, :poll-ms, :from-origin? (the consumer's) and
+  :tick-ms."
+  ([eng] (start-wakes! eng {}))
+  ([eng {:keys [tick-ms] :as opts}]
+   {:consumer (consumers/register-consumer!
+               eng consumer-name (consumer-fn eng)
+               (select-keys opts [:dispatcher :poll-ms :from-origin?]))
+    :tick (start-tick! eng {:interval-ms (or tick-ms default-tick-ms)})}))
+
+(defn stop-wakes! [{:keys [consumer tick]}]
+  (some-> consumer consumers/stop-consumer!)
+  (some-> tick stop-tick!)
+  nil)
