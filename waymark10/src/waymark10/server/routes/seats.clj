@@ -36,12 +36,17 @@
 
   Recorded deviations (each a sentence):
 
-  - THE BUDGET WINDOW IS READ, NEVER STORED. `spent` is summed over
-    the seat's closed sittings of the last seven days at the moment
-    somebody asks. A counter on the seat row would be one write per
-    close and one more thing to be wrong; the sum is one indexed read
-    over a seat-week of rows, and the wall it feeds (R-5.2) is the
-    router's own, not this file's.
+  - THE BUDGET WINDOW IS READ, NEVER STORED, AND IT IS SAID TWICE.
+    `spent` is one SUM over the seat's closed sittings of the last
+    seven days at the moment somebody asks — no counter on the row,
+    which would be one write per close and one more thing to be
+    wrong. The wall itself (`grants/spent-this-week`, R-5.2 step 3)
+    runs the SAME aggregate over the SAME conds, and that function is
+    private to a namespace this wave does not own, so `window-conds`
+    below is a second spelling of one arithmetic. They agree today
+    because they are the same store call with the same three conds;
+    the follow-up is one public reader both call, and it belongs
+    beside the seat rather than beside either caller.
   - `by_model` KEYS ON THE MODEL ROW, AND A CORRECTION KEYS ON A
     CLAIM. A sitting carries a `model` ref; a transition's actor
     carries the session's model CLAIM, an API identifier
@@ -94,37 +99,58 @@
       (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))))
 
 (defn seat-row
-  "The seat, decoded — its decimals and instants as values rather than
-  as the JSON they were stored in."
-  [eng seat-id]
-  (when-some [rdef (get (inv/resources eng) :seat)]
-    (some->> (raw-row eng :seat seat-id) (inv/decode-row rdef))))
+  "The seat as STORED — the JSON document, not the decoded row.
 
-(defn grant-seat
-  "The seat a presented grant cites (`grant.seat`, R-5.1), or nil when
-  it cites none. Read off the STORED row rather than through the
-  visibility map: a seat grant's authority is the seat row the router
-  resolves at request time, and this is the id that names it."
-  [eng grant-id]
-  (some-> (raw-row eng :grant grant-id) :data :seat str not-empty))
+  Deliberate, and the reason is the wire: `halt` carries an instant,
+  and a decoded instant handed to `write-json` is a Java object the
+  wire mapper has no writer for. The stored document is already
+  exactly what an envelope would serve, decimals and all
+  (`:encode/wire` is identity for a decimal, an ISO string for an
+  instant), so the document IS the answer. The SITTINGS are decoded,
+  because their `started_at` has to be compared and ordered, and ISO
+  strings of differing precision do not sort."
+  [eng seat-id]
+  (raw-row eng :seat seat-id))
+
+(defn seat-of
+  "The seat this request is sitting in, or nil — read off the
+  visibility, where `grants/visibility` already resolved it (R-5.2).
+
+  `[:seat :id]` and not `((:row? vis) :seat id)`: at a wall the
+  resolve empties the effective scope, and the sitter's own read of
+  its seat row goes with it. The ledger is exactly what a walled
+  sitter needs — it is how a firing says WHY it is stopping — so the
+  door reads the seat the request cited, not the scope the wall left."
+  [vis]
+  (some-> (get-in vis [:seat :id]) str not-empty))
+
+(defn- window-conds
+  "The three conds that name a seat's counted sittings: closed, this
+  seat's, started inside the window. `grants/spent-this-week` — the
+  wall itself — sums over exactly these, and saying them once here is
+  the closest this file can get to saying them once in the house (see
+  the ns deviations)."
+  [seat-id ^Instant since]
+  [{:target :state :op := :value "closed"}
+   {:target :data :field :seat :cast "text" :op := :value (str seat-id)}
+   {:target :data :field :started_at :cast "timestamptz" :op :>=
+    :value (str since)}])
 
 (defn closed-sittings
   "The seat's closed sittings started at or after `since`, decoded,
-  oldest first — the rows five of the six answers are summed over."
+  oldest first — the rows five of the six answers are summed over.
+  DECODED, because `started_at` has to be compared and ordered and
+  ISO strings of differing precision do not sort."
   [eng seat-id ^Instant since]
   (if-some [rdef (get (inv/resources eng) :sitting)]
     (let [st (:storage eng)]
       (mapv #(inv/decode-row rdef %)
             (store/with-tx st
               (fn [tx]
-                (store/search-rows
-                 st tx :sitting
-                 [{:target :data :field :seat :cast "text"
-                   :op := :value (str seat-id)}
-                  {:target :state :op := :value "closed"}
-                  {:target :data :field :started_at :cast "timestamptz"
-                   :op :>= :value (str since)}]
-                 {:order-by :started_at :limit sitting-cap})))))
+                (store/search-rows st tx :sitting
+                                   (window-conds seat-id since)
+                                   {:order-by :started_at
+                                    :limit sitting-cap})))))
     []))
 
 ;; ── the arithmetic ──────────────────────────────────────────────────
@@ -146,19 +172,35 @@
 (defn budget-of
   "R-5.2's third wall, read rather than stored: what this seat has
   spent in the rolling week, what it may spend, and when the wall
-  lifts. `resumes_at` is when the OLDEST counted sitting falls out of
-  the window — the first moment the sum can drop — and it is nil
-  unless the seat is actually at its limit, because a seat with fuel
+  lifts.
+
+  `spent` is ONE aggregate — the same SUM over the same conds the
+  resolve's own wall runs, so discover cannot report a figure the wall
+  disagrees with. `resumes_at` is when the OLDEST counted sitting
+  falls out of the window, the first moment the sum can drop, and it
+  is nil unless the seat is actually at its limit: a seat with fuel
   left is not waiting for anything."
   [eng seat ^Instant now]
-  (let [rows (closed-sittings eng (:id seat) (week-ago now))
-        spent (sum-of rows :cost_usd)
-        limit (get-in seat [:data :budget_usd_per_week])
-        oldest (first (sort (keep #(get-in % [:data :started_at]) rows)))]
+  (let [st (:storage eng)
+        since (week-ago now)
+        conds (window-conds (:id seat) since)
+        spent (or (when (contains? (inv/resources eng) :sitting)
+                    (store/with-tx st
+                      (fn [tx] (store/sum-matching st tx :sitting :cost_usd conds))))
+                  0M)
+        limit (or (get-in seat [:data :budget_usd_per_week]) 0M)
+        oldest (when (contains? (inv/resources eng) :sitting)
+                 (some-> (first (store/with-tx st
+                                  (fn [tx]
+                                    (store/search-rows st tx :sitting conds
+                                                       {:order-by :started_at
+                                                        :limit 1}))))
+                         :data :started_at str not-empty))]
     {:spent spent
      :limit limit
-     :resumes_at (when (and limit oldest (not (neg? (compare spent limit))))
-                   (.plus ^Instant oldest (long window-days) ChronoUnit/DAYS))}))
+     :resumes_at (when (and oldest (not (neg? (compare spent limit))))
+                   (.plus (Instant/parse oldest)
+                          (long window-days) ChronoUnit/DAYS))}))
 
 ;; ── corrections ─────────────────────────────────────────────────────
 
@@ -188,12 +230,17 @@
         st (:storage eng)]
     (if (empty? members)
       {}
-      (reduce (fn [acc {:keys [model n]}]
-                (update acc (model-id-of-claim eng model) (fnil + 0) (long n)))
-              {}
-              (store/with-tx st
-                (fn [tx]
-                  (store/corrections-by-model st tx (vec members) since)))))))
+      ;; the walk finishes before the claims are resolved: each
+      ;; resolution is its own short read, and nesting one inside the
+      ;; window function's transaction would hold a connection for the
+      ;; length of the whole answer
+      (let [found (store/with-tx st
+                    (fn [tx]
+                      (store/corrections-by-model st tx (vec members) since)))]
+        (reduce (fn [acc {:keys [model n]}]
+                  (update acc (model-id-of-claim eng model) (fnil + 0) (long n)))
+                {}
+                found)))))
 
 ;; ── the ledger document ─────────────────────────────────────────────
 
@@ -257,15 +304,15 @@
   "A person (unscoped) reads any seat's ledger; a sitter reads the
   seat its presented grant cites. Anybody else is told the address
   does not exist, which is what every other concealed door says."
-  [eng req seat-id]
+  [req seat-id]
   (if-some [vis (router/visibility-of req)]
-    (= (str seat-id) (grant-seat eng (:grant-id vis)))
+    (= (str seat-id) (seat-of vis))
     true))
 
 (defn- ledger-doc [eng]
   (fn [{{:keys [id]} :path-params :as req}]
     (let [seat (seat-row eng id)]
-      (when-not (and seat (may-read? eng req id))
+      (when-not (and seat (may-read? req id))
         (throw (p/not-found :seat id)))
       (let [now (now-of eng)]
         (router/json-response 200 (ledger eng seat (since-of req now) now))))))
@@ -277,8 +324,8 @@
 ;; ── what discover shows a sitter (R-7.4, R-12.3) ────────────────────
 
 (defn seat-door
-  "`doors.ask.seat` for a principal wearing a grant that cites a seat,
-  or nil for every other caller (R-7.4).
+  "`doors.ask.seat` for a principal whose request resolved a seat, or
+  nil for every other caller (R-7.4).
 
   A firing reads this FIRST (R-12.4), so the two things that stop a
   session — the halt and a parked state — are in it, beside the fuel
@@ -288,8 +335,8 @@
   been costing. Every key is present whatever its value: a sitter
   reading `halt` must be able to tell 'not halted' from 'this
   document does not say'."
-  [eng grant-id]
-  (when-some [seat-id (grant-seat eng grant-id)]
+  [eng vis]
+  (when-some [seat-id (seat-of vis)]
     (when-some [seat (seat-row eng seat-id)]
       (let [b (budget-of eng seat (now-of eng))]
         {:name (get-in seat [:data :name])

@@ -1766,9 +1766,14 @@
         seat (load-decoded eng :seat seat-id)
         halt (nonblank (get-in seat [:data :halt :reason]))
         named (or (nonblank (get-in seat [:data :name])) seat-id)
+        ;; `:haltable?` is the seat's OWN state, not the wall's: a
+        ;; parked, merged or retired seat cannot carry a halt (the
+        ;; three concealed doors are active → active, and a parked seat
+        ;; is already scoped to nothing by the person's own hand), so
+        ;; the router must not spend a row load per request trying
         wall (fn [reason detail]
-               {:id seat-id :halt halt :reason reason
-                :detail detail :scope []})
+               {:id seat-id :halt halt :reason reason :detail detail
+                :haltable? (= :active (:state seat)) :scope []})
         held (when seat
                (mapv str (get-in seat [:data (if substitute?
                                                :substitute_for
@@ -1807,7 +1812,7 @@
           ;; 4 · the seat's scope, 5 · minus the drop list for a
           ;; substitute, 6 · minus the sweep's stale entries, and the
           ;; sitter's own read of the seat row beside it (R-4.9)
-          {:id seat-id :halt halt :reason nil :detail nil
+          {:id seat-id :halt halt :reason nil :detail nil :haltable? true
            :scope (conj (cond-> (vec (get-in seat [:data :scope]))
                           substitute?
                           (without-entries (get-in seat [:data :substitute_drop]))

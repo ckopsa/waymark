@@ -40,9 +40,14 @@
   (r/resource
    {:kind :memo
     :plural "memos"
-    :states [:queued :dismissed]
+    :states [:queued :dismissed :filed]
     :initial :queued
-    :terminal #{}
+    ;; ONE TOMB: `dismissed` is over without being terminal, exactly
+    ;; as workqueue10's inbox_item declares it — a tomb with a door
+    ;; out of it is refused by name, and the person's correction IS
+    ;; that door. Which is the whole of case 21.
+    :terminal #{:filed}
+    :over {:accomplished #{:filed} :let-go #{:dismissed}}
     :summary "{data.title} · {state}"
     :schema [:map [:title [:string {:min 1 :max 80}]]]
     :filterable {:state #{:eq :in}}
@@ -50,7 +55,10 @@
     {:dismiss {:from #{:queued} :to :dismissed
                :safety {:idempotent true :reversible true :confirm false}}
      :reopen {:from #{:dismissed} :to :queued
-              :safety {:idempotent true :reversible true :confirm false}}}}))
+              :safety {:idempotent true :reversible true :confirm false}}
+     :file {:from #{:queued} :to :filed
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A filed memo keeps its history."}}}}))
 
 ;; ── the world ───────────────────────────────────────────────────────
 
@@ -124,19 +132,36 @@
                           :price_cache_write_per_mtok 1.25M}
                          {:principal colton}))))
 
-(defn- a-grant! [id]
-  (:row (inv/create! *eng* :grant
-                     {:audience (:id clerk)
-                      :scope [{:kind "memo" :actions ["dismiss"]}]}
-                     {:principal grants/approvals-actor :id id :mint? true})))
+(defn- sit!
+  "The whole bootstrap, through the doors a harness uses: the sitter
+  asks to sit in the office by NAME, a person approves, and the minted
+  grant cites the seat. → the grant's id."
+  [seat-name]
+  (let [ask (:row (inv/create! *eng* :approval_request
+                               {:task "Walk the memos this seat owns."
+                                :seat seat-name}
+                               {:principal clerk}))]
+    ;; the mint is a WIRE-BOUNDARY effect (grants' recorded gap,
+    ;; waymark-442.14): the router runs it after every invoke, so a
+    ;; test that approves in-process runs it the same way
+    (grants/approval-effects!
+     *eng* (get (inv/resources *eng*) :approval_request) :approve
+     (inv/invoke! *eng* :approval_request (:id ask) :approve nil
+                  {:principal colton}))
+    (get-in (row-of :approval_request (:id ask)) [:data :grant_id])))
 
-(defn- weld-seat! [grant-id seat-id]
-  (store/with-tx (:storage *eng*)
-    (fn [tx]
-      (let [row (store/load-row (:storage *eng*) tx :grant (str grant-id) {})]
-        (store/update-data! (:storage *eng*) tx :grant (str grant-id)
-                            (assoc (:data row) :seat (str seat-id))
-                            nil)))))
+(defn- scope-grant!
+  "A plain leash that cites no office: minted, then accepted by its
+  audience, which is what makes it live."
+  [id audience]
+  (let [row (:row (inv/create! *eng* :grant
+                               {:audience audience
+                                :scope [{:kind "memo" :actions []}]}
+                               {:principal grants/approvals-actor
+                                :id id :mint? true}))]
+    (inv/invoke! *eng* :grant (:id row) :accept {}
+                 {:principal (t/principal {:id audience :type :agent})})
+    (:id row)))
 
 (defn- sitting!
   "One wake: open it, count what it did, close it with the harness's
@@ -145,7 +170,7 @@
   [eng seat model grant {:keys [in out transitions refusals]}]
   (let [row (:row (inv/create! eng :sitting
                                {:seat (:id seat) :model (:id model)
-                                :grant (:id grant)}
+                                :grant (str grant)}
                                {:principal clerk}))]
     (dotimes [_ (or transitions 0)]
       (seats/bump-counter! eng (:id row) :transitions))
@@ -158,14 +183,21 @@
     row))
 
 (defn- GET
-  ([uri] (GET uri {"x-waymark-principal" "colton"}))
-  ([uri headers]
-   ((engine/handler *eng*) {:request-method :get :uri uri :headers headers})))
+  "The query string is its own key on a ring request; a `?` inside
+  :uri would never reach the route at all."
+  [uri query headers]
+  ((engine/handler *eng*)
+   (cond-> {:request-method :get :uri uri :headers headers}
+     query (assoc :query-string query))))
+
+(defn- ledger-status [seat headers]
+  (:status (GET (str "/api/seats/" (:id seat) "/ledger") nil headers)))
 
 (defn- ledger
-  ([seat] (ledger seat ""))
-  ([seat q]
-   (let [resp (GET (str "/api/seats/" (:id seat) "/ledger" q))]
+  ([seat] (ledger seat nil))
+  ([seat query]
+   (let [resp (GET (str "/api/seats/" (:id seat) "/ledger") query
+                   {"x-waymark-principal" "colton"})]
      (assoc (wire/read-json (:body resp)) :status (:status resp)))))
 
 ;; ── case 23 · the six answers, over a window ────────────────────────
@@ -173,8 +205,7 @@
 (deftest the-ledger-answers-six-questions-about-a-window
   (let [model (the-model)
         seat (open-seat! "ledger-clerk-seat")
-        grant (a-grant! "grant-ledger-window")
-        _ (weld-seat! (:id grant) (:id seat))
+        grant (sit! "ledger-clerk-seat")
         _ (sitting! *eng* seat model grant
                     {:in 1000000 :out 200000 :transitions 4 :refusals 1})
         _ (sitting! *eng* seat model grant
@@ -210,46 +241,36 @@
 
     (testing "the sitting eight days back is outside the window, and a
               `since` that reaches it brings it in"
-      (let [wide (ledger seat (str "?since="
+      (let [wide (ledger seat (str "since="
                                    (.minus (Instant/now) 30 ChronoUnit/DAYS)))]
         (is (zero? (compare (bigdec "6.5") (:cost_usd wide))))
         (is (= 105 (:transitions wide)))
         (is (= 10 (:refusals wide)))))
 
     (testing "an unreadable since is refused rather than quietly rounded"
-      (is (= 422 (:status (ledger seat "?since=last%20tuesday")))))
+      (is (= 422 (:status (ledger seat "since=last%20tuesday")))))
 
     (testing "who may read it"
-      (is (= 404 (:status (ledger {:id "seat-nobody-opened"})))
-          "a seat that does not exist")
-      (is (= 200 (:status (assoc (wire/read-json
-                                  (:body (GET (str "/api/seats/" (:id seat)
-                                                   "/ledger")
-                                              {"x-waymark-principal" (:id clerk)
-                                               "x-waymark-actor-type" "agent"
-                                               "x-waymark-grant" (:id grant)})))
-                                 :status
-                                 (:status (GET (str "/api/seats/" (:id seat)
-                                                    "/ledger")
-                                               {"x-waymark-principal" (:id clerk)
-                                                "x-waymark-actor-type" "agent"
-                                                "x-waymark-grant" (:id grant)})))))
-          "the seat's own sitter reads its ledger")
-      (let [other (a-grant! "grant-ledger-stranger")]
-        (is (= 404 (:status (GET (str "/api/seats/" (:id seat) "/ledger")
-                                 {"x-waymark-principal" (:id clerk)
-                                  "x-waymark-actor-type" "agent"
-                                  "x-waymark-grant" (:id other)})))
-            "a leash that cites no seat is told the address does not
-             exist — concealment, never a 403")))))
+      (let [as-sitter (fn [gid]
+                        (ledger-status seat
+                                       {"x-waymark-principal" (:id clerk)
+                                        "x-waymark-actor-type" "agent"
+                                        "x-waymark-grant" (str gid)}))]
+        (is (= 404 (:status (ledger {:id "seat-nobody-opened"})))
+            "a seat that does not exist")
+        (is (= 200 (as-sitter grant))
+            "the seat's own sitter reads its ledger")
+        (is (= 404 (as-sitter (scope-grant! "grant-ledger-scope-only"
+                                            (:id clerk))))
+            "the same hand on a live leash that cites NO seat is told the
+             address does not exist — concealment, never a 403")))))
 
 ;; ── case 21 · what it got wrong ─────────────────────────────────────
 
 (deftest a-person-undoing-the-sitter-is-a-correction-and-nothing-else-is
   (let [model (the-model)
         seat (open-seat! "correction-clerk-seat")
-        grant (a-grant! "grant-corrections")
-        _ (weld-seat! (:id grant) (:id seat))
+        grant (sit! "correction-clerk-seat")
         _ (sitting! *eng* seat model grant {:in 100000 :transitions 2})
         undone (:row (inv/create! *eng* :memo {:title "Receipt, probably"}
                                   {:principal colton}))

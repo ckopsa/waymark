@@ -212,6 +212,10 @@
                "/api/-/gate" "/api/-/gate/:tool"
                "/api/-/grant-check" "/agentInvite" "/api/-/agent-invite"
                "/api/-/ui" "/api/-/ui-lite" "/api/attachments/:id/bytes"
+               ;; the seat's ledger (spec-seat.md R-11.3a): four
+               ;; segments, static, and mounted before the plural
+               ;; grammar for the definitions sweep's exact reason
+               "/api/seats/:id/ledger"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
@@ -248,6 +252,10 @@
                  ;; would not match it, but /api/definitions/{id} is a
                  ;; row address and the sweep is not a field of it
                  "/api/definitions/:id/sweep"
+                 ;; and the seat's ledger, which /api/{plural}/{id}
+                 ;; would not match either — but /api/seats/{id} IS a
+                 ;; row address, and the ledger is not a field of it
+                 "/api/seats/:id/ledger"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))

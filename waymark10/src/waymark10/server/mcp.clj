@@ -904,7 +904,7 @@
   no seat carries no `seat` key at all — absent, the way a kind
   nobody granted is absent."
   [eng vis]
-  (let [seat (when-some [gid (:grant-id vis)] (seat-routes/seat-door eng gid))]
+  (let [seat (seat-routes/seat-door eng vis)]
     (cond-> {:posture (str "When something your task needs is absent, file "
                            "an approval_request now — anchored, for "
                            "everything at once — rather than reporting "

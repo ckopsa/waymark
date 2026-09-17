@@ -129,25 +129,43 @@
                       :price_cache_write_per_mtok 1.25M}
                      {:principal colton})))
 
-(defn- weld-seat!
-  "`grant.seat` is the field the seat resolve rides on, and it is not
-  on the create door this leg can call. The grant row is welded
-  through the store's maintenance write, which is exactly the shape
-  the mint will write and lets the read paths be proved now."
-  [eng grant-id seat-id]
-  (store/with-tx (:storage eng)
-    (fn [tx]
-      (let [row (store/load-row (:storage eng) tx :grant (str grant-id) {})]
-        (store/update-data! (:storage eng) tx :grant (str grant-id)
-                            (assoc (:data row) :seat (str seat-id))
-                            nil)))))
+(defn- sit!
+  "The whole bootstrap, through the doors a harness uses: the agent
+  asks to sit in the office by NAME, a person approves, and the minted
+  grant cites the seat. → the grant's id."
+  [eng seat-name who]
+  (let [ask (:row (inv/create! eng :approval_request
+                               {:task "Walk the queue this seat owns."
+                                :seat seat-name}
+                               {:principal who}))]
+    ;; the mint is a WIRE-BOUNDARY effect (grants' recorded gap,
+    ;; waymark-442.14): the router runs it after every invoke, so a
+    ;; test that approves in-process runs it the same way
+    (grants/approval-effects!
+     eng (get (inv/resources eng) :approval_request) :approve
+     (inv/invoke! eng :approval_request (:id ask) :approve nil
+                  {:principal colton}))
+    (get-in (row-of eng :approval_request (:id ask)) [:data :grant_id])))
+
+(defn- scope-grant!
+  "A plain leash that cites no office: minted, then accepted by its
+  audience, which is what makes it live."
+  [eng id audience]
+  (let [row (:row (inv/create! eng :grant
+                               {:audience audience
+                                :scope [{:kind "model" :actions []}]}
+                               {:principal grants/approvals-actor
+                                :id id :mint? true}))]
+    (inv/invoke! eng :grant (:id row) :accept {}
+                 {:principal (t/principal {:id audience :type :agent})})
+    (:id row)))
 
 (defn- discover
-  "The MCP tool as an agent wearing `grant-id` sees it."
-  [eng grant-id]
+  "The MCP tool as `who` wearing `grant-id` sees it."
+  [eng who grant-id]
   (let [h (engine/handler eng)
         resp (h {:request-method :post :uri "/api/-/mcp"
-                 :headers {"x-waymark-principal" "clerk"
+                 :headers {"x-waymark-principal" who
                            "x-waymark-actor-type" "agent"
                            "x-waymark-grant" (str grant-id)}
                  :body (wire/write-json
@@ -166,13 +184,7 @@
 (deftest a-boot-with-a-retired-action-marks-the-seat-stale
   (let [before (boot [errand-wide])
         seat (open-seat! before "sweep-clerk" {:scope mixed-scope})
-        grant (:row (inv/create! before :grant
-                                 {:audience "clerk"
-                                  :scope [{:kind "model" :actions []}]}
-                                 {:principal grants/approvals-actor
-                                  :id "grant-sweep-clerk"
-                                  :mint? true}))]
-    (weld-seat! before (:id grant) (:id seat))
+        grant (sit! before "sweep-clerk" clerk)]
     (is (nil? (get-in (row-of before :seat (:id seat)) [:data :stale]))
         "a seat opened against a registry that serves its scope is clean")
 
@@ -203,7 +215,8 @@
                  boots, or every reboot would be a new alert")))
 
         (testing "discover carries it to the sitter"
-          (let [door (get-in (discover after (:id grant)) [:doors :ask :seat])]
+          (let [door (get-in (discover after "clerk" grant)
+                             [:doors :ask :seat])]
             (is (= "sweep-clerk" (:name door)))
             (is (= "active" (:state door)))
             (is (= [{:kind "errand" :actions ["abandon" "finish"]}]
@@ -217,14 +230,10 @@
             (is (nil? (get-in door [:budget :resumes_at])))))))
 
     (testing "a grant that cites no seat gets no seat door at all"
-      (let [plain (:row (inv/create! before :grant
-                                     {:audience "clerk"
-                                      :scope [{:kind "model" :actions []}]}
-                                     {:principal grants/approvals-actor
-                                      :id "grant-no-seat"
-                                      :mint? true}))
-            ask (get-in (discover before (:id plain)) [:doors :ask])]
-        (is (some? (:anchor ask)) "it is still wearing a leash")
+      (let [plain (scope-grant! before "grant-no-seat" "stranger")
+            ask (get-in (discover before "stranger" plain) [:doors :ask])]
+        (is (= "grant-no-seat" (get-in ask [:anchor :grant_id]))
+            "it is still wearing a leash")
         (is (nil? (:seat ask))
             "absent, the way a kind nobody granted is absent")))))
 
@@ -234,16 +243,11 @@
   (let [eng (boot [errand-wide])
         model (add-model! eng "sweep-economy")
         seat (open-seat! eng "nap-clerk" {:cadence_seconds 300})
-        grant (:row (inv/create! eng :grant
-                                 {:audience "clerk"
-                                  :scope [{:kind "model" :actions []}]}
-                                 {:principal grants/approvals-actor
-                                  :id "grant-nap-clerk"
-                                  :mint? true}))
+        grant (scope-grant! eng "grant-nap-clerk" "clerk")
         sitting! (fn [e] (:row (inv/create! e :sitting
                                             {:seat (:id seat)
                                              :model (:id model)
-                                             :grant (:id grant)}
+                                             :grant grant}
                                             {:principal clerk})))
         young (sitting! eng)
         ;; the wake that never came back: a session whose clock was an

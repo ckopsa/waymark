@@ -210,11 +210,20 @@
   already read the halt off the row it loaded."
   [eng seat]
   (when-some [id (:id seat)]
-    (if-some [reason (:reason seat)]
-      (when-not (= reason (:halt seat))
-        (seats/seat-halt! eng id reason (:detail seat)))
-      (when (:halt seat)
-        (seats/seat-clear-halt! eng id)))))
+    ;; best-effort, the approval-effects! posture: the seat moved under
+    ;; us, or its door refused — the request is still the request, and
+    ;; an alert that could fail a sitter's read would be a worse alert
+    ;; than none
+    (try
+      (if-some [reason (:reason seat)]
+        (when (and (:haltable? seat) (not= reason (:halt seat)))
+          (seats/seat-halt! eng id reason (:detail seat)))
+        (when (:halt seat)
+          (seats/seat-clear-halt! eng id)))
+      (catch Exception e
+        (binding [*out* *err*]
+          (println "waymark10 router: seat" id "could not record its halt -"
+                   (ex-message e)))))))
 
 (defn- open-sitting
   "The open sitting this request is counted against, or nil (R-10.6):
@@ -229,9 +238,18 @@
 (defn- count-committed!
   "R-10.6, the transitions half: a committed, non-replayed transition
   under a live grant adds one to the open sitting's count. Returns the
-  result it was handed, so it composes into the doors' threads."
-  [eng req result]
-  (when (and (:transition result) (nil? (:replayed? result)))
+  result it was handed, so it composes into the doors' threads.
+
+  A SITTING'S OWN DOORS ARE NOT THE SEAT'S WORK. Opening the sitting
+  is the transition that makes the counting possible, and a sitting
+  whose first count was its own birth would report one act it never
+  took; the close and the abandon land on a row that is no longer
+  open, so the counter already declines them. Recorded, because it is
+  a reading of R-10.6 rather than its letter."
+  [eng req kind result]
+  (when (and (not= :sitting kind)
+             (:transition result)
+             (nil? (:replayed? result)))
     (when-some [sitting (open-sitting eng req)]
       (seats/bump-counter! eng (:id sitting) :transitions)))
   result)
@@ -604,7 +622,7 @@
           ;; presented it, and a walking seat's whole output is births
           ;; (R-10.6, R-12.9)
           result (count-committed!
-                  eng req
+                  eng req (:kind rdef)
                   (inv/create! eng (:kind rdef) (read-body req)
                                (select-keys opts [:principal :acknowledged
                                                   :idempotency-key :dry-run
@@ -929,7 +947,7 @@
                    ;; (R-10.6 — one lookup, and nothing at all for a
                    ;; request wearing no live grant)
                    (count-committed!
-                    eng req
+                    eng req (:kind rdef)
                     (grants/approval-effects!
                      eng rdef (keyword action)
                      (inv/invoke! eng (:kind rdef) id (keyword action) body opts)))

@@ -75,7 +75,7 @@
     sitter field and must not grow one — a seat with a sitter column
     would be a second copy of the grant. Wave two spelled the courtesy
     where the sitter is identified instead: grants.clj's seat resolve
-    adds `{kind "seat", ids [<the cited seat>], actions []}` to the
+    adds `{kind \"seat\", ids [<the cited seat>], actions []}` to the
     scope it computes, so the read rides the ordinary admission
     algebra and no second one exists.
   - `one-spelling` IS SPELLED TWICE. roles.clj's guard is the

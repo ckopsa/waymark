@@ -96,6 +96,14 @@
     is judged and the write is a no-op. Nothing is lost: a parked
     seat serves nothing until a person unparks it, and the next boot
     after that unpark marks it.
+  - STALE IS ENTRY-GRAINED, not action-grained. A scope entry naming
+    one retired action goes into `stale` WHOLE, so the resolve
+    subtracts every action it named — including the ones that still
+    resolve. Acceptance case 8 asks for exactly that (\"marks the seat
+    stale with the entry named. The sitter sees the surviving
+    entries\"), and grants' `without-entries` would express the finer
+    reading if a later leg wants it; the blunt one is what keeps the
+    stale list readable as a list of things to fix.
   - The sweep rides boot-revise!, so the LAW-REFRESH consumer
     (server/coherence) re-runs it on every definition burst as well
     as at boot. That is the right cadence, not an accident: what

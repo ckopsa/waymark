@@ -110,6 +110,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
+            [waymark10.server.schedules :as schedules]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
@@ -847,7 +848,14 @@
              ;; both. Seeded like the rest because a capability is a
              ;; ROW and an ask naming a token no row carries refuses
              ;; at the door — the registry is the vocabulary's clock.
-             cap/feed-preview-as])]
+             cap/feed-preview-as
+             ;; the other row Gate does not stand in front of
+             ;; (spec-seat.md R-12.11): the power is this engine's own
+             ;; hand on the harness's scheduler, held by the engine and
+             ;; never by a grant a sitter can wear. Seeded for the same
+             ;; reason as the rest — naming the power is what makes it
+             ;; auditable.
+             schedules/write-capability])]
     (when (empty? (store/with-tx (:storage eng)
                     (fn [tx] (store/query-rows (:storage eng) tx :capability
                                                {:token token} {:limit 1}))))

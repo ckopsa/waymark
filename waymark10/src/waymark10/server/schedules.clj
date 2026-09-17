@@ -112,9 +112,9 @@
   ── the engine opt a deployment owes ───────────────────────────────
 
   `adapters-of` reads `(:schedule-adapters eng)` first and falls back
-  to the environment. `server/engine.clj` whitelists its opts, so
-  until `:schedule-adapters` is added there the env IS the deployment
-  path (which is R-12.11's path) and the opt is the tests' seam."
+  to the environment. `server/engine.clj` whitelists both
+  `:schedule-adapters` and `:schedule-drift-ms`; a deployment may pass
+  adapters by value, and the env is R-12.11's path when it does not."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
