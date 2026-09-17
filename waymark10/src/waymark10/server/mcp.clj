@@ -235,7 +235,10 @@
        "session is that seat's sitter — it wears the seat's grant, its "
        "transitions and refusals count against the seat's sitting, and "
        "the seat's schedule names its model. Your person's other "
-       "sessions are untouched. "
+       "sessions are untouched. If your harness gives you a session id "
+       "of your own, pass it as `session` — it pairs this wake's "
+       "sitting with this run, so the hook that reports what you spent "
+       "closes yours and not another run's. "
        "\n\n"
        "IF YOUR GRANT CITES A SEAT, read doors.ask.seat FIRST, before "
        "anything else you do: it names the office you are sitting in, "
@@ -939,7 +942,14 @@
     :properties
     {:key {:type "string"
            :description (str "The seat key your instructions handed you, "
-                             "exactly as written.")}}
+                             "exactly as written.")}
+     :session {:type "string" :maxLength 128
+               :description (str "Your harness's own session id, if you have "
+                                 "one — the same id the hook that ends your "
+                                 "run will report. Passing it pairs this "
+                                 "wake's sitting with this run, so two runs "
+                                 "of one seat at the same hour each close "
+                                 "their own.")}}
     :required ["key"]
     :additionalProperties false}})
 
@@ -1719,6 +1729,14 @@
 ;; machinery does the rest — R-5.2's walls, the sitting's counters,
 ;; the ledger — because a bound session is, from the router's side,
 ;; simply a different principal wearing a different leash.
+;;
+;; The sit also names the RUN, when the harness knows its own session
+;; id (R-12.15): the sitting is stamped with it at birth, and the hook
+;; that reports the bill at the end names the same id (R-12.17). Two
+;; runs of one seat in the same hour — a person tapping Run now during
+;; the scheduled firing — are then two sittings, each closed by its
+;; own hook, rather than one row with both wakes' tokens on it and one
+;; hook left holding a bill for a sitting somebody else already shut.
 
 (def ^:private sit-no-session
   (str "This client keeps no MCP session, so a key cannot bind it. "
@@ -1756,25 +1774,51 @@
     (or (row-of eng :model (get-in schedule [:data :model]))
         (row-of eng :model (first (get-in seat [:data :held_for]))))))
 
+(defn- reusable-sitting
+  "The open sitting under this seat grant that THIS run may go on
+  using, or nil.
+
+  A second `waymark_sit` on the same session must not mint a second
+  bill, which is why the grant's open sitting is reused at all. But
+  two runs of one seat can overlap — a person taps Run now during the
+  scheduled hour — and the second run reusing the first's sitting
+  would put both wakes' tokens on one row and leave the first run's
+  hook with nothing to close. So the reuse holds only when the row is
+  THIS run's: no harness session stamped on it (nobody has claimed
+  it), or the same one this session just declared."
+  [eng grant harness-session]
+  (when-some [open (seats/open-sitting-for-grant eng (:id grant))]
+    (let [held (some-> (get-in open [:data :harness_session]) str not-empty)]
+      (when (or (nil? held) (= held harness-session))
+        open))))
+
 (defn- open-sitting!
   "The sitting this bound session is counted against (R-12.15): the
-  one already open under the seat grant, or a fresh one born now as
-  the sitter, with the seat, the model and the grant. nil when the
-  seat names no model at all, because a sitting's birth needs one —
-  the seat then has no claim to make and nothing to cost.
+  one already open under the seat grant that belongs to this run, or a
+  fresh one born now as the sitter, with the seat, the model, the
+  grant and — when the session declared one — the harness session id.
+  nil when the seat names no model at all, because a sitting's birth
+  needs one — the seat then has no claim to make and nothing to cost.
 
   The router counts transitions and refusals only against an OPEN
   sitting, and nothing else opens one for a keyed session: no leash
   keeper stands behind a Routine's firing, so the bind is where the
   sitting begins. Reused rather than re-minted on a second sit, the
-  way the grant is."
-  [eng sitter grant seat model]
+  way the grant is — see `reusable-sitting` for when that reuse stops.
+
+  THE ID IS STAMPED AT BIRTH, not guessed at the close: the engine
+  cannot derive which run this is, the harness can, and a pairing made
+  here is one the session-end door (R-12.17) reads rather than
+  reconstructs."
+  [eng sitter grant seat model harness-session]
   (when model
-    (or (seats/open-sitting-for-grant eng (:id grant))
+    (or (reusable-sitting eng grant harness-session)
         (:row (inv/create! eng :sitting
-                           {:seat (str (:id seat))
-                            :model (str (:id model))
-                            :grant (str (:id grant))}
+                           (cond-> {:seat (str (:id seat))
+                                    :model (str (:id model))
+                                    :grant (str (:id grant))}
+                             harness-session
+                             (assoc :harness_session harness-session))
                            {:principal sitter})))))
 
 (defn- standing-seat-grant
@@ -1827,6 +1871,9 @@
       (let [now ((:now-fn eng))
             seat-id (str (:id seat))
             named (str (get-in seat [:data :name]))
+            ;; the run's own id, when the harness knows one — the same
+            ;; id its session-end hook will report (R-12.15)
+            harness (some-> (:session args) str str/trim not-empty)
             sitter-id (seats/sitter-id seat)
             display (seats/sitter-display seat)
             ;; d · the sitter row, minted once per seat and found ever after
@@ -1843,7 +1890,7 @@
                           :acts-for person)
             ;; g' · the sitting the router counts against, opened here
             ;; because nobody else opens one for a keyed session
-            sitting (open-sitting! eng sitter grant seat model-row)]
+            sitting (open-sitting! eng sitter grant seat model-row harness)]
         (bind-session! eng sid {:seat seat-id :sitter sitter :bound-at now
                                 :sitting (:id sitting)})
         ;; h · what the firing reads next

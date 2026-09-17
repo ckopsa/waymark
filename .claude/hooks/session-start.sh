@@ -7,6 +7,12 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
+# A seat's session sits in the engine and never reads beads; building
+# bd would cost the firing a minute for nothing.
+if [ -n "${WAYMARK_SEAT_URL:-}" ]; then
+  exit 0
+fi
+
 BD_BIN="$HOME/go/bin/bd"
 
 if [ ! -x "$BD_BIN" ]; then

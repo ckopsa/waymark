@@ -573,8 +573,10 @@
    ;; model hold it" — a question every deployment that lets an agent
    ;; act has, so there is nothing left to opt into.
    ;;
-   ;; It starts nothing, and its one route is the ledger (R-11.3a) —
-   ;; the six answers about a seat over a window, which is a route and
+   ;; It starts nothing, and its two routes are the ledger (R-11.3a) —
+   ;; the six answers about a seat over a window — and the door a
+   ;; session's end reports its bill through (R-12.17), which is what
+   ;; closes the sitting a keyed sitter opened. Both are a route and
    ;; nothing else. The other two halves of the wave land where they
    ;; belong rather than as a fifth column on this table: the boot
    ;; sweep (R-7.1/R-7.6) in boot-revise!, the seat resolve (R-5.2) in
