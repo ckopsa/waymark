@@ -164,7 +164,12 @@
                   :roles (set (csv (get headers "x-waymark-roles")))
                   :type (let [at (some-> (get headers "x-waymark-actor-type")
                                          str/trim str/lower-case keyword)]
-                          (if (contains? t/actor-types at) at :human))})
+                          (if (contains? t/actor-types at) at :human))
+                  ;; the model claim's dev spelling, beside the actor
+                  ;; type's: the doors mint it into the session
+                  ;; (oidc-rp), and a bare handler declares it by
+                  ;; header like everything else here
+                  :model (get headers "x-waymark-model")})
     t/anonymous))
 
 (defn principal-of

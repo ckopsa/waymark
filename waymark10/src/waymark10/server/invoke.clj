@@ -166,6 +166,25 @@
 (defn etag [kind id version]
   (str "W/\"" (name kind) "-" id "-v" version "\""))
 
+(defn actor-map
+  "The actor stamped on a transition: whose hand, under whose leash,
+  and — when the session declared one — which model was running.
+
+  The grant rides here (waymark-sfe) because a write made while
+  presenting a live grant should read \"declined by <agent> under
+  grant-…\"; the model rides here for the same reason (spec-seat.md
+  R-9.5): a seat's history must say which model moved the row. Both
+  are facts ABOUT the actor, the column is jsonb, so neither needs a
+  migration or a field of its own — and both are simply absent when
+  there was nothing to say, which is the honest thing to write. The
+  model is the session's CLAIM, unverified here as everywhere."
+  [principal grant-id]
+  (cond-> {:type (name (:type principal))
+           :id (:id principal)
+           :display (:display principal)}
+    grant-id (assoc :grant grant-id)
+    (:model principal) (assoc :model (:model principal))))
+
 (defn- body-digest [body]
   ;; exact decimals in a wire body digest as their {"dec" …} nodes
   ;; (batch H — the first :decimal input field met the digest);
@@ -774,18 +793,9 @@
                  :action (:name defn)
                  :from-state (:state row)
                  :to-state (:to defn)
-                 ;; UNDER WHOSE LEASH (waymark-sfe). The actor already
-                 ;; says whose hand; a write made while presenting a
-                 ;; live grant says which grant too, so the history
-                 ;; reads "declined by <agent> under grant-…". It rides
-                 ;; the actor map — a jsonb column, so no migration and
-                 ;; no new field for a fact that is ABOUT the actor —
-                 ;; and is simply absent for every unscoped write, which
-                 ;; is the honest thing to say about one.
-                 :actor (cond-> {:type (name (:type principal))
-                                 :id (:id principal)
-                                 :display (:display principal)}
-                          (:id (:grant ctx)) (assoc :grant (:id (:grant ctx))))
+                 ;; whose hand, under whose leash, on which model
+                 ;; (actor-map: waymark-sfe, spec-seat.md R-9.5)
+                 :actor (actor-map principal (:id (:grant ctx)))
                  :law-revision (:law-revision row)
                  :input-digest digest
                  :inputs (when (:record defn) inp)
@@ -937,9 +947,7 @@
                          :action :adopt
                          :from-state (:state row)
                          :to-state (:state row)
-                         :actor {:type (name (:type principal))
-                                 :id (:id principal)
-                                 :display (:display principal)}
+                         :actor (actor-map principal nil)
                          :law-revision target
                          :input-digest (body-digest nil)
                          :correlation-id correlation-id
@@ -1981,15 +1989,11 @@
                        :action create-action
                        :from-state nil
                        :to-state (:state row)
-                       ;; under whose leash, when there was one
-                       ;; (waymark-sfe — finish!'s own stamp, and for
-                       ;; its reason: a delegate's ask reads "filed by
-                       ;; <agent> under grant-…" or it reads as the
-                       ;; agent's own initiative)
-                       :actor (cond-> {:type (name (:type principal))
-                                       :id (:id principal)
-                                       :display (:display principal)}
-                                (:id grant) (assoc :grant (:id grant)))
+                       ;; finish!'s own stamp, same map (actor-map):
+                       ;; a delegate's ask reads "filed by <agent>
+                       ;; under grant-…" or it reads as the agent's
+                       ;; own initiative
+                       :actor (actor-map principal (:id grant))
                        :law-revision (:law-revision row)
                        :input-digest digest
                        :acknowledged (not-empty (vec overridden))

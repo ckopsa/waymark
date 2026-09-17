@@ -110,11 +110,17 @@
 (def actor-types #{:human :agent :system})
 
 (defn principal
-  [{:keys [id type roles display locale]
+  "The actor the guards judge. :model is the session's own claim —
+  which model the harness says is running this turn (spec-seat.md
+  R-9.5). It is optional and absent unless a session declared one,
+  and it is a CLAIM: nothing here verifies it."
+  [{:keys [id type roles display locale model]
     :or {type :human roles #{} display "" locale "en"}}]
   (when-not (contains? actor-types type)
     (throw (definition-error (str "actor type " type " is not one of " actor-types))))
-  {:id id :type type :roles (set roles) :display display :locale locale})
+  (cond-> {:id id :type type :roles (set roles) :display display :locale locale}
+    ;; absent, not nil: a principal that declared nothing says nothing
+    (not (str/blank? (str model))) (assoc :model (str/trim (str model)))))
 
 (def anonymous (principal {:id "anonymous"}))
 
