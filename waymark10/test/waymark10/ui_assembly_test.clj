@@ -54,6 +54,30 @@
     (is (str/includes? page "prefillFromDoc(source, input)")
         "the draft branch reads the refetched source too")))
 
+(deftest a-list-of-refs-is-a-row-of-pickers
+  ;; waymark-fp62.7.8. :kind rides the ENTRY, so a [:vector
+  ;; :waymark/ref] field advertised its picker at the array level and
+  ;; buildForm drew ONE select from it: the seed was a list of ids, no
+  ;; option ever equalled it, and the seat's restate opened with
+  ;; held_for and substitute_for empty although the prefill carried
+  ;; them. The projection now carries the advertisement onto the items
+  ;; and the form reads it there — one select per row, seeded from its
+  ;; own id, and the collection fetched once for the whole field.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "function refItems"))
+    (is (str/includes? page "if (refItems(rawProp)) return refListWidget(name, prop, value);")
+        "an array is judged by its items before the comma-separated box")
+    (is (str/includes? page "if (xref(rawProp) && prop.type !== \"array\") {")
+        "the single picker is for a single ref; a list goes to fieldWidget")
+    (is (str/includes? page "function refListWidget"))
+    (is (str/includes? page "return listWidget(name, prop, items, value, makeRow);")
+        "the rows are the list widget's, the row itself is a select")
+    (is (str/includes? page "async function refEntries")
+        "the fetch is apart from the seating, so one field is one request")
+    (is (str/includes? page "choices.then(c => seatRefSelect(select, c, current));")
+        "every row waits on the one promise the field opened")
+    (is (str/includes? page "function seatRefSelect"))))
+
 (deftest the-marks-panel-rides-the-card
   ;; waymark-wxk: a verb whose declaration says `display.marks` opens a
   ;; per-piece selection IN PLACE on the card before it collects its

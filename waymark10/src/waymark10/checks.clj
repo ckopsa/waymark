@@ -643,6 +643,66 @@
                   (pr-str composes) "}; the only composition grammar is "
                   ":query (a field=value&… filter string)"))))))
 
+(defn- ref-shape?
+  "Is this schema form a shape a `:kind` entry may wear — a ref, a
+  nilable ref, or a LIST of refs? :maybe layers are seen through."
+  [form]
+  (boolean
+   (or (= :waymark/ref form)
+       (and (vector? form)
+            (case (first form)
+              :waymark/ref true
+              :maybe (ref-shape? (last form))
+              :vector (let [item (last form)]
+                        (= :waymark/ref (if (vector? item) (first item) item)))
+              false)))))
+
+(defn- kind-surfaces
+  "Every declared form a `:kind` entry can sit in: the data schema, the
+  create door and each action's input — and, one level down, a nested
+  map or a list's item map, the two places a client draws a sub-form."
+  [r]
+  (mapcat
+   (fn [[where form]]
+     (cons [where form]
+           (mapcat (fn [k]
+                     (if-some [item (item-map-form form k)]
+                       [[(str where ", " (name k) "[]") item]]
+                       (when-some [nested (nested-map-form form k)]
+                         [[(str where ", " (name k)) nested]])))
+                   (schema/entry-keys form))))
+   (list* ["data" (:schema r)]
+          ["the create door" (or (:create-schema r) (:schema r))]
+          (for [a (machine/actions-seq r) :when (:input a)]
+            [(str "action " (name (:name a))) (:input a)]))))
+
+(defn- check-ref-shape
+  "`:kind` on an entry is the picker's declaration: it says this field
+  holds the ID of a row of that kind. Every surface reads it — the
+  form's select, the collection's filter param, the cell that shows
+  the target's summary — so it is only true of three shapes: a ref, a
+  nilable ref, and a list of refs.
+
+  On anything else the annotation advertises a picker over a field
+  that holds no id, and a client seats a value the field cannot take.
+  The list shape is named here because it is the one that used to
+  read as a scalar (waymark-fp62.7.8): the seat's `held_for` published
+  its picker at the array level, the form drew ONE select for a list
+  of ids, and the prefill it could not seat was simply lost. The
+  projection now carries the advertisement onto the items, which
+  rescues the list. This refuses what no projection can: a `:kind`
+  on a field that was never a reference at all."
+  [r]
+  (doseq [[where form] (kind-surfaces r)
+          [k {:keys [properties schema]}] (schema/entry-map form)
+          :when (:kind properties)]
+    (when-not (ref-shape? schema)
+      (err r :ref-shape
+           (str where " field " k " declares :kind " (:kind properties)
+                ", so it holds the id of a row. Declare it :waymark/ref, "
+                "[:maybe :waymark/ref] or [:vector :waymark/ref]. It "
+                "declares " (pr-str schema) ", which holds no id.")))))
+
 ;; ── the query surface ───────────────────────────────────────────────
 
 (defn- check-filterable [r]
@@ -1268,7 +1328,7 @@
           check-handler-signatures check-opaque-residue
           check-summary-template check-waive-tokens
           check-place check-edit check-altitude check-long-text
-          check-options
+          check-options check-ref-shape
           check-filterable check-sortable check-default-filters
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require

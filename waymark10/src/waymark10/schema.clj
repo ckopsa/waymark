@@ -505,6 +505,51 @@
     (contains? props :examples)
     (assoc :json-schema/examples (:examples props))))
 
+(defn- carry-ref-to-items
+  "One projected property with its x-ref carried down onto the ITEMS of
+  a list (waymark-fp62.7.8).
+
+  `:kind` sits on the ENTRY, so a `[:vector :waymark/ref]` field
+  published its picker at the array level — and a client reading it
+  there draws ONE picker for the whole list. The seat's `held_for`
+  opened as a single model chooser that could not seat its own
+  prefill: the seed is a list of ids and no option equals a list. A
+  list of refs is one picker PER ITEM, so the advertisement belongs on
+  the items, where the thing one widget edits lives.
+
+  The array level KEEPS it: a collection's filter param filters BY
+  this field and reads the entry's own declaration there
+  (server/collections query-input-schema), and a cell renderer asks
+  the same question of the field. Carrying down adds a reading; it
+  removes none.
+
+  A `[:maybe [:vector …]]` lands as the `X | null` oneOf, so the carry
+  walks that too — the array branch is the one that holds items."
+  [prop xref]
+  (cond
+    (not (map? prop)) prop
+
+    ;; `items` IS the list — a projection that spells its nullability
+    ;; as a type array rather than a oneOf is a list all the same
+    (map? (:items prop))
+    (update prop :items #(merge {:x-ref xref} %))
+
+    (or (:oneOf prop) (:anyOf prop))
+    (let [k (if (:oneOf prop) :oneOf :anyOf)]
+      (update prop k (fn [alts] (mapv #(carry-ref-to-items % xref) alts))))
+
+    :else prop))
+
+(defn- ref-items
+  "The projection with every x-ref carried down onto the items of the
+  list it annotates. One pass over the finished document, because the
+  shape it answers — array, or an array inside a `X | null` — is a
+  question about the PROJECTION, not about the declaration."
+  [js]
+  (clojure.walk/postwalk
+   (fn [x] (if (and (map? x) (map? (:x-ref x))) (carry-ref-to-items x (:x-ref x)) x))
+   js))
+
 (defn- annotate
   "Walk a schema form, promoting waymark entry properties to
   :json-schema/x-* so they surface in the projection."
@@ -557,4 +602,5 @@
   (-> (annotate form)
       (m/schema options)
       (json-schema/transform options)
-      inline-definitions))
+      inline-definitions
+      ref-items))

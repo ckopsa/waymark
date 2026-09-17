@@ -157,6 +157,31 @@
                    :edit {:prefill [:nope]}
                    :input [:map [:name [:string {:max 100}]]]))))
 
+(deftest ref-shape
+  ;; waymark-fp62.7.8: :kind says the field holds the id of a row, and
+  ;; every surface draws a picker from it. Three shapes can hold one.
+  (testing "a ref, a nilable ref and a LIST of refs are all fine"
+    (doseq [form [:waymark/ref
+                  [:maybe :waymark/ref]
+                  [:vector :waymark/ref]
+                  [:maybe [:vector :waymark/ref]]]]
+      (is (= [] (warnings-of
+                 (assoc base :schema [:map
+                                      [:name [:string {:max 100}]]
+                                      [:held_for {:kind :thing} form]])))
+          (pr-str form))))
+  (testing "a field that holds no id is refused"
+    (breaks :ref-shape
+            (assoc base :schema [:map
+                                 [:name [:string {:max 100}]]
+                                 [:held_for {:kind :thing}
+                                  [:vector [:string {:max 40}]]]])))
+  (testing "…on an action's input too"
+    (breaks :ref-shape
+            (with-action base :close
+              (assoc close-action
+                     :input [:map [:into {:kind :thing} [:int {:min 0}]]])))))
+
 (deftest faceted
   (breaks :faceted (assoc base :faceted [:name])))
 

@@ -605,6 +605,13 @@
                    (let [it (unwrap-maybe (:items p))]
                      (and (map? it)
                           (or (contains? it :enum)
+                              ;; a list of refs is a list of scalars
+                              ;; here and rows of PICKERS at the client
+                              ;; (waymark-fp62.7.8): the projection
+                              ;; carries the entry's x-ref onto the
+                              ;; items, so there is no list of refs
+                              ;; left that a form cannot seat, and no
+                              ;; policy sentence is owed for one
                               (contains? scalar-types (:type it))
                               ;; a list of maps renders as rows (waymark-jtd7)
                               ;; when every item field is formable and none
