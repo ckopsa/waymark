@@ -272,19 +272,21 @@
     (testing "sitting twice on one session is the same seat, not a second grant"
       (let [again (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))]
         (is (= (:grant answer) (:grant again))
-            "the standing seat grant is reused, never re-minted")))
+            "the standing seat grant is reused, never re-minted")
+        (is (= (:sitting answer) (:sitting again))
+            "and so is the open sitting")))
 
     ;; ── the router's own seat machinery, wearing the sitter ─────────
     (let [meal (:row (inv/create! eng :meal {:name "Soup" :themes []}
                                   {:principal person}))
-          sitting (:row (inv/create! eng :sitting
-                                     {:seat (:id seat)
-                                      :model (:id model)
-                                      :grant (str (:grant answer))}
-                                     {:principal
-                                      (t/principal {:id sitter-id :type :agent
-                                                    :display "meal-clerk (seat)"
-                                                    :model "claude-sit-5"})}))
+          ;; the sit opened the sitting (R-12.15): nobody else opens one
+          ;; for a keyed session, and the answer names it
+          sitting (seats/open-sitting-for-grant eng (str (:grant answer)))
+          _ (is (some? sitting) "waymark_sit opened the seat's sitting")
+          _ (is (= (str (:id sitting)) (str (:sitting answer)))
+                "and its answer names the sitting it opened")
+          _ (is (= sitter-id (str (get-in sitting [:data :member])))
+                "born as the sitter")
           counts (fn []
                    (let [row (store/with-tx (:storage eng)
                                (fn [tx] (store/load-row (:storage eng) tx
