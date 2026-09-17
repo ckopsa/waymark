@@ -204,6 +204,16 @@
                                       ;; the drift sweep without
                                       ;; waiting fifteen minutes.
                                       :schedule-adapters :schedule-drift-ms
+                                      ;; and the fire seam beside them
+                                      ;; (spec-seat.md R-12.18): the one
+                                      ;; adapter that starts a linked
+                                      ;; Routine's run, handed in by
+                                      ;; value so no suite touches the
+                                      ;; network. `:wake-tick-ms` is the
+                                      ;; damper's own tick, so a suite
+                                      ;; can drive the wake sweep
+                                      ;; without waiting thirty seconds.
+                                      :fire-adapter :wake-tick-ms
                                       ;; the Gate proxy's address
                                       ;; (waymark-q95): {:url …}, or
                                       ;; {:rpc …} — a caller handed in

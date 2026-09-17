@@ -3,8 +3,9 @@
 The clerk's driver: a Claude Routine with the engine's connector
 attached (docs/spec-seat.md section 12.1). The person makes it once,
 by hand, from this file. The engine owns a `schedule` row for the
-seat; until the adapter can reach the Routines scheduler, that row
-is `broken` and this file is the copy it describes.
+seat. The Routines API has no door that makes a Routine, so this
+file is the copy the row describes. The person links this Routine to
+that row, and the engine fires it (see "The fire link").
 
 Written in ASD-STE100 Simplified Technical English.
 
@@ -34,9 +35,31 @@ present too, and the credential is the person's own.
 | name | `inbox-clerk` | the seat's name, one spelling |
 | model | Opus 5 | the seat's `held_for`; the schedule row mirrors it |
 | repository | `ckopsa/waymark` | the Stop hook that closes the sitting lives in its `.claude/settings.json`; the clerk still touches no code |
-| trigger | Schedule, `0 * * * *` | `cadence_seconds` 3600 |
+| trigger | Schedule, `0 * * * *` | `cadence_seconds` 3600. Keep the API trigger too: it gives the fire URL. |
+| fire URL | the API trigger's URL | the engine fires the Routine through it. See "The fire link". |
 | connectors | Waymark only | mail is read through the seat's `email.read` power |
 | instructions | the text below | the key, then the pointer of R-12.3 |
+
+## The fire link
+
+The engine cannot make this Routine, and it cannot read it. The
+Routines API fires a Routine and does nothing else. The link is the
+by-hand path (spec-seat.md R-12.18).
+
+1. Open the Routine and find its API trigger. Copy the fire URL. It
+   holds the Routine's id, which is not a secret.
+2. Make the trigger's token and copy it. The token is a secret.
+   Never paste it into a transcript.
+3. Invoke `link` on the seat's schedule row, with the fire URL and
+   the token. The row moves to `live`.
+
+The engine holds the token as it holds the seat's key. It never
+shows it again. A second `link` replaces the first. `unlink` clears
+both fields and moves the row back to `broken`.
+
+After the link, three things start a firing: the Routine's own
+schedule, a person's `fire` on the seat, and a transition the seat
+asked to be woken by (R-12.19, R-12.22).
 
 ## The instructions
 
@@ -48,6 +71,8 @@ that key and that value as `session`. Then you sit in the seat
 `inbox-clerk`. Read the seat row with waymark_get and do what its
 charter says. Take only the doors the envelope offers. When the seat
 says halted or parked, say why and stop.
+
+If a routine-fire-payload block names a row id, walk that row and stop.
 
 When the Stop hook asks you to close the sitting, make that one call
 with the numbers it gives, then stop.
@@ -73,6 +98,12 @@ its own reason.
    `rows_per_firing` rows. For each row it takes the one door the
    envelope offers. The first request opened a sitting; the router
    counts each transition and each refusal against it.
+
+   A fired run differs here. The engine puts the fire's text into the
+   session in a `routine-fire-payload` block. When that block names
+   one row id, the instructions above tell the session to walk that
+   row and to stop. A fire with no text walks the queue, as a
+   schedule firing does.
 5. The session stops and says in one line why it stopped and how
    many rows it moved. The harness then raises its Stop event, and
    the Stop hook sums the transcript's usage.
@@ -131,9 +162,11 @@ and the build costs the firing a minute.
    the Routine runs.
 2. The inbox source has run one pass and the queue holds rows.
 3. `offer_key` has been invoked, and the key is in the instructions.
-4. The environment carries the URL and the key, or it carries
+4. `link` has been invoked on the schedule row with the fire URL and
+   the token, and the row is `live`.
+5. The environment carries the URL and the key, or it carries
    nothing and the hook holds the stop, as the section above says.
-5. The first firing is watched by a person, who reads the sitting
+6. The first firing is watched by a person, who reads the sitting
    row and the seat's ledger afterwards.
 
 ## To pause
@@ -143,11 +176,16 @@ Pausing the Routine as well saves the wake. To resume, unpark.
 
 ## Later
 
-- The Routines API is fire-only: it has no door to create, update
-  or read a Routine, so the engine cannot push this Routine from the
-  schedule row or read it back. The person makes it by hand and
-  links its fire URL and token to the schedule row
-  (waymark-fp62.7.3).
-- The engine fires the seat on demand through that link, and the
-  source fires it with one row's id, so one session walks one row
-  (R-12.9, waymark-fp62.7.3).
+- The Routines API stays fire-only. It has no door that makes,
+  changes or reads a Routine. The engine therefore cannot push this
+  Routine from the schedule row, and it cannot read it back. The
+  row's `drift` stays empty.
+- The link and the fire are built (waymark-fp62.7.3). A person links
+  the fire URL and the token one time. The engine then fires the seat
+  on demand, and a fire that names one row id makes one session walk
+  that one row (R-12.19, R-12.21).
+- The seat's `wake_on` fires the seat on a transition. A walk seat
+  with no `wake_on` wakes on the walk kind's `create`, so a new
+  `inbox_item` starts a sitting. The damper holds the fire while a
+  sitting is open, and to one fire in `fire_interval_seconds`
+  (R-12.22).

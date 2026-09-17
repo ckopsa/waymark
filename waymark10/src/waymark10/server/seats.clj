@@ -380,6 +380,71 @@
       (t/allow)
       (t/deny))))
 
+;; ── the fire door's four guards (R-12.19, R-12.20) ──────────────────
+;;
+;; Each refuses with ONE sentence, and each says what to do next. A
+;; fire is fuel: the engine never fires a seat behind a wall, and
+;; never fires one whose Routine nobody has linked.
+
+(g/defguard a-person-or-the-engine
+  {:reads [:principal]
+   :explain "A fire is a person's act or the engine's. An agent with no person behind it does not fire a seat. Ask the person who opened this seat, or file an approval_request."}
+  [_row _inp ctx]
+  ;; `a-person` plus the engine. The engine is here because the wake
+  ;; consumer fires through this same door (R-12.22) and a second,
+  ;; concealed door would be the same law written twice; a BARE agent
+  ;; is refused exactly as it is at every other seat door.
+  (let [{:keys [type acts-for]} (:principal ctx)]
+    (if (or (= :human type)
+            (= :system type)
+            (and (= :agent type) (not (str/blank? (str acts-for)))))
+      (t/allow)
+      (t/deny))))
+
+(g/defguard not-parked
+  {:explain "The seat is parked. Unpark it first."}
+  [row _inp _ctx]
+  ;; `parked` is in the door's from-set on purpose: a refusal that
+  ;; names the park and says the way back is worth more than a 409
+  ;; saying the door is not there.
+  (if (= :parked (:state row))
+    (t/deny)
+    (t/allow)))
+
+(def ^:private wall-sentences
+  "One sentence for each wall, for the rare halt that carries no
+  detail — a row written before the router had a sentence, or one
+  written by hand in a test. The router's own detail wins where it is
+  there, which is why these are short."
+  {"seat_not_active" "The seat serves nothing until somebody opens it again."
+   "model_not_held" "The session's model is not one this seat is held for."
+   "budget_reached" "The week's fuel is spent. The wall lifts as the window rolls."})
+
+(g/defguard not-halted
+  {:vars [:wall]
+   :explain "The seat is against a wall. {wall}"}
+  [row _inp _ctx]
+  (if-some [halt (get-in row [:data :halt])]
+    (t/deny {:vars {:wall (or (some-> (:detail halt) str not-empty)
+                              (get wall-sentences (str (:reason halt)))
+                              "Wait for the wall to lift.")}})
+    (t/allow)))
+
+(g/defguard linked-for-fire
+  {:reads [:schedule]
+   :explain "Link the Routine's fire URL and token to the schedule first."}
+  [row _inp ctx]
+  ;; The schedule is read through the ctx `:find` hook — the write's
+  ;; own transaction, `schedules/one-per-seat?`'s spelling exactly. A
+  ;; ctx without the hook (the pure render probe) advertises
+  ;; optimistically, as every cross-row guard here does.
+  (if-some [find' (:find ctx)]
+    (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))]
+      (if (some-> (get-in sched [:data :fire_url]) str not-empty)
+        (t/allow)
+        (t/deny)))
+    (t/allow)))
+
 (g/defguard one-model-spelling
   {:judges [:name]
    :reads [:model]
@@ -432,6 +497,13 @@
 
 (defhandler clear-sitter-key [row _inp _ctx]
   (update row :data dissoc :sitter_key))
+
+;; R-12.19: a fire moves nothing on the seat. The row is returned as
+;; it stands, and the transition IS the record — `:record true` puts
+;; the text in the log's inputs, the ledger counts the move, and the
+;; schedules consumer hears it and starts the run.
+(defhandler fire-seat [row _inp _ctx]
+  row)
 
 (defn- larger
   "The larger of two comparables, either of which may be absent."
@@ -1036,6 +1108,38 @@
      :display {:label "Revoke key" :order 5
                :description "The key answers for nothing; a session presenting it is told no seat answers, and the seat's own sittings are untouched"}}
 
+    ;; ── the fire door (R-12.19, R-12.20) ────────────────────────────
+    ;; A seat wakes three ways: its cadence, a person's fire, and a
+    ;; transition it asked to be woken by. This is the second, and the
+    ;; third comes through it too. The door itself only records: the
+    ;; POST goes out after the commit, from the schedules consumer,
+    ;; which reads this transition's text out of the log.
+    :fire
+    {:from #{:active :parked} :to :active
+     :input [:map
+             [:text {:optional true
+                     :examples ["Look at the three messages that arrived this morning."]
+                     :x-display
+                     {:widget "prose"
+                      :label "What this run is about"
+                      :help "What the session should do with this wake, in your words. Name one row and the session walks that row alone; leave it empty and the session walks the queue, as a cadence wake does."}}
+              [:maybe [:string {:min 1 :max 2000}]]]]
+     :record true
+     :guards [a-person-or-the-engine not-parked not-halted linked-for-fire]
+     ;; NOT idempotent, and honestly so: a second fire starts a second
+     ;; run. Every caller already carries the key the door demands —
+     ;; the MCP door signs each invoke with `origin-key`, and the wake
+     ;; consumer keys its fire by the transition it heard, which is
+     ;; also its own replay dedupe. An idempotent spelling would have
+     ;; let invoke's natural replay swallow a textless fire whenever the
+     ;; seat's latest transition was the last textless fire — the
+     ;; wake's release fire and a person's second press, both lost.
+     :safety {:idempotent false :reversible false :confirm false
+              :one-way "The run starts at the provider and cannot be called back; it costs one sitting's fuel."}
+     :handler fire-seat
+     :display {:label "Fire" :order 6
+               :description "Wake the seat now, without waiting for its cadence — one run, counted in the ledger like any other"}}
+
     :merge
     {:from #{:active :parked} :to :merged
      :input [:map
@@ -1151,6 +1255,8 @@
    ["R-4.9's own-surface for sitters is NOT declared here, and wave two settled why: `:own-surface :by` names a field of the row being read, and a sitter is identified through `grant.seat` — a field of the GRANT. A seat with a sitter column would be a second copy of the grant, so the courtesy is spelled where the sitter is actually identified: the seat resolve adds the citing seat's row as a synthetic, unstored scope entry (`{kind \"seat\", ids [<this seat>], actions []}`), and `:kind?`, `:row?`, `:field?` and `:ids-of` then answer for it exactly as they answer for anything granted. One admission algebra, read-only, one row — and `:whole-kind?` stays false, because one row is not the collection."
     "R-4.6's consequence sentence is kept verbatim, `{into}` included. The framework does not interpolate a consequence (render substitutes only a per-origin map, never a template), so the brace renders literally. The alternative was rewording the one sentence the spec pins, and a spec-pinned string is worth more than a tidy dialog."
     "`sitter_key` IS DECLARED on the create door and on `restate`, which reads at first like the opposite of this file's write fence. It is the fence: a guard may judge only a field of the door it stands on (checks/check-create-guards and check-guard-declarations are definition ERRORS otherwise), so a `key-not-written-by-hand` that could be READ had to have something to name — members.clj's `reentry-not-written-by-hand` has it for free, because that kind has no separate create-schema. Both spellings carry `{:secret true}`, so the advertised create body drops the field (collections.clj unions the row schema's secret set with the create model's for exactly this), no form asks for it, and the usability policies skip it. What the caller gains over silent omission is the refusal's own sentence, which names the door that writes the key instead."
+    "`fire` declares `:idempotent false`, so every call must carry an Idempotency-Key (invoke's phase 2). That is the truthful spelling: a second fire starts a second run. It is also the safe one: an idempotent door is subject to invoke's natural replay, which compares only the row's LATEST transition, so a textless fire following a textless fire with nothing else on the seat would have been answered as a replay and never gone out — the wake's release fire (R-12.22) and a person's second press, both lost. The key costs nobody anything: the MCP door signs every invoke, and the wake consumer keys each fire by the transition it heard, which doubles as its own dedupe. The consumer's replay of the POST is deduped separately, where it happens: `schedules/already-fired?` compares `last_fired_at` against the transition's own instant."
+    "`fire` runs from `parked` as well as `active`, and the `not-parked` guard refuses it there. R-12.20 asks for the sentence \"The seat is parked. Unpark it first.\", and a door absent from a parked seat's envelope could only answer 409 with the machine's own words."
     "`mark_stale`, `mark_halted` and `clear_halt` are declared `active → active` only. A v10 action declares ONE `:to` (definitions.clj records the same wart for `measure`/`measure_pilot`), so covering `parked` would mean six doors instead of three — and a parked seat is already scoped to nothing by the person's own hand, so neither a stale entry nor a halt on it tells anybody anything they did not choose."]})
 
 ;; ── :model ──────────────────────────────────────────────────────────
