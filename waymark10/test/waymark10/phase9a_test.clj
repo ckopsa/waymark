@@ -349,9 +349,12 @@
         ;; :judged_by, for the same reason again
         ;; …and remark (waymark-b4s), a member's own turns, by
         ;; :said_by, for the same reason once more
+        ;; …and sitting (spec-seat.md, waymark-fp62.1), the record of
+        ;; one wake of a seat, own-surface by :member — what a wake
+        ;; cost is the sitter's own to read
         (is (= ["approval_request" "feed_view" "feed_view_consent"
                 "grant" "job" "plan" "ranking_note" "recipe_proposal"
-                "remark" "verdict_reason"]
+                "remark" "sitting" "verdict_reason"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]

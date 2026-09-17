@@ -168,6 +168,7 @@
             [waymark10.server.routes.openapi :as openapi-routes]
             [waymark10.server.routes.realtime :as realtime-routes]
             [waymark10.server.routes.seasons :as seasons-routes]
+            [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.routes.ui :as ui-routes]
             [waymark10.server.routes.worksheet :as worksheet-routes]
             [waymark10.server.schedules :as schedules]
@@ -557,18 +558,20 @@
    ;; model hold it" — a question every deployment that lets an agent
    ;; act has, so there is nothing left to opt into.
    ;;
-   ;; It starts nothing and mounts no route here. The boot sweep
-   ;; (R-7.1/R-7.6), the router's seat resolve (R-5.2) and the ledger
-   ;; route (R-11.3a) are the NEXT wave's, and each lands where it
-   ;; belongs — in boot-revise!, in the router, and in a routes
-   ;; namespace — rather than as a fifth column on this table.
+   ;; It starts nothing, and its one route is the ledger (R-11.3a) —
+   ;; the six answers about a seat over a window, which is a route and
+   ;; nothing else. The other two halves of the wave land where they
+   ;; belong rather than as a fifth column on this table: the boot
+   ;; sweep (R-7.1/R-7.6) in boot-revise!, the seat resolve (R-5.2) in
+   ;; the router.
    {:module :seats
     :enrols [{:kind :seat :enroll :always
               :kinds (fn [_] [seats/seat])}
              {:kind :model :enroll :always
               :kinds (fn [_] [seats/model])}
              {:kind :sitting :enroll :always
-              :kinds (fn [_] [seats/sitting])}]}
+              :kinds (fn [_] [seats/sitting])}]
+    :routes seat-routes/routes}
 
    ;; named, contributing nothing through this seam
    {:module :postgres-store}

@@ -190,6 +190,20 @@
                                       ;; waymark10.modules already names for
                                       ;; every other module's knob.
                                       :feed
+                                      ;; the schedule mirror's seam
+                                      ;; (spec-seat.md R-12.11):
+                                      ;; {provider adapter} handed in
+                                      ;; by value, which is the tests'
+                                      ;; and offline dev's path — the
+                                      ;; environment stays the
+                                      ;; deployment's, and
+                                      ;; schedules/adapters-of merges
+                                      ;; the two with the opt winning.
+                                      ;; Beside it the read-back's
+                                      ;; cadence, so a suite can drive
+                                      ;; the drift sweep without
+                                      ;; waiting fifteen minutes.
+                                      :schedule-adapters :schedule-drift-ms
                                       ;; the Gate proxy's address
                                       ;; (waymark-q95): {:url …}, or
                                       ;; {:rpc …} — a caller handed in

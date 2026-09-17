@@ -928,8 +928,12 @@
                             (create-copy
                              adapter
                              (create-spec eng seat-row schedule-row)))))]
+            ;; an input crosses the wire boundary: the invoke path
+            ;; digests it canonically before the schema coerces it, so
+            ;; the instant travels as its string (mirror.clj's own
+            ;; spelling for synced_at)
             (act! eng (:id schedule-row) :claim
-                  {:external_id xid :pushed_at (now eng)}))
+                  {:external_id xid :pushed_at (str (now eng))}))
           (catch Exception e
             (break! eng schedule-row e)))))))
 
@@ -1013,7 +1017,7 @@
             (if (= found (get-in schedule-row [:data :drift]))
               (stamp-seen! eng schedule-row at)
               (act! eng (:id schedule-row) :observe
-                    {:seen_at at :drift found})))
+                    {:seen_at (str at) :drift found})))
           (catch Exception e (break! eng schedule-row e)))))))
 
 (defn sweep-drift!

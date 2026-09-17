@@ -160,10 +160,15 @@
 ;; ── the surfaces this engine actually turns ─────────────────────────
 
 (deftest the-started-engine-turns-every-surface-its-modules-declared
-  (testing "ten hooks, and the one that legitimately did not run"
+  (testing "twelve hooks, and the one that legitimately did not run"
+    ;; …the last two are the schedules module's (spec-seat.md § 12):
+    ;; the consumer that mirrors a seat out, and the read-back that
+    ;; reports drift — both `:when` the schedule kind is served, which
+    ;; an always-enrolled kind always is
     (is (= #{:dispatcher :law-refresh :clock-sweeper
              :attachments-purge :webhooks-deliverer
              :jobs-worker :jobs-orphan-sweeper
+             :schedules-mirror :schedules-drift
              :curtain :presence :intents}
            (runtime/surfaces *eng*)))
     (is (nil? (runtime/surface *eng* :discovery))

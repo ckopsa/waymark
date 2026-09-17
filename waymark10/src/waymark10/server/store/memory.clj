@@ -310,6 +310,28 @@
          (sort-by (juxt :week-start :kind :action :actor-type))
          vec))
 
+  (corrections-by-model [_ _tx actor-ids since]
+    ;; the same walk Postgres does with lag(): partition the log by
+    ;; (kind, resource_id), order by id, and read each row beside the
+    ;; one before it. The window bites the CORRECTION, never the
+    ;; transition being corrected — which is usually older than it
+    (let [sat? (set (map str actor-ids))]
+      (if (empty? sat?)
+        []
+        (->> (:transitions @state [])
+             (sort-by :id)
+             (group-by (juxt #(name (:kind %)) :resource-id))
+             (mapcat (fn [[_ ts]] (partition 2 1 ts)))
+             (keep (fn [[before after]]
+                     (when (and (= "human" (get-in after [:actor :type]))
+                                (not (.isBefore ^Instant (:at after) ^Instant since))
+                                (contains? sat? (str (get-in before [:actor :id]))))
+                       {:model (get-in before [:actor :model])})))
+             frequencies
+             (map (fn [[k n]] (assoc k :n (long n))))
+             (sort-by (comp str :model))
+             vec))))
+
   (idempotency-lookup [_ _tx key kind]
     (get-in @state [:idempotency [key kind]]))
 

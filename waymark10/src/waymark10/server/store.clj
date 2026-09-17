@@ -69,6 +69,27 @@
     × kind × action × actor type, at >= since only. include-system?
     false drops rows whose actor type is system — the mirror-sync
     beat would otherwise dominate every count.")
+  (corrections-by-model [st tx actor-ids since]
+    "The correction count over the log, grouped by the model that was
+    corrected — the ladder's one new query (spec-seat.md R-11.3).
+
+    A CORRECTION is a person's transition on a row whose IMMEDIATELY
+    PREVIOUS transition on that same (kind, resource_id) was written
+    by one of `actor-ids` — the members that sat the seat in the
+    window. So this is a window function over the log, LAG by (kind,
+    resource_id) ordered by id, and it is the one question the other
+    five cannot be asked as a row read: nothing on a row records that
+    somebody undid an agent.
+
+    The lag runs over the WHOLE log and the `at >= since` filter is
+    applied after it, because the transition being corrected is
+    routinely older than the window that counts the correction.
+
+    `actor-ids` empty → no rows. → [{:model str-or-nil :n long} …],
+    where :model is the corrected transition's own actor model claim
+    (absent on a hand that declared none, which is a nil key rather
+    than a dropped row).")
+
   (idempotency-lookup [st tx key kind]
     "→ {:status :response :media-type :request-digest} or nil.")
   (idempotency-store! [st tx key kind action digest status response media-type])

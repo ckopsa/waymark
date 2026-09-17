@@ -68,15 +68,16 @@
     modules enrol `:always`, so the alternative (an opaque id string)
     would have bought nothing and lost the picker, the navigable
     reference and the dangling-ref check.
-  - THE SITTER'S OWN-SURFACE IS WAVE TWO'S. R-4.9 wants the seat row
-    readable by its sitters with no scope entry, and a sitter is
-    identified THROUGH THE GRANT (`grant.seat`, a field wave two adds).
-    `:own-surface :by` names a field of the row being read, and the
-    seat row carries no sitter field and must not grow one — a seat
-    with a sitter column would be a second copy of the grant. So the
-    courtesy is not declared here: it lands with the field that makes
-    it expressible. Until then a sitter reads its seat through the
-    ordinary scope resolution, which is the surface it already has.
+  - THE SITTER'S OWN-SURFACE IS NOT A DECLARATION. R-4.9 wants the
+    seat row readable by its sitters with no scope entry, and a sitter
+    is identified THROUGH THE GRANT (`grant.seat`). `:own-surface :by`
+    names a field of the row being READ, and the seat row carries no
+    sitter field and must not grow one — a seat with a sitter column
+    would be a second copy of the grant. Wave two spelled the courtesy
+    where the sitter is identified instead: grants.clj's seat resolve
+    adds `{kind "seat", ids [<the cited seat>], actions []}` to the
+    scope it computes, so the read rides the ordinary admission
+    algebra and no second one exists.
   - `one-spelling` IS SPELLED TWICE. roles.clj's guard is the
     precedent and the name; two kinds in one namespace cannot both be
     `one-spelling`, so the vars are `one-seat-spelling` and
@@ -953,7 +954,7 @@
    :scenarios [an-agent-does-not-park-its-own-seat
                the-person-parks-the-seat]
    :deviations
-   ["R-4.9 wants the seat row own-surface for its sitters, and a sitter is identified through `grant.seat` — a field wave two adds. `:own-surface :by` names a field of the row being read, and the seat carries no sitter field and must not grow one (a seat with a sitter column is a second copy of the grant), so the courtesy is not declared here; it lands with the field that makes it expressible."
+   ["R-4.9's own-surface for sitters is NOT declared here, and wave two settled why: `:own-surface :by` names a field of the row being read, and a sitter is identified through `grant.seat` — a field of the GRANT. A seat with a sitter column would be a second copy of the grant, so the courtesy is spelled where the sitter is actually identified: the seat resolve adds the citing seat's row as a synthetic, unstored scope entry (`{kind \"seat\", ids [<this seat>], actions []}`), and `:kind?`, `:row?`, `:field?` and `:ids-of` then answer for it exactly as they answer for anything granted. One admission algebra, read-only, one row — and `:whole-kind?` stays false, because one row is not the collection."
     "R-4.6's consequence sentence is kept verbatim, `{into}` included. The framework does not interpolate a consequence (render substitutes only a per-origin map, never a template), so the brace renders literally. The alternative was rewording the one sentence the spec pins, and a spec-pinned string is worth more than a tidy dialog."
     "`mark_stale`, `mark_halted` and `clear_halt` are declared `active → active` only. A v10 action declares ONE `:to` (definitions.clj records the same wart for `measure`/`measure_pilot`), so covering `parked` would mean six doors instead of three — and a parked seat is already scoped to nothing by the person's own hand, so neither a stale entry nor a halt on it tells anybody anything they did not choose."]})
 

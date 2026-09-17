@@ -89,6 +89,17 @@
   they are not an exception: wrap-identity IS the identity boundary,
   which the spec files under core.
 
+  ONE namespace joins the requires with the seat (spec-seat.md § 5,
+  § 7, § 10), and it is not a module in the sense above: the :seats
+  module enrols `:always` and contributes no route, and the three
+  calls this boundary makes into it — the halt a wall writes, the halt
+  a passing request clears, the two counters a sitting keeps — are
+  each named by the spec as the ROUTER'S act. The dependency runs one
+  way as ever (seats.clj requires grants.clj, never this file), and
+  the resolve itself lives in grants.clj, which cannot name seats
+  without a cycle: it reads the seat row and reports the wall, and
+  what happens about the wall happens here.
+
   Each of the four is now a protocol core names
   (waymark10.server.seams) answered by a value the assembly already
   put in core's hand. Two are RUNNING surfaces, found by hook key
@@ -117,6 +128,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.runtime :as runtime]
             [waymark10.server.seams :as seams]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.surface :as surface]
             [waymark10.types :as t]
@@ -179,6 +191,50 @@
   (or (:waymark10/principal req) (dev-principal (:headers req))))
 
 (defn visibility-of [req] (:waymark10/visibility req))
+
+;; ── the seat's walls and the sitting's counters (spec-seat § 5, 10) ─
+;;
+;; The resolve is grants.clj's and it writes nothing: it reads the seat
+;; row per request and hands back which wall the request met, if any.
+;; The WRITE is here, because R-7.7 names the router — a halt is a fact
+;; about a request meeting a wall, not about a scope being computed,
+;; and `visibility` is also called from a preview and from the
+;; capability check, where nothing met anything.
+
+(defn- mind-the-wall!
+  "R-7.7: the first request that meets one of the three walls writes
+  the seat's `halt`, and the first that passes afterwards clears it.
+  Both doors are idempotent by intent in seats.clj; this calls NEITHER
+  unless the seat row actually has to move, so a seat behind a wall
+  costs the same per request as a seat that is not — the resolve
+  already read the halt off the row it loaded."
+  [eng seat]
+  (when-some [id (:id seat)]
+    (if-some [reason (:reason seat)]
+      (when-not (= reason (:halt seat))
+        (seats/seat-halt! eng id reason (:detail seat)))
+      (when (:halt seat)
+        (seats/seat-clear-halt! eng id)))))
+
+(defn- open-sitting
+  "The open sitting this request is counted against, or nil (R-10.6):
+  ONE lookup, by the LIVE grant the identity boundary resolved. A
+  request that presented none — or a dead one, or one behind a seat's
+  wall — counts nothing, which is the honest reading: nothing was
+  spent under a leash that conferred nothing."
+  [eng req]
+  (when-some [gid (get-in (visibility-of req) [:grant :id])]
+    (seats/open-sitting-for-grant eng gid)))
+
+(defn- count-committed!
+  "R-10.6, the transitions half: a committed, non-replayed transition
+  under a live grant adds one to the open sitting's count. Returns the
+  result it was handed, so it composes into the doors' threads."
+  [eng req result]
+  (when (and (:transition result) (nil? (:replayed? result)))
+    (when-some [sitting (open-sitting eng req)]
+      (seats/bump-counter! eng (:id sitting) :transitions)))
+  result)
 
 ;; ── the visibility checks (phase 9a, concealment) ───────────────────
 
@@ -544,10 +600,15 @@
           _ (check-kind! req rdef)
           _ (check-action! req rdef (first (:create-action-names rdef)))
           opts (invoke-opts req)
-          result (inv/create! eng (:kind rdef) (read-body req)
-                              (select-keys opts [:principal :acknowledged
-                                                 :idempotency-key :dry-run
-                                                 :grant]))]
+          ;; a birth is a committed transition under the leash that
+          ;; presented it, and a walking seat's whole output is births
+          ;; (R-10.6, R-12.9)
+          result (count-committed!
+                  eng req
+                  (inv/create! eng (:kind rdef) (read-body req)
+                               (select-keys opts [:principal :acknowledged
+                                                  :idempotency-key :dry-run
+                                                  :grant])))]
       (cond
         ;; the create door's rehearsal (§23): the verdict body, and —
         ;; full mode only — a considering card naming the COLLECTION
@@ -862,9 +923,16 @@
           announce? (boolean (and reg (not= (:id (:principal opts))
                                             (:id t/anonymous))))
           result (try
-                   (grants/approval-effects!
-                    eng rdef (keyword action)
-                    (inv/invoke! eng (:kind rdef) id (keyword action) body opts))
+                   ;; the two post-commit passes this door owes, in the
+                   ;; order they became true: the approval effect lands
+                   ;; its grant, and the sitting counts the transition
+                   ;; (R-10.6 — one lookup, and nothing at all for a
+                   ;; request wearing no live grant)
+                   (count-committed!
+                    eng req
+                    (grants/approval-effects!
+                     eng rdef (keyword action)
+                     (inv/invoke! eng (:kind rdef) id (keyword action) body opts)))
                    (catch Exception e
                      (let [d (ex-data e)]
                        ;; beat 5: the wall the agent hit becomes the
@@ -1720,8 +1788,43 @@
                 ;; (spec-connector-door § 3) is read INSIDE it and
                 ;; not here.
                 (grants/unscoped-visibility eng principal))]
+      ;; the seat's walls, decided by the resolve and WRITTEN here
+      ;; (R-7.7): the first request behind a wall raises the halt, the
+      ;; first one past it lifts the halt. A seat grant that met
+      ;; nothing, and every request that is not a seat grant's, is one
+      ;; nil check.
+      (mind-the-wall! eng (:seat vis))
       (handler (cond-> (assoc req :waymark10/principal principal)
                  vis (assoc :waymark10/visibility vis))))))
+
+(defn- wrap-refusals-counted
+  "R-10.6, the refusals half: a 409 served under a live grant is fuel
+  the sitting spent on law the model did not know ahead of time, so
+  the open sitting for that grant counts one. A refusal is the first
+  thing this codebase has ever counted, and the reason it is counted
+  at all is that it is waymark's OWN backlog — a seat that spends its
+  week on refused doors is a place where the law was not spoken at the
+  door, never a model that was not good enough.
+
+  It is one middleware rather than a line in each door because every
+  refusal in this engine leaves the same way: a tagged problem thrown
+  through the boundary that projects it. Mounted INSIDE wrap-identity
+  (it reads the visibility that boundary resolved, which the raw
+  request does not carry) and inside wrap-problems (it re-throws
+  untouched; the projection to problem+json is not this function's
+  business). Recorded: the MCP door builds its own handler out of
+  `assemble-routes` and wears `wrap-problems` alone, so an agent's 409
+  at that door is not counted yet."
+  [handler eng]
+  (fn [req]
+    (try
+      (handler req)
+      (catch Exception e
+        (let [d (ex-data e)]
+          (when (and (:waymark10/problem d) (= 409 (:status d)))
+            (when-some [sitting (open-sitting eng req)]
+              (seats/bump-counter! eng (:id sitting) :refusals)))
+          (throw e))))))
 
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
@@ -1822,5 +1925,9 @@
          (assemble-routes eng route-sets)
          {:conflicts nil})
         not-found-handler)
+       ;; innermost of the three: it reads the visibility the identity
+       ;; boundary resolves and re-throws into the problem boundary
+       ;; that projects the refusal it just counted (R-10.6)
+       (wrap-refusals-counted eng)
        (wrap-identity eng)
        wrap-problems)))

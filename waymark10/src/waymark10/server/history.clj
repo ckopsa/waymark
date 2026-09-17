@@ -202,7 +202,11 @@
   live one (waymark-sfe), and carries no such key otherwise, which is
   the honest thing to say about an unscoped hand. It is what makes a
   delegated verdict readable as one: *declined by `<agent>` under
-  `grant-…`*."
+  `grant-…`*. It carries `model` beside it on the same terms
+  (spec-seat.md R-11.4): the audit is the truth about a seat, and the
+  audit cannot say which model moved a row unless the rendered actor
+  says so. Both are the session's own claim, unverified, and both are
+  simply absent when there was nothing to say."
   [rdef law t visible?]
   (let [j (decision/project (:judgment t) visible?)
         b (basis-of law t)]
@@ -210,7 +214,7 @@
              :action (:action t)
              :from (:from-state t)
              :to (:to-state t)
-             :actor (select-keys (:actor t) [:type :id :display :grant])
+             :actor (select-keys (:actor t) [:type :id :display :grant :model])
              :law_revision (:law-revision t)
              :evidence (evidence-tier rdef (:judgment t))}
       (:summary t) (assoc :summary (:summary t))
@@ -436,7 +440,8 @@
                                       :at (:at t)
                                       :action (:action t)
                                       :actor (select-keys (:actor t)
-                                                          [:type :id :display :grant])})))
+                                                          [:type :id :display
+                                                           :grant :model])})))
                             (filter (fn [i] (or (nil? row?)
                                                 (row? (:kind rdef) (:id i))))))
                       (sort-by key (group-by :resource-id in-window)))]

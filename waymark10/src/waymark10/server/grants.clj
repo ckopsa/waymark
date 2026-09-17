@@ -78,6 +78,20 @@
   envelopes render with empty action maps — concealment discipline
   unchanged.
 
+  ── the seat grant (docs/spec-seat.md § 5) ──────────────────────────
+
+  A GRANT MAY CITE A SEAT INSTEAD OF CARRYING A SCOPE. `seat` and
+  `substitute` are the two fields (R-5.1), and a grant that cites one
+  holds no scope of its own: `visibility` resolves the seat row AT
+  EACH REQUEST (R-5.2) — three walls, then the seat's scope minus a
+  substitute's drop list minus the sweep's stale list — so a `restate`
+  of the seat moves every sitter's leash with no new grant and nothing
+  copied. That is the answer to the drift on record in spec-seat § 3:
+  a stored scope is a COPY, and every copy in this file's history
+  rotted. The ask spells the seat's NAME and the mint resolves it to
+  the ref (R-5.4); an extend on a seat grant slides the expiry and
+  nothing else (R-5.3).
+
   Recorded deviations and named punts (each a sentence):
   - approver-edited scope maps and review-note round-trips are
     unported: v10's approve grants the ask as-is; the send-back is
@@ -141,7 +155,19 @@
     grant land inside the leash the moment they match. The worksheet
     export consumes both halves the way the collection does
     (waymark-ecq closed); the upload half still refuses scoped
-    requests — staging lands rows the uploader cannot see."
+    requests — staging lands rows the uploader cannot see.
+  - a grant with NEITHER a scope nor a seat is not refused: it confers
+    nothing, which is a harmless thing for a row to say, and R-5.1
+    asks only that the two never stand together.
+  - the seat resolve's budget wall is one SUM over the seat's closed
+    sittings, and no index serves it: `sum-matching` matches through
+    `data->>` expressions, and this store declares indexes for
+    `:unique` groups alone. A seat's sittings are a week of wakes, so
+    the scan is small by construction.
+  - the halt R-7.7 wants is WRITTEN BY THE ROUTER, not here: this
+    namespace reads the seat and reports the wall on `:seat`, because
+    `visibility` is also called by a preview and by the capability
+    check, where no request met anything."
   (:require [clojure.string :as str]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
@@ -415,6 +441,55 @@
     (t/deny {:vars {:kind bad}})
     (t/allow)))
 
+(g/defguard not-a-substitute
+  {:reads [:principal :grant]
+   :explain "A substitute reads the seat's memory and does not write it. The seat's own sitter writes here."}
+  ;; R-8.2, and the reason is CONTINUITY, not capability: the memory is
+  ;; the seat's voice across sessions, and a stand-in that wrote it
+  ;; would leave the next full sitter inheriting somebody else's words.
+  ;; The bar is a guard rather than a scope entry because self, journal
+  ;; and letter are private own-surface kinds no scope can name
+  ;; (scope-omits-private-kinds, just above) — so the only fact that
+  ;; distinguishes the two hands is the one the visibility carries
+  ;; beside the leash. It lives HERE, not in the app that declares the
+  ;; three kinds, because `substitute` is grant law and the sentence is
+  ;; pinned by the spec; the apps wear it.
+  ;;
+  ;; Reads are untouched (R-8.3): a guard judges a write.
+  [_row _inp ctx]
+  (if (true? (:substitute (:grant ctx)))
+    (t/deny)
+    (t/allow)))
+
+;; ── the seat grant (docs/spec-seat.md § 5) ─────────────────────────
+;;
+;; A SEAT GRANT CARRIES NO SCOPE. Its authority is the seat row, read
+;; at EACH request (R-5.2), so a `restate` moves every sitter's leash
+;; with no new grant and nothing copied — which is the whole answer to
+;; the drift on record in spec-seat § 3 (74 entries for 20 kinds; a
+;; stored scope naming a retired action; a default expiry copied onto
+;; a grant nobody meant to shorten). What this file owns is the field
+;; that cites the seat, the ask that spells its name, and the resolve.
+
+(defn- nonblank
+  "One field as a non-blank string, however the wire spelled it."
+  [x]
+  (some-> x str str/trim not-empty))
+
+(defn- seat-cited
+  "The seat id a grant row cites, or nil — the one test for `is this a
+  seat grant`, spelled once."
+  [row]
+  (nonblank (get-in row [:data :seat])))
+
+(g/defguard a-seat-or-a-scope
+  {:judges [:seat]
+   :explain "A grant CITES A SEAT or CARRIES A SCOPE, never both. A seat grant's authority is the seat row, read at every request, so a scope written beside it would be a second and frozen copy of exactly the thing the seat exists to keep live — and the two would disagree the first time somebody restated the seat. Drop one."}
+  [_row inp _ctx]
+  (if (and (some? (nonblank (:seat inp))) (seq (:scope inp)))
+    (t/deny)
+    (t/allow)))
+
 (declare surface-of visibility)
 
 (defn- entry-within-surface?
@@ -566,7 +641,15 @@
           entries)))
 
 (defhandler extend-grant [row inp _ctx]
-  (cond-> (update-in row [:data :scope] merge-scope (:scope inp))
+  ;; R-5.3: a SEAT grant has no scope to fold, and an extend on one
+  ;; moves the expiry alone. Nothing here writes a scope onto a seat
+  ;; grant even if an ask somehow carried one — the ask door refuses
+  ;; that shape (extend-of-a-seat-holds-no-scope), and this is the
+  ;; second wall, where the write would actually land.
+  (cond-> row
+    (and (nil? (seat-cited row)) (some? (:scope inp)))
+    (update-in [:data :scope] merge-scope (:scope inp))
+
     (:expires_at inp) (assoc-in [:data :expires_at] (:expires_at inp))))
 
 ;; ── the grant resource ──────────────────────────────────────────────
@@ -594,13 +677,33 @@
                                     :label "Who holds it"
                                     :help "The member id this grant empowers — the principal that will present it, not a display name."}}
              [:string {:min 1 :max 128}]]
-            [:scope {:examples [scope-example]
+            ;; OPTIONAL since the seat (R-5.1): a grant carries a scope
+            ;; or cites a seat, and `a-seat-or-a-scope` is the wall that
+            ;; keeps it to one. The entry stays a plain vector rather
+            ;; than a [:maybe …] — a seat grant OMITS the key, and a
+            ;; grant whose scope was explicitly null would be a third
+            ;; state for a field with two honest ones
+            [:scope {:optional true
+                     :examples [scope-example]
                      :x-display {:label "What it opens"
                                  ;; waymark-2hd0: a list of maps has no
                                  ;; sub-form yet; the box wears this
                                  :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
-                                 :help "The leash, entry by entry: a kind, the actions allowed on it, and optionally the rows, fields and filter that narrow it. Everything not named here stays shut."}}
+                                 :help "The leash, entry by entry: a kind, the actions allowed on it, and optionally the rows, fields and filter that narrow it. Everything not named here stays shut. Leave it empty when the grant cites a seat: a seat grant's authority is the seat's own scope, read fresh at every request."}}
              scope-schema]
+            ;; THE SEAT (R-5.1). A ref rather than a name, because the
+            ;; name is one spelling per ACTIVE seat and a grant outlives
+            ;; a retirement; the ASK spells the name, and the mint
+            ;; resolves it to this ref (R-5.4)
+            [:seat {:optional true
+                    :kind :seat
+                    :x-display {:label "The seat it sits in"
+                                :help "The office this grant is a seat in. A grant that cites a seat carries no scope of its own: the seat's scope is resolved at every request, so restating the seat moves every sitter with it and nothing is copied."}}
+             [:maybe :waymark/ref]]
+            [:substitute {:default false
+                          :x-display {:label "Sitting as a substitute"
+                                      :help "A substitute stands in: it gets the seat's scope minus the seat's drop list, and it reads the seat's memory (self, journal, letter) without writing it. The reason is continuity — the memory is the seat's voice across sessions."}}
+             :boolean]
             [:expires_at {:optional true
                           :x-display {:label "Good until"
                                       :help "When the leash goes dead on its own. Leave it empty for a grant that lasts until somebody revokes it."}}
@@ -612,14 +715,20 @@
    ;; hand-built filter)
    :links [{:rel "member" :kind :member
             :href "/api/members/{data.audience}"
-            :summary "The member this grant empowers"}]
+            :summary "The member this grant empowers"}
+           ;; the office, for the grant that sits in one — a nil seat
+           ;; omits the link, so a scope grant points at nothing
+           {:rel "seat" :kind :seat
+            :href "/api/seats/{data.seat}"
+            :summary "The office this grant sits in"}]
    ;; a hand-offered grant speaks the same vocabulary an ask must
    ;; (waymark-vnc): a scope naming a kind or action that does not
    ;; exist refuses at the door, never lands silently useless — and
    ;; an AGENT's hand mints only within its own leash (waymark9's
    ;; attenuation ceiling, landed at the mint): delegation
    ;; attenuates, never widens; the widening path stays the ask
-   :create-guards [scope-names-real-kinds scope-names-real-actions
+   :create-guards [a-seat-or-a-scope
+                   scope-names-real-kinds scope-names-real-actions
                    scope-filters-are-filterable
                    scope-omits-private-kinds
                    agents-mint-within-their-leash]
@@ -638,8 +747,13 @@
     ;; every envelope, invokable only by the approval effect's system
     ;; actor — a human widening scope by hand is not a thing
     :extend {:from #{:accepted} :to :accepted
+             ;; :scope is OPTIONAL since the seat (R-5.3): an extend on
+             ;; a seat grant moves `expires_at` and nothing else, because
+             ;; there is no scope on the grant to fold — the leash's
+             ;; authority is the seat row, and the way to widen it is to
+             ;; restate the seat
              :input [:map
-                     [:scope scope-schema]
+                     [:scope {:optional true} scope-schema]
                      [:expires_at {:optional true} [:maybe :waymark/instant]]]
              :record true
              :edit {:prefill [:scope :expires_at] :fence false
@@ -666,7 +780,11 @@
              :guards [past-expiry]
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "Expiry is the clock's bookkeeping; fresh access is a new grant, never an un-expire."}
-             :display {:label "Expire" :order 8}}}})
+             :display {:label "Expire" :order 8}}}
+   :deviations
+   ["R-5.1's exclusive pair — a grant with `seat` holds no `scope`, a grant with `scope` holds no `seat` — is a GUARD (`a-seat-or-a-scope`) rather than a schema constraint. A malli predicate over the whole map would have said the same thing to the engine and nothing at all to the caller: the fingerprint hashes the entry shapes, the JSON-Schema projection publishes properties, and the form renders fields, so a map-level refusal would have reached a person as an unattributed 422. The guard says which two fields collided and which one to drop."
+    "A grant carrying neither a scope nor a seat is not refused. It confers nothing, which is an honest thing for a row to say (an offer withdrawn to the empty leash), and R-5.1 asks only that the two never stand together."
+    "R-4.9 (the seat row is own-surface for its sitters, read-only) is not an `:own-surface` declaration on the seat kind: that key names a field of the row being READ, and the sitter is named on the GRANT. The resolve adds the cited seat as a synthetic, unstored scope entry instead, so the read rides the one admission algebra rather than a second one."]})
 
 ;; ── the approval_request resource (the negotiation machine) ─────────
 
@@ -675,6 +793,22 @@
     (some->> (store/with-tx (:storage eng)
                (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))
              (inv/decode-row rdef))))
+
+(defn- seat-by-name
+  "The ACTIVE seat wearing this spelling, engine-side (the ask's mint
+  runs post-commit, outside any ctx). nil when the ask named no seat,
+  when this engine serves no seats, or when nothing open answers to the
+  name — the ask door already refused that last one, and the mint
+  refusing to guess is the second wall."
+  [eng nm]
+  (when-some [nm (nonblank nm)]
+    (when-some [rdef (get (inv/resources eng) :seat)]
+      (some->> (first (store/with-tx (:storage eng)
+                        (fn [tx]
+                          (store/query-rows (:storage eng) tx :seat
+                                            {:name nm :state :active}
+                                            {:limit 1}))))
+               (inv/decode-row rdef)))))
 
 (g/defguard requester-holds-the-grant
   {:reads [:principal :grant]
@@ -763,18 +897,122 @@
         (t/deny {:vars {:cap open-asks-cap
                         :pending (str/join ", " (sort (map :id open)))}})))))
 
+(defn- seat-named
+  "The ACTIVE seat an ask spells by name, through the ctx :find hook —
+  the one lookup the three seat-ask guards share. nil when the ask
+  names no seat, when no active seat wears that spelling, or when the
+  ctx carries no hooks (the storage-free render probe, which declines
+  rather than guesses — the phase-8 discipline)."
+  [inp ctx]
+  (when-some [nm (nonblank (:seat inp))]
+    (when-some [find' (:find ctx)]
+      (first (find' :seat {:name nm :state "active"} {:limit 1})))))
+
 (g/defguard asks-are-short
   {:judges [:expires_at]
-   :reads [:now]
-   :vars [:max_hours :asked]
-   :explain "A leash is short — at most {max_hours} hours; this ask runs to {asked}. Propose less; an approved follow-up ask can always extend."}
+   :reads [:now :seat]
+   :vars [:max_hours :asked :whose]
+   :explain "A leash is short — at most {max_hours} hours{whose}; this ask runs to {asked}. Propose less; an approved follow-up ask can always extend."}
   [_row inp ctx]
   (if-some [^java.time.Instant exp (:expires_at inp)]
-    (let [max-s (long (:grant-max-ttl-seconds (:services ctx) 86400))
+    ;; R-5.6: a SEAT ask is capped by the seat's own standing_ttl_seconds
+    ;; — the office decides how long a sitter's leash may be, because it
+    ;; is the office's fuel — and a scope ask keeps the 24-hour ceiling
+    (let [seat (seat-named inp ctx)
+          seat-ttl (when seat (some-> (get-in seat [:data :standing_ttl_seconds]) long))
+          max-s (or seat-ttl
+                    (long (:grant-max-ttl-seconds (:services ctx) 86400)))
           cap (.plusSeconds ^java.time.Instant (:now ctx) max-s)]
       (if (pos? (compare exp cap))
-        (t/deny {:vars {:max_hours (quot max-s 3600) :asked (str exp)}})
+        (t/deny {:vars {:max_hours (quot max-s 3600)
+                        :asked (str exp)
+                        :whose (if seat-ttl
+                                 (str ", which is the seat "
+                                      (get-in seat [:data :name])
+                                      "'s own standing leash")
+                                 "")}})
         (t/allow)))
+    (t/allow)))
+
+;; ── the three shapes of an ask (R-5.4), and the two it refuses ──────
+
+(g/defguard ask-names-one-thing
+  {:judges [:seat]
+   :explain "An ask names a SEAT or spells a SCOPE, never both. A seat ask asks to sit in an office somebody already opened, and what it opens is the office's own scope, read fresh at every request; a scope ask spells its leash entry by entry. File two asks if you want both."}
+  [_row inp _ctx]
+  (if (and (some? (nonblank (:seat inp))) (seq (:scope inp)))
+    (t/deny)
+    (t/allow)))
+
+(g/defguard extend-of-a-seat-holds-no-scope
+  {:judges [:scope]
+   :reads [:grant]
+   :vars [:grant_id]
+   :explain "The grant {grant_id} sits in a seat, and a seat grant has no scope to widen: its authority is the seat's, restated on the seat by the person who opened it (R-5.3). An extend ask for it carries the new expiry and nothing else."}
+  [_row inp ctx]
+  (let [gid (nonblank (:grant_id inp))]
+    (if (and gid (seq (:scope inp)) (:read ctx))
+      (if (seat-cited ((:read ctx) :grant gid))
+        (t/deny {:vars {:grant_id gid}})
+        (t/allow))
+      (t/allow))))
+
+(g/defguard the-seat-is-open
+  {:judges [:seat]
+   :reads [:seat]
+   :vars [:seat]
+   :open "The offices a person has opened are the seats collection, one query away; a chip row of them here would be the household's roster rendered into somebody else's form."
+   :explain "No open seat is named {seat}. An ask to sit spells an ACTIVE seat's name exactly as the seat spells it — a parked, merged or retired office serves nothing, so a grant citing one would scope to nothing the moment it was minted."}
+  [_row inp ctx]
+  (if (and (some? (nonblank (:seat inp)))
+           (some? (:find ctx))
+           (nil? (seat-named inp ctx)))
+    (t/deny {:vars {:seat (nonblank (:seat inp))}})
+    (t/allow)))
+
+(defn- model-name
+  "One model ref as the identifier a harness declares, for a sentence
+  a reader can act on; the ref itself when the row is gone."
+  [ctx id]
+  (or (when-some [read' (:read ctx)]
+        (nonblank (get-in (read' :model (str id)) [:data :name])))
+      (str id)))
+
+(defn- model-list-of
+  "The seat's list for the ask's kind: `substitute_for` for a
+  substitute ask, `held_for` for a full one (R-5.7). Empty means any
+  model may sit."
+  [seat substitute?]
+  (into [] (map str) (get-in seat [:data (if substitute?
+                                           :substitute_for
+                                           :held_for)])))
+
+(g/defguard model-may-sit
+  {:judges [:seat]
+   :reads [:principal :seat :model]
+   :vars [:seat :model :list :which]
+   :open "The models a seat is held for are that seat's own row, one GET away — and the list is a handful of refs, not a vocabulary this form could recite."
+   :explain "The seat {seat} is held for {which}: {list}. This session declares {model}, which is not one of them — so a grant minted here would scope to nothing at its first request. Ask to sit as a substitute if the seat takes one, or start the session on a model the seat is held for."}
+  [_row inp ctx]
+  (if-some [seat (seat-named inp ctx)]
+    (let [substitute? (true? (:substitute inp))
+          wanted (model-list-of seat substitute?)
+          claim (nonblank (get-in ctx [:principal :model]))
+          mine (when (and claim (:find ctx))
+                 (some-> (first ((:find ctx) :model {:name claim} {:limit 1}))
+                         :id str))]
+      (if (or (empty? wanted) (and mine (some #{mine} wanted)))
+        (t/allow)
+        (t/deny {:vars {:seat (get-in seat [:data :name])
+                        :model (or claim "no model at all")
+                        :which (if substitute?
+                                 "substitutes"
+                                 "its full sitter")
+                        ;; the list by the IDENTIFIER a harness declares,
+                        ;; never by row id: the refusal has to be
+                        ;; actionable at the door the caller can reach,
+                        ;; and that door speaks model names
+                        :list (str/join ", " (map #(model-name ctx %) wanted))}})))
     (t/allow)))
 
 ;; The four-eyes wall, no longer written by hand. g/not-the-field IS
@@ -803,6 +1041,38 @@
           (t/allow) (t/deny)))
       (t/allow))
     (t/allow)))
+
+;; R-5.8. The scan is a PAGE OF ACCEPTED GRANTS rather than a filtered
+;; query, and that is a recorded cost: `seat` is an optional field, a
+;; promoted column is generated only for a non-:maybe entry (sitting's
+;; own deviation records the same wall), so the collection cannot be
+;; filtered by it. The door this runs at is a person's tap on an
+;; approval, not a sitter's request, so one page is the right price for
+;; a wall that must not be wrong.
+(g/defguard seat-has-one-sitter
+  {:reads [:principal :now :grant :seat]
+   :vars [:seat :sitter]
+   :explain "The seat {seat} is taken: {sitter} holds a live grant sitting in it. One office, one full sitter — two sessions under one seat's authority is two hands nobody can tell apart in the log afterwards. A SUBSTITUTE is not limited and this ask can be filed as one; otherwise revoke the grant that stands, or wait for it to lapse."}
+  [row _inp ctx]
+  (let [nm (nonblank (get-in row [:data :seat]))
+        substitute? (true? (get-in row [:data :substitute]))
+        find' (:find ctx)]
+    (if (or substitute? (nil? nm) (nil? find'))
+      (t/allow)
+      (let [seat (first (find' :seat {:name nm :state "active"} {:limit 1}))
+            now (:now ctx)
+            live? (fn [g]
+                    (and (= :accepted (:state g))
+                         (= (str (:id seat)) (seat-cited g))
+                         (not (true? (get-in g [:data :substitute])))
+                         (let [e (get-in g [:data :expires_at])]
+                           (or (nil? e) (neg? (compare now e))))))
+            sitter (when seat
+                     (some #(when (live? %) (get-in % [:data :audience]))
+                           (find' :grant {:state :accepted} {:limit 500})))]
+        (if sitter
+          (t/deny {:vars {:seat nm :sitter sitter}})
+          (t/allow))))))
 
 (defhandler stamp-approver [row _inp ctx]
   (cond-> (assoc-in row [:data :approved_by] (:id (:principal ctx)))
@@ -904,7 +1174,7 @@
     :verdicts
     [{:name :approve :to :approved
       :label "Approve" :style :primary :order 1
-      :guards [grant-still-accepting]
+      :guards [grant-still-accepting seat-has-one-sitter]
       :safety {:idempotent true :reversible false :confirm true
                :consequence "The requester's grant gains exactly the scope shown, immediately."}
       ;; stamp-approver stamps the approver AND the id of the grant
@@ -925,17 +1195,41 @@
                   :actions #{"create" "approve" "deny"}}}
    ;; the extra law THIS decision declares, over the pattern's floor:
    ;; grant_id (an anchorless ask is the bootstrap path — its approval
-   ;; mints the grant and stamps the id here) and the scope it asks for
+   ;; mints the grant and stamps the id here), the scope it asks for,
+   ;; and — since the seat (R-5.4) — the OFFICE it asks to sit in. The
+   ;; three shapes an ask may wear:
+   ;;
+   ;;   bootstrap, scope  {task, scope, expires_at}
+   ;;   bootstrap, seat   {task, seat, substitute?, expires_at}
+   ;;   extend            {grant_id, task, expires_at}
+   ;;
+   ;; and `scope` is optional because two of the three carry none.
    :schema [:map
             [:grant_id {:optional true :kind :grant
                         :x-display {:label "Widen this grant"
                                     :help "The grant you already hold and want more of. Leave it empty for the bootstrap ask — an approval then mints a fresh grant in your name."}}
              [:maybe :waymark/ref]]
-            [:scope {:examples [scope-example]
+            [:scope {:optional true
+                     :examples [scope-example]
                      :x-display {:label "What you are asking for"
                                  :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
-                                 :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this."}}
-             scope-schema]]
+                                 :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this. Leave it empty when you are asking to sit in a seat: the office's scope is the ask."}}
+             scope-schema]
+            ;; THE SEAT'S NAME, not its ref (R-5.4): a person spells the
+            ;; office out loud — "inbox-clerk" — and the mint resolves
+            ;; the name to the row and writes the REF on the grant. The
+            ;; name is what a charter, a handover note and a harness
+            ;; script all already say; a ref would make the ask
+            ;; unwritable without a prior GET
+            [:seat {:optional true
+                    :x-display {:raw true
+                                :label "The seat you are asking to sit in"
+                                :help "The name of an office somebody already opened — \"inbox-clerk\", say. What it opens is the seat's own scope, read fresh at every request, so a restate of the seat moves your leash with it and you never ask again for the same office."}}
+             [:maybe [:string {:min 1 :max 40}]]]
+            [:substitute {:optional true
+                          :x-display {:label "As a substitute"
+                                      :help "Tick this to stand in rather than hold the seat: a substitute gets the seat's scope minus its drop list, reads the seat's memory without writing it, and is not limited to one per seat."}}
+             [:maybe :boolean]]]
    :filterable {:grant_id #{:eq}}
    ;; the approval page opens on the decision queue: newest ask first,
    ;; and only the ones still waiting on a person — both projected by
@@ -959,6 +1253,15 @@
                    asks-are-paced
                    asks-are-few
                    asks-are-short
+                   ;; the shape gate (R-5.5): one ask names one thing,
+                   ;; an extend on a seat grant carries no scope, and a
+                   ;; seat ask names an office that is OPEN — each
+                   ;; refused at the door rather than approved into a
+                   ;; grant that scopes to nothing
+                   ask-names-one-thing
+                   extend-of-a-seat-holds-no-scope
+                   the-seat-is-open
+                   model-may-sit
                    ;; the honesty gate (waymark-vnc): an ask for a
                    ;; (kind, action) that does not exist refuses NOW,
                    ;; naming the kind's real actions — never approved
@@ -967,7 +1270,10 @@
                    scope-names-real-actions
                    scope-filters-are-filterable
                    scope-omits-private-kinds]
-   :scenarios [the-asker-does-not-decide another-principal-may-deny]})
+   :scenarios [the-asker-does-not-decide another-principal-may-deny]
+   :deviations
+   ["`seat-has-one-sitter` (R-5.8) reads a PAGE of accepted grants rather than a query filtered by seat: `grant.seat` is optional, and a promoted column — the thing a filter would walk — is generated only for a non-`:maybe` entry (the sitting kind records the same wall). The door it runs at is a person's tap on an approval, not a sitter's request, so one page is the right price for a wall that must not be wrong."
+    "A seat ask is always a BOOTSTRAP ask (R-5.4's middle row): it names no `grant_id`, so it is paced and capped like any other fresh ask, and its approval mints rather than extends. An anchored ask on a seat grant is the third row — expiry only — and `extend-of-a-seat-holds-no-scope` is what keeps it there."]})
 
 ;; ── the approve effect (the router's one grants seam) ───────────────
 
@@ -1015,7 +1321,15 @@
   the requester's next presentation of the stamped grant id scopes it
   in. A refusal here (the grant revoked between guard and effect) is
   warned on *err*, never thrown: the approval committed; the grant
-  honestly did not move."
+  honestly did not move.
+
+  A SEAT ASK MINTS A SEAT GRANT (R-5.4): the ask spelled the office's
+  NAME and this is where the name becomes a ref — audience = requester,
+  `seat` = the row that wears that spelling, `substitute` as asked, the
+  expiry, and NO SCOPE. The resolve reads the seat at each request from
+  there on. A seat ask arrives anchorless by construction (an anchored
+  one is an extend, which slides the expiry alone), so the mint branch
+  is the only one that reads the name."
   [eng rdef action-name result]
   (when (and (contains? wire-boundary-effects [(:kind rdef) action-name])
              (:transition result)
@@ -1023,22 +1337,32 @@
     (let [row (:row result)
           gid (get-in row [:data :grant_id])
           corr (get-in result [:transition :correlation-id])
-          expires (get-in row [:data :expires_at])]
+          expires (get-in row [:data :expires_at])
+          seat (seat-by-name eng (get-in row [:data :seat]))]
       (try
         (if (load-decoded eng :grant gid)
           (inv/invoke! eng :grant gid :extend
-                       (cond-> {:scope (get-in row [:data :scope])}
+                       (cond-> {}
+                         (seq (get-in row [:data :scope]))
+                         (assoc :scope (get-in row [:data :scope]))
+
                          expires (assoc :expires_at (str expires)))
                        {:principal approvals-actor
                         :correlation-id corr
                         :idempotency-key (str "approval-extend-" (:id row))})
           (do
             (inv/create! eng :grant
-                         (cond-> {:audience (get-in row [:data :requested_by])
-                                  ;; merged at the mint too, so a grant's
-                                  ;; stored scope has ONE shape wherever it
-                                  ;; came from (waymark-ycp)
-                                  :scope (merge-scope (get-in row [:data :scope]))}
+                         (cond-> {:audience (get-in row [:data :requested_by])}
+                           seat
+                           (assoc :seat (str (:id seat))
+                                  :substitute (true? (get-in row [:data :substitute])))
+
+                           (nil? seat)
+                           ;; merged at the mint too, so a grant's
+                           ;; stored scope has ONE shape wherever it
+                           ;; came from (waymark-ycp)
+                           (assoc :scope (merge-scope (get-in row [:data :scope])))
+
                            expires (assoc :expires_at (str expires)))
                          {:principal approvals-actor
                           :id gid
@@ -1332,6 +1656,166 @@
       (catch Exception _ (load-decoded eng :grant (:id row))))
     row))
 
+;; ── the seat resolve (R-5.2) ────────────────────────────────────────
+;;
+;; A seat grant's visibility is resolved FROM THE SEAT ROW AT EACH
+;; REQUEST, in seven steps, of which the first three are WALLS: the
+;; seat is not active, the session's model is not one the seat is held
+;; for, or the week's fuel is spent. A wall is hard — the grant scopes
+;; to nothing — and the router writes the seat's `halt` from what this
+;; returns (R-7.7). The remaining four take the seat's scope, subtract
+;; the substitute's drop list, subtract the sweep's stale list, and
+;; hand the result to the ordinary scope resolution below, which has
+;; no idea a seat was involved.
+;;
+;; THE COST IS BOUNDED, because it is paid per REQUEST: one seat load,
+;; one models lookup (only when the seat names a list), and one SUM
+;; over the seat's closed sittings. No writes — the halt is the
+;; router's, and it moves only when the wall itself moves.
+
+(def ^:private budget-window-seconds
+  "The seat's fuel window: seven days, rolling, measured from a
+  sitting's `started_at` (R-5.2 step 3)."
+  (* 7 86400))
+
+(defn- without-entries
+  "One scope MINUS a list of entries, entry-wise: a subtracted entry
+  removes its actions from the entry naming the same kind, and removes
+  the whole entry when it names no actions at all (the read-only
+  spelling, which subtracts everything) or when it names every action
+  the entry had. R-5.2 steps 5 and 6 — the substitute's drop list and
+  the sweep's stale list are one arithmetic, spelled once."
+  [scope entries]
+  (if (empty? entries)
+    (vec scope)
+    (let [by-kind (group-by #(scope-name (:kind %)) entries)]
+      (into []
+            (keep (fn [e]
+                    (if-some [drops (seq (get by-kind (scope-name (:kind e))))]
+                      (let [dropped (into #{} (comp (mapcat :actions)
+                                                    (keep scope-name))
+                                          drops)
+                            had (into [] (keep scope-name) (:actions e))
+                            left (into [] (remove dropped) had)]
+                        (when-not (or (some #(empty? (:actions %)) drops)
+                                      (and (seq had) (empty? left)))
+                          (assoc e :actions left)))
+                      e)))
+            scope))))
+
+(defn- own-seat-entry
+  "R-4.9, as a scope entry the engine adds at resolve time and nobody
+  stores: a sitter reads the ONE seat row its grant cites, and no
+  action on it. `:own-surface {:by …}` names a field of the row being
+  read, and a seat carries no sitter field and must not grow one (a
+  seat with a sitter column would be a second copy of the grant), so
+  the courtesy is spelled where the sitter IS identified — here, at
+  the resolve, out of the grant. Going through the scope means one
+  admission algebra rather than two: `:kind?`, `:row?`, `:field?` and
+  `:ids-of` all answer for the seat exactly as they answer for
+  anything else, and `:whole-kind?` stays false, because one row is
+  not the collection."
+  [seat-id]
+  {:kind "seat" :ids [(str seat-id)] :actions []})
+
+(defn- spent-this-week
+  "The dollars this seat's CLOSED sittings of the last seven days cost
+  — ONE aggregate read, never a page of rows. Recorded: the conds walk
+  `data->>` expressions, so no index serves them; a promoted column is
+  generated for a filterable field but `count/sum-matching` do not
+  order or match through it, and the store declares indexes for
+  `:unique` groups alone. A seat's sittings are a week of wakes, so the
+  scan is small by construction — and the day it is not, the fix is an
+  index this store cannot yet be told to declare."
+  [eng seat-id ^java.time.Instant now]
+  (or (when (get (inv/resources eng) :sitting)
+        (store/with-tx (:storage eng)
+          (fn [tx]
+            (store/sum-matching
+             (:storage eng) tx :sitting :cost_usd
+             [{:target :state :op := :value "closed"}
+              {:target :data :field :seat :cast "text" :op :=
+               :value (str seat-id)}
+              {:target :data :field :started_at :cast "timestamptz" :op :>=
+               :value (str (.minusSeconds now budget-window-seconds))}]))))
+      0M))
+
+(defn- model-id-of
+  "The models row the session's own claim names, or nil — one query by
+  the unique `name` index. A claim naming no row is nil, and a seat
+  that names a list refuses it: the harness's word is not the engine's
+  registry, and a seat held for named models cannot be held by a model
+  this house has never priced."
+  [eng claim]
+  (when-some [c (nonblank claim)]
+    (when (get (inv/resources eng) :model)
+      (some-> (first (store/with-tx (:storage eng)
+                       (fn [tx]
+                         (store/query-rows (:storage eng) tx :model
+                                           {:name c} {:limit 1}))))
+              :id str))))
+
+(defn- resolve-seat
+  "R-5.2, whole. → {:id, :halt (the reason the seat row carries right
+  now, or nil), :reason (the wall this request met, or nil), :detail,
+  :scope}. `:scope` is the effective scope — empty at a wall — and the
+  caller writes it onto the grant row it hands to `surface-of`."
+  [eng row principal ^java.time.Instant now]
+  (let [seat-id (seat-cited row)
+        substitute? (true? (get-in row [:data :substitute]))
+        seat (load-decoded eng :seat seat-id)
+        halt (nonblank (get-in seat [:data :halt :reason]))
+        named (or (nonblank (get-in seat [:data :name])) seat-id)
+        wall (fn [reason detail]
+               {:id seat-id :halt halt :reason reason
+                :detail detail :scope []})
+        held (when seat
+               (mapv str (get-in seat [:data (if substitute?
+                                               :substitute_for
+                                               :held_for)])))
+        claim (nonblank (:model principal))]
+    (cond
+      ;; 1 · the seat itself
+      (not (and seat (= :active (:state seat))))
+      (wall "seat_not_active"
+            (str "The seat " named " is "
+                 (if seat (name (:state seat)) "gone")
+                 ", so it serves nothing; every grant citing it scopes"
+                 " to nothing until somebody opens it again."))
+
+      ;; 2 · the model this session declares
+      (and (seq held)
+           (not (when-some [mine (model-id-of eng claim)]
+                  (boolean (some #{mine} held)))))
+      (wall "model_not_held"
+            (str "This session declares " (or claim "no model")
+                 " and " named " is held for "
+                 (count held) " model(s) "
+                 (if substitute? "as a substitute" "as its full sitter")
+                 "; a session outside the list sees nothing."))
+
+      :else
+      ;; 3 · the week's fuel
+      (let [spent (spent-this-week eng seat-id now)
+            budget (or (get-in seat [:data :budget_usd_per_week]) 0M)]
+        (if (not (neg? (compare spent budget)))
+          (wall "budget_reached"
+                (str "The week's fuel is spent: " (str spent) " of "
+                     (str budget) " over " named "'s closed sittings of the"
+                     " last seven days. The wall lifts on its own as the"
+                     " window rolls."))
+          ;; 4 · the seat's scope, 5 · minus the drop list for a
+          ;; substitute, 6 · minus the sweep's stale entries, and the
+          ;; sitter's own read of the seat row beside it (R-4.9)
+          {:id seat-id :halt halt :reason nil :detail nil
+           :scope (conj (cond-> (vec (get-in seat [:data :scope]))
+                          substitute?
+                          (without-entries (get-in seat [:data :substitute_drop]))
+
+                          :always
+                          (without-entries (get-in seat [:data :stale])))
+                        (own-seat-entry seat-id))})))))
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
@@ -1343,13 +1827,26 @@
   Returns closures the render/router consult — {:kind? :row? :action?
   :field? :arg? :ids-of} — plus :grant-id for narration-free
   diagnostics and :grant, the guard's-eye view a LIVE grant confers
-  (waymark-sfe): {:id :action? :row?}, nil for every other fate."
+  (waymark-sfe): {:id :action? :row? :substitute}, nil for every other
+  fate.
+
+  A SEAT GRANT is resolved here too (R-5.2): the seat row's scope
+  stands in for the grant's own before a single closure is built, so
+  everything below this line — the surface, the whole-kind question,
+  the guard's-eye view, the collection's ids — reads one kind of
+  scope and never learns where it came from. The walls ride out on
+  `:seat` for the router to write the halt from (R-7.7); this
+  namespace reads rows and writes none."
   [eng grant-id principal]
   (let [pid (:id principal)
-        row (when grant-id (load-decoded eng :grant grant-id))
-        own? (boolean (and row (= (get-in row [:data :audience]) pid)))
+        row0 (when grant-id (load-decoded eng :grant grant-id))
+        own? (boolean (and row0 (= (get-in row0 [:data :audience]) pid)))
         named? (and (some? pid) (not= pid (:id t/anonymous)))
-        live? (boolean (and own? (active? row ((:now-fn eng)))))
+        now ((:now-fn eng))
+        live? (boolean (and own? (active? row0 now)))
+        seat (when (and live? (seat-cited row0))
+               (resolve-seat eng row0 principal now))
+        row (if seat (assoc-in row0 [:data :scope] (:scope seat)) row0)
         surface (if live? (prune-unusable eng (surface-of row)) dead)
         ;; whole-kind sight is a PER-ENTRY question, judged on the
         ;; SCOPE, never on surface-of's output: surface-of absorbs
@@ -1437,6 +1934,13 @@
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
+     ;; THE SEAT THIS REQUEST SAT IN, and the wall it met if it met one
+     ;; (R-5.2, R-7.7): {:id :halt :reason :detail :scope}, nil for
+     ;; every grant that cites no seat. The ROUTER reads it and writes
+     ;; the seat's halt — the write is a request's act, not a
+     ;; resolution's, and resolving is the one thing this function
+     ;; does everywhere it is called, including from a preview.
+     :seat seat
      ;; THE GUARD'S-EYE VIEW (waymark-sfe). Present only when a LIVE
      ;; grant conferred a surface: a dead, foreign, unknown or absent
      ;; grant leaves it nil, and `unless-granted` refuses an agent that
@@ -1444,8 +1948,16 @@
      ;; does at the router. It rides the invoke ctx as `(:grant ctx)`
      ;; and the render probe's ctx alongside it, so advertisement and
      ;; enforcement read one fact.
+     ;;
+     ;; :substitute rides BESIDE the two closures (R-8.2) because a
+     ;; substitute's bar is not a scope question — the three kinds it
+     ;; bars are private own-surface kinds no scope can name — so the
+     ;; guard that judges it needs the one fact the scope cannot
+     ;; carry: whose hand is on this leash, the seat's own sitter or a
+     ;; stand-in.
      :grant (when (and live? (seq surface))
-              {:id (str grant-id) :action? action?* :row? row?*})
+              {:id (str grant-id) :action? action?* :row? row?*
+               :substitute (true? (get-in row [:data :substitute]))})
      :kind? (fn [kind]
               (let [k (name kind)]
                 (or (contains? surface k) (own-kind? k))))
