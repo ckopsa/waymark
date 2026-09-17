@@ -889,7 +889,9 @@ about:
   and offers the union as chips that insert at the caret — real help, and not
   the per-entry form the scope deserves. `:examples` rides as the placeholder
   so it does not open blank. A structured editor for vector-of-map fields is a
-  client bead (waymark-vz4), not a declaration one.
+  client bead (waymark-vz4), not a declaration one. *Closed by
+  waymark-fp62.7.9 — the entries are rows and each row hosts its own chips;
+  the last section of this document has it.*
 - **`:x-options` cannot name the KEYS of an object, nor a hole two maps up.**
   A scope's `:filter` and a field-spec's `:names` both have a real runtime
   vocabulary and got a help sentence instead of a recipe — the first because
@@ -1129,3 +1131,35 @@ holds the id of a row, so it may only sit on a ref, a nilable ref, or a list
 of refs. Anything else advertises a picker over a field that holds no id.
 No usability sentence is owed for the old shape — after the carry there is
 no list of refs left that a client cannot seat.
+
+### Rows that host their own chips (waymark-fp62.7.9)
+
+The owner, opening a seat: the create form asks for `scope`,
+`substitute_drop` and `wake_on` as JSON. The rows had a clause against
+them — a list of maps rendered as rows only when NO item field carried an
+`:x-options` recipe, and a scope entry's `kind` and `actions` both do — so
+the whole list fell back to the textarea with the chips beside it. The
+three declarations answered `[spelled-by-hand]` with a sentence that
+waived it, which is the rule working as written and the waiver hiding the
+client gap the rule was meant to burn down.
+
+The clause was already obsolete. A row IS a sub-form, and since
+waymark-z8u4 a recipe's `{of}` hole is looked up at the top of the form
+first and then among the field's own siblings by the last segment of their
+path — `scope[2].kind` answers `{kind}` from its own row. So the rows host
+the chips: every widget of a row carries its recipe like any other
+sub-field's, the rows a form opens with are wired by `buildForm`'s own
+walk, and a row added later is wired as it lands. The textarea's
+stand-in machinery — the chips that read the entries a person had already
+TYPED, `itemOptionFields` and `itemEnumFields` — retires with the box it
+stood beside.
+
+`formable?` drops the same clause: a list of maps is formable when every
+item field is, recipe or no recipe. What still fails is a list whose items
+have no declared keys, and an item field that is a box itself — a
+`:map-of` inside a row makes the whole list one, exactly as it does one
+level down, unless that field carries its own sentence. The scope entry's
+`filter` and the seat's wake entry `filter` are that case and now carry
+one (`grants/filter-spelled-by-hand`, spelled once and worn twice), and
+the seat's three waivers are gone. The two operators' boxes this document
+called the last ones are both rows now.

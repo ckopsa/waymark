@@ -385,11 +385,9 @@
     (is (str/includes? page "setAt(values, segs, v);")
         "each leaf lands at its path, typed by walking the schema")
     (is (str/includes? page ".subform {") "its own CSS survives assembly")
-    ;; waymark-jtd7: a list of maps is rows of the item's sub-form, unless
-    ;; an item field carries an option recipe — those keep the box and
-    ;; its chips, because a recipe's {sibling} holes resolve by bare name
+    ;; waymark-jtd7: a list of maps is rows of the item's sub-form —
+    ;; recipes and all since waymark-fp62.7.9, pinned below
     (is (str/includes? page "function listWidget"))
-    (is (str/includes? page "!itemOptionFields(rawProp).length"))
     (is (str/includes? page "return listWidget(name, prop, itemSchema, value);"))
     (is (str/includes? page "return compact(values);")
         "a blank row is a hole the compaction closes")
@@ -401,6 +399,35 @@
     (is (str/includes? page "if (node.closest(\".field.off\")) continue;")
         "the other branch's field is never sent")
     (is (str/includes? page ".subform.list .listrow {") "the rows' CSS survives assembly")))
+
+(deftest a-row-of-a-list-hosts-its-own-chips
+  ;; waymark-fp62.7.9. A list of maps whose item fields carry an
+  ;; x-options recipe fell past the rows to a JSON textarea with a row
+  ;; of chips beside it, so the seat's scope, its substitute_drop and
+  ;; its wake_on asked a person for JSON — the three declarations
+  ;; answered the spelled-by-hand policy with a sentence that waived
+  ;; it. A row IS a sub-form: its fields are each other's siblings, and
+  ;; the hole lookup answers {kind} from the row it was typed in
+  ;; (waymark-z8u4). So the rows host the chips, the clause that kept
+  ;; the box is gone, and the textarea's own chip machinery retires
+  ;; with it.
+  (let [page (sut/assemble)]
+    (is (str/includes?
+         page
+         "if (itemSchema.properties && Object.keys(itemSchema.properties).length)")
+        "a list of maps is rows whether or not an item field carries a recipe")
+    (is (not (str/includes? page "itemOptionFields"))
+        "the box those chips stood beside is gone, and so are they")
+    (is (not (str/includes? page "attachItemOptions")))
+    (is (str/includes? page "markOptions(widget, subRaw);")
+        "a row's sub-field carries its recipe the way any sub-field does")
+    (is (str/includes? page "if (root) wireOptions(root, row);")
+        "a row landing in a form already standing is wired as it lands")
+    (is (str/includes? page "wireOptions(form, form);")
+        "and the rows a form opens with are wired by the form's own walk")
+    (is (str/includes? page
+                       "if (lastSeg(n.getAttribute(\"name\")) === hole) return n;")
+        "a row's {kind} is answered inside the row, by the last path segment")))
 
 (deftest the-undo-stack-rides-the-page-and-names-no-kind
   ;; waymark-qmo6, docs/spec-undo.md. The stack holds the last few taps

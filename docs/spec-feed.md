@@ -2703,6 +2703,13 @@ its chips the old way; `says` and `sentence` stay free prose.
 
 No bespoke editor was built and none is filed: the generic form does this.
 
+*Amended by waymark-fp62.7.9: the textarea is gone. A list of maps renders
+as ROWS whatever its item fields carry, because a row is a sub-form and a
+recipe's `{of}` hole answers from the row's own siblings. Section and
+population are selects inside the row, `kinds` wears its chips there, and
+`itemEnumFields` and its `x-options` twin retired with the box they stood
+beside. The hand walk below drove the box; it drives the rows now.*
+
 ### Verified by hand, and the walk is written down
 
 `ui-drive.mjs` grew a fourth mode — **`node waymark10/scripts/ui-drive.mjs
