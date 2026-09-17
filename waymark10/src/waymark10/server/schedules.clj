@@ -109,12 +109,38 @@
     here yet — the consumer is elected and mints these rows alone —
     which is why the index can wait and the sentence cannot.
 
+  ── the fire link (R-12.18 to R-12.20) ─────────────────────────────
+
+  The Routines API is FIRE-ONLY: one endpoint starts a run, and no
+  endpoint makes a Routine, changes one, lists them or reads one
+  back. So for that provider the copy above cannot exist. A person
+  makes the Routine by hand, once, and pastes its fire URL and its
+  token onto this row through `link`; the engine fires it from then
+  on and never writes it.
+
+  A LINKED row (`fire_url` present) is a row a person manages, so the
+  adapter leaves it alone: `push!`, `pause!` and `resume!` call no
+  operation and move no field, and `delete!` still ends the row. The
+  `link` is the whole of the engine's knowledge of that Routine.
+
+  The fire itself is a second seam, `FireAdapter`, with one
+  operation. It runs AFTER the commit, in this same consumer, when
+  the seat's own `fire` door is heard: the door refuses what a door
+  can refuse (parked, halted, unlinked, a bare agent) and the
+  provider's own answer lands on this row as a state and a note —
+  `fired` on a 2xx, `paused` on a 400, `broken` with the sentence on
+  a 429, a 401 or a 404. A replay is deduped by `last_fired_at`, and
+  nothing here ever re-throws: a throwing consumer parks the drain.
+
   ── the engine opt a deployment owes ───────────────────────────────
 
   `adapters-of` reads `(:schedule-adapters eng)` first and falls back
   to the environment. `server/engine.clj` whitelists both
   `:schedule-adapters` and `:schedule-drift-ms`; a deployment may pass
-  adapters by value, and the env is R-12.11's path when it does not."
+  adapters by value, and the env is R-12.11's path when it does not.
+  `fire-adapter-of` reads `(:fire-adapter eng)` the same way, and the
+  real one needs no environment at all: the URL and the token are
+  fields of the row it is firing."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -126,9 +152,9 @@
   (:import (java.net URI)
            (java.net.http HttpClient HttpRequest
                           HttpRequest$BodyPublishers
-                          HttpResponse$BodyHandlers)
+                          HttpResponse HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
-           (java.time Duration)
+           (java.time Duration Instant)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
@@ -305,6 +331,26 @@
     (t/deny {:vars {:seat (:seat inp)}})
     (t/allow)))
 
+(g/defguard a-person-or-a-delegate
+  {:reads [:principal]
+   :explain "A link is a person's act. A person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes its fire URL and its token here. An agent does not link a schedule."}
+  [_row _inp ctx]
+  ;; seats.clj's `a-person` posture, spelled again rather than
+  ;; required: that guard's sentence is about opening an OFFICE, and
+  ;; the refusal a caller reads here is about a credential. Copying
+  ;; the three-line check also keeps seats.clj free to read this
+  ;; namespace later, which a require in this direction would close.
+  (let [{:keys [type acts-for]} (:principal ctx)]
+    (if (or (= :human type)
+            (and (= :agent type) (not (str/blank? (str acts-for)))))
+      (t/allow)
+      (t/deny))))
+
+(def no-link-note
+  "The note an unlinked row carries (R-12.18), spelled once so the
+  door and the test read the same words."
+  "No link: the Routine's fire URL and token are not on this schedule.")
+
 (def ^:private engine-writes
   "The safety sentence every engine-written door here wears. The
   mirror's `sync-safety` is the precedent, and the reason is the
@@ -338,6 +384,27 @@
 (defhandler forget-copy
   [row _inp _ctx]
   (update row :data dissoc :external_id))
+
+(defhandler write-link
+  [row inp _ctx]
+  (-> row
+      (assoc-in [:data :fire_url] (:fire_url inp))
+      (assoc-in [:data :fire_token] (:token inp))
+      (update :data dissoc :note)))
+
+(defhandler clear-link
+  [row _inp _ctx]
+  (-> row
+      (update :data dissoc :fire_url :fire_token)
+      (assoc-in [:data :note] no-link-note)))
+
+(defhandler stamp-fire
+  [row inp _ctx]
+  (-> row
+      (assoc-in [:data :last_fired_at] (:last_fired_at inp))
+      (cond-> (:last_run_url inp)
+        (assoc-in [:data :last_run_url] (:last_run_url inp)))
+      (update :data dissoc :note)))
 
 (defresource schedule
   {:kind :schedule
@@ -399,7 +466,48 @@
             {:widget "prose"
              :label "Why this schedule is broken"
              :help "The adapter's own sentence about why it could not reach the provider — a missing credential reads exactly as one. Cleared by the next successful push."}}
-     [:maybe [:string {:max 280}]]]]
+     [:maybe [:string {:max 280}]]]
+    ;; ── the fire link (R-12.18) ─────────────────────────────────────
+    ;; The URL is shown; the token never is. A linked row is a row a
+    ;; person manages: the adapter above leaves it alone, and the fire
+    ;; below is the only thing the engine does with it.
+    [:fire_url {:optional true
+                :x-display
+                {:raw true
+                 :label "The Routine's fire URL"
+                 :help "The one endpoint that starts a run of the Routine you made by hand. Paste it here with the token, through Link. The engine never makes, changes or reads a Routine."}}
+     [:maybe [:string {:min 1 :max 400}]]]
+    ;; THE TOKEN IS HELD AS THE SEAT HOLDS sitter_key (R-12.11): one
+    ;; writing door, never rendered, never filterable, and never in a
+    ;; transition's recorded inputs — which is why `link` does not
+    ;; record (see the deviations).
+    [:fire_token {:optional true :secret true
+                  :x-display
+                  {:hidden true
+                   :label "The Routine's token"
+                   :spelled-by-hand "Written by Link and cleared by Unlink; never shown again, and never asked for by a form that already holds it."}}
+     [:maybe [:string {:min 16 :max 400}]]]
+    [:last_fired_at {:optional true
+                     :x-display
+                     {:label "Last fired"
+                      :help "When the engine last started a run through the fire URL. Written by the engine, never by hand."}}
+     [:maybe :waymark/instant]]
+    [:last_run_url {:optional true
+                    :x-display
+                    {:raw true
+                     :label "The last run"
+                     :help "The provider's page for the run the last fire started. Written by the engine, never by hand."}}
+     [:maybe [:string {:max 400}]]]
+    ;; R-12.22's damper mark. Wave two writes it, by a maintenance
+    ;; write and no transition (the `stamp-seen!` pattern); it is
+    ;; declared here so the field exists the day the wake consumer
+    ;; lands, and so a reader of this row can see why a match did not
+    ;; fire.
+    [:wake_pending {:optional true
+                    :x-display
+                    {:label "A wake is waiting"
+                     :help "Set by the engine when a transition matched this seat's wake_on inside the damper. The next fire after the damper lifts clears it."}}
+     [:maybe :boolean]]]
    :create-schema
    [:map
     [:seat {:kind :seat
@@ -503,13 +611,77 @@
      :edit {:prefill [:model] :fence true}
      :safety {:idempotent true :reversible false :confirm false}
      :handler restate-model
-     :display {:label "Restate the model" :order 1}}}
+     :display {:label "Restate the model" :order 1}}
+
+    ;; ── the fire link (R-12.18) ─────────────────────────────────────
+    ;; Two more human doors, and they are the only place the token is
+    ;; ever spelled. A second link REPLACES the first: a person who
+    ;; rotates the Routine's token pastes the new one and nothing else
+    ;; changes.
+    :link
+    {:from #{:pending :live :paused :broken} :to :live
+     :input [:map
+             [:fire_url {:x-display
+                         {:raw true
+                          :label "The Routine's fire URL"
+                          :help "The endpoint that starts a run, copied from the Routine's own page. It carries the Routine's id, which is not a secret."}}
+              [:string {:min 1 :max 400}]]
+             [:token {:x-display
+                      {:raw true
+                       :label "The Routine's token"
+                       :help "The credential that opens that one Routine. The engine holds it and never shows it again. Paste it once; a later link replaces it."}}
+              [:string {:min 16 :max 400}]]]
+     ;; NOT :record, and the seat's `offer_key` reason verbatim: a
+     ;; recorded action persists its RAW inputs into the transition
+     ;; log, and this input IS the credential (R-12.11: "never in a
+     ;; transition's recorded inputs"). The transition row — actor,
+     ;; input digest, summary — is still the audit that a link was
+     ;; made, by whom, when.
+     :guards [a-person-or-a-delegate]
+     :edit {:prefill [:fire_url] :fence false
+            :unfenced-reason
+            "The token comes from the Routine's own page, not from this row; a link replaces what stands rather than editing it."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The link replaces whatever this row held; Unlink takes it off again."}
+     :handler write-link
+     :display {:label "Link the Routine" :style :primary :order 2
+               :description "Paste the fire URL and the token of the Routine you made by hand — the engine fires it from then on"}}
+
+    :unlink
+    {:from #{:live :paused :broken} :to :broken
+     :guards [a-person-or-a-delegate]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The fire URL and the token leave this row; linking again means pasting both once more."}
+     :handler clear-link
+     :display {:label "Unlink the Routine" :style :danger :order 3
+               :description "The engine forgets the fire URL and the token; nothing wakes this seat until it is linked again"}}
+
+    ;; the fire's landing (R-12.19). Hidden, engine-written, and the
+    ;; one door that clears a 429's note: the next fire that goes out
+    ;; says the Routine has a free run again.
+    :fired
+    {:from #{:pending :live :paused :broken} :to :live
+     :input [:map
+             [:last_fired_at {:x-display {:hidden true}} :waymark/instant]
+             [:last_run_url {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 400}]]]]
+     :record true
+     :guards [engine-writes-schedules]
+     :edit {:prefill [:last_fired_at] :fence false
+            :unfenced-reason
+            "Stamped by the fire consumer the moment the provider answered; no read preceded it to fence against."}
+     :safety engine-writes
+     :handler stamp-fire
+     :display {:label "Routine fired"}}}
    :deviations
    ["The schedule is NOT declared through server/mirror, though R-12.0 names the calendar as the precedent. Three reasons: mirror's authority points inward (a pull wins; R-12.3 wants a read-back that reports and never repairs), mirror refuses a kind that declares its own :states (R-12.1 names four), and MirrorAdapter has no pause, resume or delete (calendar10 had to hang delete-event! off the side of the protocol). The seam is ScheduleAdapter instead, and the bookkeeping posture — hidden system doors over ordinary data fields — is borrowed from mirror whole."
     "R-12.1 lists four states; this kind has five. `ended` is where a retired or merged seat's schedule lands once the copy is deleted. The alternative was returning the row to `pending`, which means \"no copy yet\" and invites the next push to make one."
     "R-12.1's field table does not list `note`, but its sentence for the `broken` state says \"the note says why\" and R-12.11 asks the kind to serve a broken provider \"with a note saying so\". So `note` is a field, engine-written, and the `fail` door records it in the log as well (the log's inputs column, R-4.7's spelling)."
     "R-12.2 calls the push a post-commit effect at the wire boundary. It is a durable log consumer here, which is what the brief asked to be built and the more honest of the two under a crash: the log is the record, and an effect that dies takes its push with it. Wave two may move it (waymark-442.14)."
-    "R-12.6's ceiling is not pushed to the provider. The Routines API is not pinned in this repository, and R-12.6 names the fallback itself — the walk's `rows_per_firing` caps the firing. One field on the create payload when the real API is known."]})
+    "R-12.6's ceiling is not pushed to the provider. The Routines API is not pinned in this repository, and R-12.6 names the fallback itself — the walk's `rows_per_firing` caps the firing. One field on the create payload when the real API is known."
+    "R-12.18 asks `link` to record. It does NOT record here, and the seat's `offer_key` made the same trade for the same reason: a recorded action persists its raw inputs into the transition log, and this input is the token — which R-12.11 says is never in a transition's recorded inputs. The transition row still says a link was made, by whose hand and when."
+    "R-12.20 writes the 429 as a refusal sentence. It lands here as a NOTE on a broken row instead. The fire goes out after the commit, so the provider's answer arrives when the door is already closed and there is nobody left to refuse; the row says what the provider said, and the next fire that goes out clears it."
+    "`fired` accepts a `paused` and a `pending` row as well as `live` and `broken`, where R-12.18 names two states. A linked row is left alone by push, pause and resume, so a row a 400 moved to `paused` has no other way back to `live`; a fire that the provider answers is the evidence that heals it."]})
 
 ;; ── reading the seat and the model ──────────────────────────────────
 
@@ -794,6 +966,95 @@
   [eng]
   (merge (from-env) (:schedule-adapters eng)))
 
+;; ── the fire seam (R-12.18 to R-12.20) ──────────────────────────────
+;;
+;; ONE operation, because the API has one endpoint. Unlike the six
+;; above, this one is PINNED: the URL, the three headers, the body and
+;; the answer are the facts recorded on waymark-fp62.7.3, not
+;; assumptions. The credential is not the engine's either — it is the
+;; row's `fire_token`, which a person pasted through `link` — so the
+;; adapter holds no token and reads no environment.
+
+(defprotocol FireAdapter
+  "The Routine's fire endpoint, as one operation."
+  (fire-routine [a fire-url token text]
+    "Start one run of the Routine at `fire-url`, bearing `token`, with
+    `text` in the run's fire payload (nil sends no text at all) →
+    {:session-id :session-url}.
+
+    A non-2xx throws ex-info carrying `:status`, and `:retry-after`
+    where the provider sent that header. The caller lands the throw on
+    the schedule row as a state and a note; nothing is retried here."))
+
+(def routine-fire-beta
+  "The beta header the fire endpoint demands. Without it the provider
+  answers 400, which is the same answer it gives for a paused Routine."
+  "experimental-cc-routine-2026-04-01")
+
+(def routine-api-version
+  "The API version header, the provider's own long-standing value."
+  "2023-06-01")
+
+(defn- retry-after-of [^HttpResponse resp]
+  (some-> (.headers resp) (.firstValue "retry-after") (.orElse nil) str not-empty))
+
+(defrecord RoutineFire [^HttpClient client]
+  FireAdapter
+  (fire-routine [_ fire-url token text]
+    ;; PINNED: POST {fire-url}
+    ;;   headers authorization: Bearer <token>,
+    ;;           anthropic-beta, anthropic-version, content-type
+    ;;   body    {"text": …} when there is text, else {}
+    ;;   ← 200 {"type": "routine_fire",
+    ;;          "claude_code_session_id": "session_01…",
+    ;;          "claude_code_session_url": "https://…"}
+    (let [body (wire/write-json (if-some [t (some-> text str not-empty)]
+                                  {:text t}
+                                  {}))
+          req (-> (HttpRequest/newBuilder (URI/create (str fire-url)))
+                  (.timeout (Duration/ofSeconds 20))
+                  (.header "authorization" (str "Bearer " token))
+                  (.header "anthropic-beta" routine-fire-beta)
+                  (.header "anthropic-version" routine-api-version)
+                  (.header "content-type" "application/json")
+                  (.POST (HttpRequest$BodyPublishers/ofString
+                          body StandardCharsets/UTF_8))
+                  (.build))
+          resp (.send client req (HttpResponse$BodyHandlers/ofString))
+          status (.statusCode resp)]
+      ;; the status is judged BEFORE the body is parsed — routines-call!
+      ;; carries the same recorded lesson, and a 429 behind a proxy
+      ;; that answers plain text is exactly the case that taught it
+      (when (>= status 400)
+        (throw (ex-info (str "the routines api answered " status
+                             " for the fire")
+                        (cond-> {:status status :body (.body resp)}
+                          (retry-after-of resp)
+                          (assoc :retry-after (retry-after-of resp))))))
+      (let [parsed (try (some-> (.body resp) not-empty wire/read-json)
+                        (catch Exception _ nil))]
+        {:session-id (some-> (:claude_code_session_id parsed) str not-empty)
+         :session-url (some-> (:claude_code_session_url parsed) str not-empty)}))))
+
+(defn routine-fire
+  "The real boundary over the fire endpoint. It takes no configuration:
+  every fire carries its own URL and its own token off the row."
+  []
+  (->RoutineFire
+   (-> (HttpClient/newBuilder) (.connectTimeout (Duration/ofSeconds 10)) (.build))))
+
+(def ^:private default-fire-adapter
+  "One client for the process, built on first use — the fire path runs
+  inside a consumer's own thread, and a client per fire would be a
+  connection pool per wake."
+  (delay (routine-fire)))
+
+(defn fire-adapter-of
+  "The adapter this engine fires through. The engine opt wins (the
+  tests' seam, and offline dev's); everything else gets the real one."
+  [eng]
+  (or (:fire-adapter eng) @default-fire-adapter))
+
 ;; ── writing the schedule onto the seat ──────────────────────────────
 
 (defn- warn! [& parts]
@@ -875,12 +1136,38 @@
   (:row (inv/invoke! eng :schedule (str id) action body
                      {:principal system-actor})))
 
-(defn- break! [eng row ^Exception e]
-  (let [note (clip (or (not-empty (str (ex-message e)))
-                       "The adapter could not reach the provider."))]
+(defn- try-act!
+  "`act!`, with a 409 or a missing row swallowed and said on *err*.
+  The fire path uses it because the provider's answer arrives long
+  after the door closed: the row may have moved under it, and a throw
+  inside a consumer parks the drain for every other seat."
+  [eng row action body]
+  (try
+    (act! eng (:id row) action body)
+    (catch Exception e
+      (warn! "schedule " (:id row) " could not record " action " — "
+             (ex-message e))
+      nil)))
+
+(defn- note!
+  "Write one sentence onto the row through `fail`, unless the row
+  already says exactly that. Idempotent by intent: a provider that
+  refuses every minute writes one broken row, not a log of them."
+  [eng row sentence]
+  (let [note (clip sentence)]
     (when (not= note (get-in row [:data :note]))
       (act! eng (:id row) :fail {:note note}))
     nil))
+
+(defn- break! [eng row ^Exception e]
+  (note! eng row (or (not-empty (str (ex-message e)))
+                     "The adapter could not reach the provider.")))
+
+(defn linked?
+  "Does a person manage this row's Routine by hand (R-12.18)? A linked
+  row carries a fire URL, and the adapter of R-12.2 leaves it alone."
+  [schedule-row]
+  (boolean (some-> (get-in schedule-row [:data :fire_url]) str not-empty)))
 
 (defn- adapter-for [adapters row]
   (let [p (keyword (str (get-in row [:data :provider])))]
@@ -904,12 +1191,17 @@
   A throw lands `broken` with the exception's sentence as the note,
   and RETURNS rather than re-throwing: a consumer that threw would
   park its cursor on a provider outage and stop hearing about every
-  other seat."
+  other seat.
+
+  A LINKED row is skipped whole (R-12.18): its Routine was made by
+  hand and this engine has no endpoint that could write it."
   [eng adapters schedule-row]
   (let [seat-id (get-in schedule-row [:data :seat])
         seat-row (raw-row eng :seat seat-id)]
     (cond
       (= :ended (:state schedule-row)) nil
+
+      (linked? schedule-row) nil
 
       (nil? seat-row)
       (do (warn! "schedule " (:id schedule-row) " names seat " seat-id
@@ -940,10 +1232,13 @@
 (defn pause!
   "Park the seat: the copy stops firing and keeps its settings. A row
   that is already paused, ended or never pushed is left alone — the
-  transition would 409 and park the drain."
+  transition would 409 and park the drain. A LINKED row is left alone
+  too: a person manages that Routine, and parking the seat is already
+  the wall the fire door refuses at (R-12.18, R-12.20)."
   [eng adapters schedule-row]
   (when-some [xid (some-> (get-in schedule-row [:data :external_id]) str not-empty)]
-    (when (= :live (:state schedule-row))
+    (when (and (= :live (:state schedule-row))
+               (not (linked? schedule-row)))
       (try
         (pause-copy (adapter-for adapters schedule-row) xid)
         (act! eng (:id schedule-row) :pause nil)
@@ -952,30 +1247,117 @@
 (defn resume!
   "Unpark the seat. A row that is not paused is left alone; a row that
   is BROKEN goes back through `push!`, because the copy may never have
-  been made and resuming a copy that does not exist is not a repair."
+  been made and resuming a copy that does not exist is not a repair.
+
+  A LINKED row is left alone (R-12.18), the paused case included: the
+  row's own state there is the provider's answer to a fire, not a
+  park, and only a fire that goes out moves it."
   [eng adapters schedule-row]
-  (case (:state schedule-row)
-    :paused (if-some [xid (some-> (get-in schedule-row [:data :external_id])
-                                  str not-empty)]
-              (try
-                (resume-copy (adapter-for adapters schedule-row) xid)
-                (act! eng (:id schedule-row) :resume nil)
-                (catch Exception e (break! eng schedule-row e)))
-              (push! eng adapters schedule-row))
-    :broken (push! eng adapters schedule-row)
-    nil))
+  (when-not (linked? schedule-row)
+    (case (:state schedule-row)
+      :paused (if-some [xid (some-> (get-in schedule-row [:data :external_id])
+                                    str not-empty)]
+                (try
+                  (resume-copy (adapter-for adapters schedule-row) xid)
+                  (act! eng (:id schedule-row) :resume nil)
+                  (catch Exception e (break! eng schedule-row e)))
+                (push! eng adapters schedule-row))
+      :broken (push! eng adapters schedule-row)
+      nil)))
 
 (defn delete!
   "Retire or merge the seat: the copy is removed and the row ends. The
   delete is idempotent at the adapter (a copy already gone succeeds),
-  so a replay reaches `end` and stops there."
+  so a replay reaches `end` and stops there.
+
+  A LINKED row ends too, and no adapter is called (R-12.18): the
+  Routine a person made by hand stays where it is, and this row stops
+  pointing at it."
   [eng adapters schedule-row]
   (when-not (= :ended (:state schedule-row))
     (let [xid (some-> (get-in schedule-row [:data :external_id]) str not-empty)]
       (try
-        (when xid (delete-copy (adapter-for adapters schedule-row) xid))
+        (when (and xid (not (linked? schedule-row)))
+          (delete-copy (adapter-for adapters schedule-row) xid))
         (act! eng (:id schedule-row) :end nil)
         (catch Exception e (break! eng schedule-row e))))))
+
+;; ── the fire (R-12.19, R-12.20) ─────────────────────────────────────
+
+(defn- instant-of
+  "An instant, however the row or the log spells it — a stored string
+  or the log's own Instant. Unparsable is nil, which reads as \"no
+  fire on record\" and fires."
+  [v]
+  (cond
+    (instance? Instant v) v
+    (some-> v str not-empty) (try (Instant/parse (str v))
+                                  (catch Exception _ nil))
+    :else nil))
+
+(defn already-fired?
+  "Has this row already been fired FOR this transition? `last_fired_at`
+  is stamped after the provider answered, so a stamp at or after the
+  transition's own instant means the drain is replaying one it already
+  carried out. That is the whole dedupe: at-least-once delivery must
+  not start a second run of somebody's Routine."
+  [schedule-row at]
+  (let [stamped (instant-of (get-in schedule-row [:data :last_fired_at]))
+        at (instant-of at)]
+    (boolean (and stamped at
+                  (not (.isBefore ^Instant stamped ^Instant at))))))
+
+(defn provider-note
+  "The provider's answer, as the one sentence the row carries
+  (R-12.20). nil for a status this engine has no sentence for — the
+  exception's own message is the note then."
+  [status retry-after]
+  (case (some-> status long)
+    429 (str "The Routine has no free run. Try again after "
+             (or (some-> retry-after str not-empty) "a minute") ".")
+    400 "The Routine is paused at the provider."
+    401 "The Routine refused the token."
+    404 "No Routine answers the fire URL."
+    nil))
+
+(defn fire!
+  "Start one run of this row's linked Routine, and land the provider's
+  answer on the row.
+
+  2xx stamps `last_fired_at` and `last_run_url` through `fired`, which
+  also clears the note — so the first fire that goes out heals a row a
+  429 broke. A 400 is the provider saying the Routine is paused: the
+  row pauses where it can, and says the sentence where it cannot. A
+  401, a 404 and anything else land as a note on a broken row.
+
+  Nothing here re-throws and nothing here retries. A throwing consumer
+  parks its cursor, and a retry inside a drain is a second run of a
+  Routine nobody asked for.
+
+  `at` is the FIRE TRANSITION's own instant, and it is what gets
+  stamped — not this machine's clock. The stamp is what `already-fired?`
+  compares a replay against, so the two must be read off one clock;
+  the log's is the one both the engine and the database agree on."
+  [eng adapter schedule-row text at]
+  (let [url (some-> (get-in schedule-row [:data :fire_url]) str not-empty)
+        token (some-> (get-in schedule-row [:data :fire_token]) str not-empty)]
+    (when url
+      (try
+        (let [answer (fire-routine adapter url token text)]
+          (try-act! eng schedule-row :fired
+                    (cond-> {:last_fired_at (str (or (instant-of at) (now eng)))}
+                      (some-> (:session-url answer) str not-empty)
+                      (assoc :last_run_url (str (:session-url answer))))))
+        (catch Exception e
+          (let [{:keys [status retry-after]} (ex-data e)
+                sentence (provider-note status retry-after)]
+            (cond
+              ;; a paused Routine, where the row can say so as a state
+              (and (= 400 (some-> status long)) (= :live (:state schedule-row)))
+              (try-act! eng schedule-row :pause nil)
+
+              sentence (note! eng schedule-row sentence)
+              :else (break! eng schedule-row e))))))))
 
 ;; ── the read-back (R-12.3) ──────────────────────────────────────────
 
@@ -1081,6 +1463,7 @@
       seat restate          push again (name, cadence, model)
       seat park             pause      seat unpark   resume
       seat merge, retire    delete
+      seat fire             start the linked Routine's run (R-12.19)
       schedule restate      push again (the model a person restated)
 
   Everything else — including every transition this namespace itself
@@ -1118,7 +1501,19 @@
 
           (contains? #{:merge :retire} action)
           (when-some [row (schedule-for-seat eng (:resource-id t))]
-            (delete! eng adapters row))))
+            (delete! eng adapters row))
+
+          ;; THE FIRE GOES OUT AFTER THE COMMIT (R-12.19). The door
+          ;; already refused what a door can refuse, so an unlinked row
+          ;; — or no row at all — is silence here and not a second
+          ;; refusal; and a replayed transition whose fire already went
+          ;; out is skipped rather than fired twice.
+          (= :fire action)
+          (when-some [row (schedule-for-seat eng (:resource-id t))]
+            (when-not (already-fired? row (:at t))
+              (fire! eng (fire-adapter-of eng) row
+                     (some-> (get-in t [:inputs :text]) str not-empty)
+                     (:at t))))))
 
       (and (= :schedule kind) (= :restate action))
       (when-some [row (raw-row eng :schedule (:resource-id t))]
@@ -1269,3 +1664,59 @@
 
 (defn reset-scheduler! [fake]
   (reset! (:state fake) fresh-scheduler))
+
+;; ── the fire's scriptable twin ──────────────────────────────────────
+;;
+;; The same reason the scheduler's twin is here: the fake is part of
+;; the seam's definition. It records every fire in order, so a test
+;; can say what the provider was asked to do and what it was told, and
+;; it answers whatever status the test scripts — the four the spec
+;; names, and any other.
+
+(def ^:private fresh-fire
+  {:fires [] :answer nil :seq 0})
+
+(defrecord FakeFire [state]
+  FireAdapter
+  (fire-routine [_ fire-url token text]
+    (let [s (swap! state
+                   (fn [s]
+                     (-> s
+                         (update :seq inc)
+                         (update :fires conj {:fire-url (str fire-url)
+                                              :token (str token)
+                                              :text (some-> text str not-empty)}))))
+          answer (:answer s)]
+      (if answer
+        (throw (ex-info (str "the routines api answered " (:status answer)
+                             " for the fire")
+                        answer))
+        {:session-id (str "session_01fake" (:seq s))
+         :session-url (str "https://claude.ai/code/session_01fake" (:seq s))}))))
+
+(defn fake-fire
+  "A scriptable fire endpoint that has answered nobody yet."
+  []
+  (->FakeFire (atom fresh-fire)))
+
+(defn fires
+  "Every fire the adapter was asked for, in order —
+  [{:fire-url :token :text} …]. The token is here because a test must
+  prove the engine sent the one the row holds; nothing else ever reads
+  it back."
+  [fake]
+  (:fires @(:state fake)))
+
+(defn answer!
+  "Script the provider's next answer, and every one after it: nil is a
+  2xx carrying a session id and a run URL, a status is that status.
+  `data` rides the thrown ex-data, which is where `:retry-after`
+  lives — (answer! fake 429 {:retry-after \"30\"})."
+  ([fake status] (answer! fake status nil))
+  ([fake status data]
+   (swap! (:state fake) assoc :answer
+          (when status (merge {:status status} data)))
+   nil))
+
+(defn reset-fire! [fake]
+  (reset! (:state fake) fresh-fire))

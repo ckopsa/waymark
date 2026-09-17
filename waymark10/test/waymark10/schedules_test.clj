@@ -456,17 +456,26 @@
     (is (= :pending (:initial rd)))
     (is (every? (set (:states rd)) [:pending :live :paused :broken]))
     (is (= #{:seat :provider :model :external_id :pushed_at :seen_at
-             :drift :note}
+             :drift :note
+             ;; the fire link (R-12.18), and the damper's mark the wake
+             ;; consumer writes (R-12.22)
+             :fire_url :fire_token :last_fired_at :last_run_url
+             :wake_pending}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
-      (doseq [a [:claim :observe :pause :resume :fail :end]]
+      (doseq [a [:claim :observe :pause :resume :fail :end :fired]]
         (is (some :hide (get-in rd [:actions a :guards]))
             (str a " is the engine's, not a person's"))))
-    (testing "and the one human door is the model (R-12.1)"
+    (testing "and the human doors are the model and the link (R-12.1, R-12.18)"
       (is (not-any? :hide (get-in rd [:actions :restate :guards])))
       (is (= #{:model}
              (set (schema/entry-keys (:input (get-in rd [:actions :restate])))))
-          "a person restates the model and nothing else"))
+          "a person restates the model and nothing else")
+      (doseq [a [:link :unlink]]
+        (is (not-any? :hide (get-in rd [:actions a :guards]))
+            (str a " is a person's door")))
+      (is (= #{:fire_url :token}
+             (set (schema/entry-keys (:input (get-in rd [:actions :link])))))))
     (testing "the deviations are on the record"
       (is (seq (:deviations rd)))
       (is (some #(str/includes? % "mirror") (:deviations rd))))))
