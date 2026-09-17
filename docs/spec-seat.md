@@ -388,6 +388,7 @@ and `abandoned` are terminal.
 | `ended_at` | instant | when the model stopped |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | int | the harness's exact counts, summed over the sitting |
 | `turns` | int | the number of model turns |
+| `harness_session` | string | the harness's id for the session that sat. Written at `create` from `waymark_sit`, or at `close` from the hook's report (R-12.17). |
 | `transitions` | int | committed transitions under the grant while the sitting was open. The engine counts. |
 | `refusals` | int | 409s served under the grant while the sitting was open. The engine counts. |
 | `cost_usd` | decimal | written at close |
@@ -556,10 +557,9 @@ else. The reason is the sitting's `note`.
 **R-12.5** The session must open a sitting before it reads the
 queue, and the harness must close it with the exact token counts
 when the session ends. The session cannot count its own tokens, so
-the close is a hook of the harness (Claude Code's session-end hook
-reads the transcript's usage), not an act of the model. Until that
-hook exists (waymark-fp62.6.1), the harness's own session record is
-the ledger, and the sitting row is closed by hand from it.
+the close is a hook of the harness, not an act of the model. The
+hook is Claude Code's Stop hook. It reads the transcript's usage and
+posts it to the close door. R-12.17 gives the rule.
 
 **R-12.6** `sitting_budget_tokens` is the copy's ceiling, through
 whatever knob the provider has. If it has none, the walk rule caps
@@ -646,7 +646,10 @@ sends no session id is served as before, stateless.
 **R-12.14** The MCP surface must serve a fixed tool `waymark_sit`
 that takes the key. It binds the calling session to the seat when
 three things hold: the call carries a known session id, the caller
-is a delegate, and an active seat holds this key. A failure of any
+is a delegate, and an active seat holds this key. The call can also
+carry `session`, the harness's own id for this session. The engine
+then makes the sitting with `harness_session` set to that id, and
+the report of R-12.17 pairs to this sitting by it. A failure of any
 one is a refusal in a sentence, and the key's refusal is uniform:
 no seat answers this key. A leaked key without a person's bearer
 opens nothing.
@@ -673,10 +676,43 @@ that loses its bind is told 404 and starts again: it initializes,
 sits with the key once more, and continues. Nothing about the seat,
 the sitter, or the grant is lost, because those are rows.
 
-What this leaves open, on record. No hook runs when a Routine's
-session ends, so the sweep abandons the sitting after two cadences
-with no token counts. The transitions and refusals still count. The
-cost of a keyed sitting is a follow-up (waymark-fp62.6.1).
+**R-12.17** The harness must close the sitting. The repository that
+the Routine clones carries a Stop hook in its `.claude/settings.json`.
+A Routine's firing is one prompt, so the session raises one Stop
+event, at its end. The hook reads the session's transcript. It sums
+the usage of each API response, in the session and in each subagent
+beside it. It then posts the four token counts and the turn count to
+`POST /api/-/sittings/close`. It sends the seat's key in the header
+`Waymark-Seat-Key`. The engine finds the seat by that key. The
+engine then closes that seat's open sitting through the sitting's
+own `close` door (R-10.4), so the handler reads the model's prices
+and writes `cost_usd` at that moment.
+
+The body carries `harness_session`, the harness's id for the
+session, and the sitting keeps it as a field (R-10.2). The engine
+pairs the report to the sitting by `harness_session` first. When no
+open sitting of the seat carries that id, the engine closes the
+seat's newest open sitting that carries no id. A sitting that
+carries an id has a report of its own coming, so a report that
+names a different run does not close it. When every open sitting
+carries an id, the engine closes the newest.
+
+The door gives four answers. It answers 200 with the closed sitting
+and its `cost_usd`. It answers 404 with `No seat answers this key.`
+when the key is wrong or absent; the refusal is uniform, as R-12.14
+makes it. It answers 409 with ``The seat `name` has no open
+sitting.`` when a second report comes in, or when nothing sat. It
+answers 422 when the body is malformed.
+
+The key is a header, and not a bearer. The identity layer reads a
+bearer as an OIDC token, so a key in that place is refused before
+the door sees it. A header is also what an environment's stored
+credential can add: the proxy writes it after the request leaves the
+container, so the key never enters the session.
+
+A sitting that gets no report is still the sweep's. The sweep
+abandons it after two cadences, with no tokens (R-7.6). The counts
+of transitions and refusals stand.
 
 ## 13. The email clerk: the descent
 
@@ -797,7 +833,7 @@ Nothing else (R-12.10).
    `refusals`.
 8. It invokes `insight.create` for a finding that cites a task it
     made, and writes one journal entry.
-9. The session ends. The harness's session-end hook closes the
+9. The session ends. The harness's Stop hook closes the
     sitting with the usage from the transcript: input 31200, output
     2900, cache read 18000, cache write 0, turns 6. The handler
     writes `cost_usd` 0.23 and the prices used. The row already
@@ -1301,6 +1337,15 @@ above. The cases:
     each refused in a sentence. (R-12.14)
 30. A transition made through a bound session carries the sitter as
     its actor, and the seat's open sitting counts it. (R-12.15)
+31. A Stop hook report that carries the seat's key closes the seat's
+    open sitting. The sitting holds the four token counts, the turn
+    count, and a `cost_usd` from the model's prices. A report with a
+    wrong key is answered 404. A second report is answered 409.
+    (R-12.17, R-10.4)
+32. After the close, the next `waymark_sit` opens a fresh sitting.
+    Two sessions that sit with different session ids hold two open
+    sittings, and a report closes the one its `harness_session`
+    names. (R-12.14, R-12.17)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
@@ -1420,6 +1465,14 @@ trusts.
   charter is never copied, and the one-row-per-session form comes
   through the scheduler's API later. The cost is a shared context
   across the rows of one firing, capped by `rows_per_firing`.
+- **The Stop hook is the session's end.** A Routine run is one
+  prompt, so its one Stop event is where the bill is known. The
+  engine does not poll the harness: the run's fire token cannot read
+  anything, and no session API exists. The transcript on the
+  container's disk is the exact record of every API response, and
+  the hook is the one path that exists today. The session copies its
+  own id into the sit, but the bill is the hook's, so a wrong id
+  costs a pairing and never the truth.
 - **A step down is judged by corrections, not by cost.** Cost always
   falls on a step down. The only question is whether the outcomes
   held, and a correction is the one record of an outcome that did
@@ -1429,9 +1482,10 @@ trusts.
 
 - A cross-check of the model claim against the MCP client name. It
   verifies the client, not the model.
-- A keyed sitting's cost. No hook runs at the end of a Routine's
-  session, so the sitting closes by the sweep with no token counts.
-  The counts of transitions and refusals stand. (R-12.16)
+- A hook that runs when the container is reclaimed in the middle of
+  a turn. No Stop event comes, so that sitting stays the sweep's.
+- The hook posts one time for each Stop. A person who continues a
+  run's session by hand makes turns that no sitting counts.
 - A composed seat page that answers the six questions of R-11.3 on
   one screen, with the ladder's steps and the audit beside them. The
   queries exist; the page is a surface declaration away, as the

@@ -45,9 +45,11 @@
 
   ── what wave two calls ─────────────────────────────────────────────
 
-  Four public fns, and they are the whole of this namespace's seam:
+  Five public fns, and they are the whole of this namespace's seam
+  (the second is the session-end door's, R-12.17):
 
       (open-sitting-for-grant eng grant-id) → the open sitting or nil
+      (open-sitting-for-seat eng seat-id [harness-session])
       (bump-counter! eng sitting-id :transitions|:refusals)
       (seat-halt! eng seat-id reason detail)
       (seat-clear-halt! eng seat-id)
@@ -522,6 +524,16 @@
                 [:input_tokens :output_tokens :cache_read_tokens
                  :cache_write_tokens :turns])
         (assoc-in [:data :note] (:note inp))
+        ;; THE BIRTH STAMP WINS (R-12.15, R-12.17). `waymark_sit` may
+        ;; already have paired this row with the harness session that
+        ;; opened it, and two runs of one seat can overlap — so a
+        ;; close writes the id only onto a row that carries none. A
+        ;; report naming a different session is the door's fallback
+        ;; case, and moving the stamp would move the bill to a run
+        ;; that did not spend it.
+        (cond-> (and (some? (:harness_session inp))
+                     (nil? (get-in row [:data :harness_session])))
+          (assoc-in [:data :harness_session] (:harness_session inp)))
         (assoc-in [:data :ended_at] (:now ctx))
         (assoc-in [:data :prices] prices)
         (assoc-in [:data :cost_usd] (cost-of counts prices)))))
@@ -1372,7 +1384,19 @@
             :x-display
             {:label "What the sitting did"
              :help "One sentence, written at the close — what this wake actually moved. Read beside the counts when a step down the ladder is being judged."}}
-     [:maybe [:string {:max 240}]]]]
+     [:maybe [:string {:max 240}]]]
+    ;; THE RUN THIS BILL CAME FROM (R-12.15, R-12.17). The harness
+    ;; knows its own session id; the engine cannot derive one. A
+    ;; session that declares it at the sit is paired with this row
+    ;; from birth, and the close's report names the same id — which is
+    ;; what lets two overlapping wakes of one seat each close their
+    ;; own sitting rather than the newest.
+    [:harness_session {:optional true
+                       :x-display
+                       {:raw true
+                        :label "The harness session"
+                        :help "The harness session id the hook reported, so a bill can be traced back to the run that made it. Absent until the close, unless the session named it when it sat."}}
+     [:maybe [:string {:max 128}]]]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the two counters are the
@@ -1394,7 +1418,18 @@
              {:raw true
               :label "The grant worn"
               :help "The leash this sitting will act under — the grant the session is presenting."}}
-     :waymark/ref]]
+     :waymark/ref]
+    ;; the ONE thing a session knows at the sit that nothing else can
+    ;; tell the engine (R-12.15): which run this is. Optional, because
+    ;; a harness that reports no id still opens a sitting; when it
+    ;; does report one, the pairing is made here rather than guessed
+    ;; at the close.
+    [:harness_session {:optional true
+                       :x-display
+                       {:raw true
+                        :label "The harness session"
+                        :help "The session id of the run that is sitting, if the harness knows one. The close's report names the same id, and that is how two overlapping wakes of one seat each end their own sitting."}}
+     [:maybe [:string {:max 128}]]]]
    ;; THE BIRTH STAMPS WHAT THE CALLER MAY NOT WRITE and what the
    ;; document owes a reader: whose session this is, when it started,
    ;; which model the session itself claims — and zeroes for every
@@ -1446,7 +1481,16 @@
                      :examples ["Walked nine messages; two became tasks and seven were receipts."]
                      :x-display {:label "What the sitting did"
                                  :help "One sentence on what this wake actually moved."}}
-              [:maybe [:string {:max 240}]]]]
+              [:maybe [:string {:max 240}]]]
+             ;; what the report is FOR beyond the counts: which run
+             ;; spent them. Written only onto a row that carries no
+             ;; stamp already (close-sitting) — see R-12.17.
+             [:harness_session {:optional true
+                                :x-display
+                                {:raw true
+                                 :label "The harness session"
+                                 :help "The harness session id this report came from, so the bill can be traced to the run that made it."}}
+              [:maybe [:string {:max 128}]]]]
      :record true
      ;; :edit-shape — a close welds the first counts onto a row that
      ;; has none; there is no earlier value to prefill from and no
@@ -1474,7 +1518,8 @@
      :display {:label "Abandon" :order 9}}}
    :deviations
    ["R-10.2 lets a sitting's `model` be null (R-9.4: a token with no claim has model null), and R-10.7 wants the collection filterable by model. A promoted column is generated only for a non-`:maybe` entry, so those two cannot both be had: `model` is required at the create door, and the session's claim wins over it when there is one. A harness with nothing to declare names the row it is running as."
-    "R-10.6 has the engine count transitions and refusals. `bump-counter!` is a maintenance write (`store/update-data!`, jobs.clj's progress precedent) rather than a transition: a logged transition per counted transition would double the log — the counter would cost more log than the thing it counts. The `close` is a real transition and freezes both numbers."]})
+    "R-10.6 has the engine count transitions and refusals. `bump-counter!` is a maintenance write (`store/update-data!`, jobs.clj's progress precedent) rather than a transition: a logged transition per counted transition would double the log — the counter would cost more log than the thing it counts. The `close` is a real transition and freezes both numbers."
+    "`harness_session` is on the BIRTH door as well as the close's (R-12.15, R-12.17), which no other count-bearing field is. The reason is that it is not a count: it is the only fact a session knows at the sit that the engine cannot derive, and the pairing it makes is what lets two overlapping wakes of one seat each end their own sitting. It is `:maybe`, so it is not filterable and the pairing reads one page of the seat's open sittings rather than querying — `model`'s recorded wall, one field over. The close writes it only onto a row that carries none: a report naming another run's id must not move a bill."]})
 
 ;; ── the seam wave two calls ─────────────────────────────────────────
 
@@ -1491,6 +1536,51 @@
         (first (store/query-rows (:storage eng) tx :sitting
                                  {:grant (str grant-id) :state :open}
                                  {:limit 1 :newest-first true}))))))
+
+(def ^:private open-sitting-page
+  "The most open sittings one seat is read for at a close. A seat
+  holds one open sitting in the ordinary case and a handful when runs
+  overlap; anything past this is a seat whose sweep is overdue, and
+  the honest fix is the sweep, not a longer page."
+  50)
+
+(defn open-sitting-for-seat
+  "The open sitting a SESSION-END REPORT belongs to (R-12.17), or nil.
+
+  `open-sitting-for-grant`'s shape, one field over and one reading
+  past it. The hook at the end of a run presents the seat's key and
+  knows nothing about which grant the firing wore, so the lookup is by
+  the promoted `seat` column and state — one query, newest first.
+
+  WHICH of the seat's open sittings is the reading. `harness_session`
+  is `:maybe`, so it can never be a promoted column and never a
+  filter (the kind's own recorded deviation about `model` is the same
+  wall); the pairing is therefore done in code over one page:
+
+    1. the newest open sitting stamped with the reported session — the
+       run that is ending, named by its own id;
+    2. failing that, the newest open sitting carrying NO stamp — a
+       wake nobody's hook will ever name, which is the one an unnamed
+       report is most likely about;
+    3. failing that, the newest open sitting.
+
+  A report with no session id starts at 2, which is why a stamped
+  sitting is not closed by somebody else's report while its own run
+  is still going."
+  ([eng seat-id] (open-sitting-for-seat eng seat-id nil))
+  ([eng seat-id harness-session]
+   (when (and seat-id (get (inv/resources eng) :sitting))
+     (let [rows (store/with-tx (:storage eng)
+                  (fn [tx]
+                    (store/query-rows (:storage eng) tx :sitting
+                                      {:seat (str seat-id) :state :open}
+                                      {:limit open-sitting-page
+                                       :newest-first true})))
+           stamp-of #(some-> (get-in % [:data :harness_session]) str not-empty)
+           wanted (some-> harness-session str not-empty)]
+       (or (when wanted (first (filter #(= wanted (stamp-of %)) rows)))
+           (first (remove stamp-of rows))
+           (first rows))))))
 
 (defn bump-counter!
   "Add one to an open sitting's `:transitions` or `:refusals`. A

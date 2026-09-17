@@ -33,7 +33,7 @@ present too, and the credential is the person's own.
 |---|---|---|
 | name | `inbox-clerk` | the seat's name, one spelling |
 | model | Opus 5 | the seat's `held_for`; the schedule row mirrors it |
-| repository | none | the clerk never touches code |
+| repository | `ckopsa/waymark` | the Stop hook that closes the sitting lives in its `.claude/settings.json`; the clerk still touches no code |
 | trigger | Schedule, `0 * * * *` | `cadence_seconds` 3600 |
 | connectors | Waymark only | mail is read through the seat's `email.read` power |
 | instructions | the text below | the key, then the pointer of R-12.3 |
@@ -43,7 +43,8 @@ present too, and the credential is the person's own.
 ```
 Your seat key is: <paste the key here>
 
-Call waymark_sit with that key once, first. Then you sit in the seat
+First, run `echo $CLAUDE_CODE_SESSION_ID` and call waymark_sit once with
+that key and that value as `session`. Then you sit in the seat
 `inbox-clerk`. Read the seat row with waymark_get and do what its
 charter says. Take only the doors the envelope offers. When the seat
 says halted or parked, say why and stop.
@@ -56,10 +57,12 @@ its own reason.
 ## What one firing does
 
 1. The connector initializes. The engine answers a session id.
-2. The session calls `waymark_sit` with the key. The engine binds
-   the session to the seat. From here the session is the sitter
-   `seat:{seat id}`, wearing the seat's grant, with the schedule's
-   model as its claim.
+2. The session calls `waymark_sit` with the key and with its own
+   session id, which the container gives it as
+   `CLAUDE_CODE_SESSION_ID`. The engine binds the session to the
+   seat, and the sitting is born with `harness_session` set to that
+   id. From here the session is the sitter `seat:{seat id}`, wearing
+   the seat's grant, with the schedule's model as its claim.
 3. `waymark_discover` shows `doors.ask.seat`. A halt or a parked
    state means say why and stop.
 4. The session reads the seat row for the charter, then walks
@@ -67,9 +70,38 @@ its own reason.
    `rows_per_firing` rows. For each row it takes the one door the
    envelope offers. The first request opened a sitting; the router
    counts each transition and each refusal against it.
-5. The session says in one line why it stopped and how many rows it
-   moved. The sitting is closed by the sweep after two cadences
-   (R-12.16); its cost is a follow-up.
+5. The session stops and says in one line why it stopped and how
+   many rows it moved. The harness then raises its Stop event. The
+   Stop hook sums the transcript's usage and posts the counts to
+   `POST /api/-/sittings/close`, with the key in the header
+   `Waymark-Seat-Key`. The engine finds the seat by the key, pairs
+   the report to the sitting by `harness_session`, and closes it.
+   The cost is on the sitting row and in the seat's ledger within
+   the minute (R-12.17).
+
+## The environment
+
+The Routine's cloud environment carries three settings. They are
+what lets the Stop hook reach the engine.
+
+1. Set the variable `WAYMARK_SEAT_URL` to
+   `https://<engine host>/api/-/sittings/close`. The hook does
+   nothing when this variable is empty, so the hook is safe in every
+   other session of this repository.
+2. Give the environment the seat's key. On Pro or Max, store it as
+   an API credential: type Bearer, header name `Waymark-Seat-Key`,
+   prefix cleared, host the engine host. The proxy then adds the
+   header after the request leaves the container, and the key never
+   enters the session. On a plan with no API credential, set the
+   variable `WAYMARK_SEAT_KEY` to the key instead.
+3. Put the engine host on the environment's allowed domains when no
+   credential covers it. A host with a credential is reachable at
+   any network level.
+
+The session-start hook of the same repository reads
+`WAYMARK_SEAT_URL` too. When the variable is set, the hook stops
+before it builds `bd`, because a seat's session never reads beads
+and the build costs the firing a minute.
 
 ## Before the first firing
 
@@ -77,7 +109,9 @@ its own reason.
    the Routine runs.
 2. The inbox source has run one pass and the queue holds rows.
 3. `offer_key` has been invoked, and the key is in the instructions.
-4. The first firing is watched by a person, who reads the sitting
+4. The environment carries the URL and the key, as the section above
+   says.
+5. The first firing is watched by a person, who reads the sitting
    row and the seat's ledger afterwards.
 
 ## To pause
@@ -87,10 +121,11 @@ Pausing the Routine as well saves the wake. To resume, unpark.
 
 ## Later
 
-- The adapter pushes this Routine from the schedule row, and reads
-  it back for drift, once the Routines API is pinned
-  (waymark-fp62.7).
-- The source fires the schedule with one row's id, so one session
-  walks one row (R-12.9).
-- A hook at the session's end closes the sitting with its usage
-  (waymark-fp62.6.1).
+- The Routines API is fire-only: it has no door to create, update
+  or read a Routine, so the engine cannot push this Routine from the
+  schedule row or read it back. The person makes it by hand and
+  links its fire URL and token to the schedule row
+  (waymark-fp62.7.3).
+- The engine fires the seat on demand through that link, and the
+  source fires it with one row's id, so one session walks one row
+  (R-12.9, waymark-fp62.7.3).

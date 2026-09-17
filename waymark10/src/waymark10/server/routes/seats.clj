@@ -1,7 +1,8 @@
 (ns waymark10.server.routes.seats
   "What the house ANSWERS about a seat: the ledger route (spec-seat.md
-  R-11.3, R-11.3a) and the little document `waymark_discover` shows a
-  sitter under `doors.ask.seat` (R-7.4, R-12.3).
+  R-11.3, R-11.3a), the door a session's end reports its bill through
+  (§ 12.1, R-12.17), and the little document `waymark_discover` shows
+  a sitter under `doors.ask.seat` (R-7.4, R-12.3).
 
   THE SIX ANSWERS ARE ONE CALL. R-11.3 asks six questions of a seat
   over a window — what did it cost, what did it do, where did it hit
@@ -65,7 +66,8 @@
             [waymark10.server.router :as router]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
-            [waymark10.server.store :as store])
+            [waymark10.server.store :as store]
+            [waymark10.types :as t])
   (:import (java.math RoundingMode)
            (java.time Instant)
            (java.time.temporal ChronoUnit)))
@@ -322,9 +324,194 @@
       (let [now (now-of eng)]
         (router/json-response 200 (ledger eng seat (since-of req now) now))))))
 
+;; ── the session-end door (spec-seat.md § 12.1, R-12.17) ─────────────
+;;
+;; A keyed sitter session opens a sitting when it sits (R-12.15) and
+;; the router counts against it — and until this door existed nothing
+;; ever closed it. The boot sweep abandoned it two cadences later and
+;; its cost went unrecorded, which is the one thing a seat is for.
+;;
+;; What ends a run is the HARNESS, not the engine: the session stops,
+;; its hook sums the transcript's usage and posts it here. So the door
+;; is shaped for a hook and nothing else — one POST, one credential,
+;; five counts, no bearer, no etag, no idempotency key.
+
+(def ^:private close-path
+  "The address the hook posts to — the engine's own `/api/-/…` shape
+  (/api/-/mcp, /api/-/feed), one segment longer. The literal \"-\"
+  second segment is what keeps it out of the plural grammar
+  altogether, and the static bucket is where the engine's doors about
+  itself are mounted."
+  "/api/-/sittings/close")
+
+(def ^:private seat-key-header
+  "MCP's Mcp-Session-Id precedent: ring lowercases what a client
+  sends, so the READ is this and the contract's spelling is
+  `Waymark-Seat-Key`.
+
+  NOT an Authorization bearer, deliberately: the identity layer would
+  try to parse one as a token and refuse the request before this
+  handler saw it. The key is not an identity — it is the seat's, and
+  the request's resolved principal is ignored."
+  "waymark-seat-key")
+
+(def ^:private no-seat
+  "UNIFORM, and `sit-no-seat`'s sentence verbatim (server/mcp): a key
+  that matches nothing, a key the seat has since revoked, a key that
+  is not a key at all and a seat that has been parked all answer this
+  one sentence, and a missing header answers it too. Saying which
+  would turn the door into an oracle over the house's offices."
+  "No seat answers this key.")
+
+(def ^:private count-fields
+  "The five R-10.5 numbers a report carries. The engine never
+  estimates a token: every one of these is required, and a report that
+  omits one is a report the door cannot cost."
+  [:input_tokens :output_tokens :cache_read_tokens :cache_write_tokens :turns])
+
+(defn- invalid!
+  "The 422 `since-of` serves, one field over — a hook reading its own
+  refusal has to know WHICH number it got wrong."
+  [field detail]
+  (throw (p/problem :invalid-params 422 "Invalid parameters"
+                    {:detail (str (name field) " " detail)})))
+
+(defn- report-of
+  "The posted body, judged before a row is read.
+
+  The counts are judged HERE as well as by the close's own input
+  schema, and the order is the reason: a malformed report must answer
+  422 whether or not the seat happens to have an open sitting, and the
+  409 below is decided by a read. The declaration remains the
+  authority — it refuses the same values at the invoke — and this is
+  the same law said early enough to be said first.
+
+  Broken JSON is 422 here rather than `read-body`'s 400 for the same
+  reason the counts are: to a hook there is one kind of mistake at
+  this door, its own body, and one status for it."
+  [req]
+  (let [body (try (router/read-body req)
+                  (catch Exception _
+                    (invalid! :body "must be JSON; it did not parse.")))]
+    (when-not (map? body)
+      (invalid! :body (str "must be a JSON object carrying "
+                           (str/join ", " (map name count-fields)) ".")))
+    (doseq [f count-fields]
+      (let [v (get body f)]
+        (when (nil? v)
+          (invalid! f "is required: the harness's exact count, a whole number."))
+        (when-not (and (int? v) (not (neg? v)))
+          (invalid! f (str "must be a whole number of zero or more; got "
+                           (pr-str v) ".")))))
+    (doseq [[f limit] [[:note 240] [:harness_session 128]]]
+      (when-some [v (get body f)]
+        (when-not (and (string? v) (<= (count v) limit))
+          (invalid! f (str "must be a string of at most " limit
+                           " characters.")))))
+    ;; closed, like the action's own input: a misspelled count is a
+    ;; count nobody reported, and a report that swallowed it would
+    ;; cost a wake at zero and say nothing
+    (when-some [extra (seq (sort (map name (keys (apply dissoc body
+                                                        :note :harness_session
+                                                        count-fields)))))]
+      (invalid! (first extra)
+                (str "is not a field of this report, which carries "
+                     (str/join ", " (map name count-fields))
+                     ", and optionally note and harness_session.")))
+    body))
+
+(defn- seat-of-key
+  "The active seat whose sitter key this request presents, or the one
+  sentence. `seats/seat-by-key` compares in constant time, so a caller
+  cannot walk the key off the clock; a request with no header never
+  reaches storage at all, and answers the same way."
+  [eng req]
+  (or (seats/seat-by-key eng (get-in req [:headers seat-key-header]))
+      (throw (p/problem :not-found 404 "Not found" {:detail no-seat}))))
+
+(defn- sitter-of
+  "The principal the close is written as: the seat's sitter, exactly
+  as `mcp/sit` builds it (`seats/sitter-id` + `sitter-display`).
+
+  THE HOOK ACTS FOR THE SITTER, so the log reads the sitter. The bill
+  is the office's, the transitions it froze were the office's, and a
+  ledger whose closes were written by a system actor would name the
+  engine as the one thing in the seat's history that was not the seat.
+  Nothing refuses it: `close` declares no guards, and the kind's
+  `:own-surface {:by :member}` is a projection rule rather than a
+  gate — this call is `inv/invoke!` with a principal and no presented
+  leash, the `seat-halt!` posture."
+  [seat]
+  (t/principal {:id (seats/sitter-id seat)
+                :type :agent
+                :display (seats/sitter-display seat)}))
+
+(defn- close-doc
+  "What the hook reads back: the row it closed, the counts as
+  recorded, and the two numbers the engine counted and has now frozen
+  (R-10.6). `cost_usd` is the close's own arithmetic over the model's
+  prices at that moment (R-10.4) — the hook reports tokens and learns
+  what they cost."
+  [seat row]
+  (let [d (:data row)]
+    {:waymark "10"
+     :kind "sitting_close"
+     :sitting (str (:id row))
+     :seat (str (:id seat))
+     :state (name (:state row))
+     :cost_usd (:cost_usd d)
+     :input_tokens (:input_tokens d)
+     :output_tokens (:output_tokens d)
+     :cache_read_tokens (:cache_read_tokens d)
+     :cache_write_tokens (:cache_write_tokens d)
+     :turns (:turns d)
+     :transitions (:transitions d)
+     :refusals (:refusals d)}))
+
+(defn- sitting-close
+  "POST /api/-/sittings/close — the end of a wake, reported (R-12.17).
+
+  ANONYMOUS ON PURPOSE, and nothing in the chain has to bend for it: a
+  request with no bearer resolves to `t/anonymous` (router's
+  `dev-principal`), `members/gate!` passes an anonymous principal
+  untouched because a system or unnamed actor is not a member, and
+  `grants/unscoped-visibility` answers nil for anybody who is not an
+  agent — so `router/visibility-of` is nil, none of the concealment
+  checks bite, and the static bucket wraps no auth of its own around
+  what it mounts. The key in the header is the whole credential, and
+  it is the seat's rather than a person's, which is exactly what a
+  hook running after its session has ended can still present.
+
+  The order of the three refusals is the order of what they cost: the
+  key first (a request that answers for no seat learns nothing else),
+  the body next (a malformed report is wrong whatever the seat holds),
+  the open sitting last, because finding it is a read. A second report
+  after a close lands on that last one — 409, by design: the ending is
+  written once and the hook that retries is told the bill is in.
+
+  A WALLED SEAT STILL CLOSES. R-5.2's three walls scope a seat grant
+  to nothing; this door presents no grant, so a seat that reached its
+  budget mid-wake can still record what that wake cost — which is the
+  number the wall was about."
+  [eng]
+  (fn [req]
+    (let [seat (seat-of-key eng req)
+          report (report-of req)
+          sitting (or (seats/open-sitting-for-seat eng (:id seat)
+                                                   (:harness_session report))
+                      (throw (p/problem
+                              :no-open-sitting 409 "No open sitting"
+                              {:detail (str "The seat `"
+                                            (get-in seat [:data :name])
+                                            "` has no open sitting.")})))
+          closed (:row (inv/invoke! eng :sitting (str (:id sitting)) :close
+                                    report {:principal (sitter-of seat)}))]
+      (router/json-response 200 (close-doc seat closed)))))
+
 (defn routes [eng]
   {:module :seats
-   :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]]})
+   :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
+            [close-path {:post (sitting-close eng)}]]})
 
 ;; ── what discover shows a sitter (R-7.4, R-12.3) ────────────────────
 

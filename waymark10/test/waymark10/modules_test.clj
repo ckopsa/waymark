@@ -219,6 +219,10 @@
                ;; segments, static, and mounted before the plural
                ;; grammar for the definitions sweep's exact reason
                "/api/seats/:id/ledger"
+               ;; …and the door a session's end reports its bill
+               ;; through (spec-seat.md R-12.17), beside the ledger:
+               ;; the engine's own /api/-/… shape, one segment longer
+               "/api/-/sittings/close"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
@@ -259,6 +263,12 @@
                  ;; would not match either — but /api/seats/{id} IS a
                  ;; row address, and the ledger is not a field of it
                  "/api/seats/:id/ledger"
+                 ;; and the session-end door beside it (R-12.17):
+                 ;; four segments whose second is the literal "-",
+                 ;; so no plural route can reach it — it is in the
+                 ;; static bucket because that is where the engine's
+                 ;; own /api/-/… doors live, not because it has to be
+                 "/api/-/sittings/close"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))
