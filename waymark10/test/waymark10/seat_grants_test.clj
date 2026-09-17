@@ -34,6 +34,7 @@
 
 (r/defresource pantry
   {:kind :seat_pantry
+   :states [:open :done]
    :plural "seat_pantries"
    :initial :open
    :terminal #{:done}
@@ -45,6 +46,7 @@
 
 (r/defresource ledger
   {:kind :seat_ledger_line
+   :states [:open :done]
    :plural "seat_ledger_lines"
    :initial :open
    :terminal #{:done}
@@ -66,6 +68,7 @@
 (r/defresource vault
   {:kind :seat_vault
    :plural "seat_vaults"
+   :states [:open :sealed]
    :initial :open
    :terminal #{:sealed}
    :summary "{data.name} · {state}"
