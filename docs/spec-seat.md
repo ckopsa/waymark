@@ -657,10 +657,14 @@ id}`, actor type agent, acting for the person, provisioned at the
 first sit. It wears a seat grant the engine mints at the first sit,
 because the person handing over the key is the approval, with the
 seat's `standing_ttl_seconds` as its leash. Its model claim is the
-schedule's `model` (R-12.8). From the bind until the session ends,
-every call resolves to the sitter: the first request opens a
-sitting, the router counts transitions and refusals against it, and
-R-5.2's walls apply. The person's other sessions carry no key and
+schedule's `model` (R-12.8). The bind opens the seat's sitting, or
+reuses the one already open under the grant, because no leash keeper
+stands behind a Routine's firing to open one. From the bind until
+the session ends, every call resolves to the sitter: the router
+counts transitions and refusals against that sitting, and R-5.2's
+walls apply. The first firing on production (2026-09-17) showed the
+gap: the sitter moved rows as itself, on the schedule's model, and
+no sitting counted them. The person's other sessions carry no key and
 stay the person's delegate, with the seat's levers.
 
 **R-12.16** The bind is held in the engine's memory for the life of

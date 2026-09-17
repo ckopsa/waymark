@@ -1746,20 +1746,36 @@
                  (fn [tx] (store/load-row (:storage eng) tx kind id {})))
                (inv/decode-row rdef)))))
 
-(defn- seat-model-name
-  "The model the seat's schedule names, by its API identifier — the
-  spelling a session's claim is matched against (R-9.5), so the answer
-  can be handed straight to the sitter principal as its `:model`.
-
-  Two hops, each of which may be absent: a seat whose schedule row was
-  never written, or a schedule whose model a person cleared, has no
-  claim to make, and NO CLAIM is the honest answer. A seat held for a
-  list of models then refuses the sitter at the resolve's second wall,
-  which is the wall saying exactly that."
+(defn- seat-model
+  "The model row the seat's schedule names — or, when the schedule has
+  none, the first model the seat is held for. nil when neither names
+  one. The row, not the name, because the sitting's birth wants the
+  ref and the sitter's claim wants the identifier."
   [eng seat]
-  (let [schedule (row-of eng :schedule (get-in seat [:data :schedule]))
-        model (row-of eng :model (get-in schedule [:data :model]))]
-    (some-> (get-in model [:data :name]) str not-empty)))
+  (let [schedule (row-of eng :schedule (get-in seat [:data :schedule]))]
+    (or (row-of eng :model (get-in schedule [:data :model]))
+        (row-of eng :model (first (get-in seat [:data :held_for]))))))
+
+(defn- open-sitting!
+  "The sitting this bound session is counted against (R-12.15): the
+  one already open under the seat grant, or a fresh one born now as
+  the sitter, with the seat, the model and the grant. nil when the
+  seat names no model at all, because a sitting's birth needs one —
+  the seat then has no claim to make and nothing to cost.
+
+  The router counts transitions and refusals only against an OPEN
+  sitting, and nothing else opens one for a keyed session: no leash
+  keeper stands behind a Routine's firing, so the bind is where the
+  sitting begins. Reused rather than re-minted on a second sit, the
+  way the grant is."
+  [eng sitter grant seat model]
+  (when model
+    (or (seats/open-sitting-for-grant eng (:id grant))
+        (:row (inv/create! eng :sitting
+                           {:seat (str (:id seat))
+                            :model (str (:id model))
+                            :grant (str (:id grant))}
+                           {:principal sitter})))))
 
 (defn- standing-seat-grant
   "The grant this sitter already holds FOR THIS SEAT, or nil.
@@ -1819,18 +1835,24 @@
             grant (or (standing-seat-grant eng sitter-id seat-id)
                       (mint-seat-grant! eng sitter-id seat now))
             ;; f · the model claim, when the schedule makes one
-            model (seat-model-name eng seat)
+            model-row (seat-model eng seat)
+            model (some-> model-row (get-in [:data :name]) str not-empty)
             ;; g · the binding: this session, that sitter, from now on
             sitter (assoc (t/principal {:id sitter-id :type :agent
                                         :display display :model model})
-                          :acts-for person)]
-        (bind-session! eng sid {:seat seat-id :sitter sitter :bound-at now})
+                          :acts-for person)
+            ;; g' · the sitting the router counts against, opened here
+            ;; because nobody else opens one for a keyed session
+            sitting (open-sitting! eng sitter grant seat model-row)]
+        (bind-session! eng sid {:seat seat-id :sitter sitter :bound-at now
+                                :sitting (:id sitting)})
         ;; h · what the firing reads next
         (value-result
          {:seat named
           :sitter sitter-id
           :model model
           :grant (:id grant)
+          :sitting (:id sitting)
           :note (str "You sit in `" named "`. Read the seat row with "
                      "waymark_get and do what its charter says.")})))))
 
