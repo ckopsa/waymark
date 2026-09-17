@@ -136,16 +136,25 @@
 
 (g/defguard a-person
   {:reads [:principal]
-   :explain "A seat is an office a person opens, restates, parks and closes. An agent does not open its own office: ask for a grant that cites a seat somebody already opened, and the sitting is yours."}
+   :explain "A seat is an office a person opens, restates, parks and closes — in person, or through a tool the person is signed in to. An agent does not open its own office: ask for a grant that cites a seat somebody already opened, and the sitting is yours."}
   [_row _inp ctx]
-  ;; :human ONLY — not :agent (the whole point) and not :system
-  ;; either: the engine's own actors reach every handler through one
-  ;; ctx :invoke, and a seat is the one row whose authority a system
-  ;; path must not be able to widen. The concealed transitions below
-  ;; are where the engine writes, and they say so out loud.
-  (if (= :human (:type (:principal ctx)))
-    (t/allow)
-    (t/deny)))
+  ;; :human, or a DELEGATE — an :agent principal the identity gate
+  ;; marked :acts-for, which is a person signed in through a tool
+  ;; (spec-connector-door § 3): the members gate admits it only while
+  ;; that person is an active member, and the mark is the gate's own,
+  ;; never a request's. Not a bare :agent (the whole point) and not
+  ;; :system either: the engine's own actors reach every handler
+  ;; through one ctx :invoke, and a seat is the one row whose
+  ;; authority a system path must not be able to widen. The concealed
+  ;; transitions below are where the engine writes, and they say so
+  ;; out loud. Ruled 2026-09-17 (spec-seat.md § 17): the owner's
+  ;; connector opens the first seat, and the person behind the
+  ;; delegate is the person the rule always meant.
+  (let [{:keys [type acts-for]} (:principal ctx)]
+    (if (or (= :human type)
+            (and (= :agent type) (not (str/blank? (str acts-for)))))
+      (t/allow)
+      (t/deny))))
 
 (g/defguard one-seat-spelling
   {:judges [:name]

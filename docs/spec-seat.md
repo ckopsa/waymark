@@ -162,7 +162,7 @@ sitter of this seat loses its grant and must ask to sit in {into}."
 | guard | doors | rule |
 |---|---|---|
 | `one-spelling` | create | no active seat has this name. From `roles.clj`. |
-| `a-person` | create, restate, park, unpark, merge, retire | the principal's type is human. The precedent is the `actor_type` check on the member row in `members.clj`. |
+| `a-person` | create, restate, park, unpark, merge, retire | the principal's type is human, or the principal is a delegate: an agent the identity gate marked `acts-for`, which is a person signed in through a tool (`spec-connector-door.md` § 3). A bare agent is refused. The precedent is the `actor_type` check on the member row in `members.clj`. |
 | `not-a-sitter` | create, restate, merge | the actor holds no live grant that cites this seat, or the `into` seat |
 | the four scope guards | create, restate | the scope names only kinds, actions, filter fields, and non-private kinds the registry declares |
 | `drop-inside-scope` | create, restate | each `substitute_drop` entry is inside `scope` |
@@ -1204,7 +1204,9 @@ above. The cases:
     last transition was the seat's sitter's `no`, and does not return
     a person's transition on a row the sitter never moved. (R-11.3)
 22. A sitter's `create`, `park`, or `retire` on a seat is refused by
-    `a-person`. A person's is served. (R-4.7)
+    `a-person`. A person's is served, and so is a delegate's: an
+    agent principal that carries `acts-for`. A bare agent's is
+    refused. (R-4.7)
 23. The ledger route returns the six answers for a window, and
     discover names the route. (R-11.3a)
 24. The first request that meets a wall writes `halt` with the
@@ -1246,6 +1248,19 @@ trusts.
   fuel spent on law the model did not know. The engine counts them
   on the sitting, because the harness cannot see them and the person
   cannot fix what nobody counts.
+- **A person's delegate opens a seat.** The first build of
+  `a-person` admitted the human type only, and refused the owner's
+  own connector, because the connector resolves to an agent
+  (`spec-connector-door.md` § 3). The owner ruled on 2026-09-17 that
+  the law changes, not the grant: a delegate is a person signed in
+  through a tool, the identity gate marks it `acts-for` from a
+  verified token and nothing else can, and the members gate admits
+  it only while that person is an active member. The delegate still
+  wears a grant, so the seat's doors open only when the person
+  approved a scope that names them, and `not-a-sitter` still refuses
+  a delegate whose grant cites the seat. The rule the wall protects
+  is unchanged: an agent does not widen its own authority. A bare
+  agent, with no person behind it, is refused as before.
 - **A seat is a resource, not a declaration in code.** The first
   draft (2026-09-16, morning) chose a declaration, because the
   declaration gate fails on the push that retires an action. The

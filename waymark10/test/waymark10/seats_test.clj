@@ -52,6 +52,14 @@
 
 (def ^:private colton (t/principal {:id "colton" :display "Colton"}))
 (def ^:private clerk (t/principal {:id "clerk" :type :agent :display "Clerk"}))
+;; the owner's connector: an :agent the identity gate marked :acts-for
+;; (oidc.clj, spec-connector-door § 3) — the mark rides OUTSIDE
+;; t/principal's closed shape, so it is assoc'd the way the gate does it
+(def ^:private delegate
+  (assoc (t/principal {:id "waymark10-connector-claude:colton"
+                       :type :agent
+                       :display "Claude for Colton"})
+         :acts-for "colton"))
 
 ;; ── readers ─────────────────────────────────────────────────────────
 
@@ -172,7 +180,22 @@
     (let [p (refusal #(inv/create! *eng* :seat (seat-body "opened-by-an-agent" {})
                                    {:principal clerk}))]
       (is (= :a-person (:guard p)))
-      (is (nil? (row-of :seat "opened-by-an-agent"))))))
+      (is (nil? (row-of :seat "opened-by-an-agent")))))
+  (testing "a delegate's — a person signed in through a tool — is served"
+    ;; spec-seat.md § 17, ruled 2026-09-17: the connector resolves to
+    ;; an :agent that the identity gate marked :acts-for, and the
+    ;; person behind the mark is the person the wall always meant
+    (let [row (:row (inv/create! *eng* :seat (seat-body "opened-through-a-tool" {})
+                                 {:principal delegate}))]
+      (is (= :active (:state row)))
+      (is (= "opened-through-a-tool" (get-in row [:data :name])))))
+  (testing "an agent that merely CLAIMS the mark in its id is not a delegate"
+    (let [p (refusal #(inv/create! *eng* :seat (seat-body "opened-by-a-pretender" {})
+                                   {:principal (t/principal {:id "waymark10-connector-claude:colton"
+                                                             :type :agent
+                                                             :display "Claude for Colton"})}))]
+      (is (= :a-person (:guard p))
+          "the mark is the gate's assoc, not a spelling of the id"))))
 
 ;; ── case 20 · the charter's cap is the priming budget ───────────────
 
