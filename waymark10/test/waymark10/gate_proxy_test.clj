@@ -412,6 +412,10 @@
    "waymark_get" "waymark_invoke" "waymark_history"
    ;; the seventh fixed tool (waymark-pywy.3)
    "waymark_resolve"
+   ;; the eighth (spec-seat.md R-12.14): the keyed sitter session's
+   ;; door, present for every caller and called only by a session that
+   ;; was handed a key
+   "waymark_sit"
    ;; the two power tools (waymark-912p): the Gate door's MCP surface,
    ;; present for every caller from the first connect
    "waymark_powers" "waymark_power"])

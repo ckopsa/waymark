@@ -1179,6 +1179,40 @@
     (catch Exception e
       (or (load-member eng (:id principal)) (throw e)))))
 
+(defn ensure-sitter!
+  "The seat's sitter row, minted if this is its first sitting
+  (spec-seat.md R-12.15): an agent member whose id is the seat's own
+  `seat:<id>`, acting for the person whose tool presented the key.
+  Returns the row — the one just minted, or the one that was already
+  there, which is what makes waymark_sit callable twice.
+
+  `provision!`'s create, verbatim but for the id and the display, and
+  for the same reasons: the REGISTRAR is the one writer the `acts_for`
+  and `provenance` fences admit, a token-less create lands
+  provenance \"idp\" (a durable identity — the sitter outlives every
+  session that sits in it, exactly as a person's delegate does), and
+  the row is stamped with its own `:subject` so every namespace that
+  asks \"does a principal answer to this row?\" can decide it from the
+  row alone. A losing race reloads the winner's row.
+
+  It is a SITTER and not a session: one row per seat, never one per
+  firing, so the ledger reads one actor per office and the seat's
+  history is the office's history rather than a crowd of near-
+  identical ids."
+  [eng seat-id display person]
+  (try
+    (:row (inv/create! eng :member
+                       (cond-> {:display (let [d (str display)
+                                               d (if (str/blank? d) (str seat-id) d)]
+                                           (subs d 0 (min (count d) 80)))
+                                :actor_type "agent"
+                                :subject (str seat-id)}
+                         (not (str/blank? (str person)))
+                         (assoc :acts_for (str person)))
+                       {:principal registrar :id (str seat-id)}))
+    (catch Exception e
+      (or (load-member eng (str seat-id)) (throw e)))))
+
 (defn- heal-subject!
   "The gate's heal (waymark-tti.10): a row the gate resolved BY ID
   whose :subject is blank gains one — its own id, which is the

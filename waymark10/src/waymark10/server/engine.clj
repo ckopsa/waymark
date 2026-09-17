@@ -253,6 +253,14 @@
                     ;; the socket's one-time identity vouchers —
                     ;; ephemeral, never law (collab/mint-ticket!)
                     :collab-tickets (atom {})
+                    ;; the MCP transport's sessions (spec-seat.md
+                    ;; R-12.14): {<Mcp-Session-Id> {:created :touched
+                    ;; :bound}}, where :bound is the seat a
+                    ;; waymark_sit welded this session to. Ephemeral
+                    ;; like the collab tickets and never law — a
+                    ;; restart drops them and every client is told to
+                    ;; initialize again.
+                    :mcp-sessions (atom {})
                     :runtime (atom nil)})
         eng (assoc eng :render-fn
                    (fn [rdef row]
