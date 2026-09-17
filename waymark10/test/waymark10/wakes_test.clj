@@ -4,7 +4,8 @@
 
   The seat's third way of waking. The cadence is the first and a
   person's `fire` is the second; this is a transition the seat ASKED
-  to be woken by, named in `wake_on` as scope-shaped entries.
+  to be woken by, named in `wake_on` entries — or, since R-12.24, a
+  queue of them reaching a size the seat named in the same place.
 
   What this suite proves, in the spec's own order:
 
@@ -32,6 +33,16 @@
     not have is refused at the create door, one naming a kind this
     engine does not serve is refused at `restate`, and a gap of zero
     seconds is refused by the schema.
+  - R-12.24 · the COUNT wake, the second thing a `wake_on` entry can
+    be: nineteen rows in the queue wake nobody, the twentieth fires
+    once and the text carries the count and no row id; a count wake
+    damped by an open sitting is remembered and releases one fire
+    when that sitting closes; an entry's `filter` decides WHICH rows
+    are counted, so a filter the kind's default does not name counts
+    a different number than the queue does; an entry with no actions
+    counts on every action of its kind, where a transition entry with
+    none matches nothing; and `at_least` below one is refused by the
+    schema at the create door.
 
   Each seat here links its OWN fire token, and the assertions count
   the fires carrying that token: the suite shares one fake provider
@@ -53,7 +64,8 @@
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.wakes :as wakes]
             [waymark10.test.db :as db]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 ;; ── the queue this house walks ──────────────────────────────────────
 
@@ -86,10 +98,41 @@
              :safety {:idempotent true :reversible true :confirm false}
              :display {:label "Touch" :order 2}}}}))
 
+(def ^:private wake-item
+  "The queue a COUNT wake counts (R-12.24). `wake_task` above cannot
+  be it: a count is a number about a WHOLE collection, and the other
+  deftests here leave their own rows in that queue — a neighbour's
+  leftover row would move the number this suite asserts. So the count
+  tests get a kind of their own, with a `batch` each deftest filters
+  by, which is also what proves an entry's `filter` reaches the count
+  at all."
+  (r/resource
+   {:kind :wake_item
+    :plural "wake_items"
+    :states [:open :complete]
+    :initial :open
+    :terminal #{:complete}
+    :summary "{data.batch} · {state}"
+    :schema [:map
+             [:batch {:examples ["the morning post"]
+                      :x-display {:label "Which batch"
+                                  :help "The run of rows this one belongs to."}}
+              [:string {:min 1 :max 40}]]]
+    :filterable {:state #{:eq :in} :batch #{:eq}}
+    :default-filters {:state "open"}
+    :actions
+    {:complete {:from #{:open} :to :complete
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "Done is done."}
+                :display {:label "Complete" :style :primary :order 1}}
+     :touch {:from #{:open} :to :open
+             :safety {:idempotent true :reversible true :confirm false}
+             :display {:label "Touch" :order 2}}}}))
+
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["wake_tasks" "schedules" "seats" "models" "sittings" "definitions"
+  ["wake_tasks" "wake_items" "schedules" "seats" "models" "sittings" "definitions"
    "members" "roles" "grants" "approval_requests" "attachments"
    "subscriptions" "jobs"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"
@@ -109,7 +152,8 @@
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [fake (sch/fake-scheduler)
               fire (sch/fake-fire)
-              eng (engine/engine {:storage st :resources [wake-task]})]
+              eng (engine/engine {:storage st
+                                  :resources [wake-task wake-item]})]
           (binding [*eng* (assoc eng
                                  :schedule-adapters {:claude_routine fake}
                                  :fire-adapter fire)
@@ -180,6 +224,22 @@
 (defn- task-do! [id action]
   (inv/invoke! *eng* :wake_task (str id) action nil {:principal elena}))
 
+(def ^:private count-scope
+  "A counting seat's leash: the queue it walks and the queue it
+  counts. A count entry naming a kind outside the scope would still
+  wake the seat — the declaration says so — but a seat that is woken
+  by a number it may not read is not the case under test."
+  [{:kind "wake_task" :actions ["complete"]}
+   {:kind "wake_item" :actions ["complete"]}])
+
+(defn- item! [batch]
+  (:id (:row (inv/create! *eng* :wake_item {:batch batch}
+                          {:principal elena}))))
+
+(defn- item-do! [id action]
+  (inv/invoke! *eng* :wake_item (str id) action nil {:principal elena}))
+
+
 (defn- model! [nm]
   (:id (:row (inv/create! *eng* :model
                           {:name nm :display nm :vendor "anthropic"
@@ -229,6 +289,14 @@
   "The seat's own `fire` transitions."
   [seat-id]
   (filterv #(= :fire (:action %)) (log-of :seat seat-id)))
+
+(defn- fire-text
+  "The text of the seat's nth fire (0-based), read as the JSON object
+  it is — the payload block the provider puts into the session."
+  [seat-id n]
+  (some-> (get-in (nth (seat-fires seat-id) n) [:inputs :text])
+          str
+          wire/read-json))
 
 (defn- refusal
   "The problem ex-data of a write that was refused, or nil when it was
@@ -506,4 +574,186 @@
   (testing "and a seat that names no gap is born with the default"
     (let [seat (seat! "defaultgap" {})]
       (is (= 300 (get-in (raw :seat seat) [:data :fire_interval_seconds])))
+      (seat-do! seat :retire))))
+
+;; ── 7 · R-12.24: the count wake waits for the size ──────────────────
+
+(deftest a-count-wake-fires-when-the-queue-reaches-its-size
+  (let [wn :wake-count
+        fn' :wake-count-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        batch "count-of-twenty"
+        {:keys [seat token]}
+        (linked-seat! "countclerk"
+                      {:scope count-scope
+                       :wake_on [{:kind "wake_item"
+                                  :actions ["create"]
+                                  :filter {:batch batch}
+                                  :at_least 20}]}
+                      fn')]
+
+    (testing "nineteen rows wake nobody"
+      (dotimes [_ 19] (item! batch))
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (drain-fires! fn')
+      (is (empty? (fires-of token)))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))
+          "and nothing waits on the schedule row: a count below the
+           size is not a damped match, it is no match at all"))
+
+    (testing "the twentieth fires once, and the text carries the count"
+      (item! batch)
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (let [text (fire-text seat 0)]
+        (is (= "wake_item" (:kind text)))
+        (is (= 20 (:count text)))
+        (is (= 20 (:at_least text)))
+        (is (nil? (:id text))
+            "no row id: a count wake names a queue, so the session
+             walks it rather than one row")))
+
+    (testing "and exactly one POST reached this seat's Routine"
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token))))
+      (is (str/includes? (str (:text (last (fires-of token)))) "\"count\"")))
+
+    (seat-do! seat :retire)))
+
+;; ── 8 · the damper holds a count wake too ───────────────────────────
+
+(deftest a-damped-count-wake-releases-one-fire-when-the-sitting-closes
+  (let [wn :wake-count-damped
+        fn' :wake-count-damped-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        batch "count-damped"
+        {:keys [seat token]}
+        (linked-seat! "countdampclerk"
+                      {:scope count-scope
+                       :wake_on [{:kind "wake_item"
+                                  :actions ["create"]
+                                  :filter {:batch batch}
+                                  :at_least 2}]}
+                      fn')
+        open-one (sitting! seat)]
+    (item! batch)
+    (item! batch)
+    (drain-wakes! wn)
+
+    (testing "the open sitting holds the fire, and the match waits"
+      (is (empty? (seat-fires seat)))
+      (drain-fires! fn')
+      (is (empty? (fires-of token)))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (testing "the close releases exactly one fire, and it names no row"
+      (close-sitting! open-one)
+      (drain-wakes! wn)
+      (let [ts (seat-fires seat)]
+        (is (= 1 (count ts)))
+        (is (nil? (get-in (first ts) [:inputs :text]))
+            "the release walks the whole queue, count wake or not"))
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token))))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (seat-do! seat :retire)))
+
+;; ── 9 · the entry's filter decides what is counted ──────────────────
+
+(deftest a-count-wake-counts-only-the-rows-its-filter-names
+  (let [wn :wake-count-filter
+        fn' :wake-count-filter-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        batch "count-filtered"
+        ;; the kind's DEFAULT filter is state=open; this entry names
+        ;; state=complete, so the two count different rows of the same
+        ;; batch and the number in the text says which one ran
+        {:keys [seat token]}
+        (linked-seat! "countfilterclerk"
+                      {:scope count-scope
+                       :wake_on [{:kind "wake_item"
+                                  :actions ["complete"]
+                                  :filter {:batch batch :state "complete"}
+                                  :at_least 2}]}
+                      fn')
+        ids (vec (repeatedly 3 #(item! batch)))]
+
+    (testing "three rows waiting is not two rows complete"
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat))))
+
+    (testing "the first completion counts one, which is not enough"
+      (item-do! (first ids) :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (testing "the second reaches the size, and the count is the
+              filter's two — not the batch's three, and not the one
+              row the kind's own default filter would have left open"
+      (item-do! (second ids) :complete)
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (let [text (fire-text seat 0)]
+        (is (= "wake_item" (:kind text)))
+        (is (= 2 (:count text)))
+        (is (= 2 (:at_least text))))
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token)))))
+
+    (seat-do! seat :retire)))
+
+;; ── 10 · a count entry with no actions counts on every action ───────
+
+(deftest an-empty-actions-list-reads-differently-on-the-two-entries
+  (let [transition {:kind "wake_item" :actions ["create"]}
+        count-all {:kind "wake_item" :actions [] :at_least 5}
+        transition-all {:kind "wake_item" :actions []}]
+    (testing "a count entry naming no action counts on every action of
+              its kind (R-12.24's default)"
+      (is (wakes/matches? count-all :wake_item :touch))
+      (is (wakes/matches? count-all :wake_item :create))
+      (is (not (wakes/matches? count-all :wake_task :create))
+          "its kind, and no other"))
+    (testing "a transition entry naming none still matches nothing: a
+              wake is an action happening, not a kind existing"
+      (is (not (wakes/matches? transition-all :wake_item :create))))
+    (testing "and the entries a transition matches come back in the
+              order the seat wrote them"
+      (is (= [transition count-all]
+             (wakes/matching-entries [transition transition-all count-all]
+                                     :wake_item :create)))
+      (is (= [count-all]
+             (wakes/matching-entries [transition transition-all count-all]
+                                     :wake_item :complete))))))
+
+;; ── 11 · a size below one row is refused at the create door ─────────
+
+(deftest a-count-wake-of-fewer-than-one-row-is-refused
+
+  (testing "at_least 0 is the schema's own refusal, and it names the
+            field that failed"
+    (let [p (refusal #(inv/create!
+                       *eng* :seat
+                       (seat-body "countzero"
+                                  {:wake_on [{:kind "wake_task"
+                                              :actions ["create"]
+                                              :at_least 0}]})
+                       {:principal elena}))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "at_least"))
+      (is (str/includes? (pr-str (:errors p)) "wake_on"))))
+
+  (testing "and a seat that asks for one row is born with it"
+    (let [seat (seat! "countone"
+                      {:wake_on [{:kind "wake_task"
+                                  :actions ["create"]
+                                  :at_least 1}]})]
+      (is (= [{:kind "wake_task" :actions ["create"] :at_least 1}]
+             (get-in (raw :seat seat) [:data :wake_on])))
       (seat-do! seat :retire))))

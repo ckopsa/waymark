@@ -1746,6 +1746,16 @@
   (str "A seat key binds a person's tool. Present it from a session "
        "signed in as a person through the connector."))
 
+(defn- sit-interactive
+  "R-10.8's refusal, and it NAMES the seat where `sit-not-a-delegate`
+  does not. The mode is the seat's, so the sentence is about the
+  office rather than about the caller: a Routine's run — an agent with
+  nobody behind it — has presented the right key to the wrong kind of
+  seat, and the only thing it can do about it is stop. The seat is
+  named because the key already proved the caller knows it."
+  [named]
+  (str "The seat `" named "` is an interactive seat. A person sits here."))
+
 (def ^:private sit-no-seat
   "UNIFORM, and short on purpose: a key that matches nothing, a key
   the seat has since revoked, a key that is not a key at all and a
@@ -1859,12 +1869,22 @@
   [eng _call session args]
   (let [sid (some-> (:mcp-session-id session) str not-empty)
         person (some-> (:acts-for (:principal session)) str not-empty)
-        seat (when (and sid person) (seats/seat-by-key eng (:key args)))]
+        ;; the seat is read before the person is judged, so an
+        ;; INTERACTIVE seat can answer with its own sentence (R-10.8)
+        ;; rather than with the general one about delegates
+        seat (when sid (seats/seat-by-key eng (:key args)))]
     (cond
       ;; a · a session to bind to
       (nil? sid) (result sit-no-session true)
-      ;; b · a person behind the tool
-      (nil? person) (result sit-not-a-delegate true)
+      ;; b · a person behind the tool — and, at an interactive seat,
+      ;; the refusal says which kind of seat this is: a Routine's run
+      ;; is not somebody who forgot to sign in, it is a session that
+      ;; may not sit here at all
+      (nil? person)
+      (result (if (seats/interactive-seat? seat)
+                (sit-interactive (str (get-in seat [:data :name])))
+                sit-not-a-delegate)
+              true)
       ;; c · a seat that answers the key
       (nil? seat) (result sit-no-seat true)
       :else
@@ -1900,6 +1920,10 @@
           :model model
           :grant (:id grant)
           :sitting (:id sitting)
+          ;; R-10.8: the hook learns the mode from the sit's answer,
+          ;; and it is what decides whether a Stop closes or tallies
+          :mode (or (some-> (get-in seat [:data :mode]) str not-empty)
+                    seats/default-mode)
           :note (str "You sit in `" named "`. Read the seat row with "
                      "waymark_get and do what its charter says.")})))))
 

@@ -146,6 +146,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -1491,10 +1492,21 @@
         action (:action t)]
     (cond
       (= :seat kind)
-      (let [births (seat-create-actions eng)]
+      (let [births (seat-create-actions eng)
+            seat-row (raw-row eng :seat (:resource-id t))]
         (cond
+          ;; AN INTERACTIVE SEAT HAS NO SCHEDULE (R-10.8). Nothing
+          ;; fires it, so no row is minted and nothing is pushed — and
+          ;; a seat RESTATED into the mode ends the copy it already
+          ;; had, rather than leaving a Routine firing an office
+          ;; nobody may fire. `delete!` is idempotent at the adapter
+          ;; and a row already ended is left alone.
+          (seats/interactive-seat? seat-row)
+          (when-some [row (schedule-for-seat eng (:resource-id t))]
+            (delete! eng adapters row))
+
           (contains? births action)
-          (when-some [seat-row (raw-row eng :seat (:resource-id t))]
+          (when seat-row
             (push! eng adapters (ensure-schedule! eng seat-row)))
 
           (= :restate action)

@@ -223,6 +223,10 @@
                ;; through (spec-seat.md R-12.17), beside the ledger:
                ;; the engine's own /api/-/… shape, one segment longer
                "/api/-/sittings/close"
+               ;; …and its sibling, which an interactive session's Stop
+               ;; hook posts to every turn (R-12.25): the same body and
+               ;; the same credential, onto a sitting that stays open
+               "/api/-/sittings/tally"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
@@ -269,6 +273,8 @@
                  ;; static bucket because that is where the engine's
                  ;; own /api/-/… doors live, not because it has to be
                  "/api/-/sittings/close"
+                 ;; and the tally, its sibling (R-12.25)
+                 "/api/-/sittings/tally"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))

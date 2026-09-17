@@ -140,11 +140,40 @@
   (t/principal {:id "waymark10-seats" :type :system :display "Seats"}))
 
 (def halt-reasons
-  "The three walls of R-5.2, and the only reasons a seat halts. Each
-  is HARD (the grant scopes to nothing) and each must reach a person,
-  which is what `halt` is for — a halt is not a state, so the wall
-  lifts on its own when the condition clears."
-  #{"seat_not_active" "model_not_held" "budget_reached"})
+  "The walls of R-5.2, and the only reasons a seat halts. Each is HARD
+  (the grant scopes to nothing) and each must reach a person, which is
+  what `halt` is for — a halt is not a state, so the wall lifts on its
+  own when the condition clears.
+
+  The fourth is R-12.27's, and it is the running cost's own wall: a
+  sitting past the seat's `sitting_budget_tokens` is spent while the
+  seat's week is not, so it lifts the moment that sitting closes."
+  #{"seat_not_active" "model_not_held" "budget_reached"
+    "sitting_budget_reached"})
+
+(def seat-modes
+  "The two ways a seat is sat in (R-10.8). A FIRED seat is the seat's
+  work day: a cadence, a wake or a person's `fire` starts a run, and
+  the run's own hook closes the sitting. An INTERACTIVE seat is its
+  training day: a person sits in it from their own machine, across
+  turns and hours, and nothing fires it."
+  ["fired" "interactive"])
+
+(def default-mode
+  "What every seat was before the field existed, and what a seat is
+  when nobody says otherwise."
+  "fired")
+
+(def interactive-mode "interactive")
+
+(defn interactive-seat?
+  "Is this seat one a person sits in (R-10.8)? Reads a STORED row as
+  happily as a decoded one — an enum crosses the wire as its own
+  string either way — so the schedules consumer, the wake consumer
+  and the `fire` door all ask the question the same way. A row
+  written before the field existed is `fired`, which is what it was."
+  [seat-row]
+  (= interactive-mode (some-> (get-in seat-row [:data :mode]) str)))
 
 (def ^:private million (bigdec 1000000))
 
@@ -471,6 +500,17 @@
     (t/deny)
     (t/allow)))
 
+(g/defguard not-interactive
+  {:explain "The seat is an interactive seat. A person sits here; nothing fires it."}
+  [row _inp _ctx]
+  ;; R-10.8. The mode is the SEAT'S, so the wall is on the seat's own
+  ;; door rather than on the principal: a person's fire, a wake and
+  ;; the schedules consumer's cadence all arrive here, and an
+  ;; interactive seat is woken by none of the three.
+  (if (interactive-seat? row)
+    (t/deny)
+    (t/allow)))
+
 (def ^:private wall-sentences
   "One sentence for each wall, for the rare halt that carries no
   detail — a row written before the router had a sentence, or one
@@ -478,7 +518,8 @@
   there, which is why these are short."
   {"seat_not_active" "The seat serves nothing until somebody opens it again."
    "model_not_held" "The session's model is not one this seat is held for."
-   "budget_reached" "The week's fuel is spent. The wall lifts as the window rolls."})
+   "budget_reached" "The week's fuel is spent. The wall lifts as the window rolls."
+   "sitting_budget_reached" "This sitting's fuel is spent. Close the sitting; a new one opens fresh."})
 
 (g/defguard not-halted
   {:vars [:wall]
@@ -523,8 +564,9 @@
 (def ^:private restatable
   "The fields a `restate` states again. `name` is not among them (one
   spelling per seat) and neither is anything the engine writes."
-  [:charter :scope :substitute_drop :held_for :substitute_for
-   :standing_ttl_seconds :cadence_seconds :budget_usd_per_week
+  [:charter :mode :scope :substitute_drop :held_for :substitute_for
+   :standing_ttl_seconds :cadence_seconds :sitting_idle_seconds
+   :budget_usd_per_week
    :sitting_budget_tokens :walk :rows_per_firing
    :wake_on :fire_interval_seconds])
 
@@ -634,28 +676,46 @@
     (.divide total ^java.math.BigDecimal million (int cost-scale)
              RoundingMode/HALF_UP)))
 
+(def ^:private counted-fields
+  "The five a report writes onto the row, in the order the schema
+  declares them. Named once: the close and the tally write the same
+  five, and a list spelled twice would drift the day a sixth arrives."
+  [:input_tokens :output_tokens :cache_read_tokens :cache_write_tokens
+   :turns])
+
+(defn- prices-now
+  "The four prices this sitting's model carries AT THIS MOMENT
+  (R-10.4). Four decimals, always — a model row that went missing
+  between the open and the close costs zero rather than writing nulls
+  into a map the schema says holds prices."
+  [row ctx]
+  (let [model (when (:read ctx)
+                ((:read ctx) :model (str (get-in row [:data :model]))))]
+    (into {}
+          (map (fn [[_ price-field price-key]]
+                 [price-key (or (get-in model [:data price-field]) 0M)]))
+          cost-pairs)))
+
+(defn- write-counts
+  "The five counts of a report, onto the row."
+  [row inp]
+  (reduce (fn [r f] (assoc-in r [:data f] (get inp f))) row counted-fields))
+
+(defn- token-counts
+  "The four priced counts of a report, as `cost-of` takes them."
+  [inp]
+  (select-keys inp [:input_tokens :output_tokens
+                    :cache_read_tokens :cache_write_tokens]))
+
 (defhandler close-sitting [row inp ctx]
   ;; R-10.4: the model's prices are read AT THIS MOMENT, the cost is
   ;; computed from them, and the prices used are written beside it —
   ;; so a reprice tomorrow moves the model row and does not move one
   ;; byte of what last week cost. R-10.5: the engine never estimates
   ;; a token; these are the harness's counts, recorded.
-  (let [model (when (:read ctx)
-                ((:read ctx) :model (str (get-in row [:data :model]))))
-        ;; four decimals, always — a model row that went missing
-        ;; between the open and the close costs zero rather than
-        ;; writing nulls into a map the schema says holds prices
-        prices (into {}
-                     (map (fn [[_ price-field price-key]]
-                            [price-key (or (get-in model [:data price-field])
-                                           0M)]))
-                     cost-pairs)
-        counts (select-keys inp [:input_tokens :output_tokens
-                                 :cache_read_tokens :cache_write_tokens])]
-    (-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
-                row
-                [:input_tokens :output_tokens :cache_read_tokens
-                 :cache_write_tokens :turns])
+  (let [prices (prices-now row ctx)
+        counts (token-counts inp)]
+    (-> (write-counts row inp)
         (assoc-in [:data :note] (:note inp))
         ;; THE BIRTH STAMP WINS (R-12.15, R-12.17). `waymark_sit` may
         ;; already have paired this row with the harness session that
@@ -670,6 +730,33 @@
         (assoc-in [:data :ended_at] (:now ctx))
         (assoc-in [:data :prices] prices)
         (assoc-in [:data :cost_usd] (cost-of counts prices)))))
+
+(defhandler tally-sitting [row inp ctx]
+  ;; R-12.25, R-12.27: the same five counts as a close, written onto a
+  ;; sitting that is STILL OPEN, priced at this moment so the week's
+  ;; wall can see what an unfinished sitting has spent.
+  ;;
+  ;; CUMULATIVE, never additive: the hook sums the whole transcript
+  ;; every turn, so the newest tally REPLACES the last and a replayed
+  ;; one writes what is already there.
+  ;;
+  ;; No `prices` map is copied down. The prices belong beside the bill
+  ;; that a reprice must not be able to move, and the only bill is the
+  ;; close's; a running cost is a reading of the row right now, and it
+  ;; is re-read at the next turn.
+  (-> (write-counts row inp)
+      ;; a tally with nothing to say leaves the last sentence standing
+      ;; — the close is where a note is owed, and a per-turn wipe would
+      ;; lose it
+      (cond-> (some? (:note inp))
+        (assoc-in [:data :note] (:note inp)))
+      ;; THE BIRTH STAMP WINS, the close's rule verbatim (R-12.17)
+      (cond-> (and (some? (:harness_session inp))
+                   (nil? (get-in row [:data :harness_session])))
+        (assoc-in [:data :harness_session] (:harness_session inp)))
+      (assoc-in [:data :tallied_at] (:now ctx))
+      (assoc-in [:data :cost_usd] (cost-of (token-counts inp)
+                                           (prices-now row ctx)))))
 
 ;; ── the law, written down ───────────────────────────────────────────
 ;;
@@ -761,6 +848,83 @@
 (def ^:private scope-help
   "A scope is a list of entries — a kind, the actions allowed on it, and optionally the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name.")
 
+(def ^:private mode-choices
+  "R-10.8's two words, in the person's own terms. Said once and shown
+  at all three doors, because a seat whose mode reads one way on the
+  create form and another on the restate is a seat nobody can move."
+  {"fired" "Fired — a cadence, a wake or your own fire starts the run, and the run's own hook closes the sitting"
+   "interactive" "Interactive — you sit here yourself, from your own machine, across as many turns as the work takes; nothing fires it"})
+
+(def ^:private mode-help
+  "The seat's OWN reading of R-10.8, and the reason the field is on the
+  seat rather than on the principal."
+  "Who sits here. A fired seat is the seat's work day: it wakes on its cadence, on a wake or on your fire, and a Routine's run does the work. An interactive seat is its training day: you sit in it yourself, the corrections you make are the record a step down the ladder reads, and nothing fires it — a Routine's run that tries is refused.")
+
+(def ^:private idle-help
+  "R-12.25's safety net under the wait, said where a person sets it."
+  "How long an interactive sitting may go untallied before the engine closes it. The Stop hook tallies after every turn, so this is the gap that says somebody shut the laptop — the sweep then closes the sitting with the last tally's counts rather than leaving it open forever. It means nothing to a fired seat.")
+
+;; ── what wakes a seat, entry by entry (R-12.22, R-12.24) ───────────
+;;
+;; A `wake_on` entry wore the scope entry's schema while a wake was
+;; one thing: a transition the seat asked to be woken by. R-12.24
+;; gives it a second thing to be — a COUNT wake, which says how many
+;; rows must be waiting before the seat is worth waking — so the
+;; entry has a schema of its own here. The scope's `kind` and
+;; `actions` are the same two fields, judged by the same two guards
+;; (`wake-on-names-real-kinds`, `wake-on-names-real-actions`), and two
+;; fields a leash has no use for join them:
+;;
+;;   filter     which rows are counted, in the shape of that kind's
+;;              query where clause — `grants/filter-map-schema`, the
+;;              scope entry's own filter shape, spelled once and worn
+;;              twice. Absent, the kind's default filter counts: the
+;;              queue a walk works through.
+;;   at_least   the size that wakes the seat. Absent, the entry is a
+;;              transition wake and behaves exactly as it always did.
+;;
+;; The rest of a scope entry — ids, fields, hashed, args — is a
+;; leash's vocabulary and not a wake's: WHAT a woken session may see
+;; is decided by the seat's `scope`, one field up, and a wake entry
+;; that repeated it would be a second leash nobody is holding.
+(def wake-entry-schema
+  [:map
+   [:kind {:x-options {:from :kinds}
+           :x-display {:label "Kind"
+                       :help "The collection whose transitions wake this seat — one kind name this engine serves."}}
+    [:string {:min 1 :max 64}]]
+   [:actions {:x-options {:from :actions :of :kind :each true}
+              :x-display {:label "Actions"
+                          :help "Which transitions of that kind count, by name. A transition wake with an empty list wakes this seat for nothing; a count wake with an empty list counts on every action of the kind."}}
+    [:vector [:string {:min 1 :max 64}]]]
+   ;; no :x-options, for the scope filter's reason verbatim: the
+   ;; vocabulary here is the legal KEYS of an object, and the recipe's
+   ;; composition words both describe a value BUILT from tokens
+   [:filter {:optional true
+             :x-display {:label "Only rows matching"
+                         :help "Which rows a count wake counts: field=value pairs in the shape of that kind's own query, the collection grammar's eq. Omit it and the kind's own default filter counts — the queue a walk works through."}}
+    [:maybe grants/filter-map-schema]]
+   [:at_least {:optional true
+               :examples [20]
+               :x-display {:label "Rows waiting before it wakes"
+                           :help "The size that wakes this seat. The engine counts the rows matching this entry when one of its actions commits, and fires once the count is at or above this number; the fire names no row, so the session walks the queue. Omit it and every matching transition wakes the seat, one row at a time."}}
+    [:int {:min 1}]]])
+
+(def wake-on-schema
+  "What a seat may write in `wake_on`: a list of wake entries."
+  [:vector wake-entry-schema])
+
+(def ^:private wake-on-example
+  "The scope example, and one count entry beside it: the two kinds of
+  wake in one textarea, so the shape of the second is not a thing a
+  person has to be told about to find."
+  (conj grants/scope-example
+        {:kind "task" :actions ["create"]
+         :filter {:state "open"} :at_least 20}))
+
+(def ^:private wake-on-help
+  "A wake_on entry is a kind, the actions on it that count, and optionally the filter and the at_least that make it a count wake — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name.")
+
 (def ^:private charter-example
   "Decide whether a message asks something of this house, and say what it asks in one line. A receipt for something already bought asks nothing. A person waiting on an answer asks something, even when they are polite about it.")
 
@@ -798,6 +962,17 @@
                 :label "The judgment, in your words"
                 :help "What this seat has to DECIDE that the engine cannot say at a door — and nothing else. Leave out which door comes next (the envelope offers only the open ones) and leave out what is forbidden (a door the scope does not open is not there). If you find yourself writing the same correction twice, that sentence belongs in a guard, a filter or a reason string, not here."}}
      [:string {:min 1 :max 1200}]]
+    ;; ── WHO SITS HERE (R-10.8) ──────────────────────────────────────
+    ;; The mode is the SEAT'S, not the principal's: one office is
+    ;; fired and another is sat in, and the ledger compares seat with
+    ;; seat. The audit chair of the ladder (§ 11) is a second seat
+    ;; with the same charter and this field set the other way.
+    [:mode {:default default-mode
+            :x-display
+            {:label "How it is sat in"
+             :choices mode-choices
+             :help mode-help}}
+     (into [:enum] seat-modes)]
     [:scope {:examples [grants/scope-example]
              :x-display
              {:label "What the seat opens"
@@ -831,8 +1006,14 @@
     [:cadence_seconds {:examples [3600]
                        :x-display
                        {:label "How often it wakes, in seconds"
-                        :help "The interval the schedule fires this seat at. This is the seat's FIXED COST: a wake costs money whether or not there was work, so a quiet seat wants a longer cadence before it wants a cheaper model."}}
+                        :help "The interval the schedule fires this seat at. This is the seat's FIXED COST: a wake costs money whether or not there was work, so a quiet seat wants a longer cadence before it wants a cheaper model. An interactive seat has no cadence; nothing fires it."}}
      [:int {:min 300 :max 2592000}]]
+    [:sitting_idle_seconds {:default 3600
+                            :examples [3600]
+                            :x-display
+                            {:label "How long a sitting may idle, in seconds"
+                             :help idle-help}}
+     [:int {:min 60 :max 86400}]]
     [:budget_usd_per_week {:examples [5M]
                            :x-display
                            {:label "Fuel for seven days, in dollars"
@@ -864,12 +1045,12 @@
     ;; value a person never chose, and a later restate of `walk` would
     ;; leave it pointing at the queue the seat no longer walks.
     [:wake_on {:optional true
-               :examples [grants/scope-example]
+               :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :spelled-by-hand scope-help
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
-     [:maybe grants/scope-schema]]
+                :spelled-by-hand wake-on-help
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
+     [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
                              :x-display
@@ -945,6 +1126,12 @@
                 :label "The judgment, in your words"
                 :help "What this seat has to DECIDE that the engine cannot say at a door — and nothing else. A new seat's judgment is not known yet; open it on a model you trust and let the first weeks find out what the judgment actually is."}}
      [:string {:min 1 :max 1200}]]
+    [:mode {:default default-mode
+            :x-display
+            {:label "How it is sat in"
+             :choices mode-choices
+             :help mode-help}}
+     (into [:enum] seat-modes)]
     [:scope {:examples [grants/scope-example]
              :x-display
              {:label "What the seat opens"
@@ -978,8 +1165,14 @@
     [:cadence_seconds {:examples [3600]
                        :x-display
                        {:label "How often it wakes, in seconds"
-                        :help "The interval the schedule fires this seat at — the seat's fixed cost, paid whether or not there was work."}}
+                        :help "The interval the schedule fires this seat at — the seat's fixed cost, paid whether or not there was work. An interactive seat has no cadence; nothing fires it."}}
      [:int {:min 300 :max 2592000}]]
+    [:sitting_idle_seconds {:default 3600
+                            :examples [3600]
+                            :x-display
+                            {:label "How long a sitting may idle, in seconds"
+                             :help idle-help}}
+     [:int {:min 60 :max 86400}]]
     [:budget_usd_per_week {:examples [5M]
                            :x-display
                            {:label "Fuel for seven days, in dollars"
@@ -1002,12 +1195,12 @@
                         :help "The most rows one wake moves to a leaf — the lever you pull before you pull the model."}}
      [:int {:min 1 :max 200}]]
     [:wake_on {:optional true
-               :examples [grants/scope-example]
+               :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :spelled-by-hand scope-help
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
-     [:maybe grants/scope-schema]]
+                :spelled-by-hand wake-on-help
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
+     [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
                              :x-display
@@ -1055,6 +1248,12 @@
                          :label "The judgment, in your words"
                          :help "State the seat's judgment again, whole. If a sentence here is one you have written because the model kept getting something wrong, the fix is a guard, a filter, a door or a reason string — and then the sentence leaves."}}
               [:string {:min 1 :max 1200}]]
+             [:mode {:default default-mode
+                     :x-display
+                     {:label "How it is sat in"
+                      :choices mode-choices
+                      :help mode-help}}
+              (into [:enum] seat-modes)]
              [:scope {:examples [grants/scope-example]
                       :x-display
                       {:label "What the seat opens"
@@ -1088,8 +1287,14 @@
              [:cadence_seconds {:examples [3600]
                                 :x-display
                                 {:label "How often it wakes, in seconds"
-                                 :help "A longer cadence is the cheapest lever there is: it removes wakes that cost money and found nothing."}}
+                                 :help "A longer cadence is the cheapest lever there is: it removes wakes that cost money and found nothing. An interactive seat has no cadence; nothing fires it."}}
               [:int {:min 300 :max 2592000}]]
+             [:sitting_idle_seconds {:default 3600
+                                     :examples [3600]
+                                     :x-display
+                                     {:label "How long a sitting may idle, in seconds"
+                                      :help idle-help}}
+              [:int {:min 60 :max 86400}]]
              [:budget_usd_per_week {:examples [5M]
                                     :x-display
                                     {:label "Fuel for seven days, in dollars"
@@ -1112,12 +1317,12 @@
                                  :help "The most rows one wake moves to a leaf."}}
               [:int {:min 1 :max 200}]]
              [:wake_on {:optional true
-                        :examples [grants/scope-example]
+                        :examples [wake-on-example]
                         :x-display
                         {:label "What wakes it"
-                         :spelled-by-hand scope-help
-                         :help "The transitions that wake this seat, stated again in full. An entry naming a kind the scope above does not open still wakes the seat; the sitting then sees only what the scope opens."}}
-              [:maybe grants/scope-schema]]
+                         :spelled-by-hand wake-on-help
+                         :help "The transitions that wake this seat, stated again in full, count entries and all. An entry naming a kind the scope above does not open still wakes the seat; the sitting then sees only what the scope opens."}}
+              [:maybe wake-on-schema]]
              [:fire_interval_seconds {:default 300
                                       :examples [300]
                                       :x-display
@@ -1145,8 +1350,9 @@
      ;; sitter_key is NOT prefilled and cannot be: the draft view
      ;; serves prefill from the raw row, and resource/check-secret!
      ;; refuses a :secret field there at the declaration.
-     :edit {:prefill [:charter :scope :substitute_drop :held_for
+     :edit {:prefill [:charter :mode :scope :substitute_drop :held_for
                       :substitute_for :standing_ttl_seconds :cadence_seconds
+                      :sitting_idle_seconds
                       :budget_usd_per_week :sitting_budget_tokens :walk
                       :rows_per_firing :wake_on :fire_interval_seconds]
             :draft {:shared true :live true}}
@@ -1238,7 +1444,8 @@
                       :help "What the session should do with this wake, in your words. Name one row and the session walks that row alone; leave it empty and the session walks the queue, as a cadence wake does."}}
               [:maybe [:string {:min 1 :max 2000}]]]]
      :record true
-     :guards [a-person-or-the-engine not-parked not-halted linked-for-fire]
+     :guards [a-person-or-the-engine not-interactive not-parked not-halted
+              linked-for-fire]
      ;; NOT idempotent, and honestly so: a second fire starts a second
      ;; run. Every caller already carries the key the door demands —
      ;; the MCP door signs each invoke with `origin-key`, and the wake
@@ -1312,7 +1519,8 @@
                        {:label "Which wall"
                         :choices {"seat_not_active" "The seat is parked, merged or retired, so it serves nothing"
                                   "model_not_held" "The session's model is not one this seat is held for"
-                                  "budget_reached" "The week's fuel is spent; the wall lifts when the window rolls"}}}
+                                  "budget_reached" "The week's fuel is spent; the wall lifts when the window rolls"
+                                  "sitting_budget_reached" "This sitting is past the seat's token ceiling; the wall lifts when it closes"}}}
               (into [:enum] (sort halt-reasons))]
              [:detail {:optional true
                        :x-display {:label "What it said"}}
@@ -1365,7 +1573,8 @@
                an-agent-does-not-revoke-the-seats-key
                the-person-revokes-the-seats-key]
    :deviations
-   ["R-4.9's own-surface for sitters is NOT declared here, and wave two settled why: `:own-surface :by` names a field of the row being read, and a sitter is identified through `grant.seat` — a field of the GRANT. A seat with a sitter column would be a second copy of the grant, so the courtesy is spelled where the sitter is actually identified: the seat resolve adds the citing seat's row as a synthetic, unstored scope entry (`{kind \"seat\", ids [<this seat>], actions []}`), and `:kind?`, `:row?`, `:field?` and `:ids-of` then answer for it exactly as they answer for anything granted. One admission algebra, read-only, one row — and `:whole-kind?` stays false, because one row is not the collection."
+   ["R-10.8's `mode` is a field of the SEAT and not of the sitting's create door, and `sitting_idle_seconds` sits beside `cadence_seconds` rather than on the sitting. Both are the office's settings: the mode decides who may sit at all (the `fire` door's `not-interactive` guard, the schedules consumer's silence, the wake consumer's skip), and the idle limit is what the sweep measures a sitting of this seat against. A sitting inherits the mode at birth and never chooses it."
+    "R-4.9's own-surface for sitters is NOT declared here, and wave two settled why: `:own-surface :by` names a field of the row being read, and a sitter is identified through `grant.seat` — a field of the GRANT. A seat with a sitter column would be a second copy of the grant, so the courtesy is spelled where the sitter is actually identified: the seat resolve adds the citing seat's row as a synthetic, unstored scope entry (`{kind \"seat\", ids [<this seat>], actions []}`), and `:kind?`, `:row?`, `:field?` and `:ids-of` then answer for it exactly as they answer for anything granted. One admission algebra, read-only, one row — and `:whole-kind?` stays false, because one row is not the collection."
     "R-4.6's consequence sentence is kept verbatim, `{into}` included. The framework does not interpolate a consequence (render substitutes only a per-origin map, never a template), so the brace renders literally. The alternative was rewording the one sentence the spec pins, and a spec-pinned string is worth more than a tidy dialog."
     "`sitter_key` IS DECLARED on the create door and on `restate`, which reads at first like the opposite of this file's write fence. It is the fence: a guard may judge only a field of the door it stands on (checks/check-create-guards and check-guard-declarations are definition ERRORS otherwise), so a `key-not-written-by-hand` that could be READ had to have something to name — members.clj's `reentry-not-written-by-hand` has it for free, because that kind has no separate create-schema. Both spellings carry `{:secret true}`, so the advertised create body drops the field (collections.clj unions the row schema's secret set with the create model's for exactly this), no form asks for it, and the usability policies skip it. What the caller gains over silent omission is the refusal's own sentence, which names the door that writes the key instead."
     "`fire` declares `:idempotent false`, so every call must carry an Idempotency-Key (invoke's phase 2). That is the truthful spelling: a second fire starts a second run. It is also the safe one: an idempotent door is subject to invoke's natural replay, which compares only the row's LATEST transition, so a textless fire following a textless fire with nothing else on the seat would have been answered as a replay and never gone out — the wake's release fire (R-12.22) and a person's second press, both lost. The key costs nobody anything: the MCP door signs every invoke, and the wake consumer keys each fire by the transition it heard, which doubles as its own dedupe. The consumer's replay of the POST is deduped separately, where it happens: `schedules/already-fired?` compares `last_fired_at` against the transition's own instant."
@@ -1507,6 +1716,65 @@
           (some-> (first (find' :model {:name claimed} {:limit 1})) :id str)))
       (some-> (:model inp) str)))
 
+(defn- seat-mode-of
+  "The mode of the seat this sitting is opening in (R-10.8), read at
+  birth. A seat this engine cannot read here — the probe ctx carries
+  no hooks — and a seat row written before the field existed are both
+  `fired`, which is what every seat was."
+  [inp ctx]
+  (or (when-some [read' (:read ctx)]
+        (some-> (read' :seat (str (:seat inp))) (get-in [:data :mode])
+                str not-empty))
+      default-mode))
+
+(def ^:private report-input
+  "The report a session makes about itself: the five counts of R-10.5,
+  the sentence, and the run that spent them.
+
+  ONE MAP, TWO DOORS. `close` ends the sitting with it and `tally`
+  writes it onto a sitting still open (R-12.25) — a hook that can
+  fill one can fill the other, and two spellings of one report would
+  be two shapes for the harness to keep in step."
+  [:map
+   [:input_tokens {:x-display {:label "Input tokens"
+                               :help "The harness's exact count for this sitting."}}
+    [:int {:min 0}]]
+   [:output_tokens {:x-display {:label "Output tokens"
+                                :help "The harness's exact count for this sitting."}}
+    [:int {:min 0}]]
+   [:cache_read_tokens {:x-display {:label "Cache-read tokens"
+                                    :help "The harness's exact count for this sitting."}}
+    [:int {:min 0}]]
+   [:cache_write_tokens {:x-display {:label "Cache-write tokens"
+                                     :help "The harness's exact count for this sitting."}}
+    [:int {:min 0}]]
+   [:turns {:x-display {:label "Model turns"
+                        :help "How many turns the model took."}}
+    [:int {:min 0 :max 100000}]]
+   [:note {:optional true
+           :examples ["Walked nine messages; two became tasks and seven were receipts."]
+           :x-display {:label "What the sitting did"
+                       :help "One sentence on what this wake actually moved."}}
+    [:maybe [:string {:max 240}]]]
+   ;; what the report is FOR beyond the counts: which run spent them.
+   ;; Written only onto a row that carries no stamp already
+   ;; (close-sitting, tally-sitting) — see R-12.17.
+   [:harness_session {:optional true
+                      :x-display
+                      {:raw true
+                       :label "The harness session"
+                       :help "The harness session id this report came from, so the bill can be traced to the run that made it."}}
+    [:maybe [:string {:max 128}]]]])
+
+(defn- sitting-person
+  "The member the sitter acts for, or nil. `:acts-for` is the identity
+  gate's own mark on a delegate principal (spec-connector-door § 3) —
+  a person signed in through a tool — and it is nil for a Routine's
+  run, which is the honest answer for a session with nobody in the
+  chair."
+  [ctx]
+  (some-> (get-in ctx [:principal :acts-for]) str not-empty))
+
 (defresource sitting
   {:kind :sitting
    :plural "sittings"
@@ -1521,7 +1789,7 @@
    ;; discover that the row needs a scope entry. The guards still judge
    ;; every invoke; this only decides which doors are visible enough to
    ;; be knocked on — the grant's own posture, one kind over.
-   :own-surface {:by :member :actions #{"create" "close"}}
+   :own-surface {:by :member :actions #{"create" "close" "tally"}}
    :schema
    [:map
     [:seat {:kind :seat
@@ -1590,7 +1858,7 @@
      [:int {:min 0}]]
     [:cost_usd {:optional true
                 :x-display {:label "What it cost, in dollars"
-                            :help "Written at the close from the model's prices at that moment; a reprice afterwards does not move it."}}
+                            :help "Written at the close from the model's prices at that moment; a reprice afterwards does not move it. On an OPEN sitting it is the running cost (R-12.27): what the tallies so far have spent, so the week's wall can see a sitting that has not ended."}}
      [:maybe [:decimal {:min 0}]]]
     [:prices {:optional true
               :x-display
@@ -1617,7 +1885,36 @@
                        {:raw true
                         :label "The harness session"
                         :help "The harness session id the hook reported, so a bill can be traced back to the run that made it. Absent until the close, unless the session named it when it sat."}}
-     [:maybe [:string {:max 128}]]]]
+     [:maybe [:string {:max 128}]]]
+    ;; ── WHO SAT, AND HOW (R-10.8) ───────────────────────────────────
+    ;; Both are stamped at birth and neither is on the create door: a
+    ;; sitting does not choose its mode, it INHERITS the seat's, and
+    ;; the person behind a delegate is the identity gate's mark rather
+    ;; than a claim a session may make about itself. The ledger reads
+    ;; the two modes in two columns, and a step down the ladder
+    ;; compares fired with fired.
+    [:mode {:optional true
+            :x-display
+            {:label "How it was sat"
+             :choices mode-choices
+             :spelled-by-hand "Copied from the seat at birth; a sitting's mode is the seat's, and no hand writes it."}}
+     [:maybe (into [:enum] seat-modes)]]
+    [:person {:optional true
+              :x-display
+              {:raw true
+               :label "The person in the chair"
+               :spelled-by-hand "The member the sitter acts for, stamped at birth when a person sat through their own tool; absent for a Routine's run, which has nobody behind it."}}
+     [:maybe [:string {:max 200}]]]
+    ;; THE SAFETY NET UNDER THE WAIT (R-12.25). An interactive sitting
+    ;; waits between turns, so nothing bounds it but this: the Stop
+    ;; hook tallies each turn, the stamp moves, and a stamp that stops
+    ;; moving is how the sweep tells a person who walked away from a
+    ;; person who is thinking.
+    [:tallied_at {:optional true
+                  :x-display
+                  {:label "Last tallied"
+                   :spelled-by-hand "Stamped by each tally of an open sitting; absent on a sitting nobody has tallied."}}
+     [:maybe :waymark/instant]]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the two counters are the
@@ -1660,12 +1957,19 @@
    (fn [row ctx]
      (reduce (fn [r [f v]] (assoc-in r [:data f] v))
              row
-             [[:member (str (get-in ctx [:principal :id]))]
-              [:model (resolve-model (:data row) ctx)]
-              [:started_at (:now ctx)]
-              [:input_tokens 0] [:output_tokens 0]
-              [:cache_read_tokens 0] [:cache_write_tokens 0]
-              [:turns 0] [:transitions 0] [:refusals 0]]))
+             (cond-> [[:member (str (get-in ctx [:principal :id]))]
+                      [:model (resolve-model (:data row) ctx)]
+                      ;; R-10.8: the mode is the seat's, read once at
+                      ;; birth, so a seat restated afterwards never
+                      ;; rewrites a sitting already under way
+                      [:mode (seat-mode-of (:data row) ctx)]
+                      [:started_at (:now ctx)]
+                      [:input_tokens 0] [:output_tokens 0]
+                      [:cache_read_tokens 0] [:cache_write_tokens 0]
+                      [:turns 0] [:transitions 0] [:refusals 0]]
+               ;; the delegate's own person, when there is one — the
+               ;; identity gate's mark, never a claim in the request
+               (sitting-person ctx) (conj [:person (sitting-person ctx)]))))
    :filterable {:state #{:eq :in}
                 :seat #{:eq}
                 :member #{:eq}
@@ -1682,36 +1986,7 @@
    :actions
    {:close
     {:from #{:open} :to :closed
-     :input [:map
-             [:input_tokens {:x-display {:label "Input tokens"
-                                         :help "The harness's exact count for this sitting."}}
-              [:int {:min 0}]]
-             [:output_tokens {:x-display {:label "Output tokens"
-                                          :help "The harness's exact count for this sitting."}}
-              [:int {:min 0}]]
-             [:cache_read_tokens {:x-display {:label "Cache-read tokens"
-                                              :help "The harness's exact count for this sitting."}}
-              [:int {:min 0}]]
-             [:cache_write_tokens {:x-display {:label "Cache-write tokens"
-                                               :help "The harness's exact count for this sitting."}}
-              [:int {:min 0}]]
-             [:turns {:x-display {:label "Model turns"
-                                  :help "How many turns the model took."}}
-              [:int {:min 0 :max 100000}]]
-             [:note {:optional true
-                     :examples ["Walked nine messages; two became tasks and seven were receipts."]
-                     :x-display {:label "What the sitting did"
-                                 :help "One sentence on what this wake actually moved."}}
-              [:maybe [:string {:max 240}]]]
-             ;; what the report is FOR beyond the counts: which run
-             ;; spent them. Written only onto a row that carries no
-             ;; stamp already (close-sitting) — see R-12.17.
-             [:harness_session {:optional true
-                                :x-display
-                                {:raw true
-                                 :label "The harness session"
-                                 :help "The harness session id this report came from, so the bill can be traced to the run that made it."}}
-              [:maybe [:string {:max 128}]]]]
+     :input report-input
      :record true
      ;; :edit-shape — a close welds the first counts onto a row that
      ;; has none; there is no earlier value to prefill from and no
@@ -1723,6 +1998,33 @@
      :handler close-sitting
      :display {:label "Close" :style :primary :order 1
                :description "Report the token counts and the turns — the cost is computed from the model's prices right now and written down beside them"}}
+
+    ;; ── the tally (R-12.25, R-12.27) ────────────────────────────────
+    ;; A fired run raises ONE Stop event, so its hook closes. An
+    ;; interactive session raises one for every turn, so its hook must
+    ;; not close and must not block — it tallies. The counts are
+    ;; CUMULATIVE, which is what makes a replay harmless: a second
+    ;; tally of the same numbers writes the same numbers.
+    ;;
+    ;; The door is the sitter's, exactly as `close` is (`:own-surface`
+    ;; carries all three), and the route invokes it as the sitter.
+    ;; The running cost it writes is what lets the week's wall see a
+    ;; sitting that has not ended — one turn late at most.
+    :tally
+    {:from #{:open} :to :open
+     :input report-input
+     :record true
+     ;; :edit-shape — the same reason the close waives it, and one
+     ;; more: a tally arrives from a Stop hook with no etag to carry
+     ;; and no form to prefill, and it REPLACES what the last one
+     ;; wrote by design.
+     :waives #{:edit-shape}
+     ;; a self-loop: re-doing is its own undo, so no :one-way is owed
+     ;; and :reversible would have nowhere to point
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler tally-sitting
+     :display {:label "Tally" :order 2
+               :description "Write what this sitting has spent so far — the counts, the running cost at today's prices, and the stamp the sweep reads"}}
 
     ;; R-7.6: a sitting left open past two cadences is the boot
     ;; sweep's, and it ends with NO tokens — the absence of a bill,
@@ -1740,6 +2042,8 @@
    :deviations
    ["R-10.2 lets a sitting's `model` be null (R-9.4: a token with no claim has model null), and R-10.7 wants the collection filterable by model. A promoted column is generated only for a non-`:maybe` entry, so those two cannot both be had: `model` is required at the create door, and the session's claim wins over it when there is one. A harness with nothing to declare names the row it is running as."
     "R-10.6 has the engine count transitions and refusals. `bump-counter!` is a maintenance write (`store/update-data!`, jobs.clj's progress precedent) rather than a transition: a logged transition per counted transition would double the log — the counter would cost more log than the thing it counts. The `close` is a real transition and freezes both numbers."
+    "`tally` writes a `cost_usd` and NO `prices` map, where the close writes both. The prices are copied down beside a bill a reprice must not be able to move, and the only bill is the close's; a tally's cost is a reading of the row at that moment, re-read at the next turn, and a prices map beside it would say a running figure was final. A sitting closed by the sweep from its last tally is costed by the close, at the close's prices, like every other."
+    "`close` and `tally` share ONE input (`report-input`) rather than declaring the five counts twice. The two doors take the same report from the same hook — one ends the sitting, the other writes the running total — and two spellings would be two shapes for a harness to keep in step, which is exactly the drift § 3 of the spec is about."
     "`harness_session` is on the BIRTH door as well as the close's (R-12.15, R-12.17), which no other count-bearing field is. The reason is that it is not a count: it is the only fact a session knows at the sit that the engine cannot derive, and the pairing it makes is what lets two overlapping wakes of one seat each end their own sitting. It is `:maybe`, so it is not filterable and the pairing reads one page of the seat's open sittings rather than querying — `model`'s recorded wall, one field over. The close writes it only onto a row that carries none: a report naming another run's id must not move a bill."]})
 
 ;; ── the seam wave two calls ─────────────────────────────────────────
@@ -1750,7 +2054,8 @@
   "create")
 
 (defn effective-wake-on
-  "What actually wakes this seat (R-12.22), as scope-shaped entries.
+  "What actually wakes this seat (R-12.22), as `wake-entry-schema`
+  entries.
 
   The seat's own `wake_on` when it wrote one. A seat that walks a
   queue and wrote none behaves as ONE entry — the walk's kind with
@@ -1759,7 +2064,12 @@
   default in the row would be a value nobody chose, and a restate of
   `walk` would leave it naming the queue the seat no longer walks. A
   seat with neither wakes on its cadence and a person's fire alone,
-  which is the empty vector."
+  which is the empty vector.
+
+  The count wake (R-12.24) asks nothing of the default: the computed
+  entry carries no `at_least`, so it stays the transition wake it has
+  always been — a walk seat wakes on the row that arrived, and a seat
+  that wants a batch says how big a batch is."
   [seat-row]
   (let [written (get-in seat-row [:data :wake_on])
         walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
