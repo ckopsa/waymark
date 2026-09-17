@@ -55,7 +55,7 @@
   ;; dropped only its own would boot into whatever shape another suite
   ;; left behind.
   ["composition_requests" "outcome_pieces" "outcomes" "values" "people"
-   "hypotheses"
+   "hypotheses" "inbox_items"
    "tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"

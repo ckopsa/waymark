@@ -67,7 +67,7 @@
    ;; outcome another suite left `offered` is a card ABOVE do-now on
    ;; this test's page, and the value it serves is what keeps it there
    "composition_requests" "outcome_pieces" "outcomes" "values" "people"
-   "hypotheses"
+   "hypotheses" "inbox_items"
    "contexts" "day_plans" "blocks" "spans" "decisions"
    "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"

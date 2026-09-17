@@ -41,7 +41,14 @@
   against it; unset falls back to the in-memory twin, so offline dev
   and the declaration gate never reach for the LAN) and
   WORKQUEUE10_GATE_CHAT_LIMIT (how many conversations a listing asks
-  for — the window, default 40), WAYMARK10_DEPLOY_MODE,
+  for — the window, default 40), WORKQUEUE10_INBOX_TOOL / _INBOX_LIMIT
+  / _INBOX_FOLDER / _INBOX_EVERY (the inbox header source, spec-seat
+  § 13.8 — which Gate listing tool fills the queue (default
+  emila__inbox), how many headers it asks for (40, or \"none\" for a
+  rig whose listing takes no limit), an optional folder, and how many
+  seconds between passes (900); it reaches the same Gate
+  WORKQUEUE10_GATE_URL names, and the same twin when it is unset),
+  WAYMARK10_DEPLOY_MODE,
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan), WAYMARK10_OIDC_* (the family
   IdP — waymark10.server.oidc/from-env names them; absent = the
@@ -68,6 +75,7 @@
             [workqueue10.reconsent :as reconsent]
             [workqueue10.resources.dwelling :refer [self journal]]
             [workqueue10.resources.hypothesis :refer [hypothesis]]
+            [workqueue10.resources.inbox-item :refer [inbox-item]]
             [workqueue10.resources.insight :refer [insight]]
             [workqueue10.resources.letters :refer [letter]]
             [workqueue10.resources.permission-slip :refer [permission-slip]]
@@ -88,6 +96,7 @@
             [workqueue10.sources.gtasks :as gtasks]
             [workqueue10.sources.homeassistant :as ha]
             [workqueue10.sources.hub :as hub]
+            [workqueue10.sources.inbox :as inbox]
             [workqueue10.sources.mealplan :as meals]
             [workqueue10.sources.messa :as messa]
             [workqueue10.sources.tgram :as tgram]
@@ -351,6 +360,72 @@
        "messa" (messa/source cfg)})
     {"tgram" fake-tgram "messa" fake-messa}))
 
+(defn inbox-source
+  "The inbox header source (docs/spec-seat.md § 13.8): one Gate
+  listing per beat, one `inbox_item` row per new message id, no model
+  and no tokens. Real when WORKQUEUE10_GATE_URL names the Gate — the
+  every-boundary rule the thread sources state — and the SAME
+  in-memory twin the thread rigs run over otherwise, so offline dev
+  and the declaration gate never reach for the LAN.
+
+  The engine is injected as two functions rather than a handle: a
+  `:mint!` (one row from one document) and an `:exists?` (does the
+  house already hold this message id), so the translation stays
+  testable without an engine and the create door's exact spelling is
+  a wiring concern rather than a source one.
+
+  → nil when this engine does not serve :inbox_item yet. The kind is
+  its own declaration; until it lands, the pass has nowhere to mint
+  and simply does not start, which is a boot that says so rather than
+  one that fails."
+  [eng]
+  (when (contains? (inv/resources eng) :inbox_item)
+    (let [actor (t/principal {:id "workqueue10-inbox"
+                              :type :system
+                              :display "The inbox source"})
+          st (:storage eng)
+          url (some-> (System/getenv "WORKQUEUE10_GATE_URL") str not-empty)]
+      (inbox/source
+       {:rpc-fn (if url
+                  (gate-chat/rpc {:url url})
+                  (gate-chat/fake-rpc fake-gate))
+        :tool (or (some-> (System/getenv "WORKQUEUE10_INBOX_TOOL")
+                          str not-empty)
+                  inbox/default-tool)
+        ;; the window, or "none" for a rig whose listing takes no
+        ;; limit argument at all (emila's input schema is Gate's, not
+        ;; ours — the escape hatch is an env var, not a deploy)
+        :limit (let [v (some-> (System/getenv "WORKQUEUE10_INBOX_LIMIT")
+                               str not-empty)]
+                 (cond (nil? v) inbox/default-limit
+                       (= "none" v) :none
+                       :else (or (parse-long v) inbox/default-limit)))
+        :folder (some-> (System/getenv "WORKQUEUE10_INBOX_FOLDER")
+                        str not-empty)
+        :mint! (fn [doc] (:row (inv/create! eng :inbox_item doc
+                                            {:principal actor})))
+        ;; the durable half of the dedupe, asked per id: the rig's
+        ;; window is forty headers, so this is at most forty small
+        ;; reads a beat, and it is the only answer that outlives the
+        ;; process (the source's own atom covers the rest)
+        :exists? (fn [id]
+                   (try
+                     (boolean
+                      (seq (store/with-tx st
+                             (fn [tx]
+                               (store/query-rows st tx :inbox_item
+                                                 {:message_id id}
+                                                 {:limit 1})))))
+                     ;; a read we could not make answers HELD, never
+                     ;; new: a message minted twice is a second row
+                     ;; the person must dismiss, and a message minted
+                     ;; one beat late is a message minted
+                     (catch Exception _ true)))}))))
+
+(defn- inbox-every-seconds []
+  (or (some-> (System/getenv "WORKQUEUE10_INBOX_EVERY") parse-long)
+      inbox/default-every-seconds))
+
 (defonce fake-calendar
   ;; module-default fake boundary — tests script it, offline dev and
   ;; the declaration gate run over it
@@ -590,9 +665,24 @@
        ;; arm), because every likelihood ratio in the table assumes the
        ;; evidence was typed by somebody who did not know what it would
        ;; do.
+       ;; :inbox_item rides last (docs/spec-seat.md § 13.8): the
+       ;; household's unanswered mail as rows, and the decision tree
+       ;; over them — queued, researched, then the action item or the
+       ;; dismissal. It is here because a seat that walks a TREE costs
+       ;; a fraction of one that reasons in prose: the envelope offers
+       ;; one door at a time, so the walk needs no judgment the machine
+       ;; does not frame, and a leaf is never offered again — which is
+       ;; week one's duplicate-task refusals turned into a queue rather
+       ;; than a sentence in a charter. Domainless for the family
+       ;; reason the rest are: whose mail wants what is not a domain of
+       ;; logistics beside queue/chores/meals, it is the doorstep in
+       ;; front of all of them. :nav :secondary for value's reason — an
+       ;; unread message is not a thing to DO, and the work it turns
+       ;; into is born through task's own create door inside the `yes`
+       ;; handler, under the sitter's own name.
        (into (into [saved-view capability connection self journal letter
                     permission-slip tickler insight value outcome outcome-piece
-                    person composition-request hypothesis
+                    person composition-request hypothesis inbox-item
                     (thread-resource (conf/thread-confluence thread-srcs
                                                              report-fn))]
                    dashboard/resources)))))
@@ -906,14 +996,30 @@
         server (engine/start! eng port
                               {:wrap-handler
                                (comp (reconsent/wrap eng)
-                                     (oidc-rp/wrap-handler eng))})]
-    (reset! dev {:engine eng :server server :storage storage})
+                                     (oidc-rp/wrap-handler eng))})
+        ;; the inbox queue, filling with no tokens (spec-seat § 13.8):
+        ;; one Gate listing per beat, one row per new message id. The
+        ;; mirror discovery daemon cannot carry it — :inbox_item is a
+        ;; native kind with a decision tree, not a mirror — so the
+        ;; pass rides the same shape one level down: a daemon thread
+        ;; under an ELECTED role, so one process per database lists
+        ;; the household's inbox however many serve it
+        inbox-pass (when-some [src (inbox-source eng)]
+                     (store/elect-role!
+                      storage :workqueue10-inbox
+                      {:retry-ms 5000
+                       :start-fn #(inbox/start-passes!
+                                   src {:every-seconds (inbox-every-seconds)})
+                       :stop-fn inbox/stop-passes!}))]
+    (reset! dev {:engine eng :server server :storage storage
+                 :inbox-pass inbox-pass})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))
     eng))
 
 (defn stop! []
-  (when-some [{:keys [engine server storage]} @dev]
+  (when-some [{:keys [engine server storage inbox-pass]} @dev]
+    (when inbox-pass (store/release-role! storage inbox-pass))
     (engine/stop! engine server)
     (pg/close! storage)
     (reset! dev nil)))

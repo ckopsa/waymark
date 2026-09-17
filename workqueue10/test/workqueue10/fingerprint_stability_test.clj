@@ -100,7 +100,11 @@
       ;; …and 40 since the 2026-09 lean-down retired the evening fold
       ;; (activity, evening_plan, evening_session) and weather — the
       ;; census moves down as well as up, and this line says so.
-      (is (= 40 (count before)) "the whole household is under the lens")
+      ;; …and 41 since docs/spec-seat.md § 13.8's :inbox_item — the
+      ;; household's unanswered mail as rows, and the decision tree over
+      ;; them. The census moves because the house gained a kind, which
+      ;; is exactly the change this line is here to notice.
+      (is (= 41 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)
