@@ -90,7 +90,11 @@
    (engine/engine {:storage (memory/storage)
                    :resources [fx/meal]
                    :now-fn (fn [] @at)
-                   :schedule-adapters {schedules/default-provider
+                   ;; keyed by KEYWORD: `adapter-for` reads the row's
+                   ;; provider string as a keyword, the way every other
+                   ;; suite wires its fake; a string key here is an
+                   ;; adapter the consumer never finds
+                   :schedule-adapters {:claude_routine
                                        (schedules/fake-scheduler)}
                    :oidc {:issuer issuer :audience audience :jwks jwks
                           :app-url "https://app.test/"
@@ -595,7 +599,7 @@
 (deftest the-schedules-consumer-mints-nothing-for-an-interactive-seat
   (let [eng (fresh-engine)
         adapters (schedules/adapters-of eng)
-        fake (get adapters schedules/default-provider)
+        fake (get adapters (keyword schedules/default-provider))
         model (add-model! eng)
         chair (open-seat! eng model {:name "chair" :mode "interactive"})
         quiet (open-seat! eng model {:name "fired" :key other-key})
