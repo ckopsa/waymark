@@ -156,6 +156,54 @@ The session-start hook of the same repository reads
 before it builds `bd`, because a seat's session never reads beads
 and the build costs the firing a minute.
 
+## The chair
+
+The clerk has a training day as well as a work day. The chair is a
+second seat, `inbox-clerk-chair`, with the same charter, the same
+scope and the same walk as `inbox-clerk`. Its `mode` is
+`interactive`. Nothing fires it: it has no Routine, the engine mints
+no schedule row for it, a wake passes it by, and its `fire` door is
+refused. A person sits in it, from that person's own machine
+(spec-seat.md R-10.8). A Routine's run that sits with the chair's key
+is refused: `The seat inbox-clerk-chair is an interactive seat. A
+person sits here.`
+
+To sit in the chair:
+
+1. Invoke `offer_key` on the chair with a key of its own. Mint it the
+   way "The key" above says.
+2. Put the key and the engine's URL in the shell of the machine:
+
+   ```
+   export WAYMARK_SEAT_KEY=<the chair's key>
+   export WAYMARK_SEAT_URL=https://<engine host>/api/-/sittings/close
+   ```
+
+   One variable covers the two doors. The hook makes the tally URL
+   from `WAYMARK_SEAT_URL` and puts `/tally` in the place of
+   `/close`.
+3. Start a session on the machine and call `waymark_sit` once with
+   the chair's key. The engine answers the mode `interactive`, and
+   the sitting is born with that mode and with the person's member
+   id in `person`.
+4. Work with the model. Read the row, correct the verdict, and say
+   what to do next. The sitting stays open between the turns, and the
+   hook holds no stop, so the wait is the person's.
+5. On each turn's stop, the hook posts the counts to the tally door.
+   The counts are cumulative, so the last tally is the sitting's sum
+   (spec-seat.md R-12.25).
+6. Close the session when the work is done. The `SessionEnd` hook
+   posts the final counts to the close door. When the machine is
+   closed instead, the sweep ends the sitting after the seat's
+   `sitting_idle_seconds`. A sitting that tallied is closed, with the
+   last tally as its counts. A sitting that never tallied is
+   abandoned, with no tokens (spec-seat.md R-7.6).
+
+The running cost is on the open sitting from the first tally, so the
+seat's week and the sitting's own ceiling both see the chair while it
+sits. The ledger reports the two seats apart, and a step-down
+judgment on `inbox-clerk` reads its fired sittings only.
+
 ## Before the first firing
 
 1. The seat exists and is active, with `held_for` naming the model

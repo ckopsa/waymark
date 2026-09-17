@@ -120,8 +120,10 @@ work.
 | `substitute_for` | list of model refs | the models that can sit as a substitute. Empty means any. |
 | `standing_ttl_seconds` | int | the longest leash a grant in this seat can request |
 | `cadence_seconds` | int | how often the schedule fires the seat. The fixed wake cost. |
+| `mode` | enum `fired`, `interactive`, default `fired` | who opens a sitting here. A schedule, a person or a wake fires a fired seat. A person sits in an interactive seat, and nothing fires it. R-10.8. |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
+| `sitting_idle_seconds` | int, 60 to 86400, default 3600 | how long an open interactive sitting can wait with no new tally before the sweep ends it. R-7.6. |
 | `walk` | kind name, optional | the queue this seat walks, one row at a time, in the order of its default sort. R-12.9. |
 | `rows_per_firing` | int, default 20 | the most rows one firing moves to a leaf. The walk's cap. |
 | `stale` | list of scope entries | written by the sweep. A person never writes it. |
@@ -293,6 +295,18 @@ refused by the guards, with the entry named.
 **R-7.6** The boot sweep must move a sitting left `open` for more
 than two cadences to `abandoned`, with no tokens.
 
+An interactive sitting has its own clock. The sweep must close an
+open interactive sitting that has a tally and whose `tallied_at` is
+older than the seat's `sitting_idle_seconds`, with the counts of the
+last tally and the note `Closed by the sweep after {n} seconds
+idle.` That sitting moves to `closed`, not to `abandoned`, because
+the counts are real (R-12.25).
+
+An open interactive sitting that has no tally, and that has waited
+longer than `sitting_idle_seconds` after `started_at`, is
+`abandoned`, as the rule above abandons a stale fired sitting. The
+sweep records the absence of a bill, and not a bill of zero.
+
 **R-7.7** A hard stop must raise an alert. The owner's ruling,
 2026-09-17: the three walls of R-5.2 (the seat not active, the model
 outside its list, the budget reached) stay hard, and each must reach
@@ -391,14 +405,18 @@ and `abandoned` are terminal.
 | `harness_session` | string | the harness's id for the session that sat. Written at `create` from `waymark_sit`, or at `close` from the hook's report (R-12.17). |
 | `transitions` | int | committed transitions under the grant while the sitting was open. The engine counts. |
 | `refusals` | int | 409s served under the grant while the sitting was open. The engine counts. |
-| `cost_usd` | decimal | written at close |
-| `prices` | map | the four prices used at close |
+| `mode` | enum `fired`, `interactive` | the seat's mode, copied at birth. Engine-written. R-10.8. |
+| `person` | string, optional, up to 200 | the member the delegate acts for, when the sitter is a delegate. Engine-written. |
+| `tallied_at` | instant, optional | when the harness last tallied this open sitting. Engine-written. R-12.25. |
+| `cost_usd` | decimal | written at close, and again at each tally of an open sitting (R-12.27) |
+| `prices` | map | the four prices used at close, or at the last tally |
 | `note` | string | one sentence on what the sitting did |
 
 **R-10.3** A sitting must be own-surface for its member, with the
 actions `create`, `close`, and `abandon`. The session opens it
 before it reads the queue, and the harness's hook closes it when the
-session ends (R-12.5).
+session ends (R-12.5). An interactive sitting has a fourth action,
+`tally`, which the harness's hook opens on each turn (R-12.25).
 
 **R-10.4** `close` must take the four token counts and the turn count.
 The handler must read the model's prices at that moment, compute
@@ -422,6 +440,34 @@ fuel.
 per seat per week against its budget; fuel per model; refusals per
 seat per week; cost per transition; the fixed cost of a seat, as the
 sittings that wrote nothing.
+
+**R-10.8** The mode is the seat's, not the principal's. The owner's
+reading of 2026-09-17: the seat says who sits in it. A seat's `mode`
+is `fired` or `interactive`, and the default is `fired` (R-4.2). A
+fired seat keeps the behavior of section 12: a cadence, a person's
+fire, and a wake each start a sitting. An interactive seat has no
+cadence, and nothing fires it. The engine mints no schedule row for
+it, the wake consumer passes it by, and its `fire` door is refused
+(R-12.20).
+
+A delegate opens an interactive seat's sitting: an agent the identity
+gate marked `acts-for`, which is a person signed in through a tool.
+A Routine's run is a bare agent, and `waymark_sit` refuses it at an
+interactive seat: ``The seat `{name}` is an interactive seat. A
+person sits here.`` A fired seat admits both, as it does today.
+
+The sitting takes its `mode` from the seat at birth, and the engine
+writes it. The sitting also holds `person`, the member id the
+delegate acts for. `waymark_sit` answers the mode, so the harness's
+hook learns it from the sit's answer (R-12.26).
+
+The sitter is the seat's member in both modes, so the seat's grant,
+the walk, the budget and the ceiling apply the same way. The ladder's
+audit chair is therefore a second seat, with the same charter and the
+same scope, in the interactive mode, and the ledger compares a seat
+with a seat. The ledger reports the two modes in two columns, and a
+step-down judgment (R-11.4) compares a fired sitting with a fired
+sitting.
 
 ## 11. Requirements: the ladder
 
@@ -746,6 +792,13 @@ when the transcript shows no sit. This path needs no domain, no
 variable and no credential, because the traffic is the connector's,
 which the session already holds.
 
+The harness raises a second event. `SessionEnd` comes one time, when
+the session ends. The repository's `.claude/settings.json` carries an
+entry for it, which runs the same hook script with the argument
+`end`. The hook posts the close there for an interactive sitting
+(R-12.25). A fired sitting keeps the Stop close of this rule, because
+its run ends with its one Stop event.
+
 A sitting that gets no report is still the sweep's. The sweep
 abandons it after two cadences, with no tokens (R-7.6). The counts
 of transitions and refusals stand.
@@ -796,7 +849,8 @@ ledger counts it.
 cases. The seat is parked: `The seat is parked. Unpark it first.`
 The seat is halted: the halt's own sentence. The schedule has no
 link: `Link the Routine's fire URL and token to the schedule
-first.` The caller is a bare agent, with no person behind it: the
+first.` The seat is an interactive seat: `The seat is an interactive
+seat. A person sits here; nothing fires it.` The caller is a bare agent, with no person behind it: the
 refusal of R-4.7.
 
 The provider's own answer comes after the commit, so it is a note on
@@ -854,6 +908,130 @@ run URL. That id is the run page's id. It is not the sitting's
 (R-12.14). The engine writes the run URL on the schedule row, so a
 person can open the run. The exact pairing of a fire to its sitting
 is a punt (section 18).
+
+**R-12.24** A `wake_on` entry must be able to count. The entry gains
+two optional fields, and the shape becomes `{kind, actions, filter,
+at_least}`. `filter` is a map in the shape of a query's where clause
+for that kind, which is the shape a scope entry's filter already has.
+`at_least` is a whole number, 1 or more. An entry with no `at_least`
+is a transition wake (R-12.22). An entry with `at_least` is a count
+wake.
+
+A count wake does not poll. The engine counts only when a committed
+transition of that kind matches the entry's actions, and an entry
+with no actions matches every action of the kind. The count is one
+query over the kind's collection under the entry's `filter`. When the
+entry carries no `filter`, the kind's default filter applies, which
+is the walk's queue. When the count is at or above `at_least`, the
+engine fires the seat.
+
+A count fire's text names the kind and the count, and it names no
+row: `{"kind": "inbox_item", "count": 23, "at_least": 20}`. The
+session therefore walks the queue, as a cadence firing does.
+
+The damper of R-12.22 applies with no change. The engine does not
+fire while the seat has an open sitting, and it fires at most once in
+`fire_interval_seconds`. A match the damper stops sets
+`wake_pending`, and one fire goes out when the damper lifts.
+
+The cadence stays. A seat with a count wake and a cadence fires when
+the queue reaches the size, or when the interval passes, whichever
+comes first. Example: the entry `{inbox_item, at_least: 20}` on a
+seat with `rows_per_firing` 20 fires one full batch. Example: the
+entry `{approval_request, filter: {state: "pending", kind_of:
+"extend"}, at_least: 5}`.
+
+The engine must refuse an `at_least` below 1, at `create` and at
+`restate`: `at_least must be 1 or more.` A `filter` that names a
+field the kind does not have is refused with the query's own
+sentence.
+
+### 12.3 The interactive sitting
+
+The owner's reading of 2026-09-17: the sitting does not change.
+Instead of a close at the end of the run, the session waits for the
+next instruction, and the person says when to close.
+
+An interactive sitting is a person's own session in the seat. The
+person's connector sits with `waymark_sit`, the model walks the
+queue, the person corrects it, and the session waits between the
+turns. The sitting runs across many turns and many hours. It is the
+audit chair of the ladder (section 11): a correction the person makes
+in the chair is the record a step-down judgment reads. A fired
+sitting is the seat's work day. An interactive sitting is the seat's
+training day.
+
+**R-12.25** The harness must tally an interactive sitting on each
+turn. A Routine's run raises one Stop event, at the end of its one
+prompt. An interactive session raises one Stop event for each turn.
+So the hook must not close the sitting on Stop, and it must not hold
+the stop: a hold on each turn tells the model to close after the
+person's first message.
+
+The hook posts a tally instead. It sums the transcript's usage as
+R-12.17 says, and it posts the four token counts and the turn count
+to `POST /api/-/sittings/tally`, with the seat's key in the header
+`Waymark-Seat-Key`. The body, the pairing rule and the four answers
+are the close door's (R-12.17). The engine writes the counts on the
+open sitting through the sitting's `tally` door, from `open` to
+`open`, and it writes `tallied_at` beside them.
+
+The counts are cumulative. Each tally carries the sum over the
+sitting to that moment, so a second tally replaces the first, and a
+replay of one tally changes nothing.
+
+The close comes from the harness's `SessionEnd` hook, which posts the
+final counts to `POST /api/-/sittings/close`. When no `SessionEnd`
+event comes, because the person closed the machine, the sweep ends
+the sitting after the seat's `sitting_idle_seconds`: it closes a
+sitting that has a tally, with that tally as its counts, and it
+abandons one that never tallied (R-7.6).
+
+**R-12.26** A person's own machine carries the environment. The shell
+holds `WAYMARK_SEAT_URL` and `WAYMARK_SEAT_KEY`, so the direct post
+of R-12.17, which is the first path, is the interactive path. One
+variable covers the two doors: the hook makes the tally URL from
+`WAYMARK_SEAT_URL` and puts `/tally` in the place of `/close`. The
+second path, which holds the stop and hands the counts to the
+session, is not used in an interactive sitting: a hold on every turn
+stops the person's work.
+
+The hook reads the mode from the sit's own answer. `waymark_sit`
+answers `mode` beside the sitting (R-10.8), so the hook finds it in
+the transcript's tool result. The hook then takes one of three ways.
+A fired sitting with no URL: hold the stop one time, as today. An
+interactive sitting with the URL: tally on Stop, and close on
+`SessionEnd`. An interactive sitting with no URL: write one line on
+the error stream, one time, and let the sweep close the sitting. That
+line says that an interactive sitting tallies through
+`WAYMARK_SEAT_URL`, that none is set, and that the sweep closes the
+sitting.
+
+**R-12.27** The engine must price each tally. The router judges the
+week's wall on every request, and the sum it reads counts closed
+sittings only. A fired sitting is bounded by its run, so the sum is
+near the truth. An interactive sitting is not bounded, so it can
+spend for hours against a wall that cannot see it.
+
+The tally is the fix. The engine writes a running `cost_usd` on the
+open sitting at the prices of that moment, with the pricing the close
+door uses (R-10.4). The week's sum is then the closed sittings of the
+window plus the running cost of the open ones. The wall therefore
+drops inside a sitting, and the next request meets `budget_reached`.
+The wall lags by one turn at most. An open sitting with no tally yet
+has no running cost, and it adds nothing.
+
+The same tally lets the router judge `sitting_budget_tokens` on the
+open sitting. When the sitting's tallied counts add up to the seat's
+ceiling, the router walls the request with a reason of its own,
+`sitting_budget_reached`: `This sitting's fuel is spent: {n} of
+{ceiling} tokens. Close the sitting; a new one opens fresh.` The sum
+is the four counts together: input, output, cache read and cache
+write.
+
+The honest limit: the wall stops the seat's work, and it does not
+stop the provider's meter. A session with every door refused has
+nothing to do, and the refusal says so.
 
 ## 13. The email clerk: the descent
 
@@ -1510,6 +1688,38 @@ above. The cases:
     `wake_pending`. (R-12.22)
 37. A match while the seat has an open sitting does not fire.
     (R-12.22)
+38. A queue of 19 rows does not fire a seat whose entry asks for 20.
+    The twentieth `create` fires the seat one time, and the text
+    names the kind, the count and `at_least`, and names no row.
+    (R-12.24)
+39. A damped count wake sets `wake_pending` and releases one fire
+    when the sitting closes. An entry's `filter` narrows the count,
+    so rows outside the filter do not reach the size. An `at_least`
+    of 0 is refused at `create` with the sentence. (R-12.24)
+40. A seat created with no `mode` is `fired`. An interactive seat
+    refuses a bare agent's `waymark_sit` with the sentence, and
+    admits a delegate's. The sitting carries the seat's `mode` and
+    the delegate's `person`. `fire` on an interactive seat is
+    refused with the sentence. The engine mints no schedule row for
+    it, and the wake consumer passes it by. (R-10.8, R-12.20)
+41. A `tally` writes the four counts, `tallied_at` and a running
+    `cost_usd` on the open sitting, and the sitting stays `open`. A
+    second tally replaces the counts of the first. (R-12.25)
+42. The week's sum counts an open sitting's running cost, so the
+    budget wall drops in the middle of a sitting. A sitting whose
+    tallied counts reach `sitting_budget_tokens` meets
+    `sitting_budget_reached` with its own sentence. (R-12.27)
+43. `POST /api/-/sittings/tally` answers 200 with the open sitting
+    and its running cost, 404 with `No seat answers this key.`, 409
+    when the seat has no open sitting, and 422 on a malformed body.
+    (R-12.25, R-12.17)
+44. The sweep closes an open interactive sitting whose `tallied_at`
+    is older than `sitting_idle_seconds`, with the last tally's
+    counts and the note that names the seconds. It abandons one that
+    waited as long with no tally at all, with no tokens. It leaves a
+    fresh sitting open. The hook tallies on Stop and closes on
+    `SessionEnd`, and it holds no stop in an interactive sitting.
+    (R-7.6, R-12.25, R-12.26)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
@@ -1661,6 +1871,25 @@ trusts.
   falls on a step down. The only question is whether the outcomes
   held, and a correction is the one record of an outcome that did
   not.
+- **The mode is the seat's.** An earlier draft read the mode from the
+  principal: a delegate's sit was interactive, and a Routine's run
+  was fired. The owner ruled (2026-09-17) that the seat defines the
+  mode. A seat is a charter and a bill, and the two modes bill in
+  different ways, so one seat in two modes hides which sittings the
+  ledger is reading. The audit chair is therefore a second seat, with
+  the same charter and the same scope, and the ledger compares a seat
+  with a seat (R-10.8).
+- **The tally is the safety net under the wait.** The owner's reading
+  (2026-09-17) is that the sitting does not change: the session waits
+  for the next instruction, and the person says when to close. The
+  wait is then the whole difference between the two modes, and an
+  interactive sitting nobody closes costs a day of usage that nothing
+  records. The alternative was to close on each Stop event and to
+  open a fresh sitting on the next turn, which makes one afternoon
+  into forty sittings and loses the chair as one record. The tally
+  writes the counts on the open sitting on each turn, so the ledger,
+  the week's wall and the sitting's own ceiling all read a sitting
+  that is still open (R-12.25, R-12.27).
 
 ## 18. Recorded punts
 
@@ -1714,6 +1943,13 @@ trusts.
 - A refusal log with the door, the guard, and the sentence, beyond
   the count. The count is enough to find the seat. The log is what
   the fence census (leg 2) reads to find the guard.
+- Turn-level cost inside an interactive sitting. The tally is one sum
+  over the sitting, so the record does not say which correction cost
+  what. Keeping the turns is a later leg.
+- A count wake over a kind the seat cannot see. The count runs under
+  the seat's own grant, so an absent kind counts zero, and the seat
+  says nothing. A sentence in `doors.ask.seat` that says the count
+  sees nothing is the follow-up.
 
 ## 19. Effort
 
@@ -1742,4 +1978,11 @@ part of this leg that reaches outside the house. The fire door of
 section 12.2 adds two doors to the schedule, one door and two fields
 to the seat, and one more adapter with its fake. The wake consumer
 is one namespace over the transition log, with a cache of the active
-seats and a tick for the damper.
+seats and a tick for the damper. The count wake of R-12.24 adds two
+fields to the `wake_on` entry schema and one count query to that
+consumer, which reuses the collection count the list page already
+runs. The interactive sitting of section 12.3 adds two fields to the
+seat and three to the sitting, one door with a handler that prices an
+open sitting, one route beside the close route, one wall reason, one
+sum in the week's total, one branch in the sweep, and two events in
+the harness's hook.
