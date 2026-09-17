@@ -108,7 +108,10 @@
 
 (deftest a-selection-never-drops-core
   (testing "naming one module keeps the law's own vocabulary"
-    (is (= #{:definition :member :role :grant :approval_request :job}
+    ;; …and the seat, the model, the sitting and the schedule, which
+    ;; are core's since the grant carries a typed ref to the seat
+    (is (= #{:definition :member :role :grant :approval_request :job
+             :seat :model :sitting :schedule}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"

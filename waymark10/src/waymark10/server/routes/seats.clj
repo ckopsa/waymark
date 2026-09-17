@@ -227,6 +227,11 @@
   that written transition declared."
   [eng rows ^Instant since]
   (let [members (into #{} (keep #(some-> (get-in % [:data :member]) str)) rows)
+        ;; the framework's own kinds are never corrections: a person's
+        ;; approve after a sitter's ask, or a close after a sitter's
+        ;; sitting create, is bookkeeping, not a reversal of a verdict
+        excluded (into [] (keep (fn [[k rdef]] (when (= :system (:nav rdef)) (name k))))
+                       (inv/resources eng))
         st (:storage eng)]
     (if (empty? members)
       {}
@@ -236,7 +241,7 @@
       ;; length of the whole answer
       (let [found (store/with-tx st
                     (fn [tx]
-                      (store/corrections-by-model st tx (vec members) since)))]
+                      (store/corrections-by-model st tx (vec members) since excluded)))]
         (reduce (fn [acc {:keys [model n]}]
                   (update acc (model-id-of-claim eng model) (fnil + 0) (long n)))
                 {}

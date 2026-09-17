@@ -69,9 +69,13 @@
     × kind × action × actor type, at >= since only. include-system?
     false drops rows whose actor type is system — the mirror-sync
     beat would otherwise dominate every count.")
-  (corrections-by-model [st tx actor-ids since]
+  (corrections-by-model [st tx actor-ids since excluded-kinds]
     "The correction count over the log, grouped by the model that was
     corrected — the ladder's one new query (spec-seat.md R-11.3).
+    `excluded-kinds` (kind names as strings) are never corrections: the
+    framework's own kinds, where a person's approve after a sitter's
+    ask, or a close after a sitter's create, is bookkeeping and not a
+    reversal of anything the sitter judged.
 
     A CORRECTION is a person's transition on a row whose IMMEDIATELY
     PREVIOUS transition on that same (kind, resource_id) was written

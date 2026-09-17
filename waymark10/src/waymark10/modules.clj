@@ -210,7 +210,22 @@
              {:kind :grant :enroll :always
               :kinds (fn [_] [grants/grant])}
              {:kind :approval_request :enroll :always
-              :kinds (fn [_] [grants/approval-request])}]
+              :kinds (fn [_] [grants/approval-request])}
+             ;; the seat, the model, the sitting and the schedule
+             ;; (docs/spec-seat.md, waymark-fp62.1) are core's too: the
+             ;; grant — core's own — carries a typed ref to the seat,
+             ;; and the seat to its schedule, so an engine assembled
+             ;; from a module subset would refuse its own grant kind
+             ;; without them (checks/refs). The office an agent sits
+             ;; in is the law's vocabulary, the same way the grant is.
+             {:kind :seat :enroll :always
+              :kinds (fn [_] [seats/seat])}
+             {:kind :model :enroll :always
+              :kinds (fn [_] [seats/model])}
+             {:kind :sitting :enroll :always
+              :kinds (fn [_] [seats/sitting])}
+             {:kind :schedule :enroll :always
+              :kinds (fn [_] [schedules/schedule])}]
     ;; the three surfaces no waymark engine is a waymark engine
     ;; without: the outbox reader every other surface rides, the
     ;; law-refresh consumer (a core need in any multi-process
@@ -327,8 +342,8 @@
    ;; processes mirroring one seat write two copies at the provider,
    ;; and the consumer's cursor is shared and unguarded.
    {:module :schedules
-    :enrols [{:kind :schedule :enroll :always
-              :kinds (fn [_] [schedules/schedule])}]
+    ;; the kind itself is core's (see :module :core); this module is
+    ;; the two surfaces that RUN for it
     :hooks [{:hook :schedules-mirror
              :after [:dispatcher]
              :elected :schedules-mirror
@@ -565,12 +580,8 @@
    ;; sweep (R-7.1/R-7.6) in boot-revise!, the seat resolve (R-5.2) in
    ;; the router.
    {:module :seats
-    :enrols [{:kind :seat :enroll :always
-              :kinds (fn [_] [seats/seat])}
-             {:kind :model :enroll :always
-              :kinds (fn [_] [seats/model])}
-             {:kind :sitting :enroll :always
-              :kinds (fn [_] [seats/sitting])}]
+    ;; the three kinds are core's (see :module :core); this module is
+    ;; the ledger route beside them
     :routes seat-routes/routes}
 
    ;; named, contributing nothing through this seam

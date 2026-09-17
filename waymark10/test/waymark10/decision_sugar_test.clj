@@ -257,7 +257,7 @@
   ;; computed here. Re-pin it from the first CI run — the failure
   ;; prints the hash to paste — and keep this paragraph as the note
   ;; the comment above asks for.
-  "01ca868b7440b6c13c9e10260904eb82a18217f79b439134369fdb337496d9f3")
+  "87c403a19083ff896dbc1c83cde04098c1867bc0cd9eb16bcfa7ee7fcb111dce")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

@@ -617,7 +617,7 @@
             (jdbc/execute! tx [sql (Timestamp/from ^java.time.Instant since)]
                            jdbc-opts))))
 
-  (corrections-by-model [_ tx actor-ids since]
+  (corrections-by-model [_ tx actor-ids since excluded-kinds]
     ;; the lag is computed over the WHOLE log and filtered afterwards:
     ;; the transition a person corrects is routinely older than the
     ;; window that counts the correction, so narrowing before the
@@ -625,8 +625,10 @@
     (if (empty? actor-ids)
       []
       (let [marks (str/join ", " (repeat (count actor-ids) "?"))
+            excluded (vec excluded-kinds)
+            ex-marks (str/join ", " (repeat (count excluded) "?"))
             sql (str "WITH walked AS ("
-                     "SELECT at, actor->>'type' AS actor_type,"
+                     "SELECT at, kind, actor->>'type' AS actor_type,"
                      " lag(actor->>'id') OVER w AS prev_actor,"
                      " lag(actor->>'model') OVER w AS prev_model"
                      " FROM waymark10_transitions"
@@ -637,10 +639,13 @@
                      " WHERE actor_type = 'human'"
                      "   AND at >= ?"
                      "   AND prev_actor IN (" marks ")"
+                     (when (seq excluded)
+                       (str "   AND kind NOT IN (" ex-marks ")"))
                      " GROUP BY 1 ORDER BY 1")]
         (mapv (fn [r] {:model (:model r) :n (long (:n r))})
-              (jdbc/execute! tx (into [sql (Timestamp/from ^java.time.Instant since)]
-                                      (map str) actor-ids)
+              (jdbc/execute! tx (-> [sql (Timestamp/from ^java.time.Instant since)]
+                                    (into (map str) actor-ids)
+                                    (into excluded))
                              jdbc-opts)))))
 
   (idempotency-lookup [_ tx key kind]
