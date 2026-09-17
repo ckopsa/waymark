@@ -206,6 +206,15 @@
   kind, one action, nothing else."
   [{:kind "task" :actions ["claim" "complete"]}])
 
+(def filter-map-schema
+  "A filter in the shape of the kind's query where clause: field →
+  exact value, the collection grammar's :eq only. It is spelled once
+  because two declarations now carry it — the scope entry below,
+  where it narrows what a grant admits, and the seat's `wake_on`
+  entry (seats/wake-entry-schema), where it narrows what a count wake
+  counts. Keys arrive keywordized off the wire."
+  [:map-of :keyword [:string {:min 1 :max 200}]])
+
 ;; The scope form is where a person decides whether to trust an agent,
 ;; so it is the last form in this codebase that should have been a
 ;; blank JSON textarea. Since waymark-8sg the two vocabularies it is
@@ -258,7 +267,7 @@
     [:filter {:optional true
               :x-display {:label "Only rows matching"
                           :help "One field=value pair, judged at render — rows minted later land inside the leash the moment they match. The field must be one the kind declares filterable with eq; one filtered entry per kind."}}
-     [:maybe [:map-of :keyword [:string {:min 1 :max 200}]]]]
+     [:maybe filter-map-schema]]
     [:args {:optional true
             :x-display {:label "Argument limits"
                         :help "Per-action limits on WHICH arguments may be sent — {action, allow|deny, names}. Omit it and an admitted action takes any argument its schema accepts."}}
@@ -1722,21 +1731,30 @@
   {:kind "seat" :ids [(str seat-id)] :actions []})
 
 (defn- spent-this-week
-  "The dollars this seat's CLOSED sittings of the last seven days cost
-  — ONE aggregate read, never a page of rows. Recorded: the conds walk
+  "The dollars this seat's sittings of the last seven days cost — ONE
+  aggregate read, never a page of rows. Recorded: the conds walk
   `data->>` expressions, so no index serves them; a promoted column is
   generated for a filterable field but `count/sum-matching` do not
   order or match through it, and the store declares indexes for
   `:unique` groups alone. A seat's sittings are a week of wakes, so the
   scan is small by construction — and the day it is not, the fix is an
-  index this store cannot yet be told to declare."
+  index this store cannot yet be told to declare.
+
+  CLOSED AND OPEN BOTH (R-12.27). A fired sitting is bounded by its
+  run, so summing the closed ones was the whole spend; an interactive
+  sitting is not bounded by anything, and a wall that could not see
+  one would be a wall a day's work walks straight through. An open
+  sitting carries a running `cost_usd` from its last tally — and none
+  at all until it has been tallied, which a SUM skips. One call, one
+  cond over two states: two calls would be two scans of one table for
+  one number."
   [eng seat-id ^java.time.Instant now]
   (or (when (get (inv/resources eng) :sitting)
         (store/with-tx (:storage eng)
           (fn [tx]
             (store/sum-matching
              (:storage eng) tx :sitting :cost_usd
-             [{:target :state :op := :value "closed"}
+             [{:target :state :op :in :values ["closed" "open"]}
               {:target :data :field :seat :cast "text" :op :=
                :value (str seat-id)}
               {:target :data :field :started_at :cast "timestamptz" :op :>=
@@ -1757,6 +1775,34 @@
                          (store/query-rows (:storage eng) tx :model
                                            {:name c} {:limit 1}))))
               :id str))))
+
+(def ^:private sitting-count-fields
+  "The four token counts a tally writes. A sitting's ceiling is spent
+  against all four: a cache read is cheaper than an input token and it
+  is not free, and a ceiling that counted two of the four would be a
+  ceiling nobody could reason about."
+  [:input_tokens :output_tokens :cache_read_tokens :cache_write_tokens])
+
+(defn- tallied-tokens
+  "How many tokens the OPEN sitting under this grant has reported so
+  far (R-12.27), or nil when there is no open sitting to ask.
+
+  ONE query, by the promoted `grant` column and state — the shape
+  `seats/open-sitting-for-grant` uses, spelled here because seats.clj
+  requires THIS namespace and not the other way round. A sitting
+  nobody has tallied carries the zeroes its birth wrote, which is the
+  honest answer: nothing reported, nothing spent."
+  [eng grant-id]
+  (when (and grant-id (get (inv/resources eng) :sitting))
+    (when-some [row (first (store/with-tx (:storage eng)
+                             (fn [tx]
+                               (store/query-rows (:storage eng) tx :sitting
+                                                 {:grant (str grant-id)
+                                                  :state :open}
+                                                 {:limit 1
+                                                  :newest-first true}))))]
+      (reduce (fn [n f] (+ n (long (or (get-in row [:data f]) 0))))
+              0 sitting-count-fields))))
 
 (defn- resolve-seat
   "R-5.2, whole. → {:id, :halt (the reason the seat row carries right
@@ -1805,15 +1851,36 @@
       :else
       ;; 3 · the week's fuel
       (let [spent (spent-this-week eng seat-id now)
-            budget (or (get-in seat [:data :budget_usd_per_week]) 0M)]
-        (if (not (neg? (compare spent budget)))
+            budget (or (get-in seat [:data :budget_usd_per_week]) 0M)
+            ;; 4 · THIS SITTING'S fuel (R-12.27). Only an interactive
+            ;; sitting is asked: a fired one is bounded by its run and
+            ;; reports its counts at the close, when it is no longer
+            ;; open, so the read would answer zero for every seat in
+            ;; the house on every request and cost a round trip to do
+            ;; it. The ceiling is the seat's own `sitting_budget_tokens`
+            ;; — the number already passed to the harness as the cap on
+            ;; one wake — so the wall says what the seat already said.
+            ceiling (long (or (get-in seat [:data :sitting_budget_tokens]) 0))
+            burnt (when (and (pos? ceiling)
+                             (= "interactive"
+                                (some-> (get-in seat [:data :mode]) str)))
+                    (tallied-tokens eng (:id row)))]
+        (cond
+          (not (neg? (compare spent budget)))
           (wall "budget_reached"
                 (str "The week's fuel is spent: " (str spent) " of "
-                     (str budget) " over " named "'s closed sittings of the"
+                     (str budget) " over " named "'s sittings of the"
                      " last seven days. The wall lifts on its own as the"
                      " window rolls."))
-          ;; 4 · the seat's scope, 5 · minus the drop list for a
-          ;; substitute, 6 · minus the sweep's stale entries, and the
+
+          (and burnt (<= ceiling (long burnt)))
+          (wall "sitting_budget_reached"
+                (str "This sitting's fuel is spent: " burnt " of " ceiling
+                     " tokens. Close the sitting; a new one opens fresh."))
+
+          :else
+          ;; 5 · the seat's scope, 6 · minus the drop list for a
+          ;; substitute, 7 · minus the sweep's stale entries, and the
           ;; sitter's own read of the seat row beside it (R-4.9)
           {:id seat-id :halt halt :reason nil :detail nil :haltable? true
            :scope (conj (cond-> (vec (get-in seat [:data :scope]))

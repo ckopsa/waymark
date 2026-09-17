@@ -38,16 +38,20 @@
   Recorded deviations (each a sentence):
 
   - THE BUDGET WINDOW IS READ, NEVER STORED, AND IT IS SAID TWICE.
-    `spent` is one SUM over the seat's closed sittings of the last
-    seven days at the moment somebody asks — no counter on the row,
-    which would be one write per close and one more thing to be
-    wrong. The wall itself (`grants/spent-this-week`, R-5.2 step 3)
-    runs the SAME aggregate over the SAME conds, and that function is
-    private to a namespace this wave does not own, so `window-conds`
-    below is a second spelling of one arithmetic. They agree today
-    because they are the same store call with the same three conds;
-    the follow-up is one public reader both call, and it belongs
-    beside the seat rather than beside either caller.
+    `spent` is one SUM over the seat's sittings of the last seven
+    days at the moment somebody asks — no counter on the row, which
+    would be one write per close and one more thing to be wrong. The
+    wall itself (`grants/spent-this-week`, R-5.2 step 3) runs the
+    SAME aggregate over the SAME conds, and that function is private
+    to a namespace this wave does not own, so `spending-conds` below
+    is a second spelling of one arithmetic. They agree today because
+    they are the same store call with the same three conds — CLOSED
+    AND OPEN both, since R-12.27 put a running cost on an open
+    sitting; the follow-up is one public reader both call, and it
+    belongs beside the seat rather than beside either caller. The
+    LEDGER keeps its own conds (`window-conds`, closed alone): a
+    ledger line is a finished bill, and a sitting still going has not
+    made one.
   - `by_model` KEYS ON THE MODEL ROW, AND A CORRECTION KEYS ON A
     CLAIM. A sitting carries a `model` ref; a transition's actor
     carries the session's model CLAIM, an API identifier
@@ -138,6 +142,17 @@
    {:target :data :field :started_at :cast "timestamptz" :op :>=
     :value (str since)}])
 
+(defn- spending-conds
+  "The conds the WALL sums over (R-5.2 step 3, widened by R-12.27):
+  this seat's sittings of the window, closed or open. `window-conds`
+  above names the ledger's rows — the finished bills five of the six
+  answers are computed from — and this names the fuel: an open sitting
+  has spent what its last tally says, and a budget that could not see
+  it would be a budget an interactive sitting walks through."
+  [seat-id ^Instant since]
+  (into [{:target :state :op :in :values ["closed" "open"]}]
+        (rest (window-conds seat-id since))))
+
 (defn closed-sittings
   "The seat's closed sittings started at or after `since`, decoded,
   oldest first — the rows five of the six answers are summed over.
@@ -176,19 +191,22 @@
   spent in the rolling week, what it may spend, and when the wall
   lifts.
 
-  `spent` is ONE aggregate — the same SUM over the same conds the
-  resolve's own wall runs, so discover cannot report a figure the wall
-  disagrees with. `resumes_at` is when the OLDEST counted sitting
-  falls out of the window, the first moment the sum can drop, and it
-  is nil unless the seat is actually at its limit: a seat with fuel
-  left is not waiting for anything."
+  `spent` is ONE aggregate over the same conds the resolve's own wall
+  runs — CLOSED AND OPEN both, since R-12.27 (an open sitting carries
+  a running cost from its last tally) — so discover cannot report a
+  figure the wall disagrees with. `resumes_at` is when the OLDEST
+  counted sitting falls out of the window, the first moment the sum
+  can drop, and it is nil unless the seat is actually at its limit: a
+  seat with fuel left is not waiting for anything."
   [eng seat ^Instant now]
   (let [st (:storage eng)
         since (week-ago now)
         conds (window-conds (:id seat) since)
         spent (or (when (contains? (inv/resources eng) :sitting)
                     (store/with-tx st
-                      (fn [tx] (store/sum-matching st tx :sitting :cost_usd conds))))
+                      (fn [tx] (store/sum-matching st tx :sitting :cost_usd
+                                                   (spending-conds (:id seat)
+                                                                   since)))))
                   0M)
         limit (or (get-in seat [:data :budget_usd_per_week]) 0M)
         oldest (when (contains? (inv/resources eng) :sitting)
@@ -344,6 +362,13 @@
   itself are mounted."
   "/api/-/sittings/close")
 
+(def ^:private tally-path
+  "The close's sibling (R-12.25), one word over. An interactive
+  session raises a Stop event every turn, so its hook posts HERE on
+  each one and posts the close once, at the end — same credential,
+  same body, same pairing rule."
+  "/api/-/sittings/tally")
+
 (def ^:private seat-key-header
   "MCP's Mcp-Session-Id precedent: ring lowercases what a client
   sends, so the READ is this and the contract's spelling is
@@ -468,6 +493,74 @@
      :transitions (:transitions d)
      :refusals (:refusals d)}))
 
+(defn- tally-doc
+  "What the Stop hook reads back: the row it tallied, the counts as
+  recorded, the running cost at this moment (R-12.27) and the stamp
+  the sweep measures idleness from. `state` is there and says `open`,
+  because the one thing a hook must be able to tell from this answer
+  is that the sitting is still going."
+  [seat row]
+  (let [d (:data row)]
+    {:waymark "10"
+     :kind "sitting_tally"
+     :sitting (str (:id row))
+     :seat (str (:id seat))
+     :state (name (:state row))
+     :cost_usd (:cost_usd d)
+     :input_tokens (:input_tokens d)
+     :output_tokens (:output_tokens d)
+     :cache_read_tokens (:cache_read_tokens d)
+     :cache_write_tokens (:cache_write_tokens d)
+     :turns (:turns d)
+     :transitions (:transitions d)
+     :refusals (:refusals d)
+     :tallied_at (some-> (:tallied_at d) str)}))
+
+(defn- paired
+  "The three refusals in the order of what they cost, and the row they
+  land on: `[seat report sitting]`.
+
+  The key first (a request that answers for no seat learns nothing
+  else), the body next (a malformed report is wrong whatever the seat
+  holds), the open sitting last, because finding it is a read. Both
+  doors of § 12.1 ask exactly this and pair exactly this way
+  (R-12.17), so it is asked once: a tally that found its sitting by a
+  different rule than the close would tally one run and close
+  another."
+  [eng req]
+  (let [seat (seat-of-key eng req)
+        report (report-of req)
+        sitting (or (seats/open-sitting-for-seat eng (:id seat)
+                                                 (:harness_session report))
+                    (throw (p/problem
+                            :no-open-sitting 409 "No open sitting"
+                            {:detail (str "The seat `"
+                                          (get-in seat [:data :name])
+                                          "` has no open sitting.")})))]
+    [seat report sitting]))
+
+(defn- sitting-tally
+  "POST /api/-/sittings/tally — what this sitting has spent so far
+  (R-12.25, R-12.27).
+
+  The close's twin in every way but the ending. A fired run raises one
+  Stop event and its hook closes; an interactive session raises one
+  per turn, and a hook that closed there would end the sitting after
+  the person's first message. So it tallies: the same counts onto the
+  same row, the sitting still open, and a running cost the week's wall
+  can see.
+
+  CUMULATIVE, so a replay is harmless — the hook sums the whole
+  transcript every turn, and the newest numbers replace the last. The
+  answer carries them back with the stamp, which is what the sweep
+  reads when nobody ever posts the close."
+  [eng]
+  (fn [req]
+    (let [[seat report sitting] (paired eng req)
+          tallied (:row (inv/invoke! eng :sitting (str (:id sitting)) :tally
+                                     report {:principal (sitter-of seat)}))]
+      (router/json-response 200 (tally-doc seat tallied)))))
+
 (defn- sitting-close
   "POST /api/-/sittings/close — the end of a wake, reported (R-12.17).
 
@@ -495,15 +588,7 @@
   number the wall was about."
   [eng]
   (fn [req]
-    (let [seat (seat-of-key eng req)
-          report (report-of req)
-          sitting (or (seats/open-sitting-for-seat eng (:id seat)
-                                                   (:harness_session report))
-                      (throw (p/problem
-                              :no-open-sitting 409 "No open sitting"
-                              {:detail (str "The seat `"
-                                            (get-in seat [:data :name])
-                                            "` has no open sitting.")})))
+    (let [[seat report sitting] (paired eng req)
           closed (:row (inv/invoke! eng :sitting (str (:id sitting)) :close
                                     report {:principal (sitter-of seat)}))]
       (router/json-response 200 (close-doc seat closed)))))
@@ -511,7 +596,8 @@
 (defn routes [eng]
   {:module :seats
    :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
-            [close-path {:post (sitting-close eng)}]]})
+            [close-path {:post (sitting-close eng)}]
+            [tally-path {:post (sitting-tally eng)}]]})
 
 ;; ── what discover shows a sitter (R-7.4, R-12.3) ────────────────────
 

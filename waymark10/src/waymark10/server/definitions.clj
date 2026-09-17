@@ -1011,13 +1011,69 @@
    (concat (rows-of eng :seat {:state :active})
            (rows-of eng :seat {:state :parked}))))
 
+(def ^:private default-idle-seconds
+  "R-12.25's own default, for a seat row written before the field
+  existed. An hour, which is the seat schema's default too."
+  3600)
+
+(defn- stale-since?
+  "Is `at` — an instant off a decoded row, or nothing — older than
+  `seconds` before `now`? Nothing is not stale: a row with no stamp
+  has not stopped, it has never started."
+  [^java.time.Instant at ^java.time.Instant now seconds]
+  (boolean (and at (.isBefore at (.minusSeconds now (long seconds))))))
+
+(defn- end-sitting!
+  "One sitting, ended through its own door under the seats actor, so
+  the ending is in the log like every other ending. A door that
+  refuses one sitting must not take the boot down with it: the sweep
+  says so and walks on. → true when it ended."
+  [eng row action body]
+  (try (inv/invoke! eng :sitting (:id row) action body
+                    {:principal seats/seats-actor})
+       true
+       (catch Exception e
+         (warn! "sitting " (:id row) " could not be ended by " (name action)
+                ": " (ex-message e))
+         false)))
+
+(defn- last-tally
+  "The counts an idle sitting is closed with (R-12.25): what its last
+  tally reported, which is what the Stop hook summed off the
+  transcript one turn before the person walked away. Zeroes for a
+  count the row somehow lacks — the close demands all five, and a
+  sitting born on this engine carries all five from its birth."
+  [row]
+  (into {} (map (fn [f] [f (long (or (get-in row [:data f]) 0))]))
+        [:input_tokens :output_tokens :cache_read_tokens
+         :cache_write_tokens :turns]))
+
 (defn- sweep-sittings!
-  "R-7.6: a sitting left `open` for more than two of its seat's
-  cadences is over. It goes through the sitting's own `abandon` door
-  under the seats actor, so the ending is in the log like every other
-  ending — and with NO tokens, because the absence of a bill is the
-  honest record of a session that never reported one. → how many
-  ended."
+  "The sittings nobody ended, ended — R-7.6 and R-12.25 in one pass
+  over the open rows. → {:abandoned n :closed n}.
+
+  THREE READINGS, AND THE MODE DECIDES WHICH (R-10.8) — the sitting's
+  own, inherited from its seat at birth:
+
+    fired, older than two of its seat's cadences   → abandon
+    interactive, tallied, tallied_at older than
+      the seat's `sitting_idle_seconds`            → CLOSE, with the
+                                                     last tally
+    interactive, never tallied, started_at older
+      than the same limit                          → abandon
+
+  The abandons carry NO tokens, because the absence of a bill is the
+  honest record of a session that never reported one. The close is the
+  other case and the reason this leg exists: an interactive sitting
+  DID report, every turn, right up until the laptop shut — so ending
+  it with nothing would throw away counts the engine was handed. Its
+  bill is the last tally, costed at the close's own prices like every
+  other bill.
+
+  A fired sitting is never idle-closed and an interactive one is never
+  judged by a cadence: an interactive seat has no cadence to speak of
+  (nothing fires it), and two of one would be an arbitrary clock over
+  a person who is thinking."
   [eng]
   (let [st (:storage eng)
         rdef (get (inv/resources eng) :sitting)
@@ -1025,40 +1081,61 @@
         ;; one read per SEAT, not per sitting: a seat waking hourly
         ;; leaves its open sittings behind in a bunch
         seen (volatile! {})
-        cadence-of (fn [seat-id]
-                     (let [cached (get @seen seat-id ::miss)]
-                       (if (not= ::miss cached)
-                         cached
-                         (let [c (some-> (store/with-tx st
-                                           (fn [tx]
-                                             (store/load-row st tx :seat
-                                                             (str seat-id) {})))
-                                         :data :cadence_seconds)]
-                           (vswap! seen assoc seat-id c)
-                           c))))]
+        seat-of (fn [seat-id]
+                  (let [cached (get @seen seat-id ::miss)]
+                    (if (not= ::miss cached)
+                      cached
+                      (let [r (store/with-tx st
+                                (fn [tx]
+                                  (store/load-row st tx :seat
+                                                  (str seat-id) {})))]
+                        (vswap! seen assoc seat-id r)
+                        r))))]
     (if (or (nil? rdef) (not (contains? (inv/resources eng) :seat)))
-      0
+      {:abandoned 0 :closed 0}
       (reduce
-       (fn [n raw]
+       (fn [acc raw]
          (let [row (inv/decode-row rdef raw)
-               cadence (cadence-of (some-> (get-in row [:data :seat]) str))
-               started (get-in row [:data :started_at])]
-           (if (and cadence started
-                    (.isBefore ^java.time.Instant started
-                               (.minusSeconds now (* 2 (long cadence)))))
-             ;; a door that refuses one sitting must not take the boot
-             ;; down with it: the sweep says so and walks on
-             (if (try (inv/invoke! eng :sitting (:id row) :abandon nil
-                                   {:principal seats/seats-actor})
-                      true
-                      (catch Exception e
-                        (warn! "sitting " (:id row) " could not be abandoned: "
-                               (ex-message e))
-                        false))
-               (inc n)
-               n)
-             n)))
-       0
+               seat (seat-of (some-> (get-in row [:data :seat]) str))
+               cadence (get-in seat [:data :cadence_seconds])
+               idle (long (or (get-in seat [:data :sitting_idle_seconds])
+                              default-idle-seconds))
+               started (get-in row [:data :started_at])
+               tallied (get-in row [:data :tallied_at])
+               ;; the SITTING's own mode, which it inherited at birth,
+               ;; and the seat's only for a row born before the field
+               ;; existed: a seat restated after a sitting opened must
+               ;; not change how that sitting ends
+               interactive? (= seats/interactive-mode
+                               (str (or (get-in row [:data :mode])
+                                        (get-in seat [:data :mode]))))]
+           (cond
+             (nil? seat) acc
+
+             interactive?
+             (cond
+               (stale-since? tallied now idle)
+               (if (end-sitting! eng row :close
+                                 (assoc (last-tally row)
+                                        :note (str "Closed by the sweep after "
+                                                   idle " seconds idle.")))
+                 (update acc :closed inc)
+                 acc)
+
+               (and (nil? tallied) (stale-since? started now idle))
+               (if (end-sitting! eng row :abandon nil)
+                 (update acc :abandoned inc)
+                 acc)
+
+               :else acc)
+
+             (and cadence (stale-since? started now (* 2 (long cadence))))
+             (if (end-sitting! eng row :abandon nil)
+               (update acc :abandoned inc)
+               acc)
+
+             :else acc)))
+       {:abandoned 0 :closed 0}
        (rows-of eng :sitting {:state :open})))))
 
 (defn- report-drift!
@@ -1086,15 +1163,21 @@
 (defn sweep-seats!
   "The boot's seat pass (§ 7, R-12.3), run after the kind fingerprints
   because it judges scopes against the registry those fingerprints
-  just settled. → {:stale n :abandoned n :drifting n}.
+  just settled. → {:stale n :abandoned n :closed n :drifting n}.
 
   Every step is guarded against a kind this engine does not serve: an
   engine assembled without the seats module sweeps nothing and says
   nothing, which is what a module you left out should cost."
   [eng]
-  {:stale (sweep-scopes! eng)
-   :abandoned (sweep-sittings! eng)
-   :drifting (report-drift! eng)})
+  (let [stale (sweep-scopes! eng)
+        sittings (sweep-sittings! eng)]
+    {:stale stale
+     :abandoned (:abandoned sittings)
+     ;; R-12.25's half of the same pass: an interactive sitting
+     ;; somebody walked away from is CLOSED with its last tally, not
+     ;; abandoned, because it did report what it spent
+     :closed (:closed sittings)
+     :drifting (report-drift! eng)}))
 
 (defn boot-revise!
   "Fingerprint every resident application kind, revise where the hash

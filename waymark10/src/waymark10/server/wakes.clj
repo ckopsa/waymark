@@ -24,6 +24,18 @@
   named consumer (`:wakes`) beside the schedules mirror's, and no
   subscription row is minted for a receiver that is a door.
 
+  ── the two kinds of entry ─────────────────────────────────────────
+
+  R-12.24 gives a `wake_on` entry a second reading. An entry with no
+  `at_least` is the TRANSITION wake above: the row that moved wakes
+  the seat, and the text names it. An entry WITH one is a COUNT wake:
+  the seat is not woken by a row, it is woken by a queue reaching a
+  size. It does not poll — the count is read only when a transition
+  of that kind matches the entry's actions, which is the one moment
+  the number can have changed — and the count itself is the
+  collection's own (`count-under`), so the number in the text is the
+  number the list page would show under the same filter.
+
   ── the damper, and what it is for ─────────────────────────────────
 
   A wake is fuel. R-12.22 gives the damper three parts and this file
@@ -63,7 +75,8 @@
   Nothing here re-throws. A throwing consumer parks its cursor, and a
   parked cursor stops every other seat in the house from being woken
   by anything."
-  (:require [waymark10.server.consumers :as consumers]
+  (:require [waymark10.server.collections :as collections]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
@@ -138,15 +151,22 @@
             default-fire-interval-seconds)))
 
 (defn- active-seats
-  "Every active seat, as the three facts a match needs: its id, what
-  wakes it (`effective-wake-on`, so a walk seat's computed default is
-  already in), and its own gap."
+  "Every active seat a wake can reach, as the three facts a match
+  needs: its id, what wakes it (`effective-wake-on`, so a walk seat's
+  computed default is already in), and its own gap.
+
+  AN INTERACTIVE SEAT IS NOT HERE (R-10.8). A person sits in it and
+  nothing fires it — its own `fire` door refuses the engine — so it is
+  dropped where the cache is built rather than at the door: a match
+  judged and then refused would warn once per matching transition in
+  a house where nothing is wrong."
   [eng]
   (into []
-        (map (fn [row]
-               {:id (str (:id row))
-                :wake-on (seats/effective-wake-on row)
-                :interval (interval-of row)}))
+        (comp (remove seats/interactive-seat?)
+              (map (fn [row]
+                     {:id (str (:id row))
+                      :wake-on (seats/effective-wake-on row)
+                      :interval (interval-of row)})))
         (rows-where eng :seat {:state :active} seat-page)))
 
 (defn- seats-of
@@ -156,19 +176,33 @@
   [eng cache]
   (or @cache (reset! cache (active-seats eng))))
 
+(defn count-entry?
+  "Is this a COUNT wake (R-12.24)? One field decides it: `at_least`."
+  [e]
+  (some? (:at_least e)))
+
 (defn matches?
-  "Does this transition match one of the seat's wake entries? The kind
-  and the action, both by name. An entry with an empty actions list
-  matches NOTHING — a wake is an action happening, not a kind
-  existing, and the read-only reading `actions []` carries in a scope
-  has no meaning here."
+  "Does this ONE entry match the transition? The kind and the action,
+  both by name.
+
+  An empty actions list reads differently on the two kinds of entry,
+  and deliberately. On a TRANSITION wake it matches nothing — a wake
+  is an action happening, not a kind existing, and the read-only
+  reading `actions []` carries in a scope has no meaning here. On a
+  COUNT wake it matches every action of the kind (R-12.24's default),
+  because what that entry watches is the SIZE of a collection, and
+  every door of a kind can move it."
+  [e kind action]
+  (and (= (name kind) (str (:kind e)))
+       (if (seq (:actions e))
+         (boolean (some #(= (name action) (str %)) (:actions e)))
+         (count-entry? e))))
+
+(defn matching-entries
+  "The seat's entries this transition matches, in the order the seat
+  wrote them."
   [entries kind action]
-  (let [k (name kind)
-        a (name action)]
-    (boolean (some (fn [e]
-                     (and (= k (str (:kind e)))
-                          (some #(= a (str %)) (:actions e))))
-                   entries))))
+  (filterv #(matches? % kind action) entries))
 
 (defn wake-text
   "The transition, as the text the fire carries (R-12.22): the kind,
@@ -181,6 +215,76 @@
                     :action (name (:action t))
                     :from (some-> (:from-state t) name)
                     :to (some-> (:to-state t) name)}))
+
+;; ── the count wake (R-12.24) ────────────────────────────────────────
+
+(defn count-under
+  "How many rows of `kind` a count wake is looking at, or nil when
+  this engine does not serve the kind.
+
+  The COLLECTION's count, and not a second one. A list page reads its
+  total as `store/count-matching` over the conds
+  `collections/parse-query` compiles from the kind's own query
+  grammar (`collections/envelope`), and this is those same two calls
+  with the entry's filter standing where a caller's query string
+  stands. So everything the grammar does for a person asking for a
+  page it does here too: the kind's DEFAULT filters apply when the
+  entry names none — which is what makes the absent filter the walk's
+  own queue — a named field replaces its default, and a field the
+  kind does not declare filterable is refused in the query's own
+  sentence.
+
+  What the count does NOT wear is a grant's projection. The number is
+  the engine's; what the woken session then sees is the sitting's,
+  through the seat's scope (R-12.24's punt). A filter the kind cannot
+  answer is a warning and a nil — a seat that cannot be counted for
+  is a seat that says nothing, rather than a consumer that parks."
+  [eng kind filter-map]
+  (when-some [rdef (get (inv/resources eng) kind)]
+    (try
+      (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
+            conds (:conds (collections/parse-query rdef params))
+            st (:storage eng)]
+        (store/with-tx st
+          (fn [tx] (store/count-matching st tx (:kind rdef) conds))))
+      (catch Exception e
+        (warn! "the count wake over " (name kind) " could not be counted — "
+               (ex-message e))
+        nil))))
+
+(defn count-text
+  "The count, as the text a count wake's fire carries (R-12.24): the
+  kind, the rows waiting, and the size that was asked for. NO row id,
+  so the session walks the queue rather than one row."
+  [kind n at-least]
+  (wire/write-json {:kind (name kind) :count n :at_least at-least}))
+
+(defn- wake-text-for
+  "The text this seat's fire carries for this transition, or nil when
+  the transition wakes it not at all.
+
+  A TRANSITION entry that matches answers with the transition
+  (R-12.22). A COUNT entry that matches costs one count query
+  (R-12.24) and answers only once the rows waiting have reached its
+  `at_least`; below that the seat is not woken and nothing is
+  remembered, because the entry has not matched yet.
+
+  A seat that wrote both kinds and matched both is woken by the
+  transition: it is the more specific of the two and names the row
+  that moved. One transition opens one fire either way — the fire's
+  idempotency key is the transition it heard."
+  [eng entries t]
+  (let [matched (matching-entries entries (:kind t) (:action t))]
+    (if (some (complement count-entry?) matched)
+      (wake-text t)
+      (some (fn [e]
+              (let [at-least (long (:at_least e))
+                    n (or (count-under eng (keyword (name (:kind e)))
+                                       (:filter e))
+                          0)]
+                (when (>= n at-least)
+                  (count-text (:kind e) n at-least))))
+            matched))))
 
 ;; ── the damper ──────────────────────────────────────────────────────
 
@@ -261,7 +365,9 @@
       nil)))
 
 (defn- wake-seat!
-  "One active seat, one transition it asked to be woken by.
+  "One active seat, one transition it asked to be woken by, and the
+  text that transition earned (`wake-text-for`: the row that moved,
+  or a count wake's count).
 
   No schedule, or one nobody linked: silence, and the link is asked
   BEFORE the damper. The `fire` door would refuse an unlinked seat
@@ -273,13 +379,13 @@
   Damped — an open sitting, or a fire inside this seat's gap — the
   match is REMEMBERED as `wake_pending` and nothing goes out.
   → true when a fire went out."
-  [eng seat t ^Instant at]
+  [eng seat t ^Instant at text]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
     (when (schedules/linked? row)
       (if (or (some? (seats/open-sitting-for-seat eng (:id seat)))
               (fired-recently? row (:interval seat) at))
         (mark-pending! eng row)
-        (when (fire! eng (:id seat) (wake-text t)
+        (when (fire! eng (:id seat) text
                      (str "wake:" (:id seat) ":" (:id t)))
           (stamp-fired! eng row at false)
           true)))))
@@ -347,7 +453,8 @@
                                own writing about wakes, and a seat
                                woken by its own fire wakes forever
       everything else          match it against every active seat's
-                               effective wake_on, and wake the ones
+                               effective wake_on, count for the count
+                               entries it matched, and wake the seats
                                that asked
 
   Never throws: a throwing consumer parks its cursor, and a parked
@@ -367,8 +474,9 @@
         :else
         (let [at (now eng)]
           (doseq [seat (seats-of eng cache)
-                  :when (matches? (:wake-on seat) kind (:action t))]
-            (wake-seat! eng seat t at)))))
+                  :let [text (wake-text-for eng (:wake-on seat) t)]
+                  :when text]
+            (wake-seat! eng seat t at text)))))
     (catch Exception e
       (warn! "transition " (:id t) " could not be handled — " (ex-message e))
       nil))
