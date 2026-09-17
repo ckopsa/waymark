@@ -247,10 +247,15 @@ jobs:
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      # -Sdeps "$CLJ_SDEPS" points tools.deps at this job's own Maven
+      # repository, which setup-clojure restored under runner.temp and
+      # named in that variable. Every clojure call in this file carries
+      # it, and it goes before -M — the CLI stops reading its own flags
+      # there. Why: .github/actions/setup-clojure/action.yml.
       - name: check-queue — declaration gate, no database
-        run: cd workqueue10 && clojure -M:check
+        run: cd workqueue10 && clojure -Sdeps "$CLJ_SDEPS" -M:check
       - name: calendar10 — pure translation, no database or network
-        run: cd calendar10 && clojure -M:test
+        run: cd calendar10 && clojure -Sdeps "$CLJ_SDEPS" -M:test
       - name: JVM crash report
         if: failure()
         uses: ./.github/actions/jvm-crash-report
@@ -444,7 +449,9 @@ jobs:
             args+=(--plugin kaocha.plugin/profiling --profiling-count 500)
           fi
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
-          cd waymark10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+          # -Sdeps before -M: this job's own Maven repository, from
+          # setup-clojure. See the quick job above.
+          cd waymark10 && clojure -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
       # A JVM that died says so in hs_err_pid*.log next to the suite;
       # the banner in the log above is eight lines of it. Keep the rest.
       - name: JVM crash report
@@ -553,7 +560,9 @@ jobs:
             args+=(--plugin kaocha.plugin/profiling --profiling-count 500)
           fi
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
-          cd workqueue10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+          # -Sdeps before -M: this job's own Maven repository, from
+          # setup-clojure. See the quick job above.
+          cd workqueue10 && clojure -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
       - name: JVM crash report
         if: failure()
         uses: ./.github/actions/jvm-crash-report

@@ -7,11 +7,44 @@
 # on the deps.edn files, so it survives every commit that does not
 # change a dependency — which is nearly all of them.
 #
-# ~/.m2/repository is Maven's; ~/.gitlibs is tools.deps' store for
-# :git/url coordinates. Neither is populated by the other, so both are
-# named. .cpcache is deliberately NOT cached: it is per-checkout
-# classpath memoisation, cheap to rebuild and a real source of stale
-# confusion when restored across commits.
+# The Maven repository is Maven's; the gitlibs store is tools.deps'
+# store for :git/url coordinates. Neither is populated by the other, so
+# both are named. .cpcache is deliberately NOT cached: it is
+# per-checkout classpath memoisation, cheap to rebuild and a real
+# source of stale confusion when restored across commits.
+#
+# EVERY JOB EXTRACTS INTO ITS OWN DIRECTORY, NOT INTO $HOME. Both
+# caches restore under ${RUNNER_TEMP}, which one runner owns and the
+# runner empties between jobs. On the self-hosted runners every runner
+# on the node shares one home directory, and nine shards start within
+# seconds of each other — so nine cache restores were unpacking into
+# one ~/.m2 at once, and a shard whose JVM opened a jar another
+# restore was still writing read a truncated file. 2026-09-17: four
+# shards died before a single test body ran, each on a different jar
+# ("zip END header not found" on the Clojure jar, "Could not locate
+# ring/util/mime_type__init.class", "Could not locate
+# clojure/spec/alpha__init.class", "Could not find or load main class
+# clojure.main"). Every one passed on rerun, and no GitHub-hosted job
+# has ever failed this way. It is the same race the JDK step below
+# records, one directory over.
+#
+# THE KEY DID NOT MOVE. Only the extraction target did, so a job still
+# downloads exactly what it downloaded before; what it no longer does
+# is share the unpacked tree with eight siblings.
+#
+# THE PATHS TRAVEL IN VARIABLES, NOT IN EVERY COMMAND. The first step
+# writes three names to GITHUB_ENV for the rest of the job:
+# CLJ_M2_REPO (the Maven repository), GITLIBS (tools.deps reads this
+# one by itself, so nothing has to pass it), and CLJ_SDEPS, the EDN
+# map that carries the repository to tools.deps. Every clojure call in
+# tests.yml spells it the same way:
+#
+#     clojure -Sdeps "$CLJ_SDEPS" -M:test
+#
+# -Sdeps comes BEFORE -M; the CLI reads it as an extra deps.edn merged
+# over the project's, and nothing after -M is the CLI's to read. A
+# developer's machine sets none of these variables, so `make test10`
+# and `make check-queue` keep using ~/.m2 with no flag at all.
 #
 # No third-party action: this is a pinned installer script and two
 # cache entries, which is less to trust and less to break than a
@@ -28,12 +61,32 @@ inputs:
 runs:
   using: composite
   steps:
+    # Before the cache, because the cache unpacks into these two
+    # directories and every later step needs their names.
+    - name: Per-job dependency stores
+      shell: bash
+      run: |
+        set -euo pipefail
+        repo="${RUNNER_TEMP}/clojure-deps/m2/repository"
+        gitlibs="${RUNNER_TEMP}/clojure-deps/gitlibs"
+        mkdir -p "$repo" "$gitlibs"
+        {
+          echo "CLJ_M2_REPO=${repo}"
+          echo "GITLIBS=${gitlibs}"
+          echo "CLJ_SDEPS={:mvn/local-repo \"${repo}\"}"
+        } >> "$GITHUB_ENV"
+        echo "maven repository: ${repo}"
+        echo "gitlibs store:    ${gitlibs}"
+
     - name: Cache Clojure dependencies
       uses: actions/cache@v4
       with:
+        # Written by the step above. runner.temp belongs to one runner
+        # and is emptied between jobs, so no two shards on a shared
+        # host unpack into the same tree.
         path: |
-          ~/.m2/repository
-          ~/.gitlibs
+          ${{ runner.temp }}/clojure-deps/m2/repository
+          ${{ runner.temp }}/clojure-deps/gitlibs
         # Every deps.edn in the tree: waymark10 is a :local/root of both
         # others, so a change to any of them can move the resolved set.
         key: cljdeps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/deps.edn') }}
