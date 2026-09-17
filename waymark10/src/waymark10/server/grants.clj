@@ -700,10 +700,13 @@
                     :x-display {:label "The seat it sits in"
                                 :help "The office this grant is a seat in. A grant that cites a seat carries no scope of its own: the seat's scope is resolved at every request, so restating the seat moves every sitter with it and nothing is copied."}}
              [:maybe :waymark/ref]]
-            [:substitute {:default false
+            ;; optional, not defaulted: the mint path (approval-effects!,
+            ;; an engine-internal create) skips declared defaults, and
+            ;; every reader asks `true?`, so absent IS false
+            [:substitute {:optional true
                           :x-display {:label "Sitting as a substitute"
                                       :help "A substitute stands in: it gets the seat's scope minus the seat's drop list, and it reads the seat's memory (self, journal, letter) without writing it. The reason is continuity — the memory is the seat's voice across sessions."}}
-             :boolean]
+             [:maybe :boolean]]
             [:expires_at {:optional true
                           :x-display {:label "Good until"
                                       :help "When the leash goes dead on its own. Leave it empty for a grant that lasts until somebody revokes it."}}
