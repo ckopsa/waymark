@@ -588,11 +588,9 @@
   "Can a generic form OFFER this projected property — a widget a person
   fills without spelling structure? A scalar, an enum, a const, a list
   of scalars, a nested map whose every field is itself formable, or a
-  list of such maps whose item fields carry no option recipe. A map
-  with no declared keys, a bare :any, a list of maps with a recipe
-  inside: no — the one widget left is a box that wants JSON. A
-  sub-field carrying its own :spelled-by-hand sentence has answered for
-  itself."
+  list of such maps. A map with no declared keys, a bare :any: no —
+  the one widget left is a box that wants JSON. A sub-field carrying
+  its own :spelled-by-hand sentence has answered for itself."
   [prop]
   (let [p (unwrap-maybe prop)
         t (:type p)]
@@ -613,17 +611,16 @@
                               ;; left that a form cannot seat, and no
                               ;; policy sentence is owed for one
                               (contains? scalar-types (:type it))
-                              ;; a list of maps renders as rows (waymark-jtd7)
-                              ;; when every item field is formable and none
-                              ;; carries an option recipe — the client's own
-                              ;; rule, mirrored: that list keeps its box and
-                              ;; the chips beside it. The hole lookup reaches
-                              ;; a row's own siblings since waymark-z8u4, so
-                              ;; this is the rows not yet taught to host the
-                              ;; chips, no longer a limit of the recipe
+                              ;; a list of maps renders as rows
+                              ;; (waymark-jtd7) when every item field is
+                              ;; formable — the client's own rule,
+                              ;; mirrored. An item field's OPTION RECIPE
+                              ;; is no longer a reason to keep the box
+                              ;; (waymark-fp62.7.9): a row is a sub-form,
+                              ;; so the recipe's {of} hole answers from
+                              ;; the row's own siblings (waymark-z8u4)
+                              ;; and every row wears its own chips
                               (and (seq (:properties it))
-                                   (not-any? (fn [[_ sp]] (:x-options sp))
-                                             (:properties it))
                                    (every? (fn [[_ sp]]
                                              (or (get-in sp [:x-display :spelled-by-hand])
                                                  (formable? sp)))
@@ -637,9 +634,9 @@
 
 (defn spelled-by-hand
   "A field no form can offer except as a box that wants JSON — a map
-  with no declared keys, a bare :any, a list of maps — is a person
-  being asked to spell structure. The renderer that once did this to a
-  labelled nested map was a bug (waymark-au42); the fields this policy
+  with no declared keys, a bare :any, a list of maps whose items have
+  none — is a person being asked to spell structure. The renderer that
+  once did this to a labelled nested map was a bug (waymark-au42); the fields this policy
   names are the ones the declaration itself left that way. The fix is
   the field's own: declare the keys as a nested :map, so every client
   renders a sub-form, or say why a person spells it — :x-display
@@ -661,7 +658,8 @@
                       (str "[spelled-by-hand] " (where-of door) " asks for "
                            (listing boxes) " in a shape no form can offer"
                            " except as a box that wants JSON — a map with no"
-                           " declared keys, a bare :any, a list of maps;"
+                           " declared keys, a bare :any, a list of maps whose"
+                           " items have none;"
                            " declare the keys as a nested :map so every client"
                            " renders a sub-form, or say why a person spells it"
                            " in :x-display {:spelled-by-hand \"…\"} and the box"

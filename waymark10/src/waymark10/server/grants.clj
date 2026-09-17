@@ -215,6 +215,16 @@
   counts. Keys arrive keywordized off the wire."
   [:map-of :keyword [:string {:min 1 :max 200}]])
 
+(def filter-spelled-by-hand
+  "Why a filter is typed rather than offered, spelled once and worn
+  twice: the scope entry below and the seat's wake entry
+  (seats/wake-entry-schema) wear the same box for the same reason. A
+  row of a list of entries is a sub-form since waymark-fp62.7.9, so
+  every other field of an entry is a widget — this one is the map-of
+  the client can only hand a person as a box, and waymark-2hd0's rule
+  is that such a box wears the declaration's own reason."
+  "No form can list another kind's field names, so this pair is typed: write the field name, then the value it must equal. The field must be one that kind declares filterable.")
+
 ;; The scope form is where a person decides whether to trust an agent,
 ;; so it is the last form in this codebase that should have been a
 ;; blank JSON textarea. Since waymark-8sg the two vocabularies it is
@@ -266,6 +276,7 @@
     ;; carries it and waymark-3ox holds the honest spelling
     [:filter {:optional true
               :x-display {:label "Only rows matching"
+                          :spelled-by-hand filter-spelled-by-hand
                           :help "One field=value pair, judged at render — rows minted later land inside the leash the moment they match. The field must be one the kind declares filterable with eq; one filtered entry per kind."}}
      [:maybe filter-map-schema]]
     [:args {:optional true

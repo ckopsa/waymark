@@ -845,9 +845,6 @@
 
 ;; ── :seat ───────────────────────────────────────────────────────────
 
-(def ^:private scope-help
-  "A scope is a list of entries — a kind, the actions allowed on it, and optionally the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name.")
-
 (def ^:private mode-choices
   "R-10.8's two words, in the person's own terms. Said once and shown
   at all three doors, because a seat whose mode reads one way on the
@@ -902,6 +899,7 @@
    ;; composition words both describe a value BUILT from tokens
    [:filter {:optional true
              :x-display {:label "Only rows matching"
+                         :spelled-by-hand grants/filter-spelled-by-hand
                          :help "Which rows a count wake counts: field=value pairs in the shape of that kind's own query, the collection grammar's eq. Omit it and the kind's own default filter counts — the queue a walk works through."}}
     [:maybe grants/filter-map-schema]]
    [:at_least {:optional true
@@ -921,9 +919,6 @@
   (conj grants/scope-example
         {:kind "task" :actions ["create"]
          :filter {:state "open"} :at_least 20}))
-
-(def ^:private wake-on-help
-  "A wake_on entry is a kind, the actions on it that count, and optionally the filter and the at_least that make it a count wake — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name.")
 
 (def ^:private charter-example
   "Decide whether a message asks something of this house, and say what it asks in one line. A receipt for something already bought asks nothing. A person waiting on an answer asks something, even when they are polite about it.")
@@ -976,14 +971,12 @@
     [:scope {:examples [grants/scope-example]
              :x-display
              {:label "What the seat opens"
-              :spelled-by-hand scope-help
               :help "The office's authority, entry by entry: a kind, the actions allowed on it, and optionally the rows, fields and filter that narrow it. Every sitter of this seat sees exactly this and nothing else — and a restate moves every live grant with it, with no new grant minted."}}
      grants/scope-schema]
     [:substitute_drop {:default []
                        :examples [grants/scope-example]
                        :x-display
                        {:label "What a substitute does NOT get"
-                        :spelled-by-hand scope-help
                         :help "The entries a stand-in sitter is refused — the parts of this office you would not hand a model covering for the one that usually sits here. Every entry must be inside the scope above; an empty list means a substitute sees the whole seat."}}
      grants/scope-schema]
     [:held_for {:default []
@@ -1048,7 +1041,6 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :spelled-by-hand wake-on-help
                 :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
@@ -1135,14 +1127,12 @@
     [:scope {:examples [grants/scope-example]
              :x-display
              {:label "What the seat opens"
-              :spelled-by-hand scope-help
               :help "The office's authority, entry by entry. Ask for the least that does the job — every sitter of this seat will see exactly this."}}
      grants/scope-schema]
     [:substitute_drop {:default []
                        :examples [grants/scope-example]
                        :x-display
                        {:label "What a substitute does NOT get"
-                        :spelled-by-hand scope-help
                         :help "The entries a stand-in sitter is refused. Every entry must be inside the scope above; an empty list means a substitute sees the whole seat."}}
      grants/scope-schema]
     [:held_for {:default []
@@ -1198,7 +1188,6 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :spelled-by-hand wake-on-help
                 :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
@@ -1266,14 +1255,12 @@
              [:scope {:examples [grants/scope-example]
                       :x-display
                       {:label "What the seat opens"
-                       :spelled-by-hand scope-help
                        :help "The whole authority, restated. Every live grant citing this seat moves with it at the next request — no new grant, nothing copied."}}
               grants/scope-schema]
              [:substitute_drop {:default []
                                 :examples [grants/scope-example]
                                 :x-display
                                 {:label "What a substitute does NOT get"
-                                 :spelled-by-hand scope-help
                                  :help "The entries a stand-in is refused; every one must be inside the scope above. An empty list means a substitute sees the whole seat."}}
               grants/scope-schema]
              [:held_for {:default []
@@ -1329,7 +1316,6 @@
                         :examples [wake-on-example]
                         :x-display
                         {:label "What wakes it"
-                         :spelled-by-hand wake-on-help
                          :help "The transitions that wake this seat, stated again in full, count entries and all. An entry naming a kind the scope above does not open still wakes the seat; the sitting then sees only what the scope opens."}}
               [:maybe wake-on-schema]]
              [:fire_interval_seconds {:default 300

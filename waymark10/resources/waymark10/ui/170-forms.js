@@ -89,20 +89,20 @@ function fieldWidget(name, rawProp, value) {
       return el("input", {type: "text", name, "data-array": "csv",
         placeholder: "comma-separated",
         value: Array.isArray(value) ? value.join(", ") : (value ?? "")});
+    /* a list of maps with declared fields is ROWS of a sub-form
+       (waymark-jtd7), option recipes and all (waymark-fp62.7.9). A row
+       IS a sub-form, so a row's fields are each other's siblings and a
+       recipe's {kind} hole answers from the row it was typed in
+       (holeNode, waymark-z8u4) — which is what waymark-7rw's chips
+       beside a JSON box were standing in for. The seat's scope, its
+       substitute_drop and its wake_on asked for JSON until this. */
+    const itemSchema = schemaProp(items);
+    if (itemSchema.properties && Object.keys(itemSchema.properties).length)
+      return listWidget(name, prop, itemSchema, value);
     /* scaffolding, never a value (waymark-7rw): a declared :examples
        rides as the placeholder here for the same reason it does on a
-       prose box — a grant's scope is the last form in the building
-       that should open as a blank rectangle */
-    /* a list of maps with declared fields is ROWS of a sub-form
-       (waymark-jtd7) — unless an item field carries an option recipe:
-       those lists keep the box and the chips beside it. The hole
-       lookup can reach a row's own siblings since waymark-z8u4
-       (holeNode), so this is the rows not yet taught to host the
-       chips, no longer a limit of the recipe — a follow-up, recorded */
-    const itemSchema = schemaProp(items);
-    if (itemSchema.properties && Object.keys(itemSchema.properties).length &&
-        !itemOptionFields(rawProp).length)
-      return listWidget(name, prop, itemSchema, value);
+       prose box — the box left below is for the items no declaration
+       gave fields to, and it should not open as a blank rectangle */
     const ex = (prop.examples || rawProp.examples || [])[0];
     return el("textarea", {name, "data-array": "json",
                            placeholder: ex !== undefined
@@ -220,8 +220,11 @@ function listWidget(name, prop, items, value, makeRow) {
                              "aria-label": "remove this entry",
                              onclick: () => { row.remove(); refresh(); }}, "✕"));
     rows.append(row);
-    /* a row added to a form already standing is wired as it lands;
-       the rows a form opens with wait for buildForm's own walk */
+    /* a row added to a form already standing is wired as it lands: its
+       fields' option recipes become chips whose {hole} reads this
+       row's own siblings. A row the form OPENS with is not inside the
+       form yet — it waits for buildForm's own walk, which reaches it
+       there and wires it the same way. */
     const root = box.closest("[data-form]");
     if (root) wireOptions(root, row);
     refresh();
@@ -611,125 +614,6 @@ function attachOptions(form, input, xo) {
                sib.addEventListener("input", refresh); }
   }
 }
-/* ── vocabularies inside a list of entries (waymark-7rw) ────────────
-   A grant's scope is a LIST OF ENTRIES — a kind, its actions, the
-   fields and filter that narrow them — and the vocabulary belongs to
-   the entry's parts, not to the list. x-options needed no new
-   capability to say so: an item's fields are each other's siblings,
-   so the annotation rides items.properties and {of} resolves inside
-   the entry a person is filling in.
-
-   This client draws such a list as a JSON textarea, where there is no
-   DOM sibling to read a hole from. So the recipe is resolved against
-   the entries ALREADY TYPED — the kinds this scope names so far — and
-   the chips offer the union of what each admits. A chip inserts its
-   token, quoted, at the caret: an offer of the right WORDS, not a
-   form that pretends to know where they go. The whole surface is
-   still advertisement — the textarea stays free text, and the guard
-   is still the refusal. */
-function itemOptionFields(rawProp) {
-  const items = schemaProp(schemaProp(rawProp).items || {});
-  return Object.entries(items.properties || {})
-    .map(([name, p]) => {
-      const xd = p["x-display"] || schemaProp(p)["x-display"] || {};
-      return [name, xoptionsOf(p), xd.label || name];
-    })
-    .filter(([, xo]) => xo && xo.href);
-}
-/* …and the vocabularies the DECLARATION already knows (waymark-4yn).
-   A feed recipe's section and population are enums — the census and
-   the population registry are literals a reviewer reads on one screen
-   — so their legal words are already in the schema in front of this
-   form, one level down inside items. There is nothing to fetch, and a
-   list whose parts are enum'd deserves the same row of chips an
-   x-options part gets rather than a memory test. Same surface, same
-   manners: the chip inserts the WORD at the caret and the textarea
-   stays free text. */
-function itemEnumFields(rawProp) {
-  const items = schemaProp(schemaProp(rawProp).items || {});
-  return Object.entries(items.properties || {})
-    .map(([name, p]) => {
-      const leaf = schemaProp(p);
-      const toks = (leaf.enum || p.enum ||
-        (leaf.anyOf || leaf.oneOf || []).flatMap(b => b.enum || []));
-      const xd = p["x-display"] || leaf["x-display"] || {};
-      return [name, (toks || []).map(String), xd.label || name];
-    })
-    .filter(([, toks]) => toks.length);
-}
-function typedEntries(textarea) {
-  try {
-    const v = JSON.parse(textarea.value);
-    return Array.isArray(v) ? v.filter(e => e && typeof e === "object") : [];
-  } catch (_e) { return []; }        /* half-typed JSON is the normal case */
-}
-function attachItemOptions(form, textarea, fields, enums) {
-  const panel = el("div", {class: "opt-chips"});
-  textarea.after(panel);
-  const chipRow = (label, note, toks, insertFn) =>
-    el("div", {class: "opt-row"},
-      el("span", {class: "muted"}, label + " · "),
-      ...toks.slice(0, 24).map(t => {
-        const c = el("button", {type: "button", class: "chip", title: note}, t);
-        c.addEventListener("click", e => { e.preventDefault(); insertFn(t); });
-        return c;
-      }),
-      ...(toks.length > 24
-        ? [el("span", {class: "muted"}, " … " + (toks.length - 24) + " more")]
-        : []));
-  const insert = tok => {
-    const s = JSON.stringify(tok);
-    const at = textarea.selectionStart ?? textarea.value.length;
-    textarea.value = textarea.value.slice(0, at) + s + textarea.value.slice(at);
-    textarea.selectionStart = textarea.selectionEnd = at + s.length;
-    textarea.dispatchEvent(new Event("input", {bubbles: true}));
-    textarea.focus();
-  };
-  const CAP = 24;
-  let seq = 0;
-  const refresh = async () => {
-    const mine = ++seq;
-    const entries = typedEntries(textarea);
-    const rows = [];
-    for (const [name, xo, label] of fields) {
-      const holes = optHoles(xo);
-      /* hole-free: one fetch. With a hole: one per entry that has
-         already answered it, unioned — "the actions of the kinds you
-         have named so far", which is the only honest answer here */
-      const ctxs = holes.length
-        ? entries.filter(e => holes.every(h => e[h]))
-        : [{}];
-      const seen = new Set();
-      for (const c of ctxs)
-        for (const t of (await optionTokens(xo, c)) || []) seen.add(t);
-      rows.push([name, xo, [...seen], ctxs.length, label]);
-    }
-    if (mine !== seq) return;          /* a later keystroke won the race */
-    panel.replaceChildren(
-      ...(enums || []).map(([name, toks, label]) =>
-        chipRow(label, "one of this kind's own declared words for " + name,
-                toks, insert)),
-      ...rows.map(([name, xo, toks, n, label]) =>
-      el("div", {class: "opt-row"},
-        el("span", {class: "muted"}, (label || name) + " · "),
-        ...(toks.length
-          ? toks.slice(0, CAP).map(t => {
-              const c = el("button", {type: "button", class: "chip",
-                                      title: xo.note}, t);
-              c.addEventListener("click", e => { e.preventDefault(); insert(t); });
-              return c;
-            })
-          : [el("span", {class: "muted"},
-                n ? "nothing offered — " + xo.note
-                  : "name " + xo.of + " in an entry first — the options are "
-                    + xo.note)]),
-        ...(toks.length > CAP
-          ? [el("span", {class: "muted"}, " … " + (toks.length - CAP) + " more")]
-          : []))));
-  };
-  refresh();
-  textarea.addEventListener("input", refresh);
-}
 function buildForm(schema, prefill, kind) {
   /* data-form marks the root a hole resolves against (holeNode) and a
      list row landing later finds its way back up to (listWidget) */
@@ -738,7 +622,6 @@ function buildForm(schema, prefill, kind) {
   /* x-options wiring waits for the whole form: a recipe interpolates
      SIBLING values, and a sibling declared later is not in the DOM yet
      — a widget carries its recipe (markOptions) until the walk below */
-  const pendingItemOptions = [];
   for (const [name, rawProp] of Object.entries(schema.properties || {})) {
     if (name === "ids") continue;           /* bulk ids ride the selection */
     const prop = schemaProp(rawProp);
@@ -798,21 +681,11 @@ function buildForm(schema, prefill, kind) {
       el("div", {class: "err srv", "data-srverr": name}),
       xd.help ? el("div", {class:"muted",
                            style:"font-size:11px;margin:2px 0 4px"}, xd.help) : null));
-    const xo = xoptionsOf(rawProp);
-    if (xo && xo.href && widget.tagName === "INPUT")
-      markOptions(widget, rawProp);
-    else if (widget.dataset && widget.dataset.array === "json") {
-      const fields = itemOptionFields(rawProp);
-      const enums = itemEnumFields(rawProp);
-      if (fields.length || enums.length)
-        pendingItemOptions.push([widget, fields, enums]);
-    }
+    markOptions(widget, rawProp);
   }
   /* one walk wires every marked widget — the top level's and the
      sub-forms' alike, the rows a list opened with included */
   wireOptions(form, form);
-  for (const [widget, fs, es] of pendingItemOptions)
-    attachItemOptions(form, widget, fs, es);
   wireWhen(form, "");
   return form;
 }

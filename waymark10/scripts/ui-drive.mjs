@@ -1831,25 +1831,35 @@ async function recipeStory() {
   await evaljs(`[...document.querySelectorAll('button,a')]
                   .find(n => /new|create|add/i.test(n.textContent||"")).click(); true`);
   await sleep(1200);
-  ok("the create form has an order box",
-     await evaljs(`!!document.querySelector('[name="order"]')`));
-  const chips = await evaljs(`(() => {
-    const ta = document.querySelector('[name="order"]');
-    const panel = ta && ta.nextElementSibling;
-    if (!panel || !panel.classList.contains("opt-chips")) return [];
-    return [...panel.querySelectorAll(".opt-row")].map(r => ({
-      field: ((r.querySelector(".muted")||{}).textContent||"").trim(),
-      chips: [...r.querySelectorAll(".chip")].map(c => c.textContent)}));
+  /* waymark-fp62.7.9: the order is ROWS of a sub-form now, not a JSON
+     box with chips beside it — one widget per field of a line, and the
+     `kinds` recipe's chips inside the row that owns them */
+  ok("the create form asks for the order as rows",
+     await evaljs(`!!document.querySelector('[data-list="order"]')`));
+  await evaljs(`document.querySelector('[data-list="order"] .listadd').click(); true`);
+  await sleep(1200);
+  const offers = await evaljs(`(() => {
+    const row = document.querySelector('[data-list="order"] .listrow');
+    if (!row) return null;
+    const opts = f => [...((row.querySelector('[name$=".' + f + '"]')
+                            || {}).options || [])].map(o => o.value);
+    const el = row.querySelector('[name$=".kinds"]');
+    const panel = el && el.nextElementSibling;
+    return {section: opts("section"), population: opts("population"),
+            kinds: panel && panel.classList.contains("opt-chips")
+              ? [...panel.querySelectorAll(".chip")].map(c => c.textContent)
+              : []};
   })()`);
-  console.log("    chip rows: " +
-    chips.map(r => r.field + " " + r.chips.length).join(", "));
-  ok("the entry list offers pickers, not recall", chips.length >= 3);
+  const one = offers || {section: [], population: [], kinds: []};
+  console.log("    one row offers: section " + one.section.length +
+    ", population " + one.population.length + ", kinds " + one.kinds.length);
+  ok("a row of the order is a sub-form, not a rectangle", !!offers);
   ok("section offers the census (an enum, no fetch)",
-     !!chips.find(r => r.chips.includes("do_now") && r.chips.includes("seam")));
+     one.section.includes("do_now") && one.section.includes("seam"));
   ok("population offers the registry (an enum, no fetch)",
-     !!chips.find(r => r.chips.includes("next_actions")));
-  ok("kinds fetched its own vocabulary (an x-options recipe)",
-     !!chips.find(r => /kinds/i.test(r.field) && r.chips.length > 3));
+     one.population.includes("next_actions"));
+  ok("kinds fetched its own vocabulary into the row (an x-options recipe)",
+     one.kinds.length > 3);
 
   console.log("\n· edit one line of the order the house already reads, and submit");
   const order = JSON.parse(JSON.stringify(before.recipe.order));
@@ -1862,10 +1872,22 @@ async function recipeStory() {
       el.dispatchEvent(new Event("input", {bubbles:true}));
       el.dispatchEvent(new Event("change", {bubbles:true}));
       return null; };
+    /* one row per line, each field typed into its own widget — a list
+       is a chip that adds rows, and the row it adds is a sub-form */
+    const lines = ${JSON.stringify(order)};
+    const box = document.querySelector('[data-list="order"]');
+    if (!box) return ["no order rows"];
+    const add = box.querySelector(".listadd");
+    const rows = () => box.querySelectorAll(".listrow").length;
+    while (rows() < lines.length) add.click();
+    const said = [];
+    lines.forEach((line, i) => {
+      for (const [k, v] of Object.entries(line))
+        said.push(set("order[" + i + "]." + k,
+                      Array.isArray(v) ? v.join(", ") : String(v)));
+    });
     return [set("label", ${JSON.stringify("Hand-verified order " + tag)}),
-            set("scope", "household"),
-            set("order", ${JSON.stringify(JSON.stringify(order, null, 1))})]
-           .filter(Boolean); })()`);
+            set("scope", "household"), ...said].filter(Boolean); })()`);
   ok("every field of the create form was fillable", missing.length === 0);
   await sleep(300);
   await evaljs(`[...document.querySelectorAll('button')]
@@ -1893,14 +1915,20 @@ async function recipeStory() {
   await evaljs(`[...document.querySelectorAll('button,a')]
                   .find(n => /revise/i.test((n.textContent||"").trim())).click(); true`);
   await sleep(1200);
-  ok("revise prefills the order it is editing",
-     await evaljs(`(document.querySelector('[name="order"]')||{}).value.length > 10`));
-  const order2 = JSON.parse(JSON.stringify(before.recipe.order));
-  for (const l of order2) if (l.section === "seam") l.sentence = words2;
-  await evaljs(`(() => {
-    const el = document.querySelector('[name="order"]');
-    el.value = ${JSON.stringify(JSON.stringify(order2, null, 1))};
-    el.dispatchEvent(new Event("input", {bubbles:true})); })(); true`);
+  ok("revise prefills the order it is editing, one row per line",
+     await evaljs(`document.querySelectorAll('[data-list="order"] .listrow').length > 1`));
+  /* the seam's own row is the one edited — the rest of the order is
+     already in the rows the prefill seated */
+  const said = await evaljs(`(() => {
+    const rows = [...document.querySelectorAll('[data-list="order"] .listrow')];
+    const seam = rows.find(r =>
+      ((r.querySelector('[name$=".section"]') || {}).value) === "seam");
+    const el = seam && seam.querySelector('[name$=".sentence"]');
+    if (!el) return "no seam row";
+    el.value = ${JSON.stringify(words2)};
+    el.dispatchEvent(new Event("input", {bubbles:true}));
+    return null; })()`);
+  ok("the seam's row was the one edited", said === null);
   await sleep(300);
   await evaljs(`(() => { const b = [...document.querySelectorAll('button')]
       .find(n => /^(revise|save|submit|confirm)$/i.test((n.textContent||"").trim()));

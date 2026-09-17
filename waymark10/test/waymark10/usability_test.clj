@@ -481,8 +481,9 @@
                     [:blob {:x-display {:label "Blob" :help "Whatever it is."}}
                      :any]
                     ;; a list of maps whose item carries an option recipe
-                    ;; keeps the box (waymark-jtd7) — the chips beside it
-                    ;; are the recipe's, and an indexed row cannot host them
+                    ;; is ROWS since waymark-fp62.7.9: a row is a sub-form,
+                    ;; so the recipe's hole answers from the row's own
+                    ;; siblings and every row wears its own chips
                     [:rows {:x-display {:label "Rows" :help "Some rows."}}
                      [:vector [:map [:kind {:x-options {:from :kinds}
                                             :x-display {:label "Kind"}}
@@ -497,9 +498,54 @@
                      [:maybe :waymark/date]]])
                   "spelled-by-hand")]
     (is (= 1 (count ws)) "one sentence per door, every box listed")
-    (is (str/includes? (first ws) "action annotate asks for [:extras :blob :rows]")
-        "the list of scalars, the date and the list of labelled maps are forms; the three boxes are named")
+    (is (str/includes? (first ws) "action annotate asks for [:extras :blob]")
+        "the list of scalars, the date and both lists of labelled maps are forms; the two boxes are named")
     (is (str/includes? (first ws) "declare the keys as a nested :map")))
+
+  (testing "a list of entries is rows of a sub-form, recipes and all
+            (waymark-fp62.7.9) — the seat's scope is the case"
+    (is (= [] (warns (annotate-door
+                      [:map
+                       [:scope {:x-display {:label "Scope" :help "The leash."}}
+                        [:vector
+                         [:map
+                          [:kind {:x-options {:from :kinds}
+                                  :x-display {:label "Kind"}}
+                           [:string {:min 1 :max 64}]]
+                          [:actions {:x-options {:from :actions :of :kind
+                                                 :each true}
+                                     :x-display {:label "Actions"}}
+                           [:vector [:string {:min 1 :max 64}]]]
+                          [:at_least {:optional true
+                                      :x-display {:label "How many"}}
+                           [:maybe [:int {:min 1}]]]]]]])
+                     "spelled-by-hand"))
+        "each item field is a widget of its own, the recipe's chips included"))
+
+  (testing "one unformable item field is still a box, and the sentence
+            on that field is still the waiver"
+    (is (= 1 (count (warns (annotate-door
+                            [:map
+                             [:scope {:x-display {:label "Scope"
+                                                  :help "The leash."}}
+                              [:vector
+                               [:map
+                                [:kind {:x-display {:label "Kind"}} :string]
+                                [:filter {:x-display {:label "Only rows"}}
+                                 [:map-of :keyword :string]]]]]])
+                           "spelled-by-hand")))
+        "a map-of inside a row makes the whole list a box, as it does one level down")
+    (is (= [] (warns (annotate-door
+                      [:map
+                       [:scope {:x-display {:label "Scope" :help "The leash."}}
+                        [:vector
+                         [:map
+                          [:kind {:x-display {:label "Kind"}} :string]
+                          [:filter {:x-display
+                                    {:label "Only rows"
+                                     :spelled-by-hand "The keys are the named kind's own field names."}}
+                           [:map-of :keyword :string]]]]]])
+                     "spelled-by-hand"))))
 
   (testing "a nested map with declared fields is a sub-form, not a box"
     (is (= [] (warns (annotate-door
