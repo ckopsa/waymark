@@ -464,6 +464,21 @@
 
 (def ^:private another-key "c2l0dGVyLWtleS10d28taGVyZQ")
 
+(def ^:private lookup-key
+  "The lookup test's own pair: it asserts that a key answers ONE seat,
+  so it must never share a key with a test that leaves a keyed seat
+  active behind it — the seed decides which deftest runs first."
+  "c2l0dGVyLWtleS1sb29rdXAtbWluZQ")
+
+(def ^:private lookup-other-key "c2l0dGVyLWtleS1sb29rdXAtdGhlaXJz")
+
+(def ^:private kept-key
+  "The restate test's own key: the seat it leaves behind stays active
+  and keyed, and seat-by-key reads every active seat, so a key shared
+  with the lookup test would answer for two seats under the seed that
+  runs this file's tests in the other order."
+  "c2l0dGVyLWtleS1rZXB0LWhlcmU")
+
 (def ^:private planted-key
   "Its own key, so the fence's assertions do not depend on which
   deftest in this file ran first."
@@ -539,21 +554,21 @@
       (is (nil? (key-of (:id seat))) "and the seat holds no key")))
   (testing "a restate that carries no key leaves the offered one alone"
     (let [seat (open-seat! "restated-around-its-key")]
-      (inv/invoke! *eng* :seat (:id seat) :offer_key {:key a-key}
+      (inv/invoke! *eng* :seat (:id seat) :offer_key {:key kept-key}
                    {:principal colton})
       (restate! (:id seat) (restate-body {:cadence_seconds 7200}))
-      (is (= a-key (key-of (:id seat)))
+      (is (= kept-key (key-of (:id seat)))
           "restate states the office again; the credential is not part of it"))))
 
 (deftest seat-by-key-answers-the-one-seat-and-nobody-else
   (let [mine (open-seat! "key-lookup-mine")
         theirs (open-seat! "key-lookup-theirs")]
-    (inv/invoke! *eng* :seat (:id mine) :offer_key {:key a-key}
+    (inv/invoke! *eng* :seat (:id mine) :offer_key {:key lookup-key}
                  {:principal colton})
-    (inv/invoke! *eng* :seat (:id theirs) :offer_key {:key another-key}
+    (inv/invoke! *eng* :seat (:id theirs) :offer_key {:key lookup-other-key}
                  {:principal colton})
-    (is (= (:id mine) (:id (seats/seat-by-key *eng* a-key))))
-    (is (= (:id theirs) (:id (seats/seat-by-key *eng* another-key))))
+    (is (= (:id mine) (:id (seats/seat-by-key *eng* lookup-key))))
+    (is (= (:id theirs) (:id (seats/seat-by-key *eng* lookup-other-key))))
     (testing "a key nobody holds answers nil, and so does a blank one"
       (is (nil? (seats/seat-by-key *eng* "c2l0dGVyLWtleS1ub2JvZHktaGFz")))
       (is (nil? (seats/seat-by-key *eng* "")))
@@ -561,7 +576,7 @@
           "nil must never match the seats that hold no key"))
     (testing "a revoked key answers nothing"
       (inv/invoke! *eng* :seat (:id mine) :revoke_key nil {:principal colton})
-      (is (nil? (seats/seat-by-key *eng* a-key))))
+      (is (nil? (seats/seat-by-key *eng* lookup-key))))
     (testing "and a parked seat is not an active one"
       (inv/invoke! *eng* :seat (:id theirs) :park nil {:principal colton})
-      (is (nil? (seats/seat-by-key *eng* another-key))))))
+      (is (nil? (seats/seat-by-key *eng* lookup-other-key))))))
