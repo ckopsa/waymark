@@ -48,6 +48,9 @@ that key and that value as `session`. Then you sit in the seat
 `inbox-clerk`. Read the seat row with waymark_get and do what its
 charter says. Take only the doors the envelope offers. When the seat
 says halted or parked, say why and stop.
+
+When the Stop hook asks you to close the sitting, make that one call
+with the numbers it gives, then stop.
 ```
 
 Nothing else goes in the instructions (R-12.10). The charter is on
@@ -71,23 +74,42 @@ its own reason.
    envelope offers. The first request opened a sitting; the router
    counts each transition and each refusal against it.
 5. The session stops and says in one line why it stopped and how
-   many rows it moved. The harness then raises its Stop event. The
-   Stop hook sums the transcript's usage and posts the counts to
-   `POST /api/-/sittings/close`, with the key in the header
-   `Waymark-Seat-Key`. The engine finds the seat by the key, pairs
-   the report to the sitting by `harness_session`, and closes it.
-   The cost is on the sitting row and in the seat's ledger within
-   the minute (R-12.17).
+   many rows it moved. The harness then raises its Stop event, and
+   the Stop hook sums the transcript's usage.
+
+   With the repository alone, the hook holds the stop one time. It
+   gives the session the sitting's id and the counts. The session
+   makes one `waymark_invoke` call, `close` on the sitting, with
+   those numbers, and then it stops. The hook holds the stop one
+   time only, so the second Stop event ends the session.
+
+   When the environment carries the URL, the hook posts the counts
+   to `POST /api/-/sittings/close` instead, with the key in the
+   header `Waymark-Seat-Key`. The engine finds the seat by the key,
+   pairs the report to the sitting by `harness_session`, and closes
+   it.
+
+   By either path, the cost is on the sitting row and in the seat's
+   ledger within the minute (R-12.17).
 
 ## The environment
 
-The Routine's cloud environment carries three settings. They are
-what lets the Stop hook reach the engine.
+The Routine's cloud environment needs no settings. With the
+repository alone, the Stop hook holds the session's stop one time.
+It gives the session the sitting's id and the token counts, and the
+session closes its sitting through the connector. No variable, no
+credential and no allowed domain are necessary, because the
+connector is already attached.
+
+An environment that can carry settings has a second way: the hook
+posts the counts to the engine itself, and the session stops one
+turn earlier. Three settings make that path.
 
 1. Set the variable `WAYMARK_SEAT_URL` to
-   `https://<engine host>/api/-/sittings/close`. The hook does
-   nothing when this variable is empty, so the hook is safe in every
-   other session of this repository.
+   `https://<engine host>/api/-/sittings/close`. The hook takes the
+   first path only when this variable is set. A session of this
+   repository that did not sit gets neither path: the hook reads no
+   sitting in the transcript, and it is silent.
 2. Give the environment the seat's key. On Pro or Max, store it as
    an API credential: type Bearer, header name `Waymark-Seat-Key`,
    prefix cleared, host the engine host. The proxy then adds the
@@ -109,8 +131,8 @@ and the build costs the firing a minute.
    the Routine runs.
 2. The inbox source has run one pass and the queue holds rows.
 3. `offer_key` has been invoked, and the key is in the instructions.
-4. The environment carries the URL and the key, as the section above
-   says.
+4. The environment carries the URL and the key, or it carries
+   nothing and the hook holds the stop, as the section above says.
 5. The first firing is watched by a person, who reads the sitting
    row and the seat's ledger afterwards.
 

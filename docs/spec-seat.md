@@ -710,6 +710,25 @@ the door sees it. A header is also what an environment's stored
 credential can add: the proxy writes it after the request leaves the
 container, so the key never enters the session.
 
+The post is the first path. Some environments carry no variable and
+no credential, and take the repository only. There the hook has no
+door to post to, and it uses a second path: it holds the stop one
+time. It gives the session the sitting's id, the four token counts
+and the turn count. The session then closes its own sitting through
+the connector, with `close` on the sitting, because the sitting is
+own-surface for its member (R-10.3). The counts stay the hook's: the
+session copies the numbers as they are written, and it does not
+count again. The tokens of the closing call are not on the bill,
+because the hook sums the transcript before the call (section 18).
+
+The hook holds the stop one time only. The harness tells the hook
+when it continues a session because a hook held its stop
+(`stop_hook_active`), and the hook is then silent. The hook is also
+silent when the transcript already shows a `close` on a sitting, and
+when the transcript shows no sit. This path needs no domain, no
+variable and no credential, because the traffic is the connector's,
+which the session already holds.
+
 A sitting that gets no report is still the sweep's. The sweep
 abandons it after two cadences, with no tokens (R-7.6). The counts
 of transitions and refusals stand.
@@ -1341,6 +1360,8 @@ above. The cases:
     open sitting. The sitting holds the four token counts, the turn
     count, and a `cost_usd` from the model's prices. A report with a
     wrong key is answered 404. A second report is answered 409.
+    A seat session whose environment carries no URL is held at its
+    stop one time and closes its own sitting through the connector.
     (R-12.17, R-10.4)
 32. After the close, the next `waymark_sit` opens a fresh sitting.
     Two sessions that sit with different session ids hold two open
@@ -1472,7 +1493,11 @@ trusts.
   container's disk is the exact record of every API response, and
   the hook is the one path that exists today. The session copies its
   own id into the sit, but the bill is the hook's, so a wrong id
-  costs a pairing and never the truth.
+  costs a pairing and never the truth. The hook can also hold the
+  stop one time, and give the counts to the session, which closes its
+  own sitting through the connector. That second path is for an
+  environment that carries no variable and no credential, because the
+  connector's traffic needs no domain, no variable and no key.
 - **A step down is judged by corrections, not by cost.** Cost always
   falls on a step down. The only question is whether the outcomes
   held, and a correction is the one record of an outcome that did
@@ -1486,6 +1511,8 @@ trusts.
   a turn. No Stop event comes, so that sitting stays the sweep's.
 - The hook posts one time for each Stop. A person who continues a
   run's session by hand makes turns that no sitting counts.
+- The closing call's own tokens. The hook sums before the close, so
+  the last call is not on the bill.
 - A composed seat page that answers the six questions of R-11.3 on
   one screen, with the ladder's steps and the audit beside them. The
   queries exist; the page is a surface declaration away, as the

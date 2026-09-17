@@ -312,3 +312,117 @@
 
       (testing "and it counted against the seat's open sitting"
         (is (= [1 0] (counts)))))))
+
+;; ── 5. the session ends its own wake ────────────────────────────────
+
+(deftest the-sitter-closes-its-own-sitting-through-the-bound-session
+  ;; R-12.15 opened the row as the sitter and R-12.17 says the report
+  ;; names the run that spent the tokens. The HTTP door
+  ;; (/api/-/sittings/close) is one way that report arrives; THIS is
+  ;; the other, and the one a Routine whose environment carries no
+  ;; variables and no credential can actually take: the Stop hook
+  ;; hands the counts back to the session, and the session closes its
+  ;; own sitting through the connector it is already holding.
+  ;;
+  ;; Nothing in the engine was added for it. A sitting is its member's
+  ;; (`:own-surface {:by :member :actions #{"create" "close"}}`), the
+  ;; sitter IS the member, and the own-surface courtesy is a fact
+  ;; about a NAMED principal rather than about a scope — so the seat
+  ;; grant's empty scope neither grants this nor hides it.
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-seat! eng)
+        sitter-id (seats/sitter-id seat)
+        run "session_01TheRoutineFiringItself"
+        [sid _] (initialize! h)
+        sat (doc-of (tool h (with-session sid) "waymark_sit"
+                          {:key a-key :session run}))
+        sitting-id (str (:sitting sat))
+        ;; one wake's usage, as a Stop hook sums it off the transcript
+        counts {:input_tokens 8000 :output_tokens 2100
+                :cache_read_tokens 45000 :cache_write_tokens 900 :turns 4}
+        ;; the four the seat's model carries — read off the row, so the
+        ;; expected bill is computed from the numbers the close reads
+        prices {:input (get-in model [:data :price_input_per_mtok])
+                :output (get-in model [:data :price_output_per_mtok])
+                :cache_read (get-in model [:data :price_cache_read_per_mtok])
+                :cache_write (get-in model [:data :price_cache_write_per_mtok])}
+        sitting-row (fn []
+                      (store/with-tx (:storage eng)
+                        (fn [tx] (store/load-row (:storage eng) tx :sitting
+                                                 sitting-id {}))))]
+
+    (testing "the sit opened the row, paired with this run, as the sitter"
+      (let [row (sitting-row)]
+        (is (= :open (:state row)))
+        (is (= sitter-id (str (get-in row [:data :member]))))
+        (is (= run (get-in row [:data :harness_session]))
+            "stamped at birth, not guessed at the close (R-12.15)")))
+
+    (testing "the bound session SEES its own sitting, and the one door on it"
+      (let [r (tool h (with-session sid) "waymark_get"
+                    {:kind "sitting" :id sitting-id})
+            env (doc-of r)]
+        (is (false? (:isError r)) (text-of r))
+        (is (= "open" (:state env)))
+        (is (some? (get-in env [:actions :close]))
+            "the own-surface advertises the door it names")
+        (is (nil? (get-in env [:actions :abandon]))
+            "and nothing else — abandon is the boot sweep's, not the sitter's")))
+
+    (testing "a DIFFERENT session of the same person's tool sees no such row"
+      ;; no key, no bind: it is the delegate, and a sitting is not the
+      ;; delegate's — concealed, never refused by name
+      (let [[other _] (initialize! h)
+            r (tool h (with-session other) "waymark_invoke"
+                    {:kind "sitting" :id sitting-id :action "close"
+                     :input counts})]
+        (is (true? (:isError r)))
+        (is (= 404 (:status (doc-of r))))
+        (is (= 2 (count (:content r)))
+            "the concealed-door hint rides every not-found")
+        (is (= :open (:state (sitting-row)))
+            "and the wake it could not see is untouched")))
+
+    (let [r (tool h (with-session sid) "waymark_invoke"
+                  {:kind "sitting" :id sitting-id :action "close"
+                   :input (assoc counts
+                                 :note "Walked the queue; one meal accepted."
+                                 :harness_session run)})
+          env (doc-of r)]
+
+      (testing "the sitter's own close goes through, on the session it bound"
+        (is (false? (:isError r)) (text-of r))
+        (is (= "closed" (:state env))))
+
+      (testing "the counts, the turns, the note and the run are written down"
+        (let [row (sitting-row)
+              d (:data row)]
+          (is (= :closed (:state row)))
+          (is (= 8000 (:input_tokens d)))
+          (is (= 2100 (:output_tokens d)))
+          (is (= 45000 (:cache_read_tokens d)))
+          (is (= 900 (:cache_write_tokens d)))
+          (is (= 4 (:turns d)))
+          (is (= "Walked the queue; one meal accepted." (:note d)))
+          (is (= run (:harness_session d))
+              "the birth stamp and the report name one run")
+          (is (some? (:ended_at d)) "stamped by the close")
+
+          (testing "and the bill is the model's prices at this moment (R-10.4)"
+            (is (== (seats/cost-of counts prices) (:cost_usd d)))
+            (is (== (:input prices) (get-in d [:prices :input])))
+            (is (== (:output prices) (get-in d [:prices :output])))
+            (is (== (:cache_read prices) (get-in d [:prices :cache_read])))
+            (is (== (:cache_write prices) (get-in d [:prices :cache_write]))))))
+
+      (testing "the ending is a real transition, and the SITTER made it"
+        (let [log (store/with-tx (:storage eng)
+                    (fn [tx] (store/transitions (:storage eng) tx
+                                                {:kind :sitting
+                                                 :resource-id sitting-id}
+                                                {:limit 10 :newest-first true})))
+              closed (first (filter #(= :close (:action %)) log))]
+          (is (some? closed))
+          (is (= sitter-id (str (get-in closed [:actor :id])))
+              "one actor per office: the ledger reads the seat"))))))
