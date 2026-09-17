@@ -1182,6 +1182,11 @@
     ;; the seventh fixed tool (waymark-pywy.3): generic, still no
     ;; route of its own
     "waymark_resolve"
+    ;; the eighth fixed tool (spec-seat.md R-12.14): how ONE session of
+    ;; a person's connector becomes a seat's sitter, by the key in its
+    ;; instructions — fixed for every caller, because a list that only
+    ;; showed it to a keyed session would leak which seats exist
+    "waymark_sit"
     ;; the two power tools (waymark-912p): the Gate door's MCP
     ;; surface, fixed for every caller — what a grant admits is read
     ;; through waymark_powers, never appended to this list
@@ -1253,7 +1258,8 @@
 
 (defn- mcp-six-tools-violations
   "tools/list is EXACTLY the fixed tools — the spec's six,
-  waymark_resolve, and the two power tools — for every caller. The
+  waymark_resolve, waymark_sit, and the two power tools — for every
+  caller. The
   design decision stands and has hardened: the list does NOT grow
   with the law, so an engine with fifty kinds advertises exactly what
   an engine with one does, and since waymark-912p it does not grow

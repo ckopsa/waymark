@@ -53,7 +53,25 @@
       (seat-clear-halt! eng seat-id)
 
   plus `mark-stale!` for the boot sweep (R-7.2), which this file does
-  not own.
+  not own, and three the KEYED SITTER SESSION calls (R-12.13):
+
+      (seat-by-key eng key)       → the active seat holding that key
+      (sitter-id seat-row)        → seat:<id>, the sitter's member id
+      (sitter-display seat-row)   → what a person reads beside it
+
+  ── the sitter key, and what it is for ─────────────────────────────
+
+  Every session of a person's connector is the SAME delegate on the
+  SAME bearer, so a Routine's session and the person's own chat are
+  one credential and cannot be told apart by it. `sitter_key` is what
+  tells them apart: the person mints 128 bits, offers them to the
+  seat, and pastes them into the Routine's instructions. The session
+  that presents the key once, at its start, is that seat's sitter for
+  the rest of its life — and every other session of the same person is
+  untouched. The key is :secret and minter-supplied (the
+  `reentry_token` posture), written by `offer_key` and cleared by
+  `revoke_key`, and `key-not-written-by-hand` refuses it at every
+  other door.
 
   Recorded deviations and named punts (each a sentence, per the
   discipline; the per-kind `:deviations` carry the ones that belong to
@@ -106,7 +124,9 @@
             [waymark10.server.members :as members]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.math RoundingMode)))
+  (:import (java.math RoundingMode)
+           (java.nio.charset StandardCharsets)
+           (java.security MessageDigest)))
 
 (set! *warn-on-reflection* true)
 
@@ -155,6 +175,24 @@
             (and (= :agent type) (not (str/blank? (str acts-for)))))
       (t/allow)
       (t/deny))))
+
+;; THE SITTER KEY'S WRITE FENCE (R-12.12), members.clj's
+;; `reentry-not-written-by-hand` made real for this kind: sitter_key is
+;; a schema field and a :secret one, so a create or a restate that
+;; could carry it would stamp a LIVE credential with no mint door, no
+;; audit and nothing a reader could ever see again. The one writer is
+;; `set-sitter-key`, under `offer_key`'s own guards. The field IS
+;; declared on both inputs, deliberately — a guard may only judge a
+;; field of the door it stands on (checks/check-create-guards), and a
+;; fence nobody can name is a fence nobody can read. Both spellings
+;; are :secret, so no form asks and no advertised input names it.
+(g/defguard key-not-written-by-hand
+  {:judges [:sitter_key]
+   :explain "The sitter key is written by offer_key alone, never by hand — a create or a restate may not carry sitter_key. Open the seat first, then offer it a key."}
+  [_row inp _ctx]
+  (if (contains? inp :sitter_key)
+    (t/deny)
+    (t/allow)))
 
 (g/defguard one-seat-spelling
   {:judges [:name]
@@ -383,6 +421,16 @@
 (defhandler clear-halt-mark [row _inp _ctx]
   (update row :data dissoc :halt))
 
+;; R-12.12: a new offer REPLACES the old one — at most one live sitter
+;; key per seat, members' set-reentry overwrite exactly. The key the
+;; person pasted into yesterday's Routine dies the moment a fresh one
+;; lands.
+(defhandler set-sitter-key [row inp _ctx]
+  (assoc-in row [:data :sitter_key] (:key inp)))
+
+(defhandler clear-sitter-key [row _inp _ctx]
+  (update row :data dissoc :sitter_key))
+
 (defn- larger
   "The larger of two comparables, either of which may be absent."
   [a b]
@@ -517,6 +565,52 @@
    :as      {:id "colton" :type :human}
    :expect  {:allowed true}})
 
+(def ^:private a-minted-key
+  "Twenty-six base64url characters — what a machine mints for 128 bits,
+  and never what a hand types."
+  "Zm9vYmFyYmF6cXV4c2l0dGVy")
+
+(defscenario an-agent-does-not-hand-itself-the-seats-key
+  "The key is how a person tells one of its tool's sessions from the
+   rest. An agent that could offer itself one could walk into any
+   office it liked."
+  {:kind    :seat
+   :attempt :offer_key
+   :row     {:state :active :data an-open-seat}
+   :input   {:key a-minted-key}
+   :as      {:id "inbox-clerk" :type :agent}
+   :expect  {:refused :a-person
+             :because "a person opens"}})
+
+(defscenario the-person-offers-the-seat-a-key
+  "And the person whose fuel it is mints one and pastes it into the
+   Routine, in one tap, with revoke one tap behind it."
+  {:kind    :seat
+   :attempt :offer_key
+   :row     {:state :active :data an-open-seat}
+   :input   {:key a-minted-key}
+   :as      {:id "colton" :type :human}
+   :expect  {:allowed true}})
+
+(defscenario an-agent-does-not-revoke-the-seats-key
+  "The same wall on the way back: a sitter that could revoke the key
+   could lock its person out of its own office."
+  {:kind    :seat
+   :attempt :revoke_key
+   :row     {:state :active :data (assoc an-open-seat :sitter_key a-minted-key)}
+   :as      {:id "inbox-clerk" :type :agent}
+   :expect  {:refused :a-person
+             :because "a person opens"}})
+
+(defscenario the-person-revokes-the-seats-key
+  "And the person takes it back, which is the whole of retiring a
+   Routine's authority."
+  {:kind    :seat
+   :attempt :revoke_key
+   :row     {:state :active :data (assoc an-open-seat :sitter_key a-minted-key)}
+   :as      {:id "colton" :type :human}
+   :expect  {:allowed true}})
+
 ;; ── :seat ───────────────────────────────────────────────────────────
 
 (def ^:private scope-help
@@ -632,6 +726,21 @@
               [:since {:x-display {:label "Since"}} :waymark/instant]
               [:detail {:optional true :x-display {:label "What it said"}}
                [:maybe [:string {:max 240}]]]]]]
+    ;; THE KEYED SITTER SESSION'S HALF OF THE HANDSHAKE (R-12.12).
+    ;; Every session of a person's connector is the SAME delegate on
+    ;; the SAME bearer, so a Routine's session cannot be told from the
+    ;; person's chats by credential. This is what tells them apart: a
+    ;; machine-minted secret the person pastes into the Routine's
+    ;; instructions, presented once through waymark_sit. :secret, the
+    ;; :reentry_token posture — the value never leaves the engine in
+    ;; any projection, scoped or not — and minter-supplied, because an
+    ;; engine that generated it would have to show it back.
+    [:sitter_key {:optional true :secret true
+                  :x-display
+                  {:hidden true
+                   :label "Sitter key"
+                   :spelled-by-hand "Written by offer_key and cleared by revoke_key; never typed into a form, and never rendered back."}}
+     [:maybe [:string {:min 22 :max 128}]]]
     ;; THE MEANS BY WHICH A SITTING IS CREATED (R-12.0). The seat is
     ;; the only thing a person manages; the schedule is the engine's
     ;; own record of how this seat wakes, and it is written when the
@@ -724,7 +833,18 @@
                        :x-display
                        {:label "Rows per firing"
                         :help "The most rows one wake moves to a leaf — the lever you pull before you pull the model."}}
-     [:int {:min 1 :max 200}]]]
+     [:int {:min 1 :max 200}]]
+    ;; the write fence, named so it can be refused (R-12.12): the
+    ;; create door and the restate DECLARE sitter_key only so
+    ;; `key-not-written-by-hand` may judge it — a guard judges a field
+    ;; of its own door or nothing. :secret keeps it out of every
+    ;; advertised create body and out of every form.
+    [:sitter_key {:optional true :secret true
+                  :x-display
+                  {:hidden true
+                   :label "Sitter key"
+                   :spelled-by-hand "Refused here: the key is offer_key's to write."}}
+     [:maybe [:string {:min 22 :max 128}]]]]
    :filterable {:state #{:eq :in}
                 :name #{:eq}}
    :sortable {:fields [:name] :default "name"}
@@ -733,6 +853,7 @@
             :summary "The seat this one folded into"}]
    :create-guards [a-person
                    not-a-sitter
+                   key-not-written-by-hand
                    one-seat-spelling
                    grants/scope-names-real-kinds
                    grants/scope-names-real-actions
@@ -815,8 +936,20 @@
                      :x-display
                      {:label "Why, if the models changed"
                       :help "Required when held_for or substitute_for moves: which model it was, which it is now, and what you read that says the step holds. Read five sittings before you write it; a step that does not hold is reversed by one more restate."}}
-              [:maybe [:string {:min 1 :max 240}]]]]
+              [:maybe [:string {:min 1 :max 240}]]]
+             ;; the write fence, named so it can be refused (R-12.12)
+             ;; — declared here only so `key-not-written-by-hand` may
+             ;; judge it; :secret, so no form and no prefill sees it.
+             [:sitter_key {:optional true :secret true
+                           :x-display
+                           {:hidden true
+                            :label "Sitter key"
+                            :spelled-by-hand "Refused here: the key is offer_key's to write."}}
+              [:maybe [:string {:min 22 :max 128}]]]]
      :record true
+     ;; sitter_key is NOT prefilled and cannot be: the draft view
+     ;; serves prefill from the raw row, and resource/check-secret!
+     ;; refuses a :secret field there at the declaration.
      :edit {:prefill [:charter :scope :substitute_drop :held_for
                       :substitute_for :standing_ttl_seconds :cadence_seconds
                       :budget_usd_per_week :sitting_budget_tokens :walk
@@ -824,6 +957,7 @@
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
+              key-not-written-by-hand
               grants/scope-names-real-kinds
               grants/scope-names-real-actions
               grants/scope-filters-are-filterable
@@ -854,6 +988,41 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Unpark" :style :primary :order 3
                :description "The seat serves again, on the scope it had"}}
+
+    ;; ── the keyed sitter session (R-12.12 to R-12.16) ───────────────
+    ;; The person mints the secret, pastes it into the Routine's
+    ;; instructions, and that Routine's session — one of many wearing
+    ;; the same bearer — presents it once through waymark_sit and is
+    ;; this seat's sitter from then on. Guarded by `a-person`, which
+    ;; admits the person AND the person's own tool: minting the key is
+    ;; setting up a Routine, and setting up a Routine is a thing a
+    ;; person does from a chat.
+    :offer_key
+    {:from #{:active} :to :active
+     :input [:map
+             [:key {:x-display
+                    {:raw true
+                     :label "Sitter key"
+                     :help "The secret you are about to paste into the Routine's instructions, minted by YOU — at least 22 characters of real randomness, which is 128 bits a machine made and no hand typed. The engine never generates it and never shows it again. A new offer replaces the old one."}}
+              [:string {:min 22 :max 128}]]]
+     ;; NOT :record, and members' offer_reentry's reason verbatim: a
+     ;; recorded action persists its RAW inputs into the transition
+     ;; log, and this input IS the credential. The transition row
+     ;; (actor, key digest, summary) is still the audit that a key was
+     ;; offered, by whom, when.
+     :guards [a-person]
+     :safety {:idempotent true :reversible true :confirm false}
+     :handler set-sitter-key
+     :display {:label "Offer key" :order 4
+               :description "Hand this seat a secret to paste into a Routine — the session that presents it sits here, and a new offer replaces the old one"}}
+
+    :revoke_key
+    {:from #{:active} :to :active
+     :guards [a-person]
+     :safety {:idempotent true :reversible true :confirm false}
+     :handler clear-sitter-key
+     :display {:label "Revoke key" :order 5
+               :description "The key answers for nothing; a session presenting it is told no seat answers, and the seat's own sittings are untouched"}}
 
     :merge
     {:from #{:active :parked} :to :merged
@@ -961,10 +1130,15 @@
      :handler absorb-fold
      :display {:label "Absorb" :order 13}}}
    :scenarios [an-agent-does-not-park-its-own-seat
-               the-person-parks-the-seat]
+               the-person-parks-the-seat
+               an-agent-does-not-hand-itself-the-seats-key
+               the-person-offers-the-seat-a-key
+               an-agent-does-not-revoke-the-seats-key
+               the-person-revokes-the-seats-key]
    :deviations
    ["R-4.9's own-surface for sitters is NOT declared here, and wave two settled why: `:own-surface :by` names a field of the row being read, and a sitter is identified through `grant.seat` — a field of the GRANT. A seat with a sitter column would be a second copy of the grant, so the courtesy is spelled where the sitter is actually identified: the seat resolve adds the citing seat's row as a synthetic, unstored scope entry (`{kind \"seat\", ids [<this seat>], actions []}`), and `:kind?`, `:row?`, `:field?` and `:ids-of` then answer for it exactly as they answer for anything granted. One admission algebra, read-only, one row — and `:whole-kind?` stays false, because one row is not the collection."
     "R-4.6's consequence sentence is kept verbatim, `{into}` included. The framework does not interpolate a consequence (render substitutes only a per-origin map, never a template), so the brace renders literally. The alternative was rewording the one sentence the spec pins, and a spec-pinned string is worth more than a tidy dialog."
+    "`sitter_key` IS DECLARED on the create door and on `restate`, which reads at first like the opposite of this file's write fence. It is the fence: a guard may judge only a field of the door it stands on (checks/check-create-guards and check-guard-declarations are definition ERRORS otherwise), so a `key-not-written-by-hand` that could be READ had to have something to name — members.clj's `reentry-not-written-by-hand` has it for free, because that kind has no separate create-schema. Both spellings carry `{:secret true}`, so the advertised create body drops the field (collections.clj unions the row schema's secret set with the create model's for exactly this), no form asks for it, and the usability policies skip it. What the caller gains over silent omission is the refusal's own sentence, which names the door that writes the key instead."
     "`mark_stale`, `mark_halted` and `clear_halt` are declared `active → active` only. A v10 action declares ONE `:to` (definitions.clj records the same wart for `measure`/`measure_pilot`), so covering `parked` would mean six doors instead of three — and a parked seat is already scoped to nothing by the person's own hand, so neither a stale entry nor a halt on it tells anybody anything they did not choose."]})
 
 ;; ── :model ──────────────────────────────────────────────────────────
@@ -1400,3 +1574,51 @@
                        {:principal seats-actor})
           true)
       false)))
+
+;; ── the keyed sitter session's seam (R-12.13) ───────────────────────
+
+(defn seat-by-key
+  "The ACTIVE seat whose `sitter_key` is exactly this key, or nil.
+
+  The compare is `MessageDigest/isEqual` over UTF-8 bytes — constant
+  time in the length of the two arrays, so a caller cannot walk the
+  key one character at a time off the clock. Every active seat is
+  read, which is honest arithmetic here: seats are an office per kind
+  of judgment and a house has a handful, `sitter_key` is :secret and
+  therefore may never be :filterable (resource/check-secret!: a filter
+  is a value oracle over what the projection conceals), and the read
+  is one query behind a door the MCP surface calls once per session.
+
+  A blank key answers nil without touching storage: a seat that was
+  never offered a key holds nil, and nil must never match nil."
+  [eng key]
+  (when-some [key (some-> key str not-empty)]
+    (when (get (inv/resources eng) :seat)
+      (let [wanted (.getBytes key StandardCharsets/UTF_8)]
+        (store/with-tx (:storage eng)
+          (fn [tx]
+            (->> (store/query-rows (:storage eng) tx :seat {:state :active}
+                                   {:limit 500})
+                 (filter (fn [row]
+                           (when-some [held (some-> (get-in row [:data :sitter_key])
+                                                    str not-empty)]
+                             (MessageDigest/isEqual
+                              wanted (.getBytes held StandardCharsets/UTF_8)))))
+                 first)))))))
+
+(defn sitter-id
+  "The member id of the seat's sitter — `seat:<the seat's id>`.
+
+  DERIVED, never stored: the sitter is the office, not a person, so
+  there is exactly one of it per seat and its id must be computable
+  from the seat row alone. Two sessions that sit in the same seat are
+  the same sitter, which is the whole point — the ledger reads one
+  actor per office."
+  [seat-row]
+  (str "seat:" (:id seat-row)))
+
+(defn sitter-display
+  "What a person reads beside a transition the sitter made: the seat's
+  own name, marked as the office rather than the person."
+  [seat-row]
+  (str (get-in seat-row [:data :name]) " (seat)"))

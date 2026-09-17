@@ -21,8 +21,10 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
+            [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.render :as render]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -452,3 +454,114 @@
     (is (= :one-model-spelling (:guard p)))
     (is (str/includes? (str (:detail p)) "reactivate")
         "and the refusal names the door that exists instead")))
+
+;; ── R-12.12 · the sitter key, and the fence around it ───────────────
+
+(def ^:private a-key
+  "What a machine mints for 128 bits, base64url — never what a hand
+  types, which is the whole of why the engine does not generate it."
+  "c2l0dGVyLWtleS1vbmUtaGVyZQ")
+
+(def ^:private another-key "c2l0dGVyLWtleS10d28taGVyZQ")
+
+(def ^:private planted-key
+  "Its own key, so the fence's assertions do not depend on which
+  deftest in this file ran first."
+  "c2l0dGVyLWtleS1wbGFudGVkLWhlcmU")
+
+(defn- key-of
+  "The stored key, read off the row rather than off any projection —
+  the projections are what must not show it."
+  [id]
+  (get-in (row-of :seat id) [:data :sitter_key]))
+
+(deftest a-person-offers-the-seat-a-key-and-nothing-renders-it
+  (let [seat (open-seat! "keyed-office")]
+    (testing "the field is :secret, which is what conceals it everywhere"
+      (is (contains? (schema/secret-fields (:schema seats/seat)) :sitter_key)))
+
+    (testing "a person's offer stores the key"
+      (inv/invoke! *eng* :seat (:id seat) :offer_key {:key a-key}
+                   {:principal colton})
+      (is (= a-key (key-of (:id seat)))))
+
+    (testing "and the envelope does not carry it, for anybody"
+      (let [rdef (get (inv/resources *eng*) :seat)
+            row (row-of :seat (:id seat))
+            env (fn [who] (render/envelope rdef row
+                                           {:principal who
+                                            :now ((:now-fn *eng*))}))]
+        (doseq [[who p] [["the person whose office it is" colton]
+                         ["a bare agent" clerk]
+                         ["the anonymous" t/anonymous]]]
+          (testing who
+            (is (not (contains? (get (env p) "data") "sitter_key"))
+                "a :secret field is absent from the document, not blanked")))))
+
+    (testing "a second offer REPLACES the first — at most one live key"
+      (inv/invoke! *eng* :seat (:id seat) :offer_key {:key another-key}
+                   {:principal colton})
+      (is (= another-key (key-of (:id seat)))))
+
+    (testing "a delegate — the person's own tool — may offer one too"
+      (inv/invoke! *eng* :seat (:id seat) :offer_key {:key a-key}
+                   {:principal delegate})
+      (is (= a-key (key-of (:id seat)))))
+
+    (testing "a bare agent may not: the office is the person's"
+      (let [p (refusal #(inv/invoke! *eng* :seat (:id seat) :offer_key
+                                     {:key another-key}
+                                     {:principal clerk}))]
+        (is (= :a-person (:guard p)))
+        (is (= a-key (key-of (:id seat))) "and the key did not move")))
+
+    (testing "revoke_key clears it, and a bare agent cannot pull that lever either"
+      (is (= :a-person
+             (:guard (refusal #(inv/invoke! *eng* :seat (:id seat) :revoke_key
+                                            nil {:principal clerk})))))
+      (inv/invoke! *eng* :seat (:id seat) :revoke_key nil {:principal colton})
+      (is (nil? (key-of (:id seat)))))))
+
+(deftest the-sitter-key-is-never-written-by-hand
+  (testing "a create carrying sitter_key is refused, and names the fence"
+    (let [p (refusal #(inv/create! *eng* :seat
+                                   (seat-body "planted-at-birth"
+                                              {:sitter_key planted-key})
+                                   {:principal colton}))]
+      (is (= :key-not-written-by-hand (:guard p)))
+      (is (nil? (seats/seat-by-key *eng* planted-key))
+          "no seat was born holding it")))
+  (testing "and a restate carrying it is refused on a seat born honest"
+    (let [seat (open-seat! "planted-later")
+          p (refusal #(restate! (:id seat)
+                                (restate-body {:sitter_key planted-key})))]
+      (is (= :key-not-written-by-hand (:guard p)))
+      (is (nil? (key-of (:id seat))) "and the seat holds no key")))
+  (testing "a restate that carries no key leaves the offered one alone"
+    (let [seat (open-seat! "restated-around-its-key")]
+      (inv/invoke! *eng* :seat (:id seat) :offer_key {:key a-key}
+                   {:principal colton})
+      (restate! (:id seat) (restate-body {:cadence_seconds 7200}))
+      (is (= a-key (key-of (:id seat)))
+          "restate states the office again; the credential is not part of it"))))
+
+(deftest seat-by-key-answers-the-one-seat-and-nobody-else
+  (let [mine (open-seat! "key-lookup-mine")
+        theirs (open-seat! "key-lookup-theirs")]
+    (inv/invoke! *eng* :seat (:id mine) :offer_key {:key a-key}
+                 {:principal colton})
+    (inv/invoke! *eng* :seat (:id theirs) :offer_key {:key another-key}
+                 {:principal colton})
+    (is (= (:id mine) (:id (seats/seat-by-key *eng* a-key))))
+    (is (= (:id theirs) (:id (seats/seat-by-key *eng* another-key))))
+    (testing "a key nobody holds answers nil, and so does a blank one"
+      (is (nil? (seats/seat-by-key *eng* "c2l0dGVyLWtleS1ub2JvZHktaGFz")))
+      (is (nil? (seats/seat-by-key *eng* "")))
+      (is (nil? (seats/seat-by-key *eng* nil))
+          "nil must never match the seats that hold no key"))
+    (testing "a revoked key answers nothing"
+      (inv/invoke! *eng* :seat (:id mine) :revoke_key nil {:principal colton})
+      (is (nil? (seats/seat-by-key *eng* a-key))))
+    (testing "and a parked seat is not an active one"
+      (inv/invoke! *eng* :seat (:id theirs) :park nil {:principal colton})
+      (is (nil? (seats/seat-by-key *eng* another-key))))))

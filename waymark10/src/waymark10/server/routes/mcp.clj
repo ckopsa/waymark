@@ -2,8 +2,20 @@
   "The MCP surface's Streamable HTTP transport: one route, two methods.
 
   POST /api/-/mcp carries a JSON-RPC 2.0 message and gets a JSON
-  response — the simple half of MCP's Streamable HTTP transport, with
-  no session id, because this server is stateless between calls.
+  response — the simple half of MCP's Streamable HTTP transport.
+
+  IT KEEPS A SESSION ID NOW, and only just barely (spec-seat.md
+  R-12.14). `initialize` answers an Mcp-Session-Id header and a client
+  that sends it back on later messages is recognised; a client that
+  sends none is served exactly as it always was, stateless, because
+  identity rides the bearer and the surface is the grant's projection.
+  The ONE thing the id buys is `waymark_sit`: every session of a
+  person's connector is the same delegate on the same bearer, so
+  binding a seat to one Routine and not to the person's chats needs
+  something that tells the sessions apart, and the id is it. An
+  unknown or expired id on any message but `initialize` answers 404,
+  which is the protocol's own way of saying start a new session. The
+  map itself is ephemeral engine state (:mcp-sessions), never law.
 
   GET /api/-/mcp with `Accept: text/event-stream` is the other half,
   and it carries exactly ONE kind of server-initiated frame:
@@ -23,10 +35,12 @@
   (/api/-/events and /api/{plural}/{id}/-/events); a GET without the
   SSE accept still answers 405, saying where the streams are.
 
-  Everything else about the exchange is waymark10.server.mcp: the six
-  tools and the JSON-RPC message layer both live there, so a stdio
-  server for a local agent is that namespace with a read-line loop,
-  and this file is the only thing it would not reuse.
+  Everything else about the exchange is waymark10.server.mcp: the
+  fixed tools, the session map's own fns and the JSON-RPC message
+  layer all live there, so a stdio server for a local agent is that
+  namespace with a read-line loop, and this file is the only thing it
+  would not reuse — `mcp/message` keeps its signature, and the session
+  id is minted out here, where the header that carries it is.
 
   AUTH IS THE ROUTER'S, UNCHANGED. This is a route inside the router's
   own assembly, so `wrap-identity` has already run: the bearer (or the
@@ -53,6 +67,7 @@
             [org.httpkit.server :as http]
             [waymark10.server.events :as events]
             [waymark10.server.gate-proxy :as gate]
+            [waymark10.server.grants :as grants]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.problems :as p]
@@ -89,36 +104,98 @@
                                       "identity provider, or knows no external "
                                       "base URL (WAYMARK10_OIDC_APP_URL).")})))))
 
+(def ^:private session-header
+  "MCP's own spelling for the response; ring lowercases what a client
+  sends, so the READ is \"mcp-session-id\" and the WRITE is this."
+  "Mcp-Session-Id")
+
+(defn- unknown-session!
+  "MCP's Streamable HTTP contract: a 404 on a message carrying a
+  session id the server does not know tells the client to start a new
+  session. An expired id and an id from a previous process answer the
+  same way, because they mean the same thing."
+  []
+  (throw (p/problem :not-found 404 "Not found"
+                    {:detail (str "This MCP session is not known here; "
+                                  "initialize again.")})))
+
+(defn- sitter-session
+  "The session a BOUND MCP session runs as (spec-seat.md R-12.15).
+
+  `named-principal!` has already run on the BEARER — the person's
+  connector token is what let this request in at all, and nothing here
+  weakens that. What changes after it is WHO the request is: the
+  sitter's principal replaces the delegate's, and the sitter's own
+  visibility replaces the delegate's worn one, so every tool call this
+  message makes is the seat's.
+
+  The visibility is resolved exactly as the identity boundary resolves
+  an agent's (grants/unscoped-visibility's two branches, spelled here
+  because the sitter is not the request's principal): the worn seat
+  grant, accepted as the audience on arrival, and the bootstrap
+  surface when nothing stands — a sitter whose grant was revoked keeps
+  the asking door and nothing else.
+
+  `mind-the-wall!` runs again here, for the sitter's seat. wrap-identity
+  already ran it for the bearer, whose visibility cites no seat; R-7.7
+  wants the halt written by the request that MET the wall, and this is
+  the request."
+  [eng bound]
+  (let [sitter (:sitter bound)
+        vis (or (grants/worn-visibility eng sitter)
+                (grants/bootstrap-visibility eng sitter))]
+    (router/mind-the-wall! eng (:seat vis))
+    {:principal sitter :visibility vis}))
+
 (defn- rpc-post [eng call gate-rpc]
   (fn [req]
     (let [principal (named-principal! eng req)
-          session {:principal principal
-                   :visibility (router/visibility-of req)}
-          body (router/read-body req)]
+          body (router/read-body req)
+          init? (and (map? body) (= "initialize" (str (:method body))))
+          ;; ring lowercases a request header; a client that sends none
+          ;; is the stateless caller this door has always served, and
+          ;; nothing below changes for it
+          sid (some-> (get-in req [:headers "mcp-session-id"])
+                      str str/trim not-empty)
+          entry (when sid (mcp/touch-session! eng sid))
+          _ (when (and sid (nil? entry) (not init?)) (unknown-session!))
+          minted (when init? (mcp/open-session! eng))
+          session (cond-> (if-some [bound (:bound entry)]
+                            (sitter-session eng bound)
+                            {:principal principal
+                             :visibility (router/visibility-of req)})
+                    ;; waymark_sit binds THIS session, so it has to know
+                    ;; which one it is
+                    sid (assoc :mcp-session-id sid))
+          with-session (fn [resp]
+                         (cond-> resp
+                           minted (assoc-in [:headers session-header] minted)))]
       (cond
         ;; JSON-RPC batching left MCP with the 2025-06-18 revision, and
         ;; supporting it here would be inventing a compatibility
         ;; surface nobody asked for.
         (vector? body)
-        (router/json-response
-         200 {:jsonrpc "2.0" :id nil
-              :error {:code -32600
-                      :message (str "Batched JSON-RPC is not supported — MCP "
-                                    "removed it in " mcp/protocol-version
-                                    "; send one message per request.")}})
+        (with-session
+          (router/json-response
+           200 {:jsonrpc "2.0" :id nil
+                :error {:code -32600
+                        :message (str "Batched JSON-RPC is not supported — MCP "
+                                      "removed it in " mcp/protocol-version
+                                      "; send one message per request.")}}))
 
         (not (map? body))
-        (router/json-response
-         200 {:jsonrpc "2.0" :id nil
-              :error {:code -32600
-                      :message "Expected one JSON-RPC 2.0 object."}})
+        (with-session
+          (router/json-response
+           200 {:jsonrpc "2.0" :id nil
+                :error {:code -32600
+                        :message "Expected one JSON-RPC 2.0 object."}}))
 
         :else
         (if-some [answer (mcp/message eng call gate-rpc session body)]
-          (router/json-response 200 answer)
+          (with-session (router/json-response 200 answer))
           ;; a notification: nothing to say, and the transport says so
           ;; with a status rather than an empty body pretending to be one
-          {:status 202 :headers {} :body ""})))))
+          (with-session {:status 202 :headers {} :body ""}))))))
 
 (defn- no-stream
   "A GET that did not ask for the stream: 405, with the sentence that

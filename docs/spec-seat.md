@@ -357,8 +357,10 @@ is a signed token, not a row (`oidc.clj`, HS256), so the model is a
 claim in the token, beside `actor_type`. `POST /auth/agent` and
 `POST /auth/agent/renew` must accept `model` and mint it into the
 token. A token with no claim has model null. The MCP `initialize`
-cannot rewrite a cookie, so it is not a declaration door; the
-harness declares at bind and at renew only (R-12.7).
+cannot rewrite a cookie, so it is not a declaration door for a
+session that binds through the agent door; that harness declares
+at bind and at renew only (R-12.7). A keyed session declares
+nothing itself: its claim is the schedule's `model` (R-12.15).
 
 **R-9.5** The principal must gain `model`, read from the session. The
 actor on each transition then carries it, in the `actor` column that
@@ -612,6 +614,65 @@ never on a grant a sitter can wear. A deployment with no token for a
 provider serves the schedule kind with that provider `broken` and
 its note saying so, which is a boot that says so rather than one
 that fails.
+
+### 12.1 The keyed session
+
+The owner's ruling of 2026-09-17: the Routine that drives a seat is
+a Claude Routine with the engine's own connector attached, and the
+person gives it a key in its instructions. The key, with the
+connector's own credential, makes that session the seat's sitter.
+
+The problem it solves. A person signed in through the connector is
+one delegate per tool and person (`spec-connector-door.md` § 3).
+Every session that person's tool opens, a Routine's or a chat's,
+arrives with the same bearer and resolves to the same delegate. A
+credential cannot tell the clerk's firing from the person's chat.
+A key the person pastes into one Routine can.
+
+**R-12.12** A seat must have a field `sitter_key`, secret, written
+only by two doors: `offer_key`, which takes the key from the person
+and stores it, and `revoke_key`, which clears it. Both doors are the
+person's, guarded by `a-person`. A create or restate that carries
+the field is refused. The person mints the key by machine, 128 bits,
+and pastes it into the Routine's instructions. The engine never
+answers a key. The precedent is the member's re-entry credential.
+
+**R-12.13** The MCP door must keep a session. `initialize` answers
+an `Mcp-Session-Id`, and the client sends it on every later call. A
+call that names a session the engine does not know is answered 404,
+which is the transport's own word for start again. A client that
+sends no session id is served as before, stateless.
+
+**R-12.14** The MCP surface must serve a fixed tool `waymark_sit`
+that takes the key. It binds the calling session to the seat when
+three things hold: the call carries a known session id, the caller
+is a delegate, and an active seat holds this key. A failure of any
+one is a refusal in a sentence, and the key's refusal is uniform:
+no seat answers this key. A leaked key without a person's bearer
+opens nothing.
+
+**R-12.15** A bound session is the seat's sitter, not the person's
+delegate. The sitter is a member row of its own, id `seat:{seat
+id}`, actor type agent, acting for the person, provisioned at the
+first sit. It wears a seat grant the engine mints at the first sit,
+because the person handing over the key is the approval, with the
+seat's `standing_ttl_seconds` as its leash. Its model claim is the
+schedule's `model` (R-12.8). From the bind until the session ends,
+every call resolves to the sitter: the first request opens a
+sitting, the router counts transitions and refusals against it, and
+R-5.2's walls apply. The person's other sessions carry no key and
+stay the person's delegate, with the seat's levers.
+
+**R-12.16** The bind is held in the engine's memory for the life of
+the session, at most eight hours, and dies with a restart. A session
+that loses its bind is told 404 and starts again: it initializes,
+sits with the key once more, and continues. Nothing about the seat,
+the sitter, or the grant is lost, because those are rows.
+
+What this leaves open, on record. No hook runs when a Routine's
+session ends, so the sweep abandons the sitting after two cadences
+with no token counts. The transitions and refusals still count. The
+cost of a keyed sitting is a follow-up (waymark-fp62.6.1).
 
 ## 13. The email clerk: the descent
 
@@ -1221,6 +1282,21 @@ above. The cases:
 26. A read-back that differs from the row writes `drift`, and
     discover carries it. A provider with no token serves the
     schedule `broken` with a note. (R-12.3, R-12.11)
+27. `offer_key` by a person stores the key, and no projection of the
+    row shows it. A bare agent's `offer_key` is refused. A create or
+    restate that carries `sitter_key` is refused. `revoke_key` clears
+    it. (R-12.12)
+28. `initialize` answers an `Mcp-Session-Id`. A call naming an
+    unknown session is answered 404. A call with no session id is
+    served as before. (R-12.13)
+29. `waymark_sit` with the seat's key on a known session binds it: a
+    following discover on that session names the sitter `seat:{id}`
+    and carries `doors.ask.seat` for the seat. The same discover
+    without the session id names the delegate. A wrong key, a caller
+    that is not a delegate, and a client that keeps no session are
+    each refused in a sentence. (R-12.14)
+30. A transition made through a bound session carries the sitter as
+    its actor, and the seat's open sitting counts it. (R-12.15)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
@@ -1248,6 +1324,20 @@ trusts.
   fuel spent on law the model did not know. The engine counts them
   on the sitting, because the harness cannot see them and the person
   cannot fix what nobody counts.
+- **A key in the instructions makes the Routine the sitter.** The
+  first design of the driver had the sitter bind as its own member
+  through the agent door, with a leash keeper renewing a cookie in
+  the Routine's MCP config. The owner ruled on 2026-09-17 that the
+  driver is a Claude Routine with the engine's connector attached,
+  and that a key in its instructions, with the connector's own
+  credential, must be enough. The connector's credential is one per
+  person and tool, so the key is what tells one session from the
+  rest, and the MCP door keeps a session so the key is shown once.
+  The alternatives were a second connector per seat, which the owner
+  declined, and a key on every call, which a model forgets. Section
+  12.1 is the result. The recorded punt that the MCP handshake is
+  not a declaration door is retired for a keyed session: its
+  declaration is the schedule's model, as R-12.8 always said.
 - **A person's delegate opens a seat.** The first build of
   `a-person` admitted the human type only, and refused the owner's
   own connector, because the connector resolves to an agent
@@ -1335,6 +1425,9 @@ trusts.
 
 - A cross-check of the model claim against the MCP client name. It
   verifies the client, not the model.
+- A keyed sitting's cost. No hook runs at the end of a Routine's
+  session, so the sitting closes by the sweep with no token counts.
+  The counts of transitions and refusals stand. (R-12.16)
 - A composed seat page that answers the six questions of R-11.3 on
   one screen, with the ladder's steps and the audit beside them. The
   queries exist; the page is a surface declaration away, as the

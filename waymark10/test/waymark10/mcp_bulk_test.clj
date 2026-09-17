@@ -99,7 +99,7 @@
   (let [h (fresh)
         names (mapv :name (get-in (json (rpc h "tools/list" {})) [:result :tools]))]
     (is (= (count mcp/tools) (count names))
-        "the fixed list as it stands (seven since waymark-pywy.3) — bulk added nothing to it")
+        "the fixed list as it stands (eight since spec-seat.md R-12.14) — bulk added nothing to it")
     (is (not-any? #(str/includes? % "bulk") names) "no seventh tool for bulk")
     (is (some #{"waymark_invoke"} names))
     (testing "and waymark_invoke's own schema names the two bulk arguments"

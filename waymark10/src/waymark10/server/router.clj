@@ -201,13 +201,20 @@
 ;; and `visibility` is also called from a preview and from the
 ;; capability check, where nothing met anything.
 
-(defn- mind-the-wall!
+(defn mind-the-wall!
   "R-7.7: the first request that meets one of the three walls writes
   the seat's `halt`, and the first that passes afterwards clears it.
   Both doors are idempotent by intent in seats.clj; this calls NEITHER
   unless the seat row actually has to move, so a seat behind a wall
   costs the same per request as a seat that is not — the resolve
-  already read the halt off the row it loaded."
+  already read the halt off the row it loaded.
+
+  PUBLIC since the keyed sitter session (spec-seat.md R-12.15):
+  `wrap-identity` calls it for the BEARER's visibility, which for a
+  bound MCP session is the delegate's and not the sitter's. The MCP
+  transport resolves the sitter's own visibility after the identity
+  boundary has run, so it calls this again for that one — the same
+  expression, not a second reading of the same law."
   [eng seat]
   (when-some [id (:id seat)]
     ;; best-effort, the approval-effects! posture: the seat moved under
