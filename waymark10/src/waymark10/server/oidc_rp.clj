@@ -43,12 +43,16 @@
     POST /auth/agent/renew               a LIVE session (the cookie)
         answers with a fresh one; lapsed = a new invitation
 
+  Both agent doors take an optional `model` besides — the harness's
+  declaration of which model runs the session (spec-seat.md § 9),
+  minted into the token as a claim and verified by nobody.
+
   The session cookie is an HS256 JWT of the principal's own claims —
-  sub, roles, actor type, display — never the IdP's tokens: nothing
-  stored server-side, nothing worth stealing beyond the session
-  itself (HttpOnly, SameSite=Lax, Secure under https). Recorded punt
-  this round: refresh tokens — session expiry re-runs /auth/login,
-  which the IdP's SSO cookie answers silently."
+  sub, roles, actor type, display, the declared model — never the
+  IdP's tokens: nothing stored server-side, nothing worth stealing
+  beyond the session itself (HttpOnly, SameSite=Lax, Secure under
+  https). Recorded punt this round: refresh tokens — session expiry
+  re-runs /auth/login, which the IdP's SSO cookie answers silently."
   (:require [buddy.sign.jwt :as jwt]
             [clojure.string :as str]
             [org.httpkit.client :as http]
@@ -245,21 +249,33 @@
   every browser through the IdP every few minutes and, worse, let a
   mid-flight session silently expire between form load and submit.
   The trade (recorded): a session can outlive the IdP's own session;
-  the ttl bounds it and /auth/logout ends both."
+  the ttl bounds it and /auth/logout ends both.
+
+  THE MODEL IS A CLAIM (spec-seat.md R-9.4, R-9.6). `model` rides
+  beside `actor_type` when the principal carries one, and it says
+  only what the harness DECLARED at the door it was minted at. The
+  engine cannot verify it: no token, no handshake and no probe tells
+  an engine which model is on the other end of a session. So the law
+  that reads it — a seat held for one model — is a fence around a
+  declaration, and the check that the declaration is true is against
+  the harness, never here. A session that declared nothing has no
+  model, which is the honest thing for it to say."
   ([rp principal] (mint-session rp principal nil))
   ([rp principal extra]
    (let [now (now-secs)
          exp (+ now (:session-ttl-s rp))]
      {:exp exp
-      :token (jwt/sign (merge {:sub (:id principal)
-                               :roles (vec (:roles principal))
-                               :actor_type (name (:type principal))
-                               :display (:display principal)
-                               :iat now :exp exp}
-                              ;; the guest door's scope selector rides
-                              ;; the session — strictly narrowing, so
-                              ;; a forged claim could only conceal
-                              (select-keys extra [:grant]))
+      :token (jwt/sign (cond-> (merge {:sub (:id principal)
+                                       :roles (vec (:roles principal))
+                                       :actor_type (name (:type principal))
+                                       :display (:display principal)
+                                       :iat now :exp exp}
+                                      ;; the guest door's scope selector
+                                      ;; rides the session — strictly
+                                      ;; narrowing, so a forged claim
+                                      ;; could only conceal
+                                      (select-keys extra [:grant]))
+                         (:model principal) (assoc :model (:model principal)))
                        (:session-secret rp) {:alg :hs256})})))
 
 (defn- callback [oidc req]
@@ -320,7 +336,7 @@
   (when-some [rp (:rp oidc)]
     (when-some [c (get (cookies req) (:cookie-name rp))]
       (try
-        (let [{:keys [sub roles actor_type display grant]}
+        (let [{:keys [sub roles actor_type display grant model]}
               (jwt/unsign c (:session-secret rp) {:alg :hs256})
               at (some-> actor_type str str/lower-case keyword)]
           (when-not (str/blank? (str sub))
@@ -328,7 +344,11 @@
                                   ;; system stays engine-internal, same as bearer
                                   :type (if (contains? #{:human :agent} at) at :human)
                                   :roles (set (map str roles))
-                                  :display (or display (str sub))})
+                                  :display (or display (str sub))
+                                  ;; the declared model, back off the
+                                  ;; token that carried it (R-9.5) —
+                                  ;; nil when the session declared none
+                                  :model model})
               ;; the guest door's worn scope: wrap-identity falls back
               ;; to it when no X-Waymark-Grant header is presented
               (not (str/blank? (str grant)))
@@ -376,12 +396,39 @@
                                           "on renew, so keep THIS one and discard "
                                           "the last")}}))))})))
 
-(defn- body-invite
-  "The invite token off a JSON body — nil on absence or garbage; the
-  query param is the primary spelling."
+(defn- body-claims
+  "The door's JSON body, parsed ONCE — an empty map on absence or
+  garbage. A ring body is an InputStream that slurps exactly once, so
+  both things the agent doors read from it are read here: the token
+  that resolves the session (:invite) and the model the harness
+  declares (:model)."
   [req]
-  (try (some-> (:body req) slurp not-empty wire/read-json :invite)
-       (catch Exception _ nil)))
+  (let [m (try (some-> (:body req) slurp not-empty wire/read-json)
+               (catch Exception _ nil))]
+    (if (map? m) m {})))
+
+(def ^:private model-claim-max 64)
+
+(defn- declared-model
+  "The model this session declares (spec-seat.md R-9.4): a string of
+  1 to 64 characters, the same spelling a `model` row's `name`
+  carries. nil when nothing was declared — a session may run
+  undeclared, and its token then says nothing. ::refused when what
+  arrived is not a name: the SHAPE is the door's to hold, but the
+  truth of the claim is nobody's (R-9.6)."
+  [v]
+  (cond
+    (nil? v) nil
+    (not (string? v)) ::refused
+    (str/blank? v) nil
+    (<= (count (str/trim v)) model-claim-max) (str/trim v)
+    :else ::refused))
+
+(def ^:private model-refused
+  (problem 400 "Model claim refused"
+           (str "`model` names the model running this session — one string of "
+                "1 to 64 characters, spelled the way the model's own row is. "
+                "Declare nothing and the session simply carries no model.")))
 
 (defn- agent-session
   "POST /auth/agent — two resolutions, one door, rate-paced. The
@@ -405,25 +452,37 @@
   404, before anything spends, and says nothing; each flow is paced in
   its OWN rolling-hour window (members/reentry-door-paced! and
   invite-door-paced!, kept separate — N1) so that 404 can't be guessed
-  against, and a flood of one flow can never lock out the other."
+  against, and a flood of one flow can never lock out the other.
+
+  The door is also where a harness DECLARES its model (spec-seat.md
+  R-9.4): an optional `model`, minted into the session token as a
+  claim beside the actor type. The engine never verifies it (R-9.6)."
   [eng oidc req]
   (let [rp (:rp oidc)
         now (java.time.Instant/now)
-        ;; body-invite slurps the request body's InputStream, so read
+        ;; body-claims slurps the request body's InputStream, so read
         ;; it ONCE. The invite token keeps its pre-existing shape
         ;; (query or body); the re-entry token is read from the BODY
         ;; alone (waymark-4zj.8.2 R5) — never off the query string
-        body-token (body-invite req)
-        query-token (get (query-params req) "invite")
+        body (body-claims req)
+        query (query-params req)
+        body-token (:invite body)
+        query-token (get query "invite")
         invite-token (or query-token body-token)
+        ;; the model claim (R-9.4), either spelling: it is a
+        ;; DECLARATION, not a credential, so unlike the re-entry token
+        ;; it is safe on a query string — and a harness arriving with
+        ;; nothing but a signed link has only the query to declare in
+        model (declared-model (or (:model body) (get query "model")))
         ;; N1: the two flows are paced in SEPARATE buckets so a flood
         ;; of one can never lock out the other. A query ?invite= is
         ;; unambiguously invite onboarding → the invite bucket; a body
-        ;; token is the re-entry spelling (and the legacy body-invite
-        ;; path) → the re-entry bucket. Each is charged whatever the
-        ;; token's fate, so the pace leaks nothing about which tokens
-        ;; exist; both windows are generous globals (members' pacing
-        ;; block explains why no per-source key is trustworthy here).
+        ;; token is the re-entry spelling (and the legacy body-borne
+        ;; invite path) → the re-entry bucket. Each is charged
+        ;; whatever the token's fate, so the pace leaks nothing about
+        ;; which tokens exist; both windows are generous globals
+        ;; (members' pacing block explains why no per-source key is
+        ;; trustworthy here).
         invite-ok (or (nil? query-token)
                       (members/invite-door-paced! eng now))
         reentry-ok (or (nil? body-token)
@@ -435,6 +494,7 @@
     (cond
       (not invite-ok) paced
       (not reentry-ok) paced
+      (= ::refused model) model-refused
       :else
       (if-some [row (members/bind-agent! eng invite-token)]
         ;; the standing rotation at bind (waymark-53u): best-effort —
@@ -446,7 +506,8 @@
                                 :type :agent
                                 :roles (set (get-in row [:data :roles]))
                                 :display (or (get-in row [:data :display])
-                                             (:id row))}
+                                             (:id row))
+                                :model model}
                             (when reentry {:reentry reentry})))
         (if-some [row (members/spend-reentry! eng body-token)]
           (let [principal (t/principal
@@ -454,7 +515,8 @@
                             :type :agent
                             :roles (set (get-in row [:data :roles]))
                             :display (or (get-in row [:data :display])
-                                         (:id row))})
+                                         (:id row))
+                            :model model})
                 grant (some-> (grants/standing-grant-for eng (:id row))
                               (as-> g (grants/accept-as-audience!
                                        eng g principal)))
@@ -481,16 +543,29 @@
   ticks hourly writes the member row every few days, not every tick
   — and the response carries the new token through the same one-time
   seam the bind uses. Best-effort: a refusal (a guest, a human
-  session) is a quiet nil and the renewal stands alone."
+  session) is a quiet nil and the renewal stands alone.
+
+  The renew is a declaration door too (spec-seat.md R-9.4): a
+  `model` in the body (or the query) re-declares which model runs
+  this session from here on, so a harness that swaps models mid-leash
+  says so at the next tick. Declaring nothing carries the live
+  session's own claim forward — a renewal is a slide, not an amnesia,
+  and the ticking leash keeper that sends no body keeps what it had."
   [eng oidc req]
-  (if-some [principal (resolve-session oidc req)]
-    (let [reentry (when (= :agent (:type principal))
-                    (members/rotate-reentry-when-stale!
-                     eng (:id principal) (rand-token)))]
-      (session-response (:rp oidc) principal
-                        (when reentry {:reentry reentry})))
-    (problem 401 "Unauthenticated"
-             "No live session rides this request — renewal is for the living.")))
+  (let [declared (declared-model (or (:model (body-claims req))
+                                     (get (query-params req) "model")))]
+    (if (= ::refused declared)
+      model-refused
+      (if-some [principal (resolve-session oidc req)]
+        (let [principal (cond-> principal
+                          declared (assoc :model declared))
+              reentry (when (= :agent (:type principal))
+                        (members/rotate-reentry-when-stale!
+                         eng (:id principal) (rand-token)))]
+          (session-response (:rp oidc) principal
+                            (when reentry {:reentry reentry})))
+        (problem 401 "Unauthenticated"
+                 "No live session rides this request — renewal is for the living.")))))
 
 ;; ── the wrap engine/start! composes ─────────────────────────────────
 

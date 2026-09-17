@@ -37,10 +37,20 @@
   ONE more wall since waymark-46j, and it is about honesty rather than
   access: `names-only-what-stands` refuses an entry whose body points
   at an ADDRESS the house cannot show. The prose stays free; only the
-  addresses in it are held to being real."
+  addresses in it are held to being real.
+
+  AND ONE since the seat (docs/spec-seat.md § 8): these two kinds are
+  the seat's MEMORY, and a SUBSTITUTE — a sitter standing in for the
+  one that usually holds an office — reads them and does not write
+  them. The reason is continuity, not capability: the memory is the
+  seat's voice across sessions, and a stand-in writing it leaves the
+  next full sitter inheriting somebody else's words. The bar is
+  grants/not-a-substitute on `self/update` and `journal/create`; every
+  read is untouched."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
+            [waymark10.server.grants :as grants]
             [waymark10.types :as t]
             [workqueue10.resources.insight :refer [row-address]]))
 
@@ -376,7 +386,14 @@
              :edit {:prefill [:display :pronouns :about :boundaries
                               :lessons :working_notes]}
              :record true
-             :guards [edit-is-owner-or-human]
+             ;; the stand-in's bar (spec-seat.md R-8.2): a substitute
+             ;; reads the seat's memory and does not write it, so the
+             ;; profile is the full sitter's to edit. The guard is
+             ;; grant law — it reads the `substitute` flag the
+             ;; visibility carries beside the leash — and it is
+             ;; declared in grants.clj because the sentence is the
+             ;; spec's, once, for all three kinds of memory.
+             :guards [edit-is-owner-or-human grants/not-a-substitute]
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "Editing overwrites the profile with what was written; the log carries the prior words."}
              :handler edit-self
@@ -501,7 +518,10 @@
    ;; the story reads newest-first; created_at is the engine column,
    ;; never a prose/body field
    :sortable {:fields [:created_at] :default "-created_at"}
-   :create-guards [owner-is-self-or-on-behalf names-only-what-stands]
+   ;; a journal ENTRY is a write of the seat's memory, so the bar sits
+   ;; at the create door here rather than on an edit (R-8.2)
+   :create-guards [owner-is-self-or-on-behalf names-only-what-stands
+                   grants/not-a-substitute]
    :on-create stamp-owner
    :actions
    {:amend {:from #{:written :amended} :to :amended

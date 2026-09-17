@@ -72,10 +72,23 @@
   ;; reason again — {subject_kind, subject_id}, no application
   ;; vocabulary, and the conversation is about the cards this module
   ;; minted.
+  ;; …and the seats module's three (spec-seat.md, waymark-fp62): the
+  ;; office, the price list and the record of one wake. :always for the
+  ;; feed module's reason once more — a seat's scope names whatever
+  ;; kinds the house serves, a model is an identifier and four prices,
+  ;; a sitting is four token counts, and none of it is any
+  ;; application's vocabulary. What they are is the engine's own answer
+  ;; to what an agent's work cost.
   (is (= #{:definition :member :role :grant :approval_request
            :attachment :subscription :job :feed_recipe :recipe_proposal
            :feed_view :feed_view_consent :verdict_reason :ranking_note
-           :remark}
+           :remark :seat :model :sitting
+           ;; …and the schedule (spec-seat.md §12), for the same
+           ;; reason a seat is always here: a cron, a model and a
+           ;; provider are nobody's application vocabulary, and the
+           ;; seat's own `schedule` field is dead weight in a house
+           ;; that cannot serve the kind it points at.
+           :schedule}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -95,7 +108,10 @@
 
 (deftest a-selection-never-drops-core
   (testing "naming one module keeps the law's own vocabulary"
-    (is (= #{:definition :member :role :grant :approval_request :job}
+    ;; …and the seat, the model, the sitting and the schedule, which
+    ;; are core's since the grant carries a typed ref to the seat
+    (is (= #{:definition :member :role :grant :approval_request :job
+             :seat :model :sitting :schedule}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
@@ -199,6 +215,10 @@
                "/api/-/gate" "/api/-/gate/:tool"
                "/api/-/grant-check" "/agentInvite" "/api/-/agent-invite"
                "/api/-/ui" "/api/-/ui-lite" "/api/attachments/:id/bytes"
+               ;; the seat's ledger (spec-seat.md R-11.3a): four
+               ;; segments, static, and mounted before the plural
+               ;; grammar for the definitions sweep's exact reason
+               "/api/seats/:id/ledger"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
@@ -235,6 +255,10 @@
                  ;; would not match it, but /api/definitions/{id} is a
                  ;; row address and the sweep is not a field of it
                  "/api/definitions/:id/sweep"
+                 ;; and the seat's ledger, which /api/{plural}/{id}
+                 ;; would not match either — but /api/seats/{id} IS a
+                 ;; row address, and the ledger is not a field of it
+                 "/api/seats/:id/ledger"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))
@@ -303,6 +327,11 @@
     (is (= [:dispatcher :law-refresh :clock-sweeper
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
+            ;; the schedules module (spec-seat.md § 12) sits between
+            ;; jobs and realtime in the inventory, and its two hooks
+            ;; take that place in the stable order: the mirror waits
+            ;; on :dispatcher only, the drift sweep on nothing
+            :schedules-mirror :schedules-drift
             :curtain :presence :intents
             :discovery
             ;; the feed module's two surfaces. :tickler-sweeper

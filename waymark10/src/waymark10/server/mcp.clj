@@ -143,6 +143,7 @@
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
+            [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
@@ -221,6 +222,13 @@
        "bulk, waymark_invoke takes ids (one input for every row) or "
        "items (each row its own input); a confirm action wants items, "
        "each carrying its own acknowledge. "
+       "\n\n"
+       "IF YOUR GRANT CITES A SEAT, read doors.ask.seat FIRST, before "
+       "anything else you do: it names the office you are sitting in, "
+       "what it has left to spend this week, the scope entries the "
+       "house refused, and the ledger that says what the seat has been "
+       "costing. When it carries a halt, or the seat is parked, say why "
+       "and stop — that is the whole of the turn. "
        "\n\n"
        "Refusals are answers. When this engine refuses you it says why, "
        "what would make the action available, and what to do instead — "
@@ -884,37 +892,55 @@
   read. The posture sentence rides beside them so an agent reading
   only this document still learns that asking is the default. An
   unscoped caller (nil visibility — a human, or a system actor) has
-  no leash to anchor, so no anchor entry."
-  [vis]
-  (cond-> {:posture (str "When something your task needs is absent, file "
-                         "an approval_request now — anchored, for "
-                         "everything at once — rather than reporting "
-                         "that you cannot.")
-           :powers (vec (sort (distinct (vals gate/tool-capability))))
-           :powers_note (str "external powers, asked for by naming the "
-                             "dotted token in a scope entry's `kind` "
-                             "(actions []); once granted, waymark_powers "
-                             "lists the tools it admits and waymark_power "
-                             "invokes one — the tool list itself never "
-                             "changes")}
-    (and vis (:grant vis))
-    (assoc :anchor {:grant_id (:grant-id vis)
-                    :note (str "the grant you are wearing — pass it as "
-                               "`grant_id` on every ask so the approval "
-                               "WIDENS it; an anchorless ask mints a "
-                               "replacement and you lose this one")})
-    (and vis (nil? (:grant vis)))
-    (assoc :anchor {:grant_id nil
-                    :note (str "you wear no live grant: your first ask is "
-                               "anchorless and its approval mints one; "
-                               "anchor every ask after it")})))
+  no leash to anchor, so no anchor entry.
 
-(defn- discover [_eng call session _args]
+  THE SEAT RIDES HERE TOO (spec-seat.md R-7.4), for a caller whose
+  grant cites one: the office, its state, its fuel, the scope entries
+  the boot sweep refused, the wall it is against, the drift the
+  read-back found in the provider's copy, and the ledger's address.
+  It is the FIRST thing a firing reads (R-12.4) and the reason it is
+  beside the anchor rather than on a door of its own: an agent that
+  found the anchor found the seat in the same breath. A grant citing
+  no seat carries no `seat` key at all — absent, the way a kind
+  nobody granted is absent."
+  [eng vis]
+  (let [seat (seat-routes/seat-door eng vis)]
+    (cond-> {:posture (str "When something your task needs is absent, file "
+                           "an approval_request now — anchored, for "
+                           "everything at once — rather than reporting "
+                           "that you cannot.")
+             :powers (vec (sort (distinct (vals gate/tool-capability))))
+             :powers_note (str "external powers, asked for by naming the "
+                               "dotted token in a scope entry's `kind` "
+                               "(actions []); once granted, waymark_powers "
+                               "lists the tools it admits and waymark_power "
+                               "invokes one — the tool list itself never "
+                               "changes")}
+      (and vis (:grant vis))
+      (assoc :anchor {:grant_id (:grant-id vis)
+                      :note (str "the grant you are wearing — pass it as "
+                                 "`grant_id` on every ask so the approval "
+                                 "WIDENS it; an anchorless ask mints a "
+                                 "replacement and you lose this one")})
+      (and vis (nil? (:grant vis)))
+      (assoc :anchor {:grant_id nil
+                      :note (str "you wear no live grant: your first ask is "
+                                 "anchorless and its approval mints one; "
+                                 "anchor every ask after it")})
+      seat
+      (assoc :seat
+             (assoc seat :note
+                    (str "the office you are sitting in — read this first: "
+                         "a halt or a parked state means say why and stop, "
+                         "and the ledger says what this seat has cost"))))))
+
+(defn- discover [eng call session _args]
   (let [resp (call (request session :get "/api/.well-known/waymark" {}))
         doc (when (<= 200 (:status resp 500) 299) (body-json resp))]
     (if (map? doc)
       (result (wire/write-json
-               (update-in doc [:doors :ask] merge (ask-door (:visibility session)))))
+               (update-in doc [:doors :ask] merge
+                          (ask-door eng (:visibility session)))))
       (pass-through resp))))
 
 (defn- action-digest

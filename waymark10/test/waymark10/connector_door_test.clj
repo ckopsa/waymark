@@ -20,6 +20,7 @@
             [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
 
@@ -78,6 +79,9 @@
 
 (def ^:private discovery
   "https://app.test/.well-known/oauth-protected-resource/api/-/mcp")
+
+;; the person at the keyboard, for the doors that are a human's alone
+(def ^:private person (t/principal {:id "colton" :display "Colton Kopsa"}))
 
 ;; the person, signing in THROUGH the connector: a human's token
 ;; carrying the household's strongest role, which the delegate must
@@ -228,10 +232,69 @@
         (let [ask (get-in (wire/read-json text) [:doors :ask])]
           (is (= "grant-connector-3" (get-in ask [:anchor :grant_id])))
           (is (some #{"messages.read"} (:powers ask)))
-          (is (str/includes? (str (:posture ask)) "approval_request")))))
+          (is (str/includes? (str (:posture ask)) "approval_request"))
+          ;; spec-seat.md R-7.4: a plain scope grant cites no seat, so
+          ;; there is no seat door — absent, not empty
+          (is (nil? (:seat ask))))))
     (testing "and the connect-time instructions say asking is the default, anchored"
       (is (str/includes? mcp/instructions "grant_id"))
-      (is (str/includes? mcp/instructions "ASKING IS THE DEFAULT")))))
+      (is (str/includes? mcp/instructions "ASKING IS THE DEFAULT"))
+      (is (str/includes? mcp/instructions "doors.ask.seat")
+          "and that a sitter reads its seat first")
+      (is (str/includes? mcp/instructions "say why and stop")))))
+
+(deftest a-grant-that-cites-a-seat-carries-the-seat-into-discover
+  ;; spec-seat.md R-7.4 / R-12.4: a firing reads doors.ask.seat FIRST.
+  ;; The delegate is the one agent that can present no header, so the
+  ;; seat it sits in has to reach discover off the grant the engine
+  ;; finds for it — the worn grant, resolved like any other.
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        seat (:row (inv/create!
+                    eng :seat
+                    {:name "connector-clerk"
+                     :charter "Decide whether a meal belongs on the list."
+                     :scope [{:kind "meal" :actions ["accept"]}]
+                     :standing_ttl_seconds 604800
+                     :cadence_seconds 3600
+                     :budget_usd_per_week 5M
+                     :sitting_budget_tokens 60000}
+                    {:principal person}))]
+    ;; the bootstrap through the doors: the delegate asks to sit in the
+    ;; office by name, the person approves, and the minted grant cites
+    ;; the seat — which is what the resolve reads at every request
+    (let [ask (:row (inv/create! eng :approval_request
+                                 {:task "Walk the meal list this seat owns."
+                                  :seat "connector-clerk"}
+                                 {:principal (t/principal
+                                              {:id "connector:colton"
+                                               :type :agent
+                                               :display "Claude"})}))]
+      ;; the mint is a wire-boundary effect, so the approve runs it
+      ;; the way the router does
+      (grants/approval-effects!
+       eng (get (inv/resources eng) :approval_request) :approve
+       (inv/invoke! eng :approval_request (:id ask) :approve nil
+                    {:principal person})))
+    (let [resp (rpc h (bearer colton) "tools/call"
+                    {:name "waymark_discover" :arguments {}})
+          door (-> (json resp)
+                   (get-in [:result :content 0 :text])
+                   wire/read-json
+                   (get-in [:doors :ask :seat]))]
+      (is (= "connector-clerk" (:name door)))
+      (is (= "active" (:state door)))
+      (is (= 604800 (:standing_ttl_seconds door)))
+      (is (nil? (:halt door)) "no wall has been met")
+      (is (nil? (:stale door)) "and nothing in the scope stopped resolving")
+      (is (nil? (:drift door)) "no schedule copy has been read back")
+      (is (zero? (compare 5M (get-in door [:budget :limit]))))
+      (is (zero? (compare 0M (get-in door [:budget :spent])))
+          "no closed sitting, nothing spent")
+      (is (nil? (get-in door [:budget :resumes_at]))
+          "and nothing to wait for")
+      (is (= (str "/api/seats/" (:id seat) "/ledger") (:ledger door))
+          "discover names the ledger route (R-11.3a)"))))
 
 (deftest invited-only-admits-a-delegate-exactly-when-its-person-is-a-member
   (let [eng (fresh-engine {:members :invited-only})

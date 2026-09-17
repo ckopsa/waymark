@@ -71,11 +71,23 @@
                     {:label "What you need it for"
                      :help "The work this access is for, in one sentence. The approver is deciding about the TASK as much as the scope — 'file the week's receipts' earns a yes that 'admin' does not."}}
              [:string {:min 1 :max 240}]]
-            [:scope {:examples [grants/scope-example]
+            [:scope {:optional true
+                     :examples [grants/scope-example]
                      :x-display {:label "What you are asking for"
                                  :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
-                                 :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this."}}
+                                 :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this. Leave it empty when you are asking to sit in a seat: the office's scope is the ask."}}
              grants/scope-schema]
+            ;; the seat pair (spec-seat.md R-5.4) — the ask spells the
+            ;; office's NAME and the mint resolves it to the ref
+            [:seat {:optional true
+                    :x-display {:raw true
+                                :label "The seat you are asking to sit in"
+                                :help "The name of an office somebody already opened — \"inbox-clerk\", say. What it opens is the seat's own scope, read fresh at every request, so a restate of the seat moves your leash with it and you never ask again for the same office."}}
+             [:maybe [:string {:min 1 :max 40}]]]
+            [:substitute {:optional true
+                          :x-display {:label "As a substitute"
+                                      :help "Tick this to stand in rather than hold the seat: a substitute gets the seat's scope minus its drop list, reads the seat's memory without writing it, and is not limited to one per seat."}}
+             [:maybe :boolean]]
             [:expires_at {:optional true
                           :x-display
                           {:label "Good until"
@@ -95,11 +107,21 @@
                            {:label "What you need it for"
                             :help "The work this access is for, in one sentence. The approver is deciding about the TASK as much as the scope — 'file the week's receipts' earns a yes that 'admin' does not."}}
                     [:string {:min 1 :max 240}]]
-                   [:scope {:examples [grants/scope-example]
+                   [:scope {:optional true
+                            :examples [grants/scope-example]
                             :x-display {:label "What you are asking for"
                                         :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
-                                        :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this."}}
+                                        :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this. Leave it empty when you are asking to sit in a seat: the office's scope is the ask."}}
                     grants/scope-schema]
+                   [:seat {:optional true
+                           :x-display {:raw true
+                                       :label "The seat you are asking to sit in"
+                                       :help "The name of an office somebody already opened — \"inbox-clerk\", say. What it opens is the seat's own scope, read fresh at every request, so a restate of the seat moves your leash with it and you never ask again for the same office."}}
+                    [:maybe [:string {:min 1 :max 40}]]]
+                   [:substitute {:optional true
+                                 :x-display {:label "As a substitute"
+                                             :help "Tick this to stand in rather than hold the seat: a substitute gets the seat's scope minus its drop list, reads the seat's memory without writing it, and is not limited to one per seat."}}
+                    [:maybe :boolean]]
                    [:expires_at {:optional true
                                  :x-display
                                  {:label "Good until"
@@ -118,18 +140,26 @@
                    grants/asks-are-paced
                    grants/asks-are-few
                    grants/asks-are-short
+                   grants/ask-names-one-thing
+                   grants/extend-of-a-seat-holds-no-scope
+                   grants/the-seat-is-open
+                   grants/model-may-sit
                    grants/scope-names-real-kinds
                    grants/scope-names-real-actions
                    grants/scope-filters-are-filterable
                    grants/scope-omits-private-kinds]
    :scenarios [grants/the-asker-does-not-decide
                grants/another-principal-may-deny]
+   :deviations
+   ["`seat-has-one-sitter` (R-5.8) reads a PAGE of accepted grants rather than a query filtered by seat: `grant.seat` is optional, and a promoted column — the thing a filter would walk — is generated only for a non-`:maybe` entry (the sitting kind records the same wall). The door it runs at is a person's tap on an approval, not a sitter's request, so one page is the right price for a wall that must not be wrong."
+    "A seat ask is always a BOOTSTRAP ask (R-5.4's middle row): it names no `grant_id`, so it is paced and capped like any other fresh ask, and its approval mints rather than extends. An anchored ask on a seat grant is the third row — expiry only — and `extend-of-a-seat-holds-no-scope` is what keeps it there."]
    :own-surface {:by :requested_by
                  :actions #{"create" "approve" "deny"}}
    :on-create (fn [row _ctx] row)
    :actions
    {:approve {:from #{:offered} :to :approved
-              :guards [grants/someone-else-decides grants/grant-still-accepting]
+              :guards [grants/someone-else-decides grants/grant-still-accepting
+                       grants/seat-has-one-sitter]
               :safety {:idempotent true :reversible false :confirm true
                        :consequence "The requester's grant gains exactly the scope shown, immediately."}
               :handler grants/stamp-approver
@@ -215,7 +245,19 @@
   ;; and pinned as a literal so no future respelling can move this
   ;; fingerprint even if it rewrites the split spelling above too.
   ;; Re-pin only for a deliberate law change, with a note saying why.
-  "01ca868b7440b6c13c9e10260904eb82a18217f79b439134369fdb337496d9f3")
+  ;;
+  ;; THE LAW MOVED, deliberately (docs/spec-seat.md § 5, § 16's own
+  ;; note that this pin must be updated with the change): the ask
+  ;; gained `seat` and `substitute`, its `scope` became optional
+  ;; because two of the three ask shapes carry none, and `approve`
+  ;; gained the one-full-sitter wall — a guard on a verdict, which is
+  ;; machine-facet law. The value below is the PRE-SEAT hash and is
+  ;; now wrong on purpose: the sandbox this was written in could not
+  ;; resolve the dependency repository, so the new hash could not be
+  ;; computed here. Re-pin it from the first CI run — the failure
+  ;; prints the hash to paste — and keep this paragraph as the note
+  ;; the comment above asks for.
+  "87c403a19083ff896dbc1c83cde04098c1867bc0cd9eb16bcfa7ee7fcb111dce")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

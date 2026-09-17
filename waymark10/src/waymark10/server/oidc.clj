@@ -400,7 +400,14 @@
                     ;; system stays engine-internal: an IdP cannot mint it
                     :type (if (contains? #{:human :agent} at) at :human)
                     :roles (set (when (sequential? roles) (map str roles)))
-                    :display display}))))
+                    :display display
+                    ;; the model claim (spec-seat.md R-9.4), one
+                    ;; spelling with the session cookie's: the
+                    ;; harness NAMES the model it runs. A token
+                    ;; without the claim has no model, and the claim
+                    ;; is never verified — see mint-session
+                    ;; (waymark10.server.oidc-rp), where it is made
+                    :model (:model claims)}))))
 
 (defn verify
   "A raw token → its verified claims and the Principal they name —

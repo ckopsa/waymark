@@ -9,7 +9,11 @@
   The boot IS the revise: boot-revise! fingerprints every resident
   application kind (never :definition itself — the law of the law is
   a named punt, with waymark9's __registry__ row), compares to the
-  stored current row, and deploys per the engine's :deploy-mode.
+  stored current row, and deploys per the engine's :deploy-mode. And
+  because the registry only ever changes HERE, the boot is also where
+  the house says what the change cost a seat: `sweep-seats!` runs
+  after the fingerprints — see its own section below
+  (docs/spec-seat.md § 7).
   :promote (the default) is the single-breath revise: mint N+1
   current, retire N. :propose holds a data-law diff at proposed —
   the boot keeps serving the current law by installing its stored
@@ -85,7 +89,27 @@
     unported: after a reboot-during-hold the re-adopted proposal is
     promotable by construction (its hash matched the resident code);
     a stale piloted revision is parameter-served but also promotable —
-    the residency refusal is a named punt."
+    the residency refusal is a named punt.
+  - The SEAT SWEEP judges parked seats and cannot mark one. R-7.1
+    names active and parked; `seat`'s `mark_stale` is declared
+    `active → active` only (seats.clj records why), so a parked seat
+    is judged and the write is a no-op. Nothing is lost: a parked
+    seat serves nothing until a person unparks it, and the next boot
+    after that unpark marks it.
+  - STALE IS ENTRY-GRAINED, not action-grained. A scope entry naming
+    one retired action goes into `stale` WHOLE, so the resolve
+    subtracts every action it named — including the ones that still
+    resolve. Acceptance case 8 asks for exactly that (\"marks the seat
+    stale with the entry named. The sitter sees the surviving
+    entries\"), and grants' `without-entries` would express the finer
+    reading if a later leg wants it; the blunt one is what keeps the
+    stale list readable as a list of things to fix.
+  - The sweep rides boot-revise!, so the LAW-REFRESH consumer
+    (server/coherence) re-runs it on every definition burst as well
+    as at boot. That is the right cadence, not an accident: what
+    makes a scope entry stale is the registry moving, and refresh! is
+    the other place the registry moves. Every step is idempotent, so
+    a second pass over an unchanged registry writes nothing."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.fingerprint :as fp]
@@ -94,9 +118,11 @@
             [waymark10.schema :as schema]
             [waymark10.server.collections :as coll]
             [waymark10.server.events :as events]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.problems :as p]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
@@ -841,13 +867,245 @@
             ;; facts recompute, each row under its own law
             (repair-stale! eng kind diff)))))))
 
+
+;; ── the seat sweep (docs/spec-seat.md § 7, § 12) ────────────────────
+;;
+;; THE REGISTRY CHANGES ONLY AT BOOT (R-7.1), which is why this rides
+;; here and not on a clock: the scope a seat was opened with is
+;; validated at its own doors, and the only thing that can rot it
+;; afterwards is a push that retires a kind or an action. waymark-enx
+;; is the incident — a push retired `value.restate`, the stored scope
+;; still named it, and every extend-ask got a 409 while the leash died
+;; in silence. So the boot that changes the registry is the boot that
+;; says what the change cost.
+;;
+;; The sweep REPORTS and it repairs almost nothing. It writes `stale`
+;; so the entries that stopped resolving are on the row, in discover
+;; and in the envelope (R-7.4); it ends the sittings nobody closed
+;; (R-7.6); and it logs the schedule copies the read-back found
+;; drifting (R-12.3) without touching one of them — a mirror that
+;; healed the row from the provider's copy would adopt exactly the
+;; drift the spec exists to catch. What it does NOT do is narrow a
+;; leash: R-7.3 keeps a stale seat serving the entries that still
+;; resolve, and the router's resolve is what drops the rest at request
+;; time.
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 seat sweep: " parts))))
+
+(def ^:private sweep-cap
+  "The most rows one sweep pass reads per kind. A boot is not the
+  place to walk an unbounded table, and a house with more seats than
+  this has a bigger problem than a stale scope entry."
+  1000)
+
+(def ^:private scope-guards
+  "The four scope guards (spec-seat.md § 2), in the order a door runs
+  them. The SAME vars `seat`'s own create and restate carry — a sweep
+  that re-implemented `is this kind real` would be a second definition
+  of the law, right on the day it was written and wrong on the next."
+  [grants/scope-names-real-kinds
+   grants/scope-names-real-actions
+   grants/scope-filters-are-filterable
+   grants/scope-omits-private-kinds])
+
+(defn- scope-ctx
+  "The ctx those four read, built off the LIVE registry: the
+  vocabulary hook, the registry consult and the capability lookup,
+  spelled exactly as invoke/make-ctx spells them at a door. No
+  `:mode`, so every guard runs its real check rather than the probe's
+  optimistic answer."
+  [eng]
+  (let [st (:storage eng)]
+    {:services (:services eng)
+     :action-names (fn [target-kind]
+                     (some-> (get (inv/resources eng) (keyword target-kind))
+                             inv/action-names))
+     :rdef-of (fn [token]
+                (let [rs (inv/resources eng)
+                      t (name token)]
+                  (or (get rs (keyword t))
+                      (some (fn [[_ r]] (when (= t (:plural r)) r)) rs))))
+     :find (fn [target-kind where opts]
+             (when (contains? (inv/resources eng) target-kind)
+               (store/with-tx st
+                 (fn [tx]
+                   (store/query-rows st tx target-kind (or where {})
+                                     (merge {:limit 100} opts))))))}))
+
+(defn stale-entries
+  "The entries of one stored scope that no longer resolve, each beside
+  the sentence the guard that refused it would have said —
+  [{:entry e :note sentence} …], in scope order.
+
+  Judged ENTRY BY ENTRY on purpose. A door judges the scope whole and
+  answers with the first failure, which is the right answer to 'may I
+  write this'; the sweep is answering 'which of these still work', and
+  R-7.3 turns on the difference — a stale seat must still serve the
+  entries that are not stale, so the sweep has to know which ones
+  those are. The one law lost by the split is
+  `scope-filters-are-filterable`'s two-filtered-entries-per-kind rule,
+  which no registry change can newly break."
+  [eng scope]
+  (let [ctx (scope-ctx eng)]
+    (into []
+          (keep (fn [entry]
+                  (some (fn [guard]
+                          (let [[verdict denier] (g/evaluate guard nil
+                                                             {:scope [entry]} ctx)]
+                            (when (t/deny? verdict)
+                              {:entry entry
+                               :note (g/render-reason denier verdict nil)})))
+                        scope-guards)))
+          scope)))
+
+(def ^:private note-cap
+  "What `mark_stale`'s `note` holds. R-7.2 wants the guard's own
+  sentence and the field is 240 characters wide, so a refusal that
+  spells a long kind's whole action vocabulary is cut rather than
+  refused — a sweep that could not record WHY would be the silence
+  this whole section exists to end."
+  240)
+
+(defn- one-sentence [s]
+  (let [s (str s)]
+    (if (<= (count s) note-cap) s (str (subs s 0 (dec note-cap)) "…"))))
+
+(defn- rows-of [eng kind where]
+  (let [st (:storage eng)]
+    (if (contains? (inv/resources eng) kind)
+      (store/with-tx st
+        (fn [tx] (store/query-rows st tx kind where {:limit sweep-cap})))
+      [])))
+
+(defn- sweep-scopes!
+  "R-7.1/R-7.2: judge every active or parked seat's scope, and write
+  the failures into `stale` through the concealed `mark_stale`, with
+  the guard's own sentence as the note. `seats/mark-stale!` is
+  idempotent by intent — an unchanged list is not written again — so
+  a second boot over an unchanged registry writes nothing. → how many
+  seats moved."
+  [eng]
+  (reduce
+   (fn [n row]
+     (let [found (stale-entries eng (get-in row [:data :scope]))]
+       (if (seq found)
+         (if (try (seats/mark-stale! eng (:id row)
+                                     (mapv :entry found)
+                                     (one-sentence (:note (first found))))
+                  (catch Exception e
+                    (warn! "seat " (:id row) " could not be marked stale: "
+                           (ex-message e))
+                    false))
+           (inc n)
+           n)
+         ;; nothing failing and nothing recorded: the clean case, and
+         ;; the one a boot must not write to. R-7.5 gives the CLEARING
+         ;; of `stale` to `restate`, where the person who fixed the
+         ;; scope is standing — a sweep that cleared it would be the
+         ;; engine saying the scope is good when what changed was the
+         ;; registry underneath it.
+         n)))
+   0
+   (concat (rows-of eng :seat {:state :active})
+           (rows-of eng :seat {:state :parked}))))
+
+(defn- sweep-sittings!
+  "R-7.6: a sitting left `open` for more than two of its seat's
+  cadences is over. It goes through the sitting's own `abandon` door
+  under the seats actor, so the ending is in the log like every other
+  ending — and with NO tokens, because the absence of a bill is the
+  honest record of a session that never reported one. → how many
+  ended."
+  [eng]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) :sitting)
+        ^java.time.Instant now ((:now-fn eng))
+        ;; one read per SEAT, not per sitting: a seat waking hourly
+        ;; leaves its open sittings behind in a bunch
+        seen (volatile! {})
+        cadence-of (fn [seat-id]
+                     (let [cached (get @seen seat-id ::miss)]
+                       (if (not= ::miss cached)
+                         cached
+                         (let [c (some-> (store/with-tx st
+                                           (fn [tx]
+                                             (store/load-row st tx :seat
+                                                             (str seat-id) {})))
+                                         :data :cadence_seconds)]
+                           (vswap! seen assoc seat-id c)
+                           c))))]
+    (if (or (nil? rdef) (not (contains? (inv/resources eng) :seat)))
+      0
+      (reduce
+       (fn [n raw]
+         (let [row (inv/decode-row rdef raw)
+               cadence (cadence-of (some-> (get-in row [:data :seat]) str))
+               started (get-in row [:data :started_at])]
+           (if (and cadence started
+                    (.isBefore ^java.time.Instant started
+                               (.minusSeconds now (* 2 (long cadence)))))
+             ;; a door that refuses one sitting must not take the boot
+             ;; down with it: the sweep says so and walks on
+             (if (try (inv/invoke! eng :sitting (:id row) :abandon nil
+                                   {:principal seats/seats-actor})
+                      true
+                      (catch Exception e
+                        (warn! "sitting " (:id row) " could not be abandoned: "
+                               (ex-message e))
+                        false))
+               (inc n)
+               n)
+             n)))
+       0
+       (rows-of eng :sitting {:state :open})))))
+
+(defn- report-drift!
+  "R-12.3: the sweep REPORTS the drift the read-back found in a
+  provider's copy of a schedule; it does not repair one. One line per
+  row, and the row keeps saying it until an adapter's next read-back
+  finds the copy honest again. → how many were reported."
+  [eng]
+  (let [st (:storage eng)]
+    (if-not (contains? (inv/resources eng) :schedule)
+      0
+      (reduce (fn [n row]
+                (warn! "schedule " (:id row) " for seat "
+                       (get-in row [:data :seat]) " drifted: "
+                       (get-in row [:data :drift]))
+                (inc n))
+              0
+              (store/with-tx st
+                (fn [tx]
+                  (store/search-rows
+                   st tx :schedule
+                   [{:target :data :field :drift :op :set? :value true}]
+                   {:limit sweep-cap})))))))
+
+(defn sweep-seats!
+  "The boot's seat pass (§ 7, R-12.3), run after the kind fingerprints
+  because it judges scopes against the registry those fingerprints
+  just settled. → {:stale n :abandoned n :drifting n}.
+
+  Every step is guarded against a kind this engine does not serve: an
+  engine assembled without the seats module sweeps nothing and says
+  nothing, which is what a module you left out should cost."
+  [eng]
+  {:stale (sweep-scopes! eng)
+   :abandoned (sweep-sittings! eng)
+   :drifting (report-drift! eng)})
+
 (defn boot-revise!
   "Fingerprint every resident application kind, revise where the hash
   moved, fill the law slots. One correlation id spans the deploy.
   Also installs the engine-closed pilot guards (population grammar —
-  batch C)."
+  batch C), and — AFTER the fingerprints, because it judges scopes
+  against the registry they settle — runs the seat sweep
+  (spec-seat.md R-7.1)."
   [eng]
   (install-pilot-grammar! eng)
   (let [corr (str (random-uuid))]
     (doseq [kind (sort (keys (dissoc (inv/resources eng) :definition)))]
-      (revise-kind! eng corr kind))))
+      (revise-kind! eng corr kind)))
+  (sweep-seats! eng))

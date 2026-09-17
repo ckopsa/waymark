@@ -425,7 +425,10 @@
                    "ranking_note"
                    ;; waymark-b4s: and the turns it said —
                    ;; own-surface by :said_by
-                   "remark"}
+                   "remark"
+                   ;; spec-seat.md (waymark-fp62.1): and the sittings it
+                   ;; opened — own-surface by :member
+                   "sitting"}
                  (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"

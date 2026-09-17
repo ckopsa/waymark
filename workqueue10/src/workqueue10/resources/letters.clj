@@ -72,6 +72,7 @@
   reached."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defresource defscenario]]
+            [waymark10.server.grants :as grants]
             [waymark10.server.problems :as p]
             [waymark10.types :as t])
   (:import (java.time Instant)))
@@ -456,8 +457,13 @@
    :sortable {:fields [:created_at] :default "-created_at"}
    ;; pacing first: it must count the attempt before the recipient
    ;; guard decides whether there is anyone to deliver to
+   ;; the stand-in's bar (spec-seat.md R-8.2): a letter is the seat's
+   ;; memory reaching another member, so a SUBSTITUTE reads the shelf
+   ;; and does not add to it. Last of the create guards, because the
+   ;; pace must still count the attempt and the recipient must still be
+   ;; real — a substitute learns it may not send, not who exists.
    :create-guards [letters-are-paced letter-author-is-self
-                   letter-to-is-a-member]
+                   letter-to-is-a-member grants/not-a-substitute]
    :on-create stamp-letter
    ;; the policy, declared beside the law it judges
    :scenarios [only-the-recipient-opens
