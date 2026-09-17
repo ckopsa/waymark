@@ -518,6 +518,11 @@ loop script.
 | `pushed_at` | instant | when the adapter last wrote the copy |
 | `seen_at` | instant | when the adapter last read the copy back |
 | `drift` | string, optional | what the read-back found that the row does not say. Engine-written. |
+| `fire_url` | string, optional | the Routine's fire endpoint. A person writes it (R-12.18). |
+| `fire_token` | string, secret, optional | the token a fire carries. A person writes it. The engine never answers it. |
+| `last_fired_at` | instant, optional | when the engine last fired the Routine. Engine-written. |
+| `last_run_url` | string, optional | the provider's page for the last run. Engine-written. |
+| `wake_pending` | boolean, optional | a match waits for the damper to lift (R-12.22). Engine-written. |
 
 States: `pending` (no copy yet), `live`, `paused`, `broken` (the
 adapter could not reach the provider; the note says why). The seat
@@ -548,6 +553,13 @@ beside the prompt (name, cadence, model) are the mirror's, and the
 mirror is what keeps a copy honest: the adapter reads the copy back
 on a cadence and writes any difference into `drift`, which the boot
 sweep and `doors.ask.seat` report.
+
+The Claude Routine provider is the exception, and R-12.18 is its
+rule. Its API fires a Routine and does nothing else. There is no
+copy for the adapter to make, and none to read back, so a linked row
+gets no `drift`. The link is the by-hand path: a person makes the
+Routine, writes this prompt into it, and gives the row the fire URL
+and the token.
 
 **R-12.4** Each firing is one sitting. A firing must read
 `doors.ask.seat` first. If the seat carries `halt`, or is parked,
@@ -591,12 +603,11 @@ A provider's firing is one session, not one turn per row, so the
 rows of one firing share one context. Each turn reads the whole
 context again; the twentieth row costs more than the first, and its
 decision is made with nineteen other rows in view. The cap bounds
-both. The one-row-per-session form comes through the provider's
-API: the source fires the schedule with the row's id as its text,
-through the same adapter, and the firing walks that row alone. It
-changes the source, not the seat. The trial week measures cost and
-corrections by row position, and that decides whether the cap is
-enough.
+both. The one-row-per-session form comes through the fire door
+(R-12.21). A fire carries the row's id as its text, and that firing
+walks the one row. The engine fires the seat, so no source needs
+fire code. The trial week measures cost and corrections by row
+position, and that decides whether the cap is enough.
 
 **R-12.10** The prompt must give the model nothing beyond the
 pointer, the walk rule, and the engine's own answers: the seat row,
@@ -614,6 +625,11 @@ never on a grant a sitter can wear. A deployment with no token for a
 provider serves the schedule kind with that provider `broken` and
 its note saying so, which is a boot that says so rather than one
 that fails.
+
+The fire token of R-12.18 is not this credential. A person writes it
+on one schedule row, and it opens one Routine. The engine holds it
+as it holds `sitter_key`: written by one door, never answered, never
+filtered on, and never in a transition's recorded inputs.
 
 ### 12.1 The keyed session
 
@@ -732,6 +748,111 @@ which the session already holds.
 A sitting that gets no report is still the sweep's. The sweep
 abandons it after two cadences, with no tokens (R-7.6). The counts
 of transitions and refusals stand.
+
+### 12.2 The fire door
+
+The owner's ruling of 2026-09-17: a seat must be fired on demand and
+on events, and not on a cadence alone. The Routines API is fire-only.
+It has one endpoint, which starts a run. It has no endpoint that
+makes a Routine, changes one, lists them, or reads one back. The
+engine therefore cannot hold the copy of R-12.2 for this provider.
+The person makes the Routine by hand, one time, and links it to the
+schedule row. The engine fires it from then on. The fire URL holds
+the Routine's id, which is not a secret. The token is a secret.
+
+**R-12.18** The schedule row must hold the link. R-12.1 gives the
+fields: `fire_url` and `fire_token`, which a person writes, and
+`last_fired_at` and `last_run_url`, which the engine writes. The
+engine shows `fire_url`. The engine never shows `fire_token`. It
+holds that token as it holds the seat's `sitter_key`.
+
+The schedule must have a door `link`, with the input `{fire_url,
+token}`. Only a person or a delegate opens it. A `link` moves the row
+to `live` and clears the note. A second `link` replaces the first.
+The schedule must have a door `unlink`. It clears both fields, moves
+the row to `broken`, and writes the note `No link: the Routine's
+fire URL and token are not on this schedule.` The engine does not
+make, change or read a Routine.
+
+A linked row is a row a person manages. The adapter of R-12.2 must
+therefore leave it alone. A push, a pause and a resume of a linked
+row call no adapter and change no field. A delete still ends the row.
+
+**R-12.19** The seat must have a door `fire`. The input has one
+optional field, `text`, of at most 2000 characters. A person, a
+delegate or the engine opens the door. The engine records the text
+with the transition.
+
+The fire goes out after the commit. A consumer of the transition log
+hears the fire, reads the seat's schedule, and sends a POST to
+`fire_url` with the token and the beta header. The push of R-12.2 is
+the same seam. The consumer then writes `last_fired_at` and
+`last_run_url` on the schedule row, through a door of the engine's
+own hand. A fire is a real transition from active to active, and the
+ledger counts it.
+
+**R-12.20** The engine must refuse a fire with one sentence in these
+cases. The seat is parked: `The seat is parked. Unpark it first.`
+The seat is halted: the halt's own sentence. The schedule has no
+link: `Link the Routine's fire URL and token to the schedule
+first.` The caller is a bare agent, with no person behind it: the
+refusal of R-4.7.
+
+The provider's own answer comes after the commit, so it is a note on
+the schedule row and not a refusal at the door. When the provider
+answers 429, the engine moves the row to `broken`, with the note
+`The Routine has no free run. Try again after {retry_after}.` The
+next fire that goes out clears it. When the provider answers 400
+paused, the engine moves the row to `paused`. When the provider
+answers 401, the engine moves the row to `broken`, with the note
+`The Routine refused the token.` When the provider answers 404, the
+engine moves the row to `broken`, with the note `No Routine answers
+the fire URL.`
+
+A fire is fuel. The engine never fires a seat behind a wall.
+
+**R-12.21** When the fire's text names a row id of a kind in the
+seat's scope, the session must walk that one row. The provider puts
+the text into the session in a `routine-fire-payload` block. A
+session reads that block only when its instructions tell it to, so
+the Routine's instructions must get this line: `If a
+routine-fire-payload block names a row id, walk that row and stop.`
+A fire with no text walks the queue, as a cadence firing does.
+
+**R-12.22** The seat must have a field `wake_on`. It is a list of
+entries `{kind, actions}`, in the shape of a scope entry. A walk seat
+with no `wake_on` behaves as one entry: the walk's kind, with the
+action `create`. The engine computes that default when it reads the
+seat, and it writes nothing.
+
+Each entry is a subscription over the transition log. The engine
+already has this: the subscription kind, one cursor for each
+subscription, at-least-once delivery, and a fail or skip policy. The
+receiver of a `wake_on` entry is not a URL. The receiver is the
+seat's `fire` door. When a committed transition matches an entry, the
+engine fires the seat, with the transition as the text: the kind, the
+row id, the action, the from state and the to state. Example: the
+entry `{task, ["complete"]}` fires the seat when a task moves from
+open to complete.
+
+The damper has three parts. The engine does not fire while the seat
+has an open sitting. The engine fires at most once in
+`fire_interval_seconds`, a seat field with the default 300. A match
+the damper stops sets `wake_pending` on the schedule row. The next
+fire after the damper lifts names no row, so the session walks the
+queue. A replay after a restart is harmless, because the
+open-sitting check stops the second fire.
+
+The inbox source has no fire code. The cadence stays for a seat with
+no `wake_on`. Three things begin a sitting: the cadence, a person's
+fire, and a transition the seat asked to be woken by.
+
+**R-12.23** The provider's answer to a fire names a session id and a
+run URL. That id is the run page's id. It is not the sitting's
+`harness_session`, which the session reads in its own container
+(R-12.14). The engine writes the run URL on the schedule row, so a
+person can open the run. The exact pairing of a fire to its sitting
+is a punt (section 18).
 
 ## 13. The email clerk: the descent
 
@@ -1367,6 +1488,27 @@ above. The cases:
     Two sessions that sit with different session ids hold two open
     sittings, and a report closes the one its `harness_session`
     names. (R-12.14, R-12.17)
+33. `link` by a person moves the schedule row from `broken` to
+    `live`, and no projection of the row shows `fire_token`. `unlink`
+    moves the row back to `broken`, with the note that says no link.
+    (R-12.18)
+34. `fire` on a linked seat that is active sends the POST through a
+    fake provider, writes `last_fired_at` and `last_run_url` on the
+    schedule row, and counts one transition. A 429 from the provider
+    leaves the row `broken` with the retry sentence, and the next
+    fire that goes out clears it. A 400 paused answer moves the row
+    to `paused`. A 401 and a 404 each leave the row `broken` with
+    their own sentence. (R-12.19, R-12.20)
+35. `fire` on a parked seat, on a halted seat, and on a seat whose
+    schedule has no link is refused with the sentence, and the fake
+    provider gets nothing. A bare agent's `fire` is refused the same
+    way. (R-12.20)
+36. A committed transition that matches a `wake_on` entry fires the
+    seat one time, and the text names the row. A second match inside
+    `fire_interval_seconds` does not fire, and it sets
+    `wake_pending`. (R-12.22)
+37. A match while the seat has an open sitting does not fire.
+    (R-12.22)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
@@ -1498,6 +1640,22 @@ trusts.
   own sitting through the connector. That second path is for an
   environment that carries no variable and no credential, because the
   connector's traffic needs no domain, no variable and no key.
+- **The Routine is made by hand and linked; the engine fires it.**
+  Section 12 mirrored the Routine out through the adapter of R-12.2.
+  The API answers one endpoint, which fires a run, so there is
+  nothing to push and nothing to read back. The alternative was to
+  wait for a create endpoint, which leaves the seat on its cadence
+  alone. The owner ruled (2026-09-17) that a seat must be fired on
+  demand and on events. The person makes the Routine one time, copies
+  the fire URL and the token, and links them to the schedule row.
+  One row, not two kinds: the cadence and the fire link are fields of
+  the schedule row, and the events are rows of the transition log.
+  The fire itself is a consumer's act, because the log is the record:
+  the transition is committed before anything leaves the house, the
+  ledger counts it, and a refusal from the provider is a note on the
+  row. A door that waited for the provider's answer would make the
+  provider's health the seat's health, and a person's fire would fail
+  for a reason the person did not cause. Section 12.2 is the result.
 - **A step down is judged by corrections, not by cost.** Cost always
   falls on a step down. The only question is whether the outcomes
   held, and a correction is the one record of an outcome that did
@@ -1533,11 +1691,21 @@ trusts.
   model never holds the power. `invoke-for` exists in
   `gate_proxy.clj`; a handler that reaches it is a new seam, and a
   follow-up.
-- The source fires the schedule with one row id, so one session
-  walks one row. The provider's API accepts a text with the firing,
-  and the adapter of section 12 is the seam. It changes the source,
-  not the seat, and the trial week's numbers by row position say
-  whether it is needed.
+- The exact pairing of a fire to its sitting. The provider's answer
+  names the run page's session id, and the sitting carries the
+  harness's own id. The run URL on the schedule row is enough to find
+  the run by hand (R-12.23).
+- A queue of the fires the provider's run cap refused. A 429 breaks
+  the schedule row, and the next fire that goes out clears it. The
+  fires inside the cap are lost, and a person fires again.
+- The fire on a GitHub event. It belongs to the factory, which hears
+  those events. This engine hears its own transition log.
+- A rename of `schedule` to `routine`. The row now holds a link to a
+  Routine, and no copy of one. The name can follow later, with a
+  migration.
+- The read-back of R-12.3 stays a punt for the Claude Routine
+  provider. Its API has no read endpoint, so a linked row has no
+  `drift` to write.
 - A price source that restates model rows on a cadence (section 15).
 - Adapters for providers beyond the Claude Routine. Jules and cron
   are named in the enum; the first adapter built is the Routine's,
@@ -1569,4 +1737,8 @@ its corrections window is a new query; and the sitting's close is a
 harness hook, not engine code. There is no driver script: the
 scheduler is the harness's, the schedule kind mirrors to it, and the
 tick script stays as it is. The adapter and its credential are the
-part of this leg that reaches outside the house.
+part of this leg that reaches outside the house. The fire door of
+section 12.2 adds two doors to the schedule, one door and two fields
+to the seat, and one more adapter with its fake. The wake consumer
+is one namespace over the transition log, with a cache of the active
+seats and a tick for the damper.
