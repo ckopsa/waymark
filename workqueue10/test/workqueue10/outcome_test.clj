@@ -359,9 +359,13 @@
     ;; own create model judges the body, and the wall that used to be
     ;; the enum is the engine's sentence on the row plus that kind's
     ;; own guards under the member's hand.
+    ;; spec-seat.md (waymark-fp62.1) made `scope` optional on the grant
+    ;; — a seat grant carries none — so an audience alone now FITS the
+    ;; grant's create door. The proof stays the same: a field the door
+    ;; has never heard of is what its own model refuses.
     (testing "a governance kind is no longer walled out — its own door judges the body"
       (let [r (stage-piece! "composer-fit" o "Grant yourself something"
-                            "grant" {:audience "me"})]
+                            "grant" {:audience "me" :power "everything"})]
         (is (= 409 (:status r)))
         (is (= "the-prepared-input-fits-the-door" (guard-of r)))
         (is (str/includes? (str (detail r)) "grant's own create door"))))
