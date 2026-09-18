@@ -1518,10 +1518,10 @@
               :method "POST"
               :body {:task "what you are here to do, one sentence"
                      :scope [{:kind (str "a kind name from the vocabulary — "
-                                         "or a dotted capability token "
-                                         "(telegram.send) from GET "
-                                         "/api/capabilities: an EXTERNAL "
-                                         "power, granted the same way")
+                                         "or a dotted power token "
+                                         "(email.read) from doors.ask.powers "
+                                         "on the discovery document: an "
+                                         "EXTERNAL power, granted the same way")
                               :actions ["exact action-name strings from the vocabulary"]
                               :ids "optional — specific rows"
                               :fields "optional — {mode allow|deny, names […]}"
@@ -1624,11 +1624,13 @@
          (get (inv/resources eng) :capability)
          (assoc :capabilities
                 {:href "/api/capabilities"
-                 :note (str "the EXTERNAL powers this house grants "
-                            "(telegram.send, email.read …) — readable "
-                            "to every named principal; a scope entry "
-                            "naming one is asked, approved, leashed "
-                            "and revoked exactly like a kind")})
+                 :note (str "the external powers NO server of this "
+                            "house enforces (feed.preview_as …) — the "
+                            "rest are the mcp_server rows' powers, and "
+                            "doors.ask.powers lists both halves as one; "
+                            "readable to every named principal, and a "
+                            "scope entry naming one is asked, approved, "
+                            "leashed and revoked exactly like a kind")})
 
          ;; the credential-less door (oidc-rp's /auth/agent): present
          ;; exactly when the RP flow guards this engine AND an

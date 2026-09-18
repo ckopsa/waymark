@@ -80,6 +80,33 @@ served line, as before. The engine's own calls past the grant (the
 sources, the `:power` hook of a handler) resolve the same way through
 `gate-proxy/rpc-of`.
 
+### The powers list is also the vocabulary
+
+A dotted token in a grant scope is real if a server names it. The engine
+reads the `powers` of every `mcp_server` row that is not retired. If one
+row names the token, the engine accepts the scope entry. If no row names
+the token, the engine reads the capability registry. An active capability
+row makes the token real too. Retire the server row and its tokens are no
+longer real: a new scope that names one of them refuses.
+
+Two capabilities stay in the registry. This engine enforces
+`feed.preview_as` with its own feed route. This engine holds
+`schedule.write` and grants it to nobody. No server enforces these two
+powers, so no server row can hold them.
+
+Write any dotted token you want in a `powers` entry. A capability row is
+not necessary. The row is the policy and the row is the word.
+
+The engine sweeps the registry one time at each boot
+(`sweep-capabilities!`). The engine retires a capability row when a
+server names its token AND the row's `enforced_by` names Gate. The engine
+retires the row through the capability kind's own `retire` door, as the
+engine principal. A second sweep makes no changes.
+
+The discover answer shows one list. `doors.ask.powers` shows the servers'
+tokens and the tokens of the active capability rows together. Read that
+list to compose an ask.
+
 ## 5. The clients
 
 The engine holds one client per row (`client-for`). An http row holds

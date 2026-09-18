@@ -14,6 +14,12 @@
   server offers (R-5). This list replaced the static tool→token map
   that gate_proxy.clj used to hold.
 
+  THE ROW IS ALSO THE VOCABULARY (waymark-fp62.10.4). A dotted token
+  a non-retired row's powers name is a real token: `scope-names-real-
+  kinds` reads `tokens-of-rows` first and the capability registry only
+  for a token no row names. `sweep-capabilities!` retires, once at
+  boot, the registry rows a server's powers have taken over.
+
   THE NAME IS THE PREFIX (R-2). A tool `read` on the server `emila`
   is `emila__read` to every caller. `resolve-tool` splits the name at
   the first `__`, finds the row that wears the prefix, and answers
@@ -302,15 +308,63 @@
       :description (str (:description tool))
       :input-schema (:input_schema tool)})))
 
-(defn power-tokens
-  "Every power token any row's powers name, sorted."
-  [eng]
+(defn tokens-of-rows
+  "Every power token this page of rows' powers name, sorted. It takes
+  ROWS and not the engine because the guard that judges a scope holds
+  neither — it reads its page through the ctx `:find` hook, the same
+  way it reads the registry — and a guard that re-collected the
+  tokens would be a second definition of the vocabulary, right on the
+  day it was written and wrong on the next."
+  [rows]
   (vec (sort (distinct
-              (for [row (rows eng)
+              (for [row rows
                     e (get-in row [:data :powers])
                     :let [tk (:power e)]
                     :when (not (str/blank? (str tk)))]
                 (str tk))))))
+
+(defn power-tokens
+  "Every power token any row's powers name, sorted."
+  [eng]
+  (tokens-of-rows (rows eng)))
+
+;; ── the registry beside the rows (waymark-fp62.10.4) ────────────────
+;;
+;; Since this leg the powers list is the FIRST vocabulary: a dotted
+;; token a non-retired row names is a real token because the row says
+;; so. The capability registry answers for the tokens no server names
+;; — this engine's own powers, feed.preview_as and schedule.write —
+;; and that is the whole of what is left to it.
+
+(defn- capability-rows
+  "Every `capability` row, undecoded: the registry is flat data (a
+  token, a state, a pointer at whoever enforces), so the decode a
+  door's ctx would do buys nothing here. An engine that serves no
+  such kind has no registry, which is not an error — it is an engine
+  whose whole vocabulary is its rows."
+  [eng]
+  (if (contains? (inv/resources eng) :capability)
+    (let [st (:storage eng)]
+      (vec (store/with-tx st
+             (fn [tx] (store/query-rows st tx :capability {} {:limit 1000})))))
+    []))
+
+(defn registered-tokens
+  "Every ACTIVE capability row's token, sorted."
+  [eng]
+  (vec (sort (distinct (for [row (capability-rows eng)
+                             :when (= :active (:state row))
+                             :let [tk (get-in row [:data :token])]
+                             :when (not (str/blank? (str tk)))]
+                         (str tk))))))
+
+(defn nameable-tokens
+  "Every dotted token a scope may name: the servers' powers, and the
+  standing capability rows beside them. What discover's
+  doors.ask.powers lists — an agent composing an ask reads ONE list,
+  because a vocabulary spelled in two places is two vocabularies."
+  [eng]
+  (vec (sort (distinct (concat (power-tokens eng) (registered-tokens eng))))))
 
 ;; ── the mirror ──────────────────────────────────────────────────────
 
@@ -962,3 +1016,60 @@
                                       "Move each rig to its own row, then "
                                       "retire this one.")}
                           {:principal engine-actor})))))
+
+;; ── the one vocabulary (waymark-fp62.10.4) ──────────────────────────
+
+(def gate-enforcer
+  "The needle the sweep looks for in a capability row's `enforced_by`.
+  The old boot seed wrote \"gate-mcp (192.168.1.40:8100)\"; the sweep
+  matches the NAME and not the address, because an address moves and
+  the enforcer behind it does not."
+  "gate-mcp")
+
+(defn superseded-capabilities
+  "The capability rows a server's powers have taken over: active, the
+  token named by some row's powers, and `enforced_by` naming Gate.
+  Pure over the two lists, so the sweep and the test that proves it
+  weigh the same judgment.
+
+  A row whose `enforced_by` does NOT name Gate stands, and that is the
+  registry's remaining job: `feed.preview_as` and `schedule.write` are
+  this engine's own powers, no server enforces them, and a scope must
+  still be able to name them."
+  [caps tokens]
+  (let [tokens (set tokens)]
+    (filterv (fn [row]
+               (and (= :active (:state row))
+                    (contains? tokens (str (get-in row [:data :token])))
+                    (str/includes? (str/lower-case
+                                    (str (get-in row [:data :enforced_by])))
+                                   gate-enforcer)))
+             caps)))
+
+(defn sweep-capabilities!
+  "One pass, at boot after the rows are seeded: every capability row a
+  server's powers now carry is retired. Gate's tokens were registered
+  twice once this leg made the powers list the vocabulary — a row
+  saying `telegram.send` exists and a row named gate whose powers say
+  the same — and the second copy is the one that can rot.
+
+  The retirement walks the capability kind's OWN `retire` door under
+  the engine's principal, never a store write: the registry is a
+  resource, and a person reading its history should find a transition
+  with an actor on it rather than a row that changed by itself.
+
+  Idempotent: a second pass finds those rows retired and writes
+  nothing. → the tokens it retired, sorted."
+  [eng]
+  (let [tokens (power-tokens eng)
+        retired (atom [])]
+    (doseq [row (superseded-capabilities (capability-rows eng) tokens)]
+      (let [token (str (get-in row [:data :token]))]
+        (try
+          (inv/invoke! eng :capability (str (:id row)) :retire {}
+                       {:principal engine-actor})
+          (swap! retired conj token)
+          (catch Exception e
+            (warn! "the capability " token " did not retire ("
+                   (ex-message e) ")")))))
+    (vec (sort @retired))))

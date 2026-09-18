@@ -861,69 +861,27 @@
   "The registry's boot seed (waymark-44h): the capabilities this
   deployment grants ride the code, ensured idempotently — created
   when absent, never overwritten; retire/restore stay the humans'
-  doors."
+  doors.
+
+  TWO ROWS, NOT FOURTEEN (waymark-fp62.10.4). The twelve Gate tokens
+  this seed used to carry are the `gate` mcp_server row's `powers`
+  now, and the row is the vocabulary: seeding them here would
+  register one word twice. They are not merely dropped from the seed
+  — `mcp-servers/sweep-capabilities!` runs below and retires the rows
+  a deployment already carries. What is left are the two powers NO
+  server enforces, held by this engine itself, which have nowhere
+  else to be named."
   [eng]
-  ;; verb granularity is what a human reasons about when approving:
-  ;; read vs send/write per system — never per tool. Gate's gsd
-  ;; family (todos/calendar) is deliberately ABSENT: waymark is the
-  ;; task authority and mirrors those sources; a gsd capability
-  ;; would leash an agent around the queue's own law.
   (doseq [{:keys [token] :as cap}
-          (let [gate "gate-mcp (192.168.1.40:8100)"]
-            [{:token "telegram.send"
-              :description (str "Send a Telegram message through Gate — "
-                                "the household's addressed-notice "
-                                "transport, leashed per grant.")
-              :enforced_by gate}
-             {:token "telegram.read"
-              :description "Read Telegram chats and messages through Gate."
-              :enforced_by gate}
-             {:token "messages.read"
-              :description "Read text-message threads through Gate."
-              :enforced_by gate}
-             {:token "notes.read"
-              :description (str "Read Google Keep notes through Gate — "
-                                "list, search, and single-note reads.")
-              :enforced_by gate}
-             {:token "email.read"
-              :description (str "Read email through Gate — folders, inbox, "
-                                "search, messages, attachments.")
-              :enforced_by gate}
-             {:token "email.send"
-              :description "Send email through Gate."
-              :enforced_by gate}
-             {:token "email.move"
-              :description "File email through Gate — move messages and senders between folders."
-              :enforced_by gate}
-             {:token "ynab.read"
-              :description "Read the budget through Gate — accounts, transactions, categories, months."
-              :enforced_by gate}
-             {:token "ynab.write"
-              :description "Write the budget through Gate — create, update, split, approve transactions."
-              :enforced_by gate}
-             {:token "amazon.read"
-              :description "Read Amazon through Gate — orders, search, product details, the cart."
-              :enforced_by gate}
-             {:token "amazon.cart"
-              :description "Change the Amazon cart through Gate — add items, reset. Never places orders."
-              :enforced_by gate}
-             {:token "costco.read"
-              :description "Read Costco warehouse receipts through Gate — the list by date, one receipt's lines and tenders by barcode."
-              :enforced_by gate}
-             ;; the one row here Gate does not stand in front of
-             ;; (waymark-iqa.23): the power granted is THIS engine's
-             ;; feed route, so waymark holds the data and the law
-             ;; both. Seeded like the rest because a capability is a
-             ;; ROW and an ask naming a token no row carries refuses
-             ;; at the door — the registry is the vocabulary's clock.
-             cap/feed-preview-as
-             ;; the other row Gate does not stand in front of
-             ;; (spec-seat.md R-12.11): the power is this engine's own
-             ;; hand on the harness's scheduler, held by the engine and
-             ;; never by a grant a sitter can wear. Seeded for the same
-             ;; reason as the rest — naming the power is what makes it
-             ;; auditable.
-             schedules/write-capability])]
+          [;; the power granted is THIS engine's feed route
+           ;; (waymark-iqa.23): waymark holds the data and the law
+           ;; both, so there is no server row to put the token in
+           cap/feed-preview-as
+           ;; and its sibling (spec-seat.md R-12.11): this engine's own
+           ;; hand on the harness's scheduler, held by the engine and
+           ;; never by a grant a sitter can wear. Seeded because naming
+           ;; the power is what makes it auditable
+           schedules/write-capability]]
     (when (empty? (store/with-tx (:storage eng)
                     (fn [tx] (store/query-rows (:storage eng) tx :capability
                                                {:token token} {:limit 1}))))
@@ -1087,6 +1045,14 @@
         _ (when-some [url (some-> (System/getenv "WORKQUEUE10_GATE_URL")
                                   str not-empty)]
             (mcp-servers/ensure-gate-row! eng {:url url}))
+        ;; the one vocabulary (waymark-fp62.10.4), run AFTER the rows
+        ;; are seeded because it is the rows it reads: a dotted token
+        ;; a server's powers name is real because that row says so, so
+        ;; the registry rows Gate used to stand behind are a second
+        ;; copy of one word. Retired here, once, through the
+        ;; capability kind's own door — and a pass over a deployment
+        ;; already swept writes nothing
+        _ (mcp-servers/sweep-capabilities! eng)
         _ (connections/ensure-connections! eng (connection-descriptors))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp

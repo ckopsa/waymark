@@ -174,6 +174,12 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            ;; the powers vocabulary a dotted scope entry is judged
+            ;; against (waymark-fp62.10.4). One-directional: mcp-servers
+            ;; knows nothing of grants, so this require cannot close a
+            ;; circle, and `tokens-of-rows` is pure over the page the
+            ;; guard's own ctx hands it
+            [waymark10.server.mcp-servers :as servers]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -350,24 +356,42 @@
    :explain "A scope grants kinds this surface serves; there is no kind {kind}."}
   [_row inp ctx]
   (if-some [names-of (:action-names ctx)]
-    (if-some [bad (some (fn [e]
-                          (let [k (str (:kind e))]
-                            (if (str/includes? k ".")
-                              ;; a dotted token names a CAPABILITY
-                              ;; (waymark-44h): judged against the
-                              ;; active registry, not the routes — an
-                              ;; engine without the registry, or a
-                              ;; token it never registered, refuses
-                              ;; the same way an unknown kind does
-                              (when-not (and (:find ctx)
-                                             (some #(= :active (:state %))
-                                                   ((:find ctx) :capability
-                                                    {:token k} {:limit 1})))
-                                k)
-                              (when (nil? (names-of k)) k))))
-                        (:scope inp))]
-      (t/deny {:vars {:kind bad}})
-      (t/allow))
+    (let [find-rows (:find ctx)
+          ;; the powers of every non-retired mcp_server row, read ONCE
+          ;; per judgment however many dotted entries a scope carries,
+          ;; and not at all when it carries none
+          powers (delay
+                   (set (servers/tokens-of-rows
+                         (when find-rows
+                           (remove #(= :retired (:state %))
+                                   (find-rows :mcp_server {} {:limit 1000}))))))
+          registered? (fn [k]
+                        (boolean
+                         (and find-rows
+                              (some #(= :active (:state %))
+                                    (find-rows :capability
+                                               {:token k} {:limit 1})))))]
+      (if-some [bad (some (fn [e]
+                            (let [k (str (:kind e))]
+                              (if (str/includes? k ".")
+                                ;; a dotted token names a POWER
+                                ;; (waymark-fp62.10.4). The rows hold
+                                ;; the policy, so the rows hold the
+                                ;; word: a token any non-retired
+                                ;; server's powers name is real. The
+                                ;; capability registry answers only
+                                ;; for a token NO server names — this
+                                ;; engine's own powers, feed.preview_as
+                                ;; and schedule.write — and a token
+                                ;; neither knows refuses the same way
+                                ;; an unknown kind does
+                                (when-not (or (contains? @powers k)
+                                              (registered? k))
+                                  k)
+                                (when (nil? (names-of k)) k))))
+                          (:scope inp))]
+        (t/deny {:vars {:kind bad}})
+        (t/allow)))
     (t/allow)))
 
 (g/defguard scope-names-real-actions

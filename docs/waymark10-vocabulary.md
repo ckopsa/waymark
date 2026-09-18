@@ -691,3 +691,13 @@ person's `mark_live` discovers the server before any power reaches it
 again. One row named `gate` with `passthrough` true is the bridge of Gate's
 deprecation: its tools already wear their prefixes, so the engine adds
 nothing in front.
+
+The `powers` list is the VOCABULARY as well as the policy
+(waymark-fp62.10.4): `scope-names-real-kinds` judges a dotted scope entry
+against the non-retired rows' power tokens first, and reads the
+`capability` registry only for a token no row names. The registry is
+therefore down to the powers no server enforces — `feed.preview_as` and
+`schedule.write`, both this engine's own — and a boot sweep
+(`mcp-servers/sweep-capabilities!`) retires the rows a server's powers
+took over, so one word is never registered twice. `doors.ask.powers`
+lists both halves as one list.

@@ -1074,11 +1074,12 @@
   "What discover adds to well-known's doors.ask for THIS caller
   (waymark-r1m7): the anchor — the live grant the session wears, the
   `grant_id` an ask must carry to widen rather than replace — and the
-  powers, the dotted capability tokens Gate serves through this door.
+  powers, the dotted tokens the external powers wear.
   Both are vocabulary, not rows: the anchor is the caller's own grant
   id, and the token list is every power the mcp_server rows' powers
-  name (waymark-fp62.10), the same strings the capability registry
-  already lets every named principal read. The posture sentence rides
+  name, plus the standing capability rows beside them
+  (waymark-fp62.10.4) — the one list a scope may name from, so an
+  agent composing an ask never has to read two. The posture sentence rides
   beside them so an agent reading only this document still learns
   that asking is the default. An
   unscoped caller (nil visibility — a human, or a system actor) has
@@ -1099,7 +1100,7 @@
                            "an approval_request now — anchored, for "
                            "everything at once — rather than reporting "
                            "that you cannot.")
-             :powers (gate/power-tokens eng)
+             :powers (gate/nameable-tokens eng)
              :powers_note (str "external powers, asked for by naming the "
                                "dotted token in a scope entry's `kind` "
                                "(actions []); once granted, waymark_powers "
