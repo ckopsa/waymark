@@ -437,6 +437,29 @@ counts nothing. The harness does not report these. No refusal log
 exists today; this counter is the first record of a refusal as
 fuel.
 
+**R-10.6a** The engine must count the bytes the MCP door serves. The
+sitting carries `served`: a map from the tool name to `calls` and
+`bytes`. `calls` is how many times the door answered that tool.
+`bytes` is the UTF-8 length of the text of those answers. The map
+starts empty.
+
+The door adds one call and its bytes on each `tools/call` it answers.
+It counts an allowance and a refusal in the same way, because the
+model reads both. It finds the sitting as R-10.6 does: one lookup by
+`grant` and state `open`, under the index on `grant`. A call from a
+session with no open sitting counts nothing. The count is a
+maintenance write, as the two counters above are: the document only,
+no transition, one write for each call. The `close` freezes `served`.
+
+The bytes of `waymark_power` count as the bytes of any other tool.
+Gate's answer goes through the door word for word, so the door sees
+its size.
+
+The engine counts bytes and not tokens. It does not run the model, so
+it cannot count tokens truthfully. A reader divides by four. No price
+is attached to `served`: the bytes are the engine's own record, and
+the cost is the harness's.
+
 **R-10.7** The sitting collection must be filterable by `seat`,
 `model`, and `started_at` after, so these are each one query: fuel
 per seat per week against its budget; fuel per model; refusals per
@@ -494,8 +517,9 @@ a window, each as one query over rows that exist.
 | what did it get wrong | corrections: transitions by a person on rows whose previous transition's actor is the seat's sitter |
 | what did each thing cost | cost divided by transitions |
 | which model did it | group by `model` |
+| which tool served the bytes | sum of `served` by tool over closed sittings |
 
-**R-11.3a** The six answers must be one call. `GET
+**R-11.3a** The seven answers must be one call. `GET
 /api/seats/{id}/ledger?since=` must return them for the window, and
 `waymark_discover` must name the route under `doors.ask.seat`. The
 corrections answer is a window over the transition log (each row's
@@ -1722,6 +1746,13 @@ above. The cases:
     fresh sitting open. The hook tallies on Stop and closes on
     `SessionEnd`, and it holds no stop in an interactive sitting.
     (R-7.6, R-12.25, R-12.26)
+45. A tool answer of N bytes under a bound session adds one call and
+    N bytes to `served`, under that tool's name. A second answer adds
+    to both counts. A 404 or a 409 answer counts its bytes too. A
+    call from a session with no open sitting counts nothing, and a
+    call under the same grant after the `close` does not move the
+    closed row. The ledger answers `served` by tool over the window,
+    and `bytes_per_transition`. (R-10.6a, R-11.3)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,

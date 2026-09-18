@@ -2842,18 +2842,25 @@
             ;; `:declared`, above these fills, on a decide line that
             ;; takes two. The rank working is not this section's
             ;; claim; the fills reaching the page and being answered
-            ;; is. `withdraw` is the author's own door, and the walker
-            ;; is their author; a finding somebody else published
-            ;; refuses the walker by name and stays, which is right.
+            ;; is. `withdraw` is the author's own door, and the author
+            ;; is whoever the row's `authored_by` names: the walker for
+            ;; a staged row, the scenario's own principal for the
+            ;; subject of an allowed create. Each is withdrawn AS its
+            ;; author, within the undo window the run is still inside,
+            ;; so no finding from earlier in the run outranks these.
             _ (doseq [it (get-in (json ctx (req ctx :get
                                                 (str "/api/"
                                                      (:plural (rdef ctx :insight))
-                                                     "?state=published")))
+                                                     "?state=published&page[size]=200")))
                                [:data :items])
-                      :let [iid (some-> (:self it) id-of)]
-                      :when iid]
+                      :let [iid (some-> (:self it) id-of)
+                            row (when iid (json ctx (req ctx :get (str (:self it)))))
+                            who (some-> (get-in row [:data :authored_by]) str not-empty)]
+                      :when (and iid who)]
                 (invoke-http ctx :insight iid
-                             (declared-name ctx :insight :withdraw) nil))
+                             (declared-name ctx :insight :withdraw) nil
+                             {:headers {"x-waymark-principal" who
+                                        "x-waymark-actor-type" "agent"}}))
             ;; 1. no citation, no publish
             uncited (make-insight!
                      ctx hs (dissoc (finding "Nothing is behind this one" nil)

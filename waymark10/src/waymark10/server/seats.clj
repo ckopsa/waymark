@@ -45,12 +45,13 @@
 
   ── what wave two calls ─────────────────────────────────────────────
 
-  Five public fns, and they are the whole of this namespace's seam
+  Six public fns, and they are the whole of this namespace's seam
   (the second is the session-end door's, R-12.17):
 
       (open-sitting-for-grant eng grant-id) → the open sitting or nil
       (open-sitting-for-seat eng seat-id [harness-session])
       (bump-counter! eng sitting-id :transitions|:refusals)
+      (add-served! eng sitting-id tool bytes)
       (seat-halt! eng seat-id reason detail)
       (seat-clear-halt! eng seat-id)
 
@@ -1770,6 +1771,19 @@
   [ctx]
   (some-> (get-in ctx [:principal :acts-for]) str not-empty))
 
+(def ^:private served-entry
+  "One tool's line in `served` (R-10.6a): how many times the MCP door
+  answered that tool, and how many bytes of text those answers
+  carried. Two counts and nothing else — no price, because a price is
+  the harness's and a byte is the engine's."
+  [:map
+   [:calls {:x-display {:label "Calls"
+                        :help "How many times the door answered this tool."}}
+    [:int {:min 0}]]
+   [:bytes {:x-display {:label "Bytes"
+                        :help "The UTF-8 length of the text those answers carried."}}
+    [:int {:min 0}]]])
+
 (defresource sitting
   {:kind :sitting
    :plural "sittings"
@@ -1851,6 +1865,19 @@
                 :x-display {:label "Refusals served"
                             :help "409s served under this sitting's grant — fuel spent on law the model did not know ahead of time. Counted by the engine, frozen at the close, and read as waymark's own backlog rather than as the model's fault."}}
      [:int {:min 0}]]
+    ;; THE THIRD THE ENGINE COUNTS (R-10.6a). The transcript is the
+    ;; larger part of the bill, and the transcript is what the MCP
+    ;; door answered. `served` is the record of it: tool name → the
+    ;; calls and the bytes. Keys are OPEN on purpose — the tool list
+    ;; moves, and a closed map here would make each new tool a schema
+    ;; change. Nothing writes it by hand: it is on no door, as the two
+    ;; counters above are on no door.
+    [:served {:default {}
+              :x-display
+              {:raw true
+               :label "Bytes served, by tool"
+               :help "What the MCP door answered this sitting, tool by tool: the number of calls and the UTF-8 length of the text. The engine counts bytes and not tokens, because it does not run the model; a reader divides by four. No price is attached — the bytes are the engine's own truth and the cost is the harness's."}}
+     [:map-of :keyword served-entry]]
     [:cost_usd {:optional true
                 :x-display {:label "What it cost, in dollars"
                             :help "Written at the close from the model's prices at that moment; a reprice afterwards does not move it. On an OPEN sitting it is the running cost (R-12.27): what the tallies so far have spent, so the week's wall can see a sitting that has not ended."}}
@@ -1912,8 +1939,8 @@
      [:maybe :waymark/instant]]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
-   ;; counts and the cost are the close's, and the two counters are the
-   ;; engine's.
+   ;; counts and the cost are the close's, and the three counters — the
+   ;; two of R-10.6 and the `served` map of R-10.6a — are the engine's.
    :create-schema
    [:map
     [:seat {:kind :seat
@@ -1961,7 +1988,11 @@
                       [:started_at (:now ctx)]
                       [:input_tokens 0] [:output_tokens 0]
                       [:cache_read_tokens 0] [:cache_write_tokens 0]
-                      [:turns 0] [:transitions 0] [:refusals 0]]
+                      [:turns 0] [:transitions 0] [:refusals 0]
+                      ;; R-10.6a: an open sitting that has read
+                      ;; nothing yet says so with an empty map, not
+                      ;; with a hole
+                      [:served {}]]
                ;; the delegate's own person, when there is one — the
                ;; identity gate's mark, never a claim in the request
                (sitting-person ctx) (conj [:person (sitting-person ctx)]))))
@@ -2151,6 +2182,38 @@
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   (assoc (:data row) counter n) nil)
               n)))))))
+
+(defn add-served!
+  "Add one call and `bytes` bytes to an open sitting's `served`, under
+  the tool that answered them (R-10.6a). `bump-counter!`'s write, one
+  field wider: THE DOCUMENT ONLY — version untouched, no transition —
+  because a log line per tool answer would cost more than the thing it
+  records.
+
+  The key is the tool's own name. Keys are open, so a tool this engine
+  gains tomorrow needs no schema change, and a name is keywordized on
+  the way in because the store hands every key back as a keyword.
+
+  → the tool's new line, {:calls n :bytes b}, or nil when there was
+  nothing to count: an unknown id, a sitting already closed, a call
+  with no tool name, or a kind this engine does not serve."
+  [eng sitting-id tool bytes]
+  (let [tool (some-> tool str not-empty)
+        bytes (long (or bytes 0))]
+    (when (and sitting-id tool (not (neg? bytes))
+               (get (inv/resources eng) :sitting))
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (when-some [row (store/load-row (:storage eng) tx :sitting
+                                          (str sitting-id) {:for-update true})]
+            (when (= :open (:state row))
+              (let [k (keyword tool)
+                    prior (get-in (:data row) [:served k])
+                    line {:calls (inc (long (or (:calls prior) 0)))
+                          :bytes (+ (long (or (:bytes prior) 0)) bytes)}]
+                (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                    (assoc-in (:data row) [:served k] line) nil)
+                line))))))))
 
 (defn- seat-row [eng seat-id]
   (when (and seat-id (get (inv/resources eng) :seat))
