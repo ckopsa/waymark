@@ -54,9 +54,10 @@ declared and reviewed, and CI is the gate.
 - `resources/person.clj` — the roster, born `observed`, and the reason it
   exists: a composer read correct rows and invented the relationship
   between them.
-- `waymark10/server/gate_proxy.clj` — the engine's Gate client. `rpc-of`
-  is the seam; `tool-capability` already binds `tgram__list_chats` to
-  `telegram.read` and `messa__threads` to `messages.read`.
+- `waymark10/server/gate_proxy.clj` — the engine's power door. `rpc-of`
+  is the seam; since waymark-fp62.10 the `gate` mcp_server row's `powers`
+  bind `tgram__list_chats` to `telegram.read` and `messa__threads` to
+  `messages.read` (docs/spec-mcp-servers.md).
 
 ## The canonical doc
 

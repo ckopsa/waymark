@@ -213,15 +213,7 @@
                                       ;; damper's own tick, so a suite
                                       ;; can drive the wake sweep
                                       ;; without waiting thirty seconds.
-                                      :fire-adapter :wake-tick-ms
-                                      ;; the Gate proxy's address
-                                      ;; (waymark-q95): {:url …}, or
-                                      ;; {:rpc …} — a caller handed in
-                                      ;; whole, the tests' seam. Read at
-                                      ;; the gate route's build site with
-                                      ;; the deployment default, the
-                                      ;; :feed spelling exactly.
-                                      :gate])
+                                      :fire-adapter :wake-tick-ms])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)

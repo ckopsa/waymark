@@ -161,6 +161,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.routes.feed :as feed-routes]
+            [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.routes.gate :as gate-routes]
             [waymark10.server.routes.law-sweep :as law-sweep-routes]
             [waymark10.server.routes.mcp :as mcp-routes]
@@ -226,7 +227,14 @@
              {:kind :sitting :enroll :always
               :kinds (fn [_] [seats/sitting])}
              {:kind :schedule :enroll :always
-              :kinds (fn [_] [schedules/schedule])}]
+              :kinds (fn [_] [schedules/schedule])}
+             ;; the MCP server as a row (docs/spec-mcp-servers.md,
+             ;; waymark-fp62.10): the external powers a grant names
+             ;; reach the engine through a row's client, and a grant
+             ;; is core's — so the row that holds the policy behind a
+             ;; dotted scope entry is core's too, beside the seat.
+             {:kind :mcp_server :enroll :always
+              :kinds (fn [_] [mcp-servers/mcp-server])}]
     ;; the three surfaces no waymark engine is a waymark engine
     ;; without: the outbox reader every other surface rides, the
     ;; law-refresh consumer (a core need in any multi-process
@@ -249,7 +257,20 @@
              :start (fn [eng _]
                       (maintainer/start-sweeper!
                        eng {:interval-ms (:sweep-interval-ms eng 30000)}))
-             :stop maintainer/stop-sweeper!}]
+             :stop maintainer/stop-sweeper!}
+            ;; the MCP servers' cadence (spec-mcp-servers R-4): every
+            ;; live row's tools/list re-read on an interval, mirrored
+            ;; through the discover door when the hash moved. Elected,
+            ;; one holder per storage, because two engines discovering
+            ;; the same row would write the same mirror twice.
+            {:hook :mcp-discover
+             :elected :mcp-discover
+             :start (fn [eng _]
+                      (mcp-servers/start-discover-sweeper!
+                       eng {:interval-ms
+                            (get-in eng [:services :mcp-servers :discover-ms]
+                                    mcp-servers/default-discover-ms)}))
+             :stop mcp-servers/stop-discover-sweeper!}]
     :pack packs/core}
 
    {:module :attachments
@@ -566,17 +587,14 @@
              :stop server-belief/stop-belief-sweeper!}]
     :routes feed-routes/routes :pack packs/feed}
 
-   ;; the Gate hypermedia proxy (waymark-q95): two bespoke doors —
-   ;; GET /api/-/gate, the affordance document (Gate's live tools ∩
-   ;; the presented grant), and POST /api/-/gate/{tool}, the
-   ;; grant-checked forward. It enrols NO kind and starts nothing,
-   ;; deliberately: capabilities exist so external data is never
-   ;; copied into waymark, so the module holds the rule and the map
-   ;; (server/gate-proxy) and never a row. An engine without it
-   ;; simply has no door to Gate, which is what a deployment that
-   ;; does not front the household's external systems should look
-   ;; like. Its Gate address is an engine opt ((:gate eng) {:url …}),
-   ;; read at route build with the deployment default.
+   ;; the power door's hypermedia surface (waymark-q95): two bespoke
+   ;; doors — GET /api/-/gate, the affordance document (the live
+   ;; servers' mirrored tools ∩ the presented grant), and POST
+   ;; /api/-/gate/{tool}, the grant-checked forward. It enrols NO kind
+   ;; and starts nothing: the servers themselves are `mcp_server` rows
+   ;; (core's, above), and the module holds only the grant judgment
+   ;; (server/gate-proxy). An engine without it has no hypermedia door
+   ;; to the powers; the MCP door's two power tools still answer.
    {:module :gate :routes gate-routes/routes}
 
    ;; the seat, the model and the sitting (docs/spec-seat.md, leg 1 of

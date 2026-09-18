@@ -16,9 +16,20 @@
   that, with the rig's own refusal names, so a shape that drifts on
   either side is a test that fails here.
 
-  Memory storage, no database and no network: the fake Gate stands
-  behind the very seam `gate-proxy/rpc-of` reads first, and the same
-  fake stands behind the doors as `(:services :bench-rpc)`. The OIDC
+  THE BENCH IS A ROW HERE, as it is in a deployment
+  (waymark-fp62.6.3.3): `fresh-engine` creates one `mcp_server` row
+  named `bench`, whose powers map bench.find / bench.read /
+  bench.edit / bench.pull to their tools and name prepare, status,
+  submit and discard in NO entry. The fake rig is registered as that
+  row's client through the engine's `:client-fn` seam
+  (waymark10.mcp-servers-test's own pattern), so the row discovers
+  the rig's tools at create and every later call rides the same fake.
+  The rig speaks its BARE tool names, `read` and `submit`, and the
+  row's name is the `bench__` prefix every caller sees.
+
+  Memory storage, no database and no network: the fake rig stands
+  behind the row's client seam, and the engine's own dispatcher
+  stands behind the doors as `(:services :bench-rpc)`. The OIDC
   harness is mcp_sit_test's, copied whole — a locally minted keypair
   as the family IdP's signing key, so a person can sign in through the
   connector and a Routine's session can present a seat key.
@@ -47,18 +58,29 @@
 ;; ── the fake rig, answering the contract (6.3.1) ────────────────────
 
 (def ^:private rig-tools
-  "The eight tools Gate re-exposes as `bench__<tool>`, as a live
-  tools/list answers them. Four of them are powers a scope may name;
-  the other four are the engine's, and the map in gate-proxy is what
-  says which is which."
+  "The eight tools the rig offers, as a live tools/list answers them:
+  its OWN bare names, because the `bench__` prefix is the row's name
+  and the engine puts it on. Four of them are powers a scope may
+  name; the other four are named by no entry of the row's powers, and
+  that absence is what says which is which."
   (mapv (fn [nm]
-          {:name (str "bench__" nm)
+          {:name nm
            :description (str "The bench's " nm ".")
            :inputSchema {:type "object"
                          :properties {:repo {:type "string"}
                                       :branch {:type "string"}}
                          :required ["repo" "branch"]}})
         ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"]))
+
+(def ^:private bench-powers
+  "The bench row's powers (waymark-fp62.6.3.3): the four the model may
+  hold, each on its own token, and prepare, status, submit and
+  discard in NO entry at all — a tool no entry names does not exist
+  through the power door, whatever the rig offers."
+  [{:power "bench.find" :tools ["find"] :why false}
+   {:power "bench.read" :tools ["read"] :why false}
+   {:power "bench.edit" :tools ["edit"] :why false}
+   {:power "bench.pull" :tools ["pull"] :why false}])
 
 (def ^:private a-head "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567")
 (def ^:private a-commit "9a8b7c6d5e4f30291827364554637281900aabbc")
@@ -97,24 +119,26 @@
   (filterv #(= tool (:tool %)) (:calls @st)))
 
 (defn- fake-rig
-  "A Gate caller over the state atom — `(fn [method params])`, the
-  shape `gate-proxy/rpc-of` answers and the seam both the transport
-  and `factory10.bench` read first. It answers tools/list with the
-  eight and tools/call with the scripted answer, in the rig's own two
-  shapes: one text part and structuredContent.result, with isError
-  when the answer carries a refusal."
+  "The rig itself — `(fn [method params])`, the shape an `mcp_server`
+  row's client answers, registered through the engine's `:client-fn`
+  seam. It answers tools/list with the eight BARE names and tools/call
+  with the scripted answer, in the rig's own two shapes: one text part
+  and structuredContent.result, with isError when the answer carries a
+  refusal. What it was asked is recorded under the PREFIXED name the
+  callers above spell, because that is the name a reader of this file
+  is asking about."
   [st]
   (fn [method params]
     (cond
       (= "tools/list" method) {:tools rig-tools}
 
       (= "tools/call" method)
-      (do
-        (swap! st update :calls conj {:tool (str (:name params))
+      (let [named (str "bench__" (:name params))]
+        (swap! st update :calls conj {:tool named
                                       :arguments (:arguments params)})
         (when (:down @st)
           (throw (ex-info "Gate unreachable" {})))
-        (let [answer (get-in @st [:answers (str (:name params))]
+        (let [answer (get-in @st [:answers named]
                              {:refused "unknown_tool"})]
           {:isError (boolean (:refused answer))
            :content [{:type "text" :text (wire/write-json answer)}]
@@ -150,20 +174,49 @@
 (def ^:private person (t/principal {:id "colton" :display "Colton Kopsa"}))
 
 (defn- fresh-engine
-  "The factory's three kinds, the capability registry beside them, and
-  one fake rig standing in for Gate on both seams."
+  "The factory's three kinds and the capability registry beside them,
+  one fake rig registered as the `bench` row's client, and that row
+  created — so every path below reaches the rig the way a deployment
+  does: by the row's prefix, through the row's one client.
+
+  The engine-ref is the knot the wiring needs: `:services` is built
+  before the engine is, and the dispatcher the doors read must carry
+  the engine. It is the same knot workqueue10.main ties at its boot."
   [st]
-  (let [rig (fake-rig st)]
-    (engine/engine {:storage (memory/storage)
-                    :resources (conj (vec (main/resources)) caps/capability)
-                    :oidc {:issuer issuer :audience audience :jwks jwks
-                           :app-url "https://app.test/"
-                           :delegate-clients {"connector" "Claude"}}
-                    ;; the tests' seam gate-proxy/rpc-of reads FIRST: no
-                    ;; URL, no socket, no live Gate in this namespace
-                    :gate {:rpc rig}
-                    ;; …and the seam the change row's doors read first
-                    :services {:bench-rpc rig}})))
+  (let [rig (fake-rig st)
+        eng-ref (atom nil)
+        eng (engine/engine
+             {:storage (memory/storage)
+              ;; the mcp_server kind is core's and enrols always
+              ;; (modules.clj), so the row below needs no declaration
+              ;; here
+              :resources (conj (vec (main/resources)) caps/capability)
+              :oidc {:issuer issuer :audience audience :jwks jwks
+                     :app-url "https://app.test/"
+                     :delegate-clients {"connector" "Claude"}}
+              :services {;; the rig, as the bench row's client: no
+                         ;; process, no socket, no network here
+                         :mcp-servers
+                         {:client-fn (fn [row]
+                                       (when (= "bench"
+                                                (str (get-in row [:data :name])))
+                                         rig))}
+                         ;; …and the engine's own dispatcher, the seam
+                         ;; the change row's doors read
+                         :bench-rpc (gate/rpc-of eng-ref)}})]
+    (reset! eng-ref eng)
+    ;; the bench, as a row: stdio beside the engine, the four powers,
+    ;; and the engine-only four in no entry (waymark-fp62.6.3.3). The
+    ;; create discovers the rig's tools and the row is born live.
+    (inv/create! eng :mcp_server
+                 {:name "bench"
+                  :transport "stdio"
+                  :command "python3"
+                  :args ["-m" "bench" "--stdio"]
+                  :powers bench-powers
+                  :note "The bench, beside the engine."}
+                 {:principal person})
+    eng))
 
 (def ^:private a-repository "ckopsa/waymark")
 
@@ -268,7 +321,7 @@
   "One tools/call through the whole message layer — the path the
   transport drives, so the byte counter runs too."
   [{:keys [eng session]} tool-name args]
-  (get-in (mcp/message eng (mcp/door eng) (get-in eng [:gate :rpc]) session
+  (get-in (mcp/message eng (mcp/door eng) (gate/rpc-of eng) session
                        {:jsonrpc "2.0" :id 1 :method "tools/call"
                         :params {:name tool-name :arguments args}})
           [:result]))

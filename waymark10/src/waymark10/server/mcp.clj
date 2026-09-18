@@ -63,11 +63,11 @@
   been given (claude.ai did not, reliably). Now the list is the same
   for every caller from the first connect and an approval takes
   effect on the very next waymark_powers call: the surface is DATA
-  the agent reads, not a tool list the client caches. The Gate
-  caller (`gate-rpc`) rides in from the transport, which builds it
-  once per engine via gate-proxy/rpc-of — the engine-opt seam
-  ((:gate eng): the tests' :rpc, the deployment's :url) — never
-  re-shaken per message.
+  the agent reads, not a tool list the client caches. The power
+  dispatcher (`gate-rpc`) rides in from the transport, which builds it
+  once per engine via gate-proxy/rpc-of — since waymark-fp62.10 a
+  dispatcher over the `mcp_server` rows, each holding its own client
+  — never re-shaken per message.
 
   Core's routes and no module's, deliberately: the six tools address
   the well-known document, the schemas, the plural grammar and the
@@ -985,11 +985,11 @@
   {:name "waymark_powers"
    :title "The external powers your grant admits"
    :description
-   (str "External powers reached THROUGH this engine — Gate's live tools "
-        "intersected with your grant, recomputed on every call, nothing "
-        "stored here. Reads under `links`, mutations under `actions`; each "
+   (str "External powers reached THROUGH this engine — the live servers' "
+        "tools intersected with your grant, read from each server's row "
+        "on every call. Reads under `links`, mutations under `actions`; each "
         "entry names its capability token, its description and its input "
-        "schema (Gate's own, with Gate's `__why` spelled `why`). Invoke "
+        "schema (the server's own, with a required `why` spelled out). Invoke "
         "one with waymark_power. Before any power is granted this "
         "document is empty and carries the ask door; the moment an ask "
         "naming a dotted token (messages.read, email.read …) is "
@@ -1005,8 +1005,8 @@
         "arguments its input schema names. The grant is judged here "
         "before any wire is touched: an ungranted tool refuses naming "
         "the exact scope entry to ask for, and a tool outside this "
-        "engine's policy does not exist. A granted call forwards to Gate "
-        "and answers Gate's result VERBATIM — its content, its isError, "
+        "engine's policy does not exist. A granted call forwards to the "
+        "server and answers its result VERBATIM — its content, its isError, "
         "its own approval refusals. Mutations carry a `why`: one "
         "sentence the human who approves the action reads. "
         "ASK FOR A SMALLER ANSWER when you only need the words: "
@@ -1031,7 +1031,7 @@
                       "text/plain part when the answer carries one, and "
                       "otherwise the HTML with the scripts, the styles and "
                       "the tags removed and the spaces made even. Leave it "
-                      "out for the payload as Gate sent it.")}
+                      "out for the payload as the server sent it.")}
      :max_chars {:type "integer"
                  :minimum 1
                  :description
@@ -1076,10 +1076,11 @@
   `grant_id` an ask must carry to widen rather than replace — and the
   powers, the dotted capability tokens Gate serves through this door.
   Both are vocabulary, not rows: the anchor is the caller's own grant
-  id, and the token list is gate-proxy's static policy, the same
-  strings the capability registry already lets every named principal
-  read. The posture sentence rides beside them so an agent reading
-  only this document still learns that asking is the default. An
+  id, and the token list is every power the mcp_server rows' powers
+  name (waymark-fp62.10), the same strings the capability registry
+  already lets every named principal read. The posture sentence rides
+  beside them so an agent reading only this document still learns
+  that asking is the default. An
   unscoped caller (nil visibility — a human, or a system actor) has
   no leash to anchor, so no anchor entry.
 
@@ -1098,7 +1099,7 @@
                            "an approval_request now — anchored, for "
                            "everything at once — rather than reporting "
                            "that you cannot.")
-             :powers (vec (sort (distinct (vals gate/tool-capability))))
+             :powers (gate/power-tokens eng)
              :powers_note (str "external powers, asked for by naming the "
                                "dotted token in a scope entry's `kind` "
                                "(actions []); once granted, waymark_powers "

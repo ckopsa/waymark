@@ -669,3 +669,25 @@ The sigil is deliberate: a scenario's strings are prose, addresses and
 tokens, so only `{given/…}` is a reference. A handle that no `:given` row
 declares, a handle named before it is staged, and two rows answering to
 one handle each refuse at the def line.
+
+## 16 · `mcp_server` — an MCP server as a row
+
+An external power reaches the engine through an `mcp_server` row
+([spec](spec-mcp-servers.md), `waymark10.server.mcp-servers`), core's kind
+beside the seat. The row names the server (`name`, the prefix every one of
+its tools wears: `emila__read` is `read` on the row `emila`), says how to
+reach it (`transport` http with a `url`, or stdio with a `command` and
+`args`), names the environment variable that holds its auth header
+(`auth_env`, never the value), and mirrors what the server offers (`tools`,
+from `tools/list`, with a `tools_hash`). Its `powers` list is the policy: one
+entry `{power, tools, why}` binds a dotted token a grant names to tool names
+or globs on this server, and `why` true makes every call carry one sentence
+of reason. A tool that no entry names does not exist through the power
+door. `waymark_powers` and `waymark_power` resolve a tool by its prefix to
+the row and forward through that row's one client; the sources and a
+handler's `:power` hook resolve the same way. States `live`, `dark` and
+`retired`; the engine marks a row dark when a call fails on the wire, and a
+person's `mark_live` discovers the server before any power reaches it
+again. One row named `gate` with `passthrough` true is the bridge of Gate's
+deprecation: its tools already wear their prefixes, so the engine adds
+nothing in front.

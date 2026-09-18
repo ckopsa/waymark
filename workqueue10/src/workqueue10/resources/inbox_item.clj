@@ -107,8 +107,8 @@
 ;; ── the message the engine reads for the model ──────────────────────
 
 (def read-tool
-  "Gate's one-message read, under the `email.read` power
-  (waymark10.server.gate-proxy/tool-capability). It is named here, as
+  "Gate's one-message read, under the `email.read` power (the gate
+  row's powers, waymark10.server.mcp-servers). It is named here, as
   the listing tool is named in the source, because emila's wire is
   the one wire in this confluence that is pinned nowhere in this
   repository: a rig that calls its read something else costs this

@@ -5,29 +5,34 @@
   waymark-fp62.6.3.2).
 
   HOW A DOOR REACHES THE BENCH. Through `gate-proxy/rpc-of` — the
-  engine's OWN Gate caller — and PAST `invoke-for`, exactly as the
-  thread sources reach Gate (workqueue10.sources.gate-chat). That door
-  judges a CALLER's grant; `prepare`, `status`, `submit` and `discard`
-  are on no capability token at all, so no scope can name them, no
-  grant can admit them, and `waymark_power` refuses all four as not
-  granted. The four reading and editing tools are the model's
+  engine's OWN power dispatcher — and PAST `invoke-for`, exactly as
+  the thread sources reach their rigs (workqueue10.sources.gate-chat).
+  That door judges a CALLER's grant; NO powers entry on the bench row
+  names `prepare`, `status`, `submit` or `discard`, so no scope can
+  name them, no grant can admit them, and `waymark_power` answers all
+  four 404: a tool no entry names does not exist through that door.
+  The engine's own hand takes the other path, `mcp-servers/call!`,
+  which asks the row and not the grant. The four reading and editing tools are the model's
   (bench.find, bench.read, bench.edit, bench.pull); these four are the
   ENGINE's. What submit means is a `repo_policy` row a person
   restates, never an argument a model gives.
 
   THE `:power` HOOK IS NOT THIS. `(:power ctx)` is the engine's hand
   on a power THE REQUEST'S OWN LEASH ADMITS (inbox_item's research
-  door). It answers nil for a tool outside `tool-capability`, which is
+  door). It answers nil for a tool no powers entry names, which is
   what these four are, so a door that used it would reach nothing. The
   caller here is the engine, and the leash it obeys is the change
   row's own doors.
 
-  WHERE THE CALLER COMES FROM. `(:services ctx)` first — the map an
-  application wires into its engine, and the seam a test scripts a
-  fake rig through. Nothing wired, the deployment's own Gate: the same
-  URL the household's thread sources read (WORKQUEUE10_GATE_URL), or
-  the proxy's default. Built ONCE and held in a delay, so the MCP
-  session to Gate is opened one time and reused.
+  WHERE THE CALLER COMES FROM. `(:services ctx)` — the map an
+  application wires into its engine, under `:bench-rpc`. Since
+  waymark-fp62.10 the bench is an `mcp_server` ROW named `bench`
+  (waymark-fp62.6.3.3) and that seam holds the ENGINE'S OWN power
+  dispatcher, `gate-proxy/rpc-of`: a `bench__<tool>` name resolves by
+  its prefix to that row and rides the row's one client. A test
+  scripts a fake rig through the very same seam. Nothing wired is
+  nothing reached: `ask` answers nil and a door reads that as a dark
+  bench, because a bench with no row is a bench that is not there.
 
   A REFUSAL IS AN ANSWER. Every tool of the rig answers its refusals
   as data — `{\"refused\": \"<name>\", …}` with isError — and never a
@@ -45,26 +50,17 @@
 
 ;; ── the caller ──────────────────────────────────────────────────────
 
-(def gate-url-env
-  "The environment variable that names the household's Gate. The same
-  one the thread sources read (workqueue10.main), because there is one
-  Gate and two readers of it."
-  "WORKQUEUE10_GATE_URL")
-
-(def ^:private deployment-rpc
-  "The engine's own Gate caller, built at most once. A delay: an
-  engine whose doors never touch the bench opens no client at all."
-  (delay
-   (let [url (some-> (System/getenv gate-url-env) str str/trim not-empty)]
-     (gate/rpc-of {:gate (cond-> {} url (assoc :url url))}))))
-
 (defn rpc-of
-  "The Gate caller this ctx reaches the bench with: the one the
-  application wired as `(:services :bench-rpc)` — a test's fake rig,
-  or a deployment that holds its own client — else the deployment's.
-  `(fn [method params])`, the shape `gate-proxy/rpc-of` answers."
+  "The power dispatcher this ctx reaches the bench row with: the one
+  the application wired as `(:services :bench-rpc)`. In a deployment
+  that is `gate-proxy/rpc-of` over the engine, so the call resolves
+  `bench__<tool>` by its prefix to the `bench` row and forwards
+  through that row's ONE client — the same client every other reader
+  of that row uses. In a suite it is the fake rig, on the same seam.
+  `(fn [method params])`, the shape `gate-proxy/rpc-of` answers; nil
+  when nothing is wired."
   [ctx]
-  (or (get-in ctx [:services :bench-rpc]) (force deployment-rpc)))
+  (get-in ctx [:services :bench-rpc]))
 
 ;; ── one call ────────────────────────────────────────────────────────
 

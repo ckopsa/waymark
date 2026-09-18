@@ -314,11 +314,11 @@
   tool call would make every agent read pay for the routing table."
   [eng]
   (let [call (mcp/door eng)
-        ;; the Gate caller, built ONCE here exactly as routes/gate.clj
-        ;; builds its own — gate-proxy/rpc-of over the (:gate eng)
-        ;; engine opt (the tests' :rpc seam, the deployment's :url) —
-        ;; so the MCP session to Gate is opened lazily and reused
-        ;; across requests rather than re-shaken per message.
+        ;; the power dispatcher, built ONCE here exactly as
+        ;; routes/gate.clj builds its own — gate-proxy/rpc-of over the
+        ;; engine's mcp_server rows (spec-mcp-servers), each row holding
+        ;; its one client — so a server's session is opened lazily and
+        ;; reused across requests rather than re-shaken per message.
         gate-rpc (gate/rpc-of eng)]
     {:module :mcp
      :static [["/api/-/mcp" {:post (rpc-post eng call gate-rpc)

@@ -26,6 +26,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp-servers :as servers]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.wire :as wire]))
@@ -119,16 +120,21 @@
 (def ^:private as-claude {"x-waymark-principal" "claude"
                           "x-waymark-actor-type" "agent"})
 
-(defn- boot [log]
-  (engine/engine {:storage (memory/storage)
-                  ;; the capability registry rides the app's own
-                  ;; resources (:app-opt-in), exactly as workqueue10
-                  ;; declares it
-                  :resources [caps/capability]
-                  ;; the test seam gate-proxy/rpc-of reads FIRST — no
-                  ;; URL, no socket, no live Gate anywhere in this
-                  ;; namespace
-                  :gate {:rpc (fake-gate log)}}))
+(defn- boot
+  "An engine over the fake, with the bridge row (spec-mcp-servers
+  R-13) seeded: the row named gate, passthrough, whose client is the
+  fake handed in through the services seam — no URL, no socket, no
+  live Gate anywhere in this namespace. The seed's create discovers
+  the fake's tools onto the row, which is the one tools/list the log
+  carries before any test reads."
+  [log]
+  (doto (engine/engine {:storage (memory/storage)
+                        ;; the capability registry rides the app's own
+                        ;; resources (:app-opt-in), exactly as workqueue10
+                        ;; declares it
+                        :resources [caps/capability]
+                        :services {:mcp-servers {:gate-rpc (fake-gate log)}}})
+    (gate/ensure-gate-row!)))
 
 (defn- mint-capabilities!
   "The email tokens plus the ynab pair as ROWS — a scope entry
@@ -176,9 +182,14 @@
 
 (defn- gate-calls [log] (filterv #(= "tools/call" (:method %)) @log))
 
-;; ── the map is the policy ───────────────────────────────────────────
+;; ── the gate row's powers are the policy ────────────────────────────
 
-(deftest the-map-carries-the-beads-rows-exactly
+(defn- flattened
+  "A powers list as the old map's shape: tool name → token."
+  [powers]
+  (into {} (for [{:keys [power tools]} powers, tool tools] [tool power])))
+
+(deftest the-gate-rows-powers-carry-the-old-map-exactly
   (is (= {;; emila — email
           "emila__inbox" "email.read"
           "emila__list_messages" "email.read"
@@ -226,20 +237,27 @@
           "costco__receipt" "costco.read"
           "costco__captured" "costco.read"
           "costco__login" "costco.read"
-          "costco__reset" "costco.read"
-          ;; bench — the checkout a code seat edits (waymark-fp62.6.3.2).
-          ;; prepare, status, submit and discard are on NO token:
-          ;; the engine alone reaches them, past this map.
-          "bench__find" "bench.find"
-          "bench__read" "bench.read"
-          "bench__edit" "bench.edit"
-          "bench__pull" "bench.pull"}
-         gate/tool-capability)
-      "this map IS the security policy — a changed row is a changed
-       law, and this test is the diff a reviewer reads")
-  (is (not-any? #(str/starts-with? % "gsd__") (keys gate/tool-capability))
+          "costco__reset" "costco.read"}
+         (flattened servers/gate-seed-powers))
+      "the seed of the gate row's powers IS the old map, entry for
+       entry — a changed row is a changed law, and this test is the
+       diff a reviewer reads")
+  (is (not-any? #(str/starts-with? % "gsd__")
+                (keys (flattened servers/gate-seed-powers)))
       "gsd__* is deliberately absent: waymark owns tasks and calendar
-       natively (workqueue10/calendar10), per the bead's decision"))
+       natively (workqueue10/calendar10), per the bead's decision")
+  (testing "acceptance 8: the static map is gone from gate_proxy.clj,
+            and the seeded row carries the policy instead"
+    (is (nil? (ns-resolve 'waymark10.server.gate-proxy 'tool-capability)))
+    (let [eng (boot (atom []))
+          row (servers/row-by-name eng "gate")]
+      (is (true? (get-in row [:data :passthrough])))
+      (is (= servers/gate-seed-powers (get-in row [:data :powers])))
+      (is (= "email.read" (servers/capability-of eng "emila__read"))
+          "emila__read resolves through the passthrough row to the
+           token the map used to bind it to")
+      (is (true? (servers/why-required? eng "emila__send")))
+      (is (false? (servers/why-required? eng "emila__read"))))))
 
 ;; ── acceptance 1: the affordance document is the grant's shadow ─────
 
@@ -460,14 +478,14 @@
             names (mapv :name (:tools (:result r)))]
         (is (= 200 (:status r)) (pr-str (:doc r)))
         (is (= the-fixed names) "the list is static: nothing appended, ever")
-        (is (= [] @log) "no admitted token, no wire"))
+        (is (= [] (gate-calls log)) "no admitted token, no wire"))
       (let [{:keys [status result powers]} (powers! eng as-claude)]
         (is (= 200 status))
         (is (false? (:isError result)))
         (is (= {} (:links powers)))
         (is (= {} (:actions powers)))
         (is (= "/api/approval_requests" (get-in powers [:ask :href])))
-        (is (= [] @log) "an empty document costs no wire either")))
+        (is (= [] (gate-calls log)) "an empty document costs no wire either")))
 
     (testing "a grant does NOT change tools/list; waymark_powers shows
               the admitted Gate tools, each wearing Gate's own schema,
