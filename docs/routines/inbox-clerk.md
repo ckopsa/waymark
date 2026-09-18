@@ -34,7 +34,7 @@ present too, and the credential is the person's own.
 |---|---|---|
 | name | `inbox-clerk` | the seat's name, one spelling |
 | model | the seat's first `held_for` | the schedule row is linked, so its copy is not pushed; keep the Routine's model equal to `held_for` by hand |
-| repository | `ckopsa/waymark` | the Stop hook that closes the sitting lives in its `.claude/settings.json`; the clerk still touches no code |
+| repository | `ckopsa/waymark`, branch `seat` | the branch holds the close hook and nothing to read; the clerk touches no code. See "The seat's place". |
 | trigger | Schedule, `0 * * * *` | `cadence_seconds` 3600. Keep the API trigger too: it gives the fire URL. |
 | fire URL | the API trigger's URL | the engine fires the Routine through it. See "The fire link". |
 | connectors | Waymark only | the research door reads the mail through the seat's `email.read` power |
@@ -60,6 +60,40 @@ both fields and moves the row back to `broken`.
 After the link, three things start a firing: the Routine's own
 schedule, a person's `fire` on the seat, and a transition the seat
 asked to be woken by (R-12.19, R-12.22).
+
+## The seat's place
+
+The Routine attaches the branch `seat` of `ckopsa/waymark`, and not
+`main`. The branch holds three files, and nothing else:
+
+- `CLAUDE.md`, a note of at most 20 lines. It says that this is a
+  seat's session, that the instructions are in the Routine, and
+  that the session reads nothing else.
+- `.claude/settings.json`, with the `Stop` entry and the
+  `SessionEnd` entry only. There is no `SessionStart` entry, so a
+  firing builds nothing.
+- `.claude/hooks/sitting-close.sh`, the same script that `main`
+  holds.
+
+There is no skill, no document and no code on the branch. A
+sitter's turn therefore reads the harness's prefix and the
+Routine's instructions, and not this repository.
+
+A person does not make the branch by hand. The workflow
+`.github/workflows/seat-place.yml` makes it. The workflow runs on
+each push to `main` that changes `seat/**`, the hook, or the
+workflow itself. It puts the three files in a clean tree, counts
+them, measures `CLAUDE.md`, and pushes the tree as the orphan
+branch `seat`. A fourth file fails the run. The sources on `main`
+are `seat/CLAUDE.md` and `seat/.claude/settings.json`. The hook
+keeps one source at `.claude/hooks/sitting-close.sh`, because an
+interactive sitting in this repository uses the same script.
+
+One hand step stays. Open the Routine and set its repository field
+to the branch `seat` of `ckopsa/waymark`.
+
+If the Routine cannot attach a branch, put the same three files in
+a second repository and point the Routine at it.
 
 ## The instructions
 
