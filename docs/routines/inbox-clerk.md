@@ -34,7 +34,7 @@ present too, and the credential is the person's own.
 |---|---|---|
 | name | `inbox-clerk` | the seat's name, one spelling |
 | model | the seat's first `held_for` | the schedule row is linked, so its copy is not pushed; keep the Routine's model equal to `held_for` by hand |
-| repository | `ckopsa/waymark`, branch `seat` | the branch holds the close hook and nothing to read; the clerk touches no code. See "The seat's place". |
+| repository | `ckopsa/waymark-seat` | the seat's place: the close hook and nothing to read; the clerk touches no code. One place serves every seat. See "The seat's place". |
 | trigger | Schedule, `0 * * * *` | `cadence_seconds` 3600. Keep the API trigger too: it gives the fire URL. |
 | fire URL | the API trigger's URL | the engine fires the Routine through it. See "The fire link". |
 | connectors | Waymark only | the research door reads the mail through the seat's `email.read` power |
@@ -63,8 +63,9 @@ asked to be woken by (R-12.19, R-12.22).
 
 ## The seat's place
 
-The Routine attaches the branch `seat` of `ckopsa/waymark`, and not
-`main`. The branch holds three files, and nothing else:
+The Routine attaches the repository `ckopsa/waymark-seat`, and not
+this one. A Routine attaches a repository and not a branch. The
+seat's place holds three files for the session, and nothing else:
 
 - `CLAUDE.md`, a note of at most 20 lines. It says that this is a
   seat's session, that the instructions are in the Routine, and
@@ -73,27 +74,37 @@ The Routine attaches the branch `seat` of `ckopsa/waymark`, and not
   `SessionEnd` entry only. There is no `SessionStart` entry, so a
   firing builds nothing.
 - `.claude/hooks/sitting-close.sh`, the same script that `main`
-  holds.
+  holds here.
 
-There is no skill, no document and no code on the branch. A
+There is no skill, no document and no code in that place. A
 sitter's turn therefore reads the harness's prefix and the
-Routine's instructions, and not this repository.
+Routine's instructions, and not this repository. The place names
+no seat, so one place serves every seat: the key in each Routine's
+instructions tells the seats apart.
 
-A person does not make the branch by hand. The workflow
-`.github/workflows/seat-place.yml` makes it. The workflow runs on
-each push to `main` that changes `seat/**`, the hook, or the
-workflow itself. It puts the three files in a clean tree, counts
-them, measures `CLAUDE.md`, and pushes the tree as the orphan
-branch `seat`. A fourth file fails the run. The sources on `main`
-are `seat/CLAUDE.md` and `seat/.claude/settings.json`. The hook
-keeps one source at `.claude/hooks/sitting-close.sh`, because an
-interactive sitting in this repository uses the same script.
+The three files have one source, and it is here. `seat/CLAUDE.md`
+and `seat/.claude/settings.json` on `main` are two of them. The
+hook keeps its source at `.claude/hooks/sitting-close.sh`, because
+an interactive sitting in this repository uses the same script.
+Two workflows carry them, and neither holds a secret:
+
+1. `.github/workflows/seat-place.yml` here runs on each push to
+   `main` that changes `seat/**`, the hook, or the workflow itself.
+   It puts the three files in a clean tree, counts them, measures
+   `CLAUDE.md`, and pushes the tree as the orphan branch `seat` of
+   this repository. A fourth file fails the run.
+2. `.github/workflows/sync.yml` in `ckopsa/waymark-seat` runs each
+   hour and by hand. It checks out that branch, which is public,
+   copies the three files into its own `main`, counts them again,
+   and commits with its own token when they changed.
+
+A change to the hook here reaches the seat's place within the
+hour. GitHub stops a schedule after sixty days with no commit in
+that repository. When the hook changes after a quiet season, run
+`sync` there by hand once.
 
 One hand step stays. Open the Routine and set its repository field
-to the branch `seat` of `ckopsa/waymark`.
-
-If the Routine cannot attach a branch, put the same three files in
-a second repository and point the Routine at it.
+to `ckopsa/waymark-seat`.
 
 ## The instructions
 
