@@ -36,6 +36,7 @@
             [org.httpkit.server :as http]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
+            [waymark10.server.gate-proxy :as gate]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -50,6 +51,7 @@
 
 (def ^:private tables
   ["capabilities" "members" "roles" "grants" "approval_requests"
+   "mcp_servers"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors" "waymark10_job_leases"])
 
@@ -91,7 +93,10 @@
     (try
       (f (engine/engine (merge {:storage st
                                 :resources [caps/capability]
-                                :gate {:rpc fake-gate}}
+                                ;; the gate row's client, handed in
+                                ;; whole (spec-mcp-servers R-11): no
+                                ;; socket, no live Gate
+                                :services {:mcp-servers {:gate-rpc fake-gate}}}
                                opts)))
       (finally (pg/close! st)))))
 
@@ -190,6 +195,9 @@
   (fresh!)
   (with-eng {:sse-heartbeat-ms 1000 :events-poll-ms 200}
     (fn [eng]
+      ;; the bridge row (spec-mcp-servers R-13): messa__* resolves
+      ;; through it to the fake, and its create mirrors messa-tools
+      (gate/ensure-gate-row! eng)
       (let [server (engine/start! eng 0)
             port (http/server-port server)]
         (try

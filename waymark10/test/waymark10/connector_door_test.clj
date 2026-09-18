@@ -17,6 +17,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.mcp-servers :as servers]
             [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -62,6 +63,24 @@
                           :resources [fx/meal]
                           :oidc (oidc-opts)}
                          opts))))
+
+(defn- no-tools
+  "A gate client that answers an empty tool list. This namespace opens
+  no socket: the bridge row is seeded for its POWERS, which is what
+  doors.ask.powers lists (spec-mcp-servers R-5/R-6), and a row offers
+  its powers whether or not the server behind it answers anything."
+  [_method _params]
+  {:tools []})
+
+(defn- with-gate-row!
+  "The bridge row (spec-mcp-servers R-13, § 3 step 1), seeded the way
+  gate_proxy_test's boot seeds it. doors.ask.powers is the union of
+  the mcp_server rows' power tokens since waymark-fp62.10, so an
+  engine with no row honestly lists none — a test that reads the ask
+  door's vocabulary has to carry the row that holds it."
+  [eng]
+  (servers/ensure-gate-row! eng)
+  eng)
 
 (defn- json [resp] (wire/read-json (:body resp)))
 
@@ -201,7 +220,9 @@
   ;; drops its header to see the whole vocabulary again; a delegate has
   ;; no header to drop, so its worn grant must not narrow the NAMES —
   ;; only the rows
-  (let [eng (fresh-engine {:resources [fx/meal fx/plan]})
+  (let [eng (with-gate-row!
+              (fresh-engine {:resources [fx/meal fx/plan]
+                             :services {:mcp-servers {:gate-rpc no-tools}}}))
         h (engine/handler eng)
         kinds (fn [] (set (:kinds (json (GET h "/api/.well-known/waymark" (bearer colton))))))]
     (testing "before any grant: the bootstrap surface names every kind"
@@ -228,7 +249,9 @@
         (is (str/includes? (str text) "plan") text)
         ;; waymark-r1m7: doors.ask carries what an ask needs beyond the
         ;; names — the anchor (the grant this session wears, so the ask
-        ;; widens instead of replacing) and the powers Gate serves
+        ;; widens instead of replacing) and the powers the engine's
+        ;; mcp_server rows name (waymark-fp62.10: the seeded bridge
+        ;; row above is where "messages.read" comes from)
         (let [ask (get-in (wire/read-json text) [:doors :ask])]
           (is (= "grant-connector-3" (get-in ask [:anchor :grant_id])))
           (is (some #{"messages.read"} (:powers ask)))

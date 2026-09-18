@@ -128,7 +128,7 @@
     ;; and the means by which a wake is scheduled
     (is (= ["approval_request" "attachment" "definition" "feed_recipe"
             "feed_view" "feed_view_consent"
-            "grant" "job" "meal" "member" "model" "plan" "ranking_note"
+            "grant" "job" "mcp_server" "meal" "member" "model" "plan" "ranking_note"
             "recipe_proposal" "remark" "role" "schedule" "seat"
             "sitting" "subscription" "task"
             "verdict_reason"]

@@ -160,13 +160,17 @@
 ;; ── the surfaces this engine actually turns ─────────────────────────
 
 (deftest the-started-engine-turns-every-surface-its-modules-declared
-  (testing "thirteen hooks, and the one that legitimately did not run"
+  (testing "fourteen hooks, and the one that legitimately did not run"
     ;; …the last three are the schedules module's (spec-seat.md § 12):
     ;; the consumer that mirrors a seat out, the read-back that
     ;; reports drift, and the wake consumer of R-12.22 — all three
     ;; `:when` the schedule kind is served, which an always-enrolled
     ;; kind always is
     (is (= #{:dispatcher :law-refresh :clock-sweeper
+             ;; core's fourth since waymark-fp62.10: the mcp_server
+             ;; rows' discover cadence (spec-mcp-servers R-4), elected
+             ;; like the clock sweeper beside it
+             :mcp-discover
              :attachments-purge :webhooks-deliverer
              :jobs-worker :jobs-orphan-sweeper
              :schedules-mirror :schedules-drift :wakes

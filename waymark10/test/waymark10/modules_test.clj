@@ -88,7 +88,11 @@
            ;; provider are nobody's application vocabulary, and the
            ;; seat's own `schedule` field is dead weight in a house
            ;; that cannot serve the kind it points at.
-           :schedule}
+           :schedule
+           ;; …and the MCP server as a row (spec-mcp-servers): the
+           ;; policy behind a dotted scope entry, which the grant —
+           ;; core's own — names
+           :mcp_server}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -111,7 +115,7 @@
     ;; …and the seat, the model, the sitting and the schedule, which
     ;; are core's since the grant carries a typed ref to the seat
     (is (= #{:definition :member :role :grant :approval_request :job
-             :seat :model :sitting :schedule}
+             :seat :model :sitting :schedule :mcp_server}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
@@ -341,6 +345,9 @@
 (deftest the-hook-seq-is-the-literal-start-used-to-build
   (testing "every surface engine/start! hand-wired, in start order"
     (is (= [:dispatcher :law-refresh :clock-sweeper
+            ;; the MCP servers' cadence (spec-mcp-servers R-4): core's
+            ;; fourth hook, elected, waiting on nothing
+            :mcp-discover
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
@@ -382,6 +389,9 @@
 (deftest hooks-read-the-same-selection-everything-else-reads
   (testing "a named selection starts what it assembled, and core"
     (is (= [:dispatcher :law-refresh :clock-sweeper
+            ;; core's fourth (spec-mcp-servers R-4), so a selection
+            ;; that names :jobs still carries it
+            :mcp-discover
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))

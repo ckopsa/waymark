@@ -62,13 +62,15 @@
   40)
 
 (defn rpc
-  "The engine's Gate caller for the thread sources: `gate-proxy/rpc-of`
-  over an optional url (unset = the deployment default the proxy
-  names). Call it ONCE and share the result — the session is the
-  connection reuse."
-  [{:keys [url]}]
-  (gate/rpc-of {:gate (cond-> {} (not (str/blank? (str url)))
-                              (assoc :url (str url)))}))
+  "The engine's power dispatcher for the thread sources:
+  `gate-proxy/rpc-of` over the engine-ref main holds, so a source
+  built before the boot calls through the `mcp_server` rows the
+  moment the engine exists (spec-mcp-servers R-7). A tool name such
+  as `tgram__list_chats` resolves by its prefix to a row — today the
+  passthrough row named gate — and forwards through that row's one
+  client. Call it ONCE and share the result."
+  [{:keys [engine-ref]}]
+  (gate/rpc-of engine-ref))
 
 (defn- parse-part [s]
   (try (wire/read-json s) (catch Exception _ nil)))
@@ -152,19 +154,32 @@
   a rig that answers without one."
   [state]
   (fn [method params]
-    (when-not (= "tools/call" method)
-      (throw (ex-info (str "the fake gate speaks no " method) {})))
-    (swap! state update :calls (fnil conj [])
-           {:tool (:name params) :arguments (:arguments params)})
-    (when (:down @state)
-      (throw (ex-info "Gate unreachable" {})))
-    (let [rows (get-in @state [:answers (str (:name params))] [])]
-      (if (false? (:structured? @state))
-        {:isError false
-         :content (mapv (fn [r] {:type "text" :text (wire/write-json r)}) rows)}
-        {:isError false
-         :content (mapv (fn [r] {:type "text" :text (wire/write-json r)}) rows)
-         :structuredContent {:result (vec rows)}}))))
+    (cond
+      ;; tools/list answers the tools the fake was scripted with, so
+      ;; a gate row created over this fake mirrors them
+      ;; (spec-mcp-servers R-4) and is born live
+      (= "tools/list" method)
+      {:tools (mapv (fn [tool] {:name (str tool)
+                                :description ""
+                                :inputSchema {:type "object" :properties {}}})
+                    (sort (keys (:answers @state))))}
+
+      (not= "tools/call" method)
+      (throw (ex-info (str "the fake gate speaks no " method) {}))
+
+      :else
+      (do
+        (swap! state update :calls (fnil conj [])
+               {:tool (:name params) :arguments (:arguments params)})
+        (when (:down @state)
+          (throw (ex-info "Gate unreachable" {})))
+        (let [rows (get-in @state [:answers (str (:name params))] [])]
+          (if (false? (:structured? @state))
+            {:isError false
+             :content (mapv (fn [r] {:type "text" :text (wire/write-json r)}) rows)}
+            {:isError false
+             :content (mapv (fn [r] {:type "text" :text (wire/write-json r)}) rows)
+             :structuredContent {:result (vec rows)}}))))))
 
 (defn fake-state
   "A fresh scriptable Gate: seed it with answer! / down! and read the

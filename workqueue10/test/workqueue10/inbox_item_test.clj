@@ -27,16 +27,20 @@
   THE ENGINE'S OWN READ (bead waymark-fp62.7.16) is the second story
   here, and it is driven the same way: the research handler over a
   ctx that carries a `:power` hook. The hook is the REAL one —
-  `gate-proxy/power-of` over the same scriptable Gate the source
-  suite uses — so each assertion runs the real leash check, the real
-  tool-to-token map and the real extraction, and only the socket is
-  missing.
+  `gate-proxy/power-of` over an engine whose gate row holds the same
+  scriptable Gate the source suite uses (spec-mcp-servers R-13) — so
+  each assertion runs the real leash check, the real resolution of
+  the tool to the row's powers and the real extraction, and only the
+  socket is missing.
 
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.inbox-item-test"
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.machine :as machine]
+            [waymark10.server.capabilities :as caps]
+            [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.render :as render]
+            [waymark10.server.store.memory :as memory]
             [waymark10.text :as text]
             [workqueue10.resources.inbox-item :as inbox :refer [inbox-item]]
             [workqueue10.sources.gate-chat :as gc])
@@ -303,14 +307,28 @@
     (gc/answer! state inbox/read-tool rows)
     state))
 
+(defn- gate-engine
+  "A memory engine whose bridge row (spec-mcp-servers R-13, the row
+  named gate) holds the scriptable Gate as its client: the real
+  dispatcher, the real row, the real powers, only the socket missing.
+  The seed's create discovers the fake's scripted tools onto the row;
+  a fake scripted `down` refuses the read itself, which the hook
+  answers with nil exactly as a dark Gate did."
+  [state]
+  (doto (engine/engine {:storage (memory/storage)
+                        :resources [caps/capability]
+                        :services {:mcp-servers {:gate-rpc (gc/fake-rpc state)}}})
+    (gate/ensure-gate-row!)))
+
 (defn- power-ctx
   "The ctx a write carries when the request wears a leash that admits
-  the mail: the REAL hook, over the scriptable Gate."
+  the mail: the REAL hook, over the scriptable Gate behind the gate
+  row."
   ([state] (power-ctx state the-sitters-leash))
   ([state vis]
    {:principal the-clerk
     :now now
-    :power (gate/power-of (gc/fake-rpc state) vis)}))
+    :power (gate/power-of (gate/rpc-of (gate-engine state)) vis)}))
 
 (def ^:private html-message
   "One HTML message of about 60 KB, with a script block and a style

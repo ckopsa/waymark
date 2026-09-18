@@ -29,13 +29,12 @@
   and the way to ask, which is the registry's standing vocabulary
   posture (capabilities are words).
 
-  THE GATE CALLER IS BUILT ONCE, HERE — `gate-proxy/rpc-of` at route
-  build, the modules.clj spelling for an engine opt read at the
-  start site with its default ((:gate eng) {:url …}, defaulting to
-  the deployment's LAN address) — so the MCP session to Gate is
-  opened lazily and reused across requests rather than re-shaken per
-  read. It is the ONLY thing kept: no rows, no cache of Gate's
-  tools, no mirrored payloads. Every document is recomputed live."
+  THE POWER DISPATCHER IS BUILT ONCE, HERE — `gate-proxy/rpc-of` at
+  route build, over the engine's `mcp_server` rows (spec-mcp-servers,
+  waymark-fp62.10): each row holds its one client, opened lazily and
+  reused across requests rather than re-shaken per read. No payload is
+  mirrored here; the tools a row offers are the row's own record, and
+  every document is recomputed from the rows and the grant."
   (:require [waymark10.server.gate-proxy :as gate]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
