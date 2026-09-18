@@ -2030,10 +2030,188 @@
   is where it reads it."
   "Read the seat row with waymark_get and do what its charter says.")
 
+
+;; ── the bench, in the sit's answer (spec-seat.md R-12.29) ───────────
+;;
+;; A code seat sits down to a CHECKOUT, not to a page of rows. The
+;; bench rig (bead waymark-fp62.6.3.1) holds a bare clone for each
+;; repository and a worktree for each change, behind Gate. The engine
+;; makes that worktree BEFORE the sit answers, so the model finds the
+;; branch made and the earlier sitting's edits still in it: the sit
+;; calls the rig's `prepare` with the engine's own hand, PAST
+;; `invoke-for` and past the leash, exactly as the thread sources call
+;; Gate (workqueue10.sources.gate-chat). `prepare` is idempotent, it
+;; is on no capability token, and no scope can name it — a seat can
+;; read, edit and pull on the bench, and it can never make or move a
+;; worktree.
+;;
+;; WHAT SUBMIT MEANS IS A ROW. `repo_policy` (factory10) holds the
+;; branch pattern, the base, the size ceiling, whether a push opens a
+;; pull request, whether the gate merges, and how many rounds one
+;; change gets. This section READS that row and says the answer in one
+;; sentence. The model never chooses any of it.
+;;
+;; A DARK RIG DOES NOT REFUSE THE SIT. Gate down, the rig down, a
+;; repository the rig does not hold: each one answers no `bench` and a
+;; `bench_note` sentence, and the walk still rides. A sitting that
+;; cannot reach the bench can still read its rows and say so.
+
+(def ^:private bench-walks
+  "The two kinds whose first row names a change: the walk itself, and
+  the red run that points at one."
+  #{"change" "ci_run"})
+
+(def ^:private default-orientation
+  "Where a seat reads what this repository expects of it, when the
+  policy names no other path (R-7)."
+  "docs/orientation.md")
+
+(def ^:private default-base "main")
+
+(def ^:private default-branch-pattern
+  "The branch a change gets when the policy names no pattern. The `*`
+  is the change row's own id."
+  "waymark/*")
+
+(defn- bench-payload
+  "The rig's own answer, or nil. A refusal is not an answer: the rig
+  says `refused` with its name, and this section then says nothing
+  rather than putting a refusal where a worktree goes."
+  [payload]
+  (when (and (map? payload) (not (:isError payload)))
+    (let [r (get-in payload [:structuredContent :result])]
+      (when (and (map? r) (nil? (:refused r))) r))))
+
+(defn- repo-policy-of
+  "The active policy row for one repository, or nil — and nil is the
+  ordinary answer in an engine that declares no `repo_policy` at all,
+  which is every engine but the factory's."
+  [eng repository]
+  (when-some [rdef (when-not (str/blank? (str repository))
+                     (get (inv/resources eng) :repo_policy))]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx]
+                 (first (store/query-rows (:storage eng) tx :repo_policy
+                                          {:repository (str repository)
+                                           :state :active}
+                                          {:limit 1}))))
+             (inv/decode-row rdef))))
+
+(defn- change-of-walk
+  "The change row this firing works on, read from the first row of the
+  walk: the row itself when the seat walks changes, and the run's own
+  change when it walks ci_runs. nil when the first row names none."
+  [eng walk]
+  (when-some [id (some-> (get-in walk ["rows" 0 "id"]) str not-empty)]
+    (case (str (get walk "kind"))
+      "change" (row-of eng :change id)
+      "ci_run" (when-some [run (row-of eng :ci_run id)]
+                 (row-of eng :change (get-in run [:data :change])))
+      nil)))
+
+(defn- bench-branch
+  "The branch this change is worked on: the one the row already names,
+  else the policy's pattern with the change's own id in place of the
+  `*`. One branch per change, so a second sitting finds the first
+  sitting's worktree."
+  [change policy]
+  (or (some-> (get-in change [:data :branch]) str not-empty)
+      (some-> (get-in change [:data :head_branch]) str not-empty)
+      (str/replace (or (some-> (get-in policy [:data :branch_pattern])
+                               str not-empty)
+                       default-branch-pattern)
+                   "*" (str (:id change)))))
+
+(defn- submit-means
+  "What `submit` does on this seat, in one sentence built from the
+  policy. The model reads it and asks for nothing: the sentence says
+  whether a push opens a pull request, who merges, how large the
+  change may be, and how many rounds it gets."
+  [policy]
+  (if (nil? policy)
+    ;; the same sentence the submit door's first guard says, said
+    ;; early: a repository nobody has stated a policy for is a
+    ;; repository the bench does not submit to.
+    (str "This repository has no policy, so submit refuses. A person "
+         "states what submit means here — the branches, the base, the "
+         "size ceiling and the rounds — and then the bench works it.")
+    (let [d (:data policy)
+          opens? (not (false? (:opens_pr d)))
+          merges? (not (false? (:auto_merge d)))
+          lines (long (or (:max_lines d) 400))
+          rounds (long (or (:rounds_per_change d) 3))]
+      (str "Submit writes your changes to the branch with your sentence,"
+           " then pushes them: "
+           (if opens? "the push opens a pull request"
+               "the push moves the branch and opens no pull request")
+           ", and "
+           (if merges? "the gate merges the change when the checks are green"
+               "a person merges the change")
+           ". The change must have not more than " lines
+           " changed lines, and this change gets " rounds
+           (if (= 1 rounds) " round." " rounds.")))))
+
+(def ^:private bench-dark-note
+  "What the sit says when the rig did not answer. It is a sentence
+  about the BENCH and not about the row: the rows are still below, and
+  the seat can still read them and write a finding."
+  (str "The bench did not answer, so there is no worktree in this "
+       "answer. Do not try to read or edit files; work from the rows, "
+       "and say what you could not do."))
+
+(defn- bench-of
+  "The bench section of the sit's answer (R-12.29), or nil for a seat
+  that walks something else.
+
+  In order: the change the firing works on, the repository's policy,
+  the branch, and then ONE call to the rig's `prepare` — the engine's
+  own hand, past the leash. The answer carries the worktree (the
+  repository, the branch, the base, the head commit and how many paths
+  are dirty from an earlier sitting), the orientation path the seat
+  reads first, and what submit means here.
+
+  `gate-rpc` is this engine's Gate caller, built once by the transport.
+  It THROWS when Gate is dark, and the throw is caught here: the sit
+  answers without a bench rather than not at all."
+  [eng gate-rpc walk]
+  (when (and walk (contains? bench-walks (str (get walk "kind"))))
+    (when-some [change (change-of-walk eng walk)]
+      (let [repo (str (get-in change [:data :repository]))
+            policy (repo-policy-of eng repo)
+            base (or (some-> (get-in policy [:data :base]) str not-empty)
+                     default-base)
+            branch (bench-branch change policy)
+            made (try
+                   (bench-payload
+                    (gate-rpc "tools/call"
+                              {:name (gate/bench-tool :prepare)
+                               :arguments {:repo repo :branch branch
+                                           :base base}}))
+                   (catch Exception e
+                     (binding [*out* *err*]
+                       (println "waymark10 bench prepare failed -"
+                                (ex-message e)))
+                     nil))]
+        (cond-> {"orientation" (or (some-> (get-in policy [:data :orientation])
+                                           str not-empty)
+                                   default-orientation)
+                 "submit_means" (submit-means policy)}
+          made (assoc "bench" {"repo" (str (or (:repo made) repo))
+                               "branch" (str (or (:branch made) branch))
+                               "base" (str (or (:base made) base))
+                               "head" (some-> (:head made) str)
+                               "dirty" (long (or (:dirty made) 0))})
+          (nil? made) (assoc "bench_note" bench-dark-note))))))
+
 (defn- sit
   "R-12.14, in order, and every refusal is one plain sentence an agent
-  can act on."
-  [eng call session args]
+  can act on.
+
+  `gate-rpc` is this engine's Gate caller (the transport's own, built
+  once): the bench section below reaches the rig with it, past
+  `invoke-for`. It is why this body is dispatched from `call-tool`
+  rather than from `bodies`, as the two power tools are."
+  [eng call gate-rpc session args]
   (let [sid (some-> (:mcp-session-id session) str not-empty)
         person (some-> (:acts-for (:principal session)) str not-empty)
         ;; the seat is read before the person is judged, so an
@@ -2085,7 +2263,10 @@
             ;; i · the walk, read as the sitter under the seat's grant
             ;; and through the query path — the rows this firing works
             ;; through, with the doors each one affords
-            walk (walk-of eng call (sitter-session eng sitter) seat)]
+            walk (walk-of eng call (sitter-session eng sitter) seat)
+            ;; i' · the bench, for a seat whose walk is the code: the
+            ;; worktree is made before this answer leaves (R-12.29)
+            bench (bench-of eng gate-rpc walk)]
         ;; j · what the firing reads next. The walk rides as the wire
         ;; wrote it — a route's own document, string keys and all —
         ;; so the kebab→snake boundary cannot rewrite a key inside a
@@ -2105,7 +2286,8 @@
                               seats/default-mode)
                     :note (str "You sit in `" named "`. "
                                (if walk walk-note no-walk-note))})
-            walk (assoc "walk" walk))
+            walk (assoc "walk" walk)
+            bench (merge bench))
           verbatim-mapper))))))
 
 (def ^:private bodies
@@ -2115,8 +2297,7 @@
    "waymark_get" get-row
    "waymark_invoke" invoke
    "waymark_history" history
-   "waymark_resolve" resolve-rows
-   "waymark_sit" sit})
+   "waymark_resolve" resolve-rows})
 
 (defn- attempt
   "One tool body, run behind the refusal boundary: a tagged problem —
@@ -2206,6 +2387,29 @@
         (cond-> out
           (pos? dropped) (vary-meta assoc dropped-key dropped))))))
 
+(defn- seat-byte-ceiling
+  "The ceiling this session's seat puts on one bench answer, in bytes,
+  or nil when it names none — and nil is today's every answer: no seat
+  field carries one yet, so `bench-capped` clamps to the rig's own
+  ceiling. The read is here, on the session the transport resolved, so
+  the day a seat names a ceiling the power door already honours it."
+  [session]
+  (let [n (get-in session [:visibility :seat :bench_max_bytes])]
+    (when (and (number? n) (pos? (long n))) (long n))))
+
+(defn- rig-dropped
+  "The bytes the BENCH RIG itself removed, added to what the shape
+  removed (R-2). The rig caps its own answers and says so in
+  `dropped`; the sitting's `served` line already carries what this
+  door dropped, and a reader adding the two reads what the seat would
+  have paid for the whole answer. A tool that says nothing about
+  dropping adds nothing."
+  [result]
+  (let [n (get-in result [:structuredContent :result :dropped])]
+    (if (and (number? n) (pos? (long n)) (instance? clojure.lang.IObj result))
+      (vary-meta result update dropped-key (fnil + 0) (long n))
+      result)))
+
 (defn- dropped-bytes
   "What a shaped answer said it removed, or 0."
   [result]
@@ -2255,10 +2459,18 @@
 
      (= "waymark_power" tool-name)
      (attempt tool-name
-              #(shaped (gate/invoke-for gate-rpc (:visibility session)
-                                        (str (:tool args))
-                                        (or (:arguments args) {}))
-                       args))
+              #(let [tname (str (:tool args))]
+                 (-> (gate/invoke-for gate-rpc (:visibility session) tname
+                                      (gate/bench-capped
+                                       (or (:arguments args) {}) tname
+                                       (seat-byte-ceiling session)))
+                     (shaped args)
+                     (rig-dropped))))
+
+     ;; the sit needs the Gate caller too, for the bench it prepares
+     ;; (R-12.29) — the one body that is not in `bodies`
+     (= "waymark_sit" tool-name)
+     (attempt tool-name #(sit eng call gate-rpc session (or args {})))
 
      :else ::unknown-tool)))
 
@@ -2330,6 +2542,23 @@
           :grant (= pid (get-in row [:data :audience]))
           :approval_request (= pid (get-in row [:data :requested_by]))
           false))))
+
+(defn- served-name
+  "The name this answer is counted under (R-10.6a, and
+  waymark-fp62.6.3.2's R-8).
+
+  Every tool counts under its own name. A BENCH power is the one
+  exception, and it is the same rule read one layer down: the ledger's
+  question is which TOOL a sitting spent its bytes on, and a code seat
+  whose whole bill read `waymark_power` would answer it with one line
+  for a read, a find, an edit and a pull together. So a bench call
+  counts under the rig's own tool — `bench__read`, `bench__find` — and
+  every other power counts under `waymark_power` as it always has."
+  [tool-name params]
+  (if (= "waymark_power" tool-name)
+    (let [inner (str (get-in params [:arguments :tool]))]
+      (if (gate/bench-tool? inner) inner tool-name))
+    tool-name))
 
 (defn- count-served!
   "R-10.6a: the bytes this tool answered, on the open sitting of the
@@ -2406,7 +2635,8 @@
                            " — this engine serves exactly "
                            (mapv :name tools)
                            "; external powers go through waymark_power."))
-           (do (count-served! eng session (:name params) out)
+           (do (count-served! eng session
+                               (served-name (:name params) params) out)
                (rpc-result id out))))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))

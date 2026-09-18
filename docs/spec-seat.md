@@ -881,6 +881,28 @@ under `waymark_sit`, as the bytes of every other tool count
 answer; a seat whose answer is too large is a seat the person
 restates.
 
+**R-12.29** The sit must answer the bench for a code seat. When the
+seat's walk is `change` or `ci_run`, and the first row of the walk
+names a change, the answer to `waymark_sit` carries three more
+things. `bench` is the worktree the engine made before it answered:
+the repository, the branch, the base branch, the head commit, and how
+many paths are different from the head because an earlier sitting left
+them. The engine makes it with one call to the bench rig's `prepare`,
+with its own hand and not with the seat's — `prepare` is on no
+capability token, so no scope can name it and `waymark_power` refuses
+it. The branch is the change's head branch, or the repository policy's
+branch pattern with the change's own id in place of the `*`; there is
+one branch for each change, so a second sitting finds the work the
+first one left. `orientation` is the path of the document the seat
+reads first, from the same policy, and `docs/orientation.md` when the
+policy names no other. `submit_means` is one sentence made from the
+policy: whether a push opens a pull request, who merges it, how many
+lines one change may have, and how many rounds this change gets. The
+model chooses none of these. If the rig does not answer, the sit
+answers no `bench` and a `bench_note` sentence, and the walk still
+rides: a sitting that cannot reach the bench can read its rows and say
+so.
+
 ### 12.2 The fire door
 
 The owner's ruling of 2026-09-17: a seat must be fired on demand and

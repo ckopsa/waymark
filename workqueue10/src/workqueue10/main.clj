@@ -48,7 +48,7 @@
   rig whose listing takes no limit), an optional folder, and how many
   seconds between passes (900); it reaches the same Gate
   WORKQUEUE10_GATE_URL names, and the same twin when it is unset),
-  FACTORY10=1 (fold the day job's two kinds in — `factory-resources`)
+  FACTORY10=1 (fold the day job's kinds in — `factory-resources`)
   with FACTORY10_GITHUB_TOKEN / _REPOS / _EVERY (the GitHub source
   behind them, waymark-fp62.6.4: the token it spends, the
   comma-separated owner/repo list it reads — ckopsa/waymark when
@@ -460,7 +460,7 @@
 ;; ── the day job, behind a switch (waymark-fp62.6.2, R-8) ────────────
 
 (defn factory-resources
-  "factory10's two kinds — `change` and `ci_run` — when FACTORY10=1,
+  "factory10's kinds — `change`, `ci_run` and `repo_policy` — when FACTORY10=1,
   and nothing otherwise.
 
   WHY A SWITCH AND NOT A DEFAULT. factory10 is a MODULE, like
@@ -484,7 +484,7 @@
     []))
 
 (defn factory-source
-  "The GitHub source that FILLS those two kinds (waymark-fp62.6.4), or
+  "The GitHub source that FILLS change and ci_run (waymark-fp62.6.4), or
   nil.
 
   TWO SWITCHES, AND BOTH MUST BE ON. FACTORY10=1 folds the kinds in,
