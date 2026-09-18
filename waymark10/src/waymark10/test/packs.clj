@@ -2833,6 +2833,27 @@
             offer {:offer_kind skind :offer_id sid :offer_href self}
             finding (fn [text extra]
                       (merge {:finding text :evidence [self]} offer extra))
+            ;; 0. THE WALKER TAKES ITS OWN FINDINGS BACK FIRST. Every
+            ;; declared scenario and every core walk that ran before
+            ;; this section staged its rows AS THE WALKER, and since
+            ;; waymark-fp62.4.1 a scenario stages what it cites, so a
+            ;; finding it published on a value a person declared is a
+            ;; real, standing finding — lifted five by the rank's
+            ;; `:declared`, above these fills, on a decide line that
+            ;; takes two. The rank working is not this section's
+            ;; claim; the fills reaching the page and being answered
+            ;; is. `withdraw` is the author's own door, and the walker
+            ;; is their author; a finding somebody else published
+            ;; refuses the walker by name and stays, which is right.
+            _ (doseq [it (get-in (json ctx (req ctx :get
+                                                (str "/api/"
+                                                     (:plural (rdef ctx :insight))
+                                                     "?state=published")))
+                               [:data :items])
+                      :let [iid (some-> (:self it) id-of)]
+                      :when iid]
+                (invoke-http ctx :insight iid
+                             (declared-name ctx :insight :withdraw) nil))
             ;; 1. no citation, no publish
             uncited (make-insight!
                      ctx hs (dissoc (finding "Nothing is behind this one" nil)

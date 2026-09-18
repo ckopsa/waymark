@@ -134,7 +134,7 @@
    (let [seat (:row (inv/create! eng :seat
                                  {:name named
                                   :charter "Decide whether a meal belongs on the list."
-                                  :scope [{:kind "meal" :actions ["accept"]}]
+                                  :scope [{:kind "meal" :actions ["accept" "decline"]}]
                                   :held_for [(:id model)]
                                   :standing_ttl_seconds 604800
                                   :cadence_seconds 3600
@@ -174,7 +174,9 @@
   meal already accepted it is the engine's own 409. A SECOND `accept`
   would not be: `accept` is idempotent, and the same action with the
   same input on a row at its outcome is a natural replay, answered
-  200 and counted nothing (invoke.clj step 8)."
+  200 and counted nothing (invoke.clj step 8). The seat's scope names
+  `decline` too: a door the grant does not admit is CONCEALED, a 404
+  that counts nothing, and a 409 needs a door the sitter may see."
   [h sid meal-id]
   (tool h (with-session sid) "waymark_invoke"
         {:kind "meal" :id (str meal-id) :action "decline"}))
