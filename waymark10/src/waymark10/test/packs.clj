@@ -2851,26 +2851,39 @@
             ;; One page at the collection's own ceiling, taken again
             ;; until a pass withdraws nothing: a withdrawn finding leaves
             ;; the published filter, so page one is always the rest.
-            _ (loop [round 0]
-                (let [items (get-in (json ctx (req ctx :get
-                                                   (str "/api/"
-                                                        (:plural (rdef ctx :insight))
-                                                        "?state=published&page[size]=100")))
-                                    [:data :items])
-                      gone (reduce
-                            (fn [n it]
-                              (let [iid (some-> (:self it) id-of)
-                                    row (when iid (json ctx (req ctx :get (str (:self it)))))
-                                    who (some-> (get-in row [:data :authored_by]) str not-empty)
-                                    r (when (and iid who)
-                                        (invoke-http ctx :insight iid
-                                                     (declared-name ctx :insight :withdraw) nil
-                                                     {:headers {"x-waymark-principal" who
-                                                                "x-waymark-actor-type" "agent"}}))]
-                                (if (= 200 (:status r)) (inc n) n)))
-                            0 items)]
-                  (when (and (seq items) (pos? gone) (< round 10))
-                    (recur (inc round)))))
+            ;; The pass keeps its own tally so a violation below can say
+            ;; what it saw and did, not only that the fills were outranked.
+            pass (loop [round 0 tally {:rounds 0 :seen 0 :gone 0 :refused []}]
+                   (let [listing (req ctx :get (str "/api/"
+                                                    (:plural (rdef ctx :insight))
+                                                    "?state=published&page[size]=100"))
+                         items (get-in (json ctx listing) [:data :items])
+                         tally (-> tally
+                                   (update :rounds inc)
+                                   (update :seen + (count items))
+                                   (assoc :listing (:status listing)))
+                         tally (reduce
+                                (fn [t it]
+                                  (let [iid (some-> (:self it) id-of)
+                                        row (when iid (json ctx (req ctx :get (str (:self it)))))
+                                        who (some-> (get-in row [:data :authored_by]) str not-empty)
+                                        r (when (and iid who)
+                                            (invoke-http ctx :insight iid
+                                                         (declared-name ctx :insight :withdraw) nil
+                                                         {:headers {"x-waymark-principal" who
+                                                                    "x-waymark-actor-type" "agent"}}))]
+                                    (cond
+                                      (= 200 (:status r)) (update t :gone inc)
+                                      :else (update t :refused conj
+                                                    {:id iid :by who :status (:status r)
+                                                     :detail (some-> r ((:json ctx)) :detail str
+                                                                     (subs 0 (min 160 (count (str (:detail ((:json ctx) r)))))))}))))
+                                tally items)]
+                     ;; another round only while a round withdraws something
+                     (if (and (seq items) (< round 10)
+                              (> (:gone tally) (:gone-before tally 0)))
+                       (recur (inc round) (assoc tally :gone-before (:gone tally)))
+                       (dissoc tally :gone-before))))
             ;; 1. no citation, no publish
             uncited (make-insight!
                      ctx hs (dissoc (finding "Nothing is behind this one" nil)
@@ -3161,7 +3174,18 @@
            (and (seq mine) (nil? card))
            (conj (str "feed: " (count mine) " findings were published and not"
                       " one of them reached the feed. Cards: "
-                      (pr-str (mapv :card_id (feed-cards offered)))))
+                      (pr-str (mapv :card_id (feed-cards offered)))
+                      " — the insight cards shown: "
+                      (pr-str (mapv (fn [c]
+                                      (let [id (some-> (:self c) id-of)
+                                            row (json ctx (req ctx :get (str (:self c))))]
+                                        {:id id
+                                         :by (get-in row [:data :authored_by])
+                                         :state (:state row)
+                                         :why (get-in c [:why :insight])}))
+                                    (filter #(= "insight" (str (:kind %)))
+                                            (feed-cards offered))))
+                      " — the withdraw pass: " (pr-str pass)))
 
            (and card (not= "decide" (str (:section card))))
            (conj (str "feed: the insight card is in section "

@@ -246,7 +246,7 @@
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
 
 (defn render-hooks
-  "The render probe's :read/:find — make-ctx's enforcement hooks
+  "The render probe's :read/:find/:sum — make-ctx's enforcement hooks
   twinned for the READ path, each call over a short transaction of
   its own. An engine booted with :probe-reads true hands one instance
   of these to every render ctx (router/render-opts), so a
@@ -285,6 +285,17 @@
                         st (fn [tx] (store/query-rows
                                      st tx target-kind (or where {})
                                      (merge {:limit 100} opts))))))))
+     ;; the aggregate twin (waymark-fp62.7.13): the seat's fire door
+     ;; judges the week's fuel, and an envelope that could not ask for
+     ;; the sum would narrate a wall that has already lifted. Memoed
+     ;; like the rest — one page, one seat, one SUM.
+     :sum (fn [target-kind field conds]
+            (through
+             [:sum target-kind field conds]
+             #(when (get (resources engine) target-kind)
+                (store/with-tx
+                 st (fn [tx] (store/sum-matching st tx target-kind
+                                                 field conds))))))
      ;; the log's read-path twin (docs/spec-undo.md). An undo door is
      ;; the one affordance whose availability is a fact about the CLOCK
      ;; and about whose hand is asking, so a card that advertised it
@@ -449,6 +460,19 @@
                              (store/query-rows (:storage engine) tx target-kind
                                                (or where {})
                                                (merge {:limit 100} opts)))))
+             ;; …and the AGGREGATE twin (waymark-fp62.7.13). A guard
+             ;; that judges a SUM — the seat's rolling week of fuel
+             ;; against its budget — asks for the number, not for the
+             ;; page of rows :find would hand it: the wall itself is
+             ;; one store/sum-matching over conds the kind spells, and
+             ;; a guard that re-summed a page would be a second answer
+             ;; to one arithmetic. The write's own transaction, like
+             ;; its siblings; a guard reading it declares
+             ;; :reads [:storage].
+             :sum (fn [target-kind field conds]
+                    (when (get (resources engine) target-kind)
+                      (store/sum-matching (:storage engine) tx target-kind
+                                          field conds)))
              ;; the vocabulary hook (waymark-vnc): kind → its declared
              ;; action-name strings, nil for a kind this engine does
              ;; not serve — the same registry check-action! and render

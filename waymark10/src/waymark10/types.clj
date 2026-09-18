@@ -130,7 +130,7 @@
   {:kind :action} of the write this ctx was opened inside of by a
   ctx :invoke / :create door, nil at the wire — waymark-jfv.20), plus
   engine-injected hooks in later phases (:actor-of, :last-transition,
-  :rate, :read, :find, :invoke)."
+  :rate, :read, :find, :sum, :invoke)."
   [{:keys [principal now services locale mode correlation-id]
     :or {locale "en" mode :invoke}
     :as extra}]

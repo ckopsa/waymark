@@ -332,7 +332,7 @@
   "The one ctx-opts map every render call shares: identity, clock,
   services, visibility, and the kind map link targets resolve
   through. An engine booted with :probe-reads true also rides one
-  fresh render-hooks instance (:read/:find) per request — its cache's
+  fresh render-hooks instance (:read/:find/:sum) per request — its cache's
   scope — so acceptance sets enumerate on the envelope."
   [eng req]
   (cond-> {:principal (principal-of req)

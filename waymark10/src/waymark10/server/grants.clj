@@ -1741,7 +1741,45 @@
   [seat-id]
   {:kind "seat" :ids [(str seat-id)] :actions []})
 
-(defn- spent-this-week
+(defn week-spend-conds
+  "The three conds that name a seat's fuel: this seat's sittings,
+  started inside the rolling window, closed or open.
+
+  CLOSED AND OPEN BOTH (R-12.27). A fired sitting is bounded by its
+  run, so summing the closed ones was the whole spend; an interactive
+  sitting is not bounded by anything, and a wall that could not see
+  one would be a wall a day's work walks straight through. An open
+  sitting carries a running `cost_usd` from its last tally — and none
+  at all until it has been tallied, which a SUM skips.
+
+  PUBLIC, and said ONCE (waymark-fp62.7.13): the seat's fire door
+  judges the same wall with no sitter in the room, and two spellings
+  of one arithmetic are two answers to R-5.2's third wall, correct on
+  the day they were written."
+  [seat-id ^java.time.Instant now]
+  [{:target :state :op :in :values ["closed" "open"]}
+   {:target :data :field :seat :cast "text" :op :=
+    :value (str seat-id)}
+   {:target :data :field :started_at :cast "timestamptz" :op :>=
+    :value (str (.minusSeconds now budget-window-seconds))}])
+
+(defn spent-with
+  "The week's spend, over a summing hand the caller holds: `sum` is
+  (fn [kind field conds] → decimal or nil), which is what the ctx
+  `:sum` hook gives a guard inside a write. No hand, no number: the
+  answer is then 0M, exactly as a house with no sitting kind answers."
+  [sum seat-id ^java.time.Instant now]
+  (or (when sum (sum :sitting :cost_usd (week-spend-conds seat-id now)))
+      0M))
+
+(defn under-budget?
+  "Is there fuel left? R-5.2 step 3's comparison, said once: the wall
+  holds while the spend is NOT less than the budget, so a seat whose
+  budget is zero is at the wall from the first request."
+  [spent budget]
+  (neg? (compare spent (or budget 0M))))
+
+(defn spent-this-week
   "The dollars this seat's sittings of the last seven days cost — ONE
   aggregate read, never a page of rows. Recorded: the conds walk
   `data->>` expressions, so no index serves them; a promoted column is
@@ -1751,26 +1789,15 @@
   scan is small by construction — and the day it is not, the fix is an
   index this store cannot yet be told to declare.
 
-  CLOSED AND OPEN BOTH (R-12.27). A fired sitting is bounded by its
-  run, so summing the closed ones was the whole spend; an interactive
-  sitting is not bounded by anything, and a wall that could not see
-  one would be a wall a day's work walks straight through. An open
-  sitting carries a running `cost_usd` from its last tally — and none
-  at all until it has been tallied, which a SUM skips. One call, one
-  cond over two states: two calls would be two scans of one table for
-  one number."
+  One call, one cond over two states: two calls would be two scans of
+  one table for one number."
   [eng seat-id ^java.time.Instant now]
-  (or (when (get (inv/resources eng) :sitting)
-        (store/with-tx (:storage eng)
-          (fn [tx]
-            (store/sum-matching
-             (:storage eng) tx :sitting :cost_usd
-             [{:target :state :op :in :values ["closed" "open"]}
-              {:target :data :field :seat :cast "text" :op :=
-               :value (str seat-id)}
-              {:target :data :field :started_at :cast "timestamptz" :op :>=
-               :value (str (.minusSeconds now budget-window-seconds))}]))))
-      0M))
+  (spent-with (when (get (inv/resources eng) :sitting)
+                (fn [kind field conds]
+                  (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (store/sum-matching (:storage eng) tx kind field conds)))))
+              seat-id now))
 
 (defn- model-id-of
   "The models row the session's own claim names, or nil — one query by
@@ -1877,7 +1904,7 @@
                                 (some-> (get-in seat [:data :mode]) str)))
                     (tallied-tokens eng (:id row)))]
         (cond
-          (not (neg? (compare spent budget)))
+          (not (under-budget? spent budget))
           (wall "budget_reached"
                 (str "The week's fuel is spent: " (str spent) " of "
                      (str budget) " over " named "'s sittings of the"

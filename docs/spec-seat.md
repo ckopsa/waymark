@@ -322,6 +322,29 @@ A halt is not a state: `park` and `unpark` are the person's, and a
 halted seat is still `active`, so the wall lifts on its own when
 the condition clears, and the alert says so when it does.
 
+The line is a record of a wall. It is not a lock. A fired seat makes
+no request of its own, so a line that only a request could lift stops
+the seat until a person starts the Routine by hand. Three doors lift
+the line, and each lift is logged:
+
+- A `restate` that changes the input of a wall lifts the line of that
+  wall, in the same transaction. A new `budget_usd_per_week` lifts
+  `budget_reached`. A new `held_for` or `substitute_for` lifts
+  `model_not_held`. The handler compares the input with the row; it
+  does not sum the week. The next request judges the wall again, and
+  writes the line again if the wall holds.
+- `unpark` lifts `seat_not_active`. The state of the seat is the input
+  of that wall, and `unpark` is the hand that moves it.
+- The `fire` door judges the week's fuel again, with the sum of R-5.2
+  step 3. The window rolls with no hand, and the door must see it. If
+  the sum is less than the budget, the fire goes out, and the engine
+  lifts the line through `clear_halt` after the commit.
+
+The `fire` door does not judge `model_not_held` or `seat_not_active`.
+The first needs the model that the session declares, and the second is
+the choice of a person. The door refuses, and the sentence says which
+door lifts the line.
+
 ## 8. Requirements: the substitute
 
 **R-8.1** A substitute must not write the seat's memory. `self`,
@@ -894,7 +917,10 @@ answers 401, the engine moves the row to `broken`, with the note
 engine moves the row to `broken`, with the note `No Routine answers
 the fire URL.`
 
-A fire is fuel. The engine never fires a seat behind a wall.
+A fire is fuel. The engine never fires a seat behind a wall. A halt
+line whose wall no longer holds is not a wall: the door sums the
+week's fuel again before it refuses, and lifts the line when the fire
+goes out (R-7.7).
 
 **R-12.21** When the fire's text names a row id of a kind in the
 seat's scope, the session must walk that one row. The provider puts
