@@ -426,3 +426,53 @@
           (is (some? closed))
           (is (= sitter-id (str (get-in closed [:actor :id])))
               "one actor per office: the ledger reads the seat"))))))
+
+(deftest a-linked-schedule-claims-the-seat-s-model-not-its-stale-copy
+  ;; R-12.8 for a linked row: the copy is never pushed, so after the
+  ;; seat steps down the schedule still names the model of the link.
+  ;; The sitter's claim is the seat's own list, or the model wall
+  ;; refuses the very seat the person just restated (production,
+  ;; 2026-09-18: inbox-clerk halted model_not_held on its first run
+  ;; after the step to its substitute).
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-seat! eng)
+        next-model (:row (inv/create! eng :model
+                                      {:name "claude-sit-4" :display "Sit 4"
+                                       :vendor "anthropic" :tier "economy"
+                                       :price_input_per_mtok 1M
+                                       :price_output_per_mtok 5M
+                                       :price_cache_read_per_mtok 0.1M
+                                       :price_cache_write_per_mtok 1.25M}
+                                      {:principal person}))
+        sched (schedules/schedule-for-seat eng (:id seat))]
+    (inv/invoke! eng :schedule (:id sched) :link
+                 {:fire_url "https://routines.example/fire/trig_test"
+                  :token "a-fire-token-that-is-long-enough-1234"}
+                 {:principal person})
+    (inv/invoke! eng :seat (:id seat) :restate
+                 {:charter "Decide whether a meal belongs on the list."
+                  :mode "fired"
+                  :scope [{:kind "meal" :actions ["accept"]}]
+                  :substitute_drop []
+                  :held_for [(:id next-model)]
+                  :substitute_for []
+                  :standing_ttl_seconds 604800
+                  :cadence_seconds 3600
+                  :sitting_idle_seconds 3600
+                  :budget_usd_per_week 5M
+                  :sitting_budget_tokens 60000
+                  :rows_per_firing 20
+                  :fire_interval_seconds 300
+                  :note "Stepped down for the test: the copy still names the old model."}
+                 {:principal person})
+    (testing "the linked row's copy is stale by construction"
+      (is (= (str (:id model))
+             (str (get-in (schedules/schedule-for-seat eng (:id seat))
+                          [:data :model])))))
+    (testing "the sit claims the seat's held_for, not the copy"
+      (let [[sid _] (initialize! h)
+            sat (tool h (with-session sid) "waymark_sit" {:key a-key})
+            answer (doc-of sat)]
+        (is (false? (:isError sat)) (text-of sat))
+        (is (= "claude-sit-4" (:model answer)))))))

@@ -1786,14 +1786,21 @@
                (inv/decode-row rdef)))))
 
 (defn- seat-model
-  "The model row the seat's schedule names — or, when the schedule has
-  none, the first model the seat is held for. nil when neither names
-  one. The row, not the name, because the sitting's birth wants the
-  ref and the sitter's claim wants the identifier."
+  "The model row the sitter claims (R-12.8). For a schedule this engine
+  pushes, the schedule's `model` is the declaration and the copy
+  mirrors it. For a LINKED schedule the copy is never pushed (R-12.18),
+  so its `model` is the value at link time and drifts when the seat
+  steps down; the seat's first `held_for` is the declaration then, and
+  the schedule's copy is only the fallback when the seat names none.
+  With neither, nil. The row, not the name, because the sitting's
+  birth wants the ref and the sitter's claim wants the identifier."
   [eng seat]
-  (let [schedule (row-of eng :schedule (get-in seat [:data :schedule]))]
-    (or (row-of eng :model (get-in schedule [:data :model]))
-        (row-of eng :model (first (get-in seat [:data :held_for]))))))
+  (let [schedule (row-of eng :schedule (get-in seat [:data :schedule]))
+        held (row-of eng :model (first (get-in seat [:data :held_for])))
+        copy (row-of eng :model (get-in schedule [:data :model]))]
+    (if (schedules/linked? schedule)
+      (or held copy)
+      (or copy held))))
 
 (defn- reusable-sitting
   "The open sitting under this seat grant that THIS run may go on

@@ -662,7 +662,11 @@ starts no model, and it does not need to.
 session declares a model outside the seat's list meets the wall of
 R-5.2 and the alert of R-7.7. That is the harness bug the essay
 describes, caught at the door, and the mirror's read-back is what
-catches the copy's model drifting before a firing does.
+catches the copy's model drifting before a firing does. A linked
+schedule (R-12.18) is not pushed, so its copy keeps the model of the
+link and drifts when the seat steps down. For a linked schedule the
+seat's first `held_for` is the declaration, and the person keeps the
+Routine's model equal to it by hand; the engine cannot read it back.
 
 **R-12.9** When the seat has `walk`, the firing walks. The session
 reads the queue (the kind's collection under its default filter),
