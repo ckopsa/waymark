@@ -962,11 +962,14 @@
 ;; (`wake-on-names-real-kinds`, `wake-on-names-real-actions`), and two
 ;; fields a leash has no use for join them:
 ;;
-;;   filter     which rows are counted, in the shape of that kind's
-;;              query where clause — `grants/filter-map-schema`, the
-;;              scope entry's own filter shape, spelled once and worn
-;;              twice. Absent, the kind's default filter counts: the
-;;              queue a walk works through.
+;;   filter     which rows count, in the shape of that kind's query
+;;              where clause — `grants/filter-map-schema`, the scope
+;;              entry's own filter shape, spelled once and worn twice.
+;;              On a transition wake it is judged against the MOVED
+;;              ROW (waymark-fp62.7.20); on a count wake it picks the
+;;              rows counted. Absent, a transition wake matches every
+;;              row and a count wake counts the kind's default filter:
+;;              the queue a walk works through.
 ;;   at_least   the size that wakes the seat. Absent, the entry is a
 ;;              transition wake and behaves exactly as it always did.
 ;;
@@ -990,7 +993,7 @@
    [:filter {:optional true
              :x-display {:label "Only rows matching"
                          :spelled-by-hand grants/filter-spelled-by-hand
-                         :help "Which rows a count wake counts: field=value pairs in the shape of that kind's own query, the collection grammar's eq. Omit it and the kind's own default filter counts — the queue a walk works through."}}
+                         :help "Which rows this entry is about: field=value pairs in the shape of that kind's own query, the collection grammar's eq. A count wake counts the rows that match; a transition wake wakes this seat only when the row that moved matches. Omit it and every matching transition wakes the seat, and a count wake counts under the kind's own default filter — the queue a walk works through."}}
     [:maybe grants/filter-map-schema]]
    [:at_least {:optional true
                :examples [20]

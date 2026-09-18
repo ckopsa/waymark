@@ -28,7 +28,10 @@
 
   R-12.24 gives a `wake_on` entry a second reading. An entry with no
   `at_least` is the TRANSITION wake above: the row that moved wakes
-  the seat, and the text names it. An entry WITH one is a COUNT wake:
+  the seat, and the text names it. The entry's `filter` is read on
+  both — on this one it names which MOVED rows wake the seat
+  (`moved-under?`), so a seat that watches one change's runs is not
+  woken by every other change's. An entry WITH one is a COUNT wake:
   the seat is not woken by a row, it is woken by a queue reaching a
   size. It does not poll — the count is read only when a transition
   of that kind matches the entry's actions, which is the one moment
@@ -252,6 +255,52 @@
                (ex-message e))
         nil))))
 
+(defn moved-under?
+  "Does the row that MOVED fall under this entry's filter (R-12.22)?
+  An entry with NO filter answers true, which is every transition
+  wake written before the filter was read here.
+
+  The count wake's own machinery, asked about ONE row instead of a
+  collection: the filter compiles through `collections/parse-query`
+  to the conds `count-under` counts with, the moved row's id is one
+  more cond, and the whole judgment is one read by primary key. So a
+  field the kind does not declare filterable is refused in the
+  query's own sentence here too.
+
+  The read happens AFTER the transition committed — this consumer
+  walks the log — so a row that moved OUT of the filter by this very
+  transition does not wake the seat, and one that moved INTO it does.
+
+  The kind's DEFAULT filters do NOT apply, and that is the one place
+  this parts from `count-under`. A default filter is a COLLECTION's
+  opening view, and what is asked here is not which rows a queue
+  shows: the entry `{task [complete] filter {assignee A}}` names A's
+  task, and a default of state=open would hide the very row the
+  completion moved. The restamp population reads its filter the same
+  way, for the same reason.
+
+  A filter the kind cannot answer is a warning and a NO — a seat that
+  cannot be judged for is a seat that says nothing, which is
+  `count-under`'s posture at the same wall."
+  [eng kind id filter-map]
+  (if-not (seq filter-map)
+    true
+    (boolean
+     (when-some [rdef (get (inv/resources eng) kind)]
+       (try
+         (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
+               conds (conj (vec (:conds (collections/parse-query
+                                         rdef params {:defaults? false})))
+                           {:target :id :op := :value (str id)})
+               st (:storage eng)]
+           (store/with-tx st
+             (fn [tx]
+               (pos? (long (store/count-matching st tx (:kind rdef) conds))))))
+         (catch Exception e
+           (warn! "the wake over " (name kind)
+                  " could not judge the row that moved — " (ex-message e))
+           false))))))
+
 (defn count-text
   "The count, as the text a count wake's fire carries (R-12.24): the
   kind, the rows waiting, and the size that was asked for. NO row id,
@@ -264,26 +313,35 @@
   the transition wakes it not at all.
 
   A TRANSITION entry that matches answers with the transition
-  (R-12.22). A COUNT entry that matches costs one count query
-  (R-12.24) and answers only once the rows waiting have reached its
-  `at_least`; below that the seat is not woken and nothing is
+  (R-12.22), once the row that moved is under the entry's filter
+  (`moved-under?`: one read by id, and an entry with no filter asks
+  for no read at all). A COUNT entry that matches costs one count
+  query (R-12.24) and answers only once the rows waiting have reached
+  its `at_least`; below that the seat is not woken and nothing is
   remembered, because the entry has not matched yet.
 
   A seat that wrote both kinds and matched both is woken by the
   transition: it is the more specific of the two and names the row
-  that moved. One transition opens one fire either way — the fire's
-  idempotency key is the transition it heard."
+  that moved. A transition entry whose filter the moved row fails
+  does not stop the count entry beside it from being asked — it
+  matched nothing, so what is left is the count. One transition opens
+  one fire either way — the fire's idempotency key is the transition
+  it heard."
   [eng entries t]
   (let [matched (matching-entries entries (:kind t) (:action t))]
-    (if (some (complement count-entry?) matched)
+    (if (some (fn [e]
+                (and (not (count-entry? e))
+                     (moved-under? eng (:kind t) (:resource-id t) (:filter e))))
+              matched)
       (wake-text t)
       (some (fn [e]
-              (let [at-least (long (:at_least e))
-                    n (or (count-under eng (keyword (name (:kind e)))
-                                       (:filter e))
-                          0)]
-                (when (>= n at-least)
-                  (count-text (:kind e) n at-least))))
+              (when (count-entry? e)
+                (let [at-least (long (:at_least e))
+                      n (or (count-under eng (keyword (name (:kind e)))
+                                         (:filter e))
+                            0)]
+                  (when (>= n at-least)
+                    (count-text (:kind e) n at-least)))))
             matched))))
 
 ;; ── the damper ──────────────────────────────────────────────────────

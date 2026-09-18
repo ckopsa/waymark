@@ -15,7 +15,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: migrate-queue-prod test-calendar probe-calendar db db10 test10 test-queue dev-queue migrate-queue check-queue image-queue deploy-queue
+.PHONY: migrate-queue-prod test-calendar probe-calendar db db10 test10 test-queue dev-queue migrate-queue check-queue check-factory test-factory image-queue deploy-queue
 
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
@@ -92,6 +92,24 @@ migrate-queue-prod:  ## print PRODUCTION's real schema plan (read-only; refuses 
 		echo "  nomad alloc exec -task postgres <alloc> psql -U workqueue -d workqueue10 -c 'ALTER TABLE …'" >&2; \
 		exit 2; }
 	@cd workqueue10 && WORKQUEUE10_DSN="$$(../scripts/queue-prod-dsn.sh)" clojure -M:migrate
+
+# The software factory's kinds live under factory10/ (waymark-fp62.6.2):
+# its own module for the reason calendar10 is one — a change and a
+# ci_run belong to neither the household nor the queue. Neither target
+# needs a database: the declarations are pure, and the suite judges
+# envelopes rather than rows.
+
+check-factory:  ## factory10 declaration-time checks + usability warnings (no database)
+	cd factory10 && clojure -M:check
+
+test-factory:  ## (moved to CI) the factory's suite — GitHub Actions runs these
+	@echo "Tests run in CI, not here. The GitHub Actions pipeline"
+	@echo "(.github/workflows/tests.yml) runs test-factory beside test10,"
+	@echo "test-queue and test-calendar on every push — push your branch"
+	@echo "and read the 'gate' check."
+	@echo ""
+	@echo "To run THIS suite by hand anyway, call clojure directly:"
+	@echo "  cd factory10 && clojure -M:test   (no database, no network)"
 
 test-calendar:  ## (moved to CI) calendar10 transport tests — GitHub Actions runs these
 	@echo "Tests run in CI, not here. The GitHub Actions pipeline"

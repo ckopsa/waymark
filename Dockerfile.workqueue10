@@ -8,12 +8,16 @@ WORKDIR /app
 # never re-downloads the world. -P prepares the full :dev classpath.
 # The chore, meal and day-plan modules live under workqueue10/src since
 # the consolidation cleanup (waymark-26j); calendar10 stays a module
-# since the calendar became its own writable domain (waymark-6k5.2).
+# since the calendar became its own writable domain (waymark-6k5.2);
+# factory10 joins it as the day job's module (waymark-fp62.6.2) —
+# workqueue10.main requires it either way, and FACTORY10=1 decides
+# whether this engine SERVES its kinds.
 # EVERY :local/root in workqueue10/deps.edn must be copied here, or -P
 # fails the build with "Local lib … not found" — which is how one of
 # these was found.
 COPY waymark10/deps.edn waymark10/deps.edn
 COPY calendar10/deps.edn calendar10/deps.edn
+COPY factory10/deps.edn factory10/deps.edn
 COPY workqueue10/deps.edn workqueue10/deps.edn
 RUN cd workqueue10 && clojure -P -M:dev
 
@@ -21,6 +25,7 @@ RUN cd workqueue10 && clojure -P -M:dev
 # app; JVM boot beats maintaining a build pipeline).
 COPY waymark10/ waymark10/
 COPY calendar10/ calendar10/
+COPY factory10/ factory10/
 COPY workqueue10/ workqueue10/
 
 WORKDIR /app/workqueue10

@@ -43,6 +43,12 @@
     counts on every action of its kind, where a transition entry with
     none matches nothing; and `at_least` below one is refused by the
     schema at the create door.
+  - R-12.22 · the entry's `filter` is read on a TRANSITION wake too:
+    the seat that names one batch wakes on that batch's completion
+    and not on another's, and the same entry with no filter wakes on
+    both. The row is judged AFTER the transition committed, so the
+    kind's own default filter (state=open) does not hide a row the
+    completion just moved.
 
   Each seat here links its OWN fire token, and the assertions count
   the fires carrying that token: the suite shares one fake provider
@@ -708,7 +714,78 @@
 
     (seat-do! seat :retire)))
 
-;; ── 10 · a count entry with no actions counts on every action ───────
+;; ── 10 · the transition wake's filter names the rows that wake it ───
+
+(deftest a-transition-wake-fires-only-for-the-rows-its-filter-names
+  (let [wn :wake-transition-filter
+        fn' :wake-transition-filter-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        mine "transition-filter-mine"
+        theirs "transition-filter-theirs"
+        ;; the same entry twice, once with a filter and once without,
+        ;; over the same two rows: the only difference between these
+        ;; two seats is the filter, so the fires say what it did
+        picky (linked-seat! "pickyclerk"
+                            {:scope count-scope
+                             :wake_on [{:kind "wake_item"
+                                        :actions ["complete"]
+                                        :filter {:batch mine}}]}
+                            fn')
+        anyone (linked-seat! "anyoneclerk"
+                             {:scope count-scope
+                              :fire_interval_seconds 1
+                              :wake_on [{:kind "wake_item"
+                                         :actions ["complete"]}]}
+                             fn')
+        theirs-id (item! theirs)
+        mine-id (item! mine)]
+
+    (testing "another batch's row completes, and the filtered seat is
+              not woken — nothing waits on its schedule row either,
+              because this is no match at all rather than a match the
+              damper held"
+      (item-do! theirs-id :complete)
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (is (empty? (seat-fires (:seat picky))))
+      (is (empty? (fires-of (:token picky))))
+      (is (not (get-in (sched-of (:seat picky)) [:data :wake_pending]))))
+
+    (testing "the same entry with no filter wakes on that very row, as
+              it always did"
+      (is (= 1 (count (seat-fires (:seat anyone)))))
+      (is (= (str theirs-id) (:id (fire-text (:seat anyone) 0))))
+      (is (= 1 (count (fires-of (:token anyone))))))
+
+    ;; the gap is the unfiltered seat's own damper, not the filter's
+    ;; doing: let it pass, so the second completion is judged by the
+    ;; filter alone (case 3's sleep, for case 3's reason)
+    (Thread/sleep 1200)
+
+    (testing "the filter's own batch completes, the seat fires once,
+              and the text names the row that moved — the kind's
+              default filter (state=open) is not imposed on a row this
+              very transition completed"
+      (item-do! mine-id :complete)
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (is (= 1 (count (seat-fires (:seat picky)))))
+      (let [text (fire-text (:seat picky) 0)]
+        (is (= "wake_item" (:kind text)))
+        (is (= (str mine-id) (:id text)))
+        (is (= "complete" (:action text))))
+      (is (= 1 (count (fires-of (:token picky))))))
+
+    (testing "and the unfiltered entry wakes on both rows"
+      (is (= 2 (count (seat-fires (:seat anyone)))))
+      (is (= (str mine-id) (:id (fire-text (:seat anyone) 1))))
+      (is (= 2 (count (fires-of (:token anyone))))))
+
+    (seat-do! (:seat picky) :retire)
+    (seat-do! (:seat anyone) :retire)))
+
+;; ── 11 · a count entry with no actions counts on every action ───────
 
 (deftest an-empty-actions-list-reads-differently-on-the-two-entries
   (let [transition {:kind "wake_item" :actions ["create"]}
@@ -732,7 +809,7 @@
              (wakes/matching-entries [transition transition-all count-all]
                                      :wake_item :complete))))))
 
-;; ── 11 · a size below one row is refused at the create door ─────────
+;; ── 12 · a size below one row is refused at the create door ─────────
 
 (deftest a-count-wake-of-fewer-than-one-row-is-refused
 
