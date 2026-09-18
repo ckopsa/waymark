@@ -76,11 +76,19 @@
   "The bench row's powers (waymark-fp62.6.3.3): the four the model may
   hold, each on its own token, and prepare, status, submit and
   discard in NO entry at all — a tool no entry names does not exist
-  through the power door, whatever the rig offers."
-  [{:power "bench.find" :tools ["find"] :why false}
-   {:power "bench.read" :tools ["read"] :why false}
-   {:power "bench.edit" :tools ["edit"] :why false}
-   {:power "bench.pull" :tools ["pull"] :why false}])
+  through the power door, whatever the rig offers. Each entry names
+  the fields a grant's filter may narrow it by (waymark-fp62.6.3.5);
+  the narrow power's own cases live in
+  waymark10/test/waymark10/narrow_power_test.clj."
+  [{:power "bench.find" :tools ["find"] :why false
+    :constraints ["repo" "path"]}
+   {:power "bench.read" :tools ["read"] :why false
+    :constraints ["repo" "path"]}
+   {:power "bench.edit" :tools ["edit"] :why false
+    :constraints ["repo" "path"]}
+   ;; a pull moves a whole checkout, so no path could narrow one
+   {:power "bench.pull" :tools ["pull"] :why false
+    :constraints ["repo"]}])
 
 (def ^:private a-head "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567")
 (def ^:private a-commit "9a8b7c6d5e4f30291827364554637281900aabbc")

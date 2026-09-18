@@ -48,7 +48,11 @@
     :inputSchema {:type "object" :properties {:to {:type "string"}}}}])
 
 (def ^:private emila-powers
-  [{:power "email.read" :tools ["read"] :why false}
+  "The mail server's policy. `email.read` names one constraint
+  (waymark-fp62.6.3.5), so a grant may narrow it by `folder` and the
+  filtered-grant cases below still stand; `email.send` names none, so
+  no grant may filter it at all."
+  [{:power "email.read" :tools ["read"] :why false :constraints ["folder"]}
    {:power "email.send" :tools ["send"] :why true}])
 
 (defn- fake-server

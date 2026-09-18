@@ -418,15 +418,36 @@
   {:judges [:scope]
    :reads [:services]
    :vars [:kind :field]
-   :open "A grant filter narrows by a field the kind already declares filterable with eq — the collection grammar is the vocabulary; one filtered entry per kind."
-   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter names a data field the kind declares filterable (eq), never state, and only ONE entry may filter a kind."}
+   :open "A grant filter narrows by a field the kind already declares filterable with eq, or — for a dotted power — by a field its server's entry lists in `constraints`; both vocabularies are one GET away."
+   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names a data field the kind declares filterable (eq), never state, and only ONE entry may filter a kind; a filter on a dotted power names a field the server's powers entry lists in `constraints`, and a power that lists none admits no filter at all."}
   [_row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
     (let [entries (filter :filter (:scope inp))
-          dup (->> entries (map :kind) frequencies
+          find-rows (:find ctx)
+          ;; the rows' constraints, read ONCE per judgment and not at
+          ;; all when no filtered entry is dotted — `scope-names-real-
+          ;; kinds`' own arrangement, over the same rows
+          allowed (delay
+                    (servers/constraints-of-rows
+                     (when find-rows
+                       (remove #(= :retired (:state %))
+                               (find-rows :mcp_server {} {:limit 1000})))))
+          ;; A NARROWABLE POWER is a dotted token a non-retired
+          ;; mcp_server row's powers name (waymark-fp62.6.3.5). Its
+          ;; vocabulary is that entry's `constraints`, and the power
+          ;; door admits a call ANY entry admits — so a grant narrows
+          ;; one power to two repositories with two entries. A kind's
+          ;; filters are a query's conds and keep the one-entry rule;
+          ;; so does a dotted token only the capability registry names
+          ;; (feed.preview_as), whose own enforcement point reads the
+          ;; first filter and must not be handed a second.
+          power? (fn [e] (and (str/includes? (str (:kind e)) ".")
+                              (contains? @allowed (str (:kind e)))))
+          dup (->> entries (remove power?) (map :kind) frequencies
                    (some (fn [[k n]] (when (< 1 n) k))))
           bad (first
                (for [e entries
+                     :when (not (power? e))
                      :let [rdef (rdef-of (:kind e))]
                      :when rdef
                      [f _] (:filter e)
@@ -434,10 +455,18 @@
                            ops (get (:filterable rdef) (keyword fname))]
                      :when (or (= "state" fname)
                                (not (contains? (or ops #{}) :eq)))]
-                 {:kind (:kind e) :field fname}))]
+                 {:kind (:kind e) :field fname}))
+          bad-power (first
+                     (for [e entries
+                           :when (power? e)
+                           :let [k (str (:kind e))]
+                           [f _] (:filter e)
+                           :when (not (contains? (get @allowed k) (name f)))]
+                       {:kind k :field (name f)}))]
       (cond
         dup (t/deny {:vars {:kind dup :field "(two filtered entries)"}})
         bad (t/deny {:vars bad})
+        bad-power (t/deny {:vars bad-power})
         :else (t/allow)))
     ;; probe ctx carries no registry — decline to guess (phase-8)
     (t/allow)))
@@ -1490,9 +1519,14 @@
                  ;; never absorbed the way openness absorbs
                  :hashed (into #{} (comp (mapcat :hashed) (map str)) entries)
                  ;; filter-scoped admission: nil when any entry lacks a
-                 ;; filter (openness absorbs, the ids rule); the guard
-                 ;; keeps filtered entries to one per kind, so the vec
-                 ;; is the row?/conds-of contract, not an OR machine
+                 ;; filter (openness absorbs, the ids rule). For a KIND
+                 ;; the guard keeps filtered entries to one, so the vec
+                 ;; is the row?/conds-of contract, not an OR machine.
+                 ;; For a dotted POWER it holds every entry and the
+                 ;; power door admits a call that ANY of them admits
+                 ;; (waymark-fp62.6.3.5) — two repositories on one
+                 ;; grant is two entries, because one entry cannot say
+                 ;; two different paths for two different repositories
                  :filters (when-not (some #(nil? (:filter %)) entries)
                             (mapv :filter entries))
                  :args (args-of entries)}]))
@@ -1649,9 +1683,16 @@
   audience, unaccepted, revoked, expired and unknown all collapse to
   {:allowed false} with nothing else said (concealment: the caller
   learns no scope it did not name). :constraints is the capability
-  entry's filter map, the enforcement point's to interpret;
+  entry's FIRST filter map, the enforcement point's to interpret;
   :expires_at rides along so the caller can cache the yes no longer
-  than it lives."
+  than it lives.
+
+  It is the first and not all of them because this door answers an
+  OUTSIDE enforcement point, and one filter is the shape those have
+  always read. A power narrowed by several entries (waymark-fp62.6.3.5
+  — a bench grant naming two repositories) is judged at this engine's
+  own power door, which reads every entry; a rig that wants the whole
+  sentence asks the door that enforces it."
   [eng grant-id principal-id capability]
   (let [vis (visibility eng (str grant-id)
                         (t/principal {:id (str principal-id) :type :agent

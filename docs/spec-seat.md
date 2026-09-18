@@ -903,6 +903,30 @@ answers no `bench` and a `bench_note` sentence, and the walk still
 rides: a sitting that cannot reach the bench can read its rows and say
 so.
 
+**R-12.30** A bench grant must be able to name less than the whole
+rig. A seat's scope entry for a bench power may carry a `filter`. The
+filter names `repo`, or `path`, or both. A comma in a `repo` value
+means "any of these repositories". A `path` value is a comma list of
+globs in the rig's deny grammar, where `*` matches any characters,
+slashes included, `?` matches one character, and a glob also matches
+the last part of the path alone. The engine judges the filter
+when a person writes the scope, and refuses a field the server's
+`powers` entry does not list in `constraints`. The power door judges
+the filter again on every call. A call outside every entry refuses
+with a 403 and reaches no rig. A call that names no path reaches the
+rig with the filter's globs as `allow`. One power may carry more than
+one filtered entry, and the door admits a call that any entry admits.
+A seat's scope entry is a grant entry, so a seat narrows a bench power
+with no rule of its own.
+
+The engine must also name the office on each bench call. A call
+through `waymark_power` from a bound session carries `seat` and
+`sitting`, which are the ids the sit bound. A session with no bound
+sitting carries neither. The rig holds no seat between calls, so the
+engine names the office on every call. See
+`docs/spec-mcp-servers.md` § 4 for the `constraints` a row must list
+before a filter is legal at all.
+
 ### 12.2 The fire door
 
 The owner's ruling of 2026-09-17: a seat must be fired on demand and
@@ -1847,6 +1871,11 @@ above. The cases:
     `walk`. A door with `safety.confirm` carries the sentence to echo
     back. The sit's own answer counts under `waymark_sit` on the
     sitting it opened. (R-12.28, R-10.6a)
+47. A seat scope entry that filters a bench power by `repo` or by
+    `path` narrows what the sitter may touch. A call inside the filter
+    forwards. A call outside every entry refuses and reaches no rig. A
+    call that names no path reaches the rig with `allow`. A bench call
+    from a bound sitting carries `seat` and `sitting`. (R-12.30)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,

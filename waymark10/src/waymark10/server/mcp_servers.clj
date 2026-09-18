@@ -7,12 +7,15 @@
   THE ROW IS THE POLICY. A row names a server, says how to reach it
   (http url or stdio command), mirrors what the server offers
   (`tools`, from tools/list, with a hash), and holds `powers`: a list
-  of entries {power, tools, why}. A power is the dotted token a grant
-  names (email.read). `tools` are names or globs on this server. `why`
-  true says a call must carry one sentence of reason. A tool that no
-  entry names does not exist through the power door, whatever the
-  server offers (R-5). This list replaced the static tool→token map
-  that gate_proxy.clj used to hold.
+  of entries {power, tools, why, constraints}. A power is the dotted
+  token a grant names (email.read). `tools` are names or globs on this
+  server. `why` true says a call must carry one sentence of reason.
+  `constraints` names the tool input fields a grant's filter may narrow
+  this power by, and an entry naming none admits no filter at all
+  (waymark-fp62.6.3.5). A tool that no entry names does not exist
+  through the power door, whatever the server offers (R-5). This list
+  replaced the static tool→token map that gate_proxy.clj used to
+  hold.
 
   THE ROW IS ALSO THE VOCABULARY (waymark-fp62.10.4). A dotted token
   a non-retired row's powers name is a real token: `scope-names-real-
@@ -323,10 +326,49 @@
                     :when (not (str/blank? (str tk)))]
                 (str tk))))))
 
+(defn constraints-of-rows
+  "The fields a grant's FILTER may name for each power token this page
+  of rows carries → {token #{field …}} (waymark-fp62.6.3.5).
+
+  It takes ROWS for `tokens-of-rows`' reason verbatim: the guard that
+  judges a filtered scope entry holds no engine and reads its page
+  through the ctx `:find` hook, and a guard that re-collected the
+  fields would be a second definition of the constraint.
+
+  A token every entry names with no `constraints` maps to the EMPTY
+  set, which is not the same as absent: the empty set says a server
+  names this power and admits no filter on it, and absent says no
+  server names it at all (the capability registry's own powers —
+  `feed.preview_as` — whose enforcement point reads its filter itself
+  and is none of this door's business). Two entries naming one token
+  union their fields, because the token is what a grant names and a
+  token cannot admit a field on Tuesdays only."
+  [rows]
+  (reduce (fn [m [tk fields]] (update m tk (fnil into #{}) fields))
+          {}
+          (for [row rows
+                e (get-in row [:data :powers])
+                :let [tk (str (:power e))]
+                :when (not (str/blank? tk))]
+            [tk (into #{} (comp (map str) (remove str/blank?))
+                      (:constraints e))])))
+
 (defn power-tokens
   "Every power token any row's powers name, sorted."
   [eng]
   (tokens-of-rows (rows eng)))
+
+(defn power-constraints
+  "Every power token that admits a filter, with the fields it admits,
+  sorted → {token [field …]}. A token that admits none is ABSENT
+  rather than empty: discover's `doors.ask.constraints` and
+  `waymark_powers` publish this map, and an agent reading a token
+  there knows it may narrow the ask — a token missing from it is a
+  token to ask for whole."
+  [eng]
+  (into (sorted-map)
+        (keep (fn [[tk fields]] (when (seq fields) [tk (vec (sort fields))])))
+        (constraints-of-rows (rows eng))))
 
 ;; ── the registry beside the rows (waymark-fp62.10.4) ────────────────
 ;;
@@ -618,7 +660,8 @@
 (def ^:private a-live-server
   {:name "bench" :transport "stdio" :command "python3"
    :args ["-m" "bench" "--stdio"]
-   :powers [{:power "bench.read" :tools ["find" "read" "status"] :why false}]})
+   :powers [{:power "bench.read" :tools ["find" "read" "status"] :why false
+             :constraints ["repo" "path"]}]})
 
 (defscenario an-agent-does-not-retire-a-server
   "An agent that could retire a server could take a power off the
@@ -701,7 +744,18 @@
    [:why {:optional true
           :x-display {:label "A why is required"
                       :help "True when each call must carry one sentence of reason."}}
-    [:maybe :boolean]]])
+    [:maybe :boolean]]
+   ;; waymark-fp62.6.3.5: the row says which SENTENCES a grant may
+   ;; narrow this power with. The power door interprets a filter only
+   ;; on a field named here, so a server that has not taught the door
+   ;; how to hold itself to a field cannot be granted narrowly by
+   ;; accident — an entry listing nothing admits no filtered grant at
+   ;; all, and the ask refuses before a person ever taps it.
+   [:constraints {:optional true
+                  :examples [["repo" "path"]]
+                  :x-display {:label "Constraints"
+                              :help "The tool input fields a grant's filter may name for this power — repo, path. Leave it empty and no grant may filter this power at all."}}
+    [:maybe [:vector [:string {:min 1 :max 60}]]]]])
 
 (def ^:private tool-entry
   [:map

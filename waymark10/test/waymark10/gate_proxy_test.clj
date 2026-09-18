@@ -11,6 +11,10 @@
     the send form nor the move form;
   • an ungranted invoke is refused (403/404) IN-PROCESS and never
     reaches Gate — the fake's call log is the proof;
+  • a FILTERED grant naming a Gate power is refused where it is asked
+    for (waymark-fp62.6.3.5): the gate row's entries name no
+    `constraints`, and the narrow power's own cases live in
+    waymark10/test/waymark10/narrow_power_test.clj;
   • a granted read returns Gate's payload, and a granted send
     forwards (with `why` translated to Gate's `__why`) and returns
     Gate's payload verbatim;
@@ -319,13 +323,21 @@
         (is (= before (count @log))
             "no admitted token, no wire: the fake heard nothing")))
 
-    (testing "a FILTERED grant is not admitted — this door interprets
-              no constraint yet, and half-honouring one would be worse"
-      (let [worn (wear! eng [{:kind "email.read" :actions []
-                              :filter {:folder "Receipts"}}])
-            doc (:doc (call! eng :get "/api/-/gate" :headers worn))]
-        (is (= {} (:links doc)))
-        (is (= {} (:actions doc)))))
+    (testing "a FILTERED grant on a Gate power never mints at all
+              (waymark-fp62.6.3.5): the gate row's entries name no
+              `constraints`, so there is no field this door was taught
+              to hold itself to, and the refusal lands at the ASK
+              rather than at the door — earlier, and where a person
+              can respell it"
+      (let [minted (call! eng :post "/api/grants"
+                          :headers as-mom
+                          :body {:audience "claude"
+                                 :scope [{:kind "email.read" :actions []
+                                          :filter {:folder "Receipts"}}]})]
+        (is (= 409 (:status minted)) (pr-str (:doc minted)))
+        (is (= "scope-filters-are-filterable" (str (get-in minted [:doc :guard]))))
+        (is (str/includes? (str (get-in minted [:doc :detail])) "folder")
+            "the refusal spells the field that failed")))
 
     (testing "the anonymous get the feed door's own 404"
       (is (= 404 (:status (call! eng :get "/api/-/gate")))))))
@@ -363,16 +375,18 @@
           (is (= 404 (:status r)))
           (is (= [] (gate-calls log)))))
 
-      (testing "a filtered grant refuses the invoke too, saying why"
-        (let [worn (wear! eng [{:kind "email.move" :actions []
-                                :filter {:folder "Receipts"}}])
-              r (call! eng :post "/api/-/gate/emila__move"
-                       :headers worn
-                       :body {:uids [1] :destination "Receipts"
-                              :why "filing"})]
-          (is (= 403 (:status r)))
-          (is (str/includes? (str (get-in r [:doc :detail])) "filter")
-              (pr-str (:doc r)))
+      (testing "a filtered grant on a Gate power cannot be worn here at
+                all (waymark-fp62.6.3.5): it is refused where it is
+                asked for, so no filtered call ever reaches this door
+                and the fake hears nothing"
+        (let [minted (call! eng :post "/api/grants"
+                            :headers as-mom
+                            :body {:audience "claude"
+                                   :scope [{:kind "email.move" :actions []
+                                            :filter {:folder "Receipts"}}]})]
+          (is (= 409 (:status minted)) (pr-str (:doc minted)))
+          (is (= "scope-filters-are-filterable"
+                 (str (get-in minted [:doc :guard]))))
           (is (= [] (gate-calls log)))))
 
       (testing "the anonymous 404 before any judgment at all"
