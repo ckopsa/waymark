@@ -969,7 +969,9 @@ seat's `fire` door. When a committed transition matches an entry, the
 engine fires the seat, with the transition as the text: the kind, the
 row id, the action, the from state and the to state. Example: the
 entry `{task, ["complete"]}` fires the seat when a task moves from
-open to complete.
+open to complete. An entry's `filter` (R-12.24) applies to the row
+that moved on a transition wake, and to the counted rows on a count
+wake.
 
 The damper has three parts. The engine does not fire while the seat
 has an open sitting. The engine fires at most once in
