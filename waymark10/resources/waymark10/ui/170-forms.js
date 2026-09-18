@@ -802,9 +802,10 @@ function collectValues(form, schema) {
     if (v === undefined) continue;
     setAt(values, segs, v);
   }
-  const out = compact(values);
-  emptyLists(form, schema, out);
-  return out;
+  /* the empty lists land before the compaction: an [] survives it, and
+     a row still wholly blank is not yet in `values` to be given one */
+  emptyLists(form, schema, values);
+  return compact(values);
 }
 function prefillFromDoc(doc, input) {
   const out = {};
