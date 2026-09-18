@@ -445,7 +445,11 @@
                                        :price_cache_read_per_mtok 0.1M
                                        :price_cache_write_per_mtok 1.25M}
                                       {:principal person}))
-        sched (schedules/schedule-for-seat eng (:id seat))]
+        sched (schedules/schedule-for-seat eng (:id seat))
+        ;; the restate door is fenced: the seat moved once since its
+        ;; birth (offer_key), so the fence wants the row's current etag
+        current (store/with-tx (:storage eng)
+                  (fn [tx] (store/load-row (:storage eng) tx :seat (:id seat) {})))]
     (inv/invoke! eng :schedule (:id sched) :link
                  {:fire_url "https://routines.example/fire/trig_test"
                   :token "a-fire-token-that-is-long-enough-1234"}
@@ -465,7 +469,8 @@
                   :rows_per_firing 20
                   :fire_interval_seconds 300
                   :note "Stepped down for the test: the copy still names the old model."}
-                 {:principal person})
+                 {:principal person
+                  :if-match (inv/etag :seat (:id seat) (:version current))})
     (testing "the linked row's copy is stale by construction"
       (is (= (str (:id model))
              (str (get-in (schedules/schedule-for-seat eng (:id seat))
