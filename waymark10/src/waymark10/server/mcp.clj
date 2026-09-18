@@ -2076,6 +2076,55 @@
           :approval_request (= pid (get-in row [:data :requested_by]))
           false))))
 
+(defn- result-bytes
+  "How many bytes of text this tool result carries: the UTF-8 length
+  of every `:text` part under `:content`, added up. It is what the
+  model READS, so a refusal's sentence counts exactly as an
+  allowance's document does. A part that carries no text — an image,
+  a resource link — adds nothing here, because this counter only
+  claims to speak for text."
+  [result]
+  (reduce (fn [n part]
+            (if-some [t (:text part)]
+              (+ (long n)
+                 (alength (.getBytes ^String (str t) StandardCharsets/UTF_8)))
+              (long n)))
+          0
+          (:content result)))
+
+(defn- count-served!
+  "R-10.6a: the bytes this tool answered, on the open sitting of the
+  session's grant.
+
+  `bump-counter!`'s rule, one field over. The lookup is R-10.6's own
+  — one query by grant and state — and a session with no open sitting
+  counts nothing, which is the honest reading: nothing was read under
+  a leash that opened no wake.
+
+  It runs on every `tools/call` this door ANSWERS, a refusal as well
+  as an allowance, because the model reads both. An unknown tool name
+  never reaches here: the protocol error carries no tool result, and
+  there is no tool to name the bytes after.
+
+  `waymark_sit`'s own answer is the one call a bound session does not
+  pay for. The transport resolves the session's visibility BEFORE the
+  message runs, so the sit still wears the leash it arrived with, and
+  the sitting it opens is not yet the one the counter looks for. The
+  calls after it are all counted.
+
+  It never throws: a counter that could fail a tool answer would cost
+  the model the very bytes it is there to measure."
+  [eng session tool-name result]
+  (try
+    (when-some [gid (get-in session [:visibility :grant :id])]
+      (when-some [sitting (seats/open-sitting-for-grant eng gid)]
+        (seats/add-served! eng (:id sitting) tool-name (result-bytes result))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 mcp served counter" tool-name "failed -"
+                 (ex-message e)))
+      nil)))
+
 (defn message
   "One JSON-RPC message → the response to send, or nil when there is
   nothing to send (a notification). `session` carries the resolved
@@ -2112,6 +2161,7 @@
                            " — this engine serves exactly "
                            (mapv :name tools)
                            "; external powers go through waymark_power."))
-           (rpc-result id out)))
+           (do (count-served! eng session (:name params) out)
+               (rpc-result id out))))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))

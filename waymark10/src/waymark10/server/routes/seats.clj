@@ -4,16 +4,24 @@
   (§ 12.1, R-12.17), and the little document `waymark_discover` shows
   a sitter under `doors.ask.seat` (R-7.4, R-12.3).
 
-  THE SIX ANSWERS ARE ONE CALL. R-11.3 asks six questions of a seat
-  over a window — what did it cost, what did it do, where did it hit
-  the law, what did it get wrong, what did each thing cost, which
-  model did it — and R-11.3a says they must arrive together, because
-  a person weighing a step down the ladder reads them together or not
-  at all. Five of the six are a read over the seat's closed sittings.
-  The sixth, corrections, is the one question no row answers: nothing
-  on a row records that a person undid an agent. It is a window over
-  the transition log (`store/corrections-by-model`, LAG by (kind,
-  resource_id)), and it is the one query this leg had to add.
+  THE SEVEN ANSWERS ARE ONE CALL. R-11.3 asks seven questions of a
+  seat over a window — what did it cost, what did it do, where did it
+  hit the law, what did it get wrong, what did each thing cost, which
+  model did it, and which tool served the bytes — and R-11.3a says
+  they must arrive together, because a person weighing a step down the
+  ladder reads them together or not at all. Six of the seven are a
+  read over the seat's closed sittings. The other, corrections, is the
+  one question no row answers: nothing on a row records that a person
+  undid an agent. It is a window over the transition log
+  (`store/corrections-by-model`, LAG by (kind, resource_id)), and it
+  is the one query this leg had to add.
+
+  THE SEVENTH ANSWER IS A SUM OF MAPS (R-10.6a). Each closed sitting
+  carries `served`: tool name → the calls and the bytes the MCP door
+  answered. The ledger adds them tool by tool over the window and
+  divides the total by the transitions, so a person can see which tool
+  ate the bill before deciding which tool to make smaller. Bytes, not
+  tokens — the engine does not run the model and will not estimate one.
 
   THE ANSWERS ARE DATA, NOT A VERDICT (R-11.4). The audit is the
   truth; these numbers point a person at the sittings to read and
@@ -186,6 +194,43 @@
   (when (pos? (long n))
     (.divide cost (bigdec n) (int seats/cost-scale) RoundingMode/HALF_UP)))
 
+(defn served-of
+  "R-11.3's seventh question: the bytes the MCP door served, by tool,
+  added up over one bag of sittings. {tool → {:calls n :bytes b}}, and
+  an empty map when no sitting in the window read anything.
+
+  A sitting that never went through the MCP door carries no `served`
+  at all, and it adds nothing here rather than adding a row of zeros."
+  [rows]
+  (reduce (fn [acc r]
+            (reduce-kv (fn [a tool line]
+                         (-> a
+                             (update-in [tool :calls] (fnil + 0)
+                                        (long (or (:calls line) 0)))
+                             (update-in [tool :bytes] (fnil + 0)
+                                        (long (or (:bytes line) 0)))))
+                       acc
+                       (or (get-in r [:data :served]) {})))
+          {}
+          rows))
+
+(defn served-bytes
+  "Every tool's bytes, added up — the numerator of
+  `bytes-per-transition`."
+  [served]
+  (reduce (fn [n line] (+ (long n) (long (or (:bytes line) 0)))) 0 (vals served)))
+
+(defn bytes-per-transition
+  "Bytes served divided by transitions, rounded to a whole byte. The
+  companion of `per-transition`, and nil under the same rule: a seat
+  that moved nothing has no bytes per thing moved, and zero would be a
+  lie in the cheap direction."
+  [bytes n]
+  (when (pos? (long n))
+    (let [^java.math.BigDecimal total (bigdec (long bytes))]
+      (.longValueExact (.divide total (bigdec (long n))
+                                (int 0) RoundingMode/HALF_UP)))))
+
 (defn budget-of
   "R-5.2's third wall, read rather than stored: what this seat has
   spent in the rolling week, what it may spend, and when the wall
@@ -275,20 +320,25 @@
   (str "/api/seats/" seat-id "/ledger"))
 
 (defn- answers
-  "The five summed answers over one bag of sittings plus its share of
-  the corrections."
+  "The six summed answers over one bag of sittings plus its share of
+  the corrections. `served` is a map rather than a number, because the
+  question it answers is WHICH tool, and `bytes_per_transition` is the
+  one number that ranks two windows against each other."
   [rows corrections]
   (let [cost (sum-of rows :cost_usd)
-        n (count-of rows :transitions)]
+        n (count-of rows :transitions)
+        served (served-of rows)]
     {:cost_usd cost
      :transitions n
      :refusals (count-of rows :refusals)
      :corrections (long corrections)
-     :cost_per_transition (per-transition cost n)}))
+     :cost_per_transition (per-transition cost n)
+     :served served
+     :bytes_per_transition (bytes-per-transition (served-bytes served) n)}))
 
 (defn ledger
-  "The six answers for one seat over one window (R-11.3, R-11.3a).
-  `by_model` carries the same four per model, over the union of the
+  "The seven answers for one seat over one window (R-11.3, R-11.3a).
+  `by_model` carries the same per model, over the union of the
   models that sat and the models that were corrected — a model that
   sat and was never corrected still has a row, and so does one that
   was corrected after its last sitting fell out of the window."
