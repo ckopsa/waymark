@@ -28,13 +28,31 @@
   opens IS the work waiting for it.
 
   WHAT IS STORED, AND WHAT IS NEVER STORED. Headers: the address, the
-  subject, who sent it, when it arrived. The BODY is never here. The
-  source lists headers and mints rows with no tokens spent; the model
-  reads the message itself through `waymark_power` at research time
-  and writes back the one thing worth keeping, which is its summary.
-  That is thread.clj's mirror-the-conversation-never-the-messages
-  line, drawn one domain over, and it is the reason this kind can be
-  granted to an economy model without granting it the mail.
+  subject, who sent it, when it arrived. The source lists headers and
+  mints rows with no tokens spent. The verdict writes back the one
+  thing worth keeping, which is the summary. The WHOLE BODY is never
+  here. That is thread.clj's line about mirroring the conversation
+  and never the messages, drawn one domain over, and it is the reason
+  this kind can be granted to an economy model without granting it
+  the mail.
+
+  THE ENGINE READS THE MESSAGE, NOT THE MODEL (bead
+  waymark-fp62.7.16). The clerk's first sitting on the cheaper model
+  read one power answer of 179 KB for three messages. That was 80
+  percent of everything it read, and each turn after it read the same
+  bytes again. So the research door fetches the message itself: the
+  handler calls the `email.read` power through the ctx `:power` hook
+  — the sitter's own leash, and a call the model does not make — and
+  writes `body_excerpt`, up to 4,000 characters of plain text, with
+  `body_cut` beside it to say how much the cap removed. One fetch for
+  each row replaces a re-read on each turn.
+
+  THE FETCH NEVER REFUSES THE DOOR. A request with no `:power` hook,
+  a Gate that is dark, a rig that says no: each one writes no
+  excerpt, and the transition commits. Research is a verdict about a
+  message, and the engine's own reach is not a reason to refuse it.
+  The model can still read the whole message with `waymark_power`,
+  which is what it did before this door could read.
 
   THE TASK IS BORN INSIDE `yes`, UNDER THE OUTER PRINCIPAL. The seat's
   scope does not name `task.create` at all: the queue row is written
@@ -75,6 +93,7 @@
   exists to take off them."
   (:require [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
+            [waymark10.text :as text]
             [waymark10.types :as t]))
 
 ;; ── the two words a verdict writes ──────────────────────────────────
@@ -85,8 +104,68 @@
 ;; sentence spell the stamp, and nothing else about the row moves:
 ;; the machine advances the state, never the handler.
 
-(defhandler write-the-summary [row inp _ctx]
-  (assoc-in row [:data :summary] (:summary inp)))
+;; ── the message the engine reads for the model ──────────────────────
+
+(def read-tool
+  "Gate's one-message read, under the `email.read` power
+  (waymark10.server.gate-proxy/tool-capability). It is named here, as
+  the listing tool is named in the source, because emila's wire is
+  the one wire in this confluence that is pinned nowhere in this
+  repository: a rig that calls its read something else costs this
+  field and never the door."
+  "emila__read")
+
+(def read-arg
+  "Which argument names the message to read. The source reads the id
+  back from the listing under `message_id` (sources/inbox.clj), so
+  the read is asked for with the same word."
+  :message_id)
+
+(def read-why
+  "What Gate's own log records about this read. The household can
+  then tell, at Gate, that the ENGINE opened one message for a
+  verdict, and that a model did not ask for the mail."
+  (str "waymark: reading one message the inbox clerk is about to "
+       "decide about"))
+
+(def excerpt-chars
+  "How much of one message the row keeps. The default cap
+  (waymark10.text): enough for the ask, small enough that each turn
+  after pays little to read it again."
+  text/default-max-chars)
+
+(defn- read-the-message
+  "The message, as the plain words in it → {:text … :cut n}, or nil.
+
+  The `:power` hook is the sitter's own leash (invoke.clj's make-ctx):
+  it answers Gate's payload when this request's grant admits
+  `email.read`, and nil for everything else — no hook, no grant, a
+  dark Gate. Nil here writes nothing, and the door still opens: see
+  the header.
+
+  AN `isError` ANSWER IS NOT A MESSAGE. The power door forwards
+  Gate's payload word for word, refusals included, so a rig that says
+  no answers a sentence about the rig. Writing that sentence into
+  `body_excerpt` would make the row read as if the message said it."
+  [row ctx]
+  (when-some [power (:power ctx)]
+    (when-some [id (some-> (get-in row [:data :message_id]) str not-empty)]
+      (let [answer (power read-tool {read-arg id :why read-why})
+            {:keys [text cut]} (when (and answer (not (:isError answer)))
+                                 (text/excerpt answer excerpt-chars))]
+        (when (seq text) {:text text :cut cut})))))
+
+(defhandler write-the-summary [row inp ctx]
+  ;; TWO WRITES, AND ONLY ONE OF THEM IS THE MODEL'S. The summary is
+  ;; the sentence the door collected; the excerpt is what the engine
+  ;; read for itself, so the next turn does not pay for the message
+  ;; again.
+  (let [row (assoc-in row [:data :summary] (:summary inp))]
+    (if-some [found (read-the-message row ctx)]
+      (-> row
+          (assoc-in [:data :body_excerpt] (:text found))
+          (assoc-in [:data :body_cut] (:cut found)))
+      row)))
 
 (defhandler write-the-reason [row inp _ctx]
   ;; `reason` is optional: a `no` with nothing to say is a whole
@@ -277,6 +356,25 @@
                 :label "What the message actually says"
                 :help "What is in the message and what, if anything, it asks of this house — in the words a person would use out loud. The body is never kept, so this is the whole of what the next reader has."}}
      [:maybe [:string {:max 480}]]]
+    ;; WRITTEN BY RESEARCH TOO, and by the ENGINE rather than by the
+    ;; model (waymark-fp62.7.16). The handler reads the message
+    ;; through the sitter's own `email.read` power and keeps the first
+    ;; part of the words. A person never writes it: it is on no door
+    ;; and on no input, exactly as the sitting's `served` is.
+    [:body_excerpt {:optional true
+                    :x-display
+                    {:widget "prose"
+                     :label "The first part of the message"
+                     :help "The plain words of the message, as the engine read them at research time, up to 4,000 characters. The tags, the scripts and the styles are gone. The whole message is not kept; read it with waymark_power when this is not enough."}}
+     [:maybe [:string {:max 4000}]]]
+    ;; …AND WHAT THE CAP REMOVED, said out loud. A reader who cannot
+    ;; tell a whole message from the first page of one will trust the
+    ;; page too much.
+    [:body_cut {:optional true
+                :x-display
+                {:label "Characters the cap removed"
+                 :help "How many characters of the message the cap left out. It is 0 when the excerpt is the whole message, and empty when the engine read nothing."}}
+     [:maybe [:int {:min 0}]]]
     ;; STAMPED BY YES: the task this message became, as a row and not a
     ;; sentence. The ref is what makes "which of these turned into
     ;; work" answerable without reading prose.
@@ -349,7 +447,7 @@
                :x-display
                {:widget "prose"
                 :label "What the message actually says"
-                :help "Read the message, then say what is in it and what it asks of this house — in the words you would use out loud. The body is never stored, so this sentence is the whole of what the next reader gets. If nothing is being asked, say that; it is what the no door is for."}}
+                :help "Read the message, then say what is in it and what it asks of this house — in the words you would use out loud. The whole body is never stored: the engine keeps the first part of the message beside your sentence, so say what it MEANS rather than copy it. If nothing is being asked, say that; it is what the no door is for."}}
               [:string {:min 1 :max 480}]]]
      ;; :edit-shape — a first summary onto a blank row is not an edit
      ;; of one. There is no earlier value to prefill from and no
@@ -361,9 +459,9 @@
      ;; neither see nor lose is scaffolding for nobody.
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "Nothing is decided here and nothing is sent — this only records what the message says, and opens the two doors that answer it. There is no way back to unread, which is honest: you have read it."}
+              :one-way "Nothing is decided here and nothing is sent — this records what the message says, and opens the two doors that answer it. The engine reads the message itself as it goes and keeps the first part of it on the row. There is no way back to unread, which is honest: you have read it."}
      :display {:label "Research" :order 1
-               :description "Open the message and say what it asks — the yes and no doors appear once you have"}}
+               :description "Open the message and say what it asks — the engine keeps the first part of it beside your sentence, and the yes and no doors appear"}}
 
     ;; THE FIRST OF THE TWO ANSWERS. It is the only way a task is made
     ;; from this queue, and it demands the action item in one sentence

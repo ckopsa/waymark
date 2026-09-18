@@ -130,7 +130,16 @@
   {:kind :action} of the write this ctx was opened inside of by a
   ctx :invoke / :create door, nil at the wire — waymark-jfv.20), plus
   engine-injected hooks in later phases (:actor-of, :last-transition,
-  :rate, :read, :find, :sum, :invoke)."
+  :rate, :read, :find, :sum, :invoke, :power).
+
+  `:power` is the engine's own hand on an external power
+  (waymark-fp62.7.16): a function of a tool name and its arguments
+  that answers the Gate payload, or nil. The door builds it from the
+  request's own leash, so a handler reaches exactly the powers the
+  hand in front of it holds. It is given to the HANDLER and not to a
+  guard, and it is absent — nil — for every request that wears no
+  live grant. A handler that finds no hook writes nothing and lets
+  the transition commit."
   [{:keys [principal now services locale mode correlation-id]
     :or {locale "en" mode :invoke}
     :as extra}]

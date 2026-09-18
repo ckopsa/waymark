@@ -51,7 +51,7 @@
       (open-sitting-for-grant eng grant-id) → the open sitting or nil
       (open-sitting-for-seat eng seat-id [harness-session])
       (bump-counter! eng sitting-id :transitions|:refusals)
-      (add-served! eng sitting-id tool bytes)
+      (add-served! eng sitting-id tool bytes [dropped])
       (seat-halt! eng seat-id reason detail)
       (seat-clear-halt! eng seat-id)
 
@@ -1866,15 +1866,27 @@
 (def ^:private served-entry
   "One tool's line in `served` (R-10.6a): how many times the MCP door
   answered that tool, and how many bytes of text those answers
-  carried. Two counts and nothing else — no price, because a price is
-  the harness's and a byte is the engine's."
+  carried. No price, because a price is the harness's and a byte is
+  the engine's.
+
+  A third count joins them when, and only when, a caller asked this
+  door to make an answer smaller (waymark-fp62.7.16): `dropped`, the
+  bytes the shape removed on the way through. `served` plus `dropped`
+  is then what the power answered, which is the one arithmetic that
+  says what the shape was worth. A tool nobody shaped carries no
+  `dropped` key at all."
   [:map
    [:calls {:x-display {:label "Calls"
                         :help "How many times the door answered this tool."}}
     [:int {:min 0}]]
    [:bytes {:x-display {:label "Bytes"
                         :help "The UTF-8 length of the text those answers carried."}}
-    [:int {:min 0}]]])
+    [:int {:min 0}]]
+   [:dropped {:optional true
+              :x-display
+              {:label "Bytes dropped"
+               :help "The bytes this door removed because the caller asked for a smaller answer — text only, or a cap on the characters. Add it to the bytes above to see what the power itself answered. Absent when nothing was shaped."}}
+    [:maybe [:int {:min 0}]]]])
 
 (defresource sitting
   {:kind :sitting
@@ -2286,26 +2298,37 @@
   gains tomorrow needs no schema change, and a name is keywordized on
   the way in because the store hands every key back as a keyword.
 
-  → the tool's new line, {:calls n :bytes b}, or nil when there was
-  nothing to count: an unknown id, a sitting already closed, a call
-  with no tool name, or a kind this engine does not serve."
-  [eng sitting-id tool bytes]
-  (let [tool (some-> tool str not-empty)
-        bytes (long (or bytes 0))]
-    (when (and sitting-id tool (not (neg? bytes))
-               (get (inv/resources eng) :sitting))
-      (store/with-tx (:storage eng)
-        (fn [tx]
-          (when-some [row (store/load-row (:storage eng) tx :sitting
-                                          (str sitting-id) {:for-update true})]
-            (when (= :open (:state row))
-              (let [k (keyword tool)
-                    prior (get-in (:data row) [:served k])
-                    line {:calls (inc (long (or (:calls prior) 0)))
-                          :bytes (+ (long (or (:bytes prior) 0)) bytes)}]
-                (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                    (assoc-in (:data row) [:served k] line) nil)
-                line))))))))
+  `dropped` is the fourth argument and it is optional
+  (waymark-fp62.7.16): the bytes the door removed from this answer
+  because the caller asked for a smaller one. It is added to the line
+  only when it is more than nothing, so a tool nobody shaped keeps the
+  two counts it always had.
+
+  → the tool's new line, {:calls n :bytes b} and `:dropped` when
+  there is one, or nil when there was nothing to count: an unknown id,
+  a sitting already closed, a call with no tool name, or a kind this
+  engine does not serve."
+  ([eng sitting-id tool bytes] (add-served! eng sitting-id tool bytes 0))
+  ([eng sitting-id tool bytes dropped]
+   (let [tool (some-> tool str not-empty)
+         bytes (long (or bytes 0))
+         dropped (long (or dropped 0))]
+     (when (and sitting-id tool (not (neg? bytes)) (not (neg? dropped))
+                (get (inv/resources eng) :sitting))
+       (store/with-tx (:storage eng)
+         (fn [tx]
+           (when-some [row (store/load-row (:storage eng) tx :sitting
+                                           (str sitting-id) {:for-update true})]
+             (when (= :open (:state row))
+               (let [k (keyword tool)
+                     prior (get-in (:data row) [:served k])
+                     total (+ (long (or (:dropped prior) 0)) dropped)
+                     line (cond-> {:calls (inc (long (or (:calls prior) 0)))
+                                   :bytes (+ (long (or (:bytes prior) 0)) bytes)}
+                            (pos? total) (assoc :dropped total))]
+                 (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                     (assoc-in (:data row) [:served k] line) nil)
+                 line)))))))))
 
 (defn- seat-row [eng seat-id]
   (when (and seat-id (get (inv/resources eng) :seat))
