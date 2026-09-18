@@ -2848,19 +2848,29 @@
             ;; subject of an allowed create. Each is withdrawn AS its
             ;; author, within the undo window the run is still inside,
             ;; so no finding from earlier in the run outranks these.
-            _ (doseq [it (get-in (json ctx (req ctx :get
-                                                (str "/api/"
-                                                     (:plural (rdef ctx :insight))
-                                                     "?state=published&page[size]=200")))
-                               [:data :items])
-                      :let [iid (some-> (:self it) id-of)
-                            row (when iid (json ctx (req ctx :get (str (:self it)))))
-                            who (some-> (get-in row [:data :authored_by]) str not-empty)]
-                      :when (and iid who)]
-                (invoke-http ctx :insight iid
-                             (declared-name ctx :insight :withdraw) nil
-                             {:headers {"x-waymark-principal" who
-                                        "x-waymark-actor-type" "agent"}}))
+            ;; One page at the collection's own ceiling, taken again
+            ;; until a pass withdraws nothing: a withdrawn finding leaves
+            ;; the published filter, so page one is always the rest.
+            _ (loop [round 0]
+                (let [items (get-in (json ctx (req ctx :get
+                                                   (str "/api/"
+                                                        (:plural (rdef ctx :insight))
+                                                        "?state=published&page[size]=100")))
+                                    [:data :items])
+                      gone (reduce
+                            (fn [n it]
+                              (let [iid (some-> (:self it) id-of)
+                                    row (when iid (json ctx (req ctx :get (str (:self it)))))
+                                    who (some-> (get-in row [:data :authored_by]) str not-empty)
+                                    r (when (and iid who)
+                                        (invoke-http ctx :insight iid
+                                                     (declared-name ctx :insight :withdraw) nil
+                                                     {:headers {"x-waymark-principal" who
+                                                                "x-waymark-actor-type" "agent"}}))]
+                                (if (= 200 (:status r)) (inc n) n)))
+                            0 items)]
+                  (when (and (seq items) (pos? gone) (< round 10))
+                    (recur (inc round)))))
             ;; 1. no citation, no publish
             uncited (make-insight!
                      ctx hs (dissoc (finding "Nothing is behind this one" nil)
