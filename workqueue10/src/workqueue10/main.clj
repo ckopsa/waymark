@@ -48,6 +48,12 @@
   rig whose listing takes no limit), an optional folder, and how many
   seconds between passes (900); it reaches the same Gate
   WORKQUEUE10_GATE_URL names, and the same twin when it is unset),
+  FACTORY10=1 (fold the day job's kinds in — `factory-resources`)
+  with FACTORY10_GITHUB_TOKEN / _REPOS / _EVERY (the GitHub source
+  behind them, waymark-fp62.6.4: the token it spends, the
+  comma-separated owner/repo list it reads — ckopsa/waymark when
+  unsaid — and how many seconds between passes, 300; with no token
+  nothing starts and there is no fake),
   WAYMARK10_DEPLOY_MODE,
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan), WAYMARK10_OIDC_* (the family
@@ -72,6 +78,10 @@
             ;; the day job's kinds, folded in behind FACTORY10=1 — see
             ;; `factory-resources` below
             [factory10.main :as factory]
+            ;; …and the source that fills them, behind the same switch
+            ;; plus a token — see `factory-source` below
+            [factory10.sources.forge :as forge]
+            [factory10.sources.github :as github]
             [mealplan10.main :as mealplan]
             [mealplan10.scraper :as scraper]
             [workqueue10.confluence :as conf]
@@ -450,7 +460,7 @@
 ;; ── the day job, behind a switch (waymark-fp62.6.2, R-8) ────────────
 
 (defn factory-resources
-  "factory10's two kinds — `change` and `ci_run` — when FACTORY10=1,
+  "factory10's kinds — `change`, `ci_run` and `repo_policy` — when FACTORY10=1,
   and nothing otherwise.
 
   WHY A SWITCH AND NOT A DEFAULT. factory10 is a MODULE, like
@@ -472,6 +482,25 @@
   (if (= "1" (System/getenv "FACTORY10"))
     (factory/resources)
     []))
+
+(defn factory-source
+  "The GitHub source that FILLS change and ci_run (waymark-fp62.6.4), or
+  nil.
+
+  TWO SWITCHES, AND BOTH MUST BE ON. FACTORY10=1 folds the kinds in,
+  and FACTORY10_GITHUB_TOKEN is the credential the source spends. With
+  either one unset this answers nil and NOTHING starts. There is no
+  fake here, deliberately, and that is the one place this boundary
+  differs from every other one in this file: a fake GitHub would write
+  rows about pull requests nobody has, into the house's own engine.
+  The fake belongs to the suite, where it stands behind the transport."
+  []
+  (when (= "1" (System/getenv "FACTORY10"))
+    (github/from-env)))
+
+(defn- factory-every-seconds []
+  (or (some-> (System/getenv "FACTORY10_GITHUB_EVERY") parse-long)
+      forge/default-every-seconds))
 
 (defn resources
   "One domestic economics (waymark-bwu), across the household's
@@ -1052,16 +1081,32 @@
                       {:retry-ms 5000
                        :start-fn #(inbox/start-passes!
                                    src {:every-seconds (inbox-every-seconds)})
-                       :stop-fn inbox/stop-passes!}))]
+                       :stop-fn inbox/stop-passes!}))
+        ;; the factory mirror (waymark-fp62.6.4), on exactly that
+        ;; shape one kind over: the day job's pull requests and red
+        ;; check runs, read from GitHub every five minutes under an
+        ;; ELECTED role, so one process per database spends the token
+        ;; however many serve it. Nothing starts without FACTORY10=1
+        ;; and a token — see `factory-source`.
+        factory-pass (when-some [src (factory-source)]
+                       (store/elect-role!
+                        storage :factory10-github
+                        {:retry-ms 5000
+                         :start-fn #(forge/start-passes!
+                                     {:source src :engine eng}
+                                     {:every-seconds
+                                      (factory-every-seconds)})
+                         :stop-fn forge/stop-passes!}))]
     (reset! dev {:engine eng :server server :storage storage
-                 :inbox-pass inbox-pass})
+                 :inbox-pass inbox-pass :factory-pass factory-pass})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))
     eng))
 
 (defn stop! []
-  (when-some [{:keys [engine server storage inbox-pass]} @dev]
+  (when-some [{:keys [engine server storage inbox-pass factory-pass]} @dev]
     (when inbox-pass (store/release-role! storage inbox-pass))
+    (when factory-pass (store/release-role! storage factory-pass))
     (engine/stop! engine server)
     (pg/close! storage)
     (reset! dev nil)))

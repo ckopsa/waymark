@@ -29,6 +29,7 @@
             [factory10.mirror :as mirror]
             [factory10.resources.change :as ch :refer [change]]
             [factory10.resources.ci-run :as ci :refer [ci-run]]
+            [factory10.resources.repo-policy :refer [repo-policy]]
             [waymark10.checks :as checks]
             [waymark10.machine :as machine]
             [waymark10.scenario :as scenario]
@@ -233,22 +234,43 @@
           :title "6.2 The change family"
           :head_sha "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"}})
 
-(deftest a-change-offers-no-door-to-a-person-or-to-a-model
-  (is (empty? (offers change a-pull-request the-person))
-      "GitHub owns this row: a person who could merge it by writing a
-       row would be telling the house something that is not true")
-  (is (empty? (offers change a-pull-request the-classifier)))
-  (testing "and every door is hidden rather than merely refused"
+(def ^:private bench-doors
+  "The doors the BENCH added (waymark-fp62.6.3.2). They are nobody's
+  secret: a seat under a grant walks them, and so does a person. The
+  mirror's own doors stay hidden from both."
+  #{:submit :discard :stall})
+
+(deftest a-change-offers-the-mirrors-doors-to-nobody-and-the-benchs-to-everybody
+  (testing "GitHub's own moves are hidden from every hand but the engine's"
     (doseq [door [:observe :merge :close]]
       (is (= :hidden (:status (refusal change a-pull-request the-person door)))
           "a hidden door is absent from the envelope, so nobody spends
-           a turn asking about it")))
+           a turn asking about it")
+      (is (= :hidden (:status (refusal change a-pull-request
+                                       the-classifier door))))))
+  (testing "and the bench's doors are there for a person and for a seat"
+    (is (= bench-doors (offers change a-pull-request the-person)))
+    (is (= bench-doors (offers change a-pull-request the-classifier))
+        "the guards that judge a submit read the repository policy, and
+         a probe with no read hook advertises optimistically — the door
+         itself judges again with a real hook behind it"))
   (testing "the source moves the row, because the source is the mirror"
-    (is (= #{:observe :merge :close}
+    (is (= (into bench-doors [:observe :merge :close])
            (offers change a-pull-request the-source)))
     (is (= #{:reopen}
            (offers change (assoc a-pull-request :state :closed) the-source))
         "GitHub reopens a closed pull request, so the row comes back"))
+  (testing "a submitted change keeps working, and a stuck one waits"
+    (is (= #{:submit :discard_submitted :stall :observe_submitted :merge :close}
+           (offers change (assoc a-pull-request :state :submitted) the-source))
+        "the checks run, the review lands, and the seat works the next
+         round on the same row")
+    (is (= #{:unstick}
+           (offers change (assoc a-pull-request :state :stuck) the-person))
+        "a stuck change is the house asking a person to look at it")
+    (is (empty? (offers change (assoc a-pull-request :state :stuck)
+                        the-classifier))
+        "and the model that stalled it may not put itself back to work"))
   (testing "a merged pull request is where the story ended"
     (is (empty? (offers change (assoc a-pull-request :state :merged)
                         the-source)))))
@@ -275,15 +297,17 @@
 
 ;; ── acceptance 1 · the module assembles alone ───────────────────────
 
-(deftest the-module-is-two-kinds-in-one-domain
+(deftest the-module-is-three-kinds-in-one-domain
   (let [rs (main/resources)]
-    (is (= [:change :ci_run] (mapv :kind rs))
-        "a change first, because a ci_run points at one")
+    (is (= [:repo_policy :change :ci_run] (mapv :kind rs))
+        "the policy first, because the bench's doors read it; a change
+         before a ci_run, because a ci_run points at one")
     (is (every? #(= :factory (:domain %)) rs))
     (testing "and it assembles into a registry with nothing else beside it"
       (let [reg (engine/full-registry rs)]
         (is (contains? (:kinds reg) :change))
-        (is (contains? (:kinds reg) :ci_run))))))
+        (is (contains? (:kinds reg) :ci_run))
+        (is (contains? (:kinds reg) :repo_policy))))))
 
 ;; ── the declaration gate, in the suite ──────────────────────────────
 
@@ -299,7 +323,7 @@
 (deftest every-guard-that-speaks-says-what-to-do-next
   (let [reg (engine/full-registry (main/resources))
         rdefs (vals (:kinds reg))
-        ours #{:change :ci_run}
+        ours #{:change :ci_run :repo_policy}
         cen (checks/census rdefs)]
     (is (empty? (filterv (comp ours :kind) (:dead-ends cen)))
         "a guard that refuses in words and names no way out spends a
@@ -349,13 +373,30 @@
       (is (not (contains? fields :pushed_label)))
       (is (not (contains? fields :labelled_at)))))
 
-  (testing "the change machine leaves room for the bench"
-    (is (= [:open :merged :closed] (:states change)))
+  (testing "the change machine carries the bench"
+    (is (= [:open :submitted :stuck :merged :closed] (:states change)))
     (is (= #{:merged} (:terminal change))
-        "closed is not a tomb: GitHub reopens a closed pull request,
-         and waymark-fp62.6.3.2 adds submitted and stuck beside these")
+        "closed is not a tomb: GitHub reopens a closed pull request.
+         Neither is stuck: a person puts it back to work")
+    (is (= #{:merged} (get-in change [:over :accomplished])))
+    (is (= #{:closed} (get-in change [:over :let-go]))
+        "stuck is in neither: a change waiting for a person is not a
+         change whose work is over")
     (is (= [[:change_id]] (:unique change)))
-    (is (= {:state "open"} (:default-filters change))))
+    (is (= {:state "open,submitted"} (:default-filters change))
+        "a change a seat has pushed is still the seat's work"))
+
+  (testing "the repository policy says what submit means"
+    (is (= [[:repository]] (:unique repo-policy))
+        "one policy for each repository, enforced by an index")
+    (is (= [:active :retired] (:states repo-policy)))
+    (is (= #{} (:terminal repo-policy)))
+    (is (= {:state "active"} (:default-filters repo-policy)))
+    (let [fields (into #{} (map first) (rest (:schema repo-policy)))]
+      (is (= #{:repository :branch_pattern :base :max_lines :opens_pr
+               :auto_merge :rounds_per_change :formatter :deny :orientation}
+             fields)
+          "every number a submit obeys is here, and nothing else")))
 
   (testing "the log tail is capped, and the cap is said out loud"
     (is (= 200 ci/log-excerpt-lines))

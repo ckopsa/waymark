@@ -141,9 +141,68 @@
    "costco__captured"           "costco.read"
    "costco__login"              "costco.read"
    "costco__reset"              "costco.read"
+   ;; bench — the codebase on the bench (bead waymark-fp62.6.3.2,
+   ;; R-1). The rig holds a bare clone per repository and a worktree
+   ;; per change, and it holds the git credential. FOUR of its eight
+   ;; tools are powers a scope may name: the seat reads and edits, and
+   ;; it pulls when the base moved.
+   "bench__find"                "bench.find"
+   "bench__read"                "bench.read"
+   "bench__edit"                "bench.edit"
+   "bench__pull"                "bench.pull"
+   ;; bench__prepare, bench__status, bench__submit and bench__discard
+   ;; are DELIBERATELY absent, and absence is the whole rule: a tool
+   ;; outside this map does not exist through this door, so no scope
+   ;; can name those four, `waymark_power` refuses them as not
+   ;; granted, and the only hand that calls them is the ENGINE's —
+   ;; the sit's own prepare and the change row's submit and discard
+   ;; doors, which go PAST `invoke-for` the way the thread sources do
+   ;; (workqueue10.sources.gate-chat). What submit means is a policy
+   ;; row a person restates, never an argument a model chooses.
+   ;;
    ;; gsd__* — deliberately no rows: waymark owns tasks/calendar
    ;; natively (workqueue10/calendar10), per the bead's decision.
    })
+
+;; ── the bench, as this door knows it (waymark-fp62.6.3.2) ───────────
+
+(def bench-rig
+  "The name Gate mounts the bench rig under, so its tools arrive as
+  `bench__<tool>`. Named once here because the map above, the power
+  door's cap and the engine's own calls must all spell it the same."
+  "bench")
+
+(defn bench-tool
+  "One bench tool, as Gate names it: `bench__prepare`, `bench__submit`."
+  [tool]
+  (str bench-rig "__" (name tool)))
+
+(def bench-max-bytes
+  "The rig's OWN ceiling on one answer, in bytes (the rig's
+  CEILING_MAX_BYTES). The power door clamps `max_bytes` to the seat's
+  ceiling when the seat names one, and to this when it does not: an
+  answer larger than this is not served by the rig whatever a caller
+  asks for, so a cap above it is a cap that says nothing."
+  65536)
+
+(defn bench-tool? [tool]
+  (str/starts-with? (str tool) (str bench-rig "__")))
+
+(defn bench-capped
+  "The arguments of a bench call, with `max_bytes` clamped to the
+  ceiling (R-2). A call that names no cap is untouched — the rig's own
+  default (16,384) then stands, which is the smaller number and the
+  one a seat should usually read under.
+
+  The ceiling is the SEAT's when the request carries one and
+  `bench-max-bytes` when it does not, and it is never above the rig's
+  own: a seat may read less than the rig serves, never more."
+  [args tool ceiling]
+  (let [ceiling (min (long (or ceiling bench-max-bytes)) bench-max-bytes)
+        asked (:max_bytes args)]
+    (if (and (bench-tool? tool) (number? asked) (> (long asked) ceiling))
+      (assoc args :max_bytes ceiling)
+      args)))
 
 (def capability-tokens
   "Every token the map names — what `affordances-for` intersects the

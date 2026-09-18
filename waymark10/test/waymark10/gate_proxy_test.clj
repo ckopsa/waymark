@@ -226,7 +226,14 @@
           "costco__receipt" "costco.read"
           "costco__captured" "costco.read"
           "costco__login" "costco.read"
-          "costco__reset" "costco.read"}
+          "costco__reset" "costco.read"
+          ;; bench — the checkout a code seat edits (waymark-fp62.6.3.2).
+          ;; prepare, status, submit and discard are on NO token:
+          ;; the engine alone reaches them, past this map.
+          "bench__find" "bench.find"
+          "bench__read" "bench.read"
+          "bench__edit" "bench.edit"
+          "bench__pull" "bench.pull"}
          gate/tool-capability)
       "this map IS the security policy — a changed row is a changed
        law, and this test is the diff a reviewer reads")
