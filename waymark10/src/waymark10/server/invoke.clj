@@ -712,7 +712,7 @@
      ;; declares no guards" are different sentences and the column
      ;; must be able to tell them apart
      {:warned [] :overridden [] :basis (when scope [])}
-     ;; the framework's own walls ride in front of the declared ones
+     ;; the framework's own walls ride behind the declared ones
      ;; (waymark-fp62.4.1) — the same list render probed, so the door
      ;; refuses with the wall the envelope already named
      (g/walled-guards rdef defn row))))
@@ -1732,8 +1732,8 @@
     (get-in engine [:current-law kind] 1)))
 
 (defn- create-walled-guards
-  "The create door's guards, with the framework's dangling-ref wall in
-  front of them (waymark-fp62.4.1, R-3): a birth that names a row
+  "The create door's guards, with the framework's dangling-ref wall
+  behind them (waymark-fp62.4.1, R-3): a birth that names a row
   which does not stand refuses AT THE DOOR, and the sentence names the
   field and the kind it expected. The wall is built from the create
   model's own `:kind` entries, so a kind writes nothing and cannot
@@ -1745,8 +1745,8 @@
   create door."
   [rdef]
   (let [refs (:create-ref-fields rdef)]
-    (cond->> (vec (:create-guards rdef))
-      (seq refs) (into [(g/names-a-row-that-stands refs)]))))
+    (cond-> (vec (:create-guards rdef))
+      (seq refs) (conj (g/names-a-row-that-stands refs)))))
 
 (defn- create-guard-pass
   "The create-time guard grading (design E9), ONE reduce for the real

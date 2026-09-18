@@ -240,7 +240,10 @@
   (testing "idempotent with input: an identical body replays"
     (let [row (fac/walk-to-state *eng* :plan :draft {:seed 43})
           assign (action-of :plan :assign_meal)
-          body {:date "2025-01-06" :meal_id "m-tacos"}
+          ;; the ref wall (waymark-fp62.4.1) resolves meal_id at the
+          ;; door, so the replayed body names a meal that stands
+          meal (:row (fac/create-example *eng* :meal {:seed 44}))
+          body {:date "2025-01-06" :meal_id (:id meal)}
           one (fac/walker-invoke! *eng* :plan row assign body)
           two (fac/walker-invoke! *eng* :plan (:row one) assign body)]
       (is (nil? (:replayed? one)))
@@ -624,13 +627,17 @@
 (defn- action-map [rdef aname]
   (assoc (get-in rdef [:actions aname]) :name aname))
 
+(def ^:private wall-names #{:the-work-is-over :names-a-row-that-stands})
+
 (defn- wall-verdict
   "The first framework wall's verdict on one door, judged exactly as
-  render probes it and invoke runs it: through `g/walled-guards`."
+  render probes it and invoke runs it: through `g/walled-guards`. The
+  walls ride behind the kind's own guards, so the first WALL is what
+  this reads, not the first guard."
   [rdef aname row inp ctx]
   (let [defn' (action-map rdef aname)
         guards (g/walled-guards rdef defn' row)]
-    (if-some [wall (first guards)]
+    (if-some [wall (first (filter #(wall-names (:name %)) guards))]
       (let [[v d] (g/evaluate wall row inp ctx)]
         {:guard (:name d)
          :denied (t/deny? v)

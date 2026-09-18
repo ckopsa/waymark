@@ -131,11 +131,19 @@
 
 (defn- row [kind id] (dev/row *eng* kind id))
 
-(def ^:private member-seq (atom 0))
-(defn- fresh-member [] (str "member-" (swap! member-seq inc)))
+(defn- fresh-member!
+  "A member row that STANDS (waymark-fp62.4.1). A plan's :member is a
+  ref, the engine resolves every ref at the door now, and an invented
+  id is exactly the dead link :names-a-row-that-stands refuses. These
+  tests minted \"member-1\", \"member-2\" … to keep (member, date)
+  unique; a fresh MEMBER per call is unique for the same reason and
+  true as well (conformance-test's fresh-member! helper)."
+  []
+  (:id (create! :member {:display (str "Decided member " (random-uuid))
+                         :actor_type "human"})))
 
 (defn- plan! [date]
-  (create! :day_plan {:date (str date) :member (fresh-member)}))
+  (create! :day_plan {:date (str date) :member (fresh-member!)}))
 
 (defn- block-named [plan-id nm]
   (->> (dev/rows *eng* :block)

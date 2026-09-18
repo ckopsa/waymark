@@ -2766,39 +2766,61 @@
         (is (nil? (:target_id (fields r))))))))
 
 (deftest the-specimens-piece-is-not-what-this-wall-catches-and-the-record-says-so
-  ;; AN HONEST RECORD OF A CLAIM THIS WALL DOES NOT MAKE. The specimen
-  ;; staged a piece that PRIORITIZED the finished task, and the bead
-  ;; expected `the-door-is-open-now` to refuse it. It does not, and
-  ;; both halves of the reason are declarations rather than opinions:
+  ;; AN HONEST RECORD OF A CLAIM THIS WALL DOES NOT MAKE, AMENDED
+  ;; WHERE THE WORLD MOVED (waymark-tgy, waymark-fp62.4.1). The
+  ;; specimen staged a piece that PRIORITIZED the finished task, and
+  ;; the bead expected `the-door-is-open-now` to refuse it. It does
+  ;; not, and the two halves of the reason are declarations rather
+  ;; than opinions:
   ;;
-  ;; 1. `task.prioritize` leaves from the SYNC states, and a done task
-  ;;    is `fresh`. Nothing in task's declaration shuts its rank on a
-  ;;    finished row — the rank is hub-local and the lifecycle is data
-  ;;    (`:over {:field :status …}`), and the two never meet. If the
-  ;;    household wants that door shut, the wall belongs on task's own
-  ;;    declaration, where every reader of that kind would see it
-  ;;    (waymark-tgy).
-  ;; 2. The one guard that DOES refuse here is `role:ranker`, and it
-  ;;    declares `:reads [:principal]` — it is about the composer's
-  ;;    hand, and the hand at the tap is a member's. A wall that
-  ;;    refused a piece because the COMPOSER could not tap it would
-  ;;    refuse the household its own Saturday.
+  ;; 1. THE DOOR REALLY IS SHUT NOW, which is the half that changed.
+  ;;    `task.prioritize` still leaves from the SYNC states and a done
+  ;;    task is still `fresh` — but the lifecycle and the doors meet at
+  ;;    last, not on task's own declaration and not as a second opinion
+  ;;    written here: the framework's ending wall shuts every door on a
+  ;;    row whose declared ending is reached, except the ways back, and
+  ;;    `:over {:field :status :accomplished #{"done"} …}` is the
+  ;;    declaration it reads. task names no way back, so `prioritize`
+  ;;    and `complete` are both shut on a task the house finished.
+  ;; 2. THE FIRST WORD ON THIS DOOR IS STILL ABOUT THE HAND, which is
+  ;;    the half that did not. A kind's own guards speak before the
+  ;;    framework's walls, and `prioritize` declares `role:ranker`,
+  ;;    which declares `:reads [:principal]`. The composer holds no
+  ;;    such role, so the composer's probe never reaches the ending
+  ;;    wall — and this wall stands down for a denier about the hand,
+  ;;    because refusing a piece because the COMPOSER could not tap it
+  ;;    would refuse the household its own Saturday. The member who
+  ;;    taps is judged again at `take`, where the ending wall is
+  ;;    waiting whatever the hand.
   ;;
-  ;; So the specimen is caught one level up, by `composes-from-what-
-  ;; stands` on the BUNDLE — which is where it should be caught: the
-  ;; bug was composing from a closed book, and the piece was only the
-  ;; symptom. Recorded here rather than left as a surprise.
+  ;; So the specimen's own piece is still caught one level up, by
+  ;; `composes-from-what-stands` on the BUNDLE — which is where it
+  ;; should be caught: the bug was composing from a closed book, and
+  ;; the piece was only the symptom. The bead's OTHER door, `complete`,
+  ;; asks nothing of the hand, and there the ending wall is the first
+  ;; word and this wall quotes it — proved below, so the amended half
+  ;; is a fact here rather than a claim in a comment.
   (let [member "colton-specimen"
         composer "composer-specimen"
         v (declare-value! member "the specimen, re-run" ["the shop"])
         done (done-task! member "Sacrament talk, drafted (already done)")
         bundle (stage-outcome! composer (vid v)
-                               {:evidence [(str "/api/tasks/" done)]})]
+                               {:evidence [(str "/api/tasks/" done)]})
+        o (id-of (stage-outcome! composer (vid v)))]
     (testing "the BUNDLE is refused, which is the specimen's actual fault"
       (is (= 409 (:status bundle)))
       (is (= "composes-from-what-stands" (guard-of bundle))))
-    (testing "and a piece prioritizing that same finished task still stages — the door is genuinely open, and saying otherwise would be a second opinion about task's own law"
-      (let [o (id-of (stage-outcome! composer (vid v)))
-            r (stage-invoke-piece! composer o "Rank the finished talk"
+    (testing "and a piece prioritizing that same finished task still stages — not because the door is open, but because the first guard on it refuses the COMPOSER'S HAND, and a wall that read that as a shut door would refuse the household its own Saturday"
+      (let [r (stage-invoke-piece! composer o "Rank the finished talk"
                                    "task" done "prioritize" {:priority 3})]
-        (is (= 201 (:status r)) (detail r))))))
+        (is (= 201 (:status r)) (detail r))))
+    (testing "the bead's other door is where this wall meets the ending: complete asks nothing of any hand, so the ROW's own law is the first word and the piece is refused at staging, in the door's own sentence"
+      (let [r (stage-invoke-piece! composer o "Mark the finished talk done"
+                                   "task" done "complete" {})]
+        (is (= 409 (:status r)) (detail r))
+        (is (= "the-door-is-open-now" (guard-of r))
+            "the piece's own wall names itself; the reason inside it is the door's")
+        (is (str/includes? (detail r) (str "/api/tasks/" done))
+            "and it names the row and the door it read")
+        (is (re-find #"over" (detail r))
+            "the quoted reason is the ending wall's own: the work on this task is over")))))

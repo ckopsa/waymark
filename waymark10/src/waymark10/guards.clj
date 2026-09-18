@@ -1028,8 +1028,8 @@
 ;;
 ;; The two walls below are the framework's, not a kind's. They are
 ;; never written in a declaration and never hash into a fingerprint:
-;; `render` puts them in front of a door before it probes, and
-;; `invoke` puts them in front of the same door before it runs. One
+;; `render` puts them behind a door's own guards before it probes, and
+;; `invoke` puts them behind the same guards before it runs. One
 ;; rule every kind gets, because a rule every kind must REMEMBER is a
 ;; rule some kind forgets.
 
@@ -1112,31 +1112,49 @@
   It advertises optimistically with no read in scope — the
   storage-free render probe carries no hooks, and an envelope must not
   narrate a refusal it cannot honestly reach. The write path always
-  carries the read, which is the path this bug was found on."
+  carries the read, which is the path this bug was found on.
+
+  A write opened INSIDE another write (`(:within ctx)`, a handler's
+  `ctx :invoke` or `ctx :create`) is not judged: its input is the
+  handler's, which is law, not a caller's, and the row it names may be
+  the outer write's own, minted in the same stroke and not yet saved
+  where a read could find it (outcome's create answers the person's
+  composition_request with the outcome's own id). The outer door
+  judged what the caller typed; the wall stays at the wire."
   [refs]
   (guard
    {:name :names-a-row-that-stands
     :explain "{problem}"
-    :reads [:storage]
+    :reads [:storage :within]
     :vars [:problem]
     :check (with-meta
              (fn [_row inp ctx]
                (let [read' (:read ctx)
                      rdef-of (:rdef-of ctx)]
-                 (if (clojure.core/or (nil? read') (nil? rdef-of) (nil? inp))
+                 (if (clojure.core/or (nil? read') (nil? rdef-of) (nil? inp)
+                                      (some? (:within ctx)))
                    (t/allow)
                    (if-some [problem (ref-problem refs inp read' rdef-of)]
                      (t/deny {:vars {:problem problem}})
                      (t/allow)))))
              {:waymark10/form
               (list 'fn '[row inp ctx]
-                    (list 'waymark10.guards/ref-problem
-                          (mapv (fn [r] (update r :field clojure.core/name)) refs)
-                          'inp '(:read ctx) '(:rdef-of ctx)))})}))
+                    (list 'if '(:within ctx) nil
+                          (list 'waymark10.guards/ref-problem
+                                (mapv (fn [r] (update r :field clojure.core/name)) refs)
+                                'inp '(:read ctx) '(:rdef-of ctx))))})}))
 
 (defn walled-guards
-  "The guards this door is REALLY judged by: the framework's own walls
-  in front of the ones the kind declared (waymark-fp62.4.1).
+  "The guards this door is REALLY judged by: the ones the kind
+  declared, then the framework's own walls (waymark-fp62.4.1).
+
+  The kind speaks first. A kind that already resolves its own ref, or
+  already refuses a door on a dropped row, carries the sentence it
+  wrote for that case, with its remedies and its `:open`; the wall is
+  the backstop for the kind that forgot, and it must not shadow the
+  law a kind spelled out. A cross-row leaf is still judged first by
+  the partial rehearsal (`invoke/split-leaves`), whatever its place
+  in this list.
 
   One call, two readers. `render` probes through it, so the envelope
   never advertises a door a wall will refuse; `invoke` runs through it,
@@ -1149,10 +1167,10 @@
   kind that needed them."
   [rdef defn' row]
   (let [refs (:ref-fields defn')]
-    (into (cond-> []
+    (into (vec (:guards defn' []))
+          (cond-> []
             (machine/door-shut-when-over? rdef row (:name defn'))
             (conj (the-work-is-over rdef (:name defn')))
 
             (seq refs)
-            (conj (names-a-row-that-stands refs)))
-          (:guards defn' []))))
+            (conj (names-a-row-that-stands refs))))))

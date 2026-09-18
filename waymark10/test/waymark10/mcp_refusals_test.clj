@@ -169,6 +169,16 @@
   (tool h (with-session sid) "waymark_invoke"
         {:kind "meal" :id (str meal-id) :action "accept"}))
 
+(defn- decline!
+  "The wrong-state door: `decline` leaves `suggested` only, so on a
+  meal already accepted it is the engine's own 409. A SECOND `accept`
+  would not be: `accept` is idempotent, and the same action with the
+  same input on a row at its outcome is a natural replay, answered
+  200 and counted nothing (invoke.clj step 8)."
+  [h sid meal-id]
+  (tool h (with-session sid) "waymark_invoke"
+        {:kind "meal" :id (str meal-id) :action "decline"}))
+
 (defn- sit!
   "A bound session, and the sitting it opened."
   ([eng h] (sit! eng h a-key))
@@ -198,8 +208,8 @@
         (is (false? (:isError r)) (text-of r)))
       (is (= {:transitions 1 :refusals 0} (counts-of eng sitting))))
 
-    (testing "the second accept is a 409, and the sitting counts it"
-      (let [r (accept! h sid dinner)
+    (testing "a decline on the accepted meal is a 409, and the sitting counts it"
+      (let [r (decline! h sid dinner)
             doc (doc-of r)]
         (is (true? (:isError r)))
         (is (= 409 (:status doc))
@@ -209,7 +219,7 @@
           "R-10.6 at the MCP door: one 409, one refusal, and exactly one"))
 
     (testing "a second 409 counts a second refusal"
-      (is (true? (:isError (accept! h sid dinner))))
+      (is (true? (:isError (decline! h sid dinner))))
       (is (= {:transitions 1 :refusals 2} (counts-of eng sitting))))))
 
 ;; ── 2 · only 409s, and only the grant's own sitting ────────────────
@@ -236,7 +246,7 @@
 
     (testing "the first seat works, then meets the wrong state"
       (is (false? (:isError (accept! h (:sid one) dinner))))
-      (let [r (accept! h (:sid one) dinner)]
+      (let [r (decline! h (:sid one) dinner)]
         (is (true? (:isError r)))
         (is (= 409 (:status (doc-of r))))))
 

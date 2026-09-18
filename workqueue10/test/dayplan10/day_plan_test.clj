@@ -115,11 +115,19 @@
 (defn- block-named [plan-id nm]
   (some #(when (= nm (get-in % [:data :context_name])) %) (blocks-of plan-id)))
 
-(def ^:private member-seq (atom 0))
-(defn- fresh-member [] (str "member-" (swap! member-seq inc)))
+(defn- fresh-member!
+  "A member row that STANDS (waymark-fp62.4.1). A plan's :member is a
+  ref, the engine resolves every ref at the door now, and an invented
+  id is exactly the dead link :names-a-row-that-stands refuses. These
+  tests minted \"member-1\", \"member-2\" … to keep (member, date)
+  unique; a fresh MEMBER per call is unique for the same reason and
+  true as well (conformance-test's fresh-member! helper)."
+  []
+  (:id (create! :member {:display (str "Planned member " (random-uuid))
+                         :actor_type "human"})))
 
 (defn- plan! [date]
-  (create! :day_plan {:date (str date) :member (fresh-member)}))
+  (create! :day_plan {:date (str date) :member (fresh-member!)}))
 
 ;; the house's templates: a workday is the Workday then the Shop; a
 ;; day off is Rest then the Shop
@@ -185,13 +193,13 @@
 
 (deftest a-named-shape-overrides-the-weekday
   (reset! clock (at 8 0))
-  (let [plan (create! :day_plan {:date (str today) :member (fresh-member) :shape "off"})]
+  (let [plan (create! :day_plan {:date (str today) :member (fresh-member!) :shape "off"})]
     (is (= "off" (get-in plan [:data :shape])))
     (is (= ["Rest" "Shop"] (mapv #(get-in % [:data :context_name]) (blocks-of (:id plan)))))))
 
 (deftest one-plan-per-member-and-date
   (reset! clock (at 8 0))
-  (let [member (fresh-member)]
+  (let [member (fresh-member!)]
     (create! :day_plan {:date (str today) :member member})
     ;; the store tags the index's refusal :waymark10/unique-violation and
     ;; the ROUTER turns that into the 409 :unique-conflict problem

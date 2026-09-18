@@ -61,6 +61,7 @@
   The BYTES are the spec's JSON either way — {:read {:left 3}} writes
   {\"read\":{\"left\":3}} and reads back exactly as it was written."
   (:require [waymark10.expr :as expr]
+            [waymark10.guards :as g]
             [waymark10.schema :as schema]
             [waymark10.server.judgment :as judgment])
   (:import (java.time Instant LocalDate)))
@@ -98,7 +99,16 @@
   July 3rd, for a transition logged long before this column existed."
   [rdef action revision]
   (let [creates (:create-action-names rdef #{})
-        declared (get-in rdef [:actions action])]
+        declared (get-in rdef [:actions action])
+        ;; the framework's dangling-ref wall rides behind the declared
+        ;; guards at every door that carries a ref (waymark-fp62.4.1,
+        ;; guards/walled-guards and invoke/create-walled-guards), so
+        ;; the record stores it and the basis must derive it. The
+        ;; ending wall is not here: it is on the list only when it
+        ;; denies, and a denied door writes no transition to record.
+        walled (fn [guards refs]
+                 (cond-> (vec guards)
+                   (seq refs) (conj (g/names-a-row-that-stands refs))))]
     (cond
       ;; the create door: a birth's guards are the kind's
       ;; :create-guards, resident by construction — the judgment
@@ -108,7 +118,7 @@
        :guards (mapv (fn [g] {:name (:name g) :severity (:severity g :refuse)
                               :reads (vec (:reads g)) :judges (vec (:judges g))
                               :form (guard-form g)})
-                     (:create-guards rdef))}
+                     (walled (:create-guards rdef) (:create-ref-fields rdef)))}
 
       ;; the engine's own restamp judges nothing, and says so rather
       ;; than answering with an empty guard vector that would read as
@@ -130,7 +140,7 @@
                                 :reads (vec (:reads g))
                                 :judges (vec (:judges g))
                                 :form (guard-form g)})
-                       (:guards defn'))}))))
+                       (walled (:guards defn') (:ref-fields defn')))}))))
 
 ;; ── the written half: what the guards read ──────────────────────────
 

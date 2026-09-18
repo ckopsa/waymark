@@ -297,6 +297,11 @@
 
 (deftest grant-scoped-surface
   (let [pid (id-of (req :post "/api/plans" covered-plan))
+        ;; the ref wall (waymark-fp62.4.1) resolves meal_id at the
+        ;; door, and this grant admits :plan alone — so the meal the
+        ;; assignment names is minted by the unscoped principal
+        mid (id-of (req :post "/api/meals" {:name "Chile verde"
+                                            :themes ["mexican"]}))
         gid (offer-grant! {:audience "agent-7"
                            :scope [{:kind "plan"
                                     :actions ["assign_meal" "finalize"]}]})]
@@ -313,7 +318,7 @@
           (is (empty? vs) (str/join "\n" vs)))))
     (testing "a granted action invokes; its response stays projected"
       (let [resp (req :post (str "/api/plans/" pid "/-/assign_meal")
-                      {:date "2025-01-06" :meal_id "m-1"} (scoped gid))
+                      {:date "2025-01-06" :meal_id mid} (scoped gid))
             env (json resp)]
         (is (= 200 (:status resp)))
         (let [vs (conf/grant-concealment-violations env #{"assign_meal"
