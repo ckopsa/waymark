@@ -1,8 +1,10 @@
 (ns waymark10.mcp-sit-test
   "The keyed sitter session (docs/spec-seat.md § 12, R-12.12 to
-  R-12.16): a person pastes a seat key into a Routine's instructions,
-  the Routine's session presents it once, and THAT session — one of
-  many wearing the same connector bearer — becomes the seat's sitter.
+  R-12.16, and R-12.28): a person pastes a seat key into a Routine's
+  instructions, the Routine's session presents it once, and THAT
+  session — one of many wearing the same connector bearer — becomes
+  the seat's sitter. Section 6 below is R-12.28: what that one answer
+  carries, so the sitter's next call is its first invoke.
 
   The problem the feature answers, stated once: a person signed in
   through the claude.ai connector resolves to ONE delegate on ONE
@@ -20,6 +22,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.fixtures :as fx]
+            [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -54,12 +57,17 @@
 (defn- bearer [claims]
   {"authorization" (str "Bearer " (mint claims))})
 
-(defn- fresh-engine []
-  (engine/engine {:storage (memory/storage)
-                  :resources [fx/meal]
-                  :oidc {:issuer issuer :audience audience :jwks jwks
-                         :app-url "https://app.test/"
-                         :delegate-clients {"connector" "Claude"}}}))
+(defn- fresh-engine
+  "The house, with the fixture's meal kind — or with whatever kinds a
+  deftest hands it, which is how the walk suite below adds its queue
+  without moving anybody else's engine."
+  ([] (fresh-engine [fx/meal]))
+  ([resources]
+   (engine/engine {:storage (memory/storage)
+                   :resources resources
+                   :oidc {:issuer issuer :audience audience :jwks jwks
+                          :app-url "https://app.test/"
+                          :delegate-clients {"connector" "Claude"}}})))
 
 (defn- json [resp] (some-> (:body resp) wire/read-json))
 
@@ -481,3 +489,239 @@
             answer (doc-of sat)]
         (is (false? (:isError sat)) (text-of sat))
         (is (= "claude-sit-4" (:model answer)))))))
+
+;; ── 6. the walk rides in the sit's answer (R-12.28) ─────────────────
+;;
+;; Measured on production: ten calls and 34 KB before the first
+;; invoke, and every one of them a turn that read the whole prefix
+;; again. The engine knew all of it at the sit — the seat row names
+;; the walk and the charter, the sitter's grant names the rows it may
+;; see, and a collection item IS an envelope minus data, so the doors
+;; and their inputs are already on the page the query answers. What
+;; follows pins what the sit now hands back, and that it hands back
+;; exactly what the seat's own grant admits and nothing beside it.
+
+(def ^:private drop-consequence
+  "The sentence the confirm gate will want echoed back, spelled once
+  so the declaration and the assertion cannot drift."
+  "The post is dropped, and nobody reads it again.")
+
+(def ^:private post
+  "The queue this house walks: the smallest kind a seat may walk — it
+  filters its own queue by state and sorts it oldest first — with one
+  door that takes an input and one the confirm gate holds. `box` is
+  filterable, so a seat's scope can be narrowed to one box and a post
+  in another is a row the sitter may not see at all."
+  (r/resource
+   {:kind :post
+    :plural "posts"
+    :states [:queued :filed :dropped]
+    :initial :queued
+    :terminal #{:filed :dropped}
+    :summary "{data.subject} · {state}"
+    :schema
+    [:map
+     [:subject {:x-display {:label "What it is about"}}
+      [:string {:min 1 :max 120}]]
+     [:box {:x-display {:label "Which box"}} [:string {:min 1 :max 40}]]
+     [:received_at {:x-display {:label "When it arrived"}} :waymark/instant]
+     [:filed_in {:optional true :x-display {:label "Filed in"}}
+      [:maybe [:string {:max 60}]]]]
+    :filterable {:state #{:eq :in} :box #{:eq}}
+    :default-filters {:state "queued"}
+    :sortable {:fields [:received_at] :default "received_at"}
+    :actions
+    {:file {:from #{:queued} :to :filed
+            :input [:map [:where [:string {:min 1 :max 60}]]]
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A filed post keeps its history."}
+            :handler (fn [row inp _ctx]
+                       (assoc-in row [:data :filed_in] (:where inp)))}
+     :drop {:from #{:queued} :to :dropped
+            :safety {:idempotent true :reversible false :confirm true
+                     :consequence drop-consequence}}}}))
+
+(def ^:private walk-key
+  "The walk clerk's own key — a second office, so the meal seat above
+  keeps the key its own tests present."
+  "c2VhdC1rZXktZm9yLXRoZS13YWxrLWNsZXJr")
+
+(def ^:private walk-charter
+  "Read each post and take the door it asks for.")
+
+(defn- open-walk-seat!
+  "A seat that WALKS the post queue, its key offered. Its scope is
+  filtered to the house's own box, so a post in another box is a row
+  outside the grant rather than a row the page merely did not reach."
+  [eng extra]
+  (let [model (:row (inv/create! eng :model
+                                 {:name "claude-walk-5" :display "Walk 5"
+                                  :vendor "anthropic" :tier "strong"
+                                  :price_input_per_mtok 3M
+                                  :price_output_per_mtok 15M
+                                  :price_cache_read_per_mtok 0.3M
+                                  :price_cache_write_per_mtok 3.75M}
+                                 {:principal person}))
+        seat (:row (inv/create!
+                    eng :seat
+                    (merge {:name "post-clerk"
+                            :charter walk-charter
+                            :scope [{:kind "post"
+                                     :actions ["file" "drop"]
+                                     :filter {:box "house"}}]
+                            :walk "post"
+                            :held_for [(:id model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           extra)
+                    {:principal person}))]
+    (schedules/ensure-schedule! eng seat)
+    (inv/invoke! eng :seat (:id seat) :offer_key {:key walk-key}
+                 {:principal person})
+    seat))
+
+(defn- post!
+  "One real row in the queue, with the moment it arrived — the field
+  this kind sorts its queue by."
+  [eng subject box at]
+  (:row (inv/create! eng :post {:subject subject :box box :received_at at}
+                     {:principal person})))
+
+(defn- sit-walk!
+  "The walk clerk's sit, through the real door → [result answer]."
+  [h]
+  (let [[sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit" {:key walk-key})]
+    [r (doc-of r)]))
+
+(defn- utf8-length [^String s]
+  (alength (.getBytes s "UTF-8")))
+
+(deftest the-sit-answers-the-seats-walk-with-every-rows-doors
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {})
+        ;; three real rows: two in the house's box and one in another.
+        ;; The one the grant hides is the OLDEST, so its absence is
+        ;; the filter's doing and not the page's.
+        theirs (post! eng "Somebody else's post" "other"
+                      "2026-09-18T06:00:00Z")
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        note (post! eng "The school note" "house" "2026-09-18T08:00:00Z")
+        [r answer] (sit-walk! h)
+        walk (:walk answer)
+        rows (:rows walk)]
+
+    (testing "the sit answers, and the answer carries the walk"
+      (is (false? (:isError r)) (text-of r))
+      (is (= "post" (:kind walk)))
+      (is (= walk-charter (:charter walk))
+          "the charter rides the sit: the sitter never reads the seat row
+           to learn what it is for"))
+
+    (testing "the rows are the queue's own, oldest first"
+      (is (= [(str (:id gas)) (str (:id note))] (mapv :id rows))
+          "the kind's default sort is the order, and it is oldest first"))
+
+    (testing "and a row the grant does not admit is ABSENT, never refused"
+      (is (not (some #{(str (:id theirs))} (mapv :id rows))))
+      (is (= 2 (:total walk))
+          "the grant's filter narrows the count as it narrows the page"))
+
+    (testing "each row carries its summary projection"
+      (let [row (first rows)]
+        (is (= "post" (:kind row)))
+        (is (= "queued" (:state row)))
+        (is (str/includes? (str (:summary row)) "The gas bill"))
+        (is (= "The gas bill" (get-in row [:fields :subject])))
+        (is (nil? (:data row))
+            "a collection item carries the grid projection, not the whole
+             document — the full row comes back from the first invoke")))
+
+    (testing "and the doors that row affords, with the input each one takes"
+      (let [doors (:doors (first rows))
+            by-name (into {} (map (juxt :action identity)) doors)]
+        (is (= ["drop" "file"] (mapv :action doors))
+            "both doors this state opens, and nothing the grant withholds")
+        (is (= "string"
+               (get-in by-name ["file" :input :properties :where :type]))
+            "the sitter reads the field and its type here, not from
+             waymark_schema")
+        (is (= ["where"] (get-in by-name ["file" :input :required])))))
+
+    (testing "a confirm-gated door carries the sentence to echo back"
+      (let [drop-door (->> (:doors (first rows))
+                           (filter #(= "drop" (:action %)))
+                           first)]
+        (is (true? (:confirm drop-door)))
+        (is (= drop-consequence (:acknowledge drop-door))
+            "character for character: it is what waymark_invoke will
+             compare against")))
+
+    (testing "the note sends the sitter to the first invoke and nowhere else"
+      (is (str/includes? (str (:note answer))
+                         "invoke the door the charter chooses"))
+      (is (str/includes? (str (:note answer)) "Do not call discover"))
+      (is (not (str/includes? (str (:note answer)) "waymark_get"))))
+
+    (testing "and the sit's own answer is on the sitting's served line"
+      (let [row (store/with-tx (:storage eng)
+                  (fn [tx] (store/load-row (:storage eng) tx :sitting
+                                           (str (:sitting answer)) {})))
+            line (get-in row [:data :served :waymark_sit])]
+        (is (= 1 (long (:calls line))))
+        (is (= (utf8-length (text-of r)) (long (:bytes line)))
+            "R-10.6a at the one door that opens the wake it is counted on")
+        (is (= [:waymark_sit] (keys (get-in row [:data :served])))
+            "one line, and it is the tool that answered")))))
+
+(deftest rows-per-firing-bounds-the-walk
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:rows_per_firing 1})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        _ (post! eng "The school note" "house" "2026-09-18T08:00:00Z")
+        [r answer] (sit-walk! h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (= [(str (:id gas))] (mapv :id (get-in answer [:walk :rows])))
+        "one row, and it is the oldest")
+    (is (= 2 (get-in answer [:walk :total]))
+        "the queue still says how many are waiting; the cap says how many
+         this wake takes")))
+
+(deftest a-seat-that-walks-nothing-answers-no-walk-and-a-parked-one-no-seat
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat]} (open-seat! eng)
+        [sid _] (initialize! h)
+        answer (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))]
+
+    (testing "a seat with no walk answers no walk key at all"
+      (is (not (contains? answer :walk)))
+      (is (str/includes? (str (:note answer)) "waymark_get")
+          "and its note still points at the seat row, where its charter is"))
+
+    (testing "and once the person parks it, the key opens nothing"
+      (inv/invoke! eng :seat (:id seat) :park nil {:principal person})
+      (let [[other _] (initialize! h)
+            r (tool h (with-session other) "waymark_sit" {:key a-key})]
+        (is (true? (:isError r)))
+        (is (= "No seat answers this key." (text-of r)))))))
+
+(deftest a-seat-at-a-wall-answers-no-rows
+  ;; R-5.2's third wall, and the cheapest one to stand up: a seat
+  ;; whose week's fuel is zero is at the wall from its first request.
+  ;; The grant then scopes to NOTHING, so the queue is concealed from
+  ;; its own sitter — absent, the way every unadmitted thing is.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:budget_usd_per_week 0M})
+        _ (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        [r answer] (sit-walk! h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (= "post-clerk" (:seat answer)))
+    (is (empty? (get-in answer [:walk :rows]))
+        "no rows, and no refusal either: the sit answers what the seat's own
+         grant admits, which behind a wall is nothing")))

@@ -794,11 +794,13 @@ the sitter, or the grant is lost, because those are rows.
 
 **R-12.17** The harness must close the sitting. The repository that
 the Routine clones carries a Stop hook in its `.claude/settings.json`.
-A Routine's firing is one prompt, so the session raises one Stop
-event, at its end. The hook reads the session's transcript. It sums
-the usage of each API response, in the session and in each subagent
-beside it. It then posts the four token counts and the turn count to
-`POST /api/-/sittings/close`. It sends the seat's key in the header
+The Routine attaches the seat's place and not the code: the branch
+`seat` of this repository, which holds that hook, its settings and a
+short note. A Routine's firing is one prompt, so the session raises
+one Stop event, at its end. The hook reads the session's transcript.
+It sums the usage of each API response, in the session and in each
+subagent beside it. It then posts the four token counts and the turn
+count to `POST /api/-/sittings/close`. It sends the seat's key in the header
 `Waymark-Seat-Key`. The engine finds the seat by that key. The
 engine then closes that seat's open sitting through the sitting's
 own `close` door (R-10.4), so the handler reads the model's prices
@@ -855,6 +857,28 @@ its run ends with its one Stop event.
 A sitting that gets no report is still the sweep's. The sweep
 abandons it after two cadences, with no tokens (R-7.6). The counts
 of transitions and refusals stand.
+
+**R-12.28** The sit must answer the walk. When the seat names a
+`walk`, the answer to `waymark_sit` carries `walk`: the seat's
+charter, and the rows. The rows are the rows of that kind, under the
+kind's own default filter and its own default sort, and there are not
+more of them than `rows_per_firing`. The engine reads them as the
+sitter, under the seat's grant, through the same route
+`waymark_query` uses. A row that the grant does not admit is absent;
+the sit does not refuse it (R-10.6). Each row carries its summary
+projection and the doors its envelope offers. Each door carries the
+name of its action and the input the sitter must give. A door with
+`safety.confirm` also carries the sentence to echo back. The sitter
+therefore does not call `waymark_discover`, `waymark_schema`,
+`waymark_query` or `waymark_get` before its first `waymark_invoke`,
+and the note in the answer tells it so. A seat that walks nothing
+answers no `walk`, and its note points at the seat row. A seat at a
+wall scopes to nothing, so its queue is concealed and the answer
+carries no `walk`. The bytes of this answer count on the sitting,
+under `waymark_sit`, as the bytes of every other tool count
+(R-10.6a). `rows_per_firing` and the size of one summary bound the
+answer; a seat whose answer is too large is a seat the person
+restates.
 
 ### 12.2 The fire door
 
@@ -1790,6 +1814,14 @@ above. The cases:
     call under the same grant after the `close` does not move the
     closed row. The ledger answers `served` by tool over the window,
     and `bytes_per_transition`. (R-10.6a, R-11.3)
+46. A `waymark_sit` on a seat that walks a queue answers `walk` with
+    the charter and the rows, oldest first, not more than
+    `rows_per_firing` of them, each with its summary projection and
+    its doors, and each door with its input. A row outside the
+    sitter's grant is absent. A seat that walks nothing answers no
+    `walk`. A door with `safety.confirm` carries the sentence to echo
+    back. The sit's own answer counts under `waymark_sit` on the
+    sitting it opened. (R-12.28, R-10.6a)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,

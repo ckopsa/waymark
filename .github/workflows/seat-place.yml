@@ -1,0 +1,116 @@
+# Publishes the seat's place: the orphan branch `seat`.
+#
+# WHY THIS EXISTS. A Routine's cloud environment takes a repository
+# and no settings, so the Stop hook that closes a sitting must live in
+# a repository the Routine clones. Until now that repository was this
+# one, and every turn of every firing read this repository's CLAUDE.md
+# and what it points at — about 67,000 tokens of prefix on each turn,
+# for a sitter that touches no code (waymark-fp62.7.18).
+#
+# So the Routine attaches a place that holds the hook and nothing
+# else. This workflow assembles that place and force-pushes it as the
+# single-commit orphan branch `seat`:
+#
+#   CLAUDE.md                        <- seat/CLAUDE.md
+#   .claude/settings.json            <- seat/.claude/settings.json
+#   .claude/hooks/sitting-close.sh   <- .claude/hooks/sitting-close.sh
+#
+# THE HOOK HAS ONE SOURCE. It stays at .claude/hooks/sitting-close.sh
+# on main, because an interactive sitting in this repository uses the
+# same script for its tally (spec-seat.md R-12.25). A change to it
+# reaches the seat's place in this same run, with no hand step.
+#
+# THE COUNT IS CHECKED, NOT TRUSTED. A fourth file in the tree fails
+# the run, and so does a CLAUDE.md of more than 20 lines. The point of
+# the branch is what it does NOT carry; a check is the only thing that
+# keeps it that way.
+#
+# NO SECRET. The branch is a ref of this repository, so the workflow's
+# own GITHUB_TOKEN writes it.
+
+name: seat-place
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'seat/**'
+      - '.claude/hooks/sitting-close.sh'
+      - '.github/workflows/seat-place.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# The push is a force-push to one ref. Two at once would race, and a
+# cancelled one could leave the branch behind main. Queue instead.
+concurrency:
+  group: seat-place
+  cancel-in-progress: false
+
+jobs:
+  place:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Staged outside the working tree, because the next step empties
+      # the working tree. The whole of seat/ is copied, not the two
+      # files by name: a stray file there must REACH the tree, so that
+      # the count below can fail on it.
+      - name: Assemble the three files
+        run: |
+          set -euo pipefail
+          tree="${RUNNER_TEMP}/seat"
+          rm -rf "$tree"
+          mkdir -p "$tree"
+          cp -R seat/. "$tree/"
+          mkdir -p "$tree/.claude/hooks"
+          cp .claude/hooks/sitting-close.sh "$tree/.claude/hooks/sitting-close.sh"
+          chmod +x "$tree/.claude/hooks/sitting-close.sh"
+
+      - name: Check the three files
+        run: |
+          set -euo pipefail
+          tree="${RUNNER_TEMP}/seat"
+          held="$(cd "$tree" && find . -type f | sed 's|^\./||' | sort)"
+          want="$(printf '%s\n' \
+            '.claude/hooks/sitting-close.sh' \
+            '.claude/settings.json' \
+            'CLAUDE.md' | sort)"
+          if [ "$held" != "$want" ]; then
+            echo "::error::the seat's place must hold these three files and no other."
+            echo "it holds:"; printf '%s\n' "$held"
+            exit 1
+          fi
+          lines="$(wc -l < "$tree/CLAUDE.md")"
+          if [ "$lines" -gt 20 ]; then
+            echo "::error::seat/CLAUDE.md is ${lines} lines, and it must be 20 or fewer."
+            exit 1
+          fi
+          test -x "$tree/.claude/hooks/sitting-close.sh"
+          bash -n "$tree/.claude/hooks/sitting-close.sh"
+          python3 -m json.tool "$tree/.claude/settings.json" > /dev/null
+          echo "3 files, CLAUDE.md ${lines} lines."
+
+      - name: Push the orphan branch
+        run: |
+          set -euo pipefail
+          tree="${RUNNER_TEMP}/seat"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # One commit, no history: the branch is a published artifact,
+          # not a line of development. Anything already in the working
+          # tree goes, and only the three files come back.
+          git checkout --orphan seat
+          git rm -rf --quiet . > /dev/null
+          git clean -fdxq
+          cp -R "$tree/." .
+          git add -A
+          git commit --quiet -m "seat: the place for a sitter's session (from ${GITHUB_SHA})"
+
+          echo "the branch holds:"
+          git ls-files -s
+
+          git push --force origin seat

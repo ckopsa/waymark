@@ -17,7 +17,9 @@
     adds to both;
   - a 404 and a 409 count their bytes too, because the model reads a
     refusal exactly as it reads an allowance;
-  - a call from a session with no open sitting counts nothing;
+  - a call from a session with no open sitting counts nothing, and
+    `waymark_sit`'s own answer counts on the sitting it just opened
+    (waymark-fp62.7.19: that answer carries the seat's walk);
   - the close freezes `served`, and a later call under the same grant
     does not move the closed row;
   - the ledger answers `served` by tool over the window, and
@@ -190,13 +192,18 @@
           (:content result)))
 
 (defn- sit!
-  "A bound session, and the sitting it opened."
+  "A bound session, the sitting it opened, and the bytes the sit's own
+  answer served — counted under `waymark_sit` since waymark-fp62.7.19,
+  because that answer now carries the seat's walk and a lever nobody
+  can read is a lever nobody pulls."
   [h]
   (let [sid (initialize! h)
-        answer (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))]
+        r (tool h (with-session sid) "waymark_sit" {:key a-key})
+        answer (doc-of r)]
     {:sid sid
      :grant (str (:grant answer))
-     :sitting (str (:sitting answer))}))
+     :sitting (str (:sitting answer))
+     :bytes (bytes-of r)}))
 
 (def ^:private close-counts
   "One wake's usage, as a Stop hook sums it off the transcript. The
@@ -217,16 +224,19 @@
         h (engine/handler eng)
         model (add-model! eng)
         _ (open-seat! eng model)
-        {:keys [sid sitting grant]} (sit! h)
+        {:keys [sid sitting grant bytes]} (sit! h)
         _ (meal! eng "Soup")]
 
     (testing "the sit opened the sitting the counter looks for"
       (is (string? sitting))
       (is (= sitting (str (:id (seats/open-sitting-for-grant eng grant))))))
 
-    (testing "and it has read nothing yet: the empty map, not a hole"
-      (is (= {} (served-of eng sitting))
-          "the birth writes `served` as {} beside the two zeroed counters"))
+    (testing "and it has read nothing but its own sit"
+      (is (= {:calls 1 :bytes bytes} (line-of eng sitting "waymark_sit"))
+          "the sit's answer is the wake's first line, and the walk it
+           carries is the largest thing this door serves a firing")
+      (is (= [:waymark_sit] (keys (served-of eng sitting)))
+          "one line so far, and it is the tool that answered"))
 
     (let [r1 (tool h (with-session sid) "waymark_query" {:kind "meal"})
           n1 (bytes-of r1)]
@@ -243,8 +253,8 @@
                  (line-of eng sitting "waymark_query")))))
 
       (testing "and no other tool was billed for it"
-        (is (= [:waymark_query] (keys (served-of eng sitting)))
-            "one key, and it is the tool that answered")))))
+        (is (= #{:waymark_sit :waymark_query} (set (keys (served-of eng sitting))))
+            "two keys, and each is a tool that answered")))))
 
 ;; ── 2 · a refusal's bytes count too ────────────────────────────────
 
@@ -299,21 +309,22 @@
         h (engine/handler eng)
         model (add-model! eng)
         _ (open-seat! eng model)
-        {:keys [sitting]} (sit! h)
+        {:keys [sitting bytes]} (sit! h)
         _ (meal! eng "Chowder")
         ;; a second session of the same person's tool: it never
         ;; presented the key, so it wears the delegate's leash and no
         ;; sitting stands under it
-        loose (initialize! h)]
+        loose (initialize! h)
+        sat {:waymark_sit {:calls 1 :bytes bytes}}]
 
-    (testing "the bound session's sitting is open and has read nothing"
-      (is (= {} (served-of eng sitting))))
+    (testing "the bound session's sitting is open and has read only its sit"
+      (is (= sat (served-of eng sitting))))
 
     (testing "the unbound session's call writes nothing anywhere"
       (let [r (tool h (with-session loose) "waymark_query" {:kind "meal"})]
         (is (some? (:content r)) "the door answered it, one way or the other")
         (is (pos? (bytes-of r)) "and the answer had bytes to count"))
-      (is (= {} (served-of eng sitting))
+      (is (= sat (served-of eng sitting))
           "R-10.6a: one lookup by grant, so another session's reading is
            never billed to this seat's wake"))
 
@@ -373,7 +384,7 @@
         h (engine/handler eng)
         model (add-model! eng)
         seat (open-seat! eng model)
-        {:keys [sid sitting]} (sit! h)
+        {:keys [sid sitting] sat :bytes} (sit! h)
         soup (:id (meal! eng "Soup"))
         stew (:id (meal! eng "Stew"))
         accept (fn [id] (tool h (with-session sid) "waymark_invoke"
@@ -384,7 +395,9 @@
         q2 (tool h (with-session sid) "waymark_query" {:kind "meal"})
         invoked (+ (bytes-of a1) (bytes-of a2))
         queried (+ (bytes-of q1) (bytes-of q2))
-        total (+ invoked queried)]
+        ;; the sit's own answer is the wake's first served line
+        ;; (waymark-fp62.7.19), so it is in the window's sum too
+        total (+ sat invoked queried)]
 
     (testing "two allowances and two reads, all counted on the open wake"
       (is (false? (:isError a1)) (text-of a1))
@@ -403,7 +416,8 @@
         (is (= 2 (:transitions doc))))
 
       (testing "the seventh answer: which tool served the bytes"
-        (is (= {:waymark_invoke {:calls 2 :bytes invoked}
+        (is (= {:waymark_sit {:calls 1 :bytes sat}
+                :waymark_invoke {:calls 2 :bytes invoked}
                 :waymark_query {:calls 2 :bytes queried}}
                (:served doc))
             "summed by tool over the window's closed sittings"))
