@@ -8,8 +8,10 @@
 # for a sitter that touches no code (waymark-fp62.7.18).
 #
 # So the Routine attaches a place that holds the hook and nothing
-# else. This workflow assembles that place and force-pushes it as the
-# single-commit orphan branch `seat`:
+# else: the repository ckopsa/waymark-seat, whose own sync workflow
+# mirrors the branch this one publishes (a Routine attaches a
+# repository, not a branch). This workflow assembles that place and
+# force-pushes it as the single-commit orphan branch `seat`:
 #
 #   CLAUDE.md                        <- seat/CLAUDE.md
 #   .claude/settings.json            <- seat/.claude/settings.json

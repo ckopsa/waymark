@@ -794,13 +794,14 @@ the sitter, or the grant is lost, because those are rows.
 
 **R-12.17** The harness must close the sitting. The repository that
 the Routine clones carries a Stop hook in its `.claude/settings.json`.
-The Routine attaches the seat's place and not the code: the branch
-`seat` of this repository, which holds that hook, its settings and a
-short note. A Routine's firing is one prompt, so the session raises
-one Stop event, at its end. The hook reads the session's transcript.
-It sums the usage of each API response, in the session and in each
-subagent beside it. It then posts the four token counts and the turn
-count to `POST /api/-/sittings/close`. It sends the seat's key in the header
+The Routine attaches the seat's place and not the code: a repository
+that holds that hook, its settings and a short note, mirrored from
+the branch `seat` of this repository. A Routine's firing is one
+prompt, so the session raises one Stop event, at its end. The hook
+reads the session's transcript. It sums the usage of each API
+response, in the session and in each subagent beside it. It then
+posts the four token counts and the turn count to
+`POST /api/-/sittings/close`. It sends the seat's key in the header
 `Waymark-Seat-Key`. The engine finds the seat by that key. The
 engine then closes that seat's open sitting through the sitting's
 own `close` door (R-10.4), so the handler reads the model's prices
