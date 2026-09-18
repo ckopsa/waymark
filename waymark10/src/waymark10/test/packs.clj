@@ -2853,10 +2853,18 @@
             ;; the published filter, so page one is always the rest.
             ;; The pass keeps its own tally so a violation below can say
             ;; what it saw and did, not only that the fills were outranked.
+            ;; The listing carries its query as a ring :query-string.
+            ;; `req` puts the whole string in :uri, and a uri with a
+            ;; `?` in it matches no route: the pass then answered 404,
+            ;; saw nothing, withdrew nothing, and the fills were
+            ;; outranked whenever a scenario had staged a finding —
+            ;; the flake the tally was added to explain.
             pass (loop [round 0 tally {:rounds 0 :seen 0 :gone 0 :refused []}]
-                   (let [listing (req ctx :get (str "/api/"
-                                                    (:plural (rdef ctx :insight))
-                                                    "?state=published&page[size]=100"))
+                   (let [listing ((:handler ctx)
+                                  {:request-method :get
+                                   :uri (str "/api/" (:plural (rdef ctx :insight)))
+                                   :query-string "state=published&page[size]=100"
+                                   :headers (:walker-headers ctx)})
                          items (get-in (json ctx listing) [:data :items])
                          tally (-> tally
                                    (update :rounds inc)
