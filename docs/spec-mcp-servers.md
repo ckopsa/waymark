@@ -29,7 +29,7 @@ Fields a person states:
 | `command`, `args` | What a stdio server is started with. |
 | `auth_env` | The NAME of an environment variable on the engine's host that holds the `Authorization` header value. Never the value. |
 | `passthrough` | True only on the row named `gate`. Its tools already wear their prefixes. |
-| `powers` | The policy. A list of `{power, tools, why}`. |
+| `powers` | The policy. A list of `{power, tools, why, constraints}`. |
 | `note` | Free words for the next person. |
 
 Fields the engine writes: `tools` (the mirror of `tools/list`: each
@@ -66,6 +66,8 @@ One entry: `{"power": "email.read", "tools": ["read", "search"], "why": false}`.
 - `power` is the dotted token a grant names.
 - `tools` are tool names or globs with `*` on this server.
 - `why` true says each call must carry one sentence of reason.
+- `constraints` are the tool input fields a grant's filter may name for
+  this power. An entry that lists none admits no filter.
 
 A tool that no entry names does not exist through the power door,
 whatever the server offers. The engine judges a call in this order: no
@@ -106,6 +108,59 @@ engine principal. A second sweep makes no changes.
 The discover answer shows one list. `doors.ask.powers` shows the servers'
 tokens and the tokens of the active capability rows together. Read that
 list to compose an ask.
+
+### The narrow power
+
+A `powers` entry can hold `constraints`: a list of tool input field
+names. A grant filter may name these fields and no other field. The
+bench row lists `["repo", "path"]` on its find, read and edit entries.
+The bench row lists `["repo"]` on its pull entry, because a path
+cannot narrow a whole checkout. An entry that lists no constraints
+admits no filter at all. Gate's entries list none.
+
+The engine judges a filter at the ASK. A scope entry that names a
+dotted power and carries a `filter` may name only the fields that
+power's `constraints` list. The engine refuses the ask when the filter
+names another field. The engine refuses the ask when the power lists
+no constraints. The guard is `scope-filters-are-filterable`, which is
+the guard that judges a filter on a kind as well. A dotted token that
+only the capability registry names keeps its old judgment: the engine
+does not narrow it, and its own enforcement point reads its filter.
+
+One power can carry more than one filtered entry on one grant. Write
+one entry for each repository you narrow to. The grant surface keeps
+every entry. A kind keeps the one-entry rule, because a kind's filters
+are a query.
+
+The power door judges every call. The door reads the call's `repo`
+value. The value must equal one value the filter names. A comma in a
+filter value means "any of these". The door reads the call's `path`
+value. The value must match one glob the filter names. The glob grammar is
+the rig's deny grammar: a `*` matches any characters, slashes
+included, and a `?` matches one character. A glob also matches the
+last part of the path alone, so `*.pem` matches `keys/server.pem`. The door admits the call when ANY entry admits it.
+
+The door adds one argument to a call that names no path, and to a call
+whose path is `.`. The argument is `allow`. It holds the globs of the
+entries that admitted the call. The rig then holds itself to those
+globs for that one call.
+
+The door refuses a call that no entry admits. The refusal is a 403.
+The sentence names the power, the field, the call's value and the
+filter. The door sends nothing to the server on a refusal.
+
+The engine adds two more arguments to a bench call from a bound
+sitting. `seat` is the seat's id. `sitting` is the sitting's id. The
+engine reads both from the session's binding, in the MCP dispatch, so
+the power door stays a function of the grant and the call. A session
+with no bound sitting carries neither argument. The rig holds no seat
+between calls, so the engine names the office on every call. The
+engine's own hand carries no session, so its own calls name no office.
+
+The discover answer publishes the fields. `doors.ask.constraints` maps
+each power to its field names. A power that admits no filter is absent
+from that map. `waymark_powers` shows `constraints` on each tool whose
+entry lists them.
 
 ## 5. The clients
 
@@ -177,9 +232,27 @@ Each step is one restate by a person and no deploy of the engine.
    and asserts its own skip otherwise, because a test that runs without
    an assertion is a failure and a machine without python3 is not a
    broken engine.
+10. An ask that filters `bench.read` by `branch` refuses. The same ask
+    that filters it by `repo` stands.
+11. A grant that filters `bench.read` to one repository forwards a read
+    on that repository. It refuses a read on another repository with a
+    403 that names the filter, and the rig hears nothing.
+12. A grant that filters `bench.read` by path forwards a read inside
+    the globs and refuses a read outside them. A find that names no
+    path forwards with the globs as `allow`.
+13. Two filtered entries for `bench.edit` stand on one grant. The door
+    admits a call either entry admits. The door refuses a call neither
+    admits.
+14. An ask that filters `telegram.send` refuses, because the gate row
+    lists no constraints.
+15. A bench call through `waymark_power` in a bound sitting carries
+    `seat` and `sitting`. A call with no bound sitting carries neither.
+16. The discover answer lists the constraints of the bench powers and
+    lists none for Gate's.
 
-Tests: `waymark10/test/waymark10/mcp_servers_test.clj` (1 to 7, 9) and
-`waymark10/test/waymark10/gate_proxy_test.clj` (8).
+Tests: `waymark10/test/waymark10/mcp_servers_test.clj` (1 to 7, 9),
+`waymark10/test/waymark10/gate_proxy_test.clj` (8) and
+`waymark10/test/waymark10/narrow_power_test.clj` (10 to 16).
 
 ## 9. Deviations on record
 

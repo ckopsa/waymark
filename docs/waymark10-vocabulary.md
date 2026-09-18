@@ -701,3 +701,22 @@ therefore down to the powers no server enforces — `feed.preview_as` and
 (`mcp-servers/sweep-capabilities!`) retires the rows a server's powers
 took over, so one word is never registered twice. `doors.ask.powers`
 lists both halves as one list.
+
+A `powers` entry also says how NARROWLY a grant may name its token
+(waymark-fp62.6.3.5): `constraints` is the list of tool input fields a
+scope entry's `filter` may name for that power — `["repo" "path"]` on
+the bench's read, `[]` (and so no filter at all) on every one of
+Gate's. `scope-filters-are-filterable` judges a filtered dotted entry
+against that list at the ask, so a person is never asked to approve a
+narrowing the door could not honour; several filtered entries may name
+one power, where a kind still gets one. The power door then judges
+each CALL against the filters before it forwards — a `repo` compared
+for equality, a `path` matched against globs in the rig's own fnmatch
+grammar (`*` any characters, slashes included; `?` one; a glob also
+matches the last path part alone), a whole-tree call forwarded with the
+globs as `allow`, and a call outside every entry refused 403 without
+touching the server. `doors.ask.constraints` and `waymark_powers`
+publish the fields, so an agent asks for one repository rather than
+for a rig. The MCP dispatch adds `seat` and `sitting` to a bench call
+made in a bound sitting, so the rig's record of who touched a checkout
+names the office and not the model.

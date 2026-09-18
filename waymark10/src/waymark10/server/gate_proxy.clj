@@ -26,9 +26,16 @@
   passthrough, `why` is demanded when the entry says so and removed
   before the forward, because that server never asked for it.
 
-  THE FILTER IS REFUSED, not interpreted, as before: a grant entry
-  carrying a filter admits nothing here, because forwarding under a
-  constraint this door had not understood would honour nothing.
+  THE FILTER IS INTERPRETED, per call (waymark-fp62.6.3.5). A grant
+  entry may carry filters, and the mcp_server row's `constraints` said
+  at the ask which fields they may name — so this door never meets a
+  field it has not been taught. `filter-verdict` judges each call
+  against them before the forward: a `repo` value must be one the
+  filter names, a `path` must match one of its globs, a call that
+  names no path at all is forwarded with the globs as `allow`, and a
+  call outside every entry refuses 403 without touching the rig. The
+  entry's existence is what `admitted?` still answers, so affordances
+  offer a narrowed power rather than hiding it.
 
   THE BENCH HELPERS (`bench-rig`, `bench-tool`, `bench-tool?`,
   `bench-max-bytes`, `bench-capped`) stay here because the bench's
@@ -84,6 +91,12 @@
   discover's doors.ask.powers lists."
   servers/nameable-tokens)
 
+(def power-constraints
+  "Token → the fields a grant's filter may narrow it by, for the
+  tokens that admit any (waymark-fp62.6.3.5). What discover's
+  doors.ask.constraints lists beside the powers."
+  servers/power-constraints)
+
 ;; ── the bench, as this door knows it (waymark-fp62.6.3.2) ───────────
 
 (def bench-rig
@@ -137,19 +150,151 @@
 ;; ── the grant's read of the policy ──────────────────────────────────
 
 (defn- admitted?
-  "Does the presented visibility admit this power token, as this door
-  enforces it? The entry must EXIST (visibility already judged
-  audience, acceptance, expiry and revocation) and must carry NO
-  filter, because this door interprets no constraint."
+  "Does the presented visibility admit this power token at all? The
+  entry must EXIST — visibility already judged audience, acceptance,
+  expiry and revocation, so every one of those has collapsed into a
+  missing entry by the time this asks.
+
+  A FILTER NO LONGER DISQUALIFIES (waymark-fp62.6.3.5). The entry says
+  the token is held; whether THIS call sits inside the filter is a
+  question about the call, and `filter-verdict` asks it per call in
+  `invoke-for`. Affordances are a question about the token, so they
+  read this: a seat granted bench.read over one repository is offered
+  bench__read and refused the repositories it was not granted."
   [vis token]
-  (let [entry (grants/capability-entry vis token)]
-    (and (some? entry) (nil? (:filters entry)))))
+  (some? (grants/capability-entry vis token)))
 
 (defn admitted-tokens
   "The power tokens any row names that this visibility admits."
   [eng-or-rpc vis]
   (let [eng (engine! eng-or-rpc)]
     (into #{} (filter #(admitted? vis %)) (servers/power-tokens eng))))
+
+;; ── the filter, interpreted (waymark-fp62.6.3.5) ────────────────────
+;;
+;; The owner's ruling: the ENGINE is the enforcement point for the
+;; bench, the rig is the hand. The seat key stays in the engine and
+;; the rig holds no seat and no rule between calls — so a narrow power
+;; is a sentence the grant carries and this door reads on every call,
+;; not a configuration somebody remembered to put on the rig.
+;;
+;; A grant entry's `:filters` is a vector of {field value} maps (the
+;; mcp_server row's `constraints` already refused, at the ask, every
+;; field this door would not know what to do with). The door admits a
+;; call that ANY of the maps admits. A `path` value is a comma list of
+;; GLOBS; every other field is a comma list of WORDS compared for
+;; equality, which is the collection grammar's own `:eq`.
+
+(def ^:private path-filter-field
+  "The one filter field whose values are PATH GLOBS and not words. It
+  is spelled once because the judgment below and the `allow` argument
+  the rig receives must mean the same field."
+  "path")
+
+(defn- comma-values
+  "A filter value as the list it may be: `a,b` is 'either', a blank
+  part is nothing at all."
+  [v]
+  (into [] (comp (map str/trim) (remove str/blank?))
+        (str/split (str v) #",")))
+
+(defn path-glob-matches?
+  "Does this glob match this path? The grammar is the bench rig's own
+  deny grammar, Python's fnmatch, so a person writing a grant filter
+  and a person writing a repository policy write the same sentence:
+  `*` matches any run of characters, slashes included, `?` matches
+  one character, and `**` is `*`. A glob also matches when it matches
+  the path's last part alone (`*.pem` matches keys/server.pem), and a
+  glob that starts with `**/` also matches with that prefix removed.
+  `docs/*` matches docs/a/b.md; `*.md` matches docs/b.md."
+  [glob path]
+  (let [glob (str glob)
+        path (str path)
+        re-of (fn [g]
+                (re-pattern
+                 (str "\\A"
+                      (str/join (map (fn [tok]
+                                       (case tok
+                                         "**" ".*"
+                                         "*" ".*"
+                                         "?" "."
+                                         (java.util.regex.Pattern/quote tok)))
+                                     (re-seq #"\*\*|\*|\?|[^*?]+" g)))
+                      "\\z")))
+        base (last (str/split path #"/"))
+        full (re-of glob)]
+    (boolean
+     (or (re-matches full path)
+         (re-matches full base)
+         (and (str/starts-with? glob "**/")
+              (re-matches (re-of (subs glob 3)) path))))))
+
+(defn- whole-tree?
+  "Is this call's `path` the whole checkout? A find that names no path
+  and the rig's own `.` are one ask, and a path filter answers both
+  the same way: not a refusal, but the `allow` list the rig is told to
+  hold itself to."
+  [args]
+  (let [p (str/trim (str (:path args)))]
+    (or (str/blank? p) (= "." p))))
+
+(defn- field-admits?
+  [fname want got]
+  (if (= path-filter-field fname)
+    (boolean (some #(path-glob-matches? % got) (comma-values want)))
+    (boolean (some #(= (str got) %) (comma-values want)))))
+
+(defn- entry-verdict
+  "One filter map against one call's arguments → {:allow globs|nil}
+  when it admits the call, {:miss {…}} when it does not. `:allow` nil
+  means this map narrows no path, and openness absorbs below."
+  [fm args]
+  (reduce
+   (fn [acc [f want]]
+     (let [fname (name f)
+           got (get args (keyword fname))]
+       (cond
+         (and (= path-filter-field fname) (whole-tree? args))
+         (update acc :allow (fnil into []) (comma-values want))
+
+         (nil? got)
+         (reduced {:miss {:field fname :got nil :want (str want)}})
+
+         (field-admits? fname want got) acc
+
+         :else (reduced {:miss {:field fname :got (str got)
+                                :want (str want)}}))))
+   {:allow nil}
+   fm))
+
+(defn- filter-verdict
+  "THE PER-CALL JUDGMENT. The grant entry's filters against this
+  call's arguments → {:allow globs|nil} to forward, or {:miss {:field
+  :got :want}} to refuse. An entry with no filters admits everything,
+  which is a grant behaving exactly as it did before this leg.
+
+  `:allow` is the union of the path globs of the entries that admitted
+  the call, and nil when ONE of them narrows no path: openness absorbs
+  a sibling's narrowing here as it does everywhere else in the
+  surface, because a caller admitted by an unnarrowed entry is not
+  narrowed at all."
+  [filters args]
+  (if (empty? filters)
+    {:allow nil}
+    (let [verdicts (mapv #(entry-verdict % args) filters)
+          ok (remove :miss verdicts)]
+      (cond
+        (empty? ok) {:miss (:miss (first verdicts))}
+        (some #(nil? (:allow %)) ok) {:allow nil}
+        :else {:allow (not-empty (vec (distinct (mapcat :allow ok))))}))))
+
+(defn- with-allow
+  "The arguments the rig receives, with `allow` on them when the
+  filter narrowed paths and the call named none: the rig holds itself
+  to the globs for the one call, and the engine never has to enumerate
+  a tree to answer a find."
+  [args allow]
+  (cond-> (or args {}) (seq allow) (assoc :allow (vec allow))))
 
 ;; ── affordances ─────────────────────────────────────────────────────
 
@@ -175,12 +320,18 @@
           (update :required #(vec (distinct (conj (vec %) "why")))))
       schema)))
 
-(defn- affordance [{:keys [name token description input-schema why]}]
+(defn- affordance [{:keys [name token description input-schema why entry]}]
   (cond-> {:href (str "/api/-/gate/" name)
            :method "POST"
            :capability token
            :description (str description)
            :input (present-schema input-schema why)}
+    ;; the fields a grant may narrow this power by (waymark-fp62.6.3.5)
+    ;; — an agent reads them here and asks for the narrow grant itself,
+    ;; rather than asking for the whole rig and being told no
+    (seq (:constraints entry))
+    (assoc :constraints (vec (:constraints entry)))
+
     why
     (assoc :why {:required true
                  :note (str "One sentence of rationale; the person who "
@@ -244,6 +395,22 @@
                            " — a human in the house approves it, and the"
                            " grant it mints is what this door reads.")]})))
 
+(defn- refuse-filter
+  "The 403 for a call the grant admits the TOKEN for and not this
+  call (waymark-fp62.6.3.5). It names four things — the token, the
+  field, what the call carried and what the filter admits — because an
+  agent that reads all four either calls inside the filter or asks for
+  one that names what it needs, and an agent told only `refused` can
+  do neither. Nothing reached the rig."
+  [tname token {:keys [field got want]}]
+  (refuse-invoke
+   (str "Invoking " tname " is the " token " capability, and this grant"
+        " names it with a filter this call stands outside of: `" field
+        "` is " (if got (str "\"" got "\"") "not on this call")
+        " and the filter admits " want ". Call inside the filter, or"
+        " ask for one that names what you need.")
+   token))
+
 (defn- refuse-why
   "The 422 for a why-required tool called with no why."
   [tname]
@@ -280,16 +447,20 @@
   grant, a required why demanded, and only then the forward. The
   refusals come first and the order is the security property: a tool
   no entry names 404s (it does not exist through this door, whatever
-  the server offers), an ungranted one 403s naming the ask, a missing
-  why 422s, and NONE of them touches a server. A granted call forwards
-  through the row's client and answers the payload VERBATIM."
+  the server offers), an ungranted one 403s naming the ask, a call
+  outside the grant's FILTER 403s naming the field and the value
+  (waymark-fp62.6.3.5), a missing why 422s, and NONE of them touches a
+  server. A granted call forwards through the row's client — with
+  `allow` added when the filter narrowed paths and the call named none
+  — and answers the payload VERBATIM."
   [eng-or-rpc vis tool args]
   (let [eng (engine! eng-or-rpc)
         tname (str tool)
         {:keys [row entry token why] :as hit} (servers/resolve-tool eng tname)]
     (when (or (nil? hit) (nil? entry))
       (throw (p/not-found "power" tname)))
-    (let [gentry (grants/capability-entry vis token)]
+    (let [gentry (grants/capability-entry vis token)
+          verdict (when gentry (filter-verdict (:filters gentry) args))]
       (cond
         (nil? gentry)
         (refuse-invoke
@@ -299,19 +470,15 @@
               " or file the ask.")
          token)
 
-        (some? (:filters gentry))
-        (refuse-invoke
-         (str "This grant names " token " with a filter, and this door"
-              " interprets no constraint yet — forwarding under a"
-              " constraint it had not understood would be honouring"
-              " nothing. Ask again without a filter.")
-         token)
+        (:miss verdict)
+        (refuse-filter tname token (:miss verdict))
 
         (and why (not (carries-why? args)))
         (refuse-why tname)
 
         :else
-        (servers/call! eng tname (forward-args row args))))))
+        (servers/call! eng tname
+                       (forward-args row (with-allow args (:allow verdict))))))))
 
 ;; ── the engine's own hand (the write path) ──────────────────────────
 
@@ -323,8 +490,12 @@
 
   Built only for a request that wears a visibility admitting at least
   one token any row names. Each call resolves the tool to its row by
-  prefix and asks `admitted?` about the entry's token, which is
-  `invoke-for`'s own read. IT DOES NOT THROW: a refusal, a dark row,
+  prefix and judges the entry's token against the grant exactly as
+  `invoke-for` does, filter and all — the engine's hand is leashed no
+  more loosely than the model's. It carries no session, so it stamps
+  no seat and no sitting: a handler's own call is the ENGINE acting,
+  and an office it made up would be a lie in the rig's record.
+  IT DOES NOT THROW: a refusal, a dark row,
   a server that answers an error — each one answers nil, and the
   write it was opened inside of commits without the field it could
   not fill."
@@ -333,10 +504,13 @@
     (when (and eng vis (seq (admitted-tokens eng vis)))
       (fn power [tool args]
         (let [tname (str tool)
-              {:keys [row entry token]} (servers/resolve-tool eng tname)]
-          (when (and entry token (admitted? vis token))
+              {:keys [row entry token]} (servers/resolve-tool eng tname)
+              gentry (when token (grants/capability-entry vis token))
+              verdict (when gentry (filter-verdict (:filters gentry) args))]
+          (when (and entry gentry (not (:miss verdict)))
             (try
-              (servers/call! eng tname (forward-args row args))
+              (servers/call! eng tname
+                             (forward-args row (with-allow args (:allow verdict))))
               (catch Exception e
                 (binding [*out* *err*]
                   (println "waymark10 power" tname "failed -"

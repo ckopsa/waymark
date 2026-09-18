@@ -360,6 +360,17 @@
     (when-some [id (some-> id str not-empty)]
       (some-> (get @a id) :bound :sitting))))
 
+(defn- bound-seat
+  "The seat this session is bound to, or nil. Read from the BINDING
+  and not from the sitting row: `waymark_sit` writes the seat and the
+  sitting onto the binding in one breath (they cannot disagree), and a
+  row load per bench call would be a read the office already knows the
+  answer to."
+  [eng id]
+  (when-some [a (:mcp-sessions eng)]
+    (when-some [id (some-> id str not-empty)]
+      (some-> (get @a id) :bound :seat))))
+
 ;; ── the in-process door ─────────────────────────────────────────────
 
 (defn door
@@ -1079,7 +1090,12 @@
   id, and the token list is every power the mcp_server rows' powers
   name, plus the standing capability rows beside them
   (waymark-fp62.10.4) — the one list a scope may name from, so an
-  agent composing an ask never has to read two. The posture sentence rides
+  agent composing an ask never has to read two. `constraints` rides
+  beside the list (waymark-fp62.6.3.5): the powers a scope entry may
+  NARROW with a `filter`, and the input fields each one admits — so an
+  agent asks for one repository and one path glob rather than for a
+  whole rig, and learns which powers take no filter at all before a
+  person is ever asked to tap one. The posture sentence rides
   beside them so an agent reading only this document still learns
   that asking is the default. An
   unscoped caller (nil visibility — a human, or a system actor) has
@@ -1095,7 +1111,11 @@
   no seat carries no `seat` key at all — absent, the way a kind
   nobody granted is absent."
   [eng vis]
-  (let [seat (seat-routes/seat-door eng vis)]
+  (let [seat (seat-routes/seat-door eng vis)
+        ;; the powers a scope entry may NARROW, and by which fields
+        ;; (waymark-fp62.6.3.5). A token absent from this map takes no
+        ;; filter at all, so an agent asks for it whole or not at all.
+        constraints (gate/power-constraints eng)]
     (cond-> {:posture (str "When something your task needs is absent, file "
                            "an approval_request now — anchored, for "
                            "everything at once — rather than reporting "
@@ -1107,6 +1127,15 @@
                                "lists the tools it admits and waymark_power "
                                "invokes one — the tool list itself never "
                                "changes")}
+      (seq constraints)
+      (assoc :constraints constraints
+             :constraints_note (str "the powers a scope entry may NARROW, "
+                                    "and the input fields its `filter` may "
+                                    "name — ask for the narrow power (one "
+                                    "repository, one path glob) rather than "
+                                    "the whole rig, and add one entry per "
+                                    "narrowing you need; a power absent here "
+                                    "takes no filter at all"))
       (and vis (:grant vis))
       (assoc :anchor {:grant_id (:grant-id vis)
                       :note (str "the grant you are wearing — pass it as "
@@ -2399,6 +2428,31 @@
   (let [n (get-in session [:visibility :seat :bench_max_bytes])]
     (when (and (number? n) (pos? (long n))) (long n))))
 
+(defn- bench-stamped
+  "A bench call's arguments with the OFFICE on them (waymark-fp62.6.3.5,
+  R-5): `seat` and `sitting`, the two ids this session is bound to.
+
+  IT IS DONE HERE AND NOT IN THE DOOR. The power door is a function of
+  a grant and a call, and a session is neither; the MCP dispatch is
+  the one place that holds the binding, so the door stays pure and the
+  stamp rides in as two more arguments the rig reads. A session with
+  no bound sitting — a person's own hand, an agent that never sat —
+  carries neither, and the rig's record then says what is true: nobody
+  is sitting.
+
+  The rig holds no seat between calls (the owner's ruling: the engine
+  is the enforcement point, the rig is the hand), so the office is on
+  every call or on none."
+  [eng session tool args]
+  (if-not (gate/bench-tool? tool)
+    args
+    (let [sid (:mcp-session-id session)]
+      (if-some [sitting (some-> (bound-sitting eng sid) str not-empty)]
+        (cond-> (assoc args :sitting sitting)
+          (some-> (bound-seat eng sid) str not-empty)
+          (assoc :seat (str (bound-seat eng sid))))
+        args))))
+
 (defn- rig-dropped
   "The bytes the BENCH RIG itself removed, added to what the shape
   removed (R-2). The rig caps its own answers and says so in
@@ -2461,11 +2515,14 @@
 
      (= "waymark_power" tool-name)
      (attempt tool-name
-              #(let [tname (str (:tool args))]
-                 (-> (gate/invoke-for gate-rpc (:visibility session) tname
-                                      (gate/bench-capped
-                                       (or (:arguments args) {}) tname
-                                       (seat-byte-ceiling session)))
+              #(let [tname (str (:tool args))
+                     ;; the caller's arguments, capped to the seat's
+                     ;; ceiling and stamped with the office
+                     sent (bench-stamped
+                           eng session tname
+                           (gate/bench-capped (or (:arguments args) {}) tname
+                                              (seat-byte-ceiling session)))]
+                 (-> (gate/invoke-for gate-rpc (:visibility session) tname sent)
                      (shaped args)
                      (rig-dropped))))
 
