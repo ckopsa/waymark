@@ -7,7 +7,15 @@
          ;; day-plan namespaces live under THIS app's src/ since the
          ;; consolidation cleanup (waymark-26j) — module prefixes,
          ;; not separate apps.
-         calendar10/calendar10    {:local/root "../calendar10"}}
+         calendar10/calendar10    {:local/root "../calendar10"}
+         ;; the software factory's kinds (waymark-fp62.6.2): its own
+         ;; module for the same reason calendar10 is one — the day
+         ;; job's change and ci_run belong to neither the household
+         ;; nor the queue. main/factory-resources folds them into
+         ;; THIS engine only when FACTORY10=1; the dependency is here
+         ;; so the household's gate reads their declarations either
+         ;; way.
+         factory10/factory10      {:local/root "../factory10"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}

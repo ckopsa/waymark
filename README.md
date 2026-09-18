@@ -38,6 +38,21 @@ tasks, rotations, the pantry), chores (`choreplan10.*`), and the day
 plan (`dayplan10.*`). The calendar (`calendar10/`) stays its own
 module — a writable domain the queue and the meal plan both cite.
 
+**`factory10/`** is the software factory's module, beside the
+household rather than inside it (waymark-fp62.6.2). It holds two
+kinds today, both mirrors of GitHub that a source writes and a person
+reads:
+
+| kind | what it is | the walk |
+| --- | --- | --- |
+| `change` | one pull request — repository, number, branches, head sha, counts, labels, review state | open → merged, open → closed, closed → open; every door is the mirror's |
+| `ci_run` | one red check run, with the last 200 lines of the failed job | red → classified, by `classify_infra`, `classify_base_red` or `classify_this_change`, each demanding the remedy in one sentence; classified → reclassified, a person's door and nobody else's |
+
+It boots alone (`make check-factory`, `cd factory10 && clojure -M:test`)
+and beside the household: `workqueue10.main` folds its kinds into the
+household registry when `FACTORY10=1`, so this repository's own gate is
+the classifier's first proving ground.
+
 ## Quickstart
 
 Everything runs against one dockerized Postgres on `:5433`
@@ -49,6 +64,8 @@ make test-queue            # the household suite: queue + chores + meals + day p
 make test-calendar         # calendar transport tests
 
 make check-queue           # declaration-time checks + usability warnings (no database)
+make check-factory         # the same, for factory10's two kinds
+make test-factory          # the factory's suite (no database, no network)
 
 make dev-queue             # serve the household engine on :8014 (UI at /api/-/ui)
 

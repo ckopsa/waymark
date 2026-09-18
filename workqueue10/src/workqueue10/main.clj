@@ -69,6 +69,9 @@
             [dayplan10.resources.decision :refer [decision]]
             [dayplan10.resources.span :refer [span]]
             [dayplan10.zone :as zone]
+            ;; the day job's kinds, folded in behind FACTORY10=1 — see
+            ;; `factory-resources` below
+            [factory10.main :as factory]
             [mealplan10.main :as mealplan]
             [mealplan10.scraper :as scraper]
             [workqueue10.confluence :as conf]
@@ -444,6 +447,32 @@
                             "CALENDAR10_GOOGLE_REFRESH_TOKEN")}))
       fake-calendar))
 
+;; ── the day job, behind a switch (waymark-fp62.6.2, R-8) ────────────
+
+(defn factory-resources
+  "factory10's two kinds — `change` and `ci_run` — when FACTORY10=1,
+  and nothing otherwise.
+
+  WHY A SWITCH AND NOT A DEFAULT. factory10 is a MODULE, like
+  workqueue10: the household's queue does not carry the day job's
+  kinds, and a company's engine boots without the household's. The
+  house has one reason to hold them anyway, and it is R-8's: the first
+  proving ground for the CI failure classifier is THIS repository's
+  own gate, so the household's engine must be able to serve a red run
+  before a seat ever runs at work. A switch gives it that without
+  moving the default boot: `make dev-queue` with FACTORY10=1 serves
+  the factory beside the family, and every other boot is untouched.
+
+  THE NAMESPACE LOADS EITHER WAY, and that is deliberate. A
+  declaration runs the check battery at import, so a broken factory10
+  declaration refuses `make check-queue` and every test-queue shard —
+  the household's gate reads the day job's law whether or not it
+  serves it."
+  []
+  (if (= "1" (System/getenv "FACTORY10"))
+    (factory/resources)
+    []))
+
 (defn resources
   "One domestic economics (waymark-bwu), across the household's
   domains: the queue's kind, the folded chore registry (chore,
@@ -686,7 +715,12 @@
                     person composition-request hypothesis inbox-item
                     (thread-resource (conf/thread-confluence thread-srcs
                                                              report-fn))]
-                   dashboard/resources)))))
+                   dashboard/resources))
+       ;; …and the day job, when the switch is on (waymark-fp62.6.2,
+       ;; R-8). Empty by default; see `factory-resources` above. The
+       ;; kinds carry their own :factory domain, so `in-domain` is not
+       ;; wanted here — factory10.main stamps it.
+       (into (factory-resources)))))
 
 (def surfaces
   "Both decision screens, one engine: the housekeeper's day board and

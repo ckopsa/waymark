@@ -49,12 +49,13 @@ name: image
 on:
   push:
     branches: [main]
-    # Only the three modules the Dockerfile COPYs can change the image.
+    # Only the four modules the Dockerfile COPYs can change the image.
     # A docs or .beads commit rebuilding and REDEPLOYING it would be
     # noise with a restart attached.
     paths:
       - 'waymark10/**'
       - 'calendar10/**'
+      - 'factory10/**'
       - 'workqueue10/**'
       - 'Dockerfile.workqueue10'
       - '.github/workflows/image.yml'
@@ -63,6 +64,7 @@ on:
     paths:
       - 'waymark10/**'
       - 'calendar10/**'
+      - 'factory10/**'
       - 'workqueue10/**'
       - 'Dockerfile.workqueue10'
       - '.github/workflows/image.yml'

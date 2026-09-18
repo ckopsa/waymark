@@ -223,7 +223,7 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              waymark10/*|calendar10/*|workqueue10/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
+              waymark10/*|calendar10/*|workqueue10/*|factory10/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
                 echo "code path: $f"
                 code=true ;;
             esac
@@ -261,6 +261,39 @@ jobs:
         uses: ./.github/actions/jvm-crash-report
         with:
           name: quick
+
+  # ── THE FACTORY, ON ITS OWN ──────────────────────────────────────────
+  #
+  # factory10 (waymark-fp62.6.2) is the day job's module beside
+  # workqueue10 and calendar10. Its own group, on the same pattern as
+  # the others, and deliberately WITHOUT a postgres service: both of
+  # its kinds are pure declarations, and its suite judges envelopes
+  # and schemas rather than stored rows. A shard matrix would be two
+  # JVM boots for one namespace, so this stays one job — `discover`
+  # above splits only the two suites that have namespaces to split.
+  #
+  # The declaration gate runs first, for the reason `quick` exists: a
+  # declaration error should not wait behind a suite to be told.
+  test-factory:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      # -Sdeps "$CLJ_SDEPS" before -M, as everywhere in this file:
+      # this job's own Maven repository, from setup-clojure.
+      - name: check-factory — declaration gate, no database
+        run: cd factory10 && clojure -Sdeps "$CLJ_SDEPS" -M:check
+      - name: factory10 — the change family, no database or network
+        run: cd factory10 && clojure -Sdeps "$CLJ_SDEPS" -M:test
+      - name: JVM crash report
+        if: failure()
+        uses: ./.github/actions/jvm-crash-report
+        with:
+          name: test-factory
 
   # The matrix is built from the tree, so adding a test file needs no
   # edit here. Namespaces come from paths: test/a/b_test.clj is
@@ -612,7 +645,7 @@ jobs:
   # does no work, and the one check a merge waits on must not queue
   # behind the cluster's load.
   gate:
-    needs: [changes, quick, test10, test-queue]
+    needs: [changes, quick, test-factory, test10, test-queue]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -621,11 +654,12 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           CODE: ${{ needs.changes.outputs.code }}
           QUICK: ${{ needs.quick.result }}
+          TEST_FACTORY: ${{ needs.test-factory.result }}
           TEST10: ${{ needs.test10.result }}
           TEST_QUEUE: ${{ needs.test-queue.result }}
         run: |
           set -euo pipefail
-          echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test10=$TEST10 test-queue=$TEST_QUEUE"
+          echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE"
           if [ "$CHANGES" != "success" ]; then
             echo "gate: FAIL — the changes job did not succeed ($CHANGES), so whether this diff touches code is unknown."
             exit 1
@@ -634,9 +668,9 @@ jobs:
             echo "gate: PASS — no code paths in this diff; the suites have nothing to say."
             exit 0
           fi
-          for r in "$QUICK" "$TEST10" "$TEST_QUEUE"; do
+          for r in "$QUICK" "$TEST_FACTORY" "$TEST10" "$TEST_QUEUE"; do
             if [ "$r" != "success" ]; then
-              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test10=$TEST10 test-queue=$TEST_QUEUE)."
+              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE)."
               exit 1
             fi
           done

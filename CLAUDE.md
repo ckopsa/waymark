@@ -5,8 +5,8 @@ This file provides instructions and context for AI coding agents working on this
 ## Build & Test
 
 Tests run in **CI, not locally**: the GitHub Actions pipeline
-(`.github/workflows/tests.yml`) shards `test10`, `test-queue` and
-`test-calendar` across runners on every push — push your branch and
+(`.github/workflows/tests.yml`) shards `test10`, `test-queue`,
+`test-calendar` and `test-factory` across runners on every push — push your branch and
 read the `gate` check. The matching `make` targets now just point you
 there (they print the by-hand `clojure -M:test` command if you insist
 on running a suite locally). Don't burn local cycles standing up
@@ -16,7 +16,8 @@ The one thing worth running locally is the fast, no-database
 declaration gate:
 
 ```bash
-make check-queue   # declaration-time checks + usability warnings (no DB)
+make check-queue    # declaration-time checks + usability warnings (no DB)
+make check-factory  # the same, for factory10's two kinds
 ```
 
 The suites that do need the dockerized Postgres on `:5433`
@@ -29,7 +30,7 @@ machines with guarded transitions), from which routing, serialization,
 validation, authorization, live events, documentation, and the conformance
 suite are mechanically projected. The application directories
 (`mealplan10/`, `choreplan10/`, `dayplan10/`, `workqueue10/`,
-`calendar10/`) are declarations driving that engine. Start with
+`calendar10/`, `factory10/`) are declarations driving that engine. Start with
 `README.md`, then `docs/waymark10-design.md` and
 `docs/waymark10-vocabulary.md`.
 
