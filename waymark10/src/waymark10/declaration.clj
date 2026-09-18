@@ -21,7 +21,15 @@
   "normalize-action's whole authored surface, plus the :undo pointer
   verify-undo-pointers reads and strips."
   [:from :to :input :guards :safety :display :handler :emits :edit
-   :place :bulk :batch :waives :touches :unless :record :undo])
+   :place :bulk :batch :waives :touches :unless :record :undo
+   ;; :engine marks a door the ENGINE owns rather than the household —
+   ;; the sync machine's bookkeeping, woven in by mirror/declaration.
+   ;; No application writes it. The ending wall (waymark-fp62.4.1)
+   ;; reads it: a row whose work is over shuts the household's doors,
+   ;; and a mirror must go on recording what its authority says about
+   ;; a task the house finished last month. Outside the fingerprint's
+   ;; action facet, like the weave that stamps it
+   :engine])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
@@ -34,9 +42,12 @@
    ;; waymark-iqa.24/.25): which states — or, for a mirror kind whose
    ;; lifecycle is data rather than machine, which values of which
    ;; field — mean the work was ACCOMPLISHED, and which mean it was LET
-   ;; GO. Read-side only (the feed asks it; no door consults it), so it
-   ;; is not fingerprinted law — the :nav precedent, and the reason a
-   ;; household can teach the difference without minting a revision
+   ;; GO. Since waymark-fp62.4.1 the DOORS read it too: a row whose
+   ;; work is over takes no more doors except the ways back (an
+   ;; optional :ways-back names them where the machine cannot show
+   ;; them). Still outside the fingerprint — the :nav precedent, and
+   ;; the reason a household can teach the difference without minting
+   ;; a revision
    :over
    ;; data
    :schema :create-schema :fields :shape :upcasts

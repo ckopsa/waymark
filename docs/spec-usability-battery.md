@@ -1163,3 +1163,69 @@ level down, unless that field carries its own sentence. The scope entry's
 one (`grants/filter-spelled-by-hand`, spelled once and worn twice), and
 the seat's three waivers are gone. The two operators' boxes this document
 called the last ones are both rows now.
+
+## Amendment — the eighth finding, remedies (waymark-fp62.2.1)
+
+A guard refuses with an `:explain` sentence. Some guards also carry
+`:remedies`, tokens of the form `:kind/action` that name the door which
+clears the refusal. Some carry `:open`, the sentence that admits no door
+clears the gap. A guard with an `:explain` and neither is a **dead end**:
+the caller is told why and is not told what to do. A model that meets a
+dead end tries the same door again, or guesses. Both spend fuel on law
+that was spoken late.
+
+### `[remedies]` — a refusal names the door that clears it
+
+`usability/remedy-warning` writes one sentence per dead end: the kind, the
+door, the guard, the sentence the caller actually reads, and the fix.
+`usability/remedies` applies it to one declaration.
+
+It is **not in `policies`**, and that is the one structural difference
+from the seven. The other seven are opinions about ONE declaration, so the
+check CLI prints them under its kind. Whether a dead end is still owed
+depends on the waiver list, which is one file for every kind at once, so
+`waymark10.check` reads the census over the whole registry and prints the
+sentences beside the counts. The prose lives in the battery because every
+battery sentence is written in one place and read in one voice.
+
+### The census line
+
+`make check-queue` prints one line beside the kind census, and the gate
+prints it on every push because the gate runs `check-queue`:
+
+```
+  [remedies] guards 225, remedies 20, open 81, waived 124, dead ends 0
+```
+
+`guards` counts the fences a caller can walk into and READ. A `:hide`
+guard answers 404 and narrates nothing, so it owes no way out — a
+sentence there would leak the law the hiding conceals. A `:warning` guard
+is acknowledgable, and the acknowledge protocol is its way out. Neither is
+a fence by this count.
+
+### The waiver list only shrinks
+
+`waymark10/resources/waymark10/remedies-waivers.edn` holds the dead ends
+that existed on the day the check landed, so the warning list shows what
+is NEW. A waiver names the guard — or a name PREFIX, for the guards a
+parameterized builder mints, since `g/require` names itself
+`require:<fact>` and no list can enumerate the instances — and the bead
+that will clear it.
+
+`waymark10.check` **refuses** a waiver that waives nothing: one whose
+guards now all carry `:remedies` or `:open`. That is what makes the list
+shrink and never grow. A waiver that matches no guard in this application
+is counted, not recited: the check runs over one application's kinds, so
+most of a framework-wide list is legitimately absent.
+
+A `:remedies` token is held to naming a door that exists — `:kind/action`,
+read against the registry, with `create` the door every kind serves and no
+kind lists. A remedy pointing at an address that would 404 sends the
+caller somewhere worse than nowhere, so that is an error too.
+
+### What is not asked here
+
+Clearing the waivers is one small change per guard, and the plan is one
+bead per file. The planner that walks `:remedies` into a PATH
+(`docs/spec-refusal-plan.md`) is its own bead; this check is what makes
+the planner's input complete.

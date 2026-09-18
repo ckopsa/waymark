@@ -1822,7 +1822,7 @@
       (handler (cond-> (assoc req :waymark10/principal principal)
                  vis (assoc :waymark10/visibility vis))))))
 
-(defn- wrap-refusals-counted
+(defn wrap-refusals-counted
   "R-10.6, the refusals half: a 409 served under a live grant is fuel
   the sitting spent on law the model did not know ahead of time, so
   the open sitting for that grant counts one. A refusal is the first
@@ -1833,13 +1833,24 @@
 
   It is one middleware rather than a line in each door because every
   refusal in this engine leaves the same way: a tagged problem thrown
-  through the boundary that projects it. Mounted INSIDE wrap-identity
-  (it reads the visibility that boundary resolved, which the raw
-  request does not carry) and inside wrap-problems (it re-throws
-  untouched; the projection to problem+json is not this function's
-  business). Recorded: the MCP door builds its own handler out of
-  `assemble-routes` and wears `wrap-problems` alone, so an agent's 409
-  at that door is not counted yet."
+  through the boundary that projects it. Mount it INSIDE the boundary
+  that resolved the visibility it reads, which the raw request does
+  not carry, and inside wrap-problems (it re-throws untouched; the
+  projection to problem+json is not this function's business).
+
+  It is PUBLIC because there are two such boundaries. `handler` mounts
+  it inside `wrap-identity`. The MCP door builds its own handler out
+  of `assemble-routes`, and its request wears the visibility the
+  transport resolved for the session, so `mcp/door` mounts this same
+  middleware there: one refusal at either door counts once
+  (waymark-fp62.7, item 2).
+
+  It counts a refusal the engine THREW. A bulk or batch call that
+  reports a per-item refusal in a 200 report counts nothing: the
+  report keeps the refusal's sentence and drops its status, so a
+  per-item 409 cannot be told from a per-item 404 or 422 here. An
+  atomic bulk, whose refusal leaves as one thrown 409, is counted like
+  any other."
   [handler eng]
   (fn [req]
     (try

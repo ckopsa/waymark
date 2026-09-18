@@ -161,6 +161,14 @@
 ;; materialising from whatever workday templates the engine holds, all
 ;; of them in 2020 and so all of them passed), walked to set, and
 ;; replanned as a client would.
+;;
+;; Which is why only ONE of them stages a member (waymark-fp62.4.1): a
+;; plan's :member is a ref and the engine resolves every ref at the
+;; door, so the day the conformance tier actually creates needs a
+;; member who stands — it stages one as a `:given` row and cites it by
+;; `{given/who}`. The check-tier scenario below creates nothing and
+;; resolves nothing; its member id names no row because offline there
+;; is no store for one to stand in.
 
 (defscenario reshape-names-the-other-shape
   "Reshaping a workday into a workday would skip and re-mint every
@@ -180,8 +188,10 @@
    replan, and the refusal names the door that fits — close."
   {:kind    :day_plan
    :attempt :replan
+   :given   [{:kind :member :handle :who :state :active
+              :data {:display "Scenario spent day" :actor_type "human"}}]
    :row     {:state :set
-             :data {:date "2020-01-06" :member "01HZQ7Y7F2R3W4V5X6Y7Z8A9C2"
+             :data {:date "2020-01-06" :member "{given/who}"
                     :shape "workday"}}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}

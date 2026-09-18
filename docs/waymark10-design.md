@@ -3394,3 +3394,64 @@ Proof: `waymark10/test/waymark10/process_sugar_test.clj` (memory twin).
 Follow-up beads: respell `outcome.make_it_so` through `:process :atomic`
 (the `approval_request` proof shape), and advertise the steps on the
 envelope.
+
+## The charter as conformance — an advertised door is an obligation
+
+The bug that named this (waymark-tgy): a task the house finished last
+month went on offering **Done** and **Prioritize**. That kind's machine
+is the sync machine, its lifecycle is data (`:over {:field :status …}`),
+and the two never met — so the door really was open, the household's own
+screen really did render it, and the piece wall really did admit it. Two
+more sat beside it: an insight published citing `/api/people/<invented>`
+(waymark-79f) and another offering `still_stands` on a uuid typed from
+memory (waymark-br7v). All three are one defect. The envelope promised
+something the house could not honestly do.
+
+A charter an agent must verify is a charter that costs fuel to read. So
+the rule is not *write better declarations*; a rule every kind must
+remember is a rule some kind forgets. The engine builds two walls at the
+door instead, and `render` probes through exactly the list `invoke` runs
+through (`guards/walled-guards`) — advertisement equals enforcement, per
+row, by construction.
+
+**The ending wall.** `:over` was read-side only: the feed asked it, no
+door consulted it. Now the doors consult it. A row whose work is over
+takes no more doors, except the ways BACK. Where an ending is a state the
+machine shows those doors itself (a transition that departs an ending and
+lands outside every ending); where it is a field value it cannot, so the
+kind spells `:over :ways-back` and the def-site gate refuses an exception
+that names no door. The sync machine's own bookkeeping is marked
+`:engine true` by the mirror weave and is never shut — a mirror must keep
+recording what its authority says about a finished row. `:over` still
+rides no fingerprint facet, which is a debt this records rather than
+pays: a household that re-spells its endings changes which doors open,
+and mints no revision saying so.
+
+**The dangling-ref wall.** Every input entry whose properties carry
+`:kind` resolves at the door, on the create model and on every action's
+input; a list resolves each item and the sentence names the position. The
+kind writes nothing. Two shapes are out of reach and named as such: a ref
+nested inside a part, and a pointer that is a KIND-AND-ID PAIR rather
+than a typed ref (`insight`'s `offer_kind`/`offer_id`, a journal's
+`evidence` addresses). Those stay their kind's own checkers —
+`insight/unresolved-addresses` is the one of them, shared with
+`decision.subject` — and both now read the write's own ctx.
+
+**What unblocked the scenarios.** The insight fix was one line and had
+been blocked for a fortnight by the SCENARIO GRAMMAR, not by the check:
+`:given` rows stage under fresh ids, so a declared scenario could cite
+only an address that would never exist, and the door was obliged to
+accept it. A `:given` row carries a `:handle` now and `{given/<handle>}`
+is the staged id. That is the general shape of the lesson: a law that
+cannot be written down as a scenario is a law the gate cannot hold, and
+the fix belongs in the grammar rather than in the kind.
+
+**The obligations.** Three, in `waymark10.conformance-test`:
+advertised-door truth (every door the probe offers runs or refuses with a
+named guard, never with the machine's own wrong-state answer), the ending
+shutting the doors (an ended row offers only its ways back, and an
+exception that names no door refuses at the def site), and dangling-ref
+truth (an invented id, an id of the wrong kind, and a list with one
+unresolved item, each refused with the field named). The walker's own
+generator fills refs with rows that stand — a walk that proved a door
+took an invented id was proving a lie.

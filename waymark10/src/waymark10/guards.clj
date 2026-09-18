@@ -37,6 +37,7 @@
   (:refer-clojure :exclude [and or require])
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
+            [waymark10.machine :as machine]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -1018,3 +1019,158 @@
                              {:waymark10/form
                               '~(expr/canonical-gensyms
                                  (list* 'fn params body))})}))))
+
+;; ── the engine's own walls (waymark-fp62.4.1) ───────────────────────
+;;
+;; THE CHARTER MUST BE TRUE. An envelope that advertises a door is
+;; making a promise, and one false promise makes an agent verify every
+;; other one. Verification is fuel spent on distrust.
+;;
+;; The two walls below are the framework's, not a kind's. They are
+;; never written in a declaration and never hash into a fingerprint:
+;; `render` puts them behind a door's own guards before it probes, and
+;; `invoke` puts them behind the same guards before it runs. One
+;; rule every kind gets, because a rule every kind must REMEMBER is a
+;; rule some kind forgets.
+
+(defn the-work-is-over
+  "The ending wall: a row whose work is OVER takes no more doors,
+  except the ways BACK its kind declares or its machine shows
+  (`machine/ways-back`).
+
+  Built per (kind, door) and handed to the probe and the invoke loop
+  alike, so what the envelope says and what the door does are the one
+  sentence. `:reads` is empty — the verdict is a pure function of the
+  row — so the render probe answers it honestly with no storage hooks
+  at all, and a declared scenario may pin it offline.
+
+  The remedies are the ways back, as affordance tokens: a reader told
+  'this is over' is also told which door reopens it, and a kind with
+  no way back offers none, which is the honest answer."
+  [rdef action-name]
+  (let [kind (clojure.core/or (some-> (:kind rdef) name) "row")
+        back (vec (sort (machine/ways-back rdef)))]
+    (guard
+     {:name :the-work-is-over
+      :explain (str "The work on this " kind " is over ({word}). "
+                    "This door does not open on a row that is over.")
+      :reads []
+      :vars [:word]
+      :remedies (mapv (fn [a] (keyword kind (name a))) back)
+      :check (with-meta
+               (fn [row _ _ctx]
+                 (if (machine/door-shut-when-over? rdef row action-name)
+                   (t/deny {:vars {:word (str (machine/ending-word rdef row))}})
+                   (t/allow)))
+               {:waymark10/form
+                (list 'fn '[row _ ctx]
+                      (list 'waymark10.machine/door-shut-when-over?
+                            (:kind rdef) 'row action-name))})})))
+
+(defn- ref-problem
+  "The first ref in `inp` that names no row, as a sentence, or nil.
+  `read'` is the ctx's cross-kind read; `rdef-of` resolves the target
+  kind's declaration. A ref whose target kind this engine does not
+  serve is not judged here — the declaration gate is where a kind
+  that names nothing belongs."
+  [refs inp read' rdef-of]
+  (some
+   (fn [{:keys [field kind listed]}]
+     (clojure.core/when (clojure.core/and (contains? inp field)
+                                          (some? (get inp field))
+                                          (rdef-of kind))
+       (let [v (get inp field)
+             ids (if listed (vec v) [v])
+             missing (fn [id] (nil? (read' kind (str id))))]
+         (if listed
+           (clojure.core/when-some [i (first (keep-indexed
+                                              (fn [i id]
+                                                (clojure.core/when (missing id) i))
+                                              ids))]
+             (str (clojure.core/name field) "[" i "] names no "
+                  (clojure.core/name kind) ": "
+                  (pr-str (str (nth ids i)))
+                  " is not a row this house holds."))
+           (clojure.core/when (missing v)
+             (str (clojure.core/name field) " names no "
+                  (clojure.core/name kind) ": " (pr-str (str v))
+                  " is not a row this house holds."))))))
+   refs))
+
+(defn names-a-row-that-stands
+  "The dangling-ref wall: every ref this door carries must resolve to
+  a live row of the kind the field declares (waymark-fp62.4.1, R-3 and
+  R-4). An invented id refuses. An id of the WRONG kind refuses, for
+  the same reason and by the same read: the row is not there under the
+  kind the field names. A list of refs resolves each item, and the
+  sentence names the position of the first that stands for nothing.
+
+  `refs` is `schema/ref-fields` of the door's own input model, so the
+  wall judges exactly the fields the form offers a picker for. A kind
+  writes none of this.
+
+  It advertises optimistically with no read in scope — the
+  storage-free render probe carries no hooks, and an envelope must not
+  narrate a refusal it cannot honestly reach. The write path always
+  carries the read, which is the path this bug was found on.
+
+  A write opened INSIDE another write (`(:within ctx)`, a handler's
+  `ctx :invoke` or `ctx :create`) is not judged: its input is the
+  handler's, which is law, not a caller's, and the row it names may be
+  the outer write's own, minted in the same stroke and not yet saved
+  where a read could find it (outcome's create answers the person's
+  composition_request with the outcome's own id). The outer door
+  judged what the caller typed; the wall stays at the wire."
+  [refs]
+  (guard
+   {:name :names-a-row-that-stands
+    :explain "{problem}"
+    :reads [:storage :within]
+    :vars [:problem]
+    :check (with-meta
+             (fn [_row inp ctx]
+               (let [read' (:read ctx)
+                     rdef-of (:rdef-of ctx)]
+                 (if (clojure.core/or (nil? read') (nil? rdef-of) (nil? inp)
+                                      (some? (:within ctx)))
+                   (t/allow)
+                   (if-some [problem (ref-problem refs inp read' rdef-of)]
+                     (t/deny {:vars {:problem problem}})
+                     (t/allow)))))
+             {:waymark10/form
+              (list 'fn '[row inp ctx]
+                    (list 'if '(:within ctx) nil
+                          (list 'waymark10.guards/ref-problem
+                                (mapv (fn [r] (update r :field clojure.core/name)) refs)
+                                'inp '(:read ctx) '(:rdef-of ctx))))})}))
+
+(defn walled-guards
+  "The guards this door is REALLY judged by: the ones the kind
+  declared, then the framework's own walls (waymark-fp62.4.1).
+
+  The kind speaks first. A kind that already resolves its own ref, or
+  already refuses a door on a dropped row, carries the sentence it
+  wrote for that case, with its remedies and its `:open`; the wall is
+  the backstop for the kind that forgot, and it must not shadow the
+  law a kind spelled out. A cross-row leaf is still judged first by
+  the partial rehearsal (`invoke/split-leaves`), whatever its place
+  in this list.
+
+  One call, two readers. `render` probes through it, so the envelope
+  never advertises a door a wall will refuse; `invoke` runs through it,
+  so the wall the envelope named is the wall the write meets.
+  Advertisement equals enforcement, which is this engine's whole
+  posture.
+
+  The walls are built here rather than declared, so they cost no kind
+  a line, hash into no fingerprint, and cannot be forgotten by the one
+  kind that needed them."
+  [rdef defn' row]
+  (let [refs (:ref-fields defn')]
+    (into (vec (:guards defn' []))
+          (cond-> []
+            (machine/door-shut-when-over? rdef row (:name defn'))
+            (conj (the-work-is-over rdef (:name defn')))
+
+            (seq refs)
+            (conj (names-a-row-that-stands refs))))))

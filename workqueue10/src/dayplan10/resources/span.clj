@@ -254,32 +254,74 @@
 ;; (:reads [:span]), so their scenarios are CONFORMANCE-tier: staged
 ;; through the real doors by the :core/law-scenarios obligation and
 ;; judged by the real clock. Windows are therefore spelled in 2099
-;; (ahead) or 2020 (passed), and each scenario's plan id is its own,
-;; so the spans it stages are the only ones no-overlap can see. The
-;; block and plan ids are hand-written and name no row: a ref is a
-;; string at the door, a dangling label copies nothing, and the doors
-;; these scenarios judge never read the parent — the block's own wall
-;; (on-an-open-days-plan) is proved on block.
+;; (ahead) or 2020 (passed).
+;;
+;; EVERY ROW THEY CITE IS STAGED (waymark-fp62.4.1). A span's block_id
+;; and plan_id are refs, the engine resolves every ref at the door now,
+;; and the hand-written ids these scenarios used to carry named no row
+;; — so the create door would refuse them by :names-a-row-that-stands,
+;; a wall none of them is about. Each one stages its own chain as
+;; `:given` rows — a member, that member's day, a context of its own,
+;; the block the windows hang on — and cites them by `{given/…}`, the
+;; grammar insight.clj's scenarios spell one module over.
+;;
+;; THE STAGED DAY IS A DAY OFF, deliberately. A plan materialises one
+;; span per active template of its shape, and the workday template
+;; these kinds declare (context's a-well-formed-template-is-admitted,
+;; a real row for the rest of that run) occupies nine to five — the
+;; very hours these windows spell, so a workday plan would collide
+;; with its own scenario. The active templates of a day OFF are the
+;; conformance walker's one-minute night windows and the evening
+;; handful the context scenarios leave standing, so the daytime is
+;; clear and what the plan mints can meet nothing here. Each
+;; scenario's own context takes a minute of the LATE night for the
+;; same reason, and a name of its own because a context's name is
+;; :unique (both conformance fixtures drop the table).
 ;;
 ;; Split's door reads the clock and nothing else (still-ahead,
 ;; at-inside-window), so its two scenarios are CHECK-tier: judged over
 ;; the literal row with no storage, in `make check-queue`'s breath.
 ;; The check tier decodes nothing, so those two spell their instants
 ;; as Instants (composition_request's a-standing-request spelling) —
-;; a string would reach the guard's `.isAfter` as a string.
+;; a string would reach the guard's `.isAfter` as a string — and they
+;; stage nothing, so the ids they carry name nothing and resolve
+;; nowhere: offline there is no store for a row to stand in.
 
 (def ^:private a-plan "01HZQ7Y7F2R3W4V5X6Y7Z8A9E0")
-(def ^:private another-plan "01HZQ7Y7F2R3W4V5X6Y7Z8A9E1")
 (def ^:private a-block "01HZQ7Y7F2R3W4V5X6Y7Z8A9E2")
 
-(defn- window [plan from to]
-  {:block_id a-block :plan_id plan :starts_at from :ends_at to})
+(defn- staged-day
+  "The chain a span scenario cites, as `:given` rows in the order they
+  need each other: a member, that member's day off on `date`, a
+  context of its own holding the one-minute night window `minute`, and
+  the block the scenario's windows hang on. `nm` names the context and
+  its planner — a context's name is :unique, so no two scenarios may
+  share one."
+  [nm date minute]
+  [{:kind :member :handle :who :state :active
+    :data {:display (str "Scenario " nm " planner") :actor_type "human"}}
+   {:kind :day_plan :handle :day :state :drafting
+    :data {:date date :member "{given/who}" :shape "off"}}
+   {:kind :context :handle :context :state :active
+    :data {:name (str "Scenario " nm) :default_shapes ["off"]
+           :default_spans [minute] :default_order 5}}
+   {:kind :block :handle :block :state :planned
+    :data {:plan_id "{given/day}" :context_id "{given/context}"}}])
+
+(defn- window
+  "A span as its own create door takes it: the block and the day the
+  scenario staged, and the two instants."
+  [from to]
+  {:block_id "{given/block}" :plan_id "{given/day}"
+   :starts_at from :ends_at to})
 
 (defn- decoded-window
-  "The same window as the check tier's literal row carries it —
-  instants, not their wire strings."
-  [plan from to]
-  (window plan (Instant/parse from) (Instant/parse to)))
+  "The same window as the CHECK tier's literal row carries it —
+  instants, not their wire strings, and ids that stand for nothing
+  because a check-tier scenario stages nothing."
+  [from to]
+  {:block_id a-block :plan_id a-plan
+   :starts_at (Instant/parse from) :ends_at (Instant/parse to)})
 
 (defscenario an-overlap-is-refused
   "Two spans of one day never share a minute: a window that intersects
@@ -287,9 +329,11 @@
    way and the two doors that would clear it."
   {:kind    :span
    :attempt :create
-   :given   [{:kind :span :state :planned
-              :data (window a-plan "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}]
-   :input   (window a-plan "2099-01-06T10:00:00Z" "2099-01-06T11:00:00Z")
+   :given   (conj (staged-day "overlap" "2099-01-06"
+                              {:from "23:30" :to "23:31"})
+                  {:kind :span :state :planned
+                   :data (window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")})
+   :input   (window "2099-01-06T10:00:00Z" "2099-01-06T11:00:00Z")
    :as      {:id "colton" :type :person}
    :expect  {:refused :no-overlap-in-plan
              :because "overlaps another span of this day"
@@ -300,9 +344,11 @@
    admitted — the day may have holes, it may not have collisions."
   {:kind    :span
    :attempt :create
-   :given   [{:kind :span :state :planned
-              :data (window another-plan "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}]
-   :input   (window another-plan "2099-01-06T12:00:00Z" "2099-01-06T13:00:00Z")
+   :given   (conj (staged-day "gap" "2099-01-06"
+                              {:from "23:32" :to "23:33"})
+                  {:kind :span :state :planned
+                   :data (window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")})
+   :input   (window "2099-01-06T12:00:00Z" "2099-01-06T13:00:00Z")
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
@@ -311,9 +357,10 @@
    to plan the next one."
   {:kind    :span
    :attempt :move
+   :given   (staged-day "past window" "2020-01-06"
+                        {:from "23:34" :to "23:35"})
    :row     {:state :planned
-             :data (window "01HZQ7Y7F2R3W4V5X6Y7Z8A9E3"
-                           "2020-01-06T09:00:00Z" "2020-01-06T12:00:00Z")}
+             :data (window "2020-01-06T09:00:00Z" "2020-01-06T12:00:00Z")}
    :input   {:starts_at "2020-01-06T13:00:00Z" :ends_at "2020-01-06T14:00:00Z"}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
@@ -325,9 +372,10 @@
    of it."
   {:kind    :span
    :attempt :move
+   :given   (staged-day "no-time window" "2099-01-06"
+                        {:from "23:36" :to "23:37"})
    :row     {:state :planned
-             :data (window "01HZQ7Y7F2R3W4V5X6Y7Z8A9E4"
-                           "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+             :data (window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
    :input   {:starts_at "2099-01-06T14:00:00Z" :ends_at "2099-01-06T13:00:00Z"}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
@@ -336,12 +384,15 @@
 
 (defscenario swap-needs-a-partner-on-this-day
   "Swap exchanges windows with another planned span of the same plan;
-   a span that is not there is refused by name."
+   a span that is not there is refused by name — the door's own guard
+   asks for the partner before the ref wall does, so the refusal reads
+   as the sentence the household wrote rather than as a dead link."
   {:kind    :span
    :attempt :swap
+   :given   (staged-day "swap" "2099-01-06"
+                        {:from "23:38" :to "23:39"})
    :row     {:state :planned
-             :data (window "01HZQ7Y7F2R3W4V5X6Y7Z8A9E5"
-                           "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+             :data (window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
    :input   {:with_span_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9E6"}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
@@ -352,12 +403,12 @@
    the door refuses, names the neighbour, and offers move or skip."
   {:kind    :span
    :attempt :extend
-   :given   [{:kind :span :state :planned
-              :data (window "01HZQ7Y7F2R3W4V5X6Y7Z8A9E7"
-                            "2099-01-06T13:00:00Z" "2099-01-06T14:00:00Z")}]
+   :given   (conj (staged-day "squeezed neighbour" "2099-01-06"
+                              {:from "23:40" :to "23:41"})
+                  {:kind :span :state :planned
+                   :data (window "2099-01-06T13:00:00Z" "2099-01-06T14:00:00Z")})
    :row     {:state :planned
-             :data (window "01HZQ7Y7F2R3W4V5X6Y7Z8A9E7"
-                           "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+             :data (window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
    :input   {:ends_at "2099-01-06T14:00:00Z"}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
@@ -370,9 +421,10 @@
    refusal says so."
   {:kind    :span
    :attempt :extend
+   :given   (staged-day "earlier end" "2099-01-06"
+                        {:from "23:42" :to "23:43"})
    :row     {:state :planned
-             :data (window "01HZQ7Y7F2R3W4V5X6Y7Z8A9E8"
-                           "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+             :data (window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
    :input   {:ends_at "2099-01-06T11:00:00Z"}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
@@ -385,8 +437,7 @@
   {:kind    :span
    :attempt :split
    :row     {:state :planned
-             :data (decoded-window "01HZQ7Y7F2R3W4V5X6Y7Z8A9E9"
-                                   "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+             :data (decoded-window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
    :input   {:at (Instant/parse "2099-01-06T14:00:00Z")}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
@@ -399,8 +450,7 @@
   {:kind    :span
    :attempt :split
    :row     {:state :planned
-             :data (decoded-window "01HZQ7Y7F2R3W4V5X6Y7Z8A9EA"
-                                   "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+             :data (decoded-window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
    :input   {:at (Instant/parse "2099-01-06T11:30:00Z") :gap_minutes 60}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}

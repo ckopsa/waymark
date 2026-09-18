@@ -430,7 +430,9 @@ harness's report.
 router must find the open sitting for the request's grant, one
 lookup by `grant` and state `open` under an index on `grant`, and it
 must add one to `transitions` on each committed transition and one
-to `refusals` on each 409 it serves. A request with no open sitting
+to `refusals` on each 409 it serves. The rule holds at every door
+the engine serves, the HTTP door and the MCP door alike: one 409 at
+either door counts one refusal. A request with no open sitting
 counts nothing. The harness does not report these. No refusal log
 exists today; this counter is the first record of a refusal as
 fuel.

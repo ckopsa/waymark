@@ -178,6 +178,7 @@
   (:require [clojure.string :as str]
             [waymark10.belief :as belief]
             [waymark10.demand :as demand]
+            [waymark10.machine :as machine]
             [waymark10.server.collections :as coll]
             [waymark10.server.history :as history]
             [waymark10.server.invoke :as inv]
@@ -1403,12 +1404,15 @@
   in — `{:field :accomplished :let-go}`. Public because the feed's
   populations, the archive's gate and `set-aside?` must all read one
   vocabulary; a second opinion about what 'finished' means would let
-  one section card what another calls history."
+  one section card what another calls history.
+
+  The reading itself moved to `waymark10.machine` (waymark-fp62.4.1),
+  because the ENVELOPE reads it too — a door on an ended row is shut
+  by the same words that keep the row out of do-now, and render may
+  not require this namespace. These four stay as the names the feed
+  has always called them."
   [rdef]
-  (let [o (:over rdef)]
-    {:field (:field o)
-     :accomplished (set (if o (:accomplished o) (:terminal rdef)))
-     :let-go (set (:let-go o))}))
+  (machine/over-vocabulary rdef))
 
 (defn- ending-word
   "The word this row's ending would be spelled with: its machine state,
@@ -1416,21 +1420,14 @@
   A mirror's lifecycle is data (task.clj's own rule), so a mirrored
   row's ending is read off the document the authority sent."
   [rdef row]
-  (let [{:keys [field]} (over-vocabulary rdef)]
-    (if field
-      (some-> (get-in row [:data field]) str not-empty)
-      (keyword (:state row)))))
+  (machine/ending-word rdef row))
 
 (defn work-over?
   "Is this row's work OVER — terminal by the machine, or resting in an
   ending the kind declared? A row that is over is never a next action
   and never anything but history."
   [rdef row]
-  (let [{:keys [accomplished let-go]} (over-vocabulary rdef)
-        w (ending-word rdef row)]
-    (boolean (or (not (open? rdef row))
-                 (and w (or (contains? accomplished w)
-                            (contains? let-go w)))))))
+  (machine/work-over? rdef row))
 
 (defn accomplished?
   "Did the household FINISH this row, rather than let it go? Fuel's
@@ -1438,8 +1435,7 @@
   discarded list, an abandoned book and a skipped chore are over
   without being deeds."
   [rdef row]
-  (boolean (contains? (:accomplished (over-vocabulary rdef))
-                      (ending-word rdef row))))
+  (machine/accomplished? rdef row))
 
 (defn- dedupe-by
   "Keep the first sighting of each key — the archive's one-card-per-row

@@ -267,6 +267,19 @@
                 (op-holds? op b' a') (assoc sample fa b', fb a')
                 :else (recur (inc i))))))))))
 
+(declare create-example)
+
+(defn- a-standing-row
+  "The id of a row of `kind` that GENUINELY STANDS: the first this
+  engine holds, or one the walker creates for the purpose. nil when
+  the kind cannot be created at all, and then the caller skips
+  honestly rather than naming a row that is not there."
+  [eng kind ctx seed]
+  (or (when-some [find' (:find ctx)]
+        (:id (first (find' kind {} {:limit 1}))))
+      (try (:id (:row (create-example eng kind {:seed seed})))
+           (catch Exception _ nil))))
+
 (defn synthesize-input
   "An input map that (a) validates against the action's :input schema
   and (b) satisfies every leaf guard's declared acceptance: single-
@@ -334,7 +347,31 @@
                               (merge s (zipmap (:judges leaf) chosen))))
                           s)))
                     sample
-                    (filter :relation leaves))]
+                    (filter :relation leaves))
+            ;; THE REFS NAME ROWS THAT STAND (waymark-fp62.4.1). The
+            ;; engine resolves every `:kind` entry at the door now, so
+            ;; a generated uuid is a 409 and the walk would prove
+            ;; nothing. A field an acceptance set or a relation already
+            ;; decided is left alone — that set is the law's own
+            ;; answer, and it names real rows; every other ref is
+            ;; pointed at a row this engine holds, or at one the walker
+            ;; creates for the purpose.
+            decided (into (set (keys singles))
+                          (mapcat :judges)
+                          (filter :relation leaves))
+            sample (reduce
+                    (fn [s {:keys [field kind listed]}]
+                      (cond
+                        (nil? s) nil
+                        (contains? decided field) s
+                        (not (contains? s field)) s
+                        :else
+                        (if-some [id (a-standing-row eng kind ctx seed)]
+                          (assoc s field (if listed [id] id))
+                          (skip! (str who ": " (name field) " names a "
+                                      (name kind) ", and this engine holds"
+                                      " none to name" fix)))))
+                    sample (schema/ref-fields input-form))]
         (some->> sample (schema/encode input-form))))))
 
 ;; ── create ──────────────────────────────────────────────────────────

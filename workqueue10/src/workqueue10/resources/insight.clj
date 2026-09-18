@@ -186,12 +186,13 @@
   write's own transaction; hand it {:rdef-of …} alone and only the
   shape and the plural are judged.
 
-  Recorded, not hidden: `cites-what-it-claims` still hands it the
-  shape-only ctx. Its two `:allowed` scenarios cite literal addresses
-  (/api/ticklers/01HZ…B0) and the conformance tier stages a `:given`
-  row under a FRESH id, so no declared scenario can cite a row that
-  will exist — the resolving read there waits on a scenario grammar
-  that can name a staged row (the bug stays open until it can)."
+  BOTH doors now hand it the write's own ctx (waymark-fp62.4.1,
+  closing waymark-79f). The blocker was the scenario grammar, not the
+  check: a `:given` row staged under a FRESH id could not be cited, so
+  every declared scenario had to name an invented address the door was
+  obliged to accept. `:given` rows carry a `:handle` since, and
+  `{given/<handle>}` in a scenario's own body is the id the walker
+  minted — so the scenarios below cite rows that genuinely stand."
   [hrefs ctx]
   (let [rdef-of (:rdef-of ctx)
         read' (:read ctx)]
@@ -235,10 +236,11 @@
       (t/deny {:vars {:count 0 :offenders ""}})
 
       :else
-      ;; shape and plural, through the one checker — the row read
-      ;; (waymark-79f) waits on a scenario grammar that can name a
-      ;; staged row; see unresolved-addresses' docstring
-      (let [bad (unresolved-addresses ev {:rdef-of rdef-of})]
+      ;; shape, plural AND THE ROW, through the one checker: the ctx
+      ;; goes in whole, so wherever a read is in scope (every write) an
+      ;; address whose row does not stand is named and refused — the
+      ;; journal door's sentence, at this door too (waymark-79f)
+      (let [bad (unresolved-addresses ev ctx)]
         (if (seq bad)
           (t/deny {:vars {:count (count ev)
                           :offenders (str "; this house has nothing at "
@@ -274,6 +276,19 @@
           (nil? oid)
           (deny (str "it names no row — say WHICH " kind " the next step"
                      " is about."))
+
+          ;; AND THE ROW MUST STAND (waymark-br7v). Two findings went
+          ;; out offering `still_stands` on uuids typed from memory:
+          ;; the offer link was dead, four-eyes left the author with an
+          ;; empty actions map, and only a letter to the composer could
+          ;; fix them. The engine derives `offer_href` from this pair,
+          ;; so derive-time is check-time. Read-gated like the address
+          ;; wall beside it: the storage-free probe advertises
+          ;; optimistically, the write path always reads.
+          (and (:read ctx) (nil? ((:read ctx) (:kind rd) oid)))
+          (deny (str "this house holds no " kind " " (pr-str oid)
+                     " — a next step on a row that is not there is a"
+                     " dead link the reader cannot fix."))
 
           (nil? aname)
           (deny (str "it names no action of " (pr-str kind) "."))
@@ -599,6 +614,22 @@
 ;; first finding can actually stand, and by `:feed/insights` in the
 ;; conformance pack from the wire.
 
+;; ── the rows these scenarios cite ───────────────────────────────────
+;;
+;; EVERY CITED ROW IS STAGED (waymark-fp62.4.1, closing waymark-79f
+;; and waymark-br7v). `cites-what-it-claims` and `offers-something-
+;; light` now READ the rows a body names, so a scenario that cited an
+;; invented address would be refused by the first wall for a reason
+;; the scenario is not about. Each one below stages what it cites as a
+;; `:given` row and names it by `:handle`; `{given/<handle>}` is the id
+;; the walker minted.
+;;
+;; A FRESH SUBJECT PER SCENARIO, deliberately: `tickler`'s own
+;; `one-live-marker-per-subject` refuses a second live note on one
+;; subject, and `one-live-finding-per-offer` refuses a second live
+;; finding on one offer. Distinct subjects keep each scenario's staging
+;; independent of the one that ran before it.
+
 (def ^:private a-published-finding
   {:finding "The porch project has not moved since June, and the next physical step is one tap away"
    :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
@@ -632,8 +663,12 @@
    :attempt :create
    :at      "2026-08-24T09:00:00Z"
    :as      {:id "compiler" :type :agent}
+   :given   [{:kind :tickler :handle :porch :state :offered
+              :data {:what "Sand and repaint the porch railing"
+                     :subject_kind "task"
+                     :subject_id "scenario-no-offered-action"}}]
    :input   {:finding "The porch project has not moved since June"
-             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]}
+             :evidence ["/api/ticklers/{given/porch}"]}
    :expect  {:refused :offers-something-light}})
 
 (defscenario the-finder-does-not-decide
@@ -679,12 +714,16 @@
    :attempt :create
    :at      "2026-08-24T09:00:00Z"
    :as      {:id "petitioner" :type :agent}
+   :given   [{:kind :value :handle :shop :state :declared
+              :data {:name "The shop is for making"
+                     :says "Evenings in the shop are for making something, not for tidying it."
+                     :scope "household"}}]
    :input   {:finding "Six weeks of evenings went to building; the shop has not been opened since June"
-             :evidence ["/api/values/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :evidence ["/api/values/{given/shop}"]
              :offer_kind "value"
-             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_id "{given/shop}"
              :offer_action "still_stands"
-             :offer_href "/api/values/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"}
+             :offer_href "/api/values/{given/shop}"}
    :expect  {:allowed true}})
 
 (defscenario an-offer-needs-no-address
@@ -698,10 +737,14 @@
    :attempt :create
    :at      "2026-08-28T09:00:00Z"
    :as      {:id "compiler" :type :agent}
+   :given   [{:kind :tickler :handle :porch :state :offered
+              :data {:what "Sand and repaint the porch railing"
+                     :subject_kind "task"
+                     :subject_id "scenario-offer-needs-no-address"}}]
    :input   {:finding "The porch project has not moved since June, and the reminder is still standing"
-             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :evidence ["/api/ticklers/{given/porch}"]
              :offer_kind "tickler"
-             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_id "{given/porch}"
              :offer_action "take_it_back"}
    :expect  {:allowed true}})
 
@@ -715,13 +758,18 @@
    :attempt :create
    :at      "2026-08-28T09:00:00Z"
    :as      {:id "compiler" :type :agent}
+   :given   [{:kind :tickler :handle :porch :state :offered
+              :data {:what "Sand and repaint the porch railing"
+                     :subject_kind "task"
+                     :subject_id "scenario-offer-points-elsewhere"}}]
    :input   {:finding "The porch project has not moved since June"
-             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :evidence ["/api/ticklers/{given/porch}"]
              :offer_kind "tickler"
-             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_id "{given/porch}"
              :offer_action "take_it_back"
-             :offer_href "/api/tasks/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"}
-   :expect  {:refused :offers-something-light}})
+             :offer_href "/api/tasks/{given/porch}"}
+   :expect  {:refused :offers-something-light
+             :because "is not where that row lives"}})
 
 (defscenario a-form-is-not-a-tap
   "`task.prioritize` reads like the obvious next step and is not one:
@@ -734,12 +782,15 @@
    :attempt :create
    :at      "2026-08-28T09:00:00Z"
    :as      {:id "compiler" :type :agent}
+   :given   [{:kind :task :handle :dentist :state :fresh
+              :data {:title "Call the dentist" :source "todo"}}]
    :input   {:finding "The dentist call has sat unranked at the tail of the queue for three weeks"
-             :evidence ["/api/tasks/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :evidence ["/api/tasks/{given/dentist}"]
              :offer_kind "task"
-             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_id "{given/dentist}"
              :offer_action "prioritize"}
-   :expect  {:refused :offers-something-light}})
+   :expect  {:refused :offers-something-light
+             :because "a card offers a decision, never a form"}})
 
 (defscenario a-typed-fact-may-be-left-untyped
   "The load-bearing scenario of waymark-2m2, and it proves a wall that
@@ -761,10 +812,14 @@
    :attempt :create
    :at      "2026-08-30T09:00:00Z"
    :as      {:id "compiler" :type :agent}
+   :given   [{:kind :tickler :handle :gutters :state :offered
+              :data {:what "Call about the gutters"
+                     :subject_kind "task"
+                     :subject_id "scenario-untyped-fact"}}]
    :input   {:finding "The gutters have gone another fortnight without a call"
-             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9C1"]
+             :evidence ["/api/ticklers/{given/gutters}"]
              :offer_kind "tickler"
-             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9C1"
+             :offer_id "{given/gutters}"
              :offer_action "take_it_back"}
    :expect  {:allowed true}})
 
@@ -778,10 +833,14 @@
    :attempt :create
    :at      "2026-08-30T09:00:00Z"
    :as      {:id "compiler" :type :agent}
+   :given   [{:kind :tickler :handle :darkroom :state :offered
+              :data {:what "Clear the darkroom bench"
+                     :subject_kind "task"
+                     :subject_id "scenario-unprompted-mention"}}]
    :input   {:finding "Iris talked about the darkroom again"
-             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :evidence ["/api/ticklers/{given/darkroom}"]
              :offer_kind "tickler"
-             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_id "{given/darkroom}"
              :offer_action "take_it_back"
              :evidence_type "unprompted_mention"
              :solicited true
@@ -798,10 +857,14 @@
    :attempt :create
    :at      "2026-08-30T09:00:00Z"
    :as      {:id "compiler" :type :agent}
+   :given   [{:kind :tickler :handle :darkroom :state :offered
+              :data {:what "Clear the darkroom bench"
+                     :subject_kind "task"
+                     :subject_id "scenario-costly-action"}}]
    :input   {:finding "Iris put the darkroom weekend on the calendar"
-             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :evidence ["/api/ticklers/{given/darkroom}"]
              :offer_kind "tickler"
-             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_id "{given/darkroom}"
              :offer_action "take_it_back"
              :evidence_type "costly_action"
              :cost "none"
@@ -857,9 +920,9 @@
   (-> a-published-finding
       (dissoc :authored_by)
       (assoc :finding "The gutter guards were never ordered, and the reminder has lapsed"
-             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"]
-             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"
-             :offer_href "/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1")))
+             :evidence ["/api/ticklers/{given/guards}"]
+             :offer_id "{given/guards}"
+             :offer_href "/api/ticklers/{given/guards}")))
 
 (defscenario a-withdrawn-finding-is-not-a-verdict
   "A tombstone is a tomb. `withdrawn` says the author took a finding
@@ -871,6 +934,10 @@
    on the same next step, must never mistake one for the other."
   {:kind    :insight
    :attempt :undo
+   :given   [{:kind :tickler :handle :guards :state :offered
+              :data {:what "Order the gutter guards"
+                     :subject_kind "task"
+                     :subject_id "scenario-withdrawn-finding"}}]
    :row     {:state :withdrawn :data a-withdrawable-finding}
    :as      {:id "iris" :type :person}
    :expect  {:refused :out-of-state}})

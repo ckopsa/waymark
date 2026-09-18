@@ -100,3 +100,48 @@ own authors.
 **Small.** The probe exists, the graph is declared, the output is three keys on
 an envelope that already renders refusals. The bound and the cycle check are
 the whole algorithm.
+
+## Built — the `[remedies]` declaration check (waymark-fp62.2.1)
+
+The check this document proposed in one sentence ("a guard that refuses
+with no `:remedies` and no `:open` is a dead end a person cannot escape")
+is built. The planner above is not; this is the part that makes the
+planner's input complete.
+
+**What landed.**
+
+- `checks/dead-end?` — a guard that refuses IN WORDS and names no way out.
+  A `:hide` guard answers 404 and narrates nothing, so it owes nothing. A
+  `:warning` guard is acknowledgable, and acknowledging is its way out.
+- `checks/denier-leaves` — the walk the census needs. `g/iter-leaves`
+  answers a SCHEMA question and stops at an `:any`, because an OR
+  advertises nothing. A refusal is the other question: `g/evaluate` under
+  an `:any` hands the caller the first denying ARM, so the arm is what
+  must carry the way out.
+- `checks/census` — `{:guards :remedies :open :waived :dead-ends :stale
+  :unmatched}` over a set of declarations.
+- `usability/remedy-warning` — one sentence per dead end, naming the kind,
+  the door, the guard and the sentence the caller reads.
+- `waymark10/resources/waymark10/remedies-waivers.edn` — the dead ends
+  that existed on the day the check landed. A waiver names a guard, or a
+  name PREFIX for the guards a parameterized builder mints, and the bead
+  that will clear it. `waymark10.check` refuses a waiver that waives
+  nothing, so the list only shrinks.
+- `waymark10.check` prints the dead ends, then the census line, and exits
+  1 on a stale waiver or on a `:remedies` token naming a door no kind
+  declares.
+
+**The conformance obligation.** The suite walks every guard on every
+fixture kind and reads the refusal body of the ones it can drive. The
+obligation is an EQUALITY rather than a presence: the body says exactly
+what the guard declared, so a body that DROPPED a declared remedy fails.
+A fixture guard that refuses with nothing to do next is named in the
+suite, because a fixture that exists to prove a different obligation is
+not a debt the framework owes.
+
+**Recorded gap.** `problems/guard-refused` carries `:remedies` and
+`:becomes-available` and does NOT carry `:open`, so the `:open` half of
+the obligation is latent: it reads the body correctly and no fixture
+guard declares an `:open` yet. Two lines close it — the denier map in
+`invoke/deny-outcome` and `invoke/create-guard-pass`, and the problem
+constructor in `problems/guard-refused`.

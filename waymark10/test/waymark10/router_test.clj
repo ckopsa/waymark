@@ -91,6 +91,13 @@
   (req :post "/api/plans" {:start_date start :weeks 1
                            :days (mapv (fn [d] {:date d}) days)}))
 
+(defn- create-meal!
+  "A meal row that stands, by its id: the dangling-ref wall
+  (waymark-fp62.4.1) resolves meal_id at the door — and a dry run
+  answers as the write would, so a rehearsal names a real meal too."
+  [nm]
+  (id-of (req :post "/api/meals" {:name nm :themes []})))
+
 ;; ── 1. discovery ────────────────────────────────────────────────────
 
 (deftest well-known-lists-the-kinds
@@ -275,12 +282,13 @@
 
 (deftest dry-run-changes-nothing
   (let [pid (id-of (create-plan! "2026-08-11" ["2026-08-11"]))
+        mid (create-meal! "Dry-run chili")
         before (req :get (str "/api/plans/" pid))
         resp (*h* {:request-method :post
                    :uri (str "/api/plans/" pid "/-/assign_meal")
                    :query-string "dry_run=1"
                    :headers {"x-waymark-principal" "colton"}
-                   :body (wire/write-json {:date "2026-08-11" :meal_id "m-x"})})
+                   :body (wire/write-json {:date "2026-08-11" :meal_id mid})})
         after (req :get (str "/api/plans/" pid))]
     (is (= 200 (:status resp)))
     (is (= {:valid true} (json resp)))
@@ -315,13 +323,18 @@
 
 (deftest partial-dry-run-on-the-wire
   (let [pid (id-of (create-plan! "2026-10-12" ["2026-10-12"]))
+        mid (create-meal! "Partial pozole")
         resp (*h* {:request-method :post
                    :uri (str "/api/plans/" pid "/-/assign_meal")
                    :query-string "dry_run=partial"
                    :headers {"x-waymark-principal" "colton"}
-                   :body (wire/write-json {:meal_id "m-x"})})]
+                   :body (wire/write-json {:meal_id mid})})]
     (is (= 200 (:status resp)))
-    (is (= {:valid true :judged [] :awaiting ["date-in-plan"]}
+    ;; the ref wall reads storage, so it is judged even with :date
+    ;; absent — the date leaf is the only one still waiting
+    (is (= {:valid true
+            :judged ["names-a-row-that-stands"]
+            :awaiting ["date-in-plan"]}
            (json resp))))
   (testing "a provided field is judged now — errors keyed by it alone"
     (let [pid (id-of (create-plan! "2026-10-19" ["2026-10-19"]))

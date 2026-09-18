@@ -18,8 +18,12 @@
   A broken scenario exits 1 and a usability warning does not, and the
   difference is the whole point of the distinction: a warning is an
   opinion about how a declaration reads, a scenario is a promise the
-  household wrote down and the law stopped keeping."
+  household wrote down and the law stopped keeping. A remedy error
+  (waymark-fp62.2.1) exits 1 on the same reading: a waiver that
+  waives nothing, and a :remedies token naming a door no kind
+  declares, are both a written-down fact that stopped being true."
   (:require [clojure.string :as str]
+            [waymark10.checks :as checks]
             [waymark10.modules :as modules]
             [waymark10.scenario :as scenario]
             [waymark10.server.engine :as engine]
@@ -147,13 +151,40 @@
             (println (str "      ✗ " v))))))
     (doseq [w assembly-warnings]
       (println (str "  [assembly] " w)))
-    {:kinds (count rows)
-     :warnings (+ (reduce + 0 (map (comp count :warnings) all-rows))
-                  (reduce + 0 (map (comp count :usability) all-rows))
-                  (count assembly-warnings)
-                  (count enrollment-warnings))
-     :scenarios (reduce + 0 (map (comp :checked :scenarios) all-rows))
-     :broken (reduce + 0 (map (comp count :violations :scenarios) all-rows))}))
+    ;; the fence census (waymark-fp62.2.1): one line beside the kind
+    ;; census, over every kind this deployment serves — the
+    ;; application's own and the enrolled. The registry is the right
+    ;; reading for both halves: a remedy token names a door in another
+    ;; module as often as in its own, so a census over the app's
+    ;; resources alone would call a sound token undeclared.
+    (let [rdefs (vals (:kinds reg))
+          cen (checks/census rdefs)
+          stale (checks/stale-waiver-problems cen)
+          tokens (checks/remedy-token-problems rdefs)
+          unmatched (checks/unmatched-waiver-warnings cen)]
+      (doseq [d (:dead-ends cen)]
+        (println (str "  " (usability/remedy-warning d))))
+      (println (str "  [remedies] " (checks/census-line cen)))
+      ;; an unmatched waiver is counted, not recited: this report runs
+      ;; over ONE application's kinds, so most of a framework-wide
+      ;; list is legitimately absent here and reciting it would bury
+      ;; the dead ends above.
+      (when (seq unmatched)
+        (println (str "  [remedies] " (count unmatched)
+                      " waiver" (when (not= 1 (count unmatched)) "s")
+                      " match no guard here — another application's"
+                      " kinds, or a debt already paid")))
+      (doseq [e (concat stale tokens)]
+        (println (str "  ✗ " e)))
+      {:kinds (count rows)
+       :warnings (+ (reduce + 0 (map (comp count :warnings) all-rows))
+                    (reduce + 0 (map (comp count :usability) all-rows))
+                    (count assembly-warnings)
+                    (count enrollment-warnings))
+       :scenarios (reduce + 0 (map (comp :checked :scenarios) all-rows))
+       :broken (reduce + 0 (map (comp count :violations :scenarios) all-rows))
+       :remedy-errors (+ (count stale) (count tokens))
+       :census cen})))
 
 (defn -main [& args]
   (when (empty? args)
@@ -167,8 +198,10 @@
                       (vec args))))
       (System/exit 2))
     (try
-      (let [{:keys [kinds warnings scenarios broken]} (report resources)]
-        (println (str (cond (pos? broken) "✗ "
+      (let [{:keys [kinds warnings scenarios broken remedy-errors]}
+            (report resources)
+            failed (+ (long broken) (long (or remedy-errors 0)))]
+        (println (str (cond (pos? failed) "✗ "
                             (zero? warnings) "✓ "
                             :else "△ ")
                       kinds " kind" (when (not= 1 kinds) "s")
@@ -177,8 +210,11 @@
                         (str ", " scenarios " scenario"
                              (when (not= 1 scenarios) "s") " judged"))
                       (when (pos? broken)
-                        (str ", " broken " BROKEN"))))
-        (System/exit (if (pos? broken) 1 0)))
+                        (str ", " broken " BROKEN"))
+                      (when (pos? (long (or remedy-errors 0)))
+                        (str ", " remedy-errors " remedy error"
+                             (when (not= 1 remedy-errors) "s")))))
+        (System/exit (if (pos? failed) 1 0)))
       (catch clojure.lang.ExceptionInfo e
         (when-not (:waymark10/definition-error (ex-data e))
           (throw e))

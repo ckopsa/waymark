@@ -68,6 +68,13 @@
   (try (thunk) nil
        (catch Exception e (ex-data e))))
 
+(defn- a-meal!
+  "A meal row that stands: the dangling-ref wall (waymark-fp62.4.1)
+  refuses an invented meal_id at the door, so every assignment names
+  a row this house holds."
+  [nm]
+  (:id (:row (inv/create! *eng* :meal {:name nm :themes []} opts))))
+
 (defn- create-plan! [start days]
   (inv/create! *eng* :plan
                {:start_date start :weeks 1
@@ -90,7 +97,9 @@
 
     (testing "acceptance sets are the law: a date outside the plan refuses"
       (let [p (problem-of #(inv/invoke! *eng* :plan pid :assign_meal
-                                        {:date "2026-07-19" :meal_id "m"} opts))]
+                                        {:date "2026-07-19"
+                                         :meal_id (a-meal! "Leftovers")}
+                                        opts))]
         (is (= :guard-refused (:waymark10/problem p)))
         (is (= "2026-07-19 is not a day of this plan." (:detail p)))))
 
@@ -103,9 +112,10 @@
 
     (testing "covering every day flips the fact and opens the gate"
       (inv/invoke! *eng* :plan pid :assign_meal
-                   {:date "2026-07-14" :meal_id "m-tacos"} opts)
+                   {:date "2026-07-14" :meal_id (a-meal! "Tacos")} opts)
       (let [{:keys [row]} (inv/invoke! *eng* :plan pid :assign_meal
-                                       {:date "2026-07-15" :meal_id "m-soup"} opts)]
+                                       {:date "2026-07-15"
+                                        :meal_id (a-meal! "Soup")} opts)]
         (is (true? (get-in row [:data :all_days_covered])))
         (is (= 3 (:version row))))
       (let [{:keys [row transition]} (inv/invoke! *eng* :plan pid :finalize nil opts)]
@@ -183,12 +193,14 @@
         assign (fn [date meal]
                  (future (inv/invoke! *eng* :plan pid :assign_meal
                                       {:date date :meal_id meal} opts)))
-        a (assign "2026-09-01" "m-a")
-        b (assign "2026-09-02" "m-b")]
+        m-a (a-meal! "A")
+        m-b (a-meal! "B")
+        a (assign "2026-09-01" m-a)
+        b (assign "2026-09-02" m-b)]
     (is (map? @a))
     (is (map? @b))
     (let [final (store/with-tx (:storage *eng*)
                   #(store/load-row (:storage *eng*) % :plan pid {}))]
       (is (= 3 (:version final)) "both writes landed, serialized on the row lock")
-      (is (= #{"m-a" "m-b"}
+      (is (= #{m-a m-b}
              (into #{} (keep :meal_id) (get-in final [:data :days])))))))

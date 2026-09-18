@@ -598,3 +598,74 @@ known: the target door exists, is neither bulk nor fenced, takes the input
 the step sends (and no less), and the undo departs from where the do
 landed. The normalized `:process` map stays on the declaration for that
 check; `fingerprint-of` names no facet for it.
+
+## 15 · The engine's own walls — an advertised door is an obligation
+
+An envelope that advertises a door makes a promise. One false promise
+makes an agent verify every other one, and verification is fuel spent on
+distrust. Two walls keep the promise, and neither is written in a
+declaration: the engine builds them at the door
+(`waymark10.guards/walled-guards`), `render` probes through them and
+`invoke` runs through them, so what the envelope says and what the write
+does are one sentence. They ride no fingerprint facet — the rule is the
+same for every kind, so no kind's hash moves.
+
+**The ending wall** (`:the-work-is-over`). A row whose work is over takes
+no more doors. `:over` already says which states — or which values of
+which field — mean the work was ACCOMPLISHED or LET GO (§8); now the
+doors read it too. The exception is the door that says the ending was
+wrong:
+
+```clojure
+:over {:field :status :accomplished #{"finished"} :let-go #{"abandoned"}
+       :ways-back #{:start}}
+```
+
+Where an ending is a STATE the machine shows the ways back by itself —
+every transition that departs an ending and lands outside every ending —
+so a kind that spells its endings in states writes no `:ways-back` at
+all. Where an ending is a FIELD VALUE the machine can see nothing, so the
+kind names them. `check-over!` refuses a `:ways-back` entry that is not a
+declared door, and (for a state-declared ending) one that no ended row
+could take. A door marked `:engine true` — the sync machine's
+bookkeeping, woven in by `mirror/declaration` — is never shut: a mirror
+must go on recording what its authority says about a task the house
+finished last month.
+
+**The dangling-ref wall** (`:names-a-row-that-stands`). Every input entry
+whose properties carry `:kind` (the mark `ref-props` publishes as the
+picker's x-ref) must resolve to a live row of that kind. An invented id
+refuses. An id of the wrong kind refuses by the same read. A `[:vector
+:waymark/ref]` entry resolves each item, and the sentence names the
+position of the first that stands for nothing:
+
+```
+meal_ids[1] names no meal: "m-nope" is not a row this house holds.
+```
+
+The wall advertises optimistically with no read in scope (the
+storage-free render probe), and judges for real on every write. It covers
+TOP-LEVEL entries of a door's input and of the create model; a ref nested
+inside a part (`[:vector [:map [:meal_id {:kind :meal} …]]]`) is not
+covered yet.
+
+**A scenario names a row it staged.** A declared scenario (§`:scenarios`)
+could not prove either wall while its `:given` rows were minted under
+fresh ids: every citation had to be an invented address the door was
+obliged to accept. A `:given` row now carries a `:handle`, and
+`{given/<handle>}` anywhere in the scenario is replaced by the id the
+walker minted:
+
+```clojure
+:given [{:kind :tickler :handle :porch :state :offered
+         :data {:what "Sand the porch railing" :subject_kind "task"
+                :subject_id "scenario-porch"}}]
+:input {:evidence ["/api/ticklers/{given/porch}"]
+        :offer_kind "tickler" :offer_id "{given/porch}"
+        :offer_action "take_it_back"}
+```
+
+The sigil is deliberate: a scenario's strings are prose, addresses and
+tokens, so only `{given/…}` is a reference. A handle that no `:given` row
+declares, a handle named before it is staged, and two rows answering to
+one handle each refuse at the def line.

@@ -67,6 +67,7 @@
             :state state
             :guard (:guard denier)
             :remedies (:remedies denier)
+            :open (:open denier)
             :becomes-available (:becomes-available denier)
             :resource resource}))
 

@@ -24,6 +24,10 @@
       7 spelled by hand         a field a form can offer, or a sentence
                                 saying why a person spells it
 
+  An eighth finding, `remedies`, lives here for its prose and prints
+  from the check CLI beside the fence census: a guard that refuses in
+  words and names no way out (waymark-fp62.2.1).
+
   WHY THIS IS NOT waymark10.checks. The fail-fast gate in
   waymark10.checks runs inside `defresource`, at import, and prints
   every warning it finds on *err*. That is right for a battery of a
@@ -39,6 +43,7 @@
   Every policy returns strings shaped like the checks battery's:
   \"[policy-name] …\", one sentence, naming the fix."
   (:require [clojure.string :as str]
+            [waymark10.checks :as checks]
             [waymark10.demand :as demand]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
@@ -666,9 +671,60 @@
                            " wears the sentence"))))))
         (doors r)))
 
+;; ── 8 · remedies ────────────────────────────────────────────────────
+;;
+;; NOT IN `policies`, and that is deliberate. The other seven are
+;; opinions about ONE declaration, printed under its kind. This one is
+;; a fact about the whole assembly: whether a dead end is still owed
+;; depends on the waiver list, which is one file for every kind at
+;; once. `waymark10.check` reads the census over the registry and
+;; prints these sentences under the census line, which is also where
+;; the bead asks for them — one line per dead end, then the counts.
+;; The prose lives here so every battery sentence is written in one
+;; place and read in one voice.
+
+(defn remedy-warning
+  "The sentence for one dead end — a guard site {:kind :door :guard}
+  the census found unwaived (waymark-fp62.2.1).
+
+  `:remedies` carries the tokens — `:kind/action` — of the doors that
+  change the verdict. `:open` carries the sentence that admits no door
+  does. A guard with an `:explain` and neither leaves the caller told
+  why and not told what to do, so a model tries the same door again,
+  or guesses. Both spend fuel on law that was spoken late."
+  [{:keys [kind door guard]}]
+  (str "[remedies] guard " (name (or (:name guard) :guard)) " on " (name kind)
+       (if (= :create door)
+         "'s create door"
+         (str "'s action " (name door)))
+       " refuses with a sentence and no way out — \""
+       (str/trim (str (:explain guard)))
+       "\" — declare :remedies, the :kind/action tokens of the doors "
+       "that change this verdict, or :open, the sentence that says no "
+       "door does"))
+
+(defn remedies
+  "Every dead end this ONE declaration still owes, waivers applied.
+
+  A warning, never an error: the debt is older than the check, and
+  the waiver list (`checks/waivers-resource`) carries the guards that
+  were dead ends on the day the check landed. Clear a waiver by
+  giving its guard the remedy or the open sentence, not by editing
+  the list — `waymark10.check` refuses a waiver that waives nothing."
+  [r]
+  (let [ws @checks/waivers]
+    (into []
+          (keep (fn [{:keys [guard] :as site}]
+                  (when (and (checks/dead-end? guard)
+                             (not (some #(checks/waives? % site) ws)))
+                    (remedy-warning site))))
+          (checks/guard-sites r))))
+
 (def policies
   "The seven, in the beads' order — a vector so the report reads the
-  same way twice and an eighth policy arrives visibly."
+  same way twice and an eighth policy arrives visibly. `remedies`
+  above is a census finding rather than a per-declaration opinion; it
+  prints from the check CLI, beside its own counts."
   [#'effort-honesty #'display-prose #'composition-scaffolding
    #'gesture-duties #'card-completeness #'cheap-reverse #'spelled-by-hand])
 

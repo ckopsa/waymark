@@ -678,6 +678,7 @@
               (g/render-reason d v nrow)
               {:guard (:name d)
                :remedies (:remedies d)
+               :open (:open d)
                :becomes-available (g/becomes-available d v nrow)}
               {:kind (:kind rdef) :id (:id row)
                :summary (summary-of rdef row)})))))
@@ -711,7 +712,10 @@
      ;; declares no guards" are different sentences and the column
      ;; must be able to tell them apart
      {:warned [] :overridden [] :basis (when scope [])}
-     (:guards defn))))
+     ;; the framework's own walls ride behind the declared ones
+     ;; (waymark-fp62.4.1) — the same list render probed, so the door
+     ;; refuses with the wall the envelope already named
+     (g/walled-guards rdef defn row))))
 
 (defn- split-leaves
   "The partial rehearsal's coverage split (design §23): guard trees
@@ -743,7 +747,8 @@
   is shared). → {:valid? true :judged [names] :awaiting [names]
   :warnings […]} — or the same 409/404 the full loop would throw."
   [defn row inp ctx acknowledged rdef provided]
-  (let [{:keys [judged awaiting]} (split-leaves (:guards defn) provided)
+  (let [{:keys [judged awaiting]} (split-leaves (g/walled-guards rdef defn row)
+                                                provided)
         {:keys [warned]}
         (reduce
          (fn [acc leaf]
@@ -1726,6 +1731,23 @@
       (:current-law rdef))
     (get-in engine [:current-law kind] 1)))
 
+(defn- create-walled-guards
+  "The create door's guards, with the framework's dangling-ref wall
+  behind them (waymark-fp62.4.1, R-3): a birth that names a row
+  which does not stand refuses AT THE DOOR, and the sentence names the
+  field and the kind it expected. The wall is built from the create
+  model's own `:kind` entries, so a kind writes nothing and cannot
+  forget it.
+
+  A MINT never meets it (create-in-tx! passes the empty vector): the
+  engine's own discovery birth records what an external authority
+  already has, and it speaks the full schema rather than the author's
+  create door."
+  [rdef]
+  (let [refs (:create-ref-fields rdef)]
+    (cond-> (vec (:create-guards rdef))
+      (seq refs) (conj (g/names-a-row-that-stands refs)))))
+
 (defn- create-guard-pass
   "The create-time guard grading (design E9), ONE reduce for the real
   path, the full rehearsal, and the partial rehearsal — so the three
@@ -1759,7 +1781,8 @@
             (throw (p/guard-refused :create nil
                                     (g/render-reason d v nil)
                                     {:guard (:name d)
-                                     :remedies (:remedies d)}
+                                     :remedies (:remedies d)
+                                     :open (:open d)}
                                     nil))))))
     {:warned [] :overridden [] :basis (when scope [])}
     guards)))
@@ -1782,7 +1805,7 @@
                  partial? (-> (select-keys (keys (or body {})))
                               not-empty))]
     (when errors (throw (p/schema-invalid :create errors)))
-    (if (empty? (:create-guards rdef))
+    (if (empty? (create-walled-guards rdef))
       (if partial? {:valid? true :judged [] :awaiting []} {:valid? true})
       (store/with-tx (:storage engine)
         (fn [tx]
@@ -1792,7 +1815,7 @@
           (let [ctx (make-ctx engine tx :dry-run principal {:grant grant})]
             (if partial?
               (let [{:keys [judged awaiting]}
-                    (split-leaves (:create-guards rdef)
+                    (split-leaves (create-walled-guards rdef)
                                   (set (keys (or body {}))))
                     {:keys [warned]}
                     (create-guard-pass judged inp ctx acknowledged)]
@@ -1801,7 +1824,7 @@
                  :awaiting (mapv :name awaiting)
                  :warnings (not-empty warned)})
               (let [{:keys [warned]}
-                    (create-guard-pass (:create-guards rdef) inp ctx
+                    (create-guard-pass (create-walled-guards rdef) inp ctx
                                        acknowledged)]
                 {:valid? true :warnings (not-empty warned)}))))))))
 
@@ -1927,7 +1950,9 @@
                            :grant grant
                            :self {:kind kind :action create-action}})
             {:keys [warned overridden basis]}
-            (create-guard-pass (if mint? [] (:create-guards rdef))
+            (create-guard-pass (if mint?
+                                 []
+                                 (create-walled-guards rdef))
                                inp (dissoc ctx :invoke :create :inner-sink)
                                acknowledged
                                ;; the birth's evidence scope: no row

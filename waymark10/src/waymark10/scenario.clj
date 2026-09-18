@@ -64,6 +64,7 @@
   neither, the same shape waymark10.test.conformance-as-library
   already has."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
@@ -86,7 +87,7 @@
   [:allowed :refused :because :remedies])
 
 (def row-keys [:state :data])
-(def given-keys [:kind :state :data])
+(def given-keys [:kind :state :data :handle])
 (def principal-keys [:id :type :roles])
 
 (def offline-reads
@@ -156,6 +157,53 @@
            :type (or (:type as) :person)
            :roles (into #{} (map name) (:roles as)))))
 
+(def handle-pattern
+  "How a scenario names a row it STAGED (waymark-fp62.4.1, the blocker
+  waymark-79f recorded). A `:given` row may carry a `:handle`, and any
+  string in the scenario may then hold `{given/<handle>}` — the
+  conformance runner replaces it with the id the walker minted.
+
+  The sigil is deliberate. A scenario's `:input` is a literal wire
+  body and its strings are prose, addresses and tokens; a bare
+  `{name}` would make every brace in a sentence a possible typo. Only
+  `{given/…}` is a reference, and one that names no `:handle` refuses
+  at the def line.
+
+  This is what lets a door that RESOLVES what a body cites be proved
+  by a declared scenario at all: before it, `:given` rows were minted
+  under fresh ids and no scenario could cite a row that would exist,
+  so every citation had to be an invented address the door was
+  obliged to accept."
+  #"\{given/([A-Za-z0-9_-]+)\}")
+
+(defn handle-refs
+  "Every `{given/<handle>}` handle named anywhere inside `x`, as a set
+  of strings."
+  [x]
+  (let [found (volatile! #{})]
+    (walk/postwalk
+     (fn [v]
+       (when (string? v)
+         (doseq [[_ h] (re-seq handle-pattern v)]
+           (vswap! found conj h)))
+       v)
+     x)
+    @found))
+
+(defn fill-handles
+  "`x` with every `{given/<handle>}` replaced by the staged id `ids`
+  holds for it. A handle with no id is left exactly as written, so the
+  runner's own report shows the unfilled reference rather than an
+  address ending in the word nil."
+  [x ids]
+  (walk/postwalk
+   (fn [v]
+     (if (string? v)
+       (str/replace v handle-pattern
+                    (fn [[whole h]] (str (get ids h whole))))
+       v))
+   x))
+
 (defn- row! [sname label legal row]
   (when (some? row)
     (when-not (map? row) (err sname (str label " is {:state … :data {…}}")))
@@ -214,7 +262,28 @@
       (err sname ":given is a vector of rows that must genuinely exist"))
     (doseq [gv (:given m)]
       (when-not (keyword? (:kind gv)) (err sname "each :given row names its :kind"))
-      (row! sname ":given row" given-keys gv)))
+      (when (and (some? (:handle gv)) (not (keyword? (:handle gv))))
+        (err sname "a :given row's :handle is a keyword"))
+      (row! sname ":given row" given-keys gv))
+    ;; the handles, in staging order: a row may name only what is
+    ;; already standing when it is staged, and two rows may not answer
+    ;; to one name
+    (reduce
+     (fn [seen gv]
+       (when-some [bad (seq (sort (remove seen (handle-refs (:data gv)))))]
+         (err sname (str "a :given row names {given/" (first bad)
+                         "}, which is not staged before it")))
+       (let [h (some-> (:handle gv) name)]
+         (when (and h (contains? seen h))
+           (err sname (str "two :given rows answer to the handle " h)))
+         (cond-> seen h (conj h))))
+     #{} (:given m)))
+  ;; every handle the scenario NAMES is a handle it staged
+  (let [staged (into #{} (keep #(some-> (:handle %) name)) (:given m))
+        named (into (handle-refs (:input m)) (handle-refs (get-in m [:row :data])))]
+    (when-some [bad (seq (sort (remove staged named)))]
+      (err sname (str "names {given/" (first bad) "}, which no :given row"
+                      " declares as its :handle"))))
   (when (and (some? (:input m)) (not (map? (:input m))))
     (err sname ":input is the action's input body as a literal map"))
   (instant! sname (:at m))

@@ -1,0 +1,196 @@
+;; The remedies waiver list (waymark-fp62.2.1).
+;;
+;; A guard that refuses with an :explain sentence and carries neither
+;; :remedies nor :open is a dead end: the caller is told why and is
+;; not told what to do next. The [remedies] usability policy warns on
+;; every one of them. This list holds the dead ends that existed on
+;; the day the check landed, so the warning list shows what is NEW.
+;;
+;; THE LIST ONLY SHRINKS. waymark10.check refuses a waiver that waives
+;; nothing — every guard it names now carries :remedies or :open — so
+;; a line here dies the day its debt is paid. Clear a waiver by giving
+;; its guard the way out, never by editing the sentence around it.
+;;
+;; A waiver is a map:
+;;   :guard   the guard's own name, a keyword. Exact.
+;;   :family  a name PREFIX, a string, in place of :guard. One line
+;;            covers every guard a parameterized builder mints —
+;;            g/require names itself require:<fact>, g/role names
+;;            itself role:<token>, and neither instance is spelled
+;;            anywhere a list could enumerate.
+;;   :kind    optional. Present, the waiver covers that kind only.
+;;            Absent, it covers the guard name wherever it is declared,
+;;            which is what a guard shared by two kinds of one module
+;;            wants.
+;;   :bead    required. The bead that will clear it.
+;;   :why     optional. One sentence, when the reason is not obvious.
+;;
+;; The clearing plan is one bead per file, outcome.clj first
+;; (waymark-fp62.2's punt). waymark-fp62.2 is the parent every line
+;; names until those beads are filed.
+
+[
+ ;; ── the framework's parameterized builders (guards.clj) ────────────
+ ;; Each of these mints its guards from a call site's argument, so the
+ ;; instances have no declaration a list could name. The remedy for
+ ;; every one of them is the same shape and none of them carries it:
+ ;; the builder itself should take :remedies, and the kinds should
+ ;; pass them.
+ {:family "require:" :bead "waymark-fp62.2"
+  :why "g/require names the missing fact and no door that supplies it."}
+ {:family "role:" :bead "waymark-fp62.2"}
+ {:family "owner:" :bead "waymark-fp62.2"}
+ {:family "four-eyes:" :bead "waymark-fp62.2"}
+ {:family "unless:actor-of:" :bead "waymark-fp62.2"}
+ {:family "feature-flag:" :bead "waymark-fp62.2"}
+ {:family "rate-limit:" :bead "waymark-fp62.2"}
+ {:family "not-the-field:" :bead "waymark-fp62.2"}
+ {:family "is-the-field:" :bead "waymark-fp62.2"}
+ {:family "unless-granted:" :bead "waymark-fp62.2"}
+ {:family "author-or-granted:" :bead "waymark-fp62.2"}
+ {:guard :only-your-own-last-tap :bead "waymark-fp62.2"}
+
+ ;; ── the ask and leash sugar (resource.clj's :decision block) ───────
+ {:guard :asks-are-paced :bead "waymark-fp62.2"}
+ {:guard :asks-are-few :bead "waymark-fp62.2"}
+ {:guard :the-leash-is-short :bead "waymark-fp62.2"}
+
+ ;; ── waymark10 framework kinds ──────────────────────────────────────
+ {:guard :written-by-a-person :kind :feed_recipe :bead "waymark-fp62.2"}
+ {:guard :a-switch-is-your-own :kind :feed_view_consent :bead "waymark-fp62.2"}
+ {:guard :a-view-is-your-own :kind :feed_view :bead "waymark-fp62.2"}
+ {:guard :a-remark-is-your-own :kind :remark :bead "waymark-fp62.2"}
+ {:guard :a-reason-is-your-own :kind :verdict_reason :bead "waymark-fp62.2"}
+ {:guard :bytes-route-only :kind :attachment :bead "waymark-fp62.2"}
+ {:guard :token-wears-a-dot :kind :capability :bead "waymark-fp62.2"}
+ {:guard :worker-writes-the-job :kind :job :bead "waymark-fp62.2"}
+ {:guard :worksheet-system-only :kind :worksheet :bead "waymark-fp62.2"}
+ {:guard :system-only :bead "waymark-fp62.2"
+  :why "the Mirror weave's wall, minted for every mirrored kind."}
+ {:guard :deliverer-marks-failure :kind :subscription :bead "waymark-fp62.2"}
+ {:guard :owner-revokes :kind :subscription :bead "waymark-fp62.2"}
+ {:guard :engine-writes-schedules :kind :schedule :bead "waymark-fp62.2"}
+ {:guard :a-person-or-a-delegate :kind :schedule :bead "waymark-fp62.2"}
+
+ ;; recipe_proposal.clj
+ {:guard :the-prepared-input-fits-the-door :kind :recipe_proposal :bead "waymark-fp62.2"}
+ {:guard :it-cites-what-it-read :kind :recipe_proposal :bead "waymark-fp62.2"}
+ {:guard :staged-changes-are-few :kind :recipe_proposal :bead "waymark-fp62.2"}
+ {:guard :a-person-answers :kind :recipe_proposal :bead "waymark-fp62.2"}
+ {:guard :the-proposer-does-not-decide :kind :recipe_proposal :bead "waymark-fp62.2"}
+
+ ;; definitions.clj
+ {:guard :deploy-writes-the-law :kind :definition :bead "waymark-fp62.2"}
+ {:guard :population-shape :kind :definition :bead "waymark-fp62.2"}
+ {:guard :data-law-pilots :kind :definition :bead "waymark-fp62.2"}
+ {:guard :data-law-measures :kind :definition :bead "waymark-fp62.2"}
+ {:guard :redefines-derived-facts :kind :definition :bead "waymark-fp62.2"}
+ {:guard :population-grammar :kind :definition :bead "waymark-fp62.2"}
+
+ ;; grants.clj — the leg's own first fix-list
+ {:guard :audience-only :kind :grant :bead "waymark-fp62.2"}
+ {:guard :no-self-dealing :kind :grant :bead "waymark-fp62.2"}
+ {:guard :not-a-substitute :kind :grant :bead "waymark-fp62.2"}
+ {:guard :a-seat-or-a-scope :kind :grant :bead "waymark-fp62.2"}
+ {:guard :approval-route-only :kind :grant :bead "waymark-fp62.2"}
+ {:guard :requester-holds-the-grant :kind :grant :bead "waymark-fp62.2"}
+ {:guard :requester-is-named :kind :grant :bead "waymark-fp62.2"}
+ {:guard :asks-are-short :kind :grant :bead "waymark-fp62.2"}
+ {:guard :ask-names-one-thing :kind :grant :bead "waymark-fp62.2"}
+ {:guard :extend-of-a-seat-holds-no-scope :kind :grant :bead "waymark-fp62.2"}
+ {:guard :grant-still-accepting :kind :grant :bead "waymark-fp62.2"}
+ {:guard :seat-has-one-sitter :kind :grant :bead "waymark-fp62.2"}
+ {:guard :past-expiry :kind :grant :bead "waymark-fp62.2"}
+ {:guard :someone-else-decides :kind :grant :bead "waymark-fp62.2"}
+
+ ;; members.clj
+ {:guard :registrar-binds :kind :member :bead "waymark-fp62.2"}
+ {:guard :assign-is-recovery-admins :kind :member :bead "waymark-fp62.2"}
+ {:guard :reentry-minters-are-recovery-admin-humans :kind :member :bead "waymark-fp62.2"}
+ {:guard :reentry-not-written-by-hand :kind :member :bead "waymark-fp62.2"}
+ {:guard :reentry-targets-agents :kind :member :bead "waymark-fp62.2"}
+ {:guard :provenance-not-written-by-hand :kind :member :bead "waymark-fp62.2"}
+ {:guard :acts-for-not-written-by-hand :kind :member :bead "waymark-fp62.2"}
+ {:guard :reentry-targets-durable :kind :member :bead "waymark-fp62.2"}
+ {:guard :reentry-is-short :kind :member :bead "waymark-fp62.2"}
+ {:guard :reentry-standing-is-bounded :kind :member :bead "waymark-fp62.2"}
+ {:guard :reentry-token-matches :kind :member :bead "waymark-fp62.2"}
+ {:guard :reentry-token-is-fresh :kind :member :bead "waymark-fp62.2"}
+ {:guard :curtain-is-your-own-hand :kind :member :bead "waymark-fp62.2"}
+
+ ;; seats.clj — the seat, the model and the sitting share the file
+ {:guard :a-person :bead "waymark-fp62.2"}
+ {:guard :key-not-written-by-hand :bead "waymark-fp62.2"}
+ {:guard :not-a-sitter :bead "waymark-fp62.2"}
+ {:guard :ttl-within-standing :bead "waymark-fp62.2"}
+ {:guard :walk-names-a-kind-in-scope :bead "waymark-fp62.2"}
+ {:guard :step-carries-a-note :bead "waymark-fp62.2"}
+ {:guard :merge-target-is-active :bead "waymark-fp62.2"}
+ {:guard :the-engines-own-hand :bead "waymark-fp62.2"}
+ {:guard :folded-by-a-merge :bead "waymark-fp62.2"}
+ {:guard :a-person-or-the-engine :bead "waymark-fp62.2"}
+ {:guard :not-parked :bead "waymark-fp62.2"}
+ {:guard :not-interactive :bead "waymark-fp62.2"}
+ {:guard :not-halted :bead "waymark-fp62.2"}
+ {:guard :linked-for-fire :bead "waymark-fp62.2"}
+
+ ;; ── calendar10 ─────────────────────────────────────────────────────
+ {:guard :one-when :kind :event :bead "waymark-fp62.2"}
+ {:guard :ends-after-it-starts :kind :event :bead "waymark-fp62.2"}
+
+ ;; ── mealplan10 ─────────────────────────────────────────────────────
+ {:guard :item-on-list :kind :grocery_list :bead "waymark-fp62.2"}
+ {:guard :item-not-checked :kind :grocery_list :bead "waymark-fp62.2"}
+ {:guard :item-checked :kind :grocery_list :bead "waymark-fp62.2"}
+ {:guard :no-tracked-products :kind :ingredient :bead "waymark-fp62.2"}
+ {:guard :calendar-clear :kind :plan :bead "waymark-fp62.2"}
+ {:guard :plan-started :kind :plan :bead "waymark-fp62.2"}
+ {:guard :date-in-plan-range :kind :plan_day :bead "waymark-fp62.2"}
+ {:guard :sunday-only :kind :plan_day :bead "waymark-fp62.2"}
+ {:guard :sighting-on-record :kind :product :bead "waymark-fp62.2"}
+ {:guard :not-last-theme :kind :rotation :bead "waymark-fp62.2"}
+
+ ;; ── dayplan10 ──────────────────────────────────────────────────────
+ {:guard :on-an-open-days-plan :kind :block :bead "waymark-fp62.2"}
+ {:guard :a-different-shape :kind :day_plan :bead "waymark-fp62.2"}
+ {:guard :on-a-planned-block :kind :decision :bead "waymark-fp62.2"}
+ {:guard :home-assistant-is-wired :kind :decision :bead "waymark-fp62.2"}
+ {:guard :ends-after-starts :kind :span :bead "waymark-fp62.2"}
+ {:guard :still-ahead :kind :span :bead "waymark-fp62.2"}
+ {:guard :swap-partner-is-ahead-on-this-day :kind :span :bead "waymark-fp62.2"}
+ {:guard :extends-later :kind :span :bead "waymark-fp62.2"}
+ {:guard :at-inside-window :kind :span :bead "waymark-fp62.2"}
+
+ ;; ── workqueue10 ────────────────────────────────────────────────────
+ {:guard :health-is-the-panels :kind :connection :bead "waymark-fp62.2"}
+ {:guard :revoke-is-recovery-admins :kind :connection :bead "waymark-fp62.2"}
+ {:guard :answered-by-a-composition :kind :composition_request :bead "waymark-fp62.2"}
+ {:guard :only-a-person-asks :kind :composition_request :bead "waymark-fp62.2"}
+ {:guard :owner-is-self-or-on-behalf :bead "waymark-fp62.2"}
+ {:guard :edit-is-owner-or-human :bead "waymark-fp62.2"}
+ {:guard :self-is-singleton :kind :self :bead "waymark-fp62.2"}
+ {:guard :still-the-only-belief :kind :hypothesis :bead "waymark-fp62.2"}
+ {:guard :only-the-observer-restates :kind :hypothesis :bead "waymark-fp62.2"}
+ {:guard :the-answer-is-a-persons :kind :hypothesis :bead "waymark-fp62.2"}
+ {:guard :the-correction-is-a-persons :kind :inbox_item :bead "waymark-fp62.2"}
+ {:guard :the-question-is-open-again :kind :insight :bead "waymark-fp62.2"}
+ {:guard :the-finder-does-not-decide :kind :insight :bead "waymark-fp62.2"}
+ {:guard :letter-author-is-self :kind :letter :bead "waymark-fp62.2"}
+ {:guard :letter-to-is-a-member :kind :letter :bead "waymark-fp62.2"}
+ {:guard :letters-are-paced :kind :letter :bead "waymark-fp62.2"}
+ {:guard :opener-is-recipient :kind :letter :bead "waymark-fp62.2"}
+ {:guard :discarder-is-recipient :kind :letter :bead "waymark-fp62.2"}
+ {:guard :the-door-carries-its-own-effect :bead "waymark-fp62.2"}
+ {:guard :only-its-composer-reworks :bead "waymark-fp62.2"}
+ {:guard :the-composer-does-not-decide :bead "waymark-fp62.2"}
+ {:guard :a-person-answers :kind :outcome :bead "waymark-fp62.2"}
+ {:guard :the-asker-does-not-sign :kind :permission_slip :bead "waymark-fp62.2"}
+ {:guard :a-grown-up-signs :kind :permission_slip :bead "waymark-fp62.2"}
+ {:guard :only-the-observer-corrects :kind :person :bead "waymark-fp62.2"}
+ {:guard :only-a-person-says-who-we-know :kind :person :bead "waymark-fp62.2"}
+ {:guard :one-due :kind :task :bead "waymark-fp62.2"}
+ {:guard :list-owned-by-the-capturing-source :kind :task :bead "waymark-fp62.2"}
+ {:guard :day-granular-due-for-google :kind :task :bead "waymark-fp62.2"}
+ {:guard :this-is-yours-to-declare :kind :value :bead "waymark-fp62.2"}
+ {:guard :written-by-a-person :kind :value :bead "waymark-fp62.2"}
+]

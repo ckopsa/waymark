@@ -214,6 +214,15 @@
    ;; and a dismissed row is over for every reader that asks — while
    ;; the person's door stays open, which is the whole reason it is
    ;; said here instead of in :terminal.
+   ;;
+   ;; AND THE DOORS CLOSE WITH IT (waymark-fp62.4.1), except `reopen`.
+   ;; The engine shuts every door on a row whose work is over; the
+   ;; exception is the door that says the ending was wrong. Nothing is
+   ;; spelled here because nothing has to be: these endings are STATES,
+   ;; so the machine already shows the way back — `reopen` departs
+   ;; `dismissed` and lands in `researched`, which is no ending at all.
+   ;; A kind whose endings are WORDS IN THE DATA has no such view and
+   ;; names its ways back in `:over :ways-back` (media's `start`).
    :over {:accomplished #{:action_item} :let-go #{:dismissed}}
    :summary "{data.subject} · {data.sender} · {state}"
    ;; the message's own line, not the kind label: a card headed "Inbox

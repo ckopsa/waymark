@@ -96,10 +96,19 @@
                 "nothing starts at or before June — later rows never qualify")))
 
         (testing "an explicit body value wins over resolution"
-          (let [px (create! eng {:name "Hand-linked" :ledger "family"
+          ;; the hand-named predecessor is a row that stands (the ref
+          ;; wall, waymark-fp62.4.1): July I, deliberately NOT the
+          ;; newest family sibling the resolver would reach for. The
+          ;; control row, same shape without the ref, shows that pick.
+          (let [control (create! eng {:name "Resolver-linked" :ledger "family"
+                                      :starts_on "2026-09-01"})
+                px (create! eng {:name "Hand-linked" :ledger "family"
                                  :starts_on "2026-09-01"
-                                 :previous_period "chosen-by-hand"})]
-            (is (= "chosen-by-hand" (get-in px [:data :previous_period])))))))))
+                                 :previous_period (:id p1)})]
+            (is (= (:id p1) (get-in px [:data :previous_period])))
+            (is (not= (get-in control [:data :previous_period])
+                      (get-in px [:data :previous_period]))
+                "the hand's choice, not the resolver's")))))))
 
 (deftest order-ties-break-deterministically
   (db/with-test-engine

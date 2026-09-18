@@ -702,25 +702,41 @@
 
 (defn- run-scenario
   "One conformance-tier scenario, staged and attempted through the
-  real HTTP door."
+  real HTTP door.
+
+  `:given` rows stage in order, and each one that carries a `:handle`
+  puts the id the walker minted under that name. Every
+  `{given/<handle>}` in the rows that follow, in the subject `:row`
+  and in the `:input` is then replaced by that id
+  (`scenario/fill-handles`) — which is how a scenario cites a row that
+  will EXIST, and therefore how a door that resolves what a body cites
+  can be proved by a declared scenario at all (waymark-fp62.4.1)."
   [ctx rdef' s]
-  (let [staged (reduce (fn [_ gv]
-                         (let [out (stage-declared-row ctx (:kind gv) (:state gv)
-                                                       (:data gv))]
-                           (if (:error out) (reduced out) nil)))
-                       nil (:given s))]
+  (let [staged (reduce
+                (fn [ids gv]
+                  (let [out (stage-declared-row
+                             ctx (:kind gv) (:state gv)
+                             (scenario/fill-handles (:data gv) ids))]
+                    (if (:error out)
+                      (reduced out)
+                      (cond-> ids
+                        (:handle gv) (assoc (name (:handle gv)) (:id out))))))
+                {} (:given s))]
     (if (:error staged)
       (scenario/violation s {:unreadable (str "could not be staged: " (:error staged))})
       (let [hs (scenario-headers s)
+            input (scenario/fill-handles (:input s) staged)
             resp (if (scenario/create-door? rdef' (:attempt s))
-                   (req ctx :post (str "/api/" (:plural rdef')) (or (:input s) {}) hs)
-                   (let [subject (stage-declared-row ctx (:kind s)
-                                                     (get-in s [:row :state])
-                                                     (get-in s [:row :data]))]
+                   (req ctx :post (str "/api/" (:plural rdef')) (or input {}) hs)
+                   (let [subject (stage-declared-row
+                                  ctx (:kind s)
+                                  (get-in s [:row :state])
+                                  (scenario/fill-handles (get-in s [:row :data])
+                                                         staged))]
                      (if (:error subject)
                        ::unstaged
                        (invoke-http ctx (:kind s) (:id subject) (:attempt s)
-                                    (:input s) {:headers hs}))))]
+                                    input {:headers hs}))))]
         (if (= ::unstaged resp)
           (scenario/violation
            s {:unreadable "the row it describes could not be staged through its own door"})
@@ -2817,6 +2833,27 @@
             offer {:offer_kind skind :offer_id sid :offer_href self}
             finding (fn [text extra]
                       (merge {:finding text :evidence [self]} offer extra))
+            ;; 0. THE WALKER TAKES ITS OWN FINDINGS BACK FIRST. Every
+            ;; declared scenario and every core walk that ran before
+            ;; this section staged its rows AS THE WALKER, and since
+            ;; waymark-fp62.4.1 a scenario stages what it cites, so a
+            ;; finding it published on a value a person declared is a
+            ;; real, standing finding — lifted five by the rank's
+            ;; `:declared`, above these fills, on a decide line that
+            ;; takes two. The rank working is not this section's
+            ;; claim; the fills reaching the page and being answered
+            ;; is. `withdraw` is the author's own door, and the walker
+            ;; is their author; a finding somebody else published
+            ;; refuses the walker by name and stays, which is right.
+            _ (doseq [it (get-in (json ctx (req ctx :get
+                                                (str "/api/"
+                                                     (:plural (rdef ctx :insight))
+                                                     "?state=published")))
+                               [:data :items])
+                      :let [iid (some-> (:self it) id-of)]
+                      :when iid]
+                (invoke-http ctx :insight iid
+                             (declared-name ctx :insight :withdraw) nil))
             ;; 1. no citation, no publish
             uncited (make-insight!
                      ctx hs (dissoc (finding "Nothing is behind this one" nil)

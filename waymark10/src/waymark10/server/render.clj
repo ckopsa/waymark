@@ -151,9 +151,14 @@
 ;; ── the probe ───────────────────────────────────────────────────────
 
 (defn- probe-transition
-  "→ {:status :available|:unavailable|:hidden (:deny :denier)}."
-  [defn' row ctx]
-  (loop [gs (:guards defn')]
+  "→ {:status :available|:unavailable|:hidden (:deny :denier)}.
+
+  Through `g/walled-guards`, so the probe meets the framework's own
+  walls (the ending wall, the dangling-ref wall) exactly where the
+  write will meet them — waymark-fp62.4.1's whole point: a door the
+  envelope advertises either runs or refuses with a NAMED guard."
+  [rdef defn' row ctx]
+  (loop [gs (g/walled-guards rdef defn' row)]
     (if-some [guard (first gs)]
       (let [[v d] (g/evaluate guard row nil ctx)]
         (if (and (t/deny? v) (not= :warning (:severity d)))
@@ -397,7 +402,7 @@
                                            (:law-revision row))
             state (keyword (name (:state row)))]
         (if (contains? (:from defn') state)
-          (let [{:keys [status deny denier]} (probe-transition defn' row ctx)]
+          (let [{:keys [status deny denier]} (probe-transition rdef defn' row ctx)]
             (case status
               :available (if-some [field (empty-required-admission
                                           defn' row ctx)]
@@ -863,7 +868,7 @@
         (reduce
          (fn [acc defn']
            (if (contains? (:from defn') state)
-             (let [{:keys [status deny denier]} (probe-transition defn' row ctx)]
+             (let [{:keys [status deny denier]} (probe-transition rdef defn' row ctx)]
                (case status
                  :available
                  (if-some [field (empty-required-admission defn' row ctx)]
