@@ -241,12 +241,16 @@
        "sitting with this run, so the hook that reports what you spent "
        "closes yours and not another run's. "
        "\n\n"
-       "IF YOUR GRANT CITES A SEAT, read doors.ask.seat FIRST, before "
-       "anything else you do: it names the office you are sitting in, "
-       "what it has left to spend this week, the scope entries the "
-       "house refused, and the ledger that says what the seat has been "
-       "costing. When it carries a halt, or the seat is parked, say why "
-       "and stop — that is the whole of the turn. "
+       "IF YOUR GRANT CITES A SEAT AND YOU DID NOT SIT WITH A KEY, "
+       "read doors.ask.seat FIRST, before anything else you do: it "
+       "names the office you are sitting in, what it has left to spend "
+       "this week, the scope entries the house refused, and the ledger "
+       "that says what the seat has been costing. When it carries a "
+       "halt, or the seat is parked, say why and stop — that is the "
+       "whole of the turn. A session that DID sit with a key needs "
+       "none of that read: waymark_sit already answered the charter "
+       "and, when the seat walks a queue, the rows with their doors. "
+       "Invoke the first door rather than reading the surface again. "
        "\n\n"
        "Refusals are answers. When this engine refuses you it says why, "
        "what would make the action available, and what to do instead — "
@@ -346,6 +350,15 @@
                  (cond-> m
                    (contains? m id) (assoc-in [id :bound] binding))))
       binding)))
+
+(defn- bound-sitting
+  "The sitting this session is bound to, or nil. A plain read of the
+  map — no touch, because the counter that calls it is not a message
+  of its own."
+  [eng id]
+  (when-some [a (:mcp-sessions eng)]
+    (when-some [id (some-> id str not-empty)]
+      (some-> (get @a id) :bound :sitting))))
 
 ;; ── the in-process door ─────────────────────────────────────────────
 
@@ -943,7 +956,10 @@
        "From then on this session is that seat's sitter: it wears the "
        "seat's grant, its transitions and refusals count against the "
        "seat's sitting, and the seat's schedule names its model. Your "
-       "person's other sessions are untouched."))
+       "person's other sessions are untouched. When the seat walks a "
+       "queue, the answer carries the charter and the rows themselves, "
+       "each with the doors it affords and the input each door takes, "
+       "so your next call is the first invoke."))
 
 (def ^:private sit-tool
   {:name "waymark_sit"
@@ -1907,10 +1923,117 @@
                          (assoc :expires_at (str (.plusSeconds now ttl))))
                        {:principal grants/approvals-actor}))))
 
+;; ── the walk, in the sit's answer (R-12.28) ─────────────────────────
+;;
+;; Measured on production: ten calls and 34 KB before the first
+;; invoke, every one of them a turn that re-read the whole prefix.
+;; The engine knew all of it at the sit — the seat row names the walk
+;; and the charter, the sitter's grant names the rows it may see, and
+;; the collection item IS an envelope minus data, so its doors and
+;; their input schemas are already on the page the query answers.
+;; What follows SHAPES that page and decides nothing: one read,
+;; through the plural route waymark_query takes, wearing the leash
+;; every call after the bind will wear.
+
+(defn- sitter-session
+  "The session the sitter's own reads run as — built here exactly as
+  the transport builds it for every call AFTER the bind
+  (routes/mcp.clj's `sitter-session`): the sitter's principal, and
+  the worn seat grant, accepted as the audience on arrival the way
+  the guest door accepts it, or the bootstrap surface when nothing
+  stands. Two spellings of one resolution would be two answers to
+  what a sitter may see, so this one calls the same two fns.
+
+  ONE DIFFERENCE, RECORDED: the transport also writes the seat's halt
+  line here (`router/mind-the-wall!`, R-7.7). This does not. The wall
+  is judged all the same — a seat behind one scopes to nothing and
+  the walk comes back empty — and the first call the bound session
+  makes after the sit is the request that records it."
+  [eng sitter]
+  {:principal sitter
+   :visibility (or (grants/worn-visibility eng sitter)
+                   (grants/bootstrap-visibility eng sitter))})
+
+(defn- walk-door
+  "One door of a walk row, as the sitter must call it: the action's
+  name, the input `waymark_invoke` wants — the fields and their types,
+  so the sitter never reads the kind's schema for them — and, when the
+  door is confirm-gated, the sentence it must echo back as
+  `acknowledge`.
+
+  The entry is the envelope's own, so an action the grant does not
+  admit, or one this row's state does not afford, is not here to be
+  shaped. The sentence is `consequence-of`'s reading, over the wire's
+  own string keys: two readings of one sentence is a gate that can be
+  walked around, so the accessor stays the confirm gate's."
+  [aname entry]
+  (cond-> {"action" (str aname)}
+    (get entry "input") (assoc "input" (get entry "input"))
+    (get-in entry ["safety" "confirm"])
+    (assoc "confirm" true
+           "acknowledge"
+           (consequence-of {:display {:description (get-in entry ["display"
+                                                                  "description"])
+                                      :label (get-in entry ["display" "label"])}}))))
+
+(defn- walk-row
+  "One row of the walk: `row-summary`'s projection of the collection
+  item — the same one `waymark_query` answers under return=summary —
+  and the doors that item advertises."
+  [item]
+  (cond-> (row-summary item)
+    (seq (get item "actions"))
+    (assoc "doors" (mapv (fn [[aname entry]] (walk-door aname entry))
+                         (sort-by key (get item "actions"))))))
+
+(defn- walk-of
+  "The seat's walk, read AS THE SITTER: the kind `walk` names, through
+  the same plural route `waymark_query` takes, under that kind's own
+  default filter and its own default sort — oldest first for a queue
+  that sorts by when the work arrived — at most `rows_per_firing`
+  rows, and never more than one page.
+
+  nil when the seat walks nothing, when `walk` names a kind this
+  engine does not serve, or when the read does not answer 2xx: a
+  queue the sitter's grant conceals — a seat at one of R-5.2's walls
+  scopes to nothing — is ABSENT from the answer rather than a refusal
+  of the sit, which is R-10.6's rule at this door as at every other.
+
+  Nothing here decides what the sitter may see. The route reads under
+  the seat grant's own visibility, so a row outside the grant is not
+  on the page it answers and cannot be in what this shapes."
+  [eng call session seat]
+  (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
+    (when-some [rdef (get (inv/resources eng) (keyword walk))]
+      (let [n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
+                   coll/page-size-max)
+            resp (call (request session :get (str "/api/" (:plural rdef))
+                                {:query (query-string {"page[size]" (str n)})}))
+            doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
+        (when (collection-doc? doc)
+          {"kind" walk
+           "charter" (str (get-in seat [:data :charter]))
+           "total" (get-in doc ["data" "total"])
+           "rows" (mapv walk-row (get-in doc ["data" "items"]))})))))
+
+(def ^:private walk-note
+  "What a sitter holding its rows does next — and what it must not do.
+  Each of the four named tools was a turn of the opening on the
+  measured sitting, and the sit's own answer now carries what they
+  went for: the charter, the rows, the doors and their inputs."
+  (str "Your rows are below, each with its doors. For each row, invoke "
+       "the door the charter chooses. Do not call discover, schema, "
+       "query or powers; a refusal names its own remedy."))
+
+(def ^:private no-walk-note
+  "The seat that walks nothing still has a charter, and the seat row
+  is where it reads it."
+  "Read the seat row with waymark_get and do what its charter says.")
+
 (defn- sit
   "R-12.14, in order, and every refusal is one plain sentence an agent
   can act on."
-  [eng _call session args]
+  [eng call session args]
   (let [sid (some-> (:mcp-session-id session) str not-empty)
         person (some-> (:acts-for (:principal session)) str not-empty)
         ;; the seat is read before the person is judged, so an
@@ -1954,22 +2077,36 @@
                           :acts-for person)
             ;; g' · the sitting the router counts against, opened here
             ;; because nobody else opens one for a keyed session
-            sitting (open-sitting! eng sitter grant seat model-row harness)]
-        (bind-session! eng sid {:seat seat-id :sitter sitter :bound-at now
-                                :sitting (:id sitting)})
-        ;; h · what the firing reads next
-        (value-result
-         {:seat named
-          :sitter sitter-id
-          :model model
-          :grant (:id grant)
-          :sitting (:id sitting)
-          ;; R-10.8: the hook learns the mode from the sit's answer,
-          ;; and it is what decides whether a Stop closes or tallies
-          :mode (or (some-> (get-in seat [:data :mode]) str not-empty)
-                    seats/default-mode)
-          :note (str "You sit in `" named "`. Read the seat row with "
-                     "waymark_get and do what its charter says.")})))))
+            sitting (open-sitting! eng sitter grant seat model-row harness)
+            ;; h · the bind, BEFORE the walk is read: the session is
+            ;; the seat's from this moment, whatever the queue answers
+            _ (bind-session! eng sid {:seat seat-id :sitter sitter
+                                      :bound-at now :sitting (:id sitting)})
+            ;; i · the walk, read as the sitter under the seat's grant
+            ;; and through the query path — the rows this firing works
+            ;; through, with the doors each one affords
+            walk (walk-of eng call (sitter-session eng sitter) seat)]
+        ;; j · what the firing reads next. The walk rides as the wire
+        ;; wrote it — a route's own document, string keys and all —
+        ;; so the kebab→snake boundary cannot rewrite a key inside a
+        ;; row's values on the way out (the summary section's rule).
+        (result
+         (j/write-value-as-string
+          (cond-> (p/wire-value
+                   {:seat named
+                    :sitter sitter-id
+                    :model model
+                    :grant (:id grant)
+                    :sitting (:id sitting)
+                    ;; R-10.8: the hook learns the mode from the sit's
+                    ;; answer, and it is what decides whether a Stop
+                    ;; closes or tallies
+                    :mode (or (some-> (get-in seat [:data :mode]) str not-empty)
+                              seats/default-mode)
+                    :note (str "You sit in `" named "`. "
+                               (if walk walk-note no-walk-note))})
+            walk (assoc "walk" walk))
+          verbatim-mapper))))))
 
 (def ^:private bodies
   {"waymark_discover" discover
@@ -2208,20 +2345,25 @@
   never reaches here: the protocol error carries no tool result, and
   there is no tool to name the bytes after.
 
-  `waymark_sit`'s own answer is the one call a bound session does not
-  pay for. The transport resolves the session's visibility BEFORE the
-  message runs, so the sit still wears the leash it arrived with, and
-  the sitting it opens is not yet the one the counter looks for. The
-  calls after it are all counted.
+  `waymark_sit` IS COUNTED, and it needs its own lookup to be
+  (R-12.28). The transport resolves the session's visibility BEFORE
+  the message runs, so the sit still wears the leash it arrived with
+  and the grant it opened the sitting under is not the one on the
+  session; the sitting the bind just wrote is. Its answer now carries
+  the walk, which is the largest thing this door serves a firing, and
+  a lever nobody can read is a lever nobody pulls.
 
   It never throws: a counter that could fail a tool answer would cost
   the model the very bytes it is there to measure."
   [eng session tool-name result]
   (try
-    (when-some [gid (get-in session [:visibility :grant :id])]
-      (when-some [sitting (seats/open-sitting-for-grant eng gid)]
-        (seats/add-served! eng (:id sitting) tool-name (result-bytes result)
-                           (dropped-bytes result))))
+    (when-some [sitting-id
+                (or (when (= "waymark_sit" tool-name)
+                      (bound-sitting eng (:mcp-session-id session)))
+                    (when-some [gid (get-in session [:visibility :grant :id])]
+                      (:id (seats/open-sitting-for-grant eng gid))))]
+      (seats/add-served! eng sitting-id tool-name (result-bytes result)
+                         (dropped-bytes result)))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 mcp served counter" tool-name "failed -"
