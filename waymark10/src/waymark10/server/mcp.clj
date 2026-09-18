@@ -1796,9 +1796,12 @@
   birth wants the ref and the sitter's claim wants the identifier."
   [eng seat]
   (let [schedule (row-of eng :schedule (get-in seat [:data :schedule]))
+        ;; `schedules/linked?`'s own reading, spelled here rather than
+        ;; required: this surface does not depend on the consumer
+        linked? (boolean (some-> (get-in schedule [:data :fire_url]) str not-empty))
         held (row-of eng :model (first (get-in seat [:data :held_for])))
         copy (row-of eng :model (get-in schedule [:data :model]))]
-    (if (schedules/linked? schedule)
+    (if linked?
       (or held copy)
       (or copy held))))
 
