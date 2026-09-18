@@ -16,7 +16,7 @@
   whole argument; it is not restated here.
 
   ONE TOOL, ONE CALL A PASS: `emila__inbox` under the `email.read`
-  power (waymark10.server.gate-proxy/tool-capability). The tool name,
+  power (the gate row's powers, waymark10.server.mcp-servers). The tool name,
   the window and the folder are configurable, because emila's listing
   is the one wire in this confluence that is NOT pinned anywhere in
   this repo — see `message->doc` for the shape this namespace assumes

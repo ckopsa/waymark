@@ -30,6 +30,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
+            [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -61,8 +62,13 @@
   [log]
   (fn [method params]
     (swap! log conj {:method method :params params})
-    {:isError false
-     :content [{:type "text" :text mail-html}]}))
+    (if (= "tools/list" method)
+      ;; the gate row's discover at its seed: an empty list, because
+      ;; the power door resolves emila__read by the row's powers and
+      ;; not by its mirror
+      {:tools []}
+      {:isError false
+       :content [{:type "text" :text mail-html}]})))
 
 (def ^:private clock (Instant/parse "2026-09-18T09:00:00Z"))
 
@@ -82,9 +88,10 @@
                   ;; against it
                   :resources [caps/capability]
                   :now-fn (fn [] clock)
-                  ;; the tests' seam gate-proxy/rpc-of reads FIRST: no
-                  ;; URL, no socket, no live Gate in this namespace
-                  :gate {:rpc (fake-gate log)}}))
+                  ;; the gate row's client, handed in whole
+                  ;; (spec-mcp-servers R-11): no URL, no socket, no
+                  ;; live Gate in this namespace
+                  :services {:mcp-servers {:gate-rpc (fake-gate log)}}}))
 
 ;; ── the office, the leash and the wake ──────────────────────────────
 
@@ -134,6 +141,10 @@
   []
   (let [log (atom [])
         eng (fresh-engine log)
+        ;; the bridge row (spec-mcp-servers R-13): emila__read resolves
+        ;; through it to the fake, exactly as the static map resolved
+        ;; it before
+        _ (gate/ensure-gate-row! eng)
         _ (mint-capability! eng)
         gid (wear-the-leash! eng)
         seat (a-seat! eng)
@@ -153,7 +164,7 @@
   "One `waymark_power` call through the whole message layer — the
   same path the transport drives, so the byte counter runs too."
   [{:keys [eng session]} args]
-  (get-in (mcp/message eng (mcp/door eng) (get-in eng [:gate :rpc]) session
+  (get-in (mcp/message eng (mcp/door eng) (gate/rpc-of eng) session
                        {:jsonrpc "2.0" :id 1 :method "tools/call"
                         :params {:name "waymark_power" :arguments args}})
           [:result]))
@@ -200,7 +211,9 @@
                           :text_only true
                           :max_chars 4000})
         answered (bytes-of result)
-        calls @(:calls w)]
+        ;; the calls that reached the fake past the seed's one
+        ;; tools/list
+        calls (filterv #(= "tools/call" (:method %)) @(:calls w))]
 
     (testing "the call reached Gate, and Gate answered 60 KB"
       (is (= 1 (count calls)))

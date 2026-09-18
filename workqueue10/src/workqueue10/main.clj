@@ -107,6 +107,7 @@
             [waymark10.server.capabilities :as cap :refer [capability]]
             [waymark10.server.engine :as engine]
             [waymark10.server.feed :as feed]
+            [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
@@ -351,8 +352,12 @@
   real by default would have offline dev and the declaration gate
   reaching for the LAN), the shared in-memory twin otherwise."
   []
-  (if-some [url (some-> (System/getenv "WORKQUEUE10_GATE_URL") str not-empty)]
-    (let [rpc (gate-chat/rpc {:url url})
+  (if (some-> (System/getenv "WORKQUEUE10_GATE_URL") str not-empty)
+    (let [;; the dispatcher over the engine-ref: each call resolves
+          ;; its tool by prefix to an mcp_server row (the gate row,
+          ;; seeded at boot from WORKQUEUE10_GATE_URL) and rides that
+          ;; row's one client (spec-mcp-servers R-7)
+          rpc (gate-chat/rpc {:engine-ref engine-ref})
           limit (some-> (System/getenv "WORKQUEUE10_GATE_CHAT_LIMIT")
                         parse-long)
           birth-fn (gate-chat/roster-birth-fn {:engine-ref engine-ref})
@@ -388,7 +393,7 @@
           url (some-> (System/getenv "WORKQUEUE10_GATE_URL") str not-empty)]
       (inbox/source
        {:rpc-fn (if url
-                  (gate-chat/rpc {:url url})
+                  (gate-chat/rpc {:engine-ref engine-ref})
                   (gate-chat/fake-rpc fake-gate))
         :tool (or (some-> (System/getenv "WORKQUEUE10_INBOX_TOOL")
                           str not-empty)
@@ -995,6 +1000,14 @@
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
         _ (ensure-capabilities! eng)
+        ;; the bridge of Gate's deprecation (spec-mcp-servers § 3
+        ;; step 1): one mcp_server row named gate, passthrough, at the
+        ;; Gate WORKQUEUE10_GATE_URL names, seeded once and never
+        ;; overwritten — the sources and the power door resolve every
+        ;; <rig>__<tool> name through it until each rig has its own row
+        _ (when-some [url (some-> (System/getenv "WORKQUEUE10_GATE_URL")
+                                  str not-empty)]
+            (mcp-servers/ensure-gate-row! eng {:url url}))
         _ (connections/ensure-connections! eng (connection-descriptors))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp

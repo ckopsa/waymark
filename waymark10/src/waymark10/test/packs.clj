@@ -102,7 +102,6 @@
             [waymark10.server.capabilities :as cap]
             [waymark10.server.curtain :as curtain]
             [waymark10.server.feed :as feed]
-            [waymark10.server.gate-proxy :as gate-proxy]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.presence :as presence]
             [waymark10.server.router :as router]
@@ -1295,8 +1294,8 @@
       (seq extras)
       (conj (str "tools/list: the list is static — nothing is appended "
                  "for any caller (waymark-912p) — got " extras
-                 (if (every? #(contains? gate-proxy/tool-capability %) extras)
-                   " (Gate tools projected onto the list: the retired tail)"
+                 (if (every? #(str/includes? % "__") extras)
+                   " (server tools projected onto the list: the retired tail)"
                    " (names outside the fixed set)")))
       (some #(not= "object" (get-in % [:inputSchema :type])) tools)
       (conj "tools/list: every tool needs an object inputSchema a client can fill")

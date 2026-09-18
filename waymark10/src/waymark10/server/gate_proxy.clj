@@ -1,364 +1,170 @@
 (ns waymark10.server.gate-proxy
-  "The Gate hypermedia proxy's stateless core (waymark-q95): the door
-  that holds the leash and stores nothing.
+  "The power door's grant judgment (waymark-q95, waymark-fp62.10): the
+  door that holds the leash and stores nothing of what passes through.
 
-  Waymark NAMES ten capabilities that point at Gate (ckopsa/gate — a
-  FastAPI + MCP Server(\"gate\") on the private LAN, aggregating rig
-  servers and re-exposing their tools as <rig>__<tool>), but until
-  this namespace it did not sit on the wire: a grant saying
-  \"email.read only\" was not enforced against Gate at all. This is
-  the enforcement point — the inversion `feed.preview_as` recorded in
-  server/capabilities.clj (\"enforced by this engine's own route\"),
-  generalized: Waymark is public and holds the grant; Gate stays
-  simple, private, and does NOT authenticate its caller.
+  Since waymark-fp62.10 the servers behind this door are ROWS of the
+  `mcp_server` kind (waymark10.server.mcp-servers). Each row holds its
+  client and its `powers` list, and that list is the policy which
+  replaced the static tool→token map this namespace used to hold. This
+  namespace keeps the two things that are about the GRANT and not
+  about a server:
 
-  THE CONSTRAINT THAT SHAPED IT: no mirrored resources, no stored
-  state. Capabilities exist precisely so external data (email bodies,
-  texts, budget rows) is NEVER copied into Waymark. So this is NOT a
-  defresource kind and there are no rows here — Waymark holds the
-  RULE (`tool-capability`, the one static artifact) and forwards the
-  payload through untouched. Every request recomputes from Gate live.
+  • `affordances-for` — the mirrored tools of every live server ∩ the
+    caller's grant, rendered as a hypermedia document: reads as links,
+    mutations (an entry with `why` true) as action forms whose input
+    schema is the server's own. No wire is touched: the row is the
+    record of what the server offers (R-4, R-6).
 
-  Two functions, one per direction:
+  • `invoke-for` — the tool resolved to its row by prefix, the power
+    token judged in-process against the grant, a required `why`
+    demanded, and only then the forward through the row's client. The
+    payload is answered VERBATIM.
 
-  • `affordances-for` — Gate's LIVE `tools/list` ∩ the caller's
-    grant, rendered as a hypermedia document: Gate's `allow` tools
-    (its policies.yaml's reads — recognizable on the wire because
-    Gate does not require `__why` of them) as links, its
-    `require_approval` tools (mutations) as action forms whose input
-    schema is Gate's own inputSchema. A grant admitting no token
-    skips Gate entirely and reads an empty document.
+  GATE'S `__why` CONVENTION, surfaced as `why`: a passthrough row's
+  tools carry `__why` in their schemas; this door speaks `why` and
+  translates it back on the forward. On a server that is not
+  passthrough, `why` is demanded when the entry says so and removed
+  before the forward, because that server never asked for it.
 
-  • `invoke-for` — the tool's capability token looked up in the map,
-    grant-checked in-process (the same `capability-entry` read the
-    feed door and `/api/-/grant-check` make), refused 403/404 before
-    any wire is touched, else forwarded and answered VERBATIM.
+  THE FILTER IS REFUSED, not interpreted, as before: a grant entry
+  carrying a filter admits nothing here, because forwarding under a
+  constraint this door had not understood would honour nothing.
 
-  GATE'S `__why` CONVENTION, surfaced as `why`: Gate augments every
-  require_approval tool's schema with a `__why` argument — the
-  one-sentence rationale its human approver reads — and requires it.
-  This door speaks `why` on its own surface (the affordance's input
-  schema and its `:why` field both say so) and translates it back to
-  `__why` on the forward, passing a caller's literal `__why` through
-  untouched.
-
-  THE FILTER IS REFUSED, not interpreted: a capability entry's
-  :filter is a constraint the enforcement point interprets, and this
-  door interprets none yet — an email.read grant filtered to
-  {folder: X} would be honoured by forwarding everything, which is
-  honouring nothing. The feed door made the same call about an
-  unfiltered preview grant, for the same reason, in the other
-  direction: refuse what you cannot honestly enforce.
-
-  THE WIRE to Gate is MCP's streamable HTTP transport, the simple
-  half — POST one JSON-RPC message, read one response (JSON or a
-  single-response SSE body), exactly as Gate itself connects to its
-  rig backends. One session per engine, reused across requests
-  (`rpc-of` is called once at route build), re-initialized once on a
-  session-expiry answer. Nothing else is kept."
+  The public names other namespaces call — `rpc-of`, `affordances-for`,
+  `invoke-for`, `power-of` — keep their shapes. Each takes the engine,
+  a dispatcher `rpc-of` built (it carries the engine), or a delay over
+  one; `mcp-servers/engine-of` reads all three."
   (:require [clojure.string :as str]
             [waymark10.server.grants :as grants]
-            [waymark10.server.problems :as p]
-            [waymark10.wire :as wire])
-  (:import (java.net URI)
-           (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
-                          HttpResponse$BodyHandlers)
-           (java.time Duration)))
+            [waymark10.server.mcp-client :as client]
+            [waymark10.server.mcp-servers :as servers]
+            [waymark10.server.problems :as p]))
 
 (set! *warn-on-reflection* true)
 
-;; ── configuration ───────────────────────────────────────────────────
+;; ── the seeds and the seams ─────────────────────────────────────────
 
 (def default-url
-  "Where Gate answers on the household LAN — the deployment value,
-  overridable per engine as (:gate eng) {:url …}, the same
-  engine-opt spelling :events-poll-ms and the feed recipe use. The
-  network backstop (firewalling :8100 so only this host may reach
-  it) is home-infrastructure's, recorded in the bead, not code here."
-  "http://192.168.1.40:8100/mcp/")
+  "Where Gate answers on the household LAN. It seeds the gate row's
+  url in `ensure-gate-row!` and nothing else reads it: there is no
+  hidden fallback to it."
+  servers/default-gate-url)
 
-;; ── the one static artifact: tool → capability ──────────────────────
+(def http-rpc
+  "The streamable-HTTP client, kept under its old name for callers
+  that build one by hand: (http-rpc url) → (fn [method params])."
+  client/http-client)
 
-(def tool-capability
-  "THE SECURITY POLICY — the only thing Waymark knows about Gate
-  beyond the live tool list. Small config data, not a resource: a
-  Gate tool absent from this map does not exist through this door,
-  whatever Gate serves. These are the bead's draft rows, whole —
-  every rig Gate aggregates, each tool bound to the dotted token the
-  capability registry already names; a tool named here that a given
-  Gate does not serve live simply never survives the ∩, so the map
-  may bind more than today's Gate lists and a rig's later tool
-  arrives leashed or not at all. gsd__* (todos + calendar) is
-  deliberately absent — DECIDED, not open: waymark already owns
-  tasks and calendar natively (workqueue10/calendar10), and a gsd
-  capability would leash an agent around the queue's own law."
-  {;; emila — email
-   "emila__inbox"               "email.read"
-   "emila__list_messages"       "email.read"
-   "emila__search"              "email.read"
-   "emila__read"                "email.read"
-   "emila__read_batch"          "email.read"
-   "emila__download_attachment" "email.read"
-   "emila__summary"             "email.read"
-   "emila__folders"             "email.read"
-   "emila__move"                "email.move"
-   "emila__move_from_sender"    "email.move"
-   "emila__send"                "email.send"
-   ;; tgram — telegram
-   "tgram__get_messages"        "telegram.read"
-   "tgram__list_chats"          "telegram.read"
-   "tgram__search_messages"     "telegram.read"
-   "tgram__search_all_chats"    "telegram.read"
-   "tgram__send_message"        "telegram.send"
-   ;; messa — the phone's texts
-   "messa__threads"             "messages.read"
-   "messa__read_messages"       "messages.read"
-   "messa__reset"               "messages.read"
-   ;; keep — the household's notes (read-only rig; no mutating tools exist)
-   "keep__list_notes"           "notes.read"
-   "keep__search"               "notes.read"
-   "keep__read"                 "notes.read"
-   ;; ynab — the budget
-   "ynab__accounts"             "ynab.read"
-   "ynab__transactions"         "ynab.read"
-   "ynab__budget_month"         "ynab.read"
-   "ynab__categories"           "ynab.read"
-   "ynab__update_transaction"   "ynab.write"
-   "ynab__split_transaction"    "ynab.write"
-   "ynab__bulk_approve"         "ynab.write"
-   "ynab__create_transaction"   "ynab.write"
-   ;; amzn — amazon
-   "amzn__orders"               "amazon.read"
-   "amzn__search"               "amazon.read"
-   "amzn__product_details"      "amazon.read"
-   "amzn__view_cart"            "amazon.read"
-   "amzn__reset"                "amazon.read"
-   "amzn__add_to_cart"          "amazon.cart"
-   ;; costco — warehouse receipts (read-only rig; login/reset steer its
-   ;; own browser, never the account)
-   "costco__receipts"           "costco.read"
-   "costco__receipt"            "costco.read"
-   "costco__captured"           "costco.read"
-   "costco__login"              "costco.read"
-   "costco__reset"              "costco.read"
-   ;; gsd__* — deliberately no rows: waymark owns tasks/calendar
-   ;; natively (workqueue10/calendar10), per the bead's decision.
-   })
+(def rpc-of
+  "The engine's power dispatcher, (fn [method params]) — tools/list
+  answers the live rows' mirrored tools, tools/call resolves the
+  prefixed name to a row and forwards. Takes the engine or something
+  that derefs to it (main's engine-ref), read on every call."
+  servers/rpc-of)
 
-(def capability-tokens
-  "Every token the map names — what `affordances-for` intersects the
-  grant against before it touches any wire."
-  (into #{} (vals tool-capability)))
+(def ensure-gate-row!
+  "The bridge (R-13): the one row named gate, passthrough, seeded with
+  the powers the static map used to hold."
+  servers/ensure-gate-row!)
 
-;; ── the MCP client (streamable HTTP, the simple half) ───────────────
+(def power-tokens
+  "Every power token the rows' powers name, sorted — what discover's
+  doors.ask.powers lists."
+  servers/power-tokens)
 
-(def ^:private protocol-version "2025-06-18")
+(defn- engine!
+  "The engine behind what a caller handed in, or the 502 that says
+  there is none yet."
+  [x]
+  (or (servers/engine-of x)
+      (throw (client/unreachable "the engine is not started yet."))))
 
-(defn- gate-unreachable [detail]
-  (p/problem :gate-unreachable 502 "Gate unreachable"
-             {:detail (str "Gate did not answer this engine: " detail
-                           " Nothing was read and nothing was done; the"
-                           " grant leash was judged here either way.")}))
-
-(defn- sse-answer
-  "A streamable-HTTP response body that arrived as text/event-stream:
-  the JSON-RPC answer is the last data: event carrying a result or an
-  error (the transport allows a server to stream related messages
-  first; this client asked for the simple exchange and takes the
-  reply)."
-  [body]
-  (->> (str/split-lines (str body))
-       (map str/trim)
-       (filter #(str/starts-with? % "data:"))
-       (keep #(try (wire/read-json (str/trim (subs % 5)))
-                   (catch Exception _ nil)))
-       (filter #(or (contains? % :result) (contains? % :error)))
-       last))
-
-(defn- post-message!
-  [^HttpClient http ^String url session-id msg]
-  (let [builder (-> (HttpRequest/newBuilder (URI/create url))
-                    (.timeout (Duration/ofSeconds 30))
-                    (.header "Content-Type" "application/json")
-                    (.header "Accept" "application/json, text/event-stream"))
-        builder (if session-id
-                  (.header builder "mcp-session-id" (str session-id))
-                  builder)
-        req (.build (.POST builder (HttpRequest$BodyPublishers/ofString
-                                    (wire/write-json msg))))
-        resp (.send http req (HttpResponse$BodyHandlers/ofString))
-        headers (.headers resp)
-        ctype (.orElse (.firstValue headers "content-type") "")]
-    {:status (.statusCode resp)
-     :session-id (.orElse (.firstValue headers "mcp-session-id") nil)
-     :answer (let [^String body (.body resp)]
-               (cond
-                 (str/blank? (str body)) nil
-                 (str/includes? ctype "text/event-stream") (sse-answer body)
-                 :else (try (wire/read-json body)
-                            (catch Exception _ nil))))}))
-
-(defn http-rpc
-  "A JSON-RPC caller for one Gate: (fn [method params]) → the
-  :result. Holds exactly one piece of state — the transport session —
-  opened lazily on first use, reused across requests, re-initialized
-  once when Gate answers that it expired (a 404 on an established
-  session, per the transport spec). A JSON-RPC error or a transport
-  failure surfaces as a 502 problem; the leash was judged before any
-  of this ran, so a dark Gate never changes what was allowed."
-  [url]
-  (let [http (-> (HttpClient/newBuilder)
-                 (.connectTimeout (Duration/ofSeconds 5))
-                 (.build))
-        state (atom {:session nil :id 0})
-        next-id! #(:id (swap! state update :id inc))
-        raw! (fn [msg]
-               (try (post-message! http url (:session @state) msg)
-                    (catch Exception e
-                      (throw (gate-unreachable (ex-message e))))))
-        handshake! (fn []
-                     (let [{:keys [status session-id answer]}
-                           (raw! {:jsonrpc "2.0" :id (next-id!)
-                                  :method "initialize"
-                                  :params {:protocolVersion protocol-version
-                                           :capabilities {}
-                                           :clientInfo {:name "waymark10"
-                                                        :version "10"}}})]
-                       (when (or (:error answer)
-                                 (not (<= 200 (long status) 299)))
-                         (throw (gate-unreachable
-                                 (str "initialize answered " status " "
-                                      (some-> (:error answer) :message)))))
-                       (swap! state assoc :session session-id)
-                       ;; the transport's second half of the handshake;
-                       ;; a notification, so no answer is owed
-                       (raw! {:jsonrpc "2.0"
-                              :method "notifications/initialized"})))
-        request! (fn [method params]
-                   (raw! {:jsonrpc "2.0" :id (next-id!)
-                          :method method :params params}))]
-    (fn rpc [method params]
-      (when (nil? (:session @state)) (handshake!))
-      (let [{:keys [status answer]} (request! method params)
-            ;; an expired session is the transport's 404 — open one
-            ;; new session and retry once, never a loop
-            {:keys [status answer]} (if (= 404 (long status))
-                                      (do (swap! state assoc :session nil)
-                                          (handshake!)
-                                          (request! method params))
-                                      {:status status :answer answer})]
-        (cond
-          (:error answer)
-          (throw (gate-unreachable (str method " answered JSON-RPC error "
-                                        (get-in answer [:error :code]) ": "
-                                        (get-in answer [:error :message]))))
-
-          (not (<= 200 (long status) 299))
-          (throw (gate-unreachable (str method " answered HTTP " status ".")))
-
-          :else (:result answer))))))
-
-(defn rpc-of
-  "The engine's Gate caller, built ONCE per engine at route build (so
-  the session is the connection reuse the bead asks for): (:gate eng)
-  may carry :rpc — a caller handed in whole, the tests' seam and any
-  future transport's — or :url; absent both, the deployment default."
-  [eng]
-  (or (get-in eng [:gate :rpc])
-      (http-rpc (get-in eng [:gate :url] default-url))))
-
-;; ── the grant's read of the map ─────────────────────────────────────
+;; ── the grant's read of the policy ──────────────────────────────────
 
 (defn- admitted?
-  "Does the presented visibility admit this capability token, as this
-  door enforces it? The entry must EXIST (visibility already judged
-  audience, acceptance, expiry and revocation — every one of those is
-  nil here) and must carry NO filter, because this door interprets no
-  constraint yet and forwarding under one it had not understood would
-  be honouring nothing."
+  "Does the presented visibility admit this power token, as this door
+  enforces it? The entry must EXIST (visibility already judged
+  audience, acceptance, expiry and revocation) and must carry NO
+  filter, because this door interprets no constraint."
   [vis token]
   (let [entry (grants/capability-entry vis token)]
     (and (some? entry) (nil? (:filters entry)))))
 
-(defn admitted-tokens [vis]
-  (into #{} (filter #(admitted? vis %)) capability-tokens))
+(defn admitted-tokens
+  "The power tokens any row names that this visibility admits."
+  [eng-or-rpc vis]
+  (let [eng (engine! eng-or-rpc)]
+    (into #{} (filter #(admitted? vis %)) (servers/power-tokens eng))))
 
 ;; ── affordances ─────────────────────────────────────────────────────
 
-(defn- why-required?
-  "Gate's own read/act split, read off the wire: Gate augments every
-  require_approval (mutation) tool's schema with a REQUIRED `__why`,
-  and leaves it optional on allow (read) tools — the same partition
-  its policies.yaml draws, arriving live instead of copied here."
-  [tool]
-  (boolean (some #{"__why"} (get-in tool [:inputSchema :required]))))
-
 (defn- present-schema
-  "Gate's own inputSchema, with its `__why` convention surfaced as
-  `why` — the spelling this door's surface speaks; `gate-args`
-  translates it back on the forward."
-  [schema]
-  (let [schema (or schema {:type "object" :properties {}})]
-    (if-some [why (get-in schema [:properties :__why])]
+  "The server's own inputSchema, with Gate's `__why` surfaced as
+  `why`, and a `why` added when the entry demands one the schema does
+  not already name."
+  [schema why?]
+  (let [schema (or schema {:type "object" :properties {}})
+        schema (if-some [why (get-in schema [:properties :__why])]
+                 (-> schema
+                     (update :properties #(-> % (dissoc :__why) (assoc :why why)))
+                     (cond-> (:required schema)
+                       (update :required
+                               (partial mapv #(if (= "__why" %) "why" %)))))
+                 schema)]
+    (if (and why? (nil? (get-in schema [:properties :why])))
       (-> schema
-          (update :properties #(-> % (dissoc :__why) (assoc :why why)))
-          (cond-> (:required schema)
-            (update :required (partial mapv #(if (= "__why" %) "why" %)))))
+          (assoc-in [:properties :why]
+                    {:type "string"
+                     :description (str "One sentence of reason. This engine "
+                                       "demands it and a person reads it.")})
+          (update :required #(vec (distinct (conj (vec %) "why")))))
       schema)))
 
-(defn- affordance [tool]
-  (let [tname (str (:name tool))
-        mutation? (why-required? tool)]
-    (cond-> {:href (str "/api/-/gate/" tname)
-             :method "POST"
-             :capability (get tool-capability tname)
-             :description (str (:description tool))
-             :input (present-schema (:inputSchema tool))}
-      mutation?
-      (assoc :why {:required true
-                   :note (str "One sentence of rationale; Gate shows it to "
-                              "the human who approves this action.")}
-             :safety {:confirm false
-                      :consequence
-                      (str "Gate holds its own approval loop: this action "
-                           "pauses for a human's yes through Gate's "
-                           "notifier, and your `why` is the sentence that "
-                           "human reads.")}))))
+(defn- affordance [{:keys [name token description input-schema why]}]
+  (cond-> {:href (str "/api/-/gate/" name)
+           :method "POST"
+           :capability token
+           :description (str description)
+           :input (present-schema input-schema why)}
+    why
+    (assoc :why {:required true
+                 :note (str "One sentence of rationale; the person who "
+                            "approves this action reads it.")}
+           :safety {:confirm false
+                    :consequence
+                    (str "This action acts on the outside: your `why` is "
+                         "the sentence a person reads before or after "
+                         "it lands.")})))
 
 (defn- survivors
-  "THE one computation both surfaces project: Gate's LIVE tools ∩
-  the caller's grant, recomputed per call, nothing cached. A grant
-  admitting no token skips Gate entirely — what a caller may not see
-  costs no wire at all."
-  [rpc vis]
-  (let [tokens (admitted-tokens vis)]
+  "THE one computation both surfaces project: the live rows' mirrored
+  tools ∩ the caller's grant, recomputed per call from the rows."
+  [eng vis]
+  (let [tokens (admitted-tokens eng vis)]
     (if (empty? tokens)
       []
       (into []
-            (filter #(contains? tokens
-                                (get tool-capability (str (:name %)))))
-            (:tools (rpc "tools/list" {}))))))
+            (filter #(and (:token %) (contains? tokens (:token %))))
+            (servers/offered eng)))))
 
 (defn affordances-for
-  "GET /api/-/gate's document: Gate's LIVE tools ∩ the caller's
-  grant, recomputed per request, nothing cached and nothing stored.
-  Reads (Gate's allow policy) under :links, mutations (its
-  require_approval policy) under :actions as forms; each survivor's
-  input schema is Gate's own. A grant admitting no token reads an
-  empty document — and Gate is never contacted for it, so what a
-  caller may not see costs no wire at all."
-  [rpc vis]
-  (let [{reads false mutations true} (group-by why-required?
-                                               (survivors rpc vis))
+  "GET /api/-/gate's document and waymark_powers' answer: the live
+  servers' tools ∩ the caller's grant, recomputed per call from the
+  rows. Reads under :links, mutations (why required) under :actions
+  as forms; each survivor's input schema is the server's own. A grant
+  admitting no token reads an empty document with the ask door."
+  [eng-or-rpc vis]
+  (let [eng (engine! eng-or-rpc)
+        {reads false mutations true} (group-by :why (survivors eng vis))
         entry #(vector (str (:name %)) (affordance %))]
     {:waymark "10"
      :self "/api/-/gate"
-     :note (str "External powers reached THROUGH this engine: Gate's live "
-                "tools intersected with your grant, recomputed on every "
-                "read. Nothing behind these affordances is stored here — "
-                "invoke one and the payload passes through untouched. "
-                "Mutations carry a `why`: one sentence a human approver "
-                "reads before Gate acts.")
+     :note (str "External powers reached THROUGH this engine: the live "
+                "servers' tools intersected with your grant, read from each "
+                "server's row on every call. Nothing behind these "
+                "affordances is stored here — invoke one and the payload "
+                "passes through untouched. Mutations carry a `why`: one "
+                "sentence a person reads.")
      :links (into {} (map entry) reads)
      :actions (into {} (map entry) mutations)
      :ask {:href "/api/approval_requests"
@@ -368,24 +174,12 @@
                       "email.send, email.move — GET /api/capabilities for "
                       "the words) mint the grant this door reads.")}}))
 
-;; ── the MCP projection (the second surface) ─────────────────────────
-;;
-;; server/mcp.clj's two fixed tools are this door's other surface
-;; (waymark-912p): waymark_powers answers `affordances-for` and
-;; waymark_power calls `invoke-for`, both wearing the session's
-;; visibility. Nothing is projected per tool any more — the list used
-;; to append each survivor as its own MCP tool, and a grant approved
-;; mid-conversation then waited on the client honouring
-;; tools/list_changed. One document, read live, needs no such thing.
-
 ;; ── invoke ──────────────────────────────────────────────────────────
 
 (defn- refuse-invoke
-  "One 403, spelled so the next move is obvious — the feed door's own
-  posture: capabilities are WORDS, readable by every named principal
-  without a grant, so naming the token discloses nothing a GET
-  /api/capabilities would not, and what it buys is that an agent
-  reading this sentence knows how to ASK."
+  "One 403, spelled so the next move is obvious: capabilities are
+  WORDS, so naming the token discloses nothing, and what it buys is
+  that an agent reading this sentence knows how to ASK."
   [detail token]
   (throw (p/problem :gate-not-granted 403 "Not granted"
                     {:detail detail
@@ -395,45 +189,62 @@
                            " — a human in the house approves it, and the"
                            " grant it mints is what this door reads.")]})))
 
+(defn- refuse-why
+  "The 422 for a why-required tool called with no why."
+  [tname]
+  (throw (p/problem :why-required 422 "Why is required"
+                    {:detail (str tname " requires a why: one sentence that"
+                                  " says why this call is made. This engine"
+                                  " demands it and a person reads it.")
+                     :remedies ["Call again with arguments.why set to one sentence."]})))
+
+(defn- carries-why? [args]
+  (or (not (str/blank? (str (:why args))))
+      (not (str/blank? (str (:__why args))))))
+
 (defn- gate-args
-  "The caller's arguments as Gate expects them: `why` translated back
-  to Gate's `__why`; a caller who already speaks Gate's spelling
-  passes through untouched (and an explicit `__why` wins, so the
-  translation never overwrites a deliberate one)."
+  "The caller's arguments as Gate expects them: `why` translated to
+  Gate's `__why`; an explicit `__why` wins."
   [args]
   (let [args (or args {})]
     (if (and (contains? args :why) (not (contains? args :__why)))
       (-> args (dissoc :why) (assoc :__why (:why args)))
       (dissoc args :why))))
 
+(defn- forward-args
+  "What the row's server receives: Gate's spelling on a passthrough
+  row, and neither spelling on a server that never asked for one."
+  [row args]
+  (if (true? (get-in row [:data :passthrough]))
+    (gate-args args)
+    (dissoc (or args {}) :why :__why)))
+
 (defn invoke-for
-  "POST /api/-/gate/{tool}: the capability token looked up in the
-  map, the grant judged IN-PROCESS — the same `capability-entry` read
-  the feed door makes and the same law `/api/-/grant-check` answers —
-  and only then the forward. The refusals come first and the order is
-  the security property: an unknown tool 404s (a tool outside the map
-  does not exist through this door, whatever Gate serves), an
-  ungranted one 403s naming the ask, and NEITHER touches Gate. A
-  granted call forwards over the LAN and answers Gate's payload
-  VERBATIM — its content, its isError, its `__why`-approval refusals
-  — because the payload is exactly what this engine must never hold
-  or rewrite."
-  [rpc vis tool args]
-  (let [tname (str tool)
-        token (get tool-capability tname)]
-    (when (nil? token)
-      (throw (p/not-found "gate tool" tname)))
-    (let [entry (grants/capability-entry vis token)]
+  "POST /api/-/gate/{tool} and waymark_power: the tool resolved to its
+  row by prefix, the entry's power token judged IN-PROCESS against the
+  grant, a required why demanded, and only then the forward. The
+  refusals come first and the order is the security property: a tool
+  no entry names 404s (it does not exist through this door, whatever
+  the server offers), an ungranted one 403s naming the ask, a missing
+  why 422s, and NONE of them touches a server. A granted call forwards
+  through the row's client and answers the payload VERBATIM."
+  [eng-or-rpc vis tool args]
+  (let [eng (engine! eng-or-rpc)
+        tname (str tool)
+        {:keys [row entry token why] :as hit} (servers/resolve-tool eng tname)]
+    (when (or (nil? hit) (nil? entry))
+      (throw (p/not-found "power" tname)))
+    (let [gentry (grants/capability-entry vis token)]
       (cond
-        (nil? entry)
+        (nil? gentry)
         (refuse-invoke
-         (str "Invoking " tname " through Gate is the " token
+         (str "Invoking " tname " is the " token
               " capability, and this request wears no live grant that"
               " names it. Present an accepted grant as X-Waymark-Grant,"
               " or file the ask.")
          token)
 
-        (some? (:filters entry))
+        (some? (:filters gentry))
         (refuse-invoke
          (str "This grant names " token " with a filter, and this door"
               " interprets no constraint yet — forwarding under a"
@@ -441,52 +252,38 @@
               " nothing. Ask again without a filter.")
          token)
 
+        (and why (not (carries-why? args)))
+        (refuse-why tname)
+
         :else
-        (rpc "tools/call" {:name tname :arguments (gate-args args)})))))
+        (servers/call! eng tname (forward-args row args))))))
 
 ;; ── the engine's own hand (the write path) ──────────────────────────
 
 (defn power-of
-  "THE CTX `:power` HOOK (bead waymark-fp62.7.16, R-2): the same
-  leash, for a call the ENGINE makes on the model's behalf.
+  "THE CTX `:power` HOOK (waymark-fp62.7.16, R-2; R-7 of
+  spec-mcp-servers): the same leash, for a call the ENGINE makes on
+  the model's behalf. A function of a prefixed tool name and its
+  arguments that answers the server's payload, or nil.
 
-  `invoke-for` above answers a caller that asked for a power.
-  `power-of` builds the hook a HANDLER holds: a function of a tool
-  name and its arguments that answers Gate's payload, or nil. The
-  research door of `inbox_item` is the first to read it — the handler
-  fetches the message and writes an excerpt on the row, so the model
-  reads the words once instead of on every turn after.
-
-  THE LEASH IS THE SAME LEASH. The hook is built only for a request
-  that wears a visibility, and it is built only when that visibility
-  admits at least one token of the map. Each call then asks
-  `admitted?` about the tool's own token, which is `invoke-for`'s own
-  read: the entry must exist and it must carry no filter. So a
-  handler can reach exactly the powers the hand in front of it holds,
-  and nothing more. A request with no live grant carries no hook at
-  all, and `(:power ctx)` is then nil.
-
-  IT DOES NOT THROW. A refusal, a dark Gate, a rig that answers an
-  error: each one answers nil, and the write it was opened inside of
-  commits without the field it could not fill. The engine's own
-  reach is not a reason to refuse a person's transition, and the
-  model can still read the message with `waymark_power`.
-
-  `rpc` is this engine's Gate caller, or a delay over one — the
-  caller's build site holds it, so the MCP session to Gate is opened
-  once and is reused, and an engine whose handlers ask for no power
-  opens no client at all."
-  [rpc vis]
-  (when (and rpc vis (seq (admitted-tokens vis)))
-    (fn power [tool args]
-      (let [tname (str tool)
-            token (get tool-capability tname)]
-        (when (and token (admitted? vis token))
-          (try
-            ((force rpc) "tools/call"
-             {:name tname :arguments (gate-args args)})
-            (catch Exception e
-              (binding [*out* *err*]
-                (println "waymark10 gate power" tname "failed -"
-                         (ex-message e)))
-              nil)))))))
+  Built only for a request that wears a visibility admitting at least
+  one token any row names. Each call resolves the tool to its row by
+  prefix and asks `admitted?` about the entry's token, which is
+  `invoke-for`'s own read. IT DOES NOT THROW: a refusal, a dark row,
+  a server that answers an error — each one answers nil, and the
+  write it was opened inside of commits without the field it could
+  not fill."
+  [eng-or-rpc vis]
+  (let [eng (servers/engine-of eng-or-rpc)]
+    (when (and eng vis (seq (admitted-tokens eng vis)))
+      (fn power [tool args]
+        (let [tname (str tool)
+              {:keys [row entry token]} (servers/resolve-tool eng tname)]
+          (when (and entry token (admitted? vis token))
+            (try
+              (servers/call! eng tname (forward-args row args))
+              (catch Exception e
+                (binding [*out* *err*]
+                  (println "waymark10 power" tname "failed -"
+                           (ex-message e)))
+                nil))))))))
