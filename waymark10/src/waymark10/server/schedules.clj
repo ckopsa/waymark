@@ -291,7 +291,12 @@
   grant a sitter can wear. Naming the power is what makes it
   auditable — a reader of the registry can see that this house can
   write schedules into somebody else's scheduler, and where to look
-  when it does."
+  when it does.
+
+  It is NOT a server's power, which is why this row stands where
+  waymark-fp62.10.4 retired Gate's. No mcp_server row can hold this
+  token: the adapters that enforce it are this engine's own, and a
+  registry row is the only place the word can live."
   {:token write-capability-token
    :description
    (str "Write a seat's schedule into the harness's own scheduler — "

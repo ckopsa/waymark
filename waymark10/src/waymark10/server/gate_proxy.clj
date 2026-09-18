@@ -75,9 +75,14 @@
   servers/ensure-gate-row!)
 
 (def power-tokens
-  "Every power token the rows' powers name, sorted — what discover's
-  doors.ask.powers lists."
+  "Every power token the rows' powers name, sorted."
   servers/power-tokens)
+
+(def nameable-tokens
+  "Every dotted token a scope may name — the rows' powers and the
+  standing capability rows beside them (waymark-fp62.10.4). What
+  discover's doors.ask.powers lists."
+  servers/nameable-tokens)
 
 ;; ── the bench, as this door knows it (waymark-fp62.6.3.2) ───────────
 

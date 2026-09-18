@@ -4,10 +4,23 @@
   capability row registers one external power by token —
   telegram.send, gmail.search, telemetry.query — so the ask/grant
   machinery can NAME it: a scope entry whose kind token wears a dot
-  is judged against this registry (scope-names-real-kinds) instead
-  of the resource vocabulary, and everything downstream of the name
-  reuses unchanged — four-eyes approval, the leash, attenuated
-  delegation, revocation, the magic links.
+  is judged against a registry instead of the resource vocabulary,
+  and everything downstream of the name reuses unchanged — four-eyes
+  approval, the leash, attenuated delegation, revocation, the magic
+  links.
+
+  WHAT IS LEFT TO THIS REGISTRY (waymark-fp62.10.4). Since the
+  mcp_server row carries its own `powers` list, the ROW is the
+  vocabulary: `scope-names-real-kinds` reads the rows' power tokens
+  first, and a token any non-retired server names is real because the
+  row that enforces it says so. This registry answers only for a
+  token NO server names — and after that leg exactly two rows stand
+  there, `feed.preview_as` and `schedule.write`, because THIS ENGINE
+  is their enforcement point and there is no server row to hold them.
+  The kind keeps everything else it had: a person still reads what a
+  power reaches before approving it, and a boot sweep
+  (`mcp-servers/sweep-capabilities!`) retires the rows Gate's own
+  server row has taken over, so one word is never registered twice.
 
   Enforcement is NOT here, deliberately: waymark holds the law about
   access, never the credential. The system fronting the data (Gate,
@@ -64,7 +77,12 @@
   capability points at the system standing in front of somebody else's
   data; this one points at us, and that sentence is how a person
   reading the grant form learns that approving it moves real sight
-  inside this house rather than authority outside it."
+  inside this house rather than authority outside it.
+
+  It is NOT a server's power, which is why this row stands where
+  waymark-fp62.10.4 retired Gate's. No mcp_server row can hold this
+  token: the thing that enforces it is the feed route two files away,
+  and a registry row is the only place the word can live."
   ;; both sentences are at the schema's ceiling (240 and 120) on
   ;; purpose — this is the one capability whose approval moves sight
   ;; INSIDE the house, and a person weighing it deserves every
