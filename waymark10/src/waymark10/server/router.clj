@@ -118,6 +118,7 @@
             [waymark10.server.collections :as collections]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
+            [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.history :as history]
             [waymark10.server.invoke :as inv]
@@ -299,7 +300,7 @@
                     [(url-decode k) (url-decode (or v ""))]))))
         (some-> (:query-string req) (str/split #"&"))))
 
-(defn- invoke-opts [req]
+(defn- invoke-opts* [req]
   (let [headers (:headers req)]
     {:principal (principal-of req)
      :if-match (get headers "if-match")
@@ -318,6 +319,18 @@
                 "1" true
                 "partial" :partial
                 nil)}))
+
+(defn- invoke-opts
+  "The opts one write door hands `inv/invoke!`. The second arity adds
+  the ctx `:power` hook (waymark-fp62.7.16) — the engine's own hand on
+  the powers this request's leash admits. The single invoke door
+  builds it; the birth, bulk and batch doors do not, because a create
+  reads no mail and a fan-out that read one message per item would be
+  a fan of Gate calls nobody asked for."
+  ([req] (invoke-opts* req))
+  ([req power]
+   (cond-> (invoke-opts* req)
+     power (assoc :power power))))
 
 ;; ── responses ───────────────────────────────────────────────────────
 
@@ -926,7 +939,13 @@
         (get-one-live eng rdef plural id req)))))
 
 (defn- invoke-action [eng]
-  (fn [{{:keys [plural id action]} :path-params :as req}]
+  ;; THE GATE CALLER, BUILT ONCE HERE (waymark-fp62.7.16), exactly as
+  ;; routes/gate.clj and routes/mcp.clj build theirs: one MCP session
+  ;; to Gate per engine, reused across requests. It is a DELAY,
+  ;; because most engines never walk a door whose handler asks for a
+  ;; power — an engine that never asks opens no client at all.
+  (let [gate-rpc (delay (gate/rpc-of eng))]
+   (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-row! req rdef id)
           _ (check-action! req rdef (keyword action))
@@ -937,7 +956,11 @@
           ;; approve on an approval_request extends its grant
           ;; post-commit (system actor; a no-op for everything else)
           _ (grants/check-args! (visibility-of req) rdef (keyword action) body)
-          opts (invoke-opts req)
+          ;; …and the hand the HANDLER holds on the powers this
+          ;; request's leash admits (waymark-fp62.7.16): nil for every
+          ;; request that wears no live grant, and judged per tool by
+          ;; the same `capability-entry` read this door's siblings make
+          opts (invoke-opts req (gate/power-of gate-rpc (visibility-of req)))
           ;; the intent seams (ephemeral, never law): a dry-run IS a
           ;; considering and a warning wall IS an ask — announced only
           ;; for named principals on a started engine, after the
@@ -996,7 +1019,7 @@
         (dry-run-response result)
 
         :else
-        (envelope-response eng rdef (:row result) req 200 nil)))))
+        (envelope-response eng rdef (:row result) req 200 nil))))))
 
 ;; ── bulk, batch and drafts (phase 7) ────────────────────────────────
 

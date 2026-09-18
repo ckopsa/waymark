@@ -443,3 +443,50 @@
 
         :else
         (rpc "tools/call" {:name tname :arguments (gate-args args)})))))
+
+;; ── the engine's own hand (the write path) ──────────────────────────
+
+(defn power-of
+  "THE CTX `:power` HOOK (bead waymark-fp62.7.16, R-2): the same
+  leash, for a call the ENGINE makes on the model's behalf.
+
+  `invoke-for` above answers a caller that asked for a power.
+  `power-of` builds the hook a HANDLER holds: a function of a tool
+  name and its arguments that answers Gate's payload, or nil. The
+  research door of `inbox_item` is the first to read it — the handler
+  fetches the message and writes an excerpt on the row, so the model
+  reads the words once instead of on every turn after.
+
+  THE LEASH IS THE SAME LEASH. The hook is built only for a request
+  that wears a visibility, and it is built only when that visibility
+  admits at least one token of the map. Each call then asks
+  `admitted?` about the tool's own token, which is `invoke-for`'s own
+  read: the entry must exist and it must carry no filter. So a
+  handler can reach exactly the powers the hand in front of it holds,
+  and nothing more. A request with no live grant carries no hook at
+  all, and `(:power ctx)` is then nil.
+
+  IT DOES NOT THROW. A refusal, a dark Gate, a rig that answers an
+  error: each one answers nil, and the write it was opened inside of
+  commits without the field it could not fill. The engine's own
+  reach is not a reason to refuse a person's transition, and the
+  model can still read the message with `waymark_power`.
+
+  `rpc` is this engine's Gate caller, or a delay over one — the
+  caller's build site holds it, so the MCP session to Gate is opened
+  once and is reused, and an engine whose handlers ask for no power
+  opens no client at all."
+  [rpc vis]
+  (when (and rpc vis (seq (admitted-tokens vis)))
+    (fn power [tool args]
+      (let [tname (str tool)
+            token (get tool-capability tname)]
+        (when (and token (admitted? vis token))
+          (try
+            ((force rpc) "tools/call"
+             {:name tname :arguments (gate-args args)})
+            (catch Exception e
+              (binding [*out* *err*]
+                (println "waymark10 gate power" tname "failed -"
+                         (ex-message e)))
+              nil)))))))

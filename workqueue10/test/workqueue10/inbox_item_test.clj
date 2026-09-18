@@ -24,11 +24,22 @@
   `a-yes-births-exactly-one-task` does over a ctx that records instead
   of writing.
 
+  THE ENGINE'S OWN READ (bead waymark-fp62.7.16) is the second story
+  here, and it is driven the same way: the research handler over a
+  ctx that carries a `:power` hook. The hook is the REAL one —
+  `gate-proxy/power-of` over the same scriptable Gate the source
+  suite uses — so each assertion runs the real leash check, the real
+  tool-to-token map and the real extraction, and only the socket is
+  missing.
+
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.inbox-item-test"
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.machine :as machine]
+            [waymark10.server.gate-proxy :as gate]
             [waymark10.server.render :as render]
-            [workqueue10.resources.inbox-item :as inbox :refer [inbox-item]])
+            [waymark10.text :as text]
+            [workqueue10.resources.inbox-item :as inbox :refer [inbox-item]]
+            [workqueue10.sources.gate-chat :as gc])
   (:import (java.time Instant)))
 
 (def ^:private now (Instant/parse "2026-09-16T14:00:00Z"))
@@ -264,3 +275,183 @@
         "the walk itself is unwalled: what a seat may reach at all is
          the grant's question, and a second wall here would refuse the
          sitter the scope already admitted")))
+
+;; ── the engine's own read (waymark-fp62.7.16) ───────────────────────
+;;
+;; Acceptance 1 to 4 of the bead's design. The seam under test is the
+;; ctx `:power` hook: the research handler asks for ONE message, the
+;; leash judges the tool, the extraction makes the words, and the row
+;; keeps the first 4,000 characters of them.
+
+(def ^:private the-sitters-leash
+  "A visibility that admits `email.read` and nothing else — the shape
+  `grants/capability-entry` reads: the token, with no filter on it.
+  This is what the sitter's own grant confers at the wire, and the
+  hook judges it with `gate-proxy/admitted?` exactly as the power
+  door does."
+  {:surface {"email.read" {:kind "email.read" :actions #{}}}})
+
+(def ^:private a-leash-without-mail
+  "The same shape, naming a power that is not the mail."
+  {:surface {"notes.read" {:kind "notes.read" :actions #{}}}})
+
+(defn- gate-with
+  "A scriptable Gate that answers `rows` to the message read
+  (gate-chat's twin, the source suite's arrangement). → the state."
+  [rows]
+  (let [state (gc/fake-state)]
+    (gc/answer! state inbox/read-tool rows)
+    state))
+
+(defn- power-ctx
+  "The ctx a write carries when the request wears a leash that admits
+  the mail: the REAL hook, over the scriptable Gate."
+  ([state] (power-ctx state the-sitters-leash))
+  ([state vis]
+   {:principal the-clerk
+    :now now
+    :power (gate/power-of (gc/fake-rpc state) vis)}))
+
+(def ^:private html-message
+  "One HTML message of about 60 KB, with a script block and a style
+  block in it — the shape mail actually arrives in."
+  {:message_id (:message_id a-message)
+   :subject (:subject a-message)
+   :body_html (str "<html><head><style>p{color:#333}</style>"
+                   "<script>track('open')</script></head><body>"
+                   "<p>Jen&nbsp;asks whether Thursday works &amp; "
+                   "wants the deck estimate confirmed.</p>"
+                   (apply str
+                          (repeat 1000
+                                  "<div class=\"row\">The stain order waits on the answer.</div>"))
+                   "</body></html>")})
+
+(def ^:private plain-body
+  "A short plain message: 900 characters, which is under the cap."
+  (apply str (repeat 90 "Ten chars.")))
+
+(def ^:private plain-message
+  "The same message with both halves, the plain one first — a rig
+  that spells its parts says which one to read."
+  {:message_id (:message_id a-message)
+   :subject (:subject a-message)
+   :parts [{:mimeType "text/plain" :body plain-body}
+           {:mimeType "text/html" :body "<p>the html twin, which loses</p>"}]})
+
+(defn- researched
+  "The research handler over one ctx → the row it wrote."
+  [ctx]
+  (inbox/write-the-summary (at :queued {})
+                           {:summary "Jen wants Thursday confirmed."}
+                           ctx))
+
+;; 1 · a 60 KB HTML message becomes 4,000 characters of words
+
+(deftest research-reads-the-message-and-keeps-the-first-part-of-it
+  (let [state (gate-with [html-message])
+        row (researched (power-ctx state))
+        excerpt (get-in row [:data :body_excerpt])]
+
+    (testing "the engine asked Gate for this one message, and said why"
+      (let [[call :as calls] (gc/calls state)]
+        (is (= 1 (count calls))
+            "one fetch for one row — the whole point is that the turns
+             after this one do not fetch again")
+        (is (= inbox/read-tool (:tool call)))
+        (is (= (:message_id a-message)
+               (get-in call [:arguments inbox/read-arg])))
+        (is (= inbox/read-why (get-in call [:arguments :__why]))
+            "`why` is translated to Gate's own spelling on the
+             forward, so the household's log says who asked and for
+             what")))
+
+    (testing "the row keeps the words, capped, and says what it cut"
+      (is (= text/default-max-chars (count excerpt))
+          "4,000 characters and not one more")
+      (is (pos? (long (get-in row [:data :body_cut])))
+          "a 60 KB message does not fit, and the row says so rather
+           than reading like the whole of it")
+      (is (re-find #"Jen asks whether Thursday works & wants" excerpt)
+          "the words the model decides with, with the entities decoded")
+      (is (not (re-find #"<div|color:#333|track\(" excerpt))
+          "no tags, no style block and no script block — the model
+           pays for none of them"))
+
+    (testing "and the summary the door collected is untouched beside it"
+      (is (= "Jen wants Thursday confirmed." (get-in row [:data :summary])))
+      (is (= :queued (:state row))
+          "the machine advances the state, never the handler"))))
+
+;; 2 · a short plain message is kept whole
+
+(deftest a-plain-message-under-the-cap-is-kept-whole
+  (let [state (gate-with [plain-message])
+        row (researched (power-ctx state))]
+    (is (= plain-body (get-in row [:data :body_excerpt]))
+        "a text/plain part is preferred over its HTML twin, and a
+         message under the cap arrives as it was written")
+    (is (= 900 (count (get-in row [:data :body_excerpt]))))
+    (is (= 0 (get-in row [:data :body_cut]))
+        "0 and not absent: nothing was cut, and the reader is told
+         that rather than left to guess")))
+
+;; 3 · the door never refuses for the engine's own fault
+
+(deftest research-commits-when-the-engine-cannot-read-the-message
+  (testing "a ctx with no power hook writes no excerpt and nothing else"
+    (let [row (researched {:principal the-clerk :now now})]
+      (is (nil? (get-in row [:data :body_excerpt])))
+      (is (nil? (get-in row [:data :body_cut])))
+      (is (= "Jen wants Thursday confirmed." (get-in row [:data :summary]))
+          "the verdict still lands: the model can read the message
+           with waymark_power, as it did before this door could read")
+      (is (= (:subject a-message) (get-in row [:data :subject]))
+          "and the headers the source wrote are not touched")))
+
+  (testing "a Gate that is dark writes no excerpt either"
+    (let [state (gate-with [html-message])]
+      (gc/down! state true)
+      (let [row (researched (power-ctx state))]
+        (is (nil? (get-in row [:data :body_excerpt])))
+        (is (nil? (get-in row [:data :body_cut])))
+        (is (= "Jen wants Thursday confirmed."
+               (get-in row [:data :summary]))))))
+
+  (testing "a rig that refuses answers a sentence about itself, not a message"
+    (let [row (researched
+               {:principal the-clerk :now now
+                :power (fn [_tool _args]
+                         ;; the power door forwards Gate's payload word
+                         ;; for word, refusals included
+                         {:isError true
+                          :content [{:type "text"
+                                     :text "emila: no message with that id"}]})})]
+      (is (nil? (get-in row [:data :body_excerpt]))
+          "a refusal written into the excerpt would make the row read
+           as if the message had said it")
+      (is (nil? (get-in row [:data :body_cut])))))
+
+  (testing "a leash that does not admit the mail never reaches Gate"
+    (let [state (gate-with [html-message])
+          row (researched (power-ctx state a-leash-without-mail))]
+      (is (nil? (get-in row [:data :body_excerpt]))
+          "the hook is the same leash the power door reads: a grant
+           that does not name email.read buys no mail here either")
+      (is (empty? (gc/calls state))
+          "and nothing was asked of Gate at all"))))
+
+;; 4 · the walk reads the excerpt where it reads the row
+
+(deftest the-researched-rows-envelope-carries-the-excerpt
+  (let [state (gate-with [plain-message])
+        written (researched (power-ctx state))
+        row (assoc written :state :researched)
+        env (render/envelope inbox-item row {:principal the-clerk :now now})]
+    (is (= plain-body (get-in env ["data" "body_excerpt"]))
+        "the walk reads the words where it reads the row — no second
+         call, and no power in the sitter's hand")
+    (is (= 0 (get-in env ["data" "body_cut"])))
+    (is (not (re-find #"Ten chars" (str (get env "summary"))))
+        "the summary line stays the subject and the sender: a queue
+         page that carried 4,000 characters per row would be the bill
+         this field exists to cut")))

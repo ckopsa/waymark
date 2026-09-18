@@ -1288,6 +1288,8 @@ law. The seat lives in a row, because it is fluid.
             [:sender      [:string]]
             [:received_at :waymark/instant]
             [:summary     {:optional true} [:maybe [:string {:max 480}]]] ; written by research
+            [:body_excerpt {:optional true} [:maybe [:string {:max 4000}]]] ; read by research, for the model
+            [:body_cut    {:optional true} [:maybe [:int {:min 0}]]]        ; what the cap removed
             [:task        {:optional true :kind :task} [:maybe :waymark/ref]] ; stamped by yes
             [:reason      {:optional true} [:maybe [:string {:max 240}]]]]  ; written by no
    :actions
@@ -1336,9 +1338,14 @@ of R-11.3 finds it.
 `workqueue10/sources/`, on the pattern of `gtasks.clj`, lists the
 inbox headers through the `email.read` power at the cadence and
 mints one `inbox_item` per new message id, and none for a message
-with a list-unsubscribe header. Headers only. The body is never
-stored; the model reads it through `waymark_power` at research
-time.
+with a list-unsubscribe header. Headers only.
+
+The WHOLE body is still never stored. The research door reads the
+message itself, through the sitter's own `email.read` power, and
+keeps the first 4,000 characters of the plain text in `body_excerpt`
+with `body_cut` beside it (section 17, "Research is an engine
+step"). The model therefore decides from the row it already has, and
+`waymark_power` is for the rare message the excerpt cannot answer.
 
 This is one deploy, and it is the last deploy in this section.
 
@@ -1942,6 +1949,25 @@ trusts.
   ledger is reading. The audit chair is therefore a second seat, with
   the same charter and the same scope, and the ledger compares a seat
   with a seat (R-10.8).
+- **Research is an engine step, because the mail was the bill.** The
+  seventh counter measured the clerk's first sitting on the cheaper
+  model (2026-09-18): one `waymark_power` call answered 179,483 bytes
+  for three messages, which was 80 percent of the 223 KB the model
+  read; the query page was 4 percent. Each turn after that read the
+  same bytes again — 1.79M cache-read tokens over 25 turns, 62
+  percent of the 0.58 USD. The bill is the sum, over the turns, of
+  everything read before, so the largest early answer is the lever.
+  The research handler therefore reads the message itself, through
+  the Gate proxy under the sitter's own `email.read` grant (the ctx
+  `:power` hook), and writes `body_excerpt` — 4,000 characters of
+  plain text — with `body_cut` beside it. One fetch for each row
+  replaces a re-read on each turn, and the model never holds the
+  power to do it. The engine's own reach never refuses the door: no
+  hook, a dark Gate or a rig that says no writes no excerpt, and the
+  transition commits. `waymark_power` stays for the rare full read,
+  and it now takes `text_only` and `max_chars` so a caller can ask
+  for the words instead of the markup; what the shape removed is
+  recorded on the sitting's `served` line as `dropped`.
 - **The tally is the safety net under the wait.** The owner's reading
   (2026-09-17) is that the sitting does not change: the session waits
   for the next instruction, and the person says when to close. The
@@ -1979,11 +2005,14 @@ trusts.
   is open.
 - The 30-minute default on an anchorless scope ask (waymark-h6y) is
   unchanged. A seat ask defaults its leash to the seat's ceiling.
-- Research as an engine step: the research handler could fetch the
-  message through the Gate proxy under the sitter's grant, so the
-  model never holds the power. `invoke-for` exists in
-  `gate_proxy.clj`; a handler that reaches it is a new seam, and a
-  follow-up.
+- A summary of a message instead of a cap on it. It would spend
+  tokens to save tokens, and the first 4,000 characters are what the
+  verdict needs.
+- Gate answering plain text by policy. That is the right place for
+  it, and it is outside this repository; the cap here is what this
+  engine can enforce on its own.
+- A cap for each seat. 4,000 characters is the default the engine
+  holds; a seat may carry its own later.
 - The exact pairing of a fire to its sitting. The provider's answer
   names the run page's session id, and the sitting carries the
   harness's own id. The run URL on the schedule row is enough to find

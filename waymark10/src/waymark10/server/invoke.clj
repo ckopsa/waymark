@@ -341,9 +341,20 @@
     into inner writes: a cross-write opened by a granted invoke is
     judged against the same leash, so `outcome.make_it_so` reaching
     `outcome_piece.take` needs both named in the scope. A guard
-    reading it declares `:reads [:grant]`."
+    reading it declares `:reads [:grant]`.
+  - `:power` — the ENGINE'S OWN HAND ON A POWER
+    (waymark-fp62.7.16), built by the door from this engine's Gate
+    caller and this request's visibility
+    (`gate-proxy/power-of`), and absent for every request that wears
+    no live grant. It rides the ctx as `(:power ctx)`: a function of
+    a tool name and its arguments that answers Gate's payload, or
+    nil. The HANDLER holds it and the guards do not — a guard judges
+    and never reaches a wire, so `guard-ctx` drops it beside the
+    pen. It follows the hand into an inner invoke, as `:grant` does,
+    and a birth carries none: a create door reads no mail.
+    `inbox_item.research` is the first handler to read it."
   ([engine tx mode principal] (make-ctx engine tx mode principal nil))
-  ([engine tx mode principal {:keys [correlation-id self within grant]}]
+  ([engine tx mode principal {:keys [correlation-id self within grant power]}]
    (let [;; the cross-WRITE door (waymark9 Ctx.invoke): handlers and
          ;; on-create hooks write OTHER rows through the same
          ;; transaction and the full per-item algorithm. Only a real
@@ -359,6 +370,13 @@
              :inner-sink sink
              ;; the presented leash, as the guards see it (waymark-sfe)
              :grant grant
+             ;; …and the engine's own hand on the powers that leash
+             ;; admits (waymark-fp62.7.16) — see the docstring. nil
+             ;; for every request that wears no live grant, and
+             ;; dropped from the guard ctx: a guard judges, and a
+             ;; guard that reached a wire would judge differently on
+             ;; a day Gate was dark.
+             :power power
              ;; the write this ctx was opened inside of, or nil at the
              ;; wire — see the docstring
              :within within
@@ -388,6 +406,10 @@
                                ;; the same scope, never waived by being
                                ;; reached from inside
                                :grant grant
+                               ;; …and so does the engine's own hand
+                               ;; on that leash's powers
+                               ;; (waymark-fp62.7.16)
+                               :power power
                                ;; the inner door learns whose hand
                                ;; opened it (waymark-jfv.20)
                                :within self
@@ -991,7 +1013,9 @@
 (defn invoke!
   "One write. opts: :principal (required), :if-match, :idempotency-key,
   :dry-run, :acknowledged (set of guard names), :correlation-id,
-  :grant (the presented leash as the guards see it — waymark-sfe)."
+  :grant (the presented leash as the guards see it — waymark-sfe),
+  :power (the engine's own hand on the powers that leash admits, for
+  the handler — waymark-fp62.7.16; see make-ctx)."
   [engine kind id action-name body opts]
   (let [rdef (rdef-of engine kind)]
     (if (and (= :adopt action-name)
@@ -1065,7 +1089,7 @@
   one record under it."
   [engine tx rdef kind id defn digest body
    {:keys [principal if-match idempotency-key dry-run acknowledged
-           correlation-id require-key? record-key? within grant]
+           correlation-id require-key? record-key? within grant power]
     :or {acknowledged #{} require-key? true record-key? true}}]
   (let [action-name (:name defn)]
     ;; 2. idempotency: requirement, then stored replay
@@ -1096,11 +1120,14 @@
                           {:correlation-id correlation-id
                            :within within
                            :grant grant
+                           :power power
                            :self {:kind kind :action action-name}})
             ;; guards judge; they never write — the pen stays with the
             ;; handler (and :on-create), so guard evaluation gets a
-            ;; ctx without the cross-write door
-            guard-ctx (dissoc ctx :invoke :create :inner-sink)]
+            ;; ctx without the cross-write door, and without the hand
+            ;; on a power (waymark-fp62.7.16): a wall that read mail
+            ;; would refuse differently on a day Gate was dark
+            guard-ctx (dissoc ctx :invoke :create :inner-sink :power)]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
           (or (natural-replay engine tx rdef row defn digest)
@@ -1977,7 +2004,8 @@
             (create-guard-pass (if mint?
                                  []
                                  (create-walled-guards rdef))
-                               inp (dissoc ctx :invoke :create :inner-sink)
+                               inp (dissoc ctx :invoke :create :inner-sink
+                                           :power)
                                acknowledged
                                ;; the birth's evidence scope: no row
                                ;; exists yet, so the create input IS

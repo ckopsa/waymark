@@ -37,7 +37,7 @@ present too, and the credential is the person's own.
 | repository | `ckopsa/waymark` | the Stop hook that closes the sitting lives in its `.claude/settings.json`; the clerk still touches no code |
 | trigger | Schedule, `0 * * * *` | `cadence_seconds` 3600. Keep the API trigger too: it gives the fire URL. |
 | fire URL | the API trigger's URL | the engine fires the Routine through it. See "The fire link". |
-| connectors | Waymark only | mail is read through the seat's `email.read` power |
+| connectors | Waymark only | the research door reads the mail through the seat's `email.read` power |
 | instructions | the text below | the key, then the pointer of R-12.3 |
 
 ## The fire link
@@ -72,6 +72,11 @@ that key and that value as `session`. Then you sit in the seat
 charter says. Take only the doors the envelope offers. When the seat
 says halted or parked, say why and stop.
 
+The research door reads the message for you: after it, the row's
+body_excerpt holds the first part of the plain text, and body_cut
+says how much was cut. Use waymark_power only when that excerpt is
+not enough to decide, and ask for text_only with max_chars 4000.
+
 If a routine-fire-payload block names a row id, walk that row and stop.
 
 When the Stop hook asks you to close the sitting, make that one call
@@ -100,6 +105,20 @@ its own reason.
    `rows_per_firing` rows. For each row it takes the one door the
    envelope offers. The first request opened a sitting; the router
    counts each transition and each refusal against it.
+
+   THE RESEARCH DOOR READS THE MESSAGE FOR THE SITTER. The handler
+   calls the `email.read` power itself, under the same grant the
+   session wears, and writes the first 4,000 characters of the plain
+   text on the row as `body_excerpt`, with `body_cut` to say how much
+   it removed. The session therefore does not open the mail to
+   research it: it says what the message asks, and the words are in
+   the envelope it already has. This is the largest lever on the
+   bill. One mail answer of 179 KB was 80 percent of what a whole
+   sitting read, and each turn after it read the same bytes again.
+
+   When the engine cannot read the message — no grant, a dark Gate,
+   a rig that says no — the door still opens and the excerpt is
+   empty. Nothing about the walk changes.
 
    A fired run differs here. The engine puts the fire's text into the
    session in a `routine-fire-payload` block. When that block names

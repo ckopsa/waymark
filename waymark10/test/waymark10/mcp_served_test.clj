@@ -26,7 +26,10 @@
   NOT proved here, and recorded: the bytes of `waymark_power`. Gate's
   answer passes through the door word for word, so the door sees its
   size and counts it like any other tool's — but standing up a Gate
-  for one number would be a second fake provider in this file.
+  for one number would be a second fake provider in this file. It is
+  proved next door instead, in `waymark10.mcp-power-shape-test`,
+  which stands one fake Gate up and reads the same `served` line —
+  and the `dropped` count beside it (waymark-fp62.7.16).
 
   Memory storage, a locally-minted RSA keypair as the IdP's signing
   key, the real handler: no database, no network. The shape is
