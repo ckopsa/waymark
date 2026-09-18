@@ -743,6 +743,52 @@ function compact(x) {
   }
   return x;
 }
+/* is the leaf at this path one its parent REQUIRES? The parent's own
+   `required` list says so — the top level's for a top-level field, the
+   item map's for a field inside a row. */
+function requiredAt(schema, segs) {
+  let cur = schemaProp(schema || {});
+  for (let i = 0; i < segs.length - 1; i++) {
+    const s = segs[i];
+    cur = schemaProp(typeof s === "number" ? (cur.items || {})
+                                           : ((cur.properties || {})[s] || {}));
+  }
+  const last = segs[segs.length - 1];
+  return typeof last === "string" && (cur.required || []).map(String).includes(last);
+}
+function getAt(root, segs) {
+  let cur = root;
+  for (const s of segs) {
+    if (cur === undefined || cur === null) return undefined;
+    cur = cur[s];
+  }
+  return cur;
+}
+/* THE EMPTY LIST IS A VALUE (waymark-fp62.7.10). A list with no rows
+   and a csv left blank both said nothing above, and for an OPTIONAL
+   list that is right: absent is the declaration's default. A REQUIRED
+   list absent from the body is refused by the door as missing, and
+   the lists a person most often leaves empty are exactly the required
+   ones whose honest value is []: a seat's substitute_drop when the
+   stand-in sees the whole seat, a scope entry's actions for the
+   read-only ask. So a required list the form shows and the person
+   left empty is sent as [] — but only where its PARENT already stands
+   in the values, so a row left wholly blank stays the hole the
+   compaction closes rather than becoming a row with one empty list. */
+function emptyLists(form, schema, values) {
+  const send = (node, name) => {
+    if (node.closest(".field.off")) return;
+    const segs = parsePath(name);
+    if (!requiredAt(schema, segs)) return;
+    const parent = segs.length === 1 ? values : getAt(values, segs.slice(0, -1));
+    if (parent === undefined || parent === null || typeof parent !== "object") return;
+    if (getAt(values, segs) === undefined) setAt(values, segs, []);
+  };
+  for (const box of form.querySelectorAll("[data-list]"))
+    send(box, box.getAttribute("data-list"));
+  for (const node of form.querySelectorAll("[data-array='csv'][name]"))
+    send(node, node.getAttribute("name"));
+}
 function collectValues(form, schema) {
   const values = {};
   const props = (schema || {}).properties || {};
@@ -756,6 +802,9 @@ function collectValues(form, schema) {
     if (v === undefined) continue;
     setAt(values, segs, v);
   }
+  /* the empty lists land before the compaction: an [] survives it, and
+     a row still wholly blank is not yet in `values` to be given one */
+  emptyLists(form, schema, values);
   return compact(values);
 }
 function prefillFromDoc(doc, input) {
