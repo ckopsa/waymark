@@ -19,7 +19,9 @@
     row as `last_fired_at` and `last_run_url`.
   - case 35 · `fire` on a parked seat, a halted seat, an unlinked
     seat and by a bare agent is refused with one sentence each, and
-    the provider is told nothing.
+    the provider is told nothing. The halt is `model_not_held`: a
+    line the door cannot judge for itself, and so the one that still
+    refuses (waymark-fp62.7.13, and halt-lift-test).
   - the provider's own answers (R-12.20): 429 breaks the row with the
     retry sentence and the next fire that goes out clears it, 400
     pauses it, 401 and 404 break it with their sentences.
@@ -326,12 +328,21 @@
         (is (= "The seat is parked. Unpark it first." (str (:detail p)))))
       (seat-do! seat-id :unpark))
 
-    (testing "the seat is halted — the halt's own sentence"
-      (seats/seat-halt! *eng* seat-id "budget_reached"
-                        "The week's fuel is spent: 5.00 of 5.00 over wall-clerk's closed sittings.")
+    ;; THE WALL, NOT THE LINE (waymark-fp62.7.13). The door re-judges
+    ;; the week's fuel for itself, so a `budget_reached` line on a seat
+    ;; that has spent nothing no longer refuses anything — which is the
+    ;; bug this seat would otherwise prove backwards. `model_not_held`
+    ;; is a wall the door cannot judge with no sitter in the room, so
+    ;; it is the halt that still refuses here; halt-lift-test owns the
+    ;; budget line, both ways.
+    (testing "the seat is halted — the halt's own sentence, and the way out"
+      (seats/seat-halt! *eng* seat-id "model_not_held"
+                        "This session declares nothing and wall-clerk is held for 1 model(s) as its full sitter.")
       (let [p (refusal #(fire-seat! seat-id "now please"))]
         (is (= :not-halted (:guard p)))
-        (is (str/includes? (str (:detail p)) "The week's fuel is spent")))
+        (is (str/includes? (str (:detail p)) "is held for"))
+        (is (str/includes? (str (:detail p)) "Restate the seat")
+            "the sentence names the door that lifts the line"))
       (seats/seat-clear-halt! *eng* seat-id))
 
     (testing "the schedule has no link"

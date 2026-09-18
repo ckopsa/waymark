@@ -813,7 +813,8 @@
   survive, absent from actions AND unavailable alike (concealment,
   never narration) — :resources (batch A), the engine's kind map for
   link target plurals — and optionally :read/:find (ns docstring),
-  the probe-reads hooks the probe ctx carries verbatim."
+  the probe-reads hooks the probe ctx carries verbatim (:sum rides
+  beside them)."
   [rdef row {:keys [principal now services visibility resources]
              :as ctx-opts}]
   (let [ctx (t/ctx {:principal (or principal t/anonymous)
@@ -826,6 +827,12 @@
                     ;; this file's whole posture
                     :grant (:grant visibility)
                     :read (:read ctx-opts) :find (:find ctx-opts)
+                    ;; …and the aggregate one beside them
+                    ;; (waymark-fp62.7.13): the seat's fire door judges
+                    ;; the week's fuel with a SUM, and an envelope that
+                    ;; could not ask for the number would narrate a
+                    ;; wall that has already lifted
+                    :sum (:sum ctx-opts)
                     ;; …and the log's own hook (docs/spec-undo.md): an
                     ;; undo door's availability is a fact about the
                     ;; clock and about whose hand is asking, so a probe

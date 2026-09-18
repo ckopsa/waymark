@@ -1464,6 +1464,33 @@
   (or (some-> (get (inv/resources eng) :seat) :create-action-names set)
       #{:create}))
 
+(defn- lift-the-fired-line!
+  "Lift the halt line this fire passed (R-3 of waymark-fp62.7.13).
+
+  ONLY THE LINE THE DOOR JUDGED. The door lets a fire out past one
+  halt and one only: a `budget_reached` line whose week has fuel in it
+  again. A line of any other wall never reaches here, because the door
+  refuses it; and a line written AFTER this fire — a sitter of the run
+  this fire started, at a wall of its own — is a newer record than the
+  fire and must stand, or a drain that lags behind the wire would put
+  out an alert nobody read.
+
+  Best effort, `try-act!`'s posture and its reason: a throw inside a
+  consumer parks the drain for every other seat, and the fire is still
+  the fire."
+  [eng seat-row t]
+  (let [halt (get-in seat-row [:data :halt])
+        since (instant-of (:since halt))
+        at (instant-of (:at t))]
+    (when (and (= "budget_reached" (str (:reason halt)))
+               since at
+               (not (pos? (compare since at))))
+      (try
+        (seats/seat-clear-halt! eng (:id seat-row))
+        (catch Exception e
+          (warn! "seat " (:id seat-row)
+                 " fired but its halt line stands — " (ex-message e)))))))
+
 (defn handle-transition!
   "One transition → the push it implies, or nothing.
 
@@ -1531,11 +1558,24 @@
           ;; refusal; and a replayed transition whose fire already went
           ;; out is skipped rather than fired twice.
           (= :fire action)
-          (when-some [row (schedule-for-seat eng (:resource-id t))]
-            (when-not (already-fired? row (:at t))
-              (fire! eng (fire-adapter-of eng) row
-                     (some-> (get-in t [:inputs :text]) str not-empty)
-                     (:at t))))))
+          (do
+            ;; AND THE LINE THE FIRE LIFTED (R-3 of
+            ;; waymark-fp62.7.13). A fire that passed `not-halted`
+            ;; passed a wall that no longer holds: the door summed the
+            ;; week's fuel again and let this fire out. The lift goes
+            ;; through the same `clear_halt` the router's own pass
+            ;; uses — system actor, logged, idempotent — so the audit
+            ;; reads the same whether a sitter's request or a fire
+            ;; lifted the line. Post-commit, because the seat's row is
+            ;; not this transaction's to move; and here rather than at
+            ;; the door, so a person's fire and a wake's fire are one
+            ;; rule (R-5): both write this one transition.
+            (lift-the-fired-line! eng seat-row t)
+            (when-some [row (schedule-for-seat eng (:resource-id t))]
+              (when-not (already-fired? row (:at t))
+                (fire! eng (fire-adapter-of eng) row
+                       (some-> (get-in t [:inputs :text]) str not-empty)
+                       (:at t)))))))
 
       (and (= :schedule kind) (= :restate action))
       (when-some [row (raw-row eng :schedule (:resource-id t))]

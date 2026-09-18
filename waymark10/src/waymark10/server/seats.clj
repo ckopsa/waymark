@@ -419,17 +419,36 @@
       (t/allow))
     (t/allow)))
 
+(defn- field-moved?
+  "Did a restate change this field? One spelling, because two doors
+  ask it: the note guard below, and the halt line the restate lifts
+  (R-1 of waymark-fp62.7.13).
+
+  A LIST OF REFS compares as strings — a ref is an id, whatever type
+  carried it here — and a DECIMAL compares by value and not by scale,
+  because 12 and 12.00 are the same dollars and a line lifted by a
+  scale is a record dropped by nothing."
+  [row inp f]
+  (let [was (get-in row [:data f])
+        asked (get inp f)]
+    (cond
+      (or (vector? was) (vector? asked))
+      (not= (mapv str asked) (mapv str was))
+
+      (and (decimal? was) (decimal? asked))
+      (not (zero? (compare was asked)))
+
+      :else (not= was asked))))
+
 (g/defguard step-carries-a-note
   {:judges [:note]
    :explain "A step up or down the ladder is a record: a restate that changes held_for or substitute_for carries a note saying which model it was, which it is now, and why. Everything else about a seat may move silently; the model it is held for may not."}
   [row inp _ctx]
-  (let [same? (fn [f]
-                (= (mapv str (get inp f))
-                   (mapv str (get-in row [:data f]))))]
-    (if (and (or (not (same? :held_for)) (not (same? :substitute_for)))
-             (str/blank? (str (:note inp))))
-      (t/deny)
-      (t/allow))))
+  (if (and (or (field-moved? row inp :held_for)
+               (field-moved? row inp :substitute_for))
+           (str/blank? (str (:note inp))))
+    (t/deny)
+    (t/allow)))
 
 (g/defguard merge-target-is-active
   {:judges [:into]
@@ -522,14 +541,50 @@
    "budget_reached" "The week's fuel is spent. The wall lifts as the window rolls."
    "sitting_budget_reached" "This sitting's fuel is spent. Close the sitting; a new one opens fresh."})
 
+(def ^:private wall-exits
+  "What lifts each wall, said at the fire door (R-4 of
+  waymark-fp62.7.13). A halt line is a RECORD of a wall, not a lock:
+  the door judges the week's fuel again for itself, so the two walls
+  it cannot judge with no sitter in the room must say what a person
+  does about them."
+  {"seat_not_active" "Unpark the seat and the line lifts."
+   "model_not_held" "Restate the seat to hold the model that sits here, and the line lifts."
+   "budget_reached" "The wall lifts on its own as the window rolls."
+   "sitting_budget_reached" "The wall lifts when that sitting closes."})
+
+(defn- fuel-left?
+  "Is there fuel left in this seat's week? The reading is the WALL'S
+  own — `grants/spent-with` over `grants/week-spend-conds`, through
+  the ctx `:sum` hook — so the door and R-5.2 step 3 cannot disagree
+  about one number. nil when there is no hook to ask with: a ctx
+  without one cannot judge the week, and the caller then reads the
+  line as it stands."
+  [row ctx]
+  (when (and (:sum ctx) (:now ctx))
+    (grants/under-budget? (grants/spent-with (:sum ctx) (:id row) (:now ctx))
+                          (get-in row [:data :budget_usd_per_week]))))
+
 (g/defguard not-halted
-  {:vars [:wall]
-   :explain "The seat is against a wall. {wall}"}
-  [row _inp _ctx]
+  {:reads [:storage]
+   :vars [:wall :exit]
+   :explain "The seat is against a wall. {wall} {exit}"}
+  [row _inp ctx]
+  ;; R-3: the halt line is a record of a wall that HELD, and the
+  ;; rolling window lifts the fuel wall with no hand. A fired seat
+  ;; makes no request of its own that could clear the line, so the
+  ;; door that reads the line judges that one wall again. The other
+  ;; three it cannot: `model_not_held` needs the sitter's claim, a
+  ;; parked seat is a person's choice, and a sitting past its ceiling
+  ;; is an interactive seat's, which `not-interactive` already refuses.
   (if-some [halt (get-in row [:data :halt])]
-    (t/deny {:vars {:wall (or (some-> (:detail halt) str not-empty)
-                              (get wall-sentences (str (:reason halt)))
-                              "Wait for the wall to lift.")}})
+    (let [reason (str (:reason halt))]
+      (if (and (= "budget_reached" reason) (true? (fuel-left? row ctx)))
+        (t/allow)
+        (t/deny {:vars {:wall (or (some-> (:detail halt) str not-empty)
+                                  (get wall-sentences reason)
+                                  "Wait for the wall to lift.")
+                        :exit (get wall-exits reason
+                                   "The wall lifts when the condition clears.")}})))
     (t/allow)))
 
 (g/defguard linked-for-fire
@@ -571,15 +626,49 @@
    :sitting_budget_tokens :walk :rows_per_firing
    :wake_on :fire_interval_seconds])
 
+(def ^:private wall-inputs
+  "The seat field each wall is judged against, for the walls a person
+  states again (R-1 of waymark-fp62.7.13). `seat_not_active` is not
+  here: its input is the seat's STATE, and `unpark` is the door that
+  moves it. `sitting_budget_reached` is not here either: its input is
+  a sitting's running count, which no restate touches."
+  {"budget_reached" [:budget_usd_per_week]
+   "model_not_held" [:held_for :substitute_for]})
+
+(defn- lifts-the-line?
+  "Does this restate change the input of the wall the line records?
+  PURE, row against input: a restate is a person changing the law,
+  and the next request judges the new law and writes the line again
+  if the wall still holds. The handler never sums the week."
+  [row inp]
+  (boolean (some #(field-moved? row inp %)
+                 (get wall-inputs (str (get-in row [:data :halt :reason]))))))
+
 (defhandler restate-seat [row inp _ctx]
   ;; R-7.5: a restate whose scope passes the four guards CLEARS stale.
   ;; The guards ran before this handler, so arriving here IS the pass
   ;; — and a scope that still names a stale entry never gets here,
   ;; because the guard that marked it stale is the guard that refuses
   ;; it, with the entry named.
-  (-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
-              row restatable)
-      (update :data dissoc :stale)))
+  ;;
+  ;; R-1 of waymark-fp62.7.13, and `stale` is its precedent: a restate
+  ;; that changes the wall's own input drops the halt line in the same
+  ;; transaction. The line is a record, and a record of a law that
+  ;; moved is stale on the row the restate answers.
+  (let [lift? (lifts-the-line? row inp)]
+    (cond-> (-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
+                        row restatable)
+                (update :data dissoc :stale))
+      lift? (update :data dissoc :halt))))
+
+(defhandler unpark-seat [row _inp _ctx]
+  ;; R-2: the seat's state IS the input of the `seat_not_active` wall,
+  ;; and `unpark` is the hand that moves it. The other three lines
+  ;; stand — a park does not spend fuel and does not change the model
+  ;; list — and the door that reads them judges them.
+  (if (= "seat_not_active" (str (get-in row [:data :halt :reason])))
+    (update row :data dissoc :halt)
+    row))
 
 (defhandler write-stale [row inp _ctx]
   (assoc-in row [:data :stale] (:stale inp)))
@@ -1385,6 +1474,7 @@
     {:from #{:parked} :to :active
      :guards [a-person]
      :safety {:idempotent true :reversible true :confirm false}
+     :handler unpark-seat
      :display {:label "Unpark" :style :primary :order 3
                :description "The seat serves again, on the scope it had"}}
 
@@ -1428,7 +1518,8 @@
     ;; transition it asked to be woken by. This is the second, and the
     ;; third comes through it too. The door itself only records: the
     ;; POST goes out after the commit, from the schedules consumer,
-    ;; which reads this transition's text out of the log.
+    ;; which reads this transition's text out of the log — and which
+    ;; lifts the halt line this door judged stale (waymark-fp62.7.13).
     :fire
     {:from #{:active :parked} :to :active
      :input [:map
@@ -1577,6 +1668,7 @@
     "R-12.22's `wake_on` is judged by its OWN two guards, `wake-on-names-real-kinds` and `wake-on-names-real-actions`, which say what the scope guards next door already say. A guard grades the fields it names in `:judges` (checks/check-guard-declarations refuses anything else), and the scope guards name `:scope`; borrowing one for `wake_on` would have had it refuse a scope the caller never sent. The duplication is two short bodies over a shared helper, against a wake entry nobody can match — a seat that never wakes and never says why."
     "`wake_on` has NO default in the row and `walk` is not copied into it. R-12.22 asks for exactly that: the walk seat's one entry is computed at read time by `effective-wake-on`. A default written at the create door would be a value a person never chose, and the first restate of `walk` would leave it naming the queue the seat no longer walks."
     "`fire` runs from `parked` as well as `active`, and the `not-parked` guard refuses it there. R-12.20 asks for the sentence \"The seat is parked. Unpark it first.\", and a door absent from a parked seat's envelope could only answer 409 with the machine's own words."
+    "THE HALT LINE IS A RECORD, AND THREE DOORS LIFT IT (waymark-fp62.7.13). R-7.7 gives the line one writer and one lifter — the router, at a sitter's request. A FIRED seat makes no request of its own, so a line that outlived its wall left the seat stuck until a person ran the Routine by hand. Now: a `restate` that changes the wall's own input drops the line in the same transaction (`stale`'s precedent), `unpark` drops a `seat_not_active` line, and the `fire` door judges the week's fuel again for itself and lets the fire out when the wall no longer holds — the schedules consumer then lifts the line through `clear_halt`, so every lift is one audited door. The router's own path is untouched."
     "`mark_stale`, `mark_halted` and `clear_halt` are declared `active → active` only. A v10 action declares ONE `:to` (definitions.clj records the same wart for `measure`/`measure_pilot`), so covering `parked` would mean six doors instead of three — and a parked seat is already scoped to nothing by the person's own hand, so neither a stale entry nor a halt on it tells anybody anything they did not choose."]})
 
 ;; ── :model ──────────────────────────────────────────────────────────
