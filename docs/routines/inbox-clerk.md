@@ -33,7 +33,7 @@ present too, and the credential is the person's own.
 | field | value | why |
 |---|---|---|
 | name | `inbox-clerk` | the seat's name, one spelling |
-| model | Opus 5 | the seat's `held_for`; the schedule row mirrors it |
+| model | the seat's first `held_for` | the schedule row is linked, so its copy is not pushed; keep the Routine's model equal to `held_for` by hand |
 | repository | `ckopsa/waymark` | the Stop hook that closes the sitting lives in its `.claude/settings.json`; the clerk still touches no code |
 | trigger | Schedule, `0 * * * *` | `cadence_seconds` 3600. Keep the API trigger too: it gives the fire URL. |
 | fire URL | the API trigger's URL | the engine fires the Routine through it. See "The fire link". |
@@ -90,7 +90,9 @@ its own reason.
    `CLAUDE_CODE_SESSION_ID`. The engine binds the session to the
    seat, and the sitting is born with `harness_session` set to that
    id. From here the session is the sitter `seat:{seat id}`, wearing
-   the seat's grant, with the schedule's model as its claim.
+   the seat's grant, with the seat's first `held_for` as its claim
+   (the schedule is linked, so its own copy of the model is not the
+   declaration).
 3. `waymark_discover` shows `doors.ask.seat`. A halt or a parked
    state means say why and stop.
 4. The session reads the seat row for the charter, then walks
