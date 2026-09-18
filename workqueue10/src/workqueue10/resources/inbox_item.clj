@@ -116,10 +116,12 @@
   "emila__read")
 
 (def read-arg
-  "Which argument names the message to read. The source reads the id
-  back from the listing under `message_id` (sources/inbox.clj), so
-  the read is asked for with the same word."
-  :message_id)
+  "Which argument names the message to read. Gate's `emila__read`
+  takes `uid`, the IMAP uid, and the source stores that same uid on
+  the row under `message_id` (sources/inbox.clj). Read on production
+  2026-09-18 off waymark_powers, after a first sitting wrote no
+  excerpt because the read was asked for under the row's own word."
+  :uid)
 
 (def read-why
   "What Gate's own log records about this read. The household can
