@@ -357,14 +357,25 @@
   have received, and it deliberately does NOT wear `wrap-identity` —
   the identity on the request is the one the outer HTTP boundary
   already resolved, and re-resolving it here from headers a tool
-  composed would be a door into somebody else's session."
+  composed would be a door into somebody else's session.
+
+  It wears `router/wrap-refusals-counted` too (R-10.6,
+  waymark-fp62.7). The counter reads `:waymark10/visibility`, and
+  `request` writes the session's resolved visibility onto every
+  request this door serves — the seat grant itself for a bound
+  session. So a 409 at this door counts one refusal on the open
+  sitting, exactly as a 409 at an HTTP door does. It is mounted INSIDE
+  `wrap-problems`, because it counts the thrown problem and lets the
+  boundary project it."
   [eng]
   (router/wrap-problems
-   (ring/ring-handler
-    (ring/router (router/assemble-routes eng nil) {:conflicts nil})
-    (fn [_]
-      (p/->response (p/problem :not-found 404 "Not found"
-                               {:detail "No such route."}))))))
+   (router/wrap-refusals-counted
+    (ring/ring-handler
+     (ring/router (router/assemble-routes eng nil) {:conflicts nil})
+     (fn [_]
+       (p/->response (p/problem :not-found 404 "Not found"
+                                {:detail "No such route."}))))
+    eng)))
 
 (defn- request
   "One ring request wearing the session's already-resolved identity."
