@@ -127,7 +127,16 @@
                                         (vec (map first extra)))))
                             (cond-> {:kind (:kind t) :action (:action t)}
                               (:may t) (assoc :may true)))
-                          ts))]
+                          ts))
+          ;; THE REFS THIS DOOR CARRIES (waymark-fp62.4.1), read once
+          ;; at normalize rather than on every probe: the input entries
+          ;; whose properties name a target :kind. The engine's
+          ;; dangling-ref wall is built from this list at the door
+          ;; (guards/names-a-row-that-stands), so a kind declares
+          ;; nothing and the fingerprint does not move — action-fp
+          ;; projects a named set of keys and this is not one of them
+          ref-fields (when (:input a)
+                       (not-empty (schema/ref-fields (:input a))))]
       (cond-> (assoc a
                      :from from
                      :to (:to a)
@@ -136,7 +145,8 @@
                      :display display
                      :waives (set (:waives a))
                      :emits (vec (:emits a)))
-        (seq touches) (assoc :touches touches)))))
+        (seq touches) (assoc :touches touches)
+        ref-fields (assoc :ref-fields ref-fields)))))
 
 (defn- where-value-set
   "One where entry's values as a canonical set: a collection becomes
@@ -1528,8 +1538,10 @@
     (let [err (fn [msg] (throw (t/definition-error
                                 (str (some-> (:kind rmap) name)
                                      " [over] " msg))))]
-      (when-not (and (map? o) (every? #{:field :accomplished :let-go} (keys o)))
-        (err "is {:accomplished #{…} :let-go #{…}} with an optional :field"))
+      (when-not (and (map? o)
+                     (every? #{:field :accomplished :let-go :ways-back} (keys o)))
+        (err (str "is {:accomplished #{…} :let-go #{…}} with an optional"
+                  " :field and an optional :ways-back")))
       (let [field (:field o)
             words (fn [k] (let [s (get o k)]
                             (when-not (or (nil? s) (set? s))
@@ -1551,7 +1563,34 @@
             (when-not (every? keyword? (concat acc let-go))
               (err "without :field these are declared STATES, so they are keywords"))
             (when-some [bad (seq (sort (remove declared (concat acc let-go))))]
-              (err (str (vec bad) " are not declared states")))))))))
+              (err (str (vec bad) " are not declared states")))))
+        ;; THE WAYS BACK (waymark-fp62.4.1). A row whose work is over
+        ;; takes no more doors; the exception is the door that says the
+        ;; ending was wrong. Where the endings are STATES the machine
+        ;; shows those doors itself, so nothing is spelled here; where
+        ;; they are FIELD VALUES it cannot, so the kind names them —
+        ;; and an exception that names no door is a typo, not a law.
+        (when-some [wb (:ways-back o)]
+          (when-not (and (set? wb) (every? keyword? wb))
+            (err ":ways-back is a set of action names, as keywords"))
+          (when-some [bad (seq (sort (remove (set (keys (:actions rmap))) wb)))]
+            (err (str ":ways-back names " (vec bad)
+                      ", which this kind does not declare as doors")))
+          (when-not field
+            (let [from-of (fn [a]
+                            (let [f (:from a)]
+                              (cond (set? f) f
+                                    (sequential? f) (set f)
+                                    (some? f) #{f}
+                                    :else #{})))
+                  endings (into acc let-go)]
+              (when-some [bad (seq (sort (remove
+                                          (fn [a]
+                                            (some endings
+                                                  (from-of (get-in rmap [:actions a]))))
+                                          wb)))]
+                (err (str ":ways-back names " (vec bad)
+                          ", which no row in an ending can take"))))))))))
 
 (defn- check-worksheet!
   "The worksheet declaration's def-site gate: every column names a
@@ -1888,6 +1927,14 @@
         (update :nav #(or % :primary))
         (update :shape #(or % 1))
         (update :allow-dead set)
+        ;; the CREATE door's refs, read once (waymark-fp62.4.1): the
+        ;; dangling-ref wall in front of the create guards is built
+        ;; from this list. Outside the fingerprint's whitelist, so it
+        ;; moves no kind's hash
+        (as-> r (let [refs (not-empty
+                            (schema/ref-fields
+                             (or (:create-schema r) (:schema r))))]
+                  (cond-> r refs (assoc :create-ref-fields refs))))
         (update :allow-undo set)
         (update :deviations #(vec (or % [])))
         normalize-default-filters

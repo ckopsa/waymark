@@ -128,9 +128,18 @@
      ;; only the first is anybody's deed. Declaring it here is what
      ;; keeps :status a vocabulary this kind chose rather than a
      ;; deviation from a word the framework happened to hold.
+     ;; AND THE WAY BACK (waymark-fp62.4.1). A row whose work is over
+     ;; offers no doors, because a door on a finished row is a promise
+     ;; the household never made. `start` is the exception this kind
+     ;; already wrote down one paragraph below — "start picks it back
+     ;; up if the household relents" — so it is named here, where the
+     ;; engine reads it. The machine cannot find it on its own: this
+     ;; kind's endings are WORDS IN THE DATA, and every door of a
+     ;; mirror moves between sync states.
      :over {:field :status
             :accomplished #{"finished"}
-            :let-go #{"abandoned"}}
+            :let-go #{"abandoned"}
+            :ways-back #{:start}}
      :summary "{data.title} · {data.medium} · {data.status}"
      :label-template "{data.title}"
      :schema [:map

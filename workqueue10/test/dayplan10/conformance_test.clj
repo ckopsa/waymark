@@ -103,6 +103,16 @@
   (let [^LocalTime from (.plusMinutes (LocalTime/of 1 0) (long (swap! minute-seq inc)))]
     {:from (str from) :to (str (.plusMinutes from 1))}))
 
+;; A MEMBER THAT STANDS (waymark-fp62.4.1). `day_plan`'s :member is a
+;; ref, the engine resolves every ref at the door now, and a plan for
+;; a member who does not exist is exactly the dead link the wall was
+;; built to refuse. The examples below minted a fresh uuid per call to
+;; keep (member, date) unique; they mint a fresh MEMBER per call now,
+;; which is unique for the same reason and true as well.
+(defn- fresh-member! [eng]
+  (:id (mk! eng :member {:display (str "Walked member " (random-uuid))
+                         :actor_type "human"})))
+
 (fac/example-input! :context :create
   (fn [_]
     {:name (str "Walked context " (random-uuid))
@@ -111,15 +121,15 @@
      :default_order 1}))
 
 (fac/example-input! :day_plan :create
-  (fn [_]
-    {:date plan-date :member (str (random-uuid))}))
+  (fn [eng]
+    {:date plan-date :member (fresh-member! eng)}))
 
 ;; a block by hand: a plan of its own (so nothing the walker minted
 ;; elsewhere shares its windows) and a context, no windows — spans are
 ;; the walk's to add
 (fac/example-input! :block :create
   (fn [eng]
-    (let [plan (mk! eng :day_plan {:date plan-date :member (str (random-uuid))})
+    (let [plan (mk! eng :day_plan {:date plan-date :member (fresh-member! eng)})
           context (mk! eng :context {:name (str "Walked block context " (random-uuid))
                                      :default_shapes ["off"]
                                      :default_spans [(fresh-window!)]
@@ -130,7 +140,7 @@
 ;; contexts occupy the small hours, so the example opens late
 (fac/example-input! :span :create
   (fn [eng]
-    (let [plan (mk! eng :day_plan {:date plan-date :member (str (random-uuid))})
+    (let [plan (mk! eng :day_plan {:date plan-date :member (fresh-member! eng)})
           context (mk! eng :context {:name (str "Walked span context " (random-uuid))
                                      :default_shapes ["off"]
                                      :default_spans [(fresh-window!)]
@@ -144,7 +154,7 @@
 ;; no windows — the decision belongs to the block, never to a span
 (fac/example-input! :decision :create
   (fn [eng]
-    (let [plan (mk! eng :day_plan {:date plan-date :member (str (random-uuid))})
+    (let [plan (mk! eng :day_plan {:date plan-date :member (fresh-member! eng)})
           context (mk! eng :context {:name (str "Walked decision context " (random-uuid))
                                      :default_shapes ["off"]
                                      :default_spans [(fresh-window!)]

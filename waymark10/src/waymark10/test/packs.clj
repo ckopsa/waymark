@@ -702,25 +702,41 @@
 
 (defn- run-scenario
   "One conformance-tier scenario, staged and attempted through the
-  real HTTP door."
+  real HTTP door.
+
+  `:given` rows stage in order, and each one that carries a `:handle`
+  puts the id the walker minted under that name. Every
+  `{given/<handle>}` in the rows that follow, in the subject `:row`
+  and in the `:input` is then replaced by that id
+  (`scenario/fill-handles`) — which is how a scenario cites a row that
+  will EXIST, and therefore how a door that resolves what a body cites
+  can be proved by a declared scenario at all (waymark-fp62.4.1)."
   [ctx rdef' s]
-  (let [staged (reduce (fn [_ gv]
-                         (let [out (stage-declared-row ctx (:kind gv) (:state gv)
-                                                       (:data gv))]
-                           (if (:error out) (reduced out) nil)))
-                       nil (:given s))]
+  (let [staged (reduce
+                (fn [ids gv]
+                  (let [out (stage-declared-row
+                             ctx (:kind gv) (:state gv)
+                             (scenario/fill-handles (:data gv) ids))]
+                    (if (:error out)
+                      (reduced out)
+                      (cond-> ids
+                        (:handle gv) (assoc (name (:handle gv)) (:id out))))))
+                {} (:given s))]
     (if (:error staged)
       (scenario/violation s {:unreadable (str "could not be staged: " (:error staged))})
       (let [hs (scenario-headers s)
+            input (scenario/fill-handles (:input s) staged)
             resp (if (scenario/create-door? rdef' (:attempt s))
-                   (req ctx :post (str "/api/" (:plural rdef')) (or (:input s) {}) hs)
-                   (let [subject (stage-declared-row ctx (:kind s)
-                                                     (get-in s [:row :state])
-                                                     (get-in s [:row :data]))]
+                   (req ctx :post (str "/api/" (:plural rdef')) (or input {}) hs)
+                   (let [subject (stage-declared-row
+                                  ctx (:kind s)
+                                  (get-in s [:row :state])
+                                  (scenario/fill-handles (get-in s [:row :data])
+                                                         staged))]
                      (if (:error subject)
                        ::unstaged
                        (invoke-http ctx (:kind s) (:id subject) (:attempt s)
-                                    (:input s) {:headers hs}))))]
+                                    input {:headers hs}))))]
         (if (= ::unstaged resp)
           (scenario/violation
            s {:unreadable "the row it describes could not be staged through its own door"})

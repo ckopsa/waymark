@@ -985,6 +985,17 @@
                :actions
                (merge
                 (:actions rmap)
+                ;; THE ENGINE'S OWN DOORS, marked as such (waymark-
+                ;; fp62.4.1). The seven below are the sync machine's
+                ;; bookkeeping, not the household's work, so the ending
+                ;; wall leaves them open: a mirror must go on recording
+                ;; what its authority says about a task the house
+                ;; finished last month, and a conflicted row must stay
+                ;; resolvable whatever its `:status` says. The stamp is
+                ;; declared once, over the whole woven map, so a door
+                ;; added here cannot forget it
+                (update-vals
+                 (merge
                 (when gone-patch
                   {:observe_gone
                    ;; the gone-policy's landing: the feed answered and
@@ -1065,7 +1076,8 @@
                            :consequence "The losing version of this document is overwritten, here and externally."}
                   :handler (resolve-handler adapter data-schema sync-ctx)
                   :display {:label "Resolve conflict" :style :primary
-                            :order 1}}}))
+                            :order 1}}})
+                 #(assoc % :engine true))))
         ;; discovery's mint check queries the promoted column
         (update :filterable (fn [f] (update (or f {}) :external_id
                                             #(or % #{:eq}))))

@@ -275,6 +275,36 @@
                 (when (:secret properties) k)))
         (entry-map form)))
 
+(defn- listed-form?
+  "Does this entry form put its leaf inside a list? `[:vector …]`, and
+  the `[:maybe [:vector …]]` the optional spelling wraps it in."
+  [form]
+  (boolean
+   (and (vector? form)
+        (or (= :vector (first form))
+            (and (= :maybe (first form)) (listed-form? (last form)))))))
+
+(defn ref-fields
+  "Every entry of a :map schema that NAMES A ROW OF ANOTHER KIND —
+  `[{:field :kind :listed bool} …]` in declaration order, or an empty
+  vector.
+
+  A ref is an entry whose properties carry `:kind` (the same mark
+  `ref-props` publishes as the picker's x-ref), so the door that
+  resolves the id and the form that offers the picker read one
+  spelling. `:listed` says the value is a LIST of ids rather than one:
+  the framework's dangling-ref wall resolves each item and names the
+  position of the first that stands for nothing (waymark-fp62.4.1,
+  R-4)."
+  [form]
+  (into []
+        (keep (fn [[k {:keys [properties schema]}]]
+                (when (:kind properties)
+                  {:field k
+                   :kind (:kind properties)
+                   :listed (listed-form? schema)})))
+        (entry-map form)))
+
 (defn conceal
   "A published JSON Schema minus the named fields — absent from
   properties and required alike, so a reader can neither see the

@@ -170,6 +170,16 @@
      ;; house stands behind, dropped is the authority letting go. The
      ;; feed used to hold the word "done" itself, which made every
      ;; other vocabulary in the household a deviation.
+     ;;
+     ;; AND THE DOORS CLOSE WITH IT (waymark-fp62.4.1, closing
+     ;; waymark-tgy). A task the house finished last month went on
+     ;; offering Done and Prioritize, because this kind's lifecycle is
+     ;; data and its machine is the sync machine, and the two never
+     ;; met. They meet here now: the engine shuts every door on a row
+     ;; whose work is over, except the ways back a kind names. This
+     ;; kind names NONE — the queue's own record of a finished task is
+     ;; the authority's word, and the way to un-finish one is at the
+     ;; engine that owns it, through the `origin` link below.
      :over {:field :status :accomplished #{"done"} :let-go #{"dropped"}}
      :summary "{data.title} · {data.status}"
      :label-template "{data.title}"
