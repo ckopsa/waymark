@@ -174,16 +174,27 @@
 
 (defn- dev-principal [headers]
   (if-some [id (get headers "x-waymark-principal")]
-    (t/principal {:id id
-                  :roles (set (csv (get headers "x-waymark-roles")))
-                  :type (let [at (some-> (get headers "x-waymark-actor-type")
-                                         str/trim str/lower-case keyword)]
-                          (if (contains? t/actor-types at) at :human))
-                  ;; the model claim's dev spelling, beside the actor
-                  ;; type's: the doors mint it into the session
-                  ;; (oidc-rp), and a bare handler declares it by
-                  ;; header like everything else here
-                  :model (get headers "x-waymark-model")})
+    (cond-> (t/principal {:id id
+                          :roles (set (csv (get headers "x-waymark-roles")))
+                          :type (let [at (some-> (get headers "x-waymark-actor-type")
+                                                 str/trim str/lower-case keyword)]
+                                  (if (contains? t/actor-types at) at :human))
+                          ;; the model claim's dev spelling, beside the actor
+                          ;; type's: the doors mint it into the session
+                          ;; (oidc-rp), and a bare handler declares it by
+                          ;; header like everything else here
+                          :model (get headers "x-waymark-model")})
+      ;; the DELEGATE's dev spelling, for the same reason and in the
+      ;; same place. oidc.clj assocs :acts-for outside t/principal's
+      ;; closed shape when a token names a tool acting for a person;
+      ;; without a spelling here, no local engine can produce a
+      ;; delegate at all — and `waymark_sit` reads exactly this to
+      ;; decide whether a seat key may bind the session, so the keyed
+      ;; sitter (R-12.14) was untestable without an IdP in front.
+      ;; Absent, not nil, like :model: a principal that declared
+      ;; nothing says nothing.
+      (not (str/blank? (str (get headers "x-waymark-acts-for"))))
+      (assoc :acts-for (str/trim (str (get headers "x-waymark-acts-for")))))
     t/anonymous))
 
 (defn principal-of
