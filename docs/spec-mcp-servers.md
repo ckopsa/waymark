@@ -108,6 +108,13 @@ The `mcp-discover` hook (core's, elected) re-reads every live row's
 `discover` door only when the hash moved, so an unchanged list costs no
 transition. A failure the client calls fatal marks the row dark.
 
+The pass tells the door WHICH LIST IT SAW: the `discover` door takes
+one optional, hidden input, `seen_hash`, and the sweep passes the hash
+it read. The door is otherwise inputless, and invoke's natural replay
+answers a second inputless call on the same door with the first one's
+outcome — so a second pass over a list that had moved again would have
+been swallowed and the row would have kept the older mirror for good.
+
 ## 7. Gate's deprecation, in steps
 
 1. This kind lands. At boot, when `WORKQUEUE10_GATE_URL` is set,
@@ -139,7 +146,10 @@ Each step is one restate by a person and no deploy of the engine.
 8. The gate row with passthrough answers `emila__read` exactly as the
    static map did, and the static map is gone from `gate_proxy.clj`.
 9. A stdio row started with the bench's own command discovers eight
-   tools. The test runs when python3 is present and skips otherwise.
+   tools. The test runs when python3 and the bench checkout are present
+   and asserts its own skip otherwise, because a test that runs without
+   an assertion is a failure and a machine without python3 is not a
+   broken engine.
 
 Tests: `waymark10/test/waymark10/mcp_servers_test.clj` (1 to 7, 9) and
 `waymark10/test/waymark10/gate_proxy_test.clj` (8).
@@ -155,6 +165,10 @@ Tests: `waymark10/test/waymark10/mcp_servers_test.clj` (1 to 7, 9) and
 - A restate runs a discover too. A dark row that a person fixes by
   restating its address lands live in one tap.
 - A tool that no entry names answers 404 (it does not exist), not 403.
+- The `discover` door takes an input the requirements do not name:
+  `seen_hash`, optional and hidden, the hash the cadence read before it
+  walked the door. It is what keeps two passes over two different tool
+  lists two calls rather than one replayed call (section 6).
 
 ## 10. What this does not do
 

@@ -30,7 +30,8 @@
   promise for its id, with a timeout; a call that times out kills
   the process, because a server that stopped answering is not one
   to keep talking to. When the process dies the pending calls fail,
-  the death is counted, and the next call starts the process again.
+  the death is counted ONCE however many callers saw it, and the next
+  call starts the process again.
   The process's stderr is discarded and its environment is never
   printed.
 
@@ -223,12 +224,30 @@
                           (swap! state assoc :pending {})
                           (doseq [[_ prom] pending]
                             (deliver prom {:failed why}))))
-        died! (fn [why]
-                (let [{:keys [^Process proc]} @state]
-                  (when proc (.destroyForcibly proc)))
-                (swap! state assoc :proc nil :writer nil :reader nil)
-                (swap! state update :deaths conj (now-ms))
-                (fail-pending! why))
+        death-lock (Object.)
+        ;; ONE DEATH PER PROCESS (R-3). The end of the process, a
+        ;; write that finds a broken pipe and a call that times out
+        ;; are three views of the SAME death, and they race: the read
+        ;; loop sees the EOF while the writer is still flushing to it.
+        ;; So the death is claimed under a lock — the claimant takes
+        ;; the process out of the state and counts it, and every other
+        ;; view finds it gone and counts nothing. Counting each view
+        ;; made three deaths out of two, and the row went dark one
+        ;; death early. `proc` names the process the caller watched;
+        ;; nil means whichever is current.
+        died! (fn [proc why]
+                (let [victim (locking death-lock
+                               (let [cur (:proc @state)]
+                                 (when (and cur
+                                            (or (nil? proc)
+                                                (identical? proc cur)))
+                                   (swap! state assoc :proc nil :writer nil
+                                          :reader nil)
+                                   (swap! state update :deaths conj (now-ms))
+                                   cur)))]
+                  (when victim
+                    (.destroyForcibly ^Process victim)
+                    (fail-pending! why))))
         read-loop! (fn [^BufferedReader reader ^Process proc]
                      (try
                        (loop []
@@ -243,10 +262,9 @@
                            (recur)))
                        (catch Exception _ nil))
                      ;; EOF or a read failure: the process is gone
-                     (when (identical? proc (:proc @state))
-                       (died! "the process ended")))
+                     (died! proc "the process ended"))
         send! (fn [msg]
-                (let [{:keys [^BufferedWriter writer]} @state]
+                (let [{:keys [^BufferedWriter writer ^Process proc]} @state]
                   (when (nil? writer)
                     (throw (unreachable "the process is not running.")))
                   (try
@@ -255,7 +273,7 @@
                       (.write writer "\n")
                       (.flush writer))
                     (catch Exception e
-                      (died! (ex-message e))
+                      (died! proc (ex-message e))
                       (throw (unreachable (str "the process did not take the"
                                                " message: " (ex-message e))))))))
         ask! (fn [method params]
@@ -267,7 +285,7 @@
                    (cond
                      (identical? ::timeout answer)
                      (do (swap! state update :pending dissoc id)
-                         (died! "a call timed out")
+                         (died! (:proc @state) "a call timed out")
                          (throw (unreachable (str method " did not answer in "
                                                   timeout-ms " ms; the process"
                                                   " was stopped."))))
@@ -307,12 +325,19 @@
         (ensure-running!)
         (ask! method params))
       {::dead? (fn [] (>= (deaths-in-window) (long max-deaths)))
+       ;; the close takes the process out of the state FIRST, under
+       ;; the same lock: the read loop's EOF then finds it gone and
+       ;; counts no death, because a client somebody closed did not
+       ;; die on the wire
        ::close (fn []
-                 (let [{:keys [^Process proc]} @state]
-                   (when proc
-                     (.destroyForcibly proc)
-                     (.waitFor proc 2 TimeUnit/SECONDS)))
-                 (swap! state assoc :proc nil :writer nil :reader nil)
+                 (let [victim (locking death-lock
+                                (let [cur (:proc @state)]
+                                  (swap! state assoc :proc nil :writer nil
+                                         :reader nil)
+                                  cur))]
+                   (when victim
+                     (.destroyForcibly ^Process victim)
+                     (.waitFor ^Process victim 2 TimeUnit/SECONDS)))
                  (fail-pending! "the client was closed"))})))
 
 ;; ── the timeout every client wears ──────────────────────────────────

@@ -48,7 +48,11 @@
 
   THE CADENCE. `start-discover-sweeper!` re-reads every live row's
   tools/list on an interval and walks the `discover` door only when
-  the hash moved, so an unchanged list costs no transition."
+  the hash moved, so an unchanged list costs no transition. The hash
+  it saw rides the door as its input (`discover-input`): the door
+  mirrors what the server answers, and a door whose input never
+  changes is a door invoke's natural replay can answer with the last
+  pass's outcome."
   (:require [clojure.string :as str]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
@@ -652,6 +656,14 @@
     [:maybe [:string {:max 4000}]]]
    [:input_schema {:optional true} [:maybe [:map-of :keyword :any]]]])
 
+(def ^:private note-example
+  "The prose field's starting text: a blank box is the heaviest demand
+  the vocabulary has, and every other prose field in this engine hands
+  the caller a sentence to write over (seats' charter is the pattern)."
+  (str "The household's mail rig, on the LAN. The token lives in "
+       "EMILA_TOKEN on the engine's host. Ask Colton before you move "
+       "its address."))
+
 (def ^:private person-fields
   [[:name {:examples ["emila"]
            :x-display {:raw true
@@ -691,6 +703,7 @@
                          :help "The policy: which tools each power token admits, and whether a call must say why. A tool that no entry names does not exist through the power door."}}
     [:maybe [:vector power-entry]]]
    [:note {:optional true
+           :examples [note-example]
            :x-display {:widget "prose"
                        :label "Note"
                        :help "Anything the next person should know about this server."}}
@@ -707,6 +720,21 @@
     [:maybe :waymark/instant]]
    [:last_error {:optional true :x-display {:raw true :label "Last error"}}
     [:maybe [:string {:max 500}]]]])
+
+(def ^:private discover-input
+  "What the CADENCE saw: the hash of the tool list the engine read
+  before it walked this door. The engine's own field — hidden from
+  every form, because a person taps Discover and the handler reads
+  the server either way — and it is here for one reason. Invoke's
+  natural replay compares the LATEST transition's input digest, so a
+  discover after a discover with the same (empty) input answers as a
+  replay and the handler never runs; the list that moved in between
+  would then stay on the row for good. The hash moves whenever the
+  list moves, so the digest does too, and the mirror lands."
+  [:map
+   [:seen_hash {:optional true
+                :x-display {:hidden true :label "Hash seen"}}
+    [:maybe [:string {:max 64}]]]])
 
 (def ^:private restate-input
   [:map
@@ -731,6 +759,7 @@
                          :help "The whole policy, stated again: which tools each power token admits, and whether a call must say why."}}
     [:maybe [:vector power-entry]]]
    [:note {:optional true
+           :examples [note-example]
            :x-display {:widget "prose" :label "Note"
                        :help "Anything the next person should know about this server."}}
     [:maybe [:string {:max 500}]]]])
@@ -773,6 +802,7 @@
                :description "State the address, the auth variable, the powers or the note again; the engine discovers the server before it lands"}}
     :discover
     {:from #{:live} :to :live
+     :input discover-input
      :guards [a-person-or-the-engine]
      :safety {:idempotent true :reversible true :confirm false}
      :handler discover-server
@@ -819,7 +849,8 @@
    :deviations
    ["R-4 says the engine calls discover at create. A create cannot walk a door on a row that does not exist yet, so the discover runs in the create's own hook: a server that answers is born live with its tools, and one that does not is born dark with the reason in last_error."
     "R-5 says the engine writes a required why to the transition log. A power call is not a transition on any row, and R-8 names no door for it, so the why is demanded, forwarded to a passthrough server as __why, and not written to the log."
-    "R-8 lists restate beside mark_live. A restate runs a discover too, so a dark row a person fixes by restating its address lands live, and a restate the server does not answer is refused."]})
+    "R-8 lists restate beside mark_live. A restate runs a discover too, so a dark row a person fixes by restating its address lands live, and a restate the server does not answer is refused."
+    "R-4 names no input on discover. The door takes one, `seen_hash`, hidden and optional: the cadence says which list it saw. Invoke's natural replay compares the latest transition's input digest, so an inputless discover after an inputless discover replays the first one's outcome and the list that moved in between never lands on the row."]})
 
 ;; ── the cadence ─────────────────────────────────────────────────────
 
@@ -834,8 +865,11 @@
       (try
         (let [{:keys [hash]} (fetch-tools! seam row)]
           (when (not= hash (get-in row [:data :tools_hash]))
-            (inv/invoke! eng :mcp_server (str (:id row)) :discover nil
-                         {:principal engine-actor})))
+            ;; the hash the pass SAW rides the door as its input, so
+            ;; two passes over two different lists are two calls and
+            ;; never one replayed one (see `discover-input`)
+            (inv/invoke! eng :mcp_server (str (:id row)) :discover
+                         {:seen_hash hash} {:principal engine-actor})))
         (catch Exception e
           (if (and (p/problem? e) (fatal? seam row))
             (darken! eng row (ex-message e))

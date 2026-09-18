@@ -325,7 +325,7 @@
         mine (first (filter #(= :core/law-scenarios (:name %)) report))]
     (is (some? mine) "core's pack owes the obligation")
     (is (= [] (:violations mine)))
-    (is (= 9 (:covered mine))
+    (is (= 10 (:covered mine))
         (str "exactly the scenarios the check tier could not judge, and no"
              " more: ranking_note's one (waymark-1uv.6 — a person refused"
              " the birth door, deferred by the chain rule exactly as"
@@ -344,5 +344,11 @@
              " rule again: nobody-speaks-in-somebody-elses-voice reads only"
              " the caller, and words-do-not-answer now stands beside it on"
              " that door reading the SUBJECT's row and its kind's own"
-             " :answered-at-a-door). The other three of errand's are not"
-             " re-run here"))))
+             " :answered-at-a-door), plus mcp_server's one (waymark-fp62.10"
+             " — the chain rule once more: a-create-does-not-carry-a-secret"
+             "-as-auth-env reads only the body it refuses, but the create"
+             " door it knocks on is walled by one-server-spelling, which"
+             " counts the mcp_server rows that already wear the name; the"
+             " kind's other six sit on action doors that read the caller"
+             " and nothing else, and the check tier judges all six). The"
+             " other three of errand's are not re-run here"))))

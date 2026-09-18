@@ -10,8 +10,10 @@
   gone) lives in gate_proxy_test, beside the tests that walk the
   passthrough row through both surfaces. Acceptance 9 (a stdio row
   started with the bench's own command) is the last test here; it
-  runs when python3 and the bench checkout are present and prints
-  that it skipped otherwise."
+  runs when python3 and the bench checkout are present and asserts
+  its own skip otherwise, because a deftest that runs without an
+  assertion is a failure and a machine without python3 is not a
+  broken engine."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.server.capabilities :as caps]
@@ -438,7 +440,7 @@
 
 (deftest a-stdio-process-that-dies-is-restarted-and-dark-after-three-deaths
   (if-not (.canExecute (File. "/bin/sh"))
-    (println "waymark10.mcp-servers-test: no /bin/sh — the death policy test skipped")
+    (is true "the death policy test skipped: no /bin/sh on this machine")
     (let [c (client/stdio-client {:command "/bin/sh" :args ["-c" "exit 0"]
                                   :timeout-ms 5000 :window-ms 60000 :max-deaths 3})]
       (try
@@ -462,7 +464,10 @@
 
 (deftest a-stdio-row-started-with-the-bench-discovers-eight-tools
   (if-not (and (python3?) (.isDirectory (File. bench-dir)))
-    (println "waymark10.mcp-servers-test: python3 or the bench checkout is absent — acceptance 9 skipped")
+    ;; a skip is an ASSERTION, not a print: a deftest that runs
+    ;; without one is a failure to kaocha, and a green machine with no
+    ;; python3 must not read as a red suite
+    (is true "acceptance 9 skipped: python3 or the bench checkout is absent")
     (let [dir (str (Files/createTempDirectory "waymark-bench-test"
                                               (make-array FileAttribute 0)))
           cfg (str dir "/bench.json")

@@ -389,6 +389,9 @@
 (deftest hooks-read-the-same-selection-everything-else-reads
   (testing "a named selection starts what it assembled, and core"
     (is (= [:dispatcher :law-refresh :clock-sweeper
+            ;; core's fourth (spec-mcp-servers R-4), so a selection
+            ;; that names :jobs still carries it
+            :mcp-discover
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))
