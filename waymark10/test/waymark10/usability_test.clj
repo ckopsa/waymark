@@ -6,6 +6,7 @@
   cannot be satisfied is a policy nobody can act on."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.checks :as checks]
             [waymark10.dashboard :as dash]
             [waymark10.demand :as demand]
             [waymark10.guards :as g]
@@ -615,3 +616,74 @@
                   "display-prose")]
     (is (= 1 (count ws)))
     (is (str/includes? (first ws) "no :x-display :label on [:launch.href]"))))
+
+;; ── 8 · remedies ────────────────────────────────────────────────────
+;;
+;; The eighth finding (waymark-fp62.2.1) is not in `policies`: whether
+;; a dead end is still owed depends on the waiver list, which is one
+;; file for every kind at once, so the check CLI prints it beside the
+;; fence census. The prose is the battery's, and this is where it is
+;; held to its sentence.
+
+(def ^:private a-dead-end
+  (g/guard {:name :nothing-to-be-done
+            :explain "This errand cannot be finished today."
+            :check (fn [_ _ _] (t/deny))}))
+
+(def ^:private with-a-remedy
+  (g/guard {:name :needs-a-list
+            :explain "This errand cannot be finished today."
+            :remedies [:errand/reopen]
+            :check (fn [_ _ _] (t/deny))}))
+
+(def ^:private with-an-open-sentence
+  (g/guard {:name :nothing-opens-it
+            :explain "This errand cannot be finished today."
+            :open "No door opens it; the day has to turn over first."
+            :check (fn [_ _ _] (t/deny))}))
+
+(defn- errand-guarded [& gs]
+  (r/resource (assoc-in compliant [:actions :finish :guards] (vec gs))))
+
+(deftest remedies-warns-on-a-refusal-with-no-way-out
+  ;; acceptance 1: the warning names the kind, the door and the guard
+  (with-redefs [checks/waivers (delay [])]
+    (let [ws (u/remedies (errand-guarded a-dead-end))]
+      (is (= 1 (count ws)))
+      (is (str/starts-with? (first ws) "[remedies] "))
+      (is (str/includes? (first ws) "nothing-to-be-done") "the guard")
+      (is (str/includes? (first ws) "errand") "the kind")
+      (is (str/includes? (first ws) "action finish") "the door")
+      (is (str/includes? (first ws) "This errand cannot be finished today.")
+          "and the sentence the caller actually reads")
+      (is (str/includes? (first ws) ":remedies"))
+      (is (str/includes? (first ws) ":open")))))
+
+(deftest remedies-is-silent-where-a-way-out-is-declared
+  (with-redefs [checks/waivers (delay [])]
+    (is (= [] (u/remedies (errand-guarded with-a-remedy))))
+    (is (= [] (u/remedies (errand-guarded with-an-open-sentence))))
+    (is (= [] (u/remedies (r/resource compliant)))
+        "a kind with no guards owes nothing")))
+
+(deftest a-waiver-silences-the-finding
+  ;; acceptance 2, first half
+  (with-redefs [checks/waivers
+                (delay [{:guard :nothing-to-be-done :kind :errand
+                         :bead "waymark-fp62.2"}])]
+    (is (= [] (u/remedies (errand-guarded a-dead-end))))))
+
+(deftest the-create-door-owes-the-way-out-too
+  (with-redefs [checks/waivers (delay [])]
+    (let [ws (u/remedies (r/resource (assoc compliant
+                                            :create-guards [a-dead-end])))]
+      (is (= 1 (count ws)))
+      (is (str/includes? (first ws) "errand's create door")))))
+
+(deftest the-finding-stays-out-of-the-battery
+  ;; the seven are opinions about one declaration; this one is a fact
+  ;; about the assembly, and the tally the check CLI reports must not
+  ;; move under it.
+  (with-redefs [checks/waivers (delay [])]
+    (is (= [] (filterv #(str/starts-with? % "[remedies]")
+                       (u/warnings (errand-guarded a-dead-end)))))))

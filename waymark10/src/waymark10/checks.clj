@@ -12,7 +12,9 @@
   check-owns, check-related, cross-kind derived inputs — lives in
   waymark10.checks-assembly and runs at registry construction;
   check-touches and check-compounds remain unported."
-  (:require [clojure.set :as set]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.set :as set]
             [clojure.string :as str]
             [waymark10.declaration :as declaration]
             [waymark10.expr :as expr]
@@ -1311,6 +1313,234 @@
 
 ;; check-when (conditional demand over input models) and check-authored
 ;; (authority-synced fields) are phase-2: their declarations are unported.
+
+;; ── the remedies census (waymark-fp62.2.1) ──────────────────────────
+;;
+;; A guard refuses with an :explain sentence. Some guards also carry
+;; :remedies, tokens of the form :kind/action that name the door which
+;; clears the refusal. Some guards carry :open, the sentence that
+;; admits no door clears the gap. A guard with an :explain and neither
+;; of those two is a DEAD END: the caller reads why and has nothing to
+;; do next, so a model tries the same door again or guesses. Both
+;; spend fuel on law that was spoken late.
+;;
+;; This section counts the fences and names the dead ends. It does not
+;; print. waymark10.usability prints the warning under the kind, and
+;; waymark10.check prints the census line and refuses a stale waiver.
+;; Nothing here runs inside `run-all`: the battery below judges ONE
+;; declaration at import, and a waiver list is a fact about the whole
+;; assembly.
+
+(def waivers-resource
+  "The waiver list, on the classpath. It only shrinks."
+  "waymark10/remedies-waivers.edn")
+
+(def ^:private waiver-keys #{:guard :family :kind :bead :why})
+
+(defn denier-leaves
+  "Every guard that can BE the denier of a refusal.
+
+  This is not `g/iter-leaves`. That walk answers a SCHEMA question and
+  stops at an `:any`, because an OR advertises nothing. A refusal is a
+  different question: `g/evaluate` under an `:any` hands the caller
+  back the first denying ARM, so the ARM is the guard whose sentence
+  the caller reads, and the arm is what must carry the way out."
+  [g]
+  (cond
+    (:all g) (mapcat denier-leaves (:all g))
+    (:any g) (mapcat denier-leaves (:any g))
+    :else [g]))
+
+(defn answered?
+  "Does this guard tell the caller what to do next? `:remedies` names
+  the doors that change the verdict. `:open` is the sentence that
+  admits no door does."
+  [lg]
+  (boolean (or (seq (:remedies lg)) (some? (:open lg)))))
+
+(defn speaks?
+  "Does this guard's refusal reach the caller in words? A `:hide`
+  guard answers 404 and narrates nothing, so it owes no way out — a
+  sentence there would leak the very law the hiding conceals. A
+  `:warning` guard is acknowledgable, and the acknowledge protocol IS
+  its way out."
+  [lg]
+  (and (not (:hide lg)) (not= :warning (:severity lg))))
+
+(defn dead-end?
+  "A guard that refuses in words and names no way out."
+  [lg]
+  (and (speaks? lg) (not (answered? lg))))
+
+(defn guard-sites
+  "Every place one declaration can refuse: [{:kind :door :guard} …].
+  The create door counts — it refuses a caller who has no row to read
+  and therefore needs the way out most."
+  [r]
+  (into (into []
+              (comp (mapcat denier-leaves)
+                    (map (fn [lg] {:kind (:kind r) :door :create :guard lg})))
+              (:create-guards r))
+        (for [a (machine/actions-seq r)
+              lg (mapcat denier-leaves (:guards a))]
+          {:kind (:kind r) :door (:name a) :guard lg})))
+
+(defn- waiver-err [msg]
+  (throw (t/definition-error (str "[remedies] " msg) {:check :remedies})))
+
+(defn- validated-waiver [w]
+  (when-not (map? w)
+    (waiver-err (str "a waiver is a map, got " (pr-str w))))
+  (when-some [unknown (seq (sort (remove waiver-keys (keys w))))]
+    (waiver-err (str "waiver " (pr-str w) " declares unknown key(s) "
+                     (vec unknown) "; a waiver speaks "
+                     (vec (sort waiver-keys)))))
+  (when-not (= 1 (count (filter #(contains? w %) [:guard :family])))
+    (waiver-err (str "waiver " (pr-str w) " names exactly one of :guard "
+                     "(the guard's own name) or :family (the name prefix a "
+                     "parameterized guard builder mints)")))
+  (when (and (contains? w :guard) (not (keyword? (:guard w))))
+    (waiver-err (str "waiver " (pr-str w) ": :guard is the guard's name, a keyword")))
+  (when (and (contains? w :family) (or (not (string? (:family w)))
+                                                    (str/blank? (:family w))))
+    (waiver-err (str "waiver " (pr-str w) ": :family is a non-blank name prefix")))
+  (when (and (contains? w :kind) (not (keyword? (:kind w))))
+    (waiver-err (str "waiver " (pr-str w) ": :kind is a kind token, a keyword")))
+  (when (or (not (string? (:bead w))) (str/blank? (:bead w)))
+    (waiver-err (str "waiver " (pr-str w) " names no :bead — a waiver is a "
+                     "debt somebody owes, and the bead is who owes it")))
+  w)
+
+(defn- read-waivers []
+  (if-some [u (io/resource waivers-resource)]
+    (let [ws (edn/read-string (slurp u))]
+      (when-not (vector? ws)
+        (waiver-err (str waivers-resource " holds a vector of waivers")))
+      (mapv validated-waiver ws))
+    (waiver-err (str "the waiver list " waivers-resource
+                     " is not on the classpath"))))
+
+(def waivers
+  "The waiver list, read once. A delay: nothing at import forces it,
+  so a declaration still loads where the resource is absent."
+  (delay (read-waivers)))
+
+(defn waives?
+  "Does this waiver cover this guard site? `:kind`, when the waiver
+  spells one, must match. `:family` matches a name prefix, which is
+  how one line covers a parameterized builder's whole family (every
+  `require:<fact>`, every `role:<token>`)."
+  [w {:keys [kind guard]}]
+  (let [gname (name (or (:name guard) :guard))]
+    (and (or (nil? (:kind w)) (= (:kind w) kind))
+         (if-some [f (:family w)]
+           (str/starts-with? gname f)
+           (= (:guard w) (:name guard))))))
+
+(defn census
+  "The fence census over a set of normalized declarations — the
+  registry's, when the caller has one.
+
+      {:guards n :remedies n :open n :waived n
+       :dead-ends [{:kind :door :guard} …]
+       :stale [{:waiver …}] :unmatched [{:waiver …}]}
+
+  `:guards` counts the guards that refuse IN WORDS: a hidden guard
+  and an acknowledgable warning are not fences a caller can walk into
+  and read. `:dead-ends` are the unwaived ones — the warning list.
+
+  A waiver is STALE when it matches at least one guard site and every
+  site it matches now carries :remedies or :open. That is R-2's
+  sentence — the list only shrinks — and it holds for a :family line
+  too: the family waiver dies on the day its last member is answered.
+  A waiver that matches NOTHING is :unmatched, which is a weaker
+  finding: this assembly may simply not serve the kind that had it."
+  [rdefs]
+  (let [ws @waivers
+        sites (into [] (mapcat guard-sites) rdefs)
+        speaking (filterv (comp speaks? :guard) sites)
+        dead (filterv (comp dead-end? :guard) sites)
+        waived? (fn [site] (boolean (some #(waives? % site) ws)))
+        matches (fn [w] (filterv #(waives? w %) speaking))]
+    {:guards (count speaking)
+     :remedies (count (filter (comp seq :remedies :guard) speaking))
+     :open (count (filter (comp some? :open :guard) speaking))
+     :waived (count (filter waived? dead))
+     :dead-ends (filterv (complement waived?) dead)
+     :stale (filterv (fn [w] (let [m (matches w)]
+                               (and (seq m) (every? (comp answered? :guard) m))))
+                     ws)
+     :unmatched (filterv (fn [w] (empty? (matches w))) ws)}))
+
+(defn census-line
+  "The one line check-queue and the gate print, beside the kind
+  census."
+  [c]
+  (str "guards " (:guards c) ", remedies " (:remedies c)
+       ", open " (:open c) ", waived " (:waived c)
+       ", dead ends " (count (:dead-ends c))))
+
+(defn stale-waiver-problems
+  "R-2: a waiver for a guard that is no longer a dead end. An ERROR —
+  the list only shrinks, and a waiver left behind is a debt reported
+  as still owed."
+  [c]
+  (mapv (fn [w]
+          (str "[remedies] the waiver for "
+               (if-some [f (:family w)] (str "the " f "… family") (:guard w))
+               (when-some [k (:kind w)] (str " on " (name k)))
+               " (" (:bead w) ") waives nothing any more: every guard it "
+               "names now carries :remedies or :open. Delete the line."))
+        (:stale c)))
+
+(defn unmatched-waiver-warnings
+  "A waiver that matches no guard here. A warning rather than an
+  error: check runs over one application's kinds, so a waiver for a
+  kind this application does not serve is absent, not wrong."
+  [c]
+  (mapv (fn [w]
+          (str "[remedies] the waiver for "
+               (if-some [f (:family w)] (str "the " f "… family") (:guard w))
+               (when-some [k (:kind w)] (str " on " (name k)))
+               " (" (:bead w) ") matches no guard here — delete it once no "
+               "application serves the kind that had it."))
+        (:unmatched c)))
+
+(defn remedy-token-problems
+  "R-6: a `:remedies` token names a door that exists. The token is
+  `:kind/action`; `create` is a door every kind serves and no kind
+  lists in `:actions`. An ERROR — a remedy pointing at an address
+  that would 404 sends the caller somewhere worse than nowhere.
+
+  `rdefs` must be every kind the deployment serves (the registry's),
+  or a token across modules reads as undeclared."
+  [rdefs]
+  (let [doors (into {}
+                    (map (fn [r] [(:kind r) (conj (set (keys (:actions r)))
+                                                  :create)]))
+                    rdefs)]
+    (into []
+          (for [{:keys [kind door guard]} (mapcat guard-sites rdefs)
+                tok (:remedies guard)
+                :let [tk (when (qualified-keyword? tok)
+                           (keyword (namespace tok)))
+                      ta (when (qualified-keyword? tok)
+                           (keyword (name tok)))
+                      problem
+                      (cond
+                        (not (qualified-keyword? tok))
+                        (str (pr-str tok) " is not a :kind/action token")
+
+                        (not (contains? doors tk))
+                        (str "names the kind " (name tk)
+                             ", which no declaration here serves")
+
+                        (not (contains? (get doors tk) ta))
+                        (str "names " (name tk) "/" (name ta)
+                             ", which is no door of " (name tk)))]
+                :when problem]
+            (str "[remedies] guard " (:name guard) " on " (name kind) "."
+                 (name door) ": remedy " problem)))))
 
 ;; ── the battery ─────────────────────────────────────────────────────
 

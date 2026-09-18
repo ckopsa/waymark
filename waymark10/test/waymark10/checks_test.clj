@@ -4,6 +4,7 @@
   one thing changed from a valid base."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.checks :as checks]
             [waymark10.fixtures :as fx]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
@@ -619,3 +620,176 @@
           :at ["places"]
           :note "the places inside the row named in subject — its chapters, episodes or sections, spelled the way this field reads a place"}
          (schema/option-props {:x-options {:from :places :of :subject}}))))
+
+;; ── the remedies census (waymark-fp62.2.1) ──────────────────────────
+;;
+;; A guard that refuses in words and names no way out is a dead end.
+;; The census counts the fences, the waiver list carries the dead ends
+;; that already existed, and the list only shrinks.
+
+(def ^:private no-way-out
+  (g/guard {:name :no-way-out
+            :explain "This door is shut."
+            :check (fn [_ _ _] (t/deny))}))
+
+(def ^:private one-remedy
+  (g/guard {:name :one-remedy
+            :explain "This door is shut."
+            :remedies [:thing/close]
+            :check (fn [_ _ _] (t/deny))}))
+
+(def ^:private says-open
+  (g/guard {:name :says-open
+            :explain "This door is shut."
+            :open "No door opens it; the row ends here."
+            :check (fn [_ _ _] (t/deny))}))
+
+(def ^:private hidden-wall
+  (g/guard {:name :hidden-wall
+            :explain "This door is shut."
+            :hide true
+            :check (fn [_ _ _] (t/deny))}))
+
+(def ^:private warns-only
+  (g/guard {:name :warns-only
+            :explain "This is unusual."
+            :severity :warning
+            :check (fn [_ _ _] (t/deny))}))
+
+(defn- guarded
+  "The valid base with these guards on its one door, normalized."
+  [& gs]
+  (load-quietly (with-action base :close (assoc close-action :guards (vec gs)))))
+
+(defn- site
+  "One guard site, spelled by hand for the predicates that take one."
+  [guard]
+  {:kind :thing :door :close :guard guard})
+
+(deftest a-dead-end-is-a-refusal-with-no-way-out
+  (testing "the two ways out"
+    (is (checks/answered? one-remedy))
+    (is (checks/answered? says-open))
+    (is (not (checks/answered? no-way-out))))
+  (testing "a refusal nobody reads owes nothing"
+    (is (not (checks/speaks? hidden-wall)) "a hidden guard answers 404")
+    (is (not (checks/speaks? warns-only)) "acknowledging IS the way out")
+    (is (not (checks/dead-end? hidden-wall)))
+    (is (not (checks/dead-end? warns-only))))
+  (testing "explain and nothing else"
+    (is (checks/dead-end? no-way-out))
+    (is (not (checks/dead-end? one-remedy)))
+    (is (not (checks/dead-end? says-open)))))
+
+(deftest the-census-walks-both-arms-of-an-or
+  ;; g/iter-leaves stops at an :any because an OR advertises nothing.
+  ;; A refusal is the other question: evaluate hands back the denying
+  ;; ARM, so the arm is what must carry the way out.
+  (let [r (guarded (g/or no-way-out one-remedy))
+        sites (checks/guard-sites r)]
+    (is (= [:no-way-out :one-remedy] (mapv (comp :name :guard) sites)))
+    (is (= [:thing] (distinct (map :kind sites))))
+    (is (= [:close] (distinct (map :door sites))))))
+
+(deftest the-create-door-is-a-guard-site
+  (let [r (load-quietly (assoc base :create-guards [no-way-out]))
+        sites (checks/guard-sites r)]
+    (is (= [{:kind :thing :door :create :guard :no-way-out}]
+           (mapv #(update % :guard :name) sites)))))
+
+(deftest the-census-counts-the-fences
+  (with-redefs [checks/waivers (delay [])]
+    (let [c (checks/census [(guarded no-way-out one-remedy says-open
+                                     hidden-wall warns-only)])]
+      (is (= 3 (:guards c)) "the hidden guard and the warning are not fences")
+      (is (= 1 (:remedies c)))
+      (is (= 1 (:open c)))
+      (is (= 0 (:waived c)))
+      (is (= [:no-way-out] (mapv (comp :name :guard) (:dead-ends c))))
+      (is (= "guards 3, remedies 1, open 1, waived 0, dead ends 1"
+             (checks/census-line c))))))
+
+(deftest a-waiver-silences-one-dead-end
+  (let [ws [{:guard :no-way-out :kind :thing :bead "waymark-fp62.2"}]]
+    (with-redefs [checks/waivers (delay ws)]
+      (let [c (checks/census [(guarded no-way-out)])]
+        (is (= 1 (:waived c)))
+        (is (= [] (:dead-ends c)))
+        (is (= [] (:stale c)))
+        (is (= [] (:unmatched c))))))
+  (testing "a waiver on another kind waives nothing here"
+    (with-redefs [checks/waivers
+                  (delay [{:guard :no-way-out :kind :other
+                           :bead "waymark-fp62.2"}])]
+      (let [c (checks/census [(guarded no-way-out)])]
+        (is (= 0 (:waived c)))
+        (is (= [:no-way-out] (mapv (comp :name :guard) (:dead-ends c))))
+        (is (= 1 (count (:unmatched c))))))))
+
+(deftest the-waiver-list-only-shrinks
+  ;; acceptance 2: adding :remedies to a waived guard and keeping the
+  ;; waiver fails check-queue.
+  (let [ws [{:guard :one-remedy :kind :thing :bead "waymark-fp62.2"}]]
+    (with-redefs [checks/waivers (delay ws)]
+      (let [c (checks/census [(guarded one-remedy)])
+            problems (checks/stale-waiver-problems c)]
+        (is (= 1 (count (:stale c))))
+        (is (= 1 (count problems)))
+        (is (str/includes? (first problems) ":one-remedy"))
+        (is (str/includes? (first problems) "waymark-fp62.2"))
+        (is (str/includes? (first problems) "waives nothing any more"))))))
+
+(deftest a-family-waiver-covers-a-builders-whole-family
+  ;; g/require names itself require:<fact>, one guard per call site and
+  ;; no declaration a list could enumerate. `site` is spelled by hand
+  ;; here because a real g/require guard needs the derived fact this
+  ;; base does not declare (check-require would refuse it first).
+  (let [w {:family "require:" :bead "waymark-fp62.2"}]
+    (is (checks/waives? w (site (g/require :all_days_covered))))
+    (is (not (checks/waives? w (site no-way-out))))
+    (testing "and it dies when its last member is answered"
+      (with-redefs [checks/waivers (delay [w])]
+        (let [answered (g/guard {:name (keyword "require:handled")
+                                 :explain "The handled fact does not hold."
+                                 :remedies [:thing/close]
+                                 :check (fn [_ _ _] (t/deny))})
+              c (checks/census [(guarded answered)])]
+          (is (= 1 (count (:stale c))))
+          (is (= 0 (:waived c))))))))
+
+(deftest a-remedy-token-names-a-door-that-exists
+  ;; acceptance 3
+  (let [token (fn [tok]
+                (g/guard {:name :points-somewhere
+                          :explain "This door is shut."
+                          :remedies [tok]
+                          :check (fn [_ _ _] (t/deny))}))
+        problems (fn [tok] (checks/remedy-token-problems [(guarded (token tok))]))]
+    (testing "a declared door is silent"
+      (is (= [] (problems :thing/close))))
+    (testing "create is a door every kind serves and no kind lists"
+      (is (= [] (problems :thing/create))))
+    (testing "an action this kind does not declare"
+      (let [[p :as ps] (problems :thing/vanish)]
+        (is (= 1 (count ps)))
+        (is (str/includes? p "thing/vanish"))
+        (is (str/includes? p "no door of thing"))))
+    (testing "a kind no declaration serves"
+      (let [[p :as ps] (problems :ghost/close)]
+        (is (= 1 (count ps)))
+        (is (str/includes? p "the kind ghost"))))
+    (testing "a token that is not :kind/action at all"
+      (let [[p :as ps] (problems :close)]
+        (is (= 1 (count ps)))
+        (is (str/includes? p "is not a :kind/action token"))))))
+
+(deftest the-shipped-waiver-list-reads
+  ;; the file is data and the reader is the only gate it has: a typo
+  ;; here would break every check-queue run at once.
+  (let [ws @checks/waivers]
+    (is (vector? ws))
+    (is (seq ws))
+    (is (every? #(or (keyword? (:guard %)) (string? (:family %))) ws))
+    (is (every? #(and (string? (:bead %)) (not (str/blank? (:bead %)))) ws))
+    (is (= (count ws) (count (distinct (map (juxt :guard :family :kind) ws))))
+        "a waiver written twice is a waiver half-deleted")))
