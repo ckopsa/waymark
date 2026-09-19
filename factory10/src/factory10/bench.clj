@@ -253,14 +253,22 @@
   `rebase` is FALSE because a seat may work on a person's own pull
   request branch (the change's `head_branch`), and a rebase there
   rewrites a person's history. `stages` is empty in this bead: the
-  policy's formatter does not ride yet. `pull_request` is true unless
-  the policy says `opens_pr` false, and true means the rig reads the
-  forge from the clone URL."
+  policy's formatter does not ride yet. `pull_request` is a block
+  unless the policy says `opens_pr` false, and a block with no forge
+  named means the rig reads the forge from the clone URL.
+
+  `auto_merge` in that block is the policy's own (bead
+  waymark-fp62.6.3.15). TRUE AND THE RIG TURNS AUTO-MERGE ON for the
+  pull request it opened, so the gate merges the change when the
+  checks are green and no person taps. A repository whose branch rules
+  refuse auto-merge is a finding in `feedback`, and the pull request
+  stands."
   [row]
   (cond-> {:target (base-of row)
            :rebase false
            :stages []}
-    (not (false? (get-in row [:data :opens_pr]))) (assoc :pull_request true)))
+    (not (false? (get-in row [:data :opens_pr])))
+    (assoc :pull_request {:auto_merge (boolean (get-in row [:data :auto_merge]))})))
 
 (defn enrol-args
   "What the rig's `enroll` is told about this repository: the name it
