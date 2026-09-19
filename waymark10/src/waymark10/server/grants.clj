@@ -759,9 +759,9 @@
             [:scope {:optional true
                      :examples [scope-example]
                      :x-display {:label "What it opens"
-                                 ;; waymark-2hd0: a list of maps has no
-                                 ;; sub-form yet; the box wears this
-                                 :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
+                                 ;; waymark-2hd0: a list of maps can't list
+                                 ;; another kind's fields; the box wears this
+                                 :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps can't list another kind's field names, so each entry is typed by hand: the example above is the whole shape, and the chips beside the box offer every kind and action name."
                                  :help "The leash, entry by entry: a kind, the actions allowed on it, and optionally the rows, fields and filter that narrow it. Everything not named here stays shut. Leave it empty when the grant cites a seat: a seat grant's authority is the seat's own scope, read fresh at every request."}}
              scope-schema]
             ;; THE SEAT (R-5.1). A ref rather than a name, because the
@@ -1288,7 +1288,7 @@
             [:scope {:optional true
                      :examples [scope-example]
                      :x-display {:label "What you are asking for"
-                                 :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
+                                 :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps can't list another kind's field names, so each entry is typed by hand: the example above is the whole shape, and the chips beside the box offer every kind and action name."
                                  :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this. Leave it empty when you are asking to sit in a seat: the office's scope is the ask."}}
              scope-schema]
             ;; THE SEAT'S NAME, not its ref (R-5.4): a person spells the
