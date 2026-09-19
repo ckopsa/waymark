@@ -547,6 +547,22 @@
          {:kind "change" :id (str (:id change)) :action "submit"
           :input input}))
 
+(def ^:private a-harness-bill
+  "One round's usage, as the harness's hook sums it off the
+  transcript."
+  {:input_tokens 12000 :output_tokens 3400
+   :cache_read_tokens 90000 :cache_write_tokens 1500 :turns 7
+   :note "One round: the seat submitted the change."})
+
+(defn- report!
+  "The harness's Stop hook, posting the bill after the run ended
+  (spec-seat.md R-12.17): the seat's key in the header, the counts in
+  the body, and no bearer — the session that held one is over."
+  [{:keys [h]} body]
+  (h {:request-method :post :uri "/api/-/sittings/close"
+      :headers {"waymark-seat-key" a-key}
+      :body (wire/write-json body)}))
+
 ;; ── acceptance 3 ────────────────────────────────────────────────────
 
 (deftest the-sit-answers-the-bench-the-orientation-and-what-submit-means
@@ -813,11 +829,33 @@
       (is (= 0 (get-in row [:data :worktree_dirty])))
       (is (= "waymark/one" (get-in row [:data :branch]))))
 
-    (testing "and the round is over: the sitting closed"
-      (is (= :closed (:state (sitting-of w)))
-          "the push is the end of what this wake had to do")
-      (is (= "The round ended: this change was submitted."
-             (get-in (sitting-of w) [:data :note]))))))
+    (testing "and the sitting is STILL OPEN (bead waymark-fp62.6.3.4)"
+      (is (= :open (:state (sitting-of w)))
+          "the submit ends the round on the change; the harness closes
+           the sitting, and a fired run raises its one Stop event AFTER
+           the submit (spec-seat.md R-12.17)")
+      (is (= 0 (long (or (get-in (sitting-of w) [:data :input_tokens]) 0)))
+          "and no bill is written here — the hook's report carries it"))
+
+    (testing "and the harness's report, posted after the submit, lands"
+      (let [resp (report! w a-harness-bill)
+            doc (json resp)
+            closed (sitting-of w)]
+        (is (= 200 (:status resp)) (str (:body resp)))
+        (is (= :closed (:state closed))
+            "the harness is what closes the sitting")
+        (is (= [12000 3400 90000 1500 7]
+               [(long (get-in closed [:data :input_tokens]))
+                (long (get-in closed [:data :output_tokens]))
+                (long (get-in closed [:data :cache_read_tokens]))
+                (long (get-in closed [:data :cache_write_tokens]))
+                (long (get-in closed [:data :turns]))])
+            "the counts of the submit round are on the row")
+        (is (= "One round: the seat submitted the change."
+               (get-in closed [:data :note])))
+        (is (pos? (:cost_usd doc))
+            "so a fired submit round shows its tokens and its cost on
+             the ledger")))))
 
 (deftest a-rejected-push-refuses-and-the-remedy-names-the-pull-power
   (let [w (world)
