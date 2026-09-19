@@ -115,8 +115,9 @@ A `powers` entry can hold `constraints`: a list of tool input field
 names. A grant filter may name these fields and no other field. The
 bench row lists `["repo", "path"]` on its find, read and edit entries.
 The bench row lists `["repo"]` on its pull entry, because a path
-cannot narrow a whole checkout. An entry that lists no constraints
-admits no filter at all. Gate's entries list none.
+cannot narrow a whole checkout. The bench row lists `["repo"]` on its
+feedback entry, because a feedback reads a whole branch. An entry that
+lists no constraints admits no filter at all. Gate's entries list none.
 
 The engine judges a filter at the ASK. A scope entry that names a
 dotted power and carries a `filter` may name only the fields that
@@ -252,10 +253,14 @@ Each step is one restate by a person and no deploy of the engine.
     `seat` and `sitting`. A call with no bound sitting carries neither.
 16. The discover answer lists the constraints of the bench powers and
     lists none for Gate's.
+17. An ask that filters `bench.feedback` by `path` refuses. A grant
+    that filters `bench.feedback` to one repository forwards a
+    feedback on that repository and refuses one on another. The rig
+    receives no `allow`, because the filter narrows no path.
 
 Tests: `waymark10/test/waymark10/mcp_servers_test.clj` (1 to 7, 9),
 `waymark10/test/waymark10/gate_proxy_test.clj` (8) and
-`waymark10/test/waymark10/narrow_power_test.clj` (10 to 16).
+`waymark10/test/waymark10/narrow_power_test.clj` (10 to 17).
 
 ## 9. Deviations on record
 

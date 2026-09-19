@@ -41,6 +41,19 @@
   (factory10.bench) — the model holds the four reading and editing
   powers and never the four the engine calls.
 
+  SUBMIT ENDS THE ROUND, AND THE HARNESS CLOSES THE SITTING (bead
+  waymark-fp62.6.3.4). The submit ends the round on the change. It
+  adds one to `rounds`, and the machine moves the row to `submitted`.
+  The submit must not close the sitting. The harness must close the
+  sitting with its Stop hook (spec-seat.md R-12.17), and that report
+  carries the bill of the round. A fired run raises one Stop event,
+  and that event comes after the submit. So the sitting must stay
+  open at the submit. A sitting closed at the submit refuses the late
+  report, and the tokens and the cost of the round then land nowhere.
+  An interactive sitting tallies at each turn and keeps its own
+  numbers. The idle sweep closes a sitting whose harness never
+  reports.
+
   A SELF-LOOP IS SPELLED ONCE FOR EACH STATE. A v10 action declares
   one `:to`, so the mirror's refresh and the seat's discard each need
   a second door for the `submitted` state (`observe_submitted`,
@@ -135,58 +148,21 @@
                      "stall door.")])
        theirs (conj theirs)))))
 
-(defn- round-report
-  "The report the sitting's own close door takes (spec-seat.md
-  R-12.17): the counts as they stand now, and one sentence about what
-  the round did.
-
-  THE COUNTS ARE THE ROW'S, NOT ZERO. The engine never estimates a
-  token: an interactive sitting has been tallied every turn and the
-  row holds the newest numbers, and a fired one holds the zeroes its
-  birth wrote. RECORDED COST: a run whose Stop hook reports after this
-  close finds no open sitting and its bill lands nowhere. The round
-  ends at the submit because the owner's ruling says it does; the
-  hook's late report is the seam to fix next."
-  [ctx sitting]
-  (let [d (:data (when-some [read' (:read ctx)] (read' :sitting sitting)))]
-    {:input_tokens (long (or (:input_tokens d) 0))
-     :output_tokens (long (or (:output_tokens d) 0))
-     :cache_read_tokens (long (or (:cache_read_tokens d) 0))
-     :cache_write_tokens (long (or (:cache_write_tokens d) 0))
-     :turns (long (or (:turns d) 0))
-     :note "The round ended: this change was submitted."}))
-
-(defn- close-the-round!
-  "SUBMIT ENDS THE ROUND (bead waymark-fp62.6.3, R-7). The push is the
-  end of what this sitting had to do, so the sitting closes here
-  rather than running on to read rows it has already answered.
-
-  It is the sitting's OWN close door, through the ctx `:invoke` hook —
-  the same door the Stop hook posts to (routes/seats.clj's
-  `sitting-close`), invoked in this write's transaction and under this
-  same hand. A copy of the close would be a second place that costs a
-  wake.
-
-  BEST-EFFORT, ALWAYS. No open sitting (a person's own submit), no
-  hook (a probe), a close that refuses: each one leaves the submit
-  standing. The push already happened; a bookkeeping refusal must not
-  roll it back."
-  [ctx]
-  (when-some [invoke' (:invoke ctx)]
-    (when-some [sitting (bench/sitting-id ctx)]
-      (try (invoke' :sitting sitting :close (round-report ctx sitting))
-           (catch Exception e
-             (binding [*out* *err*]
-               (println "waymark10 bench round close failed -"
-                        (ex-message e)))
-             nil)))))
-
 (defhandler submit-the-change [row inp ctx]
-  ;; THE ROUND, IN ORDER: read the worktree, refuse a clean one, commit
-  ;; and push with the seat's sentence and the two trailers, then close
-  ;; the sitting. The machine advances the state — the row lands in
-  ;; `submitted` because the door says so, never because this handler
-  ;; wrote it.
+  ;; THE ROUND, IN ORDER: read the worktree, refuse a clean one, then
+  ;; commit and push with the seat's sentence and the two trailers.
+  ;;
+  ;; THE ROUND ENDS ON THE CHANGE (bead waymark-fp62.6.3.4). `rounds`
+  ;; grows by one here. The machine advances the state — the row lands
+  ;; in `submitted` because the door says so, never because this
+  ;; handler wrote it.
+  ;;
+  ;; THIS HANDLER MUST NOT CLOSE THE SITTING. The harness must close
+  ;; the sitting with its Stop hook (spec-seat.md R-12.17), and that
+  ;; report carries the bill of the round. A fired run raises its one
+  ;; Stop event after the submit, so the sitting must stay open here.
+  ;; A close written here would refuse that late report, and the
+  ;; tokens and the cost of the round would land nowhere.
   (let [policy (bench/policy-of row ctx)
         repo (str (get-in row [:data :repository]))
         branch (bench/branch-of row policy)
@@ -209,15 +185,13 @@
           (nil? answer) (bench/refuse! bench/dark-detail [bench/dark-remedy])
           (bench/refused answer) (rig-refusal! "submit" answer)
           :else
-          (do
-            (close-the-round! ctx)
-            (update row :data merge
-                    (cond-> {:branch branch
-                             :worktree_dirty 0
-                             :rounds (inc (long (or (get-in row [:data :rounds])
-                                                    0)))}
-                      (:commit answer) (assoc :head_sha
-                                              (str (:commit answer)))))))))))
+          (update row :data merge
+                  (cond-> {:branch branch
+                           :worktree_dirty 0
+                           :rounds (inc (long (or (get-in row [:data :rounds])
+                                                  0)))}
+                    (:commit answer) (assoc :head_sha
+                                            (str (:commit answer))))))))))
 
 (defhandler discard-the-worktree [row inp ctx]
   ;; THE ESCAPE HATCH. The worktree goes back to the branch head and
@@ -704,9 +678,10 @@
               the-branch-is-not-the-base
               under-the-round-ceiling]
      :handler submit-the-change
-     ;; the round ends here: the handler asks the open sitting to
-     ;; close through its own door (R-7), and the envelope says so
-     :touches [{:kind :sitting :action :close}]
+     ;; NO `:touches` (bead waymark-fp62.6.3.4). The round ends here
+     ;; on this change, and this door writes no other kind. The
+     ;; harness closes the sitting with its Stop hook (spec-seat.md
+     ;; R-12.17), and that report carries the bill of the round.
      :safety {:idempotent false :reversible false :confirm false
               :one-way "The commit is written and the branch is pushed, so this round is on the record at GitHub. The way forward is another round on the same change, not a way back."}
      :display {:label "Submit" :style :primary :order 5

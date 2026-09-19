@@ -242,16 +242,39 @@
   [answer]
   (and (map? answer) (nil? (refused answer))))
 
+(defn land-of
+  "The rig's `land` block for this repository, from the row (bead
+  waymark-fp62.6.3.9). WITHOUT IT THE RIG ONLY PUSHES: it opens no
+  pull request, and `feedback` answers that there is no pull_request
+  block. The row already says what submit means here, so the block is
+  a reading of the row and never an argument a model gives.
+
+  `target` is the policy's base — the branch a submit lands on.
+  `rebase` is FALSE because a seat may work on a person's own pull
+  request branch (the change's `head_branch`), and a rebase there
+  rewrites a person's history. `stages` is empty in this bead: the
+  policy's formatter does not ride yet. `pull_request` is true unless
+  the policy says `opens_pr` false, and true means the rig reads the
+  forge from the clone URL."
+  [row]
+  (cond-> {:target (base-of row)
+           :rebase false
+           :stages []}
+    (not (false? (get-in row [:data :opens_pr]))) (assoc :pull_request true)))
+
 (defn enrol-args
   "What the rig's `enroll` is told about this repository: the name it
   holds the clone under, where to clone it from, which branch a
-  worktree starts from, and the paths it never serves. The deny list
-  is the row's, so the rig and the row hold one list."
+  worktree starts from, the paths it never serves, and what a submit
+  lands. The deny list is the row's, so the rig and the row hold one
+  list; the land block is the row's too, and a restate sends it again
+  so the rig replaces its entry."
   [row]
   {:repo (str (get-in row [:data :repository]))
    :clone_url (clone-url-of row)
    :default_branch (base-of row)
-   :deny (vec (get-in row [:data :deny]))})
+   :deny (vec (get-in row [:data :deny]))
+   :land (land-of row)})
 
 (defn enrolled
   "The row after the engine offered this repository to the rig (R-2).

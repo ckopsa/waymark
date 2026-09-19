@@ -58,13 +58,17 @@
 ;; ── the fake rig, answering the contract (6.3.1) ────────────────────
 
 (def ^:private rig-tools
-  "The eleven tools the rig offers, as a live tools/list answers them:
+  "The twelve tools the rig offers, as a live tools/list answers them:
   its OWN bare names, because the `bench__` prefix is the row's name
   and the engine puts it on. Four of them are powers a scope may
-  name; the other seven — the four that decide what a change is, and
-  the three that decide which repositories the rig holds (bead
-  waymark-fp62.6.3.7) — are named by no entry of the row's powers, and
-  that absence is what says which is which."
+  name; the other eight — the four that decide what a change is, the
+  three that decide which repositories the rig holds (bead
+  waymark-fp62.6.3.7), and `feedback`, which the sit calls with the
+  engine's own hand (bead waymark-fp62.6.3.9) — are named by no entry
+  of the row's powers here, and that absence is what says which is
+  which. The deployment's row also carries `bench.feedback` for a
+  seat that asks the rig again itself; that power's own narrowing is
+  pinned in waymark10/test/waymark10/narrow_power_test.clj."
   (mapv (fn [nm]
           {:name nm
            :description (str "The bench's " nm ".")
@@ -73,7 +77,7 @@
                                       :branch {:type "string"}}
                          :required ["repo" "branch"]}})
         ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"
-         "enroll" "repos" "unenroll"]))
+         "enroll" "repos" "unenroll" "feedback"]))
 
 (def ^:private bench-powers
   "The bench row's powers (waymark-fp62.6.3.3): the four the model may
@@ -124,6 +128,24 @@
                            :clone_url "https://github.com/ckopsa/waymark"
                            :default_branch "main" :deny ["*.env"]
                            :land "worktree" :bare true :cloned true}
+          ;; what the submit caused (bead waymark-fp62.6.3.9), in the
+          ;; rig's own shape: the pull request, one finding for each
+          ;; red check and each review comment, and the parts of the
+          ;; forge the rig could not reach
+          "bench__feedback"
+          {:repo "ckopsa/waymark" :branch "waymark/one" :target "main"
+           :landing nil
+           :pull_request {:number 31 :state "open" :head a-head
+                          :url "https://github.com/ckopsa/waymark/pull/31"}
+           :pipelines [] :statuses [] :comments []
+           :findings [{:source "pipeline" :severity "error" :step "gate"
+                       :message "FAIL in waymark10.narrow-power-test"
+                       :locations [{:path "waymark10/test/waymark10/narrow_power_test.clj"
+                                    :line 231}]
+                       :url "https://github.com/ckopsa/waymark/actions/runs/7"}
+                      {:source "review" :severity "comment" :author "colton"
+                       :message "Name the rule in the comment."}]
+           :unavailable ["statuses: the forge answered 403"]}
           "bench__repos" {:repos ["ckopsa/waymark"]}
           "bench__unenroll" {:repo "ckopsa/waymark" :kept true}}}))
 
@@ -525,6 +547,22 @@
          {:kind "change" :id (str (:id change)) :action "submit"
           :input input}))
 
+(def ^:private a-harness-bill
+  "One round's usage, as the harness's hook sums it off the
+  transcript."
+  {:input_tokens 12000 :output_tokens 3400
+   :cache_read_tokens 90000 :cache_write_tokens 1500 :turns 7
+   :note "One round: the seat submitted the change."})
+
+(defn- report!
+  "The harness's Stop hook, posting the bill after the run ended
+  (spec-seat.md R-12.17): the seat's key in the header, the counts in
+  the body, and no bearer — the session that held one is over."
+  [{:keys [h]} body]
+  (h {:request-method :post :uri "/api/-/sittings/close"
+      :headers {"waymark-seat-key" a-key}
+      :body (wire/write-json body)}))
+
 ;; ── acceptance 3 ────────────────────────────────────────────────────
 
 (deftest the-sit-answers-the-bench-the-orientation-and-what-submit-means
@@ -598,7 +636,12 @@
     (is (str/includes? (str (:orientation answer)) "no orientation file")
         "a rig that answers nothing made no worktree, so there is no
          document to send the seat to — the sentence says so and
-         carries what submit means instead (R-6)")))
+         carries what submit means instead (R-6)")
+    (is (nil? (:feedback answer))
+        "and no feedback: a rig that made no worktree is asked what
+         the submit caused by nobody (R-12.31)")
+    (is (empty? (calls-of st "bench__feedback"))
+        "the sit spends no call on a bench that is not there")))
 
 (deftest a-repository-with-no-orientation-file-answers-the-sentence
   (let [st (state)
@@ -623,6 +666,133 @@
          says it, and says what submit means here")
     (is (= 1 (count (calls-of st "bench__read")))
         "and it costs ONE read of the rig")))
+
+;; ── the feedback, in the sit (bead waymark-fp62.6.3.9, R-12.31) ─────
+;;
+;; A SEAT THAT SUBMITS AND IS THEN BLIND is the failure this half
+;; exists to prevent: the checks go red, a reviewer asks for a change,
+;; and the next sitting knows neither. The rig already gathers both.
+;; The engine asks it once, with its own hand, for a change that HAS a
+;; submit behind it — a person's own pull request branch, or a round
+;; this house already pushed — and carries the answer as it came.
+
+(deftest a-change-on-a-pull-request-branch-reads-what-its-submit-caused
+  (let [w (world)
+        answer (:answer w)
+        feedback (:feedback answer)
+        call (first (calls-of (:state w) "bench__feedback"))]
+    (is (= 1 (count (calls-of (:state w) "bench__feedback")))
+        "ONE call for one firing, with the engine's own hand")
+    (is (= {:repo a-repository :branch "waymark/one" :log_bytes 2048}
+           (:arguments call))
+        "the worktree the prepare made, and the tail of a failed step
+         the seat can act on")
+
+    (testing "the pull request the branch opened"
+      (is (= 31 (get-in feedback [:pull_request :number])))
+      (is (= "open" (get-in feedback [:pull_request :state])))
+      (is (= "https://github.com/ckopsa/waymark/pull/31"
+             (get-in feedback [:pull_request :url]))))
+
+    (testing "and one finding for each thing the rig found, in the
+              rig's own order: the engine adds nothing and orders
+              nothing"
+      (is (= 2 (count (:findings feedback))))
+      (is (= {:source "pipeline" :severity "error"
+              :message "FAIL in waymark10.narrow-power-test"
+              :locations [{:path "waymark10/test/waymark10/narrow_power_test.clj"
+                           :line 231}]}
+             (first (:findings feedback)))
+          "the source, the severity, the message and the locations")
+      (is (= {:source "review" :severity "comment"
+              :message "Name the rule in the comment."}
+             (second (:findings feedback)))
+          "and a finding the rig gave no locations carries none"))
+
+    (testing "beside what the rig could not reach"
+      (is (= ["statuses: the forge answered 403"] (:unavailable feedback))
+          "a forge half-dark is a sentence the seat reads, not a
+           refusal it has to reason about"))))
+
+(deftest a-change-nobody-has-submitted-is-asked-nothing
+  (let [w (world {} {:head_branch nil})
+        answer (:answer w)]
+    (is (nil? (:feedback answer))
+        "a branch this house has not pushed has no pull request and no
+         pipeline, so there is nothing for the rig to read")
+    (is (empty? (calls-of (:state w) "bench__feedback"))
+        "and the sit spends no call finding that out")
+    (is (some? (:bench answer))
+        "the worktree is still made: the seat works, it has just not
+         submitted yet")))
+
+(deftest a-change-with-a-round-behind-it-is-asked-even-with-no-head-branch
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        change (a-change! eng {:head_branch nil})
+        ;; the rig answers the branch it was asked for: the pattern's,
+        ;; with the change's own id in it. The scripted default names
+        ;; a person's branch, and the engine reads the feedback on the
+        ;; branch the prepare ANSWERED, never on the one it guessed
+        _ (answer! st "bench__prepare"
+                   (assoc (get-in @st [:answers "bench__prepare"])
+                          :branch (str "waymark/" (:id change))))
+        ;; one round already pushed — the maintenance write
+        ;; `bump-counter!` makes, one kind over
+        _ (let [storage (:storage eng)
+                id (str (:id change))]
+            (store/with-tx storage
+              (fn [tx]
+                (let [row (store/load-row storage tx :change id {})]
+                  (store/update-data! storage tx :change id
+                                      (assoc (:data row) :rounds 1) nil)))))
+        _ (open-seat! eng {})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        call (first (calls-of st "bench__feedback"))
+        prepare (first (calls-of st "bench__prepare"))]
+    (is (= 1 (count (calls-of st "bench__feedback")))
+        "this house pushed that branch once, so the checks on it are
+         this seat's to read — a change names its own submit either by
+         a person's head branch or by a round")
+    (is (= (str "waymark/" (:id change)) (:branch (:arguments prepare)))
+        "the worktree was asked for on the branch the policy's pattern
+         made, which is the branch the round pushed")
+    (is (= (str "waymark/" (:id change)) (:branch (:arguments call)))
+        "and the feedback is read on the branch the prepare answered")
+    (is (= 31 (get-in answer [:feedback :pull_request :number]))
+        "and the answer carries what the rig said about it")))
+
+(deftest a-rig-that-refuses-the-feedback-costs-the-key-and-never-the-sit
+  (let [st (state)
+        _ (answer! st "bench__feedback"
+                   {:refused "unknown_repo" :repo a-repository
+                    :reason "the bench does not hold this repository"})
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        change (a-change! eng {})
+        _ (open-seat! eng {})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})
+        answer (doc-of sat)]
+    (is (false? (:isError sat)) (text-of sat))
+    (is (nil? (:feedback answer))
+        "a refusal is not a reading of what the submit caused, so the
+         key is absent rather than holding one")
+    (is (some? (:bench answer))
+        "and the worktree still rides: the seat works either way")
+    (is (= [(str (:id change))] (mapv :id (get-in answer [:walk :rows]))))))
 
 ;; ── acceptance 4 ────────────────────────────────────────────────────
 
@@ -669,11 +839,33 @@
       (is (= 0 (get-in row [:data :worktree_dirty])))
       (is (= "waymark/one" (get-in row [:data :branch]))))
 
-    (testing "and the round is over: the sitting closed"
-      (is (= :closed (:state (sitting-of w)))
-          "the push is the end of what this wake had to do")
-      (is (= "The round ended: this change was submitted."
-             (get-in (sitting-of w) [:data :note]))))))
+    (testing "and the sitting is STILL OPEN (bead waymark-fp62.6.3.4)"
+      (is (= :open (:state (sitting-of w)))
+          "the submit ends the round on the change; the harness closes
+           the sitting, and a fired run raises its one Stop event AFTER
+           the submit (spec-seat.md R-12.17)")
+      (is (= 0 (long (or (get-in (sitting-of w) [:data :input_tokens]) 0)))
+          "and no bill is written here — the hook's report carries it"))
+
+    (testing "and the harness's report, posted after the submit, lands"
+      (let [resp (report! w a-harness-bill)
+            doc (json resp)
+            closed (sitting-of w)]
+        (is (= 200 (:status resp)) (str (:body resp)))
+        (is (= :closed (:state closed))
+            "the harness is what closes the sitting")
+        (is (= [12000 3400 90000 1500 7]
+               [(long (get-in closed [:data :input_tokens]))
+                (long (get-in closed [:data :output_tokens]))
+                (long (get-in closed [:data :cache_read_tokens]))
+                (long (get-in closed [:data :cache_write_tokens]))
+                (long (get-in closed [:data :turns]))])
+            "the counts of the submit round are on the row")
+        (is (= "One round: the seat submitted the change."
+               (get-in closed [:data :note])))
+        (is (pos? (:cost_usd doc))
+            "so a fired submit round shows its tokens and its cost on
+             the ledger")))))
 
 (deftest a-rejected-push-refuses-and-the-remedy-names-the-pull-power
   (let [w (world)
@@ -809,11 +1001,18 @@
     (is (= {:repo a-repository
             :clone_url "https://git.example/waymark.git"
             :default_branch "main"
-            :deny ["*.env"]}
+            :deny ["*.env"]
+            :land {:target "main" :rebase false :stages []
+                   :pull_request true}}
            (:arguments call))
         "the whole sentence the rig needs: the name it holds the clone
          under, where to clone it from, which branch a worktree starts
-         from, and the paths it never serves")
+         from, the paths it never serves, and what a submit LANDS —
+         without the land block the rig only pushes, and the branch
+         gets no pull request at all (bead waymark-fp62.6.3.9)")
+    (is (false? (get-in (:arguments call) [:land :rebase]))
+        "a seat may work on a person's own pull request branch, and a
+         rebase there rewrites a person's history")
     (is (some? (get-in stored [:data :enrolled_at]))
         "and the row says the bench holds this repository now")
     (is (nil? (get-in stored [:data :note]))
@@ -852,6 +1051,15 @@
       (is (thrown? clojure.lang.ExceptionInfo (restated clerk 4000)))
       (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
           "a seat's sitter could otherwise raise its own ceiling"))))
+
+(deftest a-policy-that-opens-no-pull-request-lands-without-one
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {:opens_pr false :base "dev"})
+        land (:land (:arguments (first (calls-of st "bench__enroll"))))]
+    (is (= {:target "dev" :rebase false :stages []} land)
+        "the policy says the push opens no pull request, so the block
+         carries none and the rig pushes the branch and stops")))
 
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)
