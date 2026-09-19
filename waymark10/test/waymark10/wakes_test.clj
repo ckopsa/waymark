@@ -77,8 +77,9 @@
 
 (def ^:private wake-task
   "One application kind, the smallest that can be walked: a queue that
-  filters itself by state (what `walk-names-a-kind-in-scope` asks of
-  a walk), one door that ends a row and one that does not. The seat
+  filters itself (what `walk-names-a-kind-in-scope` asks of a walk —
+  one default filter, over any field of the kind), one door that ends
+  a row and one that does not. The seat
   kinds are the REAL framework ones — all three are `:always` in the
   module table — so this is the suite's whole application."
   (r/resource

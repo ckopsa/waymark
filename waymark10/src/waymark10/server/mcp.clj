@@ -2064,6 +2064,15 @@
   is where it reads it."
   "Read the seat row with waymark_get and do what its charter says.")
 
+(def ^:private change-beside-the-walk-note
+  "What a seat whose rows are ASKS does with the change beside them
+  (R-12.32). The row it works is the ask; the door that ends the
+  round is on the change, and a sitter told only \"invoke the door
+  the charter chooses\" would look for a submit on the ask."
+  (str " The `change` beside your rows is the change this firing "
+       "submits: work the row above, and take submit or stall on the "
+       "change."))
+
 
 ;; ── the bench, in the sit's answer (spec-seat.md R-12.29) ───────────
 ;;
@@ -2150,6 +2159,199 @@
       "ci_run" (when-some [run (row-of eng :ci_run id)]
                  (row-of eng :change (get-in run [:data :change])))
       nil)))
+
+;; ── a seat that walks something else (R-12.32) ──────────────────────
+;;
+;; A CODE SEAT MUST BUILD WHAT A PERSON ASKS FOR, and an ask is a row
+;; in a queue — a `task` in a task list (bead waymark-fp62.6.3.10).
+;; Such a row names no repository and has no change, and `submit` is a
+;; door on `change`. So the engine reads the repository off the SEAT
+;; and mints one change row for the walk row it works.
+;;
+;; THE REPOSITORY IS THE SCOPE'S. A code seat already names its
+;; repository five times: each bench power entry carries a filter with
+;; the repo it may touch (R-12.30). When every one of those entries
+;; names the same single repository, that is the seat's repository.
+;; When they name none, or two, the sit gives no bench and one
+;; sentence that says what to write in the scope. Nothing new is
+;; declared for this: the authority the seat already holds is the
+;; authority it is read by.
+;;
+;; THE CHANGE IS MINTED ONCE. `change_id` is the kind name, a colon
+;; and the walk row's own id, and `change_id` is `:unique`, so a
+;; second sitting on the same row finds the first sitting's change
+;; rather than a second one. The mint is the ENGINE's own hand:
+;; `the-mirror-writes-this-row` admits a `:system` principal and
+;; nobody else, which is the same wall the GitHub source writes past.
+
+(def ^:private bench-power-prefix
+  "What a scope entry's kind starts with when it names a bench power:
+  `bench.find`, `bench.read`. The rig's own row name, read from the
+  gate proxy so the two spellings cannot drift."
+  (str gate/bench-rig "."))
+
+(def ^:private seat-change-principal
+  "The hand the sit mints a change with. It is a system principal —
+  the engine's own actor, not the sitter and not the person behind
+  it — because the change kind's birth door is the mirror's
+  (factory10.mirror/the-mirror-writes-this-row) and a seat holds no
+  key to it."
+  (t/principal {:id "waymark10-seat"
+                :type :system
+                :display "The seat's own bench"}))
+
+(def ^:private seat-repo-note
+  "What the sit says in place of a bench when the seat's scope does
+  not name ONE repository (R-12.32). It is a sentence about the SEAT,
+  and it names what a person must write: the rows still ride, and the
+  sitting can say what it could not do."
+  (str "The bench did not open, because this seat's scope does not "
+       "name one repository. A seat that walks something other than a "
+       "change reads its repository from its own bench powers: every "
+       "bench entry of the scope must carry a filter with the same "
+       "one repo. Work from the rows, and say what you could not do."))
+
+(def ^:private no-change-note
+  "What the sit says when the change for this firing could neither be
+  found nor minted. The row that refused is in the engine's log; the
+  seat is told only that there is no bench, because a refusal it
+  cannot act on is a refusal it must not reason about."
+  (str "The bench did not open, because this firing has no change row "
+       "to submit. Work from the rows, and say what you could not do."))
+
+(defn- seat-repository
+  "The one repository this seat works, read from its own scope
+  (R-12.32), or nil.
+
+  Every bench power entry must carry a `filter` with a `repo`, and
+  every one of them must name the same value. A comma in that value
+  means \"any of these repositories\" (R-12.30), which is not ONE
+  repository, so it answers nil as two entries with two values do."
+  [seat]
+  (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
+                         (get-in seat [:data :scope]))
+        named (mapv #(some-> (get-in % [:filter :repo]) str str/trim) entries)]
+    (when (and (seq named)
+               (every? #(not (str/blank? (str %))) named)
+               (apply = named)
+               (not (str/includes? (first named) ",")))
+      (first named))))
+
+(defn- bench-seat?
+  "Is this a CODE seat? A seat whose scope names no bench power at all
+  never opens a worktree: it walks its queue and takes its doors, and
+  the sit says nothing to it about a bench, a change or a repository.
+  The post clerk is that seat, and so is every seat of the household."
+  [seat]
+  (boolean (some #(str/starts-with? (str (:kind %)) bench-power-prefix)
+                 (get-in seat [:data :scope]))))
+
+(defn- change-by-id
+  "The change row with this `change_id`, or nil. `change_id` is
+  `:unique`, so there is at most one."
+  [eng change-id]
+  (when-some [rdef (get (inv/resources eng) :change)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx]
+                 (first (store/query-rows (:storage eng) tx :change
+                                          {:change_id (str change-id)}
+                                          {:limit 1}))))
+             (inv/decode-row rdef))))
+
+(def ^:private change-title-max
+  "The change kind's own ceiling on a title. A walk row's summary line
+  is short, and a title that overran it would refuse the mint."
+  400)
+
+(defn- walk-row-title
+  "What the change is called: the walk row's own title when the
+  collection's grid carries one, else its summary line. A row says
+  what it is in one of the two, and the change wears the same words so
+  a person reads one story in both places."
+  [row]
+  (let [values (or (get row "data") (get row "fields"))
+        said (or (some-> (get values "title") str not-empty)
+                 (some-> (get row "summary") str not-empty)
+                 (str (get row "kind") " " (get row "id")))]
+    (subs said 0 (min (count said) change-title-max))))
+
+(defn- minted-change
+  "The change row for one walk row: the one that is already here, or
+  one minted now with the engine's own hand (R-12.32). The branch is
+  the policy's pattern with the WALK row's id in place of the `*`, so
+  the branch says which task it builds, and `bench-branch` reads the
+  same value back off the row.
+
+  → [change nil], or [nil sentence] when there is no repository to
+  mint against and when the mint itself refuses."
+  [eng seat walk]
+  (let [row (get-in walk ["rows" 0])
+        row-id (some-> (get row "id") str not-empty)
+        change-id (str (get walk "kind") ":" row-id)]
+    (if-some [found (change-by-id eng change-id)]
+      [found nil]
+      (if-some [repo (seat-repository seat)]
+        (let [policy (repo-policy-of eng repo)
+              pattern (or (some-> (get-in policy [:data :branch_pattern])
+                                  str not-empty)
+                          default-branch-pattern)]
+          (try
+            [(:row (inv/create!
+                    eng :change
+                    {:change_id change-id
+                     :repository repo
+                     :title (walk-row-title row)
+                     :head_branch (str/replace pattern "*" row-id)
+                     :base_branch (or (some-> (get-in policy [:data :base])
+                                              str not-empty)
+                                      default-base)
+                     :author (str (get-in seat [:data :name]))}
+                    {:principal seat-change-principal}))
+             nil]
+            (catch Exception e
+              (binding [*out* *err*]
+                (println "waymark10 seat change mint failed -" (ex-message e)))
+              ;; a peer sitting that minted the same id one moment ago
+              ;; is the ordinary cause, and its row is the answer
+              (if-some [raced (change-by-id eng change-id)]
+                [raced nil]
+                [nil no-change-note]))))
+        [nil seat-repo-note]))))
+
+(defn- change-of-sitting
+  "The change this firing submits → [change sentence]. The walk's own
+  first row when the seat walks the code (R-12.29), and the row the
+  engine finds or mints for the first walk row when it walks anything
+  else (R-12.32). A seat that walks nothing, and a walk with no rows,
+  answer neither."
+  [eng seat walk]
+  (cond
+    (nil? walk) [nil nil]
+    (contains? bench-walks (str (get walk "kind"))) [(change-of-walk eng walk) nil]
+    ;; a seat with no bench powers is not a code seat, and an engine
+    ;; that declares no `change` kind serves no bench at all: neither
+    ;; is told anything about one
+    (not (bench-seat? seat)) [nil nil]
+    (nil? (get (inv/resources eng) :change)) [nil nil]
+    (str/blank? (str (get-in walk ["rows" 0 "id"]))) [nil nil]
+    :else (minted-change eng seat walk)))
+
+(defn- change-said
+  "The change row beside the walk, read AS THE SITTER: the row's own
+  envelope through the same route `waymark_get` takes, projected the
+  way a walk row is, so the doors in the answer are the doors the
+  seat's scope opens and no others (R-12.32).
+
+  nil when the read does not answer 2xx. A change the sitter's grant
+  conceals is ABSENT from the answer rather than a refusal of the sit,
+  which is R-10.6's rule at this door as at every other."
+  [eng call session change]
+  (when-some [rdef (get (inv/resources eng) :change)]
+    (let [resp (call (request session :get
+                              (str "/api/" (:plural rdef) "/" (:id change))
+                              {}))
+          doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
+      (when (row-doc? doc) (walk-row doc)))))
 
 (defn- bench-branch
   "The branch this change is worked on: the one the row already names,
@@ -2271,10 +2473,10 @@
        "and say what you could not do."))
 
 (defn- bench-of
-  "The bench section of the sit's answer (R-12.29), or nil for a seat
-  that walks something else.
+  "The bench section of the sit's answer (R-12.29), or nil when this
+  firing has no change to work.
 
-  In order: the change the firing works on, the repository's policy,
+  In order: the change's own repository, that repository's policy,
   the branch, and then ONE call to the rig's `prepare` — the engine's
   own hand, past the leash. The answer carries the worktree (the
   repository, the branch, the base, the head commit and how many paths
@@ -2285,66 +2487,76 @@
 
   A change that has already been submitted gets one call more: the
   rig's `feedback`, which says what that submit caused (R-12.31). The
-  engine asks for it when the change names a `head_branch` — a
-  person's own pull request — or when it has had a round, because a
-  branch nobody has pushed has no pull request and no pipeline to
-  read. The answer rides as `feedback`, and a rig that refuses or
-  faults costs the key and never the sit.
+  engine asks for it when the change names a `head_branch` and a
+  `number` — a person's own pull request — or when it has had a
+  round, because a branch nobody has pushed has no pull request and
+  no pipeline to read. The answer rides as `feedback`, and a rig that
+  refuses or faults costs the key and never the sit.
 
   `gate-rpc` is this engine's Gate caller, built once by the transport.
   It THROWS when Gate is dark, and the throw is caught here: the sit
-  answers without a bench rather than not at all."
-  [eng gate-rpc walk]
-  (when (and walk (contains? bench-walks (str (get walk "kind"))))
-    (when-some [change (change-of-walk eng walk)]
-      (let [repo (str (get-in change [:data :repository]))
-            policy (repo-policy-of eng repo)
-            base (or (some-> (get-in policy [:data :base]) str not-empty)
-                     default-base)
-            branch (bench-branch change policy)
-            made (try
-                   (bench-payload
-                    (gate-rpc "tools/call"
-                              {:name (gate/bench-tool :prepare)
-                               :arguments {:repo repo :branch branch
-                                           :base base}}))
-                   (catch Exception e
-                     (binding [*out* *err*]
-                       (println "waymark10 bench prepare failed -"
-                                (ex-message e)))
-                     nil))
-            means (submit-means policy)
-            ;; what the last submit caused, for a change that HAS one:
-            ;; a person's own branch, or a round this house already
-            ;; pushed (R-12.31). A worktree the rig did not make is
-            ;; asked nothing.
-            feedback (when (and made
-                                (or (some-> (get-in change [:data :head_branch])
-                                            str not-empty)
-                                    (>= (long (or (get-in change [:data :rounds]) 0))
-                                        1)))
-                       (feedback-of gate-rpc (str (or (:repo made) repo))
-                                    (str (or (:branch made) branch))))
-            ;; the path the policy names, answered only when the file
-            ;; is really there (R-6); a worktree that was never made
-            ;; holds nothing, so a dark rig is asked for no read
-            path (or (some-> (get-in policy [:data :orientation])
-                             str not-empty)
-                     default-orientation)]
-        (cond-> {"orientation"
-                 (if (and made (orientation-there?
-                                gate-rpc (str (or (:repo made) repo))
-                                (str (or (:branch made) branch)) path))
-                   path
-                   (str no-orientation-said means))
-                 "submit_means" means}
-          made (assoc "bench" {"repo" (str (or (:repo made) repo))
-                               "branch" (str (or (:branch made) branch))
-                               "base" (str (or (:base made) base))
-                               "head" (some-> (:head made) str)
-                               "dirty" (long (or (:dirty made) 0))})
-          feedback (assoc "feedback" feedback)
-          (nil? made) (assoc "bench_note" bench-dark-note))))))
+  answers without a bench rather than not at all.
+
+  The change is the caller's: the walk's own first row for a code
+  seat, and the row the engine found or minted for a seat that walks
+  anything else (R-12.32). This section reads the repository, the
+  branch and the rounds off that row and asks nothing about the walk."
+  [eng gate-rpc change]
+  (when change
+    (let [repo (str (get-in change [:data :repository]))
+          policy (repo-policy-of eng repo)
+          base (or (some-> (get-in policy [:data :base]) str not-empty)
+                   default-base)
+          branch (bench-branch change policy)
+          made (try
+                 (bench-payload
+                  (gate-rpc "tools/call"
+                            {:name (gate/bench-tool :prepare)
+                             :arguments {:repo repo :branch branch
+                                         :base base}}))
+                 (catch Exception e
+                   (binding [*out* *err*]
+                     (println "waymark10 bench prepare failed -"
+                              (ex-message e)))
+                   nil))
+          means (submit-means policy)
+          ;; what the last submit caused, for a change that HAS one:
+          ;; a person's own branch, or a round this house already
+          ;; pushed (R-12.31). A worktree the rig did not make is
+          ;; asked nothing. A CHANGE THE ENGINE MINTED FOR A WALK ROW
+          ;; (R-12.32) names a head branch from its birth and has no
+          ;; pull request at all, so a head branch alone is not a
+          ;; submit here: such a row carries no `number` until a round
+          ;; pushes it and the source adopts it.
+          feedback (when (and made
+                              (or (>= (long (or (get-in change [:data :rounds])
+                                                0))
+                                      1)
+                                  (and (some-> (get-in change [:data :head_branch])
+                                               str not-empty)
+                                       (some? (get-in change [:data :number])))))
+                     (feedback-of gate-rpc (str (or (:repo made) repo))
+                                  (str (or (:branch made) branch))))
+          ;; the path the policy names, answered only when the file
+          ;; is really there (R-6); a worktree that was never made
+          ;; holds nothing, so a dark rig is asked for no read
+          path (or (some-> (get-in policy [:data :orientation])
+                           str not-empty)
+                   default-orientation)]
+      (cond-> {"orientation"
+               (if (and made (orientation-there?
+                              gate-rpc (str (or (:repo made) repo))
+                              (str (or (:branch made) branch)) path))
+                 path
+                 (str no-orientation-said means))
+               "submit_means" means}
+        made (assoc "bench" {"repo" (str (or (:repo made) repo))
+                             "branch" (str (or (:branch made) branch))
+                             "base" (str (or (:base made) base))
+                             "head" (some-> (:head made) str)
+                             "dirty" (long (or (:dirty made) 0))})
+        feedback (assoc "feedback" feedback)
+        (nil? made) (assoc "bench_note" bench-dark-note)))))
 
 (defn- sit
   "R-12.14, in order, and every refusal is one plain sentence an agent
@@ -2406,10 +2618,24 @@
             ;; i · the walk, read as the sitter under the seat's grant
             ;; and through the query path — the rows this firing works
             ;; through, with the doors each one affords
-            walk (walk-of eng call (sitter-session eng sitter) seat)
-            ;; i' · the bench, for a seat whose walk is the code: the
+            sitter-sees (sitter-session eng sitter)
+            walk (walk-of eng call sitter-sees seat)
+            ;; i' · the change this firing submits: the walk's own
+            ;; first row for a code seat (R-12.29), and the row the
+            ;; engine finds or mints for a seat that walks a queue of
+            ;; asks (R-12.32). The sentence is what the seat is told
+            ;; when there is no change and therefore no bench.
+            [change change-note] (change-of-sitting eng seat walk)
+            ;; i'' · the bench, for a seat whose work is the code: the
             ;; worktree is made before this answer leaves (R-12.29)
-            bench (bench-of eng gate-rpc walk)]
+            bench (bench-of eng gate-rpc change)
+            ;; i''' · and the change beside the walk, for a walk whose
+            ;; rows are NOT changes: the row the submit door is on,
+            ;; read as the sitter so its doors are the seat's own
+            said (when (and change walk
+                            (not (contains? bench-walks
+                                            (str (get walk "kind")))))
+                   (change-said eng call sitter-sees change))]
         ;; j · what the firing reads next. The walk rides as the wire
         ;; wrote it — a route's own document, string keys and all —
         ;; so the kebab→snake boundary cannot rewrite a key inside a
@@ -2428,9 +2654,12 @@
                     :mode (or (some-> (get-in seat [:data :mode]) str not-empty)
                               seats/default-mode)
                     :note (str "You sit in `" named "`. "
-                               (if walk walk-note no-walk-note))})
+                               (if walk walk-note no-walk-note)
+                               (when said change-beside-the-walk-note))})
             walk (assoc "walk" walk)
-            bench (merge bench))
+            said (assoc "change" said)
+            bench (merge bench)
+            (and (nil? bench) change-note) (assoc "bench_note" change-note))
           verbatim-mapper))))))
 
 (def ^:private bodies

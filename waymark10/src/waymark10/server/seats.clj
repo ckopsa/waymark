@@ -349,9 +349,19 @@
         (nil? rdef)
         (t/deny {:vars {:walk walk
                         :problem "is not a kind this engine serves"}})
-        (nil? (get (:default-filters rdef) :state))
+        ;; A QUEUE FILTERS ITSELF, AND THE FIELD IS THE KIND'S OWN
+        ;; (bead waymark-fp62.6.3.10). The check asked for a default
+        ;; filter over STATE, which refused `task`: that kind keeps
+        ;; its lifecycle in `status`, in the data, because its machine
+        ;; is the sync machine and its endings are the authority's
+        ;; word (workqueue10.resources.task's own note). What the seat
+        ;; needs is that the collection a firing opens is the work
+        ;; WAITING and not every row ever mirrored, and a default
+        ;; filter over any field says that. So the check asks for one
+        ;; default filter, whichever field it names.
+        (empty? (:default-filters rdef))
         (t/deny {:vars {:walk walk
-                        :problem (str "declares no default filter over state,"
+                        :problem (str "declares no default filter at all,"
                                       " so the collection a firing opens is"
                                       " every row of it rather than the work"
                                       " waiting — walk a kind whose queue"

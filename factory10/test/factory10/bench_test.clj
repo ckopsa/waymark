@@ -42,6 +42,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
@@ -188,6 +189,42 @@
 
       :else (throw (ex-info (str "the fake rig speaks no " method) {})))))
 
+;; ── the queue a person writes (bead waymark-fp62.6.3.10) ────────────
+
+(def ^:private ask
+  "The smallest queue of ASKS: one row that says what to build. The
+  household's own `task` kind is workqueue10's and this suite boots
+  the factory alone, so the walk gets a kind of its own here — shaped
+  the way `task` is shaped, which is the whole point of it. Its
+  lifecycle is DATA (`status`), its machine is not, and its default
+  filter therefore names a field that is not `state`. A seat may walk
+  it because the walk guard asks for one default filter and no
+  longer for one over state."
+  (r/resource
+   {:kind :ask
+    :plural "asks"
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {data.status}"
+    :label-template "{data.title}"
+    :schema [:map
+             [:title {:examples ["Put the size ceiling on the policy form"]
+                      :x-display {:label "What to build"
+                                  :help "The one line a person would say out loud."}}
+              [:string {:min 1 :max 200}]]
+             [:status {:optional true :filter #{:eq :in}
+                       :x-display {:label "Where it stands"}}
+              [:maybe [:enum "open" "done"]]]]
+    :filterable {:state #{:eq :in}}
+    :default-filters {:status "open"}
+    :actions
+    {:complete {:from #{:open} :to :done
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "Done is done."}
+                :display {:label "Complete" :style :primary :order 1
+                          :description "Say the ask is built"}}}}))
+
 ;; ── the house ───────────────────────────────────────────────────────
 
 (def ^:private keypair
@@ -232,7 +269,7 @@
               ;; the mcp_server kind is core's and enrols always
               ;; (modules.clj), so the row below needs no declaration
               ;; here
-              :resources (conj (vec (main/resources)) caps/capability)
+              :resources (conj (vec (main/resources)) caps/capability ask)
               :oidc {:issuer issuer :audience audience :jwks jwks
                      :app-url "https://app.test/"
                      :delegate-clients {"connector" "Claude"}}
@@ -1157,6 +1194,161 @@
             "mcp-servers/call! resolves bench__repos by the ROW's name
              and rides the row's one client: the powers decide what a
              GRANT may reach, and the engine wears no grant")))))
+
+
+;; ── the seat that builds an ask (bead waymark-fp62.6.3.10, R-12.32) ─
+;;
+;; A CODE SEAT MUST BUILD WHAT A PERSON ASKS FOR. The queue is a list
+;; of asks, not a list of pull requests, so the first row names no
+;; repository and there is no change to submit. This half proves the
+;; three things the engine does about that: it reads the repository
+;; off the seat's own scope, it mints ONE change row for the ask, and
+;; it answers that row beside the walk with the doors the seat holds.
+
+(def ^:private ask-scope
+  "The scope of a seat that builds asks: the queue it walks, the
+  change doors it submits with, and the bench powers — each one
+  filtered to the one repository, which is where the engine reads the
+  repository from (R-12.32)."
+  (into [{:kind "ask" :actions ["complete"]}
+         {:kind "change" :actions ["submit" "stall" "discard"]}]
+        (map (fn [token] {:kind token :actions []
+                          :filter {:repo a-repository}}))
+        ["bench.find" "bench.read" "bench.edit" "bench.pull"]))
+
+(defn- an-ask!
+  "One row of the queue a person writes."
+  [eng title]
+  (:row (inv/create! eng :ask {:title title :status "open"}
+                     {:principal person})))
+
+(defn- changes-of
+  "Every change row in the store."
+  [eng]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/query-rows (:storage eng) tx :change {} {:limit 20}))))
+
+(defn- ask-world
+  "An engine with the policy, one ask, a seat that WALKS asks, and a
+  session sat in it. `scope` is the seat's, so a test can give it two
+  repositories or none."
+  ([] (ask-world ask-scope))
+  ([scope]
+   (let [st (state)
+         eng (fresh-engine st)
+         _ (a-policy! eng {})
+         asked (an-ask! eng "Put the size ceiling on the policy form")
+         seat (open-seat! eng {:scope scope :walk "ask"})
+         h (engine/handler eng)
+         sid (get-in (rpc h (bearer) "initialize"
+                          {:protocolVersion mcp/protocol-version
+                           :capabilities {}
+                           :clientInfo {:name "routine" :version "0"}})
+                     [:headers "Mcp-Session-Id"])
+         sat (call! h sid "waymark_sit" {:key a-key})]
+     {:eng eng :state st :h h :sid sid :seat seat :ask asked
+      :sat sat :answer (doc-of sat)})))
+
+(deftest a-seat-that-walks-asks-is-created-and-mints-one-change-for-the-first-row
+  (let [w (ask-world)
+        answer (:answer w)
+        ask-id (str (:id (:ask w)))
+        branch (str "waymark/" ask-id)]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (= :active (:state (:seat w)))
+        "a seat walking a kind whose default filter names `status` and
+         not `state` is created with no refusal at all")
+
+    (testing "the walk is the asks"
+      (is (= "ask" (get-in answer [:walk :kind])))
+      (is (= [ask-id] (mapv :id (get-in answer [:walk :rows])))))
+
+    (testing "and one change row was minted for the first ask"
+      (let [rows (changes-of (:eng w))]
+        (is (= 1 (count rows)) "one row, not one for each sitting")
+        (let [d (:data (first rows))]
+          (is (= (str "ask:" ask-id) (:change_id d))
+              "the walk kind, a colon and the walk row's own id — so a
+               second sitting on the same ask finds this row")
+          (is (= a-repository (:repository d))
+              "read off the seat's own bench powers, because an ask
+               names no repository")
+          (is (= "Put the size ceiling on the policy form" (:title d))
+              "the ask's own words, so a person reads one story in the
+               queue and on the pull request")
+          (is (= branch (:head_branch d))
+              "the policy's pattern with the ASK's id in place of the
+               star: the branch says which ask it builds")
+          (is (= "main" (:base_branch d)))
+          (is (= "bench-seat" (:author d)))
+          (is (nil? (:number d))
+              "nothing has opened a pull request yet, and a number
+               nobody has been given is not invented here"))))
+
+    (testing "the change rides beside the walk, with the seat's doors on it"
+      (is (= "change" (get-in answer [:change :kind])))
+      (is (= (str (:id (first (changes-of (:eng w)))))
+             (get-in answer [:change :id])))
+      (is (= #{"submit" "stall" "discard"}
+             (into #{} (map :action) (get-in answer [:change :doors])))
+          "read AS THE SITTER, so the doors are the seat's scope and
+           not the mirror's")
+      (is (some #(= "submit" (:action %)) (get-in answer [:change :doors]))
+          "the door a round ends with is in the answer the sit gives"))
+
+    (testing "and the bench is the one that change names"
+      (is (= branch (:branch (:arguments (first (calls-of (:state w)
+                                                          "bench__prepare")))))
+          "the worktree is asked for on the ask's own branch")
+      (is (some? (:bench answer)))
+      (is (= "docs/orientation.md" (:orientation answer)))
+      (is (str/includes? (:submit_means answer) "pull request")))
+
+    (testing "and nothing is asked about a submit that has not happened"
+      (is (nil? (:feedback answer)))
+      (is (empty? (calls-of (:state w) "bench__feedback"))
+          "a branch this house minted and never pushed has no pull
+           request and no pipeline to read"))))
+
+(deftest a-second-sitting-on-the-same-ask-finds-the-first-sittings-change
+  (let [w (ask-world)
+        first-id (get-in (:answer w) [:change :id])
+        again (doc-of (call! (:h w) (:sid w) "waymark_sit" {:key a-key}))]
+    (is (= first-id (get-in again [:change :id]))
+        "change_id is :unique and the sit asks for it before it mints,
+         so the second firing works the row the first one made")
+    (is (= 1 (count (changes-of (:eng w))))
+        "one ask is one change, however many times a seat sits down to
+         it")))
+
+(deftest a-scope-that-does-not-name-one-repository-gives-the-rows-and-a-note
+  (testing "two repositories are not one"
+    (let [w (ask-world [{:kind "ask" :actions ["complete"]}
+                        {:kind "change" :actions ["submit" "stall" "discard"]}
+                        {:kind "bench.read" :actions []
+                         :filter {:repo a-repository}}
+                        {:kind "bench.edit" :actions []
+                         :filter {:repo "ckopsa/other"}}])
+          answer (:answer w)]
+      (is (false? (:isError (:sat w))) (text-of (:sat w)))
+      (is (nil? (:bench answer)))
+      (is (str/includes? (str (:bench_note answer)) "one repository")
+          "the sentence is about the SEAT, and it names what a person
+           writes in the scope")
+      (is (= [(str (:id (:ask w)))] (mapv :id (get-in answer [:walk :rows])))
+          "the rows still ride: a sitting that cannot reach the bench
+           can read its queue and say so")
+      (is (empty? (changes-of (:eng w)))
+          "and no change is minted against a repository nobody named")
+      (is (empty? (calls-of (:state w) "bench__prepare"))
+          "the rig is asked for nothing")))
+  (testing "and an unfiltered bench entry names none"
+    (let [w (ask-world [{:kind "ask" :actions ["complete"]}
+                        {:kind "change" :actions ["submit" "stall" "discard"]}
+                        {:kind "bench.read" :actions []}])
+          answer (:answer w)]
+      (is (nil? (:bench answer)))
+      (is (str/includes? (str (:bench_note answer)) "one repository")))))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 

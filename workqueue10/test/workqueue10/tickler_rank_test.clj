@@ -149,10 +149,13 @@
 
 (defn- task-by-title
   "A collection item is a summary line, not a document — so the title
-  is matched on the summary, task_queue_test's own spelling."
+  is matched on the summary, task_queue_test's own spelling. Over the
+  WHOLE record: the task kind opens on `status=open` (its default
+  filter, bead waymark-fp62.6.3.10), and this story reads the rows the
+  authority dropped, so `?status=` empty clears that default."
   [title]
   (first (filter #(str/includes? (str (:summary %)) title)
-                 (items-of "/api/tasks"))))
+                 (items-of "/api/tasks?status="))))
 
 (defn- ticklers-over
   "Every OFFERED marker naming one subject, each read at its own

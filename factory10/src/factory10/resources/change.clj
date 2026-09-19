@@ -65,6 +65,18 @@
   a second read of the same pull request finds the row that is already
   here. An index refuses a duplicate, not a sentence in a charter.
 
+  A CHANGE IS NOT ALWAYS BORN AT GITHUB (bead waymark-fp62.6.3.10).
+  A seat that walks a queue of asks — a task list a person writes —
+  has no pull request to point at, so the engine mints the change row
+  for the ask itself: `change_id` is the walk kind, a colon and the
+  walk row's id, and there is no `number`. The seat then works that
+  row on the bench and submits it, and the push opens the pull
+  request. The next source pass finds a pull request whose id answers
+  no row, and a row of the same repository on the same head branch:
+  it ADOPTS that row rather than minting a second one. `adopt` is the
+  door that write goes through, and it is the mirror's, hidden like
+  every other.
+
   WHAT `observe` IS FOR. A pull request changes under the row: a new
   commit moves the head sha, a review moves the review state, a
   rebase moves the counts. `observe` is a self-loop on `open` that
@@ -430,16 +442,24 @@
     [:change_id {:x-display
                  {:raw true
                   :label "The pull request's own id"
-                  :help "The address GitHub knows this pull request by, as github:owner/repo#number. The source reads it back to see whether this pull request is already a row here."}}
+                  :help "The address GitHub knows this pull request by, as github:owner/repo#number. The source reads it back to see whether this pull request is already a row here. A change a seat built from an ask carries the ask's own address instead — the walk kind, a colon and the row id — until the push opens the pull request and the source adopts the row."}}
      [:string {:min 1 :max 250}]]
     [:repository {:x-display
                   {:label "The repository"
                    :help "The repository as GitHub spells it, as owner/repo. Every policy about this change reads this field first."}}
      [:string {:min 1 :max 140}]]
-    [:number {:x-display
+    ;; OPTIONAL, because a change is not always born at GitHub (bead
+    ;; waymark-fp62.6.3.10). A seat that walks a queue of asks gets a
+    ;; change row minted for the ask BEFORE any pull request exists,
+    ;; and a number nobody has been given is a number this row must
+    ;; not invent. The source writes it at the adoption, with `adopt`
+    ;; below. Until then the summary line renders it as an em-dash,
+    ;; which is the framework's own word for "not said yet".
+    [:number {:optional true
+              :x-display
               {:label "The pull request number"
-               :help "The number GitHub shows on the pull request. It is unique inside the repository, not across repositories."}}
-     [:int {:min 1}]]
+               :help "The number GitHub shows on the pull request. It is unique inside the repository, not across repositories. A change a seat is still building has none until the push opens the pull request."}}
+     [:maybe [:int {:min 1}]]]
     ;; :raw because it is a LABEL and not prose (inbox_item's subject,
     ;; one domain over): a long title must not refuse the mint
     [:title {:optional true
@@ -547,12 +567,15 @@
    :create-guards [the-mirror-writes-this-row]
    :create-schema
    [:map
+    ;; github:owner/repo#number from the source, and <kind>:<row id>
+    ;; from a seat's own sit (spec-seat.md R-12.32)
     [:change_id {:x-display {:label "The pull request's own id"}}
      [:string {:min 1 :max 250}]]
     [:repository {:x-display {:label "The repository"}}
      [:string {:min 1 :max 140}]]
-    [:number {:x-display {:label "The pull request number"}}
-     [:int {:min 1}]]
+    ;; the mirror gives it; the seat's own mint does not (R-12.32)
+    [:number {:optional true :x-display {:label "The pull request number"}}
+     [:maybe [:int {:min 1}]]]
     [:title {:optional true :x-display {:raw true :label "Title"}}
      [:maybe [:string {:max 400}]]]
     [:author {:optional true :x-display {:label "Who opened it"}}
@@ -655,6 +678,60 @@
      :display {:label "Reopened" :order 4
                :description "GitHub reopened the pull request"}}
 
+    ;; ── THE ADOPTION (bead waymark-fp62.6.3.10) ────────────────────
+    ;; A row a seat's sit minted for an ask carries the ask's own id
+    ;; and no number. The push opens the pull request, and the next
+    ;; source pass writes GitHub's identity onto the row that is
+    ;; already here. `observe` cannot: its input is the FACTS that
+    ;; move under a row, and the id a row is known by is not one of
+    ;; them. So the identity has a door of its own, hidden behind the
+    ;; same wall, and `change_id` is `:unique` — the write lands or
+    ;; the whole transaction does, and a second pull request can
+    ;; never take a row that is already spoken for.
+    :adopt
+    {:from #{:open} :to :open
+     :guards [the-mirror-writes-this-row]
+     :handler observe-the-pull-request
+     :input [:map
+             [:change_id {:x-display {:raw true}}
+              [:string {:min 1 :max 250}]]
+             [:number {:optional true} [:maybe [:int {:min 1}]]]
+             ;; :hidden, as the field is on the document — a url has
+             ;; no shape a form could draw, and the origin LINK is the
+             ;; affordance (the long-text battery asks for one of the
+             ;; three)
+             [:url {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Adopt" :order 11
+               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
+
+    ;; the same write, one state over — a change a seat has SUBMITTED
+    ;; is exactly the change whose push opened the pull request, so
+    ;; this is the state the adoption lands in almost every time. A
+    ;; v10 action declares one `:to`, so the self-loop is spelled
+    ;; twice (the `observe`/`observe_submitted` precedent, recorded
+    ;; in `:deviations`).
+    :adopt_submitted
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler observe-the-pull-request
+     :input [:map
+             [:change_id {:x-display {:raw true}}
+              [:string {:min 1 :max 250}]]
+             [:number {:optional true} [:maybe [:int {:min 1}]]]
+             ;; :hidden, as the field is on the document — a url has
+             ;; no shape a form could draw, and the origin LINK is the
+             ;; affordance (the long-text battery asks for one of the
+             ;; three)
+             [:url {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Adopt" :order 12
+               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
+
     ;; ── THE BENCH'S OWN DOORS (waymark-fp62.6.3.2) ─────────────────
     ;; These four are NOT the mirror's: a seat under a grant walks
     ;; them, and so does a person. Each one reaches the rig with the
@@ -749,7 +826,7 @@
    :links [{:rel "origin" :href "{data.url}" :external true
             :summary "The pull request, at GitHub"}]
    :deviations
-   ["A self-loop that serves two states is spelled twice: `observe` with `observe_submitted`, and `discard` with `discard_submitted`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
+   ["A self-loop that serves two states is spelled twice: `observe` with `observe_submitted`, `discard` with `discard_submitted`, and `adopt` with `adopt_submitted`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
     "The round ceiling REFUSES and names the way to `stuck`; it does not move the row itself. Bead waymark-fp62.6.3.2's R-5 reads \"the row moves to stuck and the door names it\", and one transition cannot do both: a handler's refusal rolls back its own transaction, and an action's `:to` is one state. So `under-the-round-ceiling` refuses with `:remedies [:change/stall]`, and `stall` — a real door, with the seat's own sentence on it — makes the move."
     "The clean-worktree check is the HANDLER's, not a guard's. The only honest reading of \"is there anything to submit\" is the rig's own `status`, and a guard that reached a wire would judge differently on a day Gate was dark. The handler asks, and refuses with a 409 that carries its remedy, so the refusal counts on the sitting exactly as a guard's does."]
    :scenarios [a-model-does-not-move-a-pull-request

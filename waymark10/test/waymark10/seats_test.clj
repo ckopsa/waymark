@@ -167,6 +167,25 @@
       (is (= good-scope (get-in (row-of :seat (:id seat)) [:data :scope]))
           "and the stored scope did not move"))))
 
+(deftest a-walk-names-a-kind-whose-queue-filters-itself
+  ;; bead waymark-fp62.6.3.10, R-12.32: the guard asked for a default
+  ;; filter over STATE, which refused every kind that keeps its
+  ;; lifecycle in a data field — `task` is one, and a seat must be
+  ;; able to walk it. It now asks for ONE default filter, whichever
+  ;; field it names, because what a walk needs is a collection that
+  ;; opens on the work waiting rather than on the whole table.
+  (testing "a kind that declares no default filter at all is refused"
+    (let [p (refusal #(open-seat! "walks-the-whole-table" {:walk "model"}))]
+      (is (= :walk-names-a-kind-in-scope (:guard p)))
+      (is (str/includes? (str (:detail p)) "no default filter at all")
+          "and the sentence says what a walk needs, which is a queue
+           that filters itself")))
+  (testing "a kind the scope does not open is refused before that"
+    (let [p (refusal #(open-seat! "walks-what-it-cannot-see"
+                                  {:walk "sitting"}))]
+      (is (= :walk-names-a-kind-in-scope (:guard p)))
+      (is (str/includes? (str (:detail p)) "scope")))))
+
 ;; ── case 22 · a seat is a person's office ───────────────────────────
 
 (deftest a-seat-is-opened-by-a-person-and-not-by-an-agent

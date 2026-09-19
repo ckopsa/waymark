@@ -170,7 +170,7 @@ sitter of this seat loses its grant and must ask to sit in {into}."
 | `drop-inside-scope` | create, restate | each `substitute_drop` entry is inside `scope` |
 | `ttl-within-standing` | create, restate | `standing_ttl_seconds` is not more than `reentry-standing-ttl-seconds` |
 | `held-for-active-models` | create, restate | each model in the two lists is active |
-| `walk-names-a-kind-in-scope` | create, restate | `walk` names a kind the scope admits, and the kind declares `:default-filters` over state |
+| `walk-names-a-kind-in-scope` | create, restate | `walk` names a kind the scope admits, and the kind declares a `:default-filters` over one of its own fields |
 | `step-carries-a-note` | restate | a restate that changes `held_for` or `substitute_for` carries `note`, 1 to 240 characters. `note` is a transition input; the log's `inputs` column holds it, and no column is added. |
 | `merge-target-is-active` | merge | `into` is active, and is not this seat |
 
@@ -945,8 +945,10 @@ then go red, or a reviewer asks for a change. The next sitting must
 read both. The rig gathers both with its `feedback` tool.
 
 The engine reads the change of the walk. A change has a submit behind
-it when it names a `head_branch`, or when its `rounds` is one or
-more. The engine must then call the rig's `feedback` one time. The
+it when it names a `head_branch` and a `number`, or when its `rounds`
+is one or more. A change the engine minted for a walk row (R-12.32)
+names a head branch from its birth and has no pull request, so a head
+branch alone is not a submit. The engine must then call the rig's `feedback` one time. The
 engine calls with its own hand, and not with the seat's. The call
 gives `repo`, `branch` and `log_bytes` 2048. The repository and the
 branch are the worktree's, from the `prepare` of R-12.29. The engine
@@ -974,6 +976,74 @@ from the repository policy row. The block names the policy's base as
 the target. The block asks for a pull request when the policy's
 `opens_pr` is true. The block asks for no rebase, because a seat may
 work on a person's own pull request branch.
+
+**R-12.32** The sit must give a bench to a seat that walks a queue of
+asks. This rule is for a code seat, as R-12.29 and R-12.31 are. A
+person says what the house must build in a row of a queue: a `task` in
+a task list. That row is the ask. An ask names no repository, and it
+has no change. `submit` is a door on `change`. So the engine does
+three things before it answers, and the source does one thing after.
+
+A seat must be able to walk a queue whose lifecycle is data. The guard
+`walk-names-a-kind-in-scope` asks that the walked kind declares a
+default filter. It asked for a default filter over `state` before this
+rule. A kind that mirrors an outside authority keeps its machine for
+freshness, and it keeps its lifecycle in a field of its own. The guard
+therefore accepts a default filter over any field. The `task` kind
+declares a default filter `status=open`. Its collection opens on the
+tasks that are open, and its default sort is the priority, which puts
+the highest rank first.
+
+First, the engine reads the repository from the seat. A seat's scope
+carries one entry for each bench power, and each entry carries a
+filter with a `repo` (R-12.30). When every bench entry names the same
+one repository, that repository is the seat's. The seat has no
+repository when an entry carries no filter, when two entries name two
+repositories, or when one value names more than one repository. The
+sit then gives no `bench`. It gives a `bench_note` that tells the
+person to name one repository in the scope, and the rows still ride.
+A seat whose scope names no bench power at all is not a code seat.
+Its sit answers no `change`, no `bench` and no `bench_note`.
+
+Second, the engine finds or mints one change row for the FIRST row of
+the walk. The `change_id` is the walk kind, a colon, and the walk
+row's own id. The engine writes the row with its own hand, because the
+birth door of `change` is the mirror's. The row carries the seat's
+repository, the walk row's title, the policy's branch pattern with the
+walk row's id in place of the `*`, the policy's base, and the seat's
+name as the author. The title is the walk row's own title, or its
+summary line when that row carries no title. The row carries no number, because no pull request
+is open yet. `change_id` is unique, so a second sitting on the same
+ask finds the first sitting's row and mints no other. The bench of
+R-12.29 then opens on that row, and the branch is that row's head
+branch.
+
+Third, the sit answers `change` beside `walk`. `change` is that change
+row, read as the sitter through the route `waymark_get` takes. The
+doors on it are therefore the doors the seat's scope opens, which are
+`submit`, `stall` and `discard`. The walk rows stay the asks. A seat
+that walks `change` or `ci_run` answers no `change` key, because its
+walk rows are already the changes. The seat's scope must name `change`
+with those three doors, and the walk kind with the doors its charter
+uses.
+
+A change the engine minted has a head branch from its birth, and it
+has no pull request. The engine therefore asks the rig for no feedback
+until that change has a round or a number (R-12.31).
+
+Last, the source must adopt that row, and it must mint no second one.
+The source reads a pull request. It asks for a change row by the pull
+request's own id. When no row answers, the source looks for a row of
+the same repository, on the same head branch, whose `change_id` is not
+the forge's. A `change_id` the forge owns starts with `github:`. When
+such a row is there, the source writes the pull request's identity
+onto it: the `change_id`, the number and the url. The write goes
+through the door `adopt`, which is the mirror's and is hidden. A row
+at `submitted` is written by `adopt_submitted`, because one action
+declares one `to` state. A row at `stuck`, at `merged` or at `closed`
+is not adopted. `change_id` is unique, so that write lands whole or it
+does not land at all. The facts and the state then follow through
+`observe` and the state doors, as they do for every other row.
 
 ### 12.2 The fire door
 
@@ -1930,6 +2000,14 @@ above. The cases:
     head branch and no round makes no `feedback` call. A refusal and a
     dark rig each answer no `feedback` key, and the sit answers all the
     same. (R-12.31)
+49. A seat that walks a queue of asks is created with no refusal. Its
+    sit answers the ask rows, one change row with the `submit` door, a
+    bench on the branch the policy's pattern made from the ask's own
+    id, and the orientation. A second sitting on the same ask finds
+    the first sitting's change and mints no other. A scope that does
+    not name one repository answers no bench and a `bench_note`. The
+    next source pass adopts the row the seat built, and mints no
+    second one. (R-12.32)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,

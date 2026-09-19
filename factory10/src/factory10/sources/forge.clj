@@ -27,7 +27,12 @@
   1. It asks the forge for everything that moved (`forge-poll`).
   2. For each pull request it mints a `change` row, or it moves the
      row that is already here: `observe` for the facts, then `merge`,
-     `close` or `reopen` for the state.
+     `close` or `reopen` for the state. A pull request whose id
+     answers no row, on a head branch a row of this house already
+     names, is ADOPTED rather than minted (bead waymark-fp62.6.3.10):
+     a seat built that branch from an ask, and its submit opened this
+     pull request. The house must hold one row for that work, not
+     two.
   3. For each finished check run that failed, on a head the change
      still carries, it reads the log tail (`forge-log-tail`) and mints
      one `ci_run` row at `red`. It mints no second row for a check run
@@ -134,6 +139,40 @@
   {:open :observe
    :submitted :observe_submitted})
 
+(def forge-id-prefix
+  "What a `change_id` the FORGE owns starts with. A row the engine
+  minted for a seat's ask starts with the walk kind's own name and a
+  colon instead (spec-seat.md R-12.32), so this prefix is what tells
+  a pull request's row from an ask's row.
+
+  waymark10.server.mcp writes the other spelling. The two namespaces
+  share no code, and they do not need to: one writes `<kind>:<id>`
+  and this one only asks whether an id is GitHub's."
+  "github:")
+
+(def adopt-doors
+  "Which door writes the forge's identity onto a row this house
+  already holds, read from the row's state. The same two states
+  `observe` serves, and for the same reason: a v10 action declares
+  one `:to`, so a self-loop is spelled once for each state. A state
+  in neither column is adopted by nobody — a stuck, merged or closed
+  row is not a row waiting for its pull request."
+  {:open :adopt
+   :submitted :adopt_submitted})
+
+(def adoption-scan-limit
+  "How many rows of one branch the adoption reads. A head branch
+  holds one change in every house that works, and the ceiling is
+  there so a repository with a strange branch cannot make the pass
+  read a table."
+  10)
+
+(def adopt-fields
+  "What the adoption writes: the pull request's own identity, and
+  nothing else. The facts follow through `observe`, as they do for
+  every other row."
+  [:change_id :number :url])
+
 (def ci-run-create-fields
   "The `ci_run` create door's whole vocabulary. `verdict`, `remedy`,
   `pushed_label` and `labelled_at` are absent on purpose: a row born
@@ -168,6 +207,15 @@
   (let [st (:storage eng)]
     (store/with-tx st (fn [tx] (first (store/query-rows st tx kind where
                                                         {:limit 1}))))))
+
+(defn- rows-by
+  "Up to `limit` rows of this kind by indexed fields — `row-by` with
+  the page it reads made explicit, for the one reader that must
+  CHOOSE between the rows a filter answers."
+  [eng kind where limit]
+  (let [st (:storage eng)]
+    (store/with-tx st (fn [tx] (store/query-rows st tx kind where
+                                                 {:limit limit})))))
 
 (defn- row-by-id [eng kind id]
   (let [st (:storage eng)]
@@ -237,24 +285,66 @@
               row)]
     [row (boolean (or door observing?))]))
 
+(defn- adoptable-row
+  "The row this house minted for an ask, waiting for the pull request
+  its own submit opened (bead waymark-fp62.6.3.10), or nil.
+
+  Three things make one: the same repository, the same head branch,
+  and a `change_id` that is not the forge's. A row at a state with no
+  adopt door is not one — a stuck, merged or closed row on that
+  branch is a row whose story is elsewhere. nil is the ordinary
+  answer: almost every pull request the forge reads was opened by a
+  person, and that is a mint and not an adoption."
+  [eng doc]
+  (when-some [head (some-> (:head_branch doc) str not-empty)]
+    (when-not (str/blank? (str (:repository doc)))
+      (->> (rows-by eng :change {:repository (str (:repository doc))
+                                 :head_branch head}
+                    adoption-scan-limit)
+           (filter (fn [row]
+                     (and (not (str/starts-with?
+                                (str (get-in row [:data :change_id]))
+                                forge-id-prefix))
+                          (contains? adopt-doors (state-of row)))))
+           first))))
+
+(defn- adopt-change!
+  "The row the house minted, given the pull request's own identity:
+  the id, the number and the url, through the mirror's own `adopt`
+  door. `change_id` is `:unique`, so the write lands whole or the
+  transaction does not land at all — a second pull request can never
+  take a row that is already spoken for.
+
+  → the row, with GitHub's identity on it."
+  [eng row doc]
+  (:row (inv/invoke! eng :change (str (:id row))
+                     (get adopt-doors (state-of row))
+                     (present doc adopt-fields)
+                     (as-opts))))
+
 (defn- change-pass!
-  "Every pull request the forge answered → a row minted or a row
-  moved. A row the engine refuses is counted and skipped: the next
-  pass offers it again."
+  "Every pull request the forge answered → a row minted, a row
+  adopted, or a row moved. A row the engine refuses is counted and
+  skipped: the next pass offers it again."
   [eng changes census log-fn]
   (reduce
    (fn [census doc]
      (try
-       (let [existing (row-by eng :change {:change_id (:change_id doc)})]
-         (if (nil? existing)
+       (if-some [existing (row-by eng :change {:change_id (:change_id doc)})]
+         (let [[_ moved?] (move-change! eng existing doc)]
+           (cond-> census moved? (update :moved inc)))
+         (if-some [ours (adoptable-row eng doc)]
+           ;; the house asked for this pull request: the seat built
+           ;; the branch and its submit opened it. One row, adopted
+           ;; where it stands, rather than a second row beside it
+           (do (move-change! eng (adopt-change! eng ours doc) doc)
+               (update census :adopted inc))
            ;; a birth lands at `open`, because that is the kind's
            ;; initial state; a pull request first seen after it merged
            ;; walks its door in the same pass rather than waiting for
            ;; a move that will never come again
            (do (move-change! eng (mint-change! eng doc) doc)
-               (update census :minted inc))
-           (let [[_ moved?] (move-change! eng existing doc)]
-             (cond-> census moved? (update :moved inc)))))
+               (update census :minted inc))))
        (catch Exception e
          (log-fn "the pull request " (:change_id doc)
                  " was refused a row (" (ex-message e) ")")
@@ -374,6 +464,17 @@
                        "pushed")
                census)
 
+           ;; a change a seat built from an ask has no pull request
+           ;; until its submit opens one and the next pass adopts the
+           ;; row (bead waymark-fp62.6.3.10). There is nothing at the
+           ;; forge to label yet, and a push with no number would
+           ;; spend a call to be refused.
+           (nil? (get-in change-row [:data :number]))
+           (do (log-fn "the classified run " (get-in row [:data :run_id])
+                       " names a change with no pull request yet; no "
+                       "label was pushed")
+               census)
+
            :else
            (try
              (forge-label! source
@@ -394,7 +495,7 @@
 ;; ── the pass ────────────────────────────────────────────────────────
 
 (def ^:private fresh-census
-  {:calls 0 :repositories 0 :complete? true :minted 0 :moved 0
+  {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-stale 0
    :runs-orphan 0 :labelled 0 :refused 0})
 
@@ -426,7 +527,8 @@
           census (label-pass! eng source census log-fn)
           census (assoc census :calls (forge-calls source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
-              (:minted census) " changes minted, " (:moved census)
+              (:minted census) " changes minted, " (:adopted census)
+              " changes adopted, " (:moved census)
               " changes moved, " (:runs-minted census) " red runs minted, "
               (:labelled census) " labels pushed"
               (when (pos? (long (:runs-stale census)))
