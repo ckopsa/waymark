@@ -153,17 +153,6 @@
    :as      {:id "bench-seat" :type :agent}
    :expect  {:refused :a-person-or-their-delegate-states-the-policy}})
 
-(defscenario a-delegate-states-the-policy-for-the-person
-  "A model that ACTS FOR a person is the person's hand: the grant it
-   wears is the person's decision, and the wall is against a seat's
-   sitter, never against the person's own delegate."
-  {:kind    :repo_policy
-   :attempt :restate
-   :row     {:state :active :data a-policy}
-   :input   (assoc a-policy :max_lines 600)
-   :as      {:id "claude-for-colton" :type :agent :acts-for "colton"}
-   :expect  {:allowed true}})
-
 (defscenario the-person-states-what-submit-means
   "And the door is really there for the person whose repository it is
    — one tap, no grant and no ceremony."
@@ -363,6 +352,8 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Enrolled" :order 4
                :description "The bench took this repository and the engine says when"}}}
+   ;; The delegate's allow — an agent whose principal names whom it
+   ;; acts for — is the suite's to prove (bench_test): a check-tier
+   ;; scenario's actor carries id, roles and type, and no acts-for.
    :scenarios [a-model-does-not-restate-the-policy
-               a-delegate-states-the-policy-for-the-person
                the-person-states-what-submit-means]})
