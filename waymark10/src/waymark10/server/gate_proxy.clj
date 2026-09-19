@@ -15,10 +15,11 @@
     schema is the server's own. No wire is touched: the row is the
     record of what the server offers (R-4, R-6).
 
-  • `invoke-for` — the tool resolved to its row by prefix, the power
-    token judged in-process against the grant, a required `why`
-    demanded, and only then the forward through the row's client. The
-    payload is answered VERBATIM.
+  • `invoke-for` — the name resolved to a tool (`tool-name-of`: a
+    one-tool power's token is that tool's name), the tool resolved to
+    its row by prefix, the power token judged in-process against the
+    grant, a required `why` demanded, and only then the forward
+    through the row's client. The payload is answered VERBATIM.
 
   GATE'S `__why` CONVENTION, surfaced as `why`: a passthrough row's
   tools carry `__why` in their schemas; this door speaks `why` and
@@ -146,6 +147,27 @@
   [x]
   (or (servers/engine-of x)
       (throw (client/unreachable "the engine is not started yet."))))
+
+;; ── the name the door resolves (waymark-fp62.6.3.12) ────────────────
+
+(defn tool-name-of
+  "The tool this call is about, for a caller that typed either
+  spelling: a tool name is itself, and a power TOKEN that admits
+  exactly one tool is that tool (`bench.read` → `bench__read`).
+  `mcp-servers/tool-name-of` holds the rule; this wrapper reads the
+  engine out of a dispatcher and answers the name unchanged when
+  there is no engine yet, because a name is text and a dark engine
+  must not cost a caller its refusal."
+  [eng-or-rpc nm]
+  (if-some [eng (servers/engine-of eng-or-rpc)]
+    (servers/tool-name-of eng nm)
+    (str nm)))
+
+(defn token-tool
+  "The ONE tool a power token admits, or nil when it admits none or
+  more than one — `mcp-servers/token-tool`, over a dispatcher."
+  [eng-or-rpc token]
+  (some-> (servers/engine-of eng-or-rpc) (servers/token-tool token)))
 
 ;; ── the grant's read of the policy ──────────────────────────────────
 
@@ -411,6 +433,27 @@
         " ask for one that names what you need.")
    token))
 
+(defn- refuse-unknown
+  "The 404 for a name this door does not answer to (R-5).
+
+  A name that is a power TOKEN of more than one tool is the one case
+  that says more: the token is real, and it names no single tool, so
+  the detail LISTS the tool names it admits and the caller spells one
+  of them. Every other name gets the plain not-found: a tool no
+  powers entry names does not exist through this door, and neither
+  does a token no row names."
+  [eng nm]
+  (let [tools (servers/token-tools eng nm)]
+    (if (> (count tools) 1)
+      (throw (p/problem :not-found 404 "Not found"
+                        {:detail (str "The power " nm " admits more than"
+                                      " one tool, so it is not a tool name"
+                                      " here. Call one of these: "
+                                      (str/join ", " tools) ".")
+                         :remedies [(str "Call again with tool set to one of "
+                                         (str/join ", " tools) ".")]}))
+      (throw (p/not-found "power" nm)))))
+
 (defn- refuse-why
   "The 422 for a why-required tool called with no why."
   [tname]
@@ -442,23 +485,35 @@
     (dissoc (or args {}) :why :__why)))
 
 (defn invoke-for
-  "POST /api/-/gate/{tool} and waymark_power: the tool resolved to its
-  row by prefix, the entry's power token judged IN-PROCESS against the
-  grant, a required why demanded, and only then the forward. The
-  refusals come first and the order is the security property: a tool
-  no entry names 404s (it does not exist through this door, whatever
-  the server offers), an ungranted one 403s naming the ask, a call
-  outside the grant's FILTER 403s naming the field and the value
+  "POST /api/-/gate/{tool} and waymark_power: the NAME resolved to a
+  tool, the tool resolved to its row by prefix, the entry's power
+  token judged IN-PROCESS against the grant, a required why demanded,
+  and only then the forward.
+
+  THE NAME COMES FIRST (waymark-fp62.6.3.12). A caller may spell
+  either the tool (`bench__read`) or a power token that admits
+  exactly one tool (`bench.read`): `tool-name-of` answers the tool,
+  and the grant, the filter and the why are judged on it. A token
+  that admits two tools 404s with both tool names in the detail.
+
+  The refusals come first and the order is the security property: a
+  tool no entry names 404s (it does not exist through this door,
+  whatever the server offers), an ungranted one 403s naming the ask, a
+  call outside the grant's FILTER 403s naming the field and the value
   (waymark-fp62.6.3.5), a missing why 422s, and NONE of them touches a
   server. A granted call forwards through the row's client — with
   `allow` added when the filter narrowed paths and the call named none
   — and answers the payload VERBATIM."
   [eng-or-rpc vis tool args]
   (let [eng (engine! eng-or-rpc)
-        tname (str tool)
+        asked (str tool)
+        ;; THE NAME FIRST (waymark-fp62.6.3.12): a one-tool power's
+        ;; token is that tool's name here, and everything below judges
+        ;; the tool it resolved to
+        tname (servers/tool-name-of eng asked)
         {:keys [row entry token why] :as hit} (servers/resolve-tool eng tname)]
     (when (or (nil? hit) (nil? entry))
-      (throw (p/not-found "power" tname)))
+      (refuse-unknown eng asked))
     (let [gentry (grants/capability-entry vis token)
           verdict (when gentry (filter-verdict (:filters gentry) args))]
       (cond

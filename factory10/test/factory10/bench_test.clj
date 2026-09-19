@@ -1304,11 +1304,33 @@
       (is (= "docs/orientation.md" (:orientation answer)))
       (is (str/includes? (:submit_means answer) "pull request")))
 
+    (testing "and the bench names the TOOL for each bench power the
+              seat holds (bead waymark-fp62.6.3.12)"
+      (is (= {:bench.edit "bench__edit"
+              :bench.find "bench__find"
+              :bench.pull "bench__pull"
+              :bench.read "bench__read"}
+             (get-in answer [:bench :tools]))
+          "the seat's scope gives the tokens and the bench row's
+           powers give the tool, so the sit says what to call and no
+           instruction has to name a spelling"))
+
     (testing "and nothing is asked about a submit that has not happened"
       (is (nil? (:feedback answer)))
       (is (empty? (calls-of (:state w) "bench__feedback"))
           "a branch this house minted and never pushed has no pull
            request and no pipeline to read"))))
+
+(deftest the-bench-names-the-tools-of-the-powers-the-scope-holds-and-no-others
+  (let [w (ask-world [{:kind "ask" :actions ["complete"]}
+                      {:kind "change" :actions ["submit" "stall" "discard"]}
+                      {:kind "bench.read" :actions []
+                       :filter {:repo a-repository}}])
+        answer (:answer w)]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (= {:bench.read "bench__read"} (get-in answer [:bench :tools]))
+        "a power the scope does not name is ABSENT: the seat is told
+         what it may call and nothing else")))
 
 (deftest a-second-sitting-on-the-same-ask-finds-the-first-sittings-change
   (let [w (ask-world)

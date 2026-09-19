@@ -2246,6 +2246,37 @@
   (boolean (some #(str/starts-with? (str (:kind %)) bench-power-prefix)
                  (get-in seat [:data :scope]))))
 
+(defn- bench-tokens
+  "Every bench power this seat's scope names, sorted and without
+  repeats. It is the seat's own list: a power the scope does not name
+  is a power the seat does not hold."
+  [seat]
+  (->> (get-in seat [:data :scope])
+       (map #(str (:kind %)))
+       (filter #(str/starts-with? % bench-power-prefix))
+       distinct
+       sort
+       vec))
+
+(defn- bench-tools-of
+  "THE TOOL FOR EACH BENCH POWER THE SEAT HOLDS (R-12.29,
+  waymark-fp62.6.3.12) → {\"bench.read\" \"bench__read\", …}.
+
+  The seat's scope gives the tokens and the bench row's powers give
+  the tool, through the same `token-tool` the power door resolves a
+  name with. So the sit TELLS the seat what to call, and no
+  instruction has to name a spelling.
+
+  A token the row does not map to exactly one tool is ABSENT: the
+  door would refuse that name, and a map that promised it would send
+  the seat at a 404."
+  [eng seat]
+  (into (sorted-map)
+        (keep (fn [token]
+                (when-some [nm (gate/token-tool eng token)]
+                  [token nm])))
+        (bench-tokens seat)))
+
 (defn- change-by-id
   "The change row with this `change_id`, or nil. `change_id` is
   `:unique`, so there is at most one."
@@ -2500,8 +2531,13 @@
   The change is the caller's: the walk's own first row for a code
   seat, and the row the engine found or minted for a seat that walks
   anything else (R-12.32). This section reads the repository, the
-  branch and the rounds off that row and asks nothing about the walk."
-  [eng gate-rpc change]
+  branch and the rounds off that row and asks nothing about the walk.
+
+  THE TOOLS RIDE WITH THE WORKTREE (waymark-fp62.6.3.12). The bench
+  map carries `tools`: each bench power the SEAT's scope names, with
+  the tool name the power door resolves it to. A seat reads what to
+  call from the answer it sits down with."
+  [eng gate-rpc seat change]
   (when change
     (let [repo (str (get-in change [:data :repository]))
           policy (repo-policy-of eng repo)
@@ -2554,7 +2590,8 @@
                              "branch" (str (or (:branch made) branch))
                              "base" (str (or (:base made) base))
                              "head" (some-> (:head made) str)
-                             "dirty" (long (or (:dirty made) 0))})
+                             "dirty" (long (or (:dirty made) 0))
+                             "tools" (bench-tools-of eng seat)})
         feedback (assoc "feedback" feedback)
         (nil? made) (assoc "bench_note" bench-dark-note)))))
 
@@ -2628,7 +2665,7 @@
             [change change-note] (change-of-sitting eng seat walk)
             ;; i'' · the bench, for a seat whose work is the code: the
             ;; worktree is made before this answer leaves (R-12.29)
-            bench (bench-of eng gate-rpc change)
+            bench (bench-of eng gate-rpc seat change)
             ;; i''' · and the change beside the walk, for a walk whose
             ;; rows are NOT changes: the row the submit door is on,
             ;; read as the sitter so its doors are the seat's own
@@ -2856,7 +2893,10 @@
 
      (= "waymark_power" tool-name)
      (attempt tool-name
-              #(let [tname (str (:tool args))
+              #(let [;; THE NAME FIRST (waymark-fp62.6.3.12): a seat may
+                     ;; spell a one-tool power's token, and the stamp
+                     ;; and the cap below must see the TOOL it means
+                     tname (gate/tool-name-of eng (str (:tool args)))
                      ;; the caller's arguments, capped to the seat's
                      ;; ceiling and stamped with the office
                      sent (bench-stamped
@@ -2953,10 +2993,24 @@
   whose whole bill read `waymark_power` would answer it with one line
   for a read, a find, an edit and a pull together. So a bench call
   counts under the rig's own tool — `bench__read`, `bench__find` — and
-  every other power counts under `waymark_power` as it always has."
-  [tool-name params]
+  every other power counts under `waymark_power` as it always has.
+
+  A SEAT MAY SPELL THE TOKEN (waymark-fp62.6.3.12), and the door
+  resolves it to the tool. This counter resolves it the same way, so
+  one line of the ledger says `bench__read` whichever spelling the
+  seat typed."
+  [eng tool-name params]
   (if (= "waymark_power" tool-name)
-    (let [inner (str (get-in params [:arguments :tool]))]
+    (let [asked (str (get-in params [:arguments :tool]))
+          ;; the name the door resolved (waymark-fp62.6.3.12): a call
+          ;; made with `bench.read` is counted under `bench__read`,
+          ;; as the same call made with the tool name is. The counter
+          ;; never costs a tool its answer, so a resolution that
+          ;; throws leaves the name as the caller typed it.
+          inner (if (gate/bench-tool? asked)
+                  asked
+                  (try (gate/tool-name-of eng asked)
+                       (catch Exception _ asked)))]
       (if (gate/bench-tool? inner) inner tool-name))
     tool-name))
 
@@ -3036,7 +3090,7 @@
                            (mapv :name tools)
                            "; external powers go through waymark_power."))
            (do (count-served! eng session
-                               (served-name (:name params) params) out)
+                               (served-name eng (:name params) params) out)
                (rpc-result id out))))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))
