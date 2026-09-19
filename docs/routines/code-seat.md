@@ -112,16 +112,17 @@ that key and that value as `session`. Then you sit in the seat
 `code-seat`. The sit answers the charter, one task row with its doors,
 one change row with its doors, and the bench: the worktree, the
 orientation path, what submit means here, and the feedback of the last
-round. Read the orientation document with waymark_power bench.read
-before you read anything else.
+round. Call the bench through waymark_power with the tool names the sit
+lists under bench.tools. Read the orientation document first, with the
+tool listed for bench.read.
 
-Build the task with waymark_power: bench.find and bench.read to read,
-bench.edit to change a file, bench.pull when the bench says the branch
-is behind. Then invoke the door the charter chooses on the CHANGE row:
-submit with your one sentence, or stall with your one sentence. Submit
-ends the round. After submit or stall, stop. Do not call discover,
-schema, query or powers; a refusal names its own remedy. When the seat
-says halted or parked, say why and stop.
+Build the task with those tools: the bench.find and bench.read tools to
+read, the bench.edit tool to change a file, the bench.pull tool when the
+bench says the branch is behind. Then invoke the door the charter
+chooses on the CHANGE row: submit with your one sentence, or stall with
+your one sentence. Submit ends the round. After submit or stall, stop.
+Do not call discover, schema, query or powers; a refusal names its own
+remedy. When the seat says halted or parked, say why and stop.
 
 If a routine-fire-payload block names a row id, walk that row and stop.
 
@@ -148,6 +149,9 @@ Nothing else goes in the instructions (R-12.10).
    worktree with the rig's `prepare`, on the change's branch. The
    answer names the orientation document when the worktree holds
    one, and says what submit means here from the `repo_policy` row.
+   The bench also carries `tools`: each bench power the seat holds,
+   with the tool name the session must call it by. The session reads
+   the spelling there, and the instructions name none.
    When the change has a round behind it, the answer also carries
    `feedback` (R-12.31): the pull request's state, and one finding
    for each failed step, each red status and each review comment.

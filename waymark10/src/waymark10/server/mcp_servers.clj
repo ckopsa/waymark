@@ -31,6 +31,12 @@
   tools already wear their prefixes, so the engine adds nothing and
   matches the full name against its powers.
 
+  AND THE TOKEN IS A NAME TOO (waymark-fp62.6.3.12). A power token
+  that admits exactly ONE tool is a second spelling of that tool:
+  `tool-name-of` answers `bench__read` for `bench.read`, and the
+  power door resolves every name through it before it judges the
+  grant. A token that admits two tools resolves to neither.
+
   ONE CLIENT PER ROW (R-3). `client-for` keeps one client per row id
   in a registry, keyed by the row's transport fields, so a restate
   that moves the url builds a new client and closes the old one.
@@ -291,6 +297,58 @@
   (if (passthrough? row)
     (str bare)
     (str (get-in row [:data :name]) "__" bare)))
+
+(defn token-tools
+  "Every tool a power TOKEN admits, as a caller spells them:
+  `bench.read` → [\"bench__read\"]. The entries of every row that is
+  not retired, whose `power` is this token, their tool names carried through
+  `prefixed-name`, in order and without repeats.
+
+  A GLOB IS LEFT OUT. `list_*` names no one tool, so a token whose
+  entry carries one cannot be read as a tool name at all: the names
+  here are the ones a caller could have typed."
+  [eng token]
+  (let [tk (str token)]
+    (if (str/blank? tk)
+      []
+      (vec (distinct
+            (for [row (rows eng)
+                  e (get-in row [:data :powers])
+                  :when (= tk (str (:power e)))
+                  t (:tools e)
+                  :let [nm (str t)]
+                  :when (and (not (str/blank? nm))
+                             (not (str/includes? nm "*")))]
+              (prefixed-name row nm)))))))
+
+(defn token-tool
+  "The ONE tool a power token admits, or nil when it admits none or
+  more than one. THE RULE IS SPELLED HERE ONCE: a token that admits
+  exactly one tool may be read as the name of that tool
+  (`tool-name-of`), and the sit names that tool for each bench power a
+  seat holds (R-12.29). A token that admits two tools names neither."
+  [eng token]
+  (let [ts (token-tools eng token)]
+    (when (= 1 (count ts)) (first ts))))
+
+(defn tool-name-of
+  "THE NAME THIS DOOR RESOLVES, for a caller that typed either
+  spelling (waymark-fp62.6.3.12).
+
+  A name that is a tool is itself. A name that is not a tool, but is
+  a power TOKEN a live row names and that token admits exactly ONE
+  tool, is that tool: `bench.read` → `bench__read`. Every other
+  name is itself, and the door refuses it as it always did — a
+  token with two tools names neither, and a name no row answers to is
+  no name here.
+
+  It is TEXT AND ROWS only. The grant, the filter and the why are
+  judged after it, on the tool it answers."
+  [eng nm]
+  (let [nm (str nm)]
+    (if (:entry (resolve-tool eng nm))
+      nm
+      (or (token-tool eng nm) nm))))
 
 (defn offered
   "Every mirrored tool of every LIVE row, with its resolution:

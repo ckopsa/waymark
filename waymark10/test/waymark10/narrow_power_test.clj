@@ -97,6 +97,12 @@
    {:power "bench.pull" :tools ["pull"] :why false
     :constraints ["repo"]}
    {:power "bench.feedback" :tools ["feedback"] :why false
+    :constraints ["repo"]}
+   ;; a power of TWO tools, for bead waymark-fp62.6.3.12: it names no
+   ;; single tool, so it is not a tool name and the door says so. It
+   ;; is LAST because `entry-for` takes the first entry that names a
+   ;; tool, and `find` and `read` are their own powers above.
+   {:power "bench.look" :tools ["find" "read"] :why false
     :constraints ["repo"]}])
 
 (defn- fake-rig
@@ -454,6 +460,55 @@
         (is (false? (:isError r2)) (text-of r2))
         (is (nil? (:seat sent)))
         (is (nil? (:sitting sent)))))))
+
+;; ── the token is a tool name too (bead waymark-fp62.6.3.12) ─────
+;;
+;; A SEAT READS TOKENS. The sit, the grant and the ask all name
+;; `bench.read`, and the door used to answer only `bench__read` — so a
+;; seat that called the door with the name it had been given got 404
+;; on every power it held. A power that admits exactly ONE tool is now
+;; a second spelling of that tool, and a power that admits two names
+;; neither.
+
+(deftest a-power-token-of-one-tool-is-that-tools-name-at-the-door
+  (let [w (world [{:kind "bench.read" :actions [] :filter {:repo a-repo}}])]
+
+    (testing "the seat spells the TOKEN, and the rig hears the tool"
+      (let [r (power! w {:tool "bench.read"
+                         :arguments {:repo a-repo :path "src/a.clj"}})]
+        (is (false? (:isError r)) (text-of r))
+        (is (= ["bench__read"] (mapv :tool (calls w)))
+            "one call, under the tool the token resolved to")
+        (is (= a-repo (:repo (last-arguments w))))))
+
+    (testing "and the filter is judged on the call, as it is for the
+              tool name: the token opens no wider door"
+      (let [r (power! w {:tool "bench.read"
+                         :arguments {:repo another-repo :path "src/a.clj"}})
+            said (text-of r)]
+        (is (true? (:isError r)) said)
+        (is (str/includes? said "bench.read") "the token, to ask again for")
+        (is (= 1 (count (calls w)))
+            "nothing new reached the rig")))))
+
+(deftest a-power-token-of-two-tools-names-neither-and-the-refusal-lists-both
+  (let [w (world [{:kind "bench.look" :actions [] :filter {:repo a-repo}}])
+        r (power! w {:tool "bench.look" :arguments {:repo a-repo}})
+        said (text-of r)]
+    (is (true? (:isError r)) said)
+    (is (str/includes? said "bench__find") "the first tool it admits")
+    (is (str/includes? said "bench__read")
+        "and the second, so the seat calls one of them by name")
+    (is (empty? (calls w)) "and nothing reached the rig")))
+
+(deftest a-name-no-power-entry-names-is-refused-under-either-spelling
+  (let [w (world [{:kind "bench.read" :actions [] :filter {:repo a-repo}}])]
+    (doseq [nm ["bench__prepare" "bench.prepare" "bench.nothing"]]
+      (let [r (power! w {:tool nm :arguments {:repo a-repo}})]
+        (is (true? (:isError r))
+            (str nm " must be refused: the engine's own tools are on no
+                 token, and a token no row names is no name here"))))
+    (is (empty? (calls w)) "and the rig was asked for nothing")))
 
 ;; ── acceptance 7: the discover answer publishes the constraints ─────
 
