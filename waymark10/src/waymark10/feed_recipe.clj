@@ -802,7 +802,7 @@
    :order {:examples [order-example]
            :x-display {:label "The order, line by line"
                        ;; waymark-2hd0: a list of maps can't list another kind's fields
-                       :spelled-by-hand "A list of lines is a list of maps, which no sub-form offers yet: the example is the whole shape, and the house's current order rides the feed document at recipe.order — copy it and edit a line; the chips beside the box offer every section and population word."
+                       :spelled-by-hand "A list of lines is a list of maps, and a list of maps can't list another kind's field names, so each line is typed by hand: the example is the whole shape, and the house's current order rides the feed document at recipe.order — copy it and edit a line; the chips beside the box offer every section and population word."
                        :help "The whole feed, top to bottom: one entry per line, and the vector's order IS the page's order. The house's current order rides the feed document at recipe.order in exactly this shape — copy it and edit a line. Exactly one line is the seam; the bottomless line is last; the sections keep census order; every population is one this engine holds. A line that breaks any of those is refused here, with the sentence that says which."}}})
 
 (defn- entry
