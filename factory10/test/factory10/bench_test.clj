@@ -731,6 +731,13 @@
         eng (fresh-engine st)
         _ (a-policy! eng {})
         change (a-change! eng {:head_branch nil})
+        ;; the rig answers the branch it was asked for: the pattern's,
+        ;; with the change's own id in it. The scripted default names
+        ;; a person's branch, and the engine reads the feedback on the
+        ;; branch the prepare ANSWERED, never on the one it guessed
+        _ (answer! st "bench__prepare"
+                   (assoc (get-in @st [:answers "bench__prepare"])
+                          :branch (str "waymark/" (:id change))))
         ;; one round already pushed — the maintenance write
         ;; `bump-counter!` makes, one kind over
         _ (let [storage (:storage eng)
@@ -748,14 +755,17 @@
                           :clientInfo {:name "routine" :version "0"}})
                     [:headers "Mcp-Session-Id"])
         answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
-        call (first (calls-of st "bench__feedback"))]
+        call (first (calls-of st "bench__feedback"))
+        prepare (first (calls-of st "bench__prepare"))]
     (is (= 1 (count (calls-of st "bench__feedback")))
         "this house pushed that branch once, so the checks on it are
          this seat's to read — a change names its own submit either by
          a person's head branch or by a round")
+    (is (= (str "waymark/" (:id change)) (:branch (:arguments prepare)))
+        "the worktree was asked for on the branch the policy's pattern
+         made, which is the branch the round pushed")
     (is (= (str "waymark/" (:id change)) (:branch (:arguments call)))
-        "the branch the policy's pattern made, which is the branch the
-         round pushed")
+        "and the feedback is read on the branch the prepare answered")
     (is (= 31 (get-in answer [:feedback :pull_request :number]))
         "and the answer carries what the rig said about it")))
 
