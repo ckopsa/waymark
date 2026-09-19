@@ -59,11 +59,19 @@
   else here writes to GitHub.
 
   THE TOKEN is FACTORY10_GITHUB_TOKEN: read on pull requests, checks
-  and actions logs, write on issues for labels, on the configured
-  repositories only. FACTORY10_GITHUB_REPOS names them, comma
-  separated; unset means ckopsa/waymark, which is the proving ground
-  of R-8. No token means no source at all — `from-env` answers nil,
-  the same nil-means-absent contract every other boundary keeps.
+  and actions logs, write on issues for labels, on the repositories
+  the house works and no other. No token means no source at all —
+  `from-env` answers nil, the same nil-means-absent contract every
+  other boundary keeps.
+
+  WHICH REPOSITORIES IS A ROW, NOT A VARIABLE (bead
+  waymark-fp62.6.3.8). The source holds a `repos-fn` and reads it at
+  EVERY pass, and the wiring gives it the active `repo_policy` rows:
+  one sentence a person writes says what submit means in a repository
+  AND that the house polls it. A person who retires a policy stops the
+  polling with one tap and no deploy, and a pass with no active row
+  polls nothing and says so once. The static `:repos` list stays for
+  the suite's fake, which has no engine behind it.
 
   PUNTS, recorded. A head that moves leaves the old head's red rows at
   `red`: the ci_run machine has no `supersede` door, and this bead
@@ -112,9 +120,18 @@
   60)
 
 (def default-repos
-  "The repository the proving ground reads when nothing names one
-  (R-8): this repository's own gate."
+  "The repository a STATIC list falls back to when it names none
+  (R-8): this repository's own gate. A source wired to the policy rows
+  never reads this — no active row means no repository, which is the
+  truth the rows tell."
   ["ckopsa/waymark"])
+
+(def no-repositories-said
+  "What one pass says when no policy row is active. It is said ONCE,
+  not on every beat: a house with nothing to poll is a house waiting
+  for a person, and a line each pass would be a log nobody reads."
+  (str "no repository has an active policy row, so this pass polls "
+       "nothing — state a repo_policy and the next pass reads it"))
 
 (defn- warn! [& parts]
   (binding [*out* *err*]
@@ -535,11 +552,27 @@
 
 ;; ── the source ──────────────────────────────────────────────────────
 
-(defrecord GitHubSource [call repos cursor calls]
+(defn- repos-now
+  "The repositories THIS pass reads: the source's own function, asked
+  again (R-5). An empty answer is said once and then held, so a house
+  with no active policy prints one line rather than one each beat, and
+  the line comes back the next time the rows empty."
+  [{:keys [repos-fn said]}]
+  (let [named (into [] (comp (map str)
+                             (remove str/blank?))
+                    (repos-fn))]
+    (if (seq named)
+      (do (reset! said false) named)
+      (do (when (compare-and-set! said false true)
+            (warn! no-repositories-said))
+          named))))
+
+(defrecord GitHubSource [call repos-fn cursor calls said]
   forge/ForgeSource
   (forge-poll [this]
     (reset! calls 0)
     (let [floor (window-start @cursor)
+          repos (repos-now this)
           answers (mapv (fn [repo]
                           (try (assoc (repo-pass! this repo floor)
                                       :repo repo :ok? true)
@@ -597,28 +630,43 @@
                 (remove str/blank? (map str repos)))]
     (or (not-empty (vec named)) default-repos)))
 
+(defn- repos-fn-of
+  "The function a pass asks for its repositories: the one the config
+  names, else the static list frozen into one. Both spellings answer
+  the same question; only the first one can answer it differently next
+  pass."
+  [{:keys [repos repos-fn]}]
+  (or repos-fn (constantly (parse-repos repos))))
+
 (defn http-source
   "The real boundary over GitHub.
 
   config: :token-fn (a zero-arg token source) or :token (the word
-  itself), :repos (comma-separated string or seq), :base (the API
-  base, for a test that wants a local server)."
-  [{:keys [token token-fn repos base]}]
+  itself), :repos-fn (a zero-arg function → the repositories to read,
+  asked at every pass) or :repos (a static comma-separated string or
+  seq), :base (the API base, for a test that wants a local server)."
+  [{:keys [token token-fn base] :as config}]
   (->GitHubSource (http-call {:token-fn (or token-fn (constantly token))
                               :base base})
-                  (parse-repos repos)
+                  (repos-fn-of config)
                   (atom nil)
-                  (atom 0)))
+                  (atom 0)
+                  (atom false)))
 
 (defn from-env
-  "The deployed boundary off FACTORY10_GITHUB_TOKEN and
-  FACTORY10_GITHUB_REPOS. nil when the token is not configured, which
-  is the nil-means-absent contract every other boundary keeps: no
-  token, no source, and nothing starts."
+  "The deployed boundary off FACTORY10_GITHUB_TOKEN. nil when the token
+  is not configured, which is the nil-means-absent contract every
+  other boundary keeps: no token, no source, and nothing starts.
+
+  `repos-fn` is the wiring's own reading of the active `repo_policy`
+  rows (R-5). A source built without one falls back to the proving
+  ground's repository, which is what a boot with no engine behind it
+  can honestly say."
   ([] (from-env #(System/getenv ^String %)))
-  ([env]
+  ([env] (from-env env nil))
+  ([env repos-fn]
    (when-some [token (word (env "FACTORY10_GITHUB_TOKEN"))]
-     (http-source {:token token :repos (env "FACTORY10_GITHUB_REPOS")}))))
+     (http-source {:token token :repos-fn repos-fn}))))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 ;;
@@ -785,11 +833,13 @@
   "The REAL source over an in-memory GitHub: the translation, the
   window, the cursor arithmetic and the log reading all run.
 
-  opts: :repos (default ckopsa/waymark), :cursor (a starting cursor,
-  for the window's own test)."
+  opts: :repos (a static list, default ckopsa/waymark), :repos-fn (the
+  deployed spelling — a function asked at every pass), :cursor (a
+  starting cursor, for the window's own test)."
   ([state] (fake-source state {}))
-  ([state {:keys [repos cursor]}]
+  ([state {:keys [cursor] :as opts}]
    (->GitHubSource (fake-call state)
-                   (parse-repos repos)
+                   (repos-fn-of opts)
                    (atom cursor)
-                   (atom 0))))
+                   (atom 0)
+                   (atom false))))

@@ -8,14 +8,18 @@
   engine's OWN power dispatcher — and PAST `invoke-for`, exactly as
   the thread sources reach their rigs (workqueue10.sources.gate-chat).
   That door judges a CALLER's grant; NO powers entry on the bench row
-  names `prepare`, `status`, `submit` or `discard`, so no scope can
-  name them, no grant can admit them, and `waymark_power` answers all
-  four 404: a tool no entry names does not exist through that door.
-  The engine's own hand takes the other path, `mcp-servers/call!`,
-  which asks the row and not the grant. The four reading and editing tools are the model's
-  (bench.find, bench.read, bench.edit, bench.pull); these four are the
-  ENGINE's. What submit means is a `repo_policy` row a person
-  restates, never an argument a model gives.
+  names `prepare`, `status`, `submit`, `discard`, `enroll`, `repos` or
+  `unenroll`, so no scope can name them, no grant can admit them, and
+  `waymark_power` answers every one of them 404: a tool no entry names
+  does not exist through that door. The engine's own hand takes the
+  other path, `mcp-servers/call!`, which resolves `bench__<tool>` by
+  the ROW's name and rides the row's one client — it asks the row and
+  not the grant, so it reaches a tool the powers never name. The four
+  reading and editing tools are the model's (bench.find, bench.read,
+  bench.edit, bench.pull); the other seven are the ENGINE's. What
+  submit means is a `repo_policy` row a person restates, never an
+  argument a model gives, and which repositories the rig holds is that
+  same row (bead waymark-fp62.6.3.8).
 
   THE `:power` HOOK IS NOT THIS. `(:power ctx)` is the engine's hand
   on a power THE REQUEST'S OWN LEASH ADMITS (inbox_item's research
@@ -43,10 +47,18 @@
   sentence that says the bench is dark."
   (:require [clojure.string :as str]
             [waymark10.server.gate-proxy :as gate]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
-            [waymark10.wire :as wire]))
+            [waymark10.server.store :as store]
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
+  (:import (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "factory10 bench: " parts))))
 
 ;; ── the caller ──────────────────────────────────────────────────────
 
@@ -182,6 +194,202 @@
                     (str/split (str pattern) #"\*" -1))
         re (re-pattern (str "\\A" (str/join ".*" parts) "\\z"))]
     (boolean (re-matches re (str branch)))))
+
+;; ── the enrolment (bead waymark-fp62.6.3.8) ─────────────────────────
+;;
+;; ONE SENTENCE ABOUT A REPOSITORY. Adding a repository to the house
+;; was seven hand steps in four places. The owner's ruling: the
+;; repo_policy row IS the sentence, a person writes it, and the engine
+;; tells the rig and the GitHub source. These functions are the
+;; engine's half of that — the row's own doors call them, and the
+;; retry pass below calls the same ones, so the create, the restate,
+;; the restore and the retry cannot say different things to the rig.
+
+(def github-base
+  "Where a repository named as owner/repo lives when the row names no
+  other clone URL."
+  "https://github.com/")
+
+(defn clone-url-of
+  "Where the rig clones this repository from: the row's own
+  `clone_url` when a person wrote one, else GitHub's own address for
+  the repository (R-1)."
+  [row]
+  (or (some-> (get-in row [:data :clone_url]) str not-empty)
+      (str github-base (str (get-in row [:data :repository])))))
+
+(def not-enrolled-prefix
+  "What the row says when the bench does not hold this repository.
+  The sentence names the reason, because the next hand to read it is a
+  person deciding whether the rig or the URL is wrong."
+  "The bench has not enrolled this repository: ")
+
+(def not-unenrolled-prefix
+  "…and what it says when the bench would not let it go."
+  "The bench has not unenrolled this repository: ")
+
+(defn- reason-of
+  "Why the rig did not do it, in one clause: the refusal's own reason,
+  else the refusal's name, else the sentence for a rig that said
+  nothing at all."
+  [answer]
+  (or (some-> (:reason answer) str not-empty)
+      (refused answer)
+      "the bench did not answer"))
+
+(defn- took-it?
+  "Did the rig answer, and answer with something other than a refusal?"
+  [answer]
+  (and (map? answer) (nil? (refused answer))))
+
+(defn enrol-args
+  "What the rig's `enroll` is told about this repository: the name it
+  holds the clone under, where to clone it from, which branch a
+  worktree starts from, and the paths it never serves. The deny list
+  is the row's, so the rig and the row hold one list."
+  [row]
+  {:repo (str (get-in row [:data :repository]))
+   :clone_url (clone-url-of row)
+   :default_branch (base-of row)
+   :deny (vec (get-in row [:data :deny]))})
+
+(defn enrolled
+  "The row after the engine offered this repository to the rig (R-2).
+
+  THE ROW WRITES WHETHER THE RIG ANSWERS OR NOT. A rig that took the
+  repository stamps `enrolled_at` and clears the note; a rig that
+  refused, or that said nothing, leaves `enrolled_at` empty and writes
+  why, and the retry pass offers the row again. Nothing throws: the
+  door above is a person's create or restate, and a dark bench must
+  not refuse a person's own sentence about a repository."
+  [row ctx]
+  (try
+    (let [answer (ask ctx :enroll (enrol-args row))]
+      (if (took-it? answer)
+        (-> row
+            (assoc-in [:data :enrolled_at] (:now ctx))
+            (assoc-in [:data :note] nil))
+        (-> row
+            (assoc-in [:data :enrolled_at] nil)
+            (assoc-in [:data :note]
+                      (str not-enrolled-prefix (reason-of answer))))))
+    (catch Exception e
+      (warn! "the enrolment of " (get-in row [:data :repository])
+             " failed (" (ex-message e) "); the row stands and the retry "
+             "offers it again")
+      (-> row
+          (assoc-in [:data :enrolled_at] nil)
+          (assoc-in [:data :note] (str not-enrolled-prefix (ex-message e)))))))
+
+(defn unenrolled
+  "The row after the engine told the rig to stop holding this
+  repository (R-3). A refusal is noted and never raised: a person who
+  retires a policy has retired it, whatever the rig says."
+  [row ctx]
+  (try
+    (let [answer (ask ctx :unenroll
+                      {:repo (str (get-in row [:data :repository]))})]
+      (if (took-it? answer)
+        (-> row
+            (assoc-in [:data :enrolled_at] nil)
+            (assoc-in [:data :note] nil))
+        (assoc-in row [:data :note]
+                  (str not-unenrolled-prefix (reason-of answer)))))
+    (catch Exception e
+      (assoc-in row [:data :note]
+                (str not-unenrolled-prefix (ex-message e))))))
+
+;; ── the rows, read by the engine's own passes ───────────────────────
+
+(def enrol-actor
+  "The system hand the retry pass writes with: the engine's own actor,
+  not a person and not a model. It is what the hidden `mark_enrolled`
+  door admits."
+  (t/principal {:id "factory10-bench" :type :system
+                :display "The bench"}))
+
+(defn- rdef-of [eng] (get (inv/resources eng) :repo_policy))
+
+(defn policies
+  "Every `repo_policy` row of this engine in one state, decoded — and
+  an empty vector in an engine that declares no policy kind at all,
+  which is every engine but the factory's."
+  [eng state]
+  (if-some [rd (rdef-of eng)]
+    (let [st (:storage eng)]
+      (mapv #(inv/decode-row rd %)
+            (store/with-tx st
+              (fn [tx] (store/query-rows st tx :repo_policy {:state state}
+                                         {:limit 1000})))))
+    []))
+
+(defn active-repositories
+  "The repositories the house works now: one for each active policy row
+  (R-5). The GitHub source reads this at EVERY pass, so a policy a
+  person retires stops being polled with no deploy and no environment
+  variable."
+  [eng]
+  (into [] (keep #(some-> (get-in % [:data :repository]) str not-empty))
+        (policies eng :active)))
+
+(defn enroll-unenrolled!
+  "One retry pass (R-4): every active policy the bench does not hold
+  yet, offered to the rig again. A rig that takes one stamps the row
+  through its own hidden door, so the transition log carries the
+  enrolment; a rig that refuses leaves the row as it was, and the next
+  pass tries again. Idempotent — a row with `enrolled_at` on it is not
+  offered at all — and it throws nothing: a pass is a beat, not a
+  request.
+
+  It lives HERE and not in the discover sweep it rides beside: that
+  sweep is core's (server/mcp_servers), the policy kind is factory10's,
+  and core does not read a module's kinds."
+  [eng]
+  (let [ctx {:services (:services eng)}]
+    (doseq [row (policies eng :active)
+            :when (str/blank? (str (get-in row [:data :enrolled_at])))]
+      (try
+        (let [answer (ask ctx :enroll (enrol-args row))]
+          (when (took-it? answer)
+            (inv/invoke! eng :repo_policy (str (:id row)) :mark_enrolled
+                         {:bare (some-> (:bare answer) str not-empty)}
+                         {:principal enrol-actor})))
+        (catch Exception e
+          (warn! "the enrolment of " (get-in row [:data :repository])
+                 " did not land (" (ex-message e) "); the next pass tries "
+                 "again"))))))
+
+(def default-enrol-seconds
+  "How often the retry pass runs. The discover sweep's own cadence, in
+  seconds: a repository the bench did not take is a repository nobody
+  can work, so the house asks again soon."
+  300)
+
+(defn start-enrol-sweeper!
+  "The retry's daemon: one `enroll-unenrolled!` every `:every-seconds`,
+  on a daemon thread (the forge pass's own shape). The first pass is
+  one interval after the start, so a boot writes nothing. The wiring
+  owns the lifecycle and elects the one holder per database; a suite
+  calls `enroll-unenrolled!` directly."
+  [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}}]
+  (let [stop (CountDownLatch. 1)
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop (long every-seconds)
+                                         TimeUnit/SECONDS)
+                         (try (enroll-unenrolled! eng)
+                              (catch Exception e
+                                (warn! "the enrolment pass failed ("
+                                       (ex-message e) ")")))
+                         (recur))))
+                   "factory10-bench-enrol")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn stop-enrol-sweeper! [{:keys [^CountDownLatch stop]}]
+  (some-> stop .countDown)
+  nil)
 
 ;; ── who is committing ───────────────────────────────────────────────
 

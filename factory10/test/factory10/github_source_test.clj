@@ -12,6 +12,12 @@
   (waymark10.server.store.memory, the modules suite's own arrangement
   one layer up).
 
+  WHICH REPOSITORIES IT READS IS THE ROWS (bead waymark-fp62.6.3.8).
+  The source holds a function and asks it at every pass, and the
+  wiring gives it the active `repo_policy` rows — so one test here
+  writes policy rows into the engine and watches the poll list move
+  under them.
+
   THE FAKE IS AN IN-MEMORY GITHUB, not an in-memory source: it stands
   behind the transport seam, so the real window, the real cursor
   arithmetic, the real translation and the real log reading all run
@@ -22,6 +28,7 @@
   Run: cd factory10 && clojure -M:test"
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
             [factory10.sources.forge :as forge]
@@ -390,17 +397,65 @@
       (is (= "2026-09-18T10:00:00Z" (gh/cursor source))
           "the cursor advances only when every repository answered"))))
 
+;; ── the repositories are the rows (bead waymark-fp62.6.3.8) ─────────
+
+(def ^:private a-person (t/principal {:id "colton" :display "Colton"}))
+
+(defn- policy!
+  "One repo_policy row, as a person writes one. Every other field of
+  the policy carries a declared default, so the repository is the
+  whole sentence a test needs. No bench is wired behind this engine,
+  so the enrolment answers nothing and the row lands with its note —
+  which is the contract: a dark bench does not refuse a person."
+  [engine repository]
+  (:row (inv/create! engine :repo_policy {:repository repository}
+                     {:principal a-person})))
+
+(deftest the-source-polls-the-repositories-the-active-rows-name
+  (let [state (gh/fake-state)
+        engine (boot)
+        source (gh/fake-source state {:repos-fn #(bench/active-repositories
+                                                  engine)})]
+    (gh/seed-pull! state repo a-pull-request {:files the-files})
+    (gh/seed-pull! state "ckopsa/waymark-bench"
+                   (assoc a-pull-request :number 7
+                          :html_url "https://github.com/ckopsa/waymark-bench/pull/7"
+                          :updated_at "2026-09-18T11:00:00Z")
+                   {})
+
+    (testing "no policy is no repository: the pass polls nothing"
+      (is (= [] (:repositories (forge/forge-poll source)))))
+
+    (testing "a policy a person writes IS the poll list, read at this pass"
+      (policy! engine repo)
+      (is (= [repo] (:repositories (forge/forge-poll source)))
+          "no deploy and no environment variable between the row and
+           the pass"))
+
+    (testing "…and a second policy is polled beside the first"
+      (policy! engine "ckopsa/waymark-bench")
+      (is (= #{repo "ckopsa/waymark-bench"}
+             (set (:repositories (forge/forge-poll source))))))
+
+    (testing "a retired policy is not polled at all"
+      (let [row (first (rows-of engine :repo_policy
+                                {:repository "ckopsa/waymark-bench"}))]
+        (inv/invoke! engine :repo_policy (str (:id row)) :retire {}
+                     {:principal a-person}))
+      (is (= [repo] (:repositories (forge/forge-poll source)))
+          "the house stops working a repository with one tap"))))
+
 ;; ── the wiring's own contract ───────────────────────────────────────
 
 (deftest no-token-means-no-source
   (is (nil? (gh/from-env (constantly nil)))
       "no token, no source — and the wiring starts nothing")
-  (is (nil? (gh/from-env {"FACTORY10_GITHUB_REPOS" "ckopsa/waymark"}))
-      "a repository list without a token is not a source either")
-  (let [src (gh/from-env {"FACTORY10_GITHUB_TOKEN" "ghp-not-a-real-token"})]
+  (let [src (gh/from-env {"FACTORY10_GITHUB_TOKEN" "ghp-not-a-real-token"}
+                         (constantly ["ckopsa/waymark-bench"]))]
     (is (some? src) "the token alone configures it")
-    (is (= ["ckopsa/waymark"] (:repos src))
-        "and the proving ground is the repository nothing names (R-8)")))
+    (is (= ["ckopsa/waymark-bench"] ((:repos-fn src)))
+        "and the repositories are the wiring's own reading of the
+         rows, not a variable the environment holds")))
 
 (deftest the-repositories-are-read-in-the-order-they-are-named
   (is (= ["ckopsa/waymark" "ckopsa/waymark-bench"]

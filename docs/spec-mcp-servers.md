@@ -227,8 +227,11 @@ Each step is one restate by a person and no deploy of the engine.
 7. Two rows, one hung: the other's call answers inside its timeout.
 8. The gate row with passthrough answers `emila__read` exactly as the
    static map did, and the static map is gone from `gate_proxy.clj`.
-9. A stdio row started with the bench's own command discovers eight
-   tools. The test runs when python3 and the bench checkout are present
+9. A stdio row started with the bench's own command discovers the
+   bench's tools, the eight this engine knows among them (the rig also
+   offers the enrolment's three, which no powers entry names and the
+   engine's own hand calls). The test runs when python3 and the bench
+   checkout are present
    and asserts its own skip otherwise, because a test that runs without
    an assertion is a failure and a machine without python3 is not a
    broken engine.
