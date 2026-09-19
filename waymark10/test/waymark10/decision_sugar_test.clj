@@ -74,7 +74,7 @@
             [:scope {:optional true
                      :examples [grants/scope-example]
                      :x-display {:label "What you are asking for"
-                                 :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
+                                 :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps can't list another kind's field names, so each entry is typed by hand: the example above is the whole shape, and the chips beside the box offer every kind and action name."
                                  :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this. Leave it empty when you are asking to sit in a seat: the office's scope is the ask."}}
              grants/scope-schema]
             ;; the seat pair (spec-seat.md R-5.4) — the ask spells the
@@ -110,7 +110,7 @@
                    [:scope {:optional true
                             :examples [grants/scope-example]
                             :x-display {:label "What you are asking for"
-                                        :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
+                                        :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps can't list another kind's field names, so each entry is typed by hand: the example above is the whole shape, and the chips beside the box offer every kind and action name."
                                         :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this. Leave it empty when you are asking to sit in a seat: the office's scope is the ask."}}
                     grants/scope-schema]
                    [:seat {:optional true
