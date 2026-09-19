@@ -985,7 +985,12 @@ carries a land block. The engine sends that block at the enrolment,
 from the repository policy row. The block names the policy's base as
 the target. The block asks for a pull request when the policy's
 `opens_pr` is true. The block asks for no rebase, because a seat may
-work on a person's own pull request branch.
+work on a person's own pull request branch. The pull request block
+carries `auto_merge` from the policy. The rig must turn auto-merge on
+for the pull request when `auto_merge` is true. The forge then merges
+the change when the checks are green. No person taps merge. A forge
+that refuses auto-merge gives a finding in `feedback`. The pull
+request stands.
 
 **R-12.32** The sit must give a bench to a seat that walks a queue of
 asks. This rule is for a code seat, as R-12.29 and R-12.31 are. A

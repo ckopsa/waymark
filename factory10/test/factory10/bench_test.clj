@@ -1078,7 +1078,7 @@
             :default_branch "main"
             :deny ["*.env"]
             :land {:target "main" :rebase false :stages []
-                   :pull_request true}}
+                   :pull_request {:auto_merge true}}}
            (:arguments call))
         "the whole sentence the rig needs: the name it holds the clone
          under, where to clone it from, which branch a worktree starts
@@ -1088,6 +1088,10 @@
     (is (false? (get-in (:arguments call) [:land :rebase]))
         "a seat may work on a person's own pull request branch, and a
          rebase there rewrites a person's history")
+    (is (true? (get-in (:arguments call) [:land :pull_request :auto_merge]))
+        "the policy says a green gate merges the change, so the rig
+         turns auto-merge ON for the pull request it opens and no
+         person taps merge (bead waymark-fp62.6.3.15)")
     (is (some? (get-in stored [:data :enrolled_at]))
         "and the row says the bench holds this repository now")
     (is (nil? (get-in stored [:data :note]))
@@ -1135,6 +1139,15 @@
     (is (= {:target "dev" :rebase false :stages []} land)
         "the policy says the push opens no pull request, so the block
          carries none and the rig pushes the branch and stops")))
+
+(deftest a-policy-that-merges-by-a-person-tells-the-rig-so
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {:auto_merge false})
+        land (:land (:arguments (first (calls-of st "bench__enroll"))))]
+    (is (= {:auto_merge false} (:pull_request land))
+        "the policy leaves the merge to a person, so the rig opens the
+         pull request and turns nothing on")))
 
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)
