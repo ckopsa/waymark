@@ -890,7 +890,17 @@ many paths are different from the head because an earlier sitting left
 them. The engine makes it with one call to the bench rig's `prepare`,
 with its own hand and not with the seat's — `prepare` is on no
 capability token, so no scope can name it and `waymark_power` refuses
-it. The branch is the change's head branch, or the repository policy's
+it.
+
+`bench` must also carry `tools`: a map from each bench power the seat's
+scope names to the tool name the power door resolves it to, such as
+`bench.read` to `bench__read`. A power the scope does not name is
+absent. A power the server maps to more than one tool is absent,
+because that power names no single tool. The seat must read from this
+map the name it calls the bench with, and the seat's instructions must
+name no spelling.
+
+The branch is the change's head branch, or the repository policy's
 branch pattern with the change's own id in place of the `*`; there is
 one branch for each change, so a second sitting finds the work the
 first one left. `orientation` is the path of the document the seat

@@ -59,6 +59,16 @@ bridge of Gate's deprecation. Nothing else uses `passthrough`.
 Example: `emila__read`. A row named `emila` answers it as `read`. No row
 named `emila` yet: the `gate` row answers it as `emila__read`.
 
+The power door must also take a power token as the tool name, when that
+power names exactly one tool. `bench.read` names the one tool `read` on
+the `bench` row, so the door reads `bench.read` as `bench__read` and
+judges the grant, the filter and the `why` on that tool. A power that
+names two tools is not a tool name: the door refuses it with a 404 that
+lists both tool names. A power that names a glob names no single tool,
+so it is not a tool name either. The door resolves the name before
+every judgement, and the ledger counts the call under the tool the name
+resolved to.
+
 ## 4. The powers list is the policy
 
 One entry: `{"power": "email.read", "tools": ["read", "search"], "why": false}`.
