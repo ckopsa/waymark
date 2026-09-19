@@ -349,10 +349,11 @@
     (doseq [row (policies eng :active)
             :when (str/blank? (str (get-in row [:data :enrolled_at])))]
       (try
-        (when (took-it? (ask ctx :enroll (enrol-args row)))
-          (inv/invoke! eng :repo_policy (str (:id row)) :mark_enrolled
-                       {:clone_url (clone-url-of row)}
-                       {:principal enrol-actor}))
+        (let [answer (ask ctx :enroll (enrol-args row))]
+          (when (took-it? answer)
+            (inv/invoke! eng :repo_policy (str (:id row)) :mark_enrolled
+                         {:bare (some-> (:bare answer) str not-empty)}
+                         {:principal enrol-actor})))
         (catch Exception e
           (warn! "the enrolment of " (get-in row [:data :repository])
                  " did not land (" (ex-message e) "); the next pass tries "

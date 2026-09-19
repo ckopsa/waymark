@@ -329,18 +329,20 @@
     ;; THE RETRY'S OWN DOOR (R-4). Hidden, and the engine's hand alone:
     ;; a person never meets it, and the model cannot see it. A
     ;; self-loop, because taking a repository does not move the policy.
-    ;; The clone URL rides as the input, so the log says what the rig
-    ;; was told and a second pass is a second call rather than a replay
-    ;; of the first.
+    ;; The rig's bare path rides as the input: it is the rig's own
+    ;; answer and no field of the row, so the log says where the clone
+    ;; landed and a second pass is a second call rather than a replay
+    ;; of the first. (A field the row already holds would make this
+    ;; door edit-shaped in the usability battery's eyes.)
     :mark_enrolled
     {:from #{:active} :to :active
      :guards [the-engine-marks-the-enrolment]
      :handler mark-the-enrolment
      :input [:map
-             [:clone_url {:optional true
-                          :examples ["https://github.com/ckopsa/waymark"]
-                          :x-display {:hidden true :raw true
-                                      :label "Cloned from"}}
+             [:bare {:optional true
+                     :examples ["/var/lib/bench/ckopsa/waymark/bare.git"]
+                     :x-display {:hidden true :raw true
+                                 :label "The bare clone"}}
               [:maybe [:string {:max 300}]]]]
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Enrolled" :order 4
