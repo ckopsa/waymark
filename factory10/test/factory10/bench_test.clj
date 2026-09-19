@@ -904,6 +904,44 @@
             "so a fired submit round shows its tokens and its cost on
              the ledger")))))
 
+;; ── the title of the pull request (bead waymark-fp62.6.3.13) ────────
+
+(def ^:private a-long-title
+  "A title of more than 72 characters, as the mirror reads one off a
+  pull request a person opened."
+  (str "Reword the stale :spelled-by-hand waiver in grants.clj and "
+       "feed_recipe.clj, and say why a form cannot lift it"))
+
+(def ^:private a-long-sentence
+  "The seat's own sentence: the whole story of the round, which is
+  what made PR #160's title unreadable when the rig cut the commit's
+  first line at 200 characters."
+  (str "Reworded the stale :spelled-by-hand waiver (grants.clj twice, "
+       "the feed_recipe.clj comment and decision_sugar_test.clj twice) "
+       "from the old wording to the new one, because a form cannot "
+       "lift the waiver on its own."))
+
+(deftest the-pull-requests-title-is-the-changes-own-and-the-sentence-is-the-body
+  (let [w (world)
+        _ (submit! w {:why a-long-sentence})
+        args (:arguments (first (calls-of (:state w) "bench__submit")))]
+    (testing "the engine titles the pull request from the ROW"
+      (is (= "6.3 The bench" (:title args))
+          "the change's own title, and never the seat's sentence"))
+    (testing "and the seat's sentence is the commit message and the body"
+      (is (= a-long-sentence (:message args)))
+      (is (= a-long-sentence (:description args))))))
+
+(deftest a-title-longer-than-the-ceiling-is-cut-at-seventy-two-characters
+  (let [w (world {} {:title a-long-title})
+        _ (submit! w {:why "Fix the fixture's table list."})
+        args (:arguments (first (calls-of (:state w) "bench__submit")))]
+    (is (< 72 (count a-long-title)) "the fixture is long enough to cut")
+    (is (= 72 (count (:title args)))
+        "a pull request title is a label, so the engine cuts it")
+    (is (= (subs a-long-title 0 72) (:title args))
+        "and the cut keeps the front of the title")))
+
 (deftest a-rejected-push-refuses-and-the-remedy-names-the-pull-power
   (let [w (world)
         _ (answer! (:state w) "bench__submit"
@@ -1342,6 +1380,22 @@
     (is (= 1 (count (changes-of (:eng w))))
         "one ask is one change, however many times a seat sits down to
          it")))
+
+(deftest a-seat-born-changes-pull-request-is-titled-with-the-asks-own-title
+  (let [w (ask-world)
+        change-id (get-in (:answer w) [:change :id])
+        r (call! (:h w) (:sid w) "waymark_invoke"
+                 {:kind "change" :id change-id :action "submit"
+                  :input {:why a-long-sentence}})
+        args (:arguments (first (calls-of (:state w) "bench__submit")))]
+    (is (false? (:isError r)) (text-of r))
+    (is (= "Put the size ceiling on the policy form" (:title args))
+        "the task's own title, so a person reads one story in the
+         queue and on the pull request (bead waymark-fp62.6.3.13)")
+    (is (= a-long-sentence (:description args))
+        "and the seat's sentence is the body of the pull request")
+    (is (= a-long-sentence (:message args))
+        "which is the commit message as well")))
 
 (deftest a-scope-that-does-not-name-one-repository-gives-the-rows-and-a-note
   (testing "two repositories are not one"
