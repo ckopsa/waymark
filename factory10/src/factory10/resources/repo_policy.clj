@@ -32,11 +32,26 @@
   brings it back: a retired policy is the house saying it does not
   work this repository now. Neither state is a tomb.
 
+  THE ROW IS THE ONE SENTENCE, AND THE ENGINE TELLS THE RIG (bead
+  waymark-fp62.6.3.8). A person writes this row and nothing else: the
+  create and the restate call the bench rig's `enroll` with the
+  repository, the clone URL, the base branch and the deny list, the
+  retire calls `unenroll`, and the restore enrols again. The rig's
+  answer never refuses a person's sentence — the row lands either way,
+  and `enrolled_at` beside `note` says whether the bench holds this
+  repository yet. A row the rig did not take is offered again by the
+  retry pass (factory10.bench/enroll-unenrolled!), which stamps it
+  through the hidden `mark_enrolled` door so the transition log
+  carries the enrolment. The GitHub source reads the active rows at
+  every pass, so a repository is polled because a person stated a
+  policy for it and for no other reason.
+
   :nav :secondary, for change's reason: a repository is the day job's,
   not the family's. A `:primary` kind's open rows are claimed by the
   feed's next-actions population, and the household's feed must not
   card the day job's configuration."
-  (:require [waymark10.dsl :refer [defguardfn defhandler defresource
+  (:require [factory10.bench :as bench]
+            [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.types :as t]))
 
@@ -57,21 +72,61 @@
     (t/deny)
     (t/allow)))
 
-;; ── the restatement ─────────────────────────────────────────────────
+(defguardfn the-engine-marks-the-enrolment
+  {:reads [:principal]
+   :hide true
+   :explain "The engine stamps the enrolment. A person and a model read it."}
+  ;; The hidden shape of ci_run's `stamp_label`, one kind over: the
+  ;; retry pass is the only hand that walks this door, and a hidden
+  ;; door owes no remedy because it answers 404 and says nothing.
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx)))
+    (t/allow)
+    (t/deny)))
 
-(defhandler restate-the-policy [row inp _ctx]
+;; ── the restatement, and the rig it tells ───────────────────────────
+
+(defhandler restate-the-policy [row inp ctx]
   ;; THE WHOLE POLICY, AGAIN. A restate is the authority saying what it
   ;; holds now, so every field the door collects lands; the machine
-  ;; keeps the row where it stands.
-  (update row :data merge inp))
+  ;; keeps the row where it stands. Then the engine tells the rig, and
+  ;; the row says whether the rig took it (R-2).
+  (bench/enrolled (update row :data merge inp) ctx))
+
+(defn- enrol-at-birth
+  "The create's enrolment (R-2). A create cannot walk a door on a row
+  that does not exist yet, so the call rides the create's own hook —
+  mcp_server's `born`, one module over. A rig that does not answer
+  costs the enrolment and never the row."
+  [row ctx]
+  (bench/enrolled row ctx))
+
+(defhandler unenrol-the-repository [row _inp ctx]
+  ;; R-3: the bench is told to stop holding this repository. A refusal
+  ;; is noted on the row and never raised — a person who retires a
+  ;; policy has retired it, whatever the rig says.
+  (bench/unenrolled row ctx))
+
+(defhandler enrol-the-repository-again [row _inp ctx]
+  ;; R-3: a restore is a create again, as far as the rig is concerned.
+  (bench/enrolled row ctx))
+
+(defhandler mark-the-enrolment [row _inp ctx]
+  ;; THE RETRY'S OWN RECORD (R-4). The pass called `enroll` and the rig
+  ;; took it; this door writes the stamp, so a reader of the log can
+  ;; tell an enrolment the retry landed from one the create did.
+  (-> row
+      (assoc-in [:data :enrolled_at] (:now ctx))
+      (assoc-in [:data :note] nil)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
-;; Check-tier: no :given rows, and the one guard reads :principal and
+;; Check-tier: no :given rows, and both guards read :principal and
 ;; nothing else. `make check-factory` judges them with no database.
 
 (def ^:private a-policy
   {:repository "ckopsa/waymark"
+   :clone_url "https://github.com/ckopsa/waymark"
    :branch_pattern "waymark/*"
    :base "main"
    :max_lines 400
@@ -119,6 +174,13 @@
                   :label "The repository"
                   :help "The repository as GitHub spells it, as owner/repo. It is also the name the bench rig holds the clone under."}}
     [:string {:min 1 :max 140}]]
+   [:clone_url {:optional true
+                :examples ["https://github.com/ckopsa/waymark"]
+                :x-display
+                {:raw true
+                 :label "Where the bench clones it from"
+                 :help "The URL the rig clones this repository from. Leave it empty for https://github.com/<the repository>, which is what a GitHub repository needs."}}
+    [:maybe [:string {:max 300}]]]
    [:branch_pattern {:default "waymark/*"
                      :examples ["waymark/*"]
                      :x-display
@@ -176,6 +238,26 @@
                    :help "The path a seat reads first in this repository: what the house expects of a change here. The sit answers this path with the bench."}}
     [:string {:min 1 :max 200}]]])
 
+(def ^:private engine-fields
+  "What the ENGINE writes about this row, and a person never does: when
+  the bench took this repository, and why it did not. They are on the
+  schema and on no door's input, so no form offers them and the
+  restate prefills neither (mcp_server's `engine-fields`, one module
+  over)."
+  [[:enrolled_at {:optional true
+                  :examples ["2026-09-19T14:00:00Z"]
+                  :x-display
+                  {:label "Enrolled at"
+                   :help "When the bench rig took this repository. Empty means the bench does not hold it yet, and the retry pass offers it again."}}
+    [:maybe :waymark/instant]]
+   [:note {:optional true
+           :examples ["The bench has not enrolled this repository: the clone failed."]
+           :x-display
+           {:widget "prose"
+            :label "Note"
+            :help "What the engine has to say about this row — the reason the bench did not enrol the repository, and nothing when it did."}}
+    [:maybe [:string {:max 500}]]]])
+
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
 (defresource repo-policy
@@ -199,11 +281,16 @@
    :sortable {:fields [:repository] :default "repository"}
    ;; ONE POLICY FOR EACH REPOSITORY, enforced by an index
    :unique [[:repository]]
-   :schema (into [:map] policy-fields)
-   ;; no :create-schema: the schema IS the create form, because a
-   ;; policy is born whole. A person states every number the first
-   ;; time, and the defaults above are what the form offers.
+   :schema (into [:map] (concat policy-fields engine-fields))
+   ;; THE CREATE FORM IS THE WHOLE POLICY AND NOTHING ELSE. A person
+   ;; states every number the first time, and the defaults above are
+   ;; what the form offers; the two engine fields are on the schema so
+   ;; a reader sees them and on no form so a person never writes them.
+   :create-schema (into [:map] policy-fields)
    :create-guards [only-a-person-states-the-policy]
+   ;; …and the rig is told at the birth (R-2): a create cannot walk a
+   ;; door on a row that does not exist yet
+   :on-create enrol-at-birth
    :actions
    {:restate
     {:from #{:active} :to :active
@@ -212,10 +299,12 @@
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes
-     ;; one number and restates the rest as it was
-     :edit {:prefill [:repository :branch_pattern :base :max_lines :opens_pr
-                      :auto_merge :rounds_per_change :formatter :deny
-                      :orientation]}
+     ;; one number and restates the rest as it was. The engine's own
+     ;; two fields are absent here for the reason they are absent from
+     ;; the create form: a person does not state them.
+     :edit {:prefill [:repository :clone_url :branch_pattern :base :max_lines
+                      :opens_pr :auto_merge :rounds_per_change :formatter
+                      :deny :orientation]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
                :description "State what submit means in this repository again, whole"}}
@@ -223,6 +312,7 @@
     :retire
     {:from #{:active} :to :retired :undo :restore
      :guards [only-a-person-states-the-policy]
+     :handler unenrol-the-repository
      :safety {:idempotent true :reversible true :confirm true
               :consequence "The bench stops working this repository: a submit reads no policy and refuses. Nothing is deleted, and one tap brings it back."}
      :display {:label "Retire" :style :danger :order 9
@@ -231,8 +321,29 @@
     :restore
     {:from #{:retired} :to :active :undo :retire
      :guards [only-a-person-states-the-policy]
+     :handler enrol-the-repository-again
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restore" :order 2
-               :description "Work this repository again, under the policy as it stands"}}}
+               :description "Work this repository again, under the policy as it stands"}}
+
+    ;; THE RETRY'S OWN DOOR (R-4). Hidden, and the engine's hand alone:
+    ;; a person never meets it, and the model cannot see it. A
+    ;; self-loop, because taking a repository does not move the policy.
+    ;; The clone URL rides as the input, so the log says what the rig
+    ;; was told and a second pass is a second call rather than a replay
+    ;; of the first.
+    :mark_enrolled
+    {:from #{:active} :to :active
+     :guards [the-engine-marks-the-enrolment]
+     :handler mark-the-enrolment
+     :input [:map
+             [:clone_url {:optional true
+                          :examples ["https://github.com/ckopsa/waymark"]
+                          :x-display {:hidden true :raw true
+                                      :label "Cloned from"}}
+              [:maybe [:string {:max 300}]]]]
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Enrolled" :order 4
+               :description "The bench took this repository and the engine says when"}}}
    :scenarios [a-model-does-not-restate-the-policy
                the-person-states-what-submit-means]})

@@ -58,10 +58,12 @@
 ;; ── the fake rig, answering the contract (6.3.1) ────────────────────
 
 (def ^:private rig-tools
-  "The eight tools the rig offers, as a live tools/list answers them:
+  "The eleven tools the rig offers, as a live tools/list answers them:
   its OWN bare names, because the `bench__` prefix is the row's name
   and the engine puts it on. Four of them are powers a scope may
-  name; the other four are named by no entry of the row's powers, and
+  name; the other seven — the four that decide what a change is, and
+  the three that decide which repositories the rig holds (bead
+  waymark-fp62.6.3.7) — are named by no entry of the row's powers, and
   that absence is what says which is which."
   (mapv (fn [nm]
           {:name nm
@@ -70,7 +72,8 @@
                          :properties {:repo {:type "string"}
                                       :branch {:type "string"}}
                          :required ["repo" "branch"]}})
-        ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"]))
+        ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"
+         "enroll" "repos" "unenroll"]))
 
 (def ^:private bench-powers
   "The bench row's powers (waymark-fp62.6.3.3): the four the model may
@@ -113,7 +116,16 @@
           "bench__read" {:repo "ckopsa/waymark" :branch "waymark/one"
                          :path "src/a.clj" :hash "abc"
                          :lines [{:line 1 :text "(ns a)"}]
-                         :total_lines 1 :eof true :dropped 900}}}))
+                         :total_lines 1 :eof true :dropped 900}
+          ;; the three of bead waymark-fp62.6.3.7, in the rig's own
+          ;; shapes: the enrolment answers what the rig now holds, and
+          ;; the unenrolment says whether it kept the clone
+          "bench__enroll" {:name "ckopsa/waymark"
+                           :clone_url "https://github.com/ckopsa/waymark"
+                           :default_branch "main" :deny ["*.env"]
+                           :land "worktree" :bare true :cloned true}
+          "bench__repos" {:repos ["ckopsa/waymark"]}
+          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}}}))
 
 (defn- answer!
   "Script one tool's answer — a result map, or a refusal map with
@@ -544,6 +556,11 @@
 
     (testing "beside the path it reads first and what submit will do"
       (is (= "docs/orientation.md" (:orientation answer)))
+      (is (= {:repo a-repository :branch "waymark/one"
+              :path "docs/orientation.md"}
+             (:arguments (first (calls-of (:state w) "bench__read"))))
+          "the path is answered because the engine SAW the file: one
+           read of the worktree, with the engine's own hand")
       (is (str/includes? (:submit_means answer) "pull request"))
       (is (str/includes? (:submit_means answer) "400"))
       (is (str/includes? (:submit_means answer) "3 rounds")))))
@@ -578,8 +595,34 @@
     (is (= [(str (:id change))] (mapv :id (get-in answer [:walk :rows])))
         "the rows are still there: a seat that cannot reach the bench
          can read its queue and say so")
-    (is (= "docs/orientation.md" (:orientation answer))
-        "the orientation is the policy's, not the rig's")))
+    (is (str/includes? (str (:orientation answer)) "no orientation file")
+        "a rig that answers nothing made no worktree, so there is no
+         document to send the seat to — the sentence says so and
+         carries what submit means instead (R-6)")))
+
+(deftest a-repository-with-no-orientation-file-answers-the-sentence
+  (let [st (state)
+        _ (answer! st "bench__read" {:refused "path" :repo a-repository
+                                     :reason "no such file"})
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        _ (a-change! eng {})
+        _ (open-seat! eng {})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))]
+    (is (= (str "This repository has no orientation file. Submit means: "
+                (:submit_means answer))
+           (:orientation answer))
+        "a path to a document that is not there is a call the seat
+         spends and a refusal it has to reason about; one sentence
+         says it, and says what submit means here")
+    (is (= 1 (count (calls-of st "bench__read")))
+        "and it costs ONE read of the rig")))
 
 ;; ── acceptance 4 ────────────────────────────────────────────────────
 
@@ -732,6 +775,146 @@
 
     (testing "…and the sitting is still open, so the seat may go on"
       (is (= :open (:state (sitting-of w)))))))
+
+;; ── the enrolment (bead waymark-fp62.6.3.8) ─────────────────────────
+;;
+;; ONE SENTENCE ABOUT A REPOSITORY. A person writes the repo_policy
+;; row; the engine tells the rig. These tests read the row the engine
+;; wrote AND the call the rig heard, because a row that says it is
+;; enrolled and a rig that never heard of the repository is the one
+;; failure this half exists to prevent.
+
+(defn- policy-row
+  "The policy row as stored."
+  [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx :repo_policy (str id) {}))))
+
+(defn- actions-of
+  "Every action the transition log carries for one row, by name."
+  [eng kind id]
+  (into #{}
+        (map #(name (:action %)))
+        (store/with-tx (:storage eng)
+          (fn [tx] (store/transitions (:storage eng) tx
+                                      {:kind kind :resource-id (str id)}
+                                      {:limit 20})))))
+
+(deftest a-policy-create-enrols-the-repository-with-the-bench
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:clone_url "https://git.example/waymark.git"})
+        call (first (calls-of st "bench__enroll"))
+        stored (policy-row eng (:id row))]
+    (is (= {:repo a-repository
+            :clone_url "https://git.example/waymark.git"
+            :default_branch "main"
+            :deny ["*.env"]}
+           (:arguments call))
+        "the whole sentence the rig needs: the name it holds the clone
+         under, where to clone it from, which branch a worktree starts
+         from, and the paths it never serves")
+    (is (some? (get-in stored [:data :enrolled_at]))
+        "and the row says the bench holds this repository now")
+    (is (nil? (get-in stored [:data :note]))
+        "with nothing to explain")))
+
+(deftest a-policy-that-names-no-clone-url-is-cloned-from-github
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        call (first (calls-of st "bench__enroll"))]
+    (is (= (str "https://github.com/" a-repository) (:clone_url (:arguments call)))
+        "a repository spelled as owner/repo needs no URL from a
+         person: the engine knows where GitHub keeps it")))
+
+(deftest a-rig-that-refuses-the-enrolment-leaves-the-note-and-the-retry-lands-it
+  (let [st (state)
+        _ (answer! st "bench__enroll"
+                   {:refused "clone_failed" :repo a-repository
+                    :reason "the remote answered 404"})
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        id (str (:id row))
+        stored (policy-row eng id)]
+    (is (= "active" (name (:state stored)))
+        "the person's sentence stands whatever the rig says: a policy
+         is not refused by a bench")
+    (is (nil? (get-in stored [:data :enrolled_at])))
+    (is (= (str bench/not-enrolled-prefix "the remote answered 404")
+           (get-in stored [:data :note]))
+        "and the row says why, in the rig's own words")
+
+    (testing "the retry offers it again, and the rig takes it"
+      (answer! st "bench__enroll"
+               {:name a-repository :clone_url "https://github.com/ckopsa/waymark"
+                :default_branch "main" :deny [] :land "worktree"
+                :bare true :cloned true})
+      (bench/enroll-unenrolled! eng)
+      (let [after (policy-row eng id)]
+        (is (some? (get-in after [:data :enrolled_at])))
+        (is (nil? (get-in after [:data :note])))
+        (is (= 2 (count (calls-of st "bench__enroll")))
+            "one call at the birth and one at the retry")
+        (is (contains? (actions-of eng :repo_policy id) "mark_enrolled")
+            "through the row's own hidden door, so the transition log
+             carries the enrolment rather than a silent field write")))
+
+    (testing "and a second pass offers nothing: the stamp is the memory"
+      (bench/enroll-unenrolled! eng)
+      (is (= 2 (count (calls-of st "bench__enroll")))))))
+
+(deftest a-retire-unenrols-the-repository-and-a-restore-enrols-it-again
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        id (str (:id row))]
+    (inv/invoke! eng :repo_policy id :retire {} {:principal person})
+    (is (= {:repo a-repository} (:arguments (first (calls-of st "bench__unenroll"))))
+        "the rig is told to stop holding this repository")
+    (let [stored (policy-row eng id)]
+      (is (= "retired" (name (:state stored))))
+      (is (nil? (get-in stored [:data :enrolled_at]))
+          "and the row no longer says the bench holds it"))
+
+    (testing "a restore enrols it again, as the create did"
+      (inv/invoke! eng :repo_policy id :restore {} {:principal person})
+      (is (= 2 (count (calls-of st "bench__enroll"))))
+      (is (some? (get-in (policy-row eng id) [:data :enrolled_at]))))))
+
+(deftest a-rig-that-refuses-the-unenrolment-retires-the-row-anyway
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        id (str (:id row))
+        _ (answer! st "bench__unenroll"
+                   {:refused "config_repo" :repo a-repository
+                    :reason "the repository is named in the rig's own configuration"})
+        _ (inv/invoke! eng :repo_policy id :retire {} {:principal person})
+        stored (policy-row eng id)]
+    (is (= "retired" (name (:state stored)))
+        "a person who retires a policy has retired it")
+    (is (= (str bench/not-unenrolled-prefix
+                "the repository is named in the rig's own configuration")
+           (get-in stored [:data :note]))
+        "and the refusal is noted, not raised")))
+
+(deftest the-enrolment-tools-are-on-no-power-and-the-engine-reaches-them-anyway
+  (let [w (power-world ["bench.read" "bench.find" "bench.edit" "bench.pull"])]
+    (doseq [tool ["bench__enroll" "bench__repos" "bench__unenroll"]]
+      (let [r (tool! w "waymark_power" {:tool tool :arguments {}})]
+        (is (true? (:isError r))
+            (str tool " is on no powers entry, so no scope reaches it"))))
+    (is (empty? (calls-of (:state w) "bench__enroll"))
+        "and the power door asked the rig nothing")
+
+    (testing "…while the engine's own hand reaches the same tool"
+      (let [answer (bench/ask {:services {:bench-rpc (gate/rpc-of (:eng w))}}
+                              :repos {})]
+        (is (= ["ckopsa/waymark"] (:repos answer))
+            "mcp-servers/call! resolves bench__repos by the ROW's name
+             and rides the row's one client: the powers decide what a
+             GRANT may reach, and the engine wears no grant")))))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 

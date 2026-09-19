@@ -49,11 +49,11 @@
   seconds between passes (900); it reaches the same Gate
   WORKQUEUE10_GATE_URL names, and the same twin when it is unset),
   FACTORY10=1 (fold the day job's kinds in — `factory-resources`)
-  with FACTORY10_GITHUB_TOKEN / _REPOS / _EVERY (the GitHub source
-  behind them, waymark-fp62.6.4: the token it spends, the
-  comma-separated owner/repo list it reads — ckopsa/waymark when
-  unsaid — and how many seconds between passes, 300; with no token
-  nothing starts and there is no fake),
+  with FACTORY10_GITHUB_TOKEN / _EVERY (the GitHub source behind them,
+  waymark-fp62.6.4: the token it spends and how many seconds between
+  passes, 300; with no token nothing starts and there is no fake.
+  WHICH repositories it reads is not a variable — it is the active
+  `repo_policy` rows, read at every pass, waymark-fp62.6.3.8),
   WAYMARK10_DEPLOY_MODE,
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan), WAYMARK10_OIDC_* (the family
@@ -75,6 +75,9 @@
             [dayplan10.resources.decision :refer [decision]]
             [dayplan10.resources.span :refer [span]]
             [dayplan10.zone :as zone]
+            ;; the engine's own half of the bench: the enrolment the
+            ;; policy rows drive — see `factory-enrol-pass` below
+            [factory10.bench :as bench]
             ;; the day job's kinds, folded in behind FACTORY10=1 — see
             ;; `factory-resources` below
             [factory10.main :as factory]
@@ -498,10 +501,17 @@
   fake here, deliberately, and that is the one place this boundary
   differs from every other one in this file: a fake GitHub would write
   rows about pull requests nobody has, into the house's own engine.
-  The fake belongs to the suite, where it stands behind the transport."
-  []
+  The fake belongs to the suite, where it stands behind the transport.
+
+  WHICH REPOSITORIES IT READS IS THE ROWS (waymark-fp62.6.3.8). The
+  source is handed a function, not a list, and asks it at every pass:
+  the repositories of the active `repo_policy` rows. One sentence a
+  person writes says what submit means in a repository and that the
+  house polls it, and a retire stops the polling with no deploy."
+  [eng]
   (when (= "1" (System/getenv "FACTORY10"))
-    (github/from-env)))
+    (github/from-env #(System/getenv ^String %)
+                     #(bench/active-repositories eng))))
 
 (defn- factory-every-seconds []
   (or (some-> (System/getenv "FACTORY10_GITHUB_EVERY") parse-long)
@@ -1083,7 +1093,7 @@
         ;; ELECTED role, so one process per database spends the token
         ;; however many serve it. Nothing starts without FACTORY10=1
         ;; and a token — see `factory-source`.
-        factory-pass (when-some [src (factory-source)]
+        factory-pass (when-some [src (factory-source eng)]
                        (store/elect-role!
                         storage :factory10-github
                         {:retry-ms 5000
@@ -1091,17 +1101,34 @@
                                      {:source src :engine eng}
                                      {:every-seconds
                                       (factory-every-seconds)})
-                         :stop-fn forge/stop-passes!}))]
+                         :stop-fn forge/stop-passes!}))
+        ;; …and the bench's enrolment retry (waymark-fp62.6.3.8), on
+        ;; the same shape and behind FACTORY10=1 ALONE: a house with a
+        ;; bench and no GitHub token still owes its policy rows an
+        ;; enrolment. It is ELECTED for the discover sweep's reason —
+        ;; two engines offering the same row to the rig would stamp it
+        ;; twice — and the pass itself is factory10's, because
+        ;; server/mcp_servers is core and core reads no module's kinds.
+        factory-enrol-pass
+        (when (= "1" (System/getenv "FACTORY10"))
+          (store/elect-role!
+           storage :factory10-enroll
+           {:retry-ms 5000
+            :start-fn #(bench/start-enrol-sweeper! eng {})
+            :stop-fn bench/stop-enrol-sweeper!}))]
     (reset! dev {:engine eng :server server :storage storage
-                 :inbox-pass inbox-pass :factory-pass factory-pass})
+                 :inbox-pass inbox-pass :factory-pass factory-pass
+                 :factory-enrol-pass factory-enrol-pass})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))
     eng))
 
 (defn stop! []
-  (when-some [{:keys [engine server storage inbox-pass factory-pass]} @dev]
+  (when-some [{:keys [engine server storage inbox-pass factory-pass
+                      factory-enrol-pass]} @dev]
     (when inbox-pass (store/release-role! storage inbox-pass))
     (when factory-pass (store/release-role! storage factory-pass))
+    (when factory-enrol-pass (store/release-role! storage factory-enrol-pass))
     (engine/stop! engine server)
     (pg/close! storage)
     (reset! dev nil)))

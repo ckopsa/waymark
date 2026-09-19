@@ -895,7 +895,15 @@ branch pattern with the change's own id in place of the `*`; there is
 one branch for each change, so a second sitting finds the work the
 first one left. `orientation` is the path of the document the seat
 reads first, from the same policy, and `docs/orientation.md` when the
-policy names no other. `submit_means` is one sentence made from the
+policy names no other. The engine answers that path only when the file
+is in the worktree. It reads the path once with the rig's `read`, with
+its own hand. A refusal, a dark rig and a worktree the rig did not
+make each mean the file is not there, and the answer is then one
+sentence in place of the path: "This repository has no orientation
+file. Submit means: " and the `submit_means` sentence. A path to a
+document that is not there costs the seat one call and a refusal to
+reason about; the sentence costs it nothing.
+`submit_means` is one sentence made from the
 policy: whether a push opens a pull request, who merges it, how many
 lines one change may have, and how many rounds this change gets. The
 model chooses none of these. If the rig does not answer, the sit

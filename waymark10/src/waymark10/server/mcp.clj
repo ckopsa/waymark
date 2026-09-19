@@ -2097,6 +2097,14 @@
   policy names no other path (R-7)."
   "docs/orientation.md")
 
+(def ^:private no-orientation-said
+  "What the sit answers in place of a path when the worktree holds no
+  orientation file (bead waymark-fp62.6.3.8, R-6). A path to a file
+  that is not there is a read the seat spends a call on and a refusal
+  it has to reason about; one sentence says the same thing and carries
+  what the document would have said first — what submit means here."
+  "This repository has no orientation file. Submit means: ")
+
 (def ^:private default-base "main")
 
 (def ^:private default-branch-pattern
@@ -2153,6 +2161,21 @@
                        default-branch-pattern)
                    "*" (str (:id change)))))
 
+(defn- orientation-there?
+  "Is the orientation document in the worktree? ONE `read` of the rig,
+  with the engine's own hand and through the same caller the prepare
+  rides (R-6). An answer means the file is there; a refusal, a dark
+  Gate and a rig that faults each mean it is not, because a sit that
+  cannot see a document cannot send a seat to read it."
+  [gate-rpc repo branch path]
+  (boolean
+   (try
+     (bench-payload (gate-rpc "tools/call"
+                              {:name (gate/bench-tool :read)
+                               :arguments {:repo repo :branch branch
+                                           :path path}}))
+     (catch Exception _ nil))))
+
 (defn- submit-means
   "What `submit` does on this seat, in one sentence built from the
   policy. The model reads it and asks for nothing: the sentence says
@@ -2199,7 +2222,9 @@
   own hand, past the leash. The answer carries the worktree (the
   repository, the branch, the base, the head commit and how many paths
   are dirty from an earlier sitting), the orientation path the seat
-  reads first, and what submit means here.
+  reads first — or the sentence that says there is no such document,
+  which costs one more read of the rig (R-6) — and what submit means
+  here.
 
   `gate-rpc` is this engine's Gate caller, built once by the transport.
   It THROWS when Gate is dark, and the throw is caught here: the sit
@@ -2222,11 +2247,21 @@
                      (binding [*out* *err*]
                        (println "waymark10 bench prepare failed -"
                                 (ex-message e)))
-                     nil))]
-        (cond-> {"orientation" (or (some-> (get-in policy [:data :orientation])
-                                           str not-empty)
-                                   default-orientation)
-                 "submit_means" (submit-means policy)}
+                     nil))
+            means (submit-means policy)
+            ;; the path the policy names, answered only when the file
+            ;; is really there (R-6); a worktree that was never made
+            ;; holds nothing, so a dark rig is asked for no read
+            path (or (some-> (get-in policy [:data :orientation])
+                             str not-empty)
+                     default-orientation)]
+        (cond-> {"orientation"
+                 (if (and made (orientation-there?
+                                gate-rpc (str (or (:repo made) repo))
+                                (str (or (:branch made) branch)) path))
+                   path
+                   (str no-orientation-said means))
+                 "submit_means" means}
           made (assoc "bench" {"repo" (str (or (:repo made) repo))
                                "branch" (str (or (:branch made) branch))
                                "base" (str (or (:base made) base))

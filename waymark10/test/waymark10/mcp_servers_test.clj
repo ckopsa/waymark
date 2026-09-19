@@ -493,9 +493,13 @@
                                         :why false}]})]
       (try
         (is (= :live (:state row)) (str (get-in row [:data :last_error])))
-        (is (= ["discard" "edit" "find" "prepare" "pull" "read" "status" "submit"]
-               (mapv :name (get-in row [:data :tools])))
-            "the eight tools, by name")
+        (is (every? (set (mapv :name (get-in row [:data :tools])))
+                    ["discard" "edit" "find" "prepare" "pull" "read"
+                     "status" "submit"])
+            "the eight tools this engine knows, by name — a rig that
+             offers more (the enrolment's three, waymark-fp62.6.3.7)
+             is a rig this engine reads whole and asks for what it
+             needs")
         (is (every? #(= "object" (get-in % [:input_schema :type]))
                     (get-in row [:data :tools]))
             "each with its input schema")

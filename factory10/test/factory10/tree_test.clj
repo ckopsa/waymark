@@ -392,11 +392,21 @@
     (is (= [:active :retired] (:states repo-policy)))
     (is (= #{} (:terminal repo-policy)))
     (is (= {:state "active"} (:default-filters repo-policy)))
-    (let [fields (into #{} (map first) (rest (:schema repo-policy)))]
-      (is (= #{:repository :branch_pattern :base :max_lines :opens_pr
-               :auto_merge :rounds_per_change :formatter :deny :orientation}
+    (let [fields (into #{} (map first) (rest (:schema repo-policy)))
+          form (into #{} (map first) (rest (:create-schema repo-policy)))]
+      (is (= #{:repository :clone_url :branch_pattern :base :max_lines
+               :opens_pr :auto_merge :rounds_per_change :formatter :deny
+               :orientation :enrolled_at :note}
              fields)
-          "every number a submit obeys is here, and nothing else")))
+          "every number a submit obeys, where the bench clones it from,
+           and the engine's own two: when the bench took it and why it
+           did not")
+      (is (= #{:enrolled_at :note} (into #{} (remove form) fields))
+          "…and the engine's two are on no form: a person states the
+           policy, and the engine says what the bench did with it")
+      (is (contains? (:actions repo-policy) :mark_enrolled)
+          "the retry's own hidden door, so a late enrolment is a
+           transition and not a silent field write")))
 
   (testing "the log tail is capped, and the cap is said out loud"
     (is (= 200 ci/log-excerpt-lines))
