@@ -830,15 +830,20 @@
         delegate (assoc (t/principal {:id "claude-for-colton" :type :agent
                                       :display "Claude for Colton"})
                         :acts-for "colton")
+        ;; the restate is fenced: it wants the row's own etag, the
+        ;; shape the wire spells it in
         restated (fn [who lines]
-                   (inv/invoke! eng :repo_policy (str (:id row)) :restate
-                                (assoc (select-keys (:data (policy-row eng (:id row)))
-                                                    [:repository :branch_pattern :base
-                                                     :max_lines :opens_pr :auto_merge
-                                                     :rounds_per_change :formatter
-                                                     :deny :orientation])
-                                       :max_lines lines)
-                                {:principal who}))]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (assoc (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         :max_lines lines)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))]
     (testing "an agent that acts for a person is the person's hand"
       (restated delegate 600)
       (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
