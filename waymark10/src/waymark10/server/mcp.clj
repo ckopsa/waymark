@@ -970,7 +970,10 @@
        "person's other sessions are untouched. When the seat walks a "
        "queue, the answer carries the charter and the rows themselves, "
        "each with the doors it affords and the input each door takes, "
-       "so your next call is the first invoke."))
+       "so your next call is the first invoke. A code seat also reads "
+       "`feedback` when its change was already submitted: the pull "
+       "request, and one finding for each red check and each review "
+       "comment your last submit caused."))
 
 (def ^:private sit-tool
   {:name "waymark_sit"
@@ -2176,6 +2179,60 @@
                                            :path path}}))
      (catch Exception _ nil))))
 
+(def ^:private feedback-findings-ceiling
+  "How many of the rig's findings the sit carries (R-12.31). The rig
+  already orders them and already caps its own answer; this is the
+  last bound, so one red pipeline with a thousand comments cannot
+  fill a seat's context before it has read a row."
+  40)
+
+(def ^:private feedback-log-bytes
+  "How much of a failed step's log the rig tails for each finding
+  (R-12.31). The tail is where the error is, and 2 KiB of it is a
+  sentence a seat can act on."
+  2048)
+
+(defn- feedback-said
+  "One finding of the rig's, as the sit carries it: the source, the
+  severity, the message, and the locations when the rig named any.
+  THE ENGINE ADDS NOTHING AND JUDGES NOTHING — a finding is the rig's
+  reading of what the submit caused, and the order is the rig's too."
+  [finding]
+  (cond-> {"source" (some-> (:source finding) str)
+           "severity" (some-> (:severity finding) str)
+           "message" (some-> (:message finding) str)}
+    (seq (:locations finding)) (assoc "locations" (:locations finding))))
+
+(defn- feedback-of
+  "What the submit caused, or nil. ONE `feedback` of the rig, with the
+  engine's own hand and through the same caller the prepare rides
+  (R-12.31): the pull request the branch opened, the findings the rig
+  made of the pipelines, the statuses and the review comments, and the
+  parts of the forge it could not reach. A refusal, a dark Gate and a
+  rig that faults each mean nil, and the sit then answers no
+  `feedback` at all — a seat that cannot see the checks is not a sit
+  that refuses."
+  [gate-rpc repo branch]
+  (try
+    (when-some [got (bench-payload
+                     (gate-rpc "tools/call"
+                               {:name (gate/bench-tool :feedback)
+                                :arguments {:repo repo :branch branch
+                                            :log_bytes feedback-log-bytes}}))]
+      {"pull_request"
+       (when-some [pr (:pull_request got)]
+         {"number" (:number pr)
+          "state" (some-> (:state pr) str)
+          "url" (some-> (:url pr) str)})
+       "findings"
+       (mapv feedback-said (take feedback-findings-ceiling (:findings got)))
+       "unavailable"
+       (mapv str (:unavailable got))})
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 bench feedback failed -" (ex-message e)))
+      nil)))
+
 (defn- submit-means
   "What `submit` does on this seat, in one sentence built from the
   policy. The model reads it and asks for nothing: the sentence says
@@ -2226,6 +2283,14 @@
   which costs one more read of the rig (R-6) — and what submit means
   here.
 
+  A change that has already been submitted gets one call more: the
+  rig's `feedback`, which says what that submit caused (R-12.31). The
+  engine asks for it when the change names a `head_branch` — a
+  person's own pull request — or when it has had a round, because a
+  branch nobody has pushed has no pull request and no pipeline to
+  read. The answer rides as `feedback`, and a rig that refuses or
+  faults costs the key and never the sit.
+
   `gate-rpc` is this engine's Gate caller, built once by the transport.
   It THROWS when Gate is dark, and the throw is caught here: the sit
   answers without a bench rather than not at all."
@@ -2249,6 +2314,17 @@
                                 (ex-message e)))
                      nil))
             means (submit-means policy)
+            ;; what the last submit caused, for a change that HAS one:
+            ;; a person's own branch, or a round this house already
+            ;; pushed (R-12.31). A worktree the rig did not make is
+            ;; asked nothing.
+            feedback (when (and made
+                                (or (some-> (get-in change [:data :head_branch])
+                                            str not-empty)
+                                    (>= (long (or (get-in change [:data :rounds]) 0))
+                                        1)))
+                       (feedback-of gate-rpc (str (or (:repo made) repo))
+                                    (str (or (:branch made) branch))))
             ;; the path the policy names, answered only when the file
             ;; is really there (R-6); a worktree that was never made
             ;; holds nothing, so a dark rig is asked for no read
@@ -2267,6 +2343,7 @@
                                "base" (str (or (:base made) base))
                                "head" (some-> (:head made) str)
                                "dirty" (long (or (:dirty made) 0))})
+          feedback (assoc "feedback" feedback)
           (nil? made) (assoc "bench_note" bench-dark-note))))))
 
 (defn- sit

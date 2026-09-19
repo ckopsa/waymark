@@ -912,9 +912,13 @@ rides: a sitting that cannot reach the bench can read its rows and say
 so.
 
 **R-12.30** A bench grant must be able to name less than the whole
-rig. A seat's scope entry for a bench power may carry a `filter`. The
-filter names `repo`, or `path`, or both. A comma in a `repo` value
-means "any of these repositories". A `path` value is a comma list of
+rig. The bench has five powers: `bench.find`, `bench.read`,
+`bench.edit`, `bench.pull` and `bench.feedback`. A seat's scope entry
+for a bench power may carry a `filter`. The filter names `repo`, or
+`path`, or both. `bench.pull` and `bench.feedback` name `repo` alone.
+A path cannot narrow a whole checkout, and it cannot narrow a whole
+branch. A comma in a `repo` value means "any of these repositories".
+A `path` value is a comma list of
 globs in the rig's deny grammar, where `*` matches any characters,
 slashes included, `?` matches one character, and a glob also matches
 the last part of the path alone. The engine judges the filter
@@ -934,6 +938,42 @@ sitting carries neither. The rig holds no seat between calls, so the
 engine names the office on every call. See
 `docs/spec-mcp-servers.md` § 4 for the `constraints` a row must list
 before a filter is legal at all.
+
+**R-12.31** The sit must answer what the submit caused. This rule is
+for a code seat, as R-12.29 is. A seat submits a change. The checks
+then go red, or a reviewer asks for a change. The next sitting must
+read both. The rig gathers both with its `feedback` tool.
+
+The engine reads the change of the walk. A change has a submit behind
+it when it names a `head_branch`, or when its `rounds` is one or
+more. The engine must then call the rig's `feedback` one time. The
+engine calls with its own hand, and not with the seat's. The call
+gives `repo`, `branch` and `log_bytes` 2048. The repository and the
+branch are the worktree's, from the `prepare` of R-12.29. The engine
+must not call `feedback` when the rig made no worktree. The engine
+must not call `feedback` for a change with no head branch and no
+round. A branch nobody pushed has no pull request and no pipeline.
+
+The answer to `waymark_sit` then carries `feedback`. `feedback` has
+three parts. `pull_request` is the pull request of the branch: its
+number, its state and its url. `pull_request` is empty when the forge
+has no pull request for the branch. `findings` is the rig's list. Each
+finding carries `source`, `severity` and `message`. A finding also
+carries `locations` when the rig named locations. `findings` holds not
+more than 40 findings. The engine must keep the rig's own order. The
+engine must add no finding of its own. `unavailable` is the rig's list
+of the parts of the forge it could not read. A forge that is half dark
+is a sentence the seat reads, and not a refusal.
+
+A refusal, a dark rig and a rig that faults each mean no `feedback`
+key at all. The sit still answers, as R-12.29 says for the bench.
+
+The rig opens the pull request only when its entry for the repository
+carries a land block. The engine sends that block at the enrolment,
+from the repository policy row. The block names the policy's base as
+the target. The block asks for a pull request when the policy's
+`opens_pr` is true. The block asks for no rebase, because a seat may
+work on a person's own pull request branch.
 
 ### 12.2 The fire door
 
@@ -1884,6 +1924,12 @@ above. The cases:
     forwards. A call outside every entry refuses and reaches no rig. A
     call that names no path reaches the rig with `allow`. A bench call
     from a bound sitting carries `seat` and `sitting`. (R-12.30)
+48. A sit on a change that names a head branch carries `feedback`: the
+    pull request the rig answered, the rig's findings in the rig's own
+    order, and the rig's `unavailable` list. A sit on a change with no
+    head branch and no round makes no `feedback` call. A refusal and a
+    dark rig each answer no `feedback` key, and the sit answers all the
+    same. (R-12.31)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,

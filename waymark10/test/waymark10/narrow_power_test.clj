@@ -70,20 +70,24 @@
   "What the fake rig's tools/list serves: its own BARE names, because
   the `bench__` prefix is the row's name and the engine puts it on.
   `prepare` is named by no powers entry — the engine's own hand, on no
-  token, and no scope can reach it."
+  token, and no scope can reach it. `feedback` is on a token AND on
+  the engine's own hand, as `read` is."
   (mapv (fn [nm]
           {:name nm
            :description (str "The bench's " nm ".")
            :inputSchema {:type "object"
                          :properties {:repo {:type "string"}
                                       :path {:type "string"}}}})
-        ["prepare" "find" "read" "edit" "pull"]))
+        ["prepare" "find" "read" "edit" "pull" "feedback"]))
 
 (def ^:private bench-powers
   "The bench row's policy, with the CONSTRAINTS this bead adds: find,
   read and edit may be narrowed by the repository and by the path;
-  pull moves a whole checkout, so a path could not mean anything on
-  it and only the repository may narrow it."
+  pull moves a whole checkout and feedback reads a whole branch, so a
+  path could not mean anything on either and only the repository may
+  narrow them. `bench.feedback` is the fifth power (bead
+  waymark-fp62.6.3.9): the sit already carries what a submit caused,
+  and this is the seat asking the rig again itself."
   [{:power "bench.find" :tools ["find"] :why false
     :constraints ["repo" "path"]}
    {:power "bench.read" :tools ["read"] :why false
@@ -91,6 +95,8 @@
    {:power "bench.edit" :tools ["edit"] :why false
     :constraints ["repo" "path"]}
    {:power "bench.pull" :tools ["pull"] :why false
+    :constraints ["repo"]}
+   {:power "bench.feedback" :tools ["feedback"] :why false
     :constraints ["repo"]}])
 
 (defn- fake-rig
@@ -142,7 +148,7 @@
       (gate/ensure-gate-row!))))
 
 (defn- a-bench-row!
-  "The bench, as a row: stdio beside the engine, the four powers with
+  "The bench, as a row: stdio beside the engine, the five powers with
   their constraints, and `prepare` in no entry at all."
   [eng]
   (:row (inv/create! eng :mcp_server
@@ -344,6 +350,37 @@
         (is (= 2 (count (calls w)))
             "two forwards in this test, and both of them were allowed")))))
 
+;; ── a repo-only power: bench.feedback (bead waymark-fp62.6.3.9) ────
+
+(deftest a-repo-only-power-is-narrowed-by-the-repository-and-by-nothing-else
+  (let [w (world)
+        eng (:eng w)]
+    (testing "`path` is not one of bench.feedback's constraints, so the
+              ask refuses: a feedback reads a whole branch, and a path
+              could not narrow one"
+      (let [p (refusal #(ask! eng [{:kind "bench.feedback" :actions []
+                                    :filter {:path "docs/**"}}]))]
+        (is (= :scope-filters-are-filterable (:guard p)) (pr-str p))
+        (is (str/includes? (str (:detail p)) "path"))
+        (is (str/includes? (str (:detail p)) "bench.feedback"))))
+
+    (testing "`repo` is the one field it names, and the door holds the
+              call to it"
+      (let [w2 (world [{:kind "bench.feedback" :actions []
+                        :filter {:repo a-repo}}])
+            mine (power! w2 {:tool "bench__feedback"
+                             :arguments {:repo a-repo :branch "waymark/one"}})]
+        (is (false? (:isError mine)) (text-of mine))
+        (is (nil? (:allow (last-arguments w2)))
+            "the filter narrows no path, so the rig is told no globs")
+        (let [theirs (power! w2 {:tool "bench__feedback"
+                                 :arguments {:repo another-repo
+                                             :branch "waymark/one"}})]
+          (is (true? (:isError theirs)) (text-of theirs))
+          (is (str/includes? (text-of theirs) "bench.feedback"))
+          (is (= 1 (count (calls w2)))
+              "the refusal is in-process: nothing new reached the rig"))))))
+
 ;; ── acceptance 5: a power that names no constraints takes no filter ─
 
 (deftest a-filter-on-a-gate-power-refuses-at-the-ask
@@ -443,6 +480,9 @@
     (is (= ["path" "repo"] (:bench.edit constraints)))
     (is (= ["repo"] (:bench.pull constraints))
         "pull moves a whole checkout, so no path could narrow it")
+    (is (= ["repo"] (:bench.feedback constraints))
+        "and a feedback reads a whole branch, so no path could narrow
+         that one either")
     (is (not-any? #(str/starts-with? (name %) "telegram")
                   (keys constraints))
         "Gate's powers name no constraints, so they are ABSENT here —
