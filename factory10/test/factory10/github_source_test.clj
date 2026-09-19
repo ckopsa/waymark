@@ -33,6 +33,7 @@
             [factory10.mirror :as mirror]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
+            [waymark10.resource :as res]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -97,23 +98,27 @@
 
 (defn- boot
   "An engine over the framework's in-memory store, carrying the
-  factory's two kinds and nothing else."
-  []
-  (engine/engine {:storage (memory/storage) :resources (main/resources)}))
+  factory's two kinds and nothing else — plus whatever `extra` kinds
+  a test needs beside them."
+  ([] (boot []))
+  ([extra]
+   (engine/engine {:storage (memory/storage)
+                   :resources (into (vec (main/resources)) extra)})))
 
 (defn- rig
   "A fresh in-memory GitHub, the real source over it, and an engine —
   seeded with one open pull request and one red check run on its head."
-  []
-  (let [state (gh/fake-state)]
-    (gh/seed-pull! state repo a-pull-request
-                   {:files the-files :reviews the-reviews})
-    (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
-                    a-red-check)
-    (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
-                    a-green-check)
-    (gh/seed-log! state "7001" the-log)
-    {:state state :source (gh/fake-source state) :engine (boot)}))
+  ([] (rig []))
+  ([extra]
+   (let [state (gh/fake-state)]
+     (gh/seed-pull! state repo a-pull-request
+                    {:files the-files :reviews the-reviews})
+     (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
+                     a-red-check)
+     (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
+                     a-green-check)
+     (gh/seed-log! state "7001" the-log)
+     {:state state :source (gh/fake-source state) :engine (boot extra)})))
 
 (defn- quiet [& _] nil)
 
@@ -308,6 +313,162 @@
                    [:data :change_id]))
         "and the seat's own row keeps its ask's id")
     (is (some? (:id ours)))))
+
+
+;; ── the merge finishes the task (bead waymark-fp62.6.3.14) ──────────
+;;
+;; THE TASK IS DONE WHEN ITS PULL REQUEST MERGES. The seat that built
+;; the change submitted and stopped, and the task stayed open until a
+;; person closed it by hand. So the engine does it: a change born from
+;; a task carries the task's address in `born_from` — a field the
+;; adoption does not touch — and the merge walks the task's own
+;; `complete` door.
+
+(def ^:private the-person
+  (t/principal {:id "colton" :display "Colton Kopsa"}))
+
+(res/defhandler mark-the-task-done [row _inp _ctx]
+  (assoc-in row [:data :status] "done"))
+
+(def ^:private task
+  "The smallest `task`: the household's own task kind is workqueue10's
+  and this suite boots the factory alone, so the queue gets a kind of
+  its own here — shaped the way `task` is shaped in the one fact the
+  merge reads, a `status` field its `complete` door writes `done`
+  into. bench_test's `ask` is the same stand-in, one bead over."
+  (res/resource
+   {:kind :task
+    :plural "tasks"
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {data.status}"
+    :label-template "{data.title}"
+    :schema [:map
+             [:title {:examples ["Put the size ceiling on the policy form"]
+                      :x-display {:label "What to build"}}
+              [:string {:min 1 :max 200}]]
+             [:status {:optional true :filter #{:eq :in}
+                       :x-display {:label "Where it stands"}}
+              [:maybe [:enum "open" "done"]]]]
+    :filterable {:state #{:eq :in}}
+    :default-filters {:status "open"}
+    :actions
+    {:complete {:from #{:open} :to :done
+                :handler mark-the-task-done
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "Done is done."}
+                :display {:label "Complete" :style :primary :order 1
+                          :description "Say the task is done"}}}}))
+
+(defn- a-task!
+  "One row of the queue a person writes."
+  [engine]
+  (:row (inv/create! engine :task
+                     {:title "6.3.14 The merge completes the task"
+                      :status "open"}
+                     {:principal the-person})))
+
+(defn- merge-the-pull-request!
+  "GitHub merged it, as the API answers a merged pull request."
+  [state]
+  (gh/seed-pull! state repo
+                 (assoc a-pull-request
+                        :state "closed"
+                        :merged_at "2026-09-19T15:00:00Z"
+                        :updated_at "2026-09-19T15:00:00Z")))
+
+(deftest a-merged-pull-request-completes-the-task-the-change-was-born-from
+  (let [{:keys [state engine] :as r} (rig [task])
+        asked (a-task! engine)
+        ours (a-seat-born-change! engine
+                                  {:change_id (str "task:" (:id asked))
+                                   :born_from (str "task:" (:id asked))})
+        _ (pass! r)
+        adopted (one-row engine :change {})
+        _ (merge-the-pull-request! state)
+        _ (pass! r)
+        change (one-row engine :change {})
+        done (one-row engine :task {})]
+    (testing "the adoption takes GitHub's id and keeps the origin"
+      (is (= (:id ours) (:id adopted)))
+      (is (= "github:ckopsa/waymark#31" (get-in adopted [:data :change_id])))
+      (is (= (str "task:" (:id asked)) (get-in adopted [:data :born_from]))
+          "`change_id` is GitHub's now, and the row still says which
+           task it was built for"))
+
+    (testing "and the merge completes that task"
+      (is (= :merged (:state change)))
+      (is (= "done" (get-in done [:data :status]))
+          "the task is done when its pull request merges, whether or
+           not the seat completed it")
+      (is (= :done (:state done))
+          "through the task's own complete door, so the task's log
+           carries the move"))))
+
+(deftest a-merged-pull-request-on-a-submitted-change-completes-the-task-too
+  ;; the state a seat-born row STANDS IN on the day: the seat pushed,
+  ;; so the row is `submitted`, and the adoption keeps it there. The
+  ;; source's state table must move a submitted row to `merged` as it
+  ;; moves an open one, or the task is never completed.
+  (let [{:keys [state engine] :as r} (rig [task])
+        asked (a-task! engine)
+        ours (a-seat-born-change! engine
+                                  {:change_id (str "task:" (:id asked))
+                                   :born_from (str "task:" (:id asked))})
+        _ (put-at-submitted! engine (str (:id ours)))
+        _ (pass! r)
+        adopted (one-row engine :change {})
+        _ (merge-the-pull-request! state)
+        _ (pass! r)
+        change (one-row engine :change {})
+        done (one-row engine :task {})]
+    (is (= :submitted (:state adopted))
+        "the adoption keeps the state the row stands in")
+    (is (= :merged (:state change))
+        "and the merge moves a submitted row as it moves an open one")
+    (is (= "done" (get-in done [:data :status]))
+        "so the task is done when its pull request merges")))
+
+(deftest a-merge-whose-task-is-already-done-moves-the-change-all-the-same
+  (let [{:keys [state engine] :as r} (rig [task])
+        asked (a-task! engine)
+        _ (inv/invoke! engine :task (str (:id asked)) :complete nil
+                       {:principal the-person})
+        _ (a-seat-born-change! engine
+                               {:change_id (str "task:" (:id asked))
+                                :born_from (str "task:" (:id asked))})
+        _ (pass! r)
+        _ (merge-the-pull-request! state)
+        _ (pass! r)]
+    (is (= :merged (:state (one-row engine :change {})))
+        "a task the seat already completed is not an error: GitHub
+         merged the pull request, and the row follows GitHub")
+    (is (= "done" (get-in (one-row engine :task {}) [:data :status])))))
+
+(deftest a-merge-whose-task-is-gone-moves-the-change-all-the-same
+  (let [{:keys [state engine] :as r} (rig [task])
+        _ (a-seat-born-change! engine
+                               {:change_id "task:01HZQ7NOSUCHR0W4V5X6Y7Z8"
+                                :born_from "task:01HZQ7NOSUCHR0W4V5X6Y7Z8"})
+        _ (pass! r)
+        _ (merge-the-pull-request! state)
+        _ (pass! r)]
+    (is (= :merged (:state (one-row engine :change {})))
+        "a task nobody can find is not an error either: the merge must
+         never fail for the queue")))
+
+(deftest a-change-github-gave-us-was-born-from-nothing
+  (let [{:keys [state engine] :as r} (rig [task])
+        _ (pass! r)
+        _ (merge-the-pull-request! state)
+        _ (pass! r)]
+    (is (= :merged (:state (the-change engine))))
+    (is (nil? (get-in (the-change engine) [:data :born_from]))
+        "almost every pull request the forge reads was opened by a
+         person, and that row was born from no row of ours")
+    (is (empty? (rows-of engine :task {}))
+        "so the merge completes nothing")))
 
 ;; ── acceptance 2 ────────────────────────────────────────────────────
 

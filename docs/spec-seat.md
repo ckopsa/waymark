@@ -1055,6 +1055,30 @@ is not adopted. `change_id` is unique, so that write lands whole or it
 does not land at all. The facts and the state then follow through
 `observe` and the state doors, as they do for every other row.
 
+The change must keep the walk row it was born from. The mint writes
+the field `born_from`. `born_from` has the same value as `change_id`
+at the mint: the walk kind, a colon and the walk row's own id. The
+adoption writes GitHub's identity over `change_id`, and it does not
+touch `born_from`. So the row says which walk row it was built for
+after the pull request is open.
+
+The task is done when its pull request merges. The engine must
+complete the task when a seat-born change moves to `merged`. The
+engine reads `born_from`. The engine does this only when `born_from`
+names a `task`. The engine invokes the `complete` door on that task,
+with its own hand. The engine does this in the merge of the change.
+
+The completion is best-effort. A task that is already done is not an
+error. A task that is gone is not an error. A door that refuses is not
+an error. The engine writes the refusal in its log, and the change
+moves to `merged` all the same. GitHub merged the pull request, and
+the row follows GitHub.
+
+The seat must complete the task too. The instructions of the code seat
+say: after the submit, invoke `complete` on the task row, then stop.
+The two are one answer: the seat closes the task on the day, and the
+merge closes a task the seat left open.
+
 ### 12.2 The fire door
 
 The owner's ruling of 2026-09-17: a seat must be fired on demand and
@@ -2018,6 +2042,14 @@ above. The cases:
     not name one repository answers no bench and a `bench_note`. The
     next source pass adopts the row the seat built, and mints no
     second one. (R-12.32)
+50. The change the sit mints carries `born_from`: the walk kind, a
+    colon and the walk row's own id. The adoption writes GitHub's id
+    over `change_id` and leaves `born_from` as it is. A merged pull
+    request on such a row completes the task it was born from, with
+    the engine's own hand. A task that is already done, a task that is
+    gone, and a door that refuses each leave the change at `merged`
+    and raise no error. A change GitHub gave us carries no
+    `born_from`, and its merge completes nothing. (R-12.32)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
