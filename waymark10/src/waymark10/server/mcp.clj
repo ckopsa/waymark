@@ -2313,6 +2313,12 @@
   the branch says which task it builds, and `bench-branch` reads the
   same value back off the row.
 
+  THE ROW KEEPS WHAT IT WAS BORN FROM (bead waymark-fp62.6.3.14).
+  `born_from` gets the same `<kind>:<id>`. The source ADOPTS this row
+  when the push opens the pull request, and that write puts GitHub's
+  identity over `change_id` — so a field of its own is what lets the
+  merge complete the walk row this change was built for.
+
   → [change nil], or [nil sentence] when there is no repository to
   mint against and when the mint itself refuses."
   [eng seat walk]
@@ -2330,6 +2336,13 @@
             [(:row (inv/create!
                     eng :change
                     {:change_id change-id
+                     ;; …and the same words again, in a field the
+                     ;; adoption does not touch (waymark-fp62.6.3.14).
+                     ;; `change_id` becomes GitHub's at the adoption,
+                     ;; so the row would forget which walk row it was
+                     ;; built for — and the merge must know, because
+                     ;; it completes that row.
+                     :born_from change-id
                      :repository repo
                      :title (walk-row-title row)
                      :head_branch (str/replace pattern "*" row-id)

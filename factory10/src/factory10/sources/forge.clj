@@ -238,11 +238,23 @@
 (defn- state-door
   "The one door from the row's state to the forge's. nil when the row
   already says what the forge says, and nil for a merged row: that
-  state is the kind's only tomb."
+  state is the kind's only tomb.
+
+  A `submitted` or `stuck` row follows the forge too (bead
+  waymark-fp62.6.3.14). A seat-born change stands at `submitted` once
+  the seat has pushed, and that is the state the adoption keeps — so
+  the pull request GitHub then merges must move THAT row, or the row
+  never reaches `merged` and the task it was born from is never
+  completed. The kind's own `merge` and `close` doors admit all three
+  states; this table only says the same."
   [row-state forge-state]
   (case [row-state (str forge-state)]
     [:open "merged"] :merge
+    [:submitted "merged"] :merge
+    [:stuck "merged"] :merge
     [:open "closed"] :close
+    [:submitted "closed"] :close
+    [:stuck "closed"] :close
     [:closed "open"] :reopen
     nil))
 

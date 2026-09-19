@@ -1308,6 +1308,12 @@
           (is (= (str "ask:" ask-id) (:change_id d))
               "the walk kind, a colon and the walk row's own id — so a
                second sitting on the same ask finds this row")
+          (is (= (str "ask:" ask-id) (:born_from d))
+              "the same words again, in a field the adoption does not
+               touch (bead waymark-fp62.6.3.14): `change_id` becomes
+               GitHub's when the push opens the pull request, and the
+               merge must still know which row this change was built
+               for")
           (is (= a-repository (:repository d))
               "read off the seat's own bench powers, because an ask
                names no repository")

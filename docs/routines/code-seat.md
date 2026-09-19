@@ -77,7 +77,10 @@ The engine mints no `change` row until a firing opens. At the first
 firing the sit mints one change for the ask it walks: the id is
 `task:` and the ask's own id, the branch is the policy's pattern with
 the ask's id in place of the `*`, and there is no pull request number
-yet. A second firing on the same ask finds that same change.
+yet. A second firing on the same ask finds that same change. The
+change also keeps that same `task:` address in `born_from`, because
+the adoption writes GitHub's id over the change's own id and the
+merge must still know which ask it built.
 
 ## The charter
 
@@ -97,9 +100,9 @@ says a check is red, read the failed step's log, fix the cause, and
 submit again. When the task asks for something this repository cannot
 hold, when the change is larger than the ceiling, or when you cannot
 find what the task names, stall the change and say why in one
-sentence. A person reads every stall. Complete the task only when the
-repository already does what the task asks; then say so in the stall
-sentence and stop.
+sentence. A person reads every stall. When the repository already does
+what the task asks, complete the task, say so in the stall sentence,
+and stop.
 ```
 
 ## The instructions
@@ -120,7 +123,8 @@ Build the task with those tools: the bench.find and bench.read tools to
 read, the bench.edit tool to change a file, the bench.pull tool when the
 bench says the branch is behind. Then invoke the door the charter
 chooses on the CHANGE row: submit with your one sentence, or stall with
-your one sentence. Submit ends the round. After submit or stall, stop.
+your one sentence. Submit ends the round. After submit, invoke complete
+on the task row, then stop. After stall, stop.
 Do not call discover, schema, query or powers; a refusal names its own
 remedy. When the seat says halted or parked, say why and stop.
 
@@ -177,8 +181,11 @@ Nothing else goes in the instructions (R-12.10).
    url, and the mirror follows it from there.
 9. A green check and a merge move the change to `merged`. A red check
    on the new head mints a `ci_run` row, and the next firing reads
-   the finding in the sit's own `feedback`. When the work is done, a
-   person completes the task.
+   the finding in the sit's own `feedback`. The merge completes the
+   task: the change kept the task's address in `born_from` at the
+   mint, and the engine walks the task's `complete` door with its own
+   hand (R-12.32). A task the seat already completed stays done, and
+   a person completes nothing by hand.
 
 ## Before the first firing
 

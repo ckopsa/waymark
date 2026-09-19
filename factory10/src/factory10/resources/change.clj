@@ -77,6 +77,17 @@
   door that write goes through, and it is the mirror's, hidden like
   every other.
 
+  THE MERGE COMPLETES THE TASK (bead waymark-fp62.6.3.14). The task
+  is done when its pull request merges. `change_id` says which ask a
+  seat-born row was minted for, and the adoption OVERWRITES it with
+  GitHub's own id — so the origin is kept in a field of its own,
+  `born_from`, written once at the mint and never again. When such a
+  row moves to `merged`, the merge walks the task's `complete` door
+  with the engine's own hand. It is best-effort: a task that is
+  already done, gone or behind a door that refuses is not an error,
+  because GitHub merged the pull request and this row follows GitHub
+  whatever the queue says.
+
   WHAT `observe` IS FOR. A pull request changes under the row: a new
   commit moves the head sha, a review moves the review state, a
   rebase moves the counts. `observe` is a self-loop on `open` that
@@ -105,6 +116,58 @@
   ;; absent, and absent means silent: the stored value stands. The
   ;; machine advances the state, never this handler.
   (update row :data merge (into {} (remove (comp nil? val)) inp)))
+
+;; ── the merge finishes the task the change was born from ────────────
+
+(def ^:private task-born-prefix
+  "What `born_from` reads when the change was minted for a TASK. The
+  merge opens one kind's door and no other: a kind this module does
+  not know is a door this module must not walk."
+  "task:")
+
+(defn- task-of
+  "The task this change was born from, or nil. nil is the ordinary
+  answer: a change GitHub gave us was born from nothing, and an engine
+  that serves no `task` kind reads no row (`:read` answers nil for a
+  kind it does not carry)."
+  [row ctx]
+  (let [born (str (get-in row [:data :born_from]))]
+    (when (str/starts-with? born task-born-prefix)
+      (let [id (subs born (count task-born-prefix))]
+        (when-some [read (:read ctx)]
+          (when-some [task (read :task id)]
+            [id task]))))))
+
+(defhandler complete-the-task-it-was-born-from [row _inp ctx]
+  ;; THE TASK IS DONE WHEN ITS PULL REQUEST MERGES (bead
+  ;; waymark-fp62.6.3.14, spec-seat.md R-12.32). The seat is told to
+  ;; complete the task after its submit, and the seat that stopped at
+  ;; the submit left the task open for a person to close by hand. So
+  ;; the merge does it too, under the engine's own hand.
+  ;;
+  ;; BEST-EFFORT, AND THE MERGE NEVER FAILS FOR IT. A task already
+  ;; done is left alone, a task that is gone reads nil, and a door
+  ;; that refuses is caught and said in the log. GitHub merged the
+  ;; pull request; this row follows GitHub whatever the queue answers.
+  ;;
+  ;; NO `:touches`. factory10 boots ALONE (factory10.main) and its
+  ;; registry carries no `task`, so an entry naming that kind would
+  ;; refuse the whole assembly — `checks-assembly/check-touches` asks
+  ;; that every advertised target is registered. The precedent for a
+  ;; cross-write no declaration can name is `worksheet`'s apply and
+  ;; `insight`'s offer (workqueue10): the blast radius rides in prose,
+  ;; here in the door's own `:one-way` sentence.
+  (let [[id task] (task-of row ctx)]
+    (when (and task
+               (not= "done" (str (get-in task [:data :status])))
+               (:invoke ctx))
+      (try
+        ((:invoke ctx) :task id :complete nil)
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "factory10 change merge: the task" id
+                     "did not complete -" (ex-message e)))))))
+  row)
 
 ;; ── the bench: the four doors that reach the worktree ───────────────
 ;;
@@ -591,7 +654,16 @@
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     [:url {:optional true :x-display {:hidden true}}
-     [:maybe [:string {:max 500}]]]]
+     [:maybe [:string {:max 500}]]]
+    ;; ── where a seat-born change CAME FROM (waymark-fp62.6.3.14) ──
+    ;; The walk kind, a colon and the walk row's own id — the words
+    ;; `change_id` carries at the mint. The adoption overwrites
+    ;; `change_id` with GitHub's identity, so the origin needs a field
+    ;; the adoption does not touch: the merge reads it to finish the
+    ;; task this change was built for. Hidden, like every other fact
+    ;; the engine writes and nobody types.
+    [:born_from {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 250}]]]]
    ;; THE BIRTH DOOR IS THE MIRROR'S, AND IT IS HIDDEN. A person meets
    ;; no create form for this kind. The source mints the row with what
    ;; GitHub answered; everything but the identity is optional,
@@ -621,7 +693,11 @@
     [:draft {:optional true :x-display {:label "A draft"}}
      [:maybe :boolean]]
     [:url {:optional true :x-display {:hidden true}}
-     [:maybe [:string {:max 500}]]]]
+     [:maybe [:string {:max 500}]]]
+    ;; the seat's own mint writes it and the forge never does
+    ;; (waymark-fp62.6.3.14)
+    [:born_from {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 250}]]]]
    :actions
    {;; THE MIRROR'S REFRESH. A self-loop on `open`: the pull request
     ;; moved under the row, and these are the facts that moved.
@@ -689,8 +765,13 @@
     :merge
     {:from #{:open :submitted :stuck} :to :merged
      :guards [the-mirror-writes-this-row]
+     ;; the merge COMPLETES the task this change was born from
+     ;; (waymark-fp62.6.3.14). The handler carries the blast radius,
+     ;; because `:touches` cannot name a kind factory10 boots without
+     ;; — see `complete-the-task-it-was-born-from`.
+     :handler complete-the-task-it-was-born-from
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "GitHub merged this pull request. The row follows GitHub, so there is no way back: a merged pull request is not reopened."}
+              :one-way "GitHub merged this pull request. The row follows GitHub, so there is no way back: a merged pull request is not reopened. The task this change was born from is completed with it."}
      :display {:label "Merged" :order 2
                :description "GitHub merged the pull request"}}
 
