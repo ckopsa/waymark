@@ -89,7 +89,8 @@
   request is the day job's work, not the family's. A `:primary` kind's
   open rows are claimed by the feed's next-actions population, and the
   household's feed must not card the day job's queue."
-  (:require [factory10.bench :as bench]
+  (:require [clojure.string :as str]
+            [factory10.bench :as bench]
             [factory10.mirror :refer [the-mirror-writes-this-row]]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
@@ -160,6 +161,28 @@
                      "stall door.")])
        theirs (conj theirs)))))
 
+(def ^:private title-ceiling
+  "How many characters of a change's title the pull request's title
+  carries. A pull request title is a LABEL and not a sentence: a
+  person reads it in a list, and 72 characters is the width the first
+  line of a commit is written to. The cut loses nothing, because the
+  seat's whole sentence rides as the description."
+  72)
+
+(defn- title-of
+  "The title the pull request is opened with: this row's own title,
+  cut at the ceiling.
+
+  THE ENGINE OWNS THE TITLE, and not the seat (bead
+  waymark-fp62.6.3.13). The row's title is the ask's own words for a
+  change a seat was given, and the pull request's own words for a
+  change the mirror adopted, so a person reads one story in the queue
+  and on the pull request. A row with no title at all answers nil, and
+  the rig then falls back to the first line of the commit message."
+  [row]
+  (when-some [title (not-empty (str/trim (str (get-in row [:data :title]))))]
+    (subs title 0 (min (count title) title-ceiling))))
+
 (defhandler submit-the-change [row inp ctx]
   ;; THE ROUND, IN ORDER: read the worktree, refuse a clean one, then
   ;; commit and push with the seat's sentence and the two trailers.
@@ -178,6 +201,7 @@
   (let [policy (bench/policy-of row ctx)
         repo (str (get-in row [:data :repository]))
         branch (bench/branch-of row policy)
+        title (title-of row)
         status (bench/ask ctx :status {:repo repo :branch branch})]
     (cond
       (nil? status) (bench/refuse! bench/dark-detail [bench/dark-remedy])
@@ -186,13 +210,21 @@
       (bench/refuse! nothing-detail [clean-remedy])
       :else
       (let [answer (bench/ask ctx :submit
-                              {:repo repo
-                               :branch branch
-                               :message (str (:why inp))
-                               ;; the blame line: this commit was a
-                               ;; SEAT's, in this sitting
-                               :trailers (bench/trailers ctx)
-                               :max_lines (bench/max-lines-of policy)})]
+                              (cond-> {:repo repo
+                                       :branch branch
+                                       :message (str (:why inp))
+                                       ;; the seat's sentence is the
+                                       ;; commit message AND the pull
+                                       ;; request's body; the TITLE is
+                                       ;; the engine's (bead
+                                       ;; waymark-fp62.6.3.13)
+                                       :description (str (:why inp))
+                                       ;; the blame line: this commit
+                                       ;; was a SEAT's, in this
+                                       ;; sitting
+                                       :trailers (bench/trailers ctx)
+                                       :max_lines (bench/max-lines-of policy)}
+                                title (assoc :title title)))]
         (cond
           (nil? answer) (bench/refuse! bench/dark-detail [bench/dark-remedy])
           (bench/refused answer) (rig-refusal! "submit" answer)
