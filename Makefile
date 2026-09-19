@@ -129,7 +129,6 @@ image-queue:  ## build and push the workqueue10 image for the home cluster
 	docker buildx build --platform $(PLATFORM) -f Dockerfile.workqueue10 -t $(QUEUE_IMAGE):$(IMAGE_TAG) --push .
 	@echo "pushed $(QUEUE_IMAGE):$(IMAGE_TAG)"
 
-deploy-queue: image-queue  ## push image, then roll the workqueue10 nomad job onto it
+deploy-queue: image-queue  ## push image, then roll the workqueue10 nomad job onto it (no downtime)
 	@NOMAD_ADDR=$(NOMAD_ADDR) NOMAD_TOKEN=$(NOMAD_TOKEN) \
-		nomad var put -force nomad/jobs/workqueue10/deploy image_tag=$(IMAGE_TAG) >/dev/null
-	@echo "deploying $(QUEUE_IMAGE):$(IMAGE_TAG) — nomad restarts the server task on the new image"
+		.github/scripts/dispatch-roll.sh $(IMAGE_TAG)

@@ -177,10 +177,14 @@ jobs:
           NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
         run: .github/scripts/dispatch-migrate.sh '${{ needs.build.outputs.tag }}' apply
 
-  # Writing the var is the whole deploy: the job template reads
-  # nomad/jobs/workqueue10/deploy and restarts the server task on the new
-  # tag. Same path and same `-force` as the Makefile's deploy-queue, so a
-  # laptop deploy and a CI deploy are the same act by two hands.
+  # The deploy is a ROLL, not a restart. workqueue10-roll (the infra
+  # repo's job) registers a new version of workqueue10 on this tag, and
+  # that walks the job's canary: the new allocation starts beside the
+  # old one, passes /healthz, and only then takes over. A tag that never
+  # turns healthy is auto-reverted and this job goes red while the old
+  # image keeps serving. The roll job writes nomad/jobs/workqueue10/deploy
+  # itself, after the promotion; nothing here writes it any more, and a
+  # bare `nomad var put` deploys NOTHING since 2026-09-18.
   #
   # `always()` plus explicit results, because `apply` is SKIPPED on the
   # common path (empty plan) and a plain `needs:` would skip this too.
@@ -193,15 +197,10 @@ jobs:
       && (needs.apply.result == 'success' || needs.apply.result == 'skipped')
     runs-on: ubuntu-24.04-arm
     steps:
+      - uses: actions/checkout@v4
       - uses: hashicorp/setup-nomad@v1.0.0
-      - name: Point the job at the new image
+      - name: Roll the job onto the new image
         env:
           NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
           NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
-          TAG: ${{ needs.build.outputs.tag }}
-        run: |
-          set -euo pipefail
-          nomad var put -force \
-            nomad/jobs/workqueue10/deploy \
-            image_tag="$TAG" >/dev/null
-          echo "deploying ghcr.io/${{ github.repository_owner }}/workqueue10:${TAG}"
+        run: .github/scripts/dispatch-roll.sh '${{ needs.build.outputs.tag }}'
