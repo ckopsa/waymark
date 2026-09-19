@@ -266,6 +266,17 @@
               [:source_ui_href {:optional true :x-display {:hidden true}}
                [:maybe [:string {:max 500}]]]]
      :filterable {:state #{:eq :in}}
+     ;; THE COLLECTION OPENS ON THE WORK THAT IS WAITING (bead
+     ;; waymark-fp62.6.3.10). inbox_item's spelling, over the field
+     ;; that holds this kind's lifecycle: the machine here is the sync
+     ;; machine, so `fresh` says the row is current and never says the
+     ;; work is over — `:status` does, and `:over` above reads it.
+     ;; A reader who wants the whole record sends `status=` empty,
+     ;; which is how the grammar clears a default; every other filter
+     ;; leaves it standing. A seat walks this collection, so what it
+     ;; opens on is the open tasks and not every task the house has
+     ;; ever mirrored (spec-seat.md R-12.28).
+     :default-filters {:status "open"}
      :display {:title "{data.title}"}
      ;; CAPTURE: a task born HERE, pushed to the authority that will
      ;; own it (create-push — the paydesk worksheet's door). The birth

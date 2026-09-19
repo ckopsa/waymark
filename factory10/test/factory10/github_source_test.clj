@@ -204,6 +204,111 @@
         _ (pass! r)]
     (is (= :merged (:state (the-change engine))))))
 
+
+;; ── the adoption (bead waymark-fp62.6.3.10, R-12.32) ────────────────
+;;
+;; THE HOUSE ASKS FOR SOME OF ITS OWN PULL REQUESTS. A seat that walks
+;; a queue of asks gets a change row minted for the ask itself, with
+;; the ask's id in place of GitHub's and no number; it works that row
+;; on the bench, and its submit opens the pull request. The next pass
+;; then reads a pull request whose id answers no row. It must ADOPT
+;; the row that is already here — same repository, same head branch —
+;; because two rows for one piece of work is two queues, two round
+;; counts and two stories.
+
+(def ^:private an-ask "01HZQ7ASKR3W4V5X6Y7Z8A9B1")
+
+(defn- a-seat-born-change!
+  "The row a seat's sit minted for an ask: this repository, the branch
+  the seat works on, the ask's own id in place of GitHub's, and no
+  number at all."
+  [engine extra]
+  (:row (inv/create! engine :change
+                     (merge {:change_id (str "ask:" an-ask)
+                             :repository repo
+                             :title "6.3.10 The code seat builds a task"
+                             :head_branch "waymark-fp62.6.4"
+                             :base_branch "main"
+                             :author "code-seat"}
+                            extra)
+                     {:principal mirror/source-principal})))
+
+(defn- put-at-submitted!
+  "The row a seat has pushed one round of. The state is moved by hand
+  because the `submit` door reaches a bench rig, and this suite boots
+  none: what is under test is the PASS, not the push."
+  [engine id]
+  (let [st (:storage engine)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :change id {})]
+          (store/save-row! st tx :change
+                           (assoc row :state :submitted
+                                  :version (inc (long (:version row))))
+                           (:version row)))))))
+
+(deftest the-pull-request-a-seat-opened-is-adopted-and-not-minted-again
+  (let [{:keys [engine] :as r} (rig)
+        ours (a-seat-born-change! engine {})
+        census (pass! r)
+        rows (rows-of engine :change {})
+        row (first rows)
+        data (:data row)]
+    (is (= 1 (count rows)) "one row for one piece of work, not two")
+    (is (= (:id ours) (:id row))
+        "and it is the row the seat built, adopted where it stands")
+    (is (= 1 (:adopted census)))
+    (is (= 0 (:minted census)) "nothing was born in this pass")
+
+    (testing "GitHub's identity is on it now"
+      (is (= "github:ckopsa/waymark#31" (:change_id data))
+          "the id a later pass reads it back by")
+      (is (= 31 (:number data)) "the number the row was born without")
+      (is (= "https://github.com/ckopsa/waymark/pull/31" (:url data))))
+
+    (testing "and the facts followed through observe, as for any row"
+      (is (= 3 (:files_changed data)))
+      (is (= "changes_requested" (:review_state data)))
+      (is (= (get-in a-pull-request [:head :sha]) (:head_sha data))))
+
+    (testing "the next pass finds it by that id and moves it"
+      (let [census (pass! r)]
+        (is (= 0 (:adopted census))
+            "an adoption happens once: the id answers the row now")
+        (is (= 1 (count (rows-of engine :change {}))))))))
+
+(deftest a-change-a-seat-has-submitted-is-adopted-in-the-state-it-stands-in
+  (let [{:keys [engine] :as r} (rig)
+        ours (a-seat-born-change! engine {})
+        _ (put-at-submitted! engine (str (:id ours)))
+        census (pass! r)
+        row (first (rows-of engine :change {}))]
+    (is (= 1 (:adopted census))
+        "`submitted` is where the adoption almost always lands: the
+         push that opened the pull request is what moved the row
+         there")
+    (is (= :submitted (:state row))
+        "the adoption writes the identity and moves nothing — the
+         machine advances the state, and GitHub says open")
+    (is (= "github:ckopsa/waymark#31" (get-in row [:data :change_id])))
+    (is (= 31 (get-in row [:data :number])))))
+
+(deftest a-row-on-another-branch-is-not-adopted
+  (let [{:keys [engine] :as r} (rig)
+        ours (a-seat-born-change! engine {:head_branch "waymark/other"})
+        census (pass! r)
+        rows (rows-of engine :change {})]
+    (is (= 0 (:adopted census)))
+    (is (= 1 (:minted census)))
+    (is (= 2 (count rows))
+        "a pull request that is not this row's work gets a row of its
+         own")
+    (is (= (str "ask:" an-ask)
+           (get-in (one-row engine :change {:change_id (str "ask:" an-ask)})
+                   [:data :change_id]))
+        "and the seat's own row keeps its ask's id")
+    (is (some? (:id ours)))))
+
 ;; ── acceptance 2 ────────────────────────────────────────────────────
 
 (deftest a-failed-check-run-becomes-a-red-run-with-the-log-tail

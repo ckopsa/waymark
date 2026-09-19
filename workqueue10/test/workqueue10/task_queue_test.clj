@@ -26,6 +26,7 @@
             [workqueue10.main :as main]
             [workqueue10.sources.gtasks :as gt]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -119,8 +120,14 @@
     (is (= 200 (:status resp)) (str query ": " (:body resp)))
     (get-in (json resp) [:data :items])))
 
-(defn- task-by-title [title]
-  (or (first (filter #(str/includes? (str (:summary %)) title) (items-of "")))
+(defn- task-by-title
+  "One task by the words in its summary line, over the WHOLE record:
+  `?status=` empty is how the grammar clears the kind's own default
+  filter (collections/default-filter-params), and a story that reads
+  a task the authority dropped must ask for it."
+  [title]
+  (or (first (filter #(str/includes? (str (:summary %)) title)
+                     (items-of "?status=")))
       (throw (ex-info (str "no task titled " title) {}))))
 
 (defn- act!
@@ -198,11 +205,27 @@
 
   (testing "one discovery pass mints EVERY source's rows into the one kind"
     (is (= 6 (mirror/discover! *eng* :task)))
-    (is (= 6 (count (items-of "")))))
+    (is (= 6 (count (items-of "?status=")))
+        "six rows are in the record"))
+
+  (testing "and the collection a reader OPENS is the work still waiting
+            (:default-filters, bead waymark-fp62.6.3.10) — the coleslaw
+            the planner dropped is in the record and not in the queue"
+    (is (= 5 (count (items-of ""))))
+    (is (= (count (items-of "?status=open")) (count (items-of "")))
+        "the unfiltered read and the open read answer the same page,
+         which is what a seat walks when it walks this kind")
+    (is (= {:status "open"} (:default-filters (get (inv/resources *eng*) :task)))
+        "declared, so the picker, the self href and the seat's walk
+         guard all read one fact"))
 
   (testing "one queue, one filter grammar — across domains"
     (is (= 2 (count (items-of "?source=chore"))))
-    (is (= 3 (count (items-of "?source=meal"))))
+    (is (= 2 (count (items-of "?source=meal")))
+        "the default filter stands beside another filter: every read
+         that does not name status opens on the open tasks")
+    (is (= 3 (count (items-of "?source=meal&status=")))
+        "…and clearing it answers the meal planner's three")
     (is (= 1 (count (items-of "?source=todo"))))
     (is (= 5 (count (items-of "?status=open"))))
     (is (= 3 (count (items-of "?assignee_name=colton"))))
