@@ -50,7 +50,8 @@
   not the family's. A `:primary` kind's open rows are claimed by the
   feed's next-actions population, and the household's feed must not
   card the day job's configuration."
-  (:require [factory10.bench :as bench]
+  (:require [clojure.string :as str]
+            [factory10.bench :as bench]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.types :as t]))
@@ -59,18 +60,22 @@
 
 ;; ── the one wall ────────────────────────────────────────────────────
 
-(defguardfn only-a-person-states-the-policy
+(defguardfn a-person-or-their-delegate-states-the-policy
   {:reads [:principal]
-   :open "No door here changes this verdict. What submit means is a person's statement about a repository, so a model that needs another ceiling, another base or another pattern writes a finding that says which number is wrong and why, and a person taps."
-   :explain "The repository policy is the house's own sentence about this repository — the branches, the base, the size ceiling, the rounds and the formatter rule. A model that could restate it could raise its own ceiling."}
+   :open "No door here changes this verdict. What submit means is a person's statement about a repository. A person states it in person, or through a delegate that acts for them under a grant the person approved. A model in a seat writes a finding that says which number is wrong and why, and a person taps."
+   :explain "The repository policy is the house's own sentence about this repository — the branches, the base, the size ceiling, the rounds and the formatter rule. A model that could restate its own policy could raise its own ceiling. A delegate acting for a person is the person's hand, and the grant it wears is the person's decision."}
   [_row _inp ctx]
-  ;; The person-wall's shape (inbox_item's `the-correction-is-a-persons`,
-  ;; one module over): every hand but an agent's passes, the engine's
-  ;; own system actor included — a seed that writes the first policy at
-  ;; boot is the house's hand, not a model's.
-  (if (= :agent (:type (:principal ctx)))
-    (t/deny)
-    (t/allow)))
+  ;; The owner's ruling, 2026-09-19: a person works with a model to
+  ;; add a repository, so the wall is against a model ALONE — a seat's
+  ;; sitter, an agent that acts for nobody — and not against every
+  ;; agent. The shape is mcp_server's `a-person-or-the-engine`: a
+  ;; person, the engine's own system actor, or an agent whose
+  ;; principal names whom it acts for. The grant is the leash; this
+  ;; guard only keeps a seat from restating the policy it works under.
+  (let [{:keys [type acts-for]} (:principal ctx)]
+    (if (and (= :agent type) (str/blank? (str acts-for)))
+      (t/deny)
+      (t/allow))))
 
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
@@ -146,7 +151,7 @@
    :row     {:state :active :data a-policy}
    :input   (assoc a-policy :max_lines 4000)
    :as      {:id "bench-seat" :type :agent}
-   :expect  {:refused :only-a-person-states-the-policy}})
+   :expect  {:refused :a-person-or-their-delegate-states-the-policy}})
 
 (defscenario the-person-states-what-submit-means
   "And the door is really there for the person whose repository it is
@@ -287,7 +292,7 @@
    ;; what the form offers; the two engine fields are on the schema so
    ;; a reader sees them and on no form so a person never writes them.
    :create-schema (into [:map] policy-fields)
-   :create-guards [only-a-person-states-the-policy]
+   :create-guards [a-person-or-their-delegate-states-the-policy]
    ;; …and the rig is told at the birth (R-2): a create cannot walk a
    ;; door on a row that does not exist yet
    :on-create enrol-at-birth
@@ -295,7 +300,7 @@
    {:restate
     {:from #{:active} :to :active
      :input (into [:map] policy-fields)
-     :guards [only-a-person-states-the-policy]
+     :guards [a-person-or-their-delegate-states-the-policy]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes
@@ -311,7 +316,7 @@
 
     :retire
     {:from #{:active} :to :retired :undo :restore
-     :guards [only-a-person-states-the-policy]
+     :guards [a-person-or-their-delegate-states-the-policy]
      :handler unenrol-the-repository
      :safety {:idempotent true :reversible true :confirm true
               :consequence "The bench stops working this repository: a submit reads no policy and refuses. Nothing is deleted, and one tap brings it back."}
@@ -320,7 +325,7 @@
 
     :restore
     {:from #{:retired} :to :active :undo :retire
-     :guards [only-a-person-states-the-policy]
+     :guards [a-person-or-their-delegate-states-the-policy]
      :handler enrol-the-repository-again
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restore" :order 2
@@ -347,5 +352,8 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Enrolled" :order 4
                :description "The bench took this repository and the engine says when"}}}
+   ;; The delegate's allow — an agent whose principal names whom it
+   ;; acts for — is the suite's to prove (bench_test): a check-tier
+   ;; scenario's actor carries id, roles and type, and no acts-for.
    :scenarios [a-model-does-not-restate-the-policy
                the-person-states-what-submit-means]})

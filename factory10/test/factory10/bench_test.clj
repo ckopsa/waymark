@@ -819,6 +819,40 @@
     (is (nil? (get-in stored [:data :note]))
         "with nothing to explain")))
 
+(deftest a-delegate-states-the-policy-and-a-model-alone-does-not
+  ;; The owner's ruling, 2026-09-19: a person works with a model to add
+  ;; a repository, so the wall is against a model ALONE. This lives in
+  ;; the suite and not beside the kind's scenarios because a check-tier
+  ;; actor carries id, roles and type, and never acts-for.
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        delegate (assoc (t/principal {:id "claude-for-colton" :type :agent
+                                      :display "Claude for Colton"})
+                        :acts-for "colton")
+        ;; the restate is fenced: it wants the row's own etag, the
+        ;; shape the wire spells it in
+        restated (fn [who lines]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (assoc (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         :max_lines lines)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))]
+    (testing "an agent that acts for a person is the person's hand"
+      (restated delegate 600)
+      (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
+          "the grant it wears is the person's decision, and the row moved"))
+    (testing "an agent that acts for nobody is a model alone, and the wall stands"
+      (is (thrown? clojure.lang.ExceptionInfo (restated clerk 4000)))
+      (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
+          "a seat's sitter could otherwise raise its own ceiling"))))
+
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)
         eng (fresh-engine st)
