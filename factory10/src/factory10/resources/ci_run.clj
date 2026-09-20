@@ -289,7 +289,7 @@
                 :x-display
                 {:label "Why there is no log"
                  :help "One sentence from the source, when the failed job's log could not be read. The excerpt is empty then, and this says why it is empty."}}
-     [:maybe [:string {:max 400}]]]
+     [:maybe [:string {:max 240}]]]
     [:started_at {:optional true
                   :x-display
                   {:label "When it started"
@@ -366,7 +366,7 @@
      [:maybe [:string {:max 20000}]]]
     [:log_note {:optional true
                 :x-display {:label "Why there is no log"}}
-     [:maybe [:string {:max 400}]]]
+     [:maybe [:string {:max 240}]]]
     [:started_at {:optional true :x-display {:label "When it started"}}
      [:maybe :waymark/instant]]
     [:finished_at {:optional true :x-display {:label "When it ended"}}

@@ -547,8 +547,8 @@
     (is (nil? (:log_excerpt data)))
     (is (str/includes? (str (:log_note data)) "404")
         "the forge's own answer, so a person reads what happened")
-    (is (>= 400 (count (str (:log_note data))))
-        "one sentence, and the field caps it")))
+    (is (>= 240 (count (str (:log_note data))))
+        "one sentence, and the source cuts it to the field's ceiling")))
 
 (deftest the-job-log-redirect-is-followed-without-the-token
   (let [{:keys [state engine] :as r} (rig)

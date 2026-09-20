@@ -370,6 +370,14 @@
 
 ;; ── the red runs ────────────────────────────────────────────────────
 
+(def log-note-chars
+  "How long `log_note` may be. One sentence about why there is no
+  log, at the same ceiling a remedy sentence has: a plain text field
+  wider than that reads as prose and the usability battery says so.
+  A forge's error message can run past it, so the note is cut here
+  rather than refused a row."
+  240)
+
 (defn- mint-run!
   "One failed check run → one `ci_run` row at red, with the log tail
   on it and a ref to the change it ran on."
@@ -389,7 +397,10 @@
         body (present (assoc check
                              :change (str (:id change-row))
                              :log_excerpt (when-not blank? excerpt)
-                             :log_note (when blank? note))
+                             :log_note (when (and blank? note)
+                                         (subs (str note) 0
+                                               (min (count (str note))
+                                                    log-note-chars))))
                       ci-run-create-fields)]
     (try
       (inv/create! eng :ci_run body (as-opts))
