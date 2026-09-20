@@ -884,7 +884,15 @@ restates.
 **R-12.29** The sit must answer the bench for a code seat. When the
 seat's walk is `change` or `ci_run`, and the first row of the walk
 names a change, the answer to `waymark_sit` carries three more
-things. `bench` is the worktree the engine made before it answered:
+things. A seat that walks `ci_run` and holds NO bench power is not a
+code seat: it reads the run and writes a verdict, so its sit answers
+no `change`, no `bench` and no `bench_note`, and the rig is asked for
+nothing. The CI failure classifier is that seat
+(docs/routines/ci-classifier.md). Its scope names the three classify
+doors of `ci_run` and the change read-only, and nothing else: it
+labels a red run and it changes no code. `reclassify` is the person's
+correction and is not grantable, because the corrections after a
+verdict are how this seat's judgment is measured. `bench` is the worktree the engine made before it answered:
 the repository, the branch, the base branch, the head commit, and how
 many paths are different from the head because an earlier sitting left
 them. The engine makes it with one call to the bench rig's `prepare`,
@@ -1026,7 +1034,9 @@ repositories, or when one value names more than one repository. The
 sit then gives no `bench`. It gives a `bench_note` that tells the
 person to name one repository in the scope, and the rows still ride.
 A seat whose scope names no bench power at all is not a code seat.
-Its sit answers no `change`, no `bench` and no `bench_note`.
+Its sit answers no `change`, no `bench` and no `bench_note`. This
+holds whatever the seat walks, the `ci_run` walk of R-12.29
+included.
 
 Second, the engine finds or mints one change row for the FIRST row of
 the walk. The `change_id` is the walk kind, a colon, and the walk

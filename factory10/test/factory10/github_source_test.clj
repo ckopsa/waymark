@@ -527,8 +527,28 @@
         census (pass! r)
         data (:data (the-run engine))]
     (is (= 1 (:runs-minted census)) "the row is minted anyway")
-    (is (str/includes? (str (:log_excerpt data)) "no log excerpt")
-        "and it says why it carries no tail")))
+    (is (nil? (:log_excerpt data))
+        "the excerpt is EMPTY: a sentence about a missing log written
+         where the tail goes reads as the end of a build log, and the
+         classifier reasons about it as one (bead waymark-fp62.6.9)")
+    (is (str/includes? (str (:log_note data)) "plain text")
+        "and the note says why there is no tail, in its own field")))
+
+(deftest a-log-the-forge-will-not-answer-at-all-carries-the-note-and-no-excerpt
+  ;; The other half of the same rule: a 404 on the job log is as
+  ;; ordinary as an archive, and the row is minted either way.
+  (let [{:keys [state engine] :as r} (rig)
+        _ (gh/log-mode! state :missing)
+        census (pass! r)
+        row (the-run engine)
+        data (:data row)]
+    (is (= 1 (:runs-minted census)) "the red run is a row, log or no log")
+    (is (= :red (:state row)) "…and it is in the classifier's queue")
+    (is (nil? (:log_excerpt data)))
+    (is (str/includes? (str (:log_note data)) "404")
+        "the forge's own answer, so a person reads what happened")
+    (is (>= 240 (count (str (:log_note data))))
+        "one sentence, and the source cuts it to the field's ceiling")))
 
 (deftest the-job-log-redirect-is-followed-without-the-token
   (let [{:keys [state engine] :as r} (rig)
@@ -544,14 +564,13 @@
 
 ;; ── acceptance 3 ────────────────────────────────────────────────────
 
-(deftest a-head-that-moves-leaves-the-old-head-s-red-run-behind
-  ;; WHAT IS TESTED IS WHAT WAS BUILT. The design asks that the old
-  ;; head's red runs be marked superseded. The ci_run machine has no
-  ;; door that says so — red departs only through the three classify
-  ;; doors — and this bead adds no doors to a kind. So the source does
-  ;; the two things it can: it mints nothing for the dead head, and it
-  ;; COUNTS the red rows of a dead head in its census. The row stays at
-  ;; red until the kind has a `supersede` door.
+(deftest a-head-that-moves-supersedes-the-old-heads-red-run
+  ;; A RUN RAN ON ONE COMMIT (bead waymark-fp62.6.9). When the head
+  ;; moves that commit is gone, and the run is a question no seat can
+  ;; answer. The pass mints nothing for the dead head and walks the
+  ;; kind's `supersede` door on the rows already here, so the
+  ;; classifier's queue holds only runs of the commit the branch
+  ;; carries now.
   (let [{:keys [state engine] :as r} (rig)
         _ (pass! r)
         run (the-run engine)
@@ -570,16 +589,40 @@
         census (pass! r)]
     (is (= new-head (get-in (the-change engine) [:data :head_sha]))
         "the change carries the new head")
-    (is (= 1 (:runs-stale census))
-        "and the pass counts one red run on a head that moved")
-    (is (= :red (:state (the-run engine)))
-        "the row stands where it is — the kind has no supersede door")
+    (is (= 1 (:runs-superseded census))
+        "and the pass says it superseded one red run of the old head")
+    (is (= :superseded (:state (the-run engine)))
+        "the row left the queue through the door, at a tomb of its own")
+    (is (nil? (get-in (the-run engine) [:data :verdict]))
+        "with no verdict on it: nobody classified this run, and the
+         supersede door writes no field at all")
+    (is (empty? (rows-of engine :ci_run
+                         {:state "red"
+                          :head_sha (get-in a-pull-request [:head :sha])}))
+        "acceptance 3: a moved head leaves NO red ci_run of the old
+         head in the queue")
     (is (= 1 (:runs-minted census))
         "the new head's failure is a row of its own")
     (is (some? (one-row engine :ci_run
                         {:run_id "github:ckopsa/waymark/check-run/41752099999"})))
     (is (= (:id run) (:id (the-run engine)))
-        "and the old row was not re-minted")))
+        "and the old row was not re-minted")
+
+    (testing "the transition is on the record, so the ledger sees it"
+      (let [actions (store/with-tx (:storage engine)
+                      (fn [tx]
+                        (into #{}
+                              (map #(name (:action %)))
+                              (store/transitions
+                               (:storage engine) tx
+                               {:kind :ci_run :resource-id (str (:id run))}
+                               {:limit 20}))))]
+        (is (contains? actions "supersede")
+            "a superseded run is a transition and not a delete, so the
+             ledger counts what the head took with it")))
+
+    (testing "and a second pass supersedes nothing, because nothing is red"
+      (is (= 0 (:runs-superseded (pass! r)))))))
 
 ;; ── acceptance 4 ────────────────────────────────────────────────────
 

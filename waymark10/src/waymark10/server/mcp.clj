@@ -2457,6 +2457,15 @@
   [eng seat walk]
   (cond
     (nil? walk) [nil nil]
+    ;; A SEAT THAT ONLY READS THE RUN OPENS NO WORKTREE (bead
+    ;; waymark-fp62.6.9's companion, waymark-fp62.6.7). The classifier
+    ;; walks `ci_run` and answers from the log tail the row already
+    ;; carries: it holds no bench power, so a worktree for it would be
+    ;; a checkout nobody asked for and one rig call each firing. A
+    ;; seat that walks `change` is told about its change as it always
+    ;; was — that walk IS the code.
+    (and (= "ci_run" (str (get walk "kind"))) (not (bench-seat? seat)))
+    [nil nil]
     (contains? bench-walks (str (get walk "kind")))
     [(some->> (change-of-walk eng walk) (rebranched-change eng)) nil]
     ;; a seat with no bench powers is not a code seat, and an engine
