@@ -680,6 +680,48 @@
     (is (empty? (calls-of st "bench__feedback"))
         "the sit spends no call on a bench that is not there")))
 
+(deftest a-prepare-the-rig-refuses-reads-as-its-reason-and-not-as-a-dark-bench
+  ;; Prod, 2026-09-19: the policy's pattern was `seat/*`, and the
+  ;; repository has a branch named `seat`. Git holds refs/heads/seat
+  ;; and refs/heads/seat/<id> never at the same time, so the prepare
+  ;; refused — and the sit answered the sentence for a bench that said
+  ;; NOTHING. A refusal is an answer (bead waymark-fp62.6.3.11).
+  (let [st (state)
+        _ (answer! st "bench__prepare"
+                   {:refused "git"
+                    :command "worktree add --force"
+                    :reason (str "cannot lock ref 'refs/heads/seat/01HZQ7': "
+                                 "'refs/heads/seat' exists")})
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        change (a-change! eng {})
+        _ (open-seat! eng {})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})
+        answer (doc-of sat)
+        note (str (:bench_note answer))]
+    (is (false? (:isError sat)) (text-of sat))
+    (is (nil? (:bench answer))
+        "a refusal is not a worktree, so no bench goes in the answer")
+    (is (str/starts-with? note
+                          (str "The bench refused to open the worktree: "
+                               "worktree add --force — cannot lock ref "
+                               "'refs/heads/seat/01HZQ7': "
+                               "'refs/heads/seat' exists."))
+        "the command the rig would not run and the reason it gave: the
+         seat stalls the change with this, and a person reads the cause
+         on the row")
+    (is (not (str/includes? note "did not answer"))
+        "the dark sentence is for a rig that threw and for a rig that
+         answered nothing at all — this one answered")
+    (is (= [(str (:id change))] (mapv :id (get-in answer [:walk :rows])))
+        "and the rows still ride")))
+
 (deftest a-repository-with-no-orientation-file-answers-the-sentence
   (let [st (state)
         _ (answer! st "bench__read" {:refused "path" :repo a-repository
@@ -932,15 +974,27 @@
       (is (= a-long-sentence (:message args)))
       (is (= a-long-sentence (:description args))))))
 
-(deftest a-title-longer-than-the-ceiling-is-cut-at-seventy-two-characters
+(deftest a-title-longer-than-the-ceiling-is-cut-at-the-last-whole-word
   (let [w (world {} {:title a-long-title})
         _ (submit! w {:why "Fix the fixture's table list."})
         args (:arguments (first (calls-of (:state w) "bench__submit")))]
     (is (< 72 (count a-long-title)) "the fixture is long enough to cut")
-    (is (= 72 (count (:title args)))
+    (is (>= 72 (count (:title args)))
         "a pull request title is a label, so the engine cuts it")
-    (is (= (subs a-long-title 0 72) (:title args))
-        "and the cut keeps the front of the title")))
+    (is (= "Reword the stale :spelled-by-hand waiver in grants.clj and"
+           (:title args))
+        "the cut keeps the front of the title AND the last whole word:
+         a hard cut at 72 ended one of this house's own pull requests
+         in the middle of a word (bead waymark-fp62.6.3.13)")
+    (is (not (str/ends-with? (:title args) " "))
+        "and the space the cut fell on goes with it"))
+  (testing "a title with no space in it is cut hard, because there is
+            no boundary to cut on"
+    (let [long-word (apply str (repeat 90 "a"))
+          w (world {} {:title long-word})
+          _ (submit! w {:why "Fix the fixture's table list."})
+          args (:arguments (first (calls-of (:state w) "bench__submit")))]
+      (is (= (subs long-word 0 72) (:title args))))))
 
 (deftest a-rejected-push-refuses-and-the-remedy-names-the-pull-power
   (let [w (world)
@@ -1287,7 +1341,7 @@
   ([scope]
    (let [st (state)
          eng (fresh-engine st)
-         _ (a-policy! eng {})
+         policy (a-policy! eng {})
          asked (an-ask! eng "Put the size ceiling on the policy form")
          seat (open-seat! eng {:scope scope :walk "ask"})
          h (engine/handler eng)
@@ -1298,7 +1352,7 @@
                      [:headers "Mcp-Session-Id"])
          sat (call! h sid "waymark_sit" {:key a-key})]
      {:eng eng :state st :h h :sid sid :seat seat :ask asked
-      :sat sat :answer (doc-of sat)})))
+      :policy policy :sat sat :answer (doc-of sat)})))
 
 (deftest a-seat-that-walks-asks-is-created-and-mints-one-change-for-the-first-row
   (let [w (ask-world)
@@ -1444,6 +1498,102 @@
           answer (:answer w)]
       (is (nil? (:bench answer)))
       (is (str/includes? (str (:bench_note answer)) "one repository")))))
+
+;; ── the branch, minted again (bead waymark-fp62.6.3.11) ─────────
+;;
+;; A SEAT-BORN CHANGE WRITES ITS BRANCH AT BIRTH. A person who
+;; restates the pattern — because the old one shadowed a branch the
+;; repository already has — does not reach a change that is already
+;; here, and the next sitting opens the same bad branch. A change that
+;; never opened has no branch on the forge, so the sit mints it again.
+
+(defn- restate-pattern!
+  "A person restates the policy with another branch pattern: the whole
+  statement again, as the door asks, and the row's own etag with it."
+  [eng policy pattern]
+  (let [current (policy-row eng (:id policy))]
+    (inv/invoke! eng :repo_policy (str (:id policy)) :restate
+                 (assoc (select-keys (:data current)
+                                     [:repository :branch_pattern :base
+                                      :max_lines :opens_pr :auto_merge
+                                      :rounds_per_change :formatter
+                                      :deny :orientation])
+                        :branch_pattern pattern)
+                 {:principal person
+                  :if-match (inv/etag :repo_policy (:id policy)
+                                      (:version current))})))
+
+(defn- sit-again!
+  "The seat sits down to the same ask a second time."
+  [w]
+  (doc-of (call! (:h w) (:sid w) "waymark_sit" {:key a-key})))
+
+(deftest a-stuck-seat-born-change-with-no-round-gets-the-restated-pattern
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        stalled (call! (:h w) (:sid w) "waymark_invoke"
+                       {:kind "change" :id change-id :action "stall"
+                        :input {:why (str "The bench refused to open the "
+                                          "worktree, so there was nothing "
+                                          "to work in.")}})
+        _ (restate-pattern! (:eng w) (:policy w) "bench/*")
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= (str "bench/" ask-id) (get-in row [:data :head_branch]))
+        "the pattern that stands, with the ask's own id in place of the
+         star: a restate reaches the change that never opened")
+    (is (= "open" (name (:state row)))
+        "and the row is at work again, because `rebranch` lands at
+         `open` and the next round has somewhere to go")
+    (is (= 1 (count (changes-of (:eng w))))
+        "the branch is minted again ON THE ROW THAT IS HERE, and no
+         second change is born")
+    (is (= (str "bench/" ask-id)
+           (:branch (:arguments (last (calls-of (:state w) "bench__prepare")))))
+        "the worktree is asked for on the NEW branch, so the sit that
+         rebranded is the sit that works it")
+    (is (= (str "bench/" ask-id) (get-in answer [:change :data :head_branch]))
+        "and the seat reads the new branch on the change beside its
+         walk")
+    (is (= "open" (get-in answer [:change :state])))))
+
+(deftest an-open-seat-born-change-on-the-old-pattern-is-rebranched-too
+  ;; Prod's own row was at `open`, not at `stuck`: the sit minted it,
+  ;; the prepare refused, and the seat stalled nothing.
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        _ (restate-pattern! (:eng w) (:policy w) "bench/*")
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (= (str "bench/" ask-id) (get-in row [:data :head_branch]))
+        "a change that never opened keeps no branch, whichever of the
+         two states it waits in")
+    (is (= "open" (name (:state row))))
+    (is (= (str "bench/" ask-id) (get-in answer [:change :data :head_branch])))
+    (is (= (str "bench/" ask-id)
+           (:branch (:arguments (last (calls-of (:state w) "bench__prepare"))))))))
+
+(deftest a-change-that-was-submitted-once-keeps-its-branch
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        submitted (call! (:h w) (:sid w) "waymark_invoke"
+                         {:kind "change" :id change-id :action "submit"
+                          :input {:why a-long-sentence}})
+        _ (restate-pattern! (:eng w) (:policy w) "bench/*")
+        _ (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= 1 (long (get-in row [:data :rounds])))
+        "one round is behind this change")
+    (is (= (str "waymark/" ask-id) (get-in row [:data :head_branch]))
+        "the push put this branch on the forge, so the house does not
+         mint another one under it")
+    (is (= (str "waymark/" ask-id)
+           (:branch (:arguments (last (calls-of (:state w) "bench__prepare")))))
+        "and the next sitting opens the worktree where the work is")))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 

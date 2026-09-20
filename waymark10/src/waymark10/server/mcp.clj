@@ -2124,14 +2124,32 @@
   is the change row's own id."
   "waymark/*")
 
+(defn- bench-result
+  "What the rig said, as a map, or nil. A REFUSAL IS SAID HERE TOO: it
+  is the rig's own answer, and the reader above decides what the
+  refusal means (bead waymark-fp62.6.3.11)."
+  [payload]
+  (when (map? payload)
+    (let [r (get-in payload [:structuredContent :result])]
+      (when (map? r) r))))
+
 (defn- bench-payload
-  "The rig's own answer, or nil. A refusal is not an answer: the rig
-  says `refused` with its name, and this section then says nothing
+  "The worktree the rig made, or nil. A refusal is not a worktree: the
+  rig says `refused` with its name, and this section then says nothing
   rather than putting a refusal where a worktree goes."
   [payload]
-  (when (and (map? payload) (not (:isError payload)))
-    (let [r (get-in payload [:structuredContent :result])]
-      (when (and (map? r) (nil? (:refused r))) r))))
+  (when-not (:isError payload)
+    (when-some [r (bench-result payload)]
+      (when (nil? (:refused r)) r))))
+
+(defn- bench-refusal
+  "The refusal the rig answered with, or nil. A REFUSAL IS AN ANSWER
+  (bead waymark-fp62.6.3.11): the map names the refuser, the command
+  it would not run and the reason, and a sit that carries the reason
+  tells the seat WHY there is no worktree."
+  [payload]
+  (when-some [r (bench-result payload)]
+    (when (some-> (:refused r) str not-empty) r)))
 
 (defn- repo-policy-of
   "The active policy row for one repository, or nil — and nil is the
@@ -2306,6 +2324,17 @@
                  (str (get row "kind") " " (get row "id")))]
     (subs said 0 (min (count said) change-title-max))))
 
+(defn- pattern-branch
+  "The branch a walk row's change is worked on: the policy's pattern
+  with that row's own id in place of the `*`. The mint writes it at
+  birth, and the sit mints it again when the pattern moves under a
+  change that never opened (bead waymark-fp62.6.3.11)."
+  [policy row-id]
+  (str/replace (or (some-> (get-in policy [:data :branch_pattern])
+                           str not-empty)
+                   default-branch-pattern)
+               "*" (str row-id)))
+
 (defn- minted-change
   "The change row for one walk row: the one that is already here, or
   one minted now with the engine's own hand (R-12.32). The branch is
@@ -2328,10 +2357,7 @@
     (if-some [found (change-by-id eng change-id)]
       [found nil]
       (if-some [repo (seat-repository seat)]
-        (let [policy (repo-policy-of eng repo)
-              pattern (or (some-> (get-in policy [:data :branch_pattern])
-                                  str not-empty)
-                          default-branch-pattern)]
+        (let [policy (repo-policy-of eng repo)]
           (try
             [(:row (inv/create!
                     eng :change
@@ -2345,7 +2371,7 @@
                      :born_from change-id
                      :repository repo
                      :title (walk-row-title row)
-                     :head_branch (str/replace pattern "*" row-id)
+                     :head_branch (pattern-branch policy row-id)
                      :base_branch (or (some-> (get-in policy [:data :base])
                                               str not-empty)
                                       default-base)
@@ -2362,6 +2388,66 @@
                 [nil no-change-note]))))
         [nil seat-repo-note]))))
 
+(def ^:private forge-change-prefix
+  "What a `change_id` the FORGE owns starts with. A change this house
+  minted for a walk row starts with the walk kind's own name and a
+  colon instead (R-12.32), so this prefix is what tells the two
+  apart."
+  "github:")
+
+(defn- born-row-id
+  "The walk row this change was minted for, or nil. `born_from` says
+  `<kind>:<id>`, and `change_id` says the same until an adoption
+  writes GitHub's own id over it (waymark-fp62.6.3.14)."
+  [change]
+  (let [said (or (some-> (get-in change [:data :born_from]) str not-empty)
+                 (some-> (get-in change [:data :change_id]) str not-empty))]
+    (when (and said
+               (not (str/starts-with? said forge-change-prefix))
+               (str/includes? said ":"))
+      (not-empty (subs said (inc (str/index-of said ":")))))))
+
+(defn- rebranched-change
+  "The change this firing works, with its branch minted again from the
+  policy's pattern when the pattern moved under it (bead
+  waymark-fp62.6.3.11) — else the row as it stands.
+
+  A SEAT-BORN CHANGE WRITES ITS BRANCH AT BIRTH, so a person who
+  restates the pattern does not reach a change that is already here,
+  and the next sitting on the same walk row opens the same bad branch
+  again. A change that has never been pushed has no branch on the
+  forge, so the house mints it again: no `number`, no round, and a
+  `change_id` that is still the walk row's. A change that was
+  submitted once KEEPS its branch, because the forge holds it.
+
+  The write goes through `rebranch`, the mirror's own hidden door,
+  with the same system hand the mint uses. A refusal costs the new
+  branch and never the sit: the row stands as it was."
+  [eng change]
+  (or (when (and change
+                 (contains? #{:open :stuck}
+                            (some-> (:state change) name keyword))
+                 (nil? (get-in change [:data :number]))
+                 (zero? (long (or (get-in change [:data :rounds]) 0)))
+                 (not (str/starts-with?
+                       (str (get-in change [:data :change_id]))
+                       forge-change-prefix)))
+        (when-some [row-id (born-row-id change)]
+          (let [policy (repo-policy-of
+                        eng (str (get-in change [:data :repository])))
+                wanted (pattern-branch policy row-id)]
+            (when-not (= wanted (str (get-in change [:data :head_branch])))
+              (try
+                (:row (inv/invoke! eng :change (str (:id change)) :rebranch
+                                   {:head_branch wanted}
+                                   {:principal seat-change-principal}))
+                (catch Exception e
+                  (binding [*out* *err*]
+                    (println "waymark10 seat change rebranch failed -"
+                             (ex-message e)))
+                  nil))))))
+      change))
+
 (defn- change-of-sitting
   "The change this firing submits → [change sentence]. The walk's own
   first row when the seat walks the code (R-12.29), and the row the
@@ -2371,14 +2457,16 @@
   [eng seat walk]
   (cond
     (nil? walk) [nil nil]
-    (contains? bench-walks (str (get walk "kind"))) [(change-of-walk eng walk) nil]
+    (contains? bench-walks (str (get walk "kind")))
+    [(some->> (change-of-walk eng walk) (rebranched-change eng)) nil]
     ;; a seat with no bench powers is not a code seat, and an engine
     ;; that declares no `change` kind serves no bench at all: neither
     ;; is told anything about one
     (not (bench-seat? seat)) [nil nil]
     (nil? (get (inv/resources eng) :change)) [nil nil]
     (str/blank? (str (get-in walk ["rows" 0 "id"]))) [nil nil]
-    :else (minted-change eng seat walk)))
+    :else (let [[change note] (minted-change eng seat walk)]
+            [(some->> change (rebranched-change eng)) note])))
 
 (defn- change-said
   "The change row beside the walk, read AS THE SITTER: the row's own
@@ -2516,6 +2604,20 @@
        "answer. Do not try to read or edit files; work from the rows, "
        "and say what you could not do."))
 
+(defn- bench-refused-note
+  "What the sit says when the rig REFUSED the prepare (bead
+  waymark-fp62.6.3.11). A refusal is an answer, and its reason is the
+  cause: the seat reads what the bench would not do and why, stalls
+  the change with it, and a person reads the cause on the row."
+  [refusal]
+  (let [command (or (some-> (:command refusal) str not-empty)
+                    (str (:refused refusal)))
+        reason (or (some-> (:reason refusal) str not-empty)
+                   "the rig gave no reason")]
+    (str "The bench refused to open the worktree: " command " — " reason
+         (when-not (str/ends-with? reason ".") ".")
+         " Work from the rows, and stall the change with this reason.")))
+
 (defn- bench-of
   "The bench section of the sit's answer (R-12.29), or nil when this
   firing has no change to work.
@@ -2557,17 +2659,21 @@
           base (or (some-> (get-in policy [:data :base]) str not-empty)
                    default-base)
           branch (bench-branch change policy)
-          made (try
-                 (bench-payload
-                  (gate-rpc "tools/call"
-                            {:name (gate/bench-tool :prepare)
-                             :arguments {:repo repo :branch branch
-                                         :base base}}))
-                 (catch Exception e
-                   (binding [*out* *err*]
-                     (println "waymark10 bench prepare failed -"
-                              (ex-message e)))
-                   nil))
+          ;; the prepare's whole answer is kept, because a REFUSAL is
+          ;; an answer: the sit says its reason rather than the
+          ;; sentence for a bench that was silent (waymark-fp62.6.3.11)
+          answer (try
+                   (gate-rpc "tools/call"
+                             {:name (gate/bench-tool :prepare)
+                              :arguments {:repo repo :branch branch
+                                          :base base}})
+                   (catch Exception e
+                     (binding [*out* *err*]
+                       (println "waymark10 bench prepare failed -"
+                                (ex-message e)))
+                     nil))
+          made (bench-payload answer)
+          refusal (bench-refusal answer)
           means (submit-means policy)
           ;; what the last submit caused, for a change that HAS one:
           ;; a person's own branch, or a round this house already
@@ -2606,7 +2712,10 @@
                              "dirty" (long (or (:dirty made) 0))
                              "tools" (bench-tools-of eng seat)})
         feedback (assoc "feedback" feedback)
-        (nil? made) (assoc "bench_note" bench-dark-note)))))
+        (and (nil? made) refusal) (assoc "bench_note"
+                                         (bench-refused-note refusal))
+        (and (nil? made) (nil? refusal)) (assoc "bench_note"
+                                                bench-dark-note)))))
 
 (defn- sit
   "R-12.14, in order, and every refusal is one plain sentence an agent
