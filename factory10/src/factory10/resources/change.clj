@@ -232,9 +232,31 @@
   seat's whole sentence rides as the description."
   72)
 
+(def ^:private title-floor
+  "How short a cut title may be before the word boundary is given up
+  (bead waymark-fp62.6.3.13). A title whose last space is early has no
+  boundary worth keeping, and half a label says more than a third of
+  one."
+  40)
+
+(defn- cut-title
+  "One title at the ceiling, cut at the last space before it. A cut
+  through the middle of a word reads as a fault — a pull request of
+  this house was titled \"…(waymark-fp62.\" — and a whole word says
+  the same thing in fewer characters. A title with no space at or
+  after the floor is cut hard, because there is no boundary to cut
+  on."
+  [title]
+  (if (<= (count title) title-ceiling)
+    title
+    (let [space (str/last-index-of title " " title-ceiling)]
+      (if (and space (>= (long space) title-floor))
+        (str/trimr (subs title 0 space))
+        (subs title 0 title-ceiling)))))
+
 (defn- title-of
   "The title the pull request is opened with: this row's own title,
-  cut at the ceiling.
+  cut at the ceiling and on a word boundary.
 
   THE ENGINE OWNS THE TITLE, and not the seat (bead
   waymark-fp62.6.3.13). The row's title is the ask's own words for a
@@ -244,7 +266,7 @@
   the rig then falls back to the first line of the commit message."
   [row]
   (when-some [title (not-empty (str/trim (str (get-in row [:data :title]))))]
-    (subs title 0 (min (count title) title-ceiling))))
+    (cut-title title)))
 
 (defhandler submit-the-change [row inp ctx]
   ;; THE ROUND, IN ORDER: read the worktree, refuse a clean one, then
@@ -844,6 +866,37 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Adopt" :order 12
                :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
+
+    ;; ── THE BRANCH, MINTED AGAIN (bead waymark-fp62.6.3.11) ───────
+    ;; A seat-born row writes its head branch at BIRTH, from the
+    ;; policy's pattern. A person who restates the pattern — because
+    ;; the old one shadowed a branch the repository already has, and
+    ;; git holds neither — does not reach a row that is already here,
+    ;; and the next sitting opens the same bad branch. So the sit
+    ;; mints the branch again and writes it through this door. It is
+    ;; the mirror's, hidden like the adoptions: a change that was
+    ;; pushed once keeps its branch, because the forge holds it, and
+    ;; the sit is what judges that — no round, no number, and a
+    ;; `change_id` that is still the walk row's.
+    :rebranch
+    {:from #{:open :stuck} :to :open
+     :guards [the-mirror-writes-this-row]
+     :handler observe-the-pull-request
+     :input [:map
+             [:head_branch {:x-display {:raw true}}
+              [:string {:min 1 :max 200}]]]
+     ;; :edit-shape — the input restates a field of the document, as
+     ;; the adoptions do; a prefill for a hidden door is scaffolding
+     ;; for nobody.
+     :waives #{:edit-shape}
+     ;; :one-way, and not a confirm: nobody taps this door. The old
+     ;; branch was never pushed, so there is nothing on the forge to
+     ;; lose — and a change that HAS been pushed never reaches this
+     ;; door at all.
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The house works this change on the new branch from now. The old branch was never pushed, so nothing is lost."}
+     :display {:label "Rebranch" :order 13
+               :description "The house mints this change's branch again from the repository policy's pattern"}}
 
     ;; ── THE BENCH'S OWN DOORS (waymark-fp62.6.3.2) ─────────────────
     ;; These four are NOT the mirror's: a seat under a grant walks

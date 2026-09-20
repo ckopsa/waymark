@@ -191,7 +191,7 @@
                      :x-display
                      {:raw true
                       :label "The branch pattern"
-                      :help "The shape of a work branch, with one * for the change's own id — waymark/* makes waymark/01HZQ7… . A submit on a branch outside this pattern is refused."}}
+                      :help "The shape of a work branch, with one * for the change's own id — waymark/* makes waymark/01HZQ7… . A submit on a branch outside this pattern is refused. The text before the * must not be the name of a branch this repository already has: git holds refs/heads/seat and refs/heads/seat/01HZQ7… never at the same time, so seat/* refuses every worktree in a repository with a branch named seat."}}
     [:string {:min 1 :max 120}]]
    [:base {:default "main"
            :examples ["main"]

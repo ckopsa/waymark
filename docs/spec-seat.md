@@ -921,6 +921,14 @@ answers no `bench` and a `bench_note` sentence, and the walk still
 rides: a sitting that cannot reach the bench can read its rows and say
 so.
 
+A refusal is an answer. The rig refuses a `prepare` with the refuser's
+name, the command it would not run, and the reason. The sit must carry
+that reason in `bench_note`: "The bench refused to open the worktree:
+<command> — <reason>." The seat then stalls the change with the
+reason, and a person reads the cause on the row. The sentence for a
+bench that said nothing is for a rig that threw and for a rig that
+answered nothing at all.
+
 **R-12.30** A bench grant must be able to name less than the whole
 rig. The bench has five powers: `bench.find`, `bench.read`,
 `bench.edit`, `bench.pull` and `bench.feedback`. A seat's scope entry
@@ -1045,6 +1053,25 @@ uses.
 A change the engine minted has a head branch from its birth, and it
 has no pull request. The engine therefore asks the rig for no feedback
 until that change has a round or a number (R-12.31).
+
+A seat-born change writes its branch at birth, so a person who
+restates the branch pattern does not reach it. The sit must mint that
+branch again. It does this for a change whose `change_id` is not the
+forge's, which has no number, which has spent no round, and which
+stands at `open` or at `stuck`. The sit makes the branch from the
+policy's pattern with the walk row's own id, as the mint does. When
+that branch is not the branch on the row, the sit writes it through
+the door `rebranch`, which is the mirror's and is hidden, and the
+change stands at `open`. A change that has spent a round keeps its
+branch, because the forge holds it. The sit does this before it opens
+the bench, so the worktree of R-12.29 is made on the new branch.
+
+The branch pattern must not shadow a branch. Git holds
+`refs/heads/seat` and `refs/heads/seat/<id>` never at the same time.
+So the text before the `*` must not be the name of a branch the
+repository already has, or every `prepare` refuses. The help of the
+`branch_pattern` field says this, because the enrolment cannot read
+the branches.
 
 Last, the source must adopt that row, and it must mint no second one.
 The source reads a pull request. It asks for a change row by the pull
@@ -2055,6 +2082,13 @@ above. The cases:
     gone, and a door that refuses each leave the change at `merged`
     and raise no error. A change GitHub gave us carries no
     `born_from`, and its merge completes nothing. (R-12.32)
+51. A `prepare` the rig refuses answers a `bench_note` that names the
+    command and the reason, and not the sentence for a bench that said
+    nothing. A seat-born change with no number and no round, at `open`
+    or at `stuck`, whose branch is not the policy's pattern with its
+    walk row's id, gets the new branch through `rebranch` at the next
+    sit and stands at `open`. A change that has spent a round keeps
+    its branch. (R-12.29, R-12.32)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,

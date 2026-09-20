@@ -242,7 +242,7 @@
 
 (deftest a-change-offers-the-mirrors-doors-to-nobody-and-the-benchs-to-everybody
   (testing "GitHub's own moves are hidden from every hand but the engine's"
-    (doseq [door [:observe :merge :close :adopt]]
+    (doseq [door [:observe :merge :close :adopt :rebranch]]
       (is (= :hidden (:status (refusal change a-pull-request the-person door)))
           "a hidden door is absent from the envelope, so nobody spends
            a turn asking about it")
@@ -255,11 +255,14 @@
          a probe with no read hook advertises optimistically — the door
          itself judges again with a real hook behind it"))
   (testing "the source moves the row, because the source is the mirror"
-    (is (= (into bench-doors [:observe :adopt :merge :close])
+    (is (= (into bench-doors [:observe :adopt :rebranch :merge :close])
            (offers change a-pull-request the-source))
         "`adopt` is the mirror's too (bead waymark-fp62.6.3.10): it
          writes the pull request's identity onto a row this house
-         minted for an ask, so one row holds the work and not two")
+         minted for an ask, so one row holds the work and not two.
+         `rebranch` is the mirror's as well (waymark-fp62.6.3.11): the
+         sit mints the branch again for a change that never opened,
+         and a seat never names its own branch")
     (is (= #{:reopen}
            (offers change (assoc a-pull-request :state :closed) the-source))
         "GitHub reopens a closed pull request, so the row comes back"))

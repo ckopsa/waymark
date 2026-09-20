@@ -193,7 +193,11 @@ Nothing else goes in the instructions (R-12.10).
    bench tokens with their constraints.
 2. A `repo_policy` row is active for the repository, with
    `enrolled_at` set. The engine sent the rig the clone, the deny
-   list and the land block.
+   list and the land block. The text before the `*` in
+   `branch_pattern` is not the name of a branch this repository has:
+   git holds `refs/heads/seat` and `refs/heads/seat/<id>` never at
+   the same time, so `seat/*` refuses every worktree in a repository
+   with a branch named `seat`.
 3. A `task_list` row exists for this seat, and its id is in the
    scope's `task` filter.
 4. The seat exists and is active, with the scope above and
