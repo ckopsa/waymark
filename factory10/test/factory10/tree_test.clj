@@ -98,7 +98,28 @@
     (is (= #{:classify_infra :classify_base_red :classify_this_change}
            (offers ci-run (run-at :red {}) the-person))
         "the walk itself is unwalled: what a seat may reach at all is
-         the grant's question, not this kind's")))
+         the grant's question, not this kind's"))
+  (testing "supersede is HIDDEN at red — the mirror's door and nobody else's"
+    (is (= :hidden (:status (refusal ci-run (run-at :red {})
+                                     the-classifier :supersede)))
+        "the source knows which commit the branch carries now; a seat
+         that could supersede its own queue would answer the question
+         by emptying it (bead waymark-fp62.6.9)")
+    (is (= :hidden (:status (refusal ci-run (run-at :red {})
+                                     the-person :supersede))))
+    (is (= :available (:status (refusal ci-run (run-at :red {})
+                                        the-source :supersede)))
+        "the source walks it, so the head that moved is a transition")))
+
+(deftest a-superseded-run-is-a-tomb-and-carries-no-verdict
+  (let [row (run-at :superseded {})]
+    (is (empty? (offers ci-run row the-person))
+        "the commit is gone, so there is nothing left to classify and
+         nothing to correct")
+    (is (empty? (offers ci-run row the-classifier)))
+    (is (empty? (offers ci-run row the-source))
+        "not even the mirror's own doors: a superseded run earns no
+         label, because no verdict was written on it")))
 
 (deftest a-classified-run-offers-reclassify-to-a-person-and-nothing-to-a-sitter
   (let [classified (run-at :classified
@@ -359,9 +380,18 @@
 (deftest the-declarations-say-what-the-source-needs
 
   (testing "the ci_run machine, whole"
-    (is (= [:red :classified :reclassified] (:states ci-run)))
+    (is (= [:red :classified :reclassified :superseded] (:states ci-run)))
     (is (= :red (:initial ci-run)))
-    (is (= #{:reclassified} (:terminal ci-run)))
+    (is (= #{:reclassified :superseded} (:terminal ci-run))
+        "two tombs: the person's correction, and a run whose commit is
+         gone (bead waymark-fp62.6.9)")
+    (is (= #{:reclassified} (get-in ci-run [:over :accomplished])))
+    (is (= #{:superseded} (get-in ci-run [:over :let-go]))
+        "a run the head moved under is a run the house LET GO, and it
+         is not a week's work")
+    (is (nil? (get-in ci-run [:over :field]))
+        "the endings are STATES here: this kind keeps its own machine
+         and its lifecycle is not a mirrored data field")
     (is (= {:state "red"} (:default-filters ci-run))
         "the queue IS the collection under its default filter")
     (is (= "started_at" (get-in ci-run [:sortable :default]))

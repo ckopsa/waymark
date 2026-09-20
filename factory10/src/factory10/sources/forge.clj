@@ -36,21 +36,25 @@
   3. For each finished check run that failed, on a head the change
      still carries, it reads the log tail (`forge-log-tail`) and mints
      one `ci_run` row at `red`. It mints no second row for a check run
-     id that is already here.
-  4. For each `classified` ci_run with no label on it, it pushes one
+     id that is already here. A log it cannot read costs the excerpt
+     and never the row: the reason rides in `log_note`.
+  4. For each red ci_run of a head its change no longer carries, it
+     walks `supersede`. The row leaves the queue, and the transition
+     says why it leaves with no verdict on it.
+  5. For each `classified` ci_run with no label on it, it pushes one
      label (`forge-label!`) and walks `stamp_label`. That push is the
      only write the source makes at the forge.
-  5. It prints one census line: the calls, the rows minted and the
+  6. It prints one census line: the calls, the rows minted and the
      rows moved.
 
-  A HEAD THAT MOVES. The design asks that a moved head marks the old
-  head's red runs superseded. The ci_run machine has three states —
-  red, classified, reclassified — and no door out of `red` but the
-  three classify doors. So this pass does two things it CAN do: it
-  mints no new red row for a head the change no longer carries, and it
-  counts the red rows of a dead head in the census as `stale`. The
-  rows stay at `red` until the kind has a `supersede` door. Bead
-  waymark-fp62.6.4's report names that door; nothing here adds one.
+  A HEAD THAT MOVES (bead waymark-fp62.6.9). A run ran on one commit.
+  When the head moves, that commit is gone and no seat can answer the
+  run: the pass mints no new red row for the dead head, and it walks
+  the `supersede` door on every red row that is already here. The row
+  leaves the queue at a tomb of its own, the ledger carries the
+  transition, and the new head's own failures are the work. Before
+  that door the pass could only COUNT these rows, and they stayed at
+  `red` in the classifier's queue.
 
   PARTIAL FAILURE, per workqueue10.confluence. A repository that
   throws costs its own rows one pass and nothing else. The cursor
@@ -178,7 +182,7 @@
   `pushed_label` and `labelled_at` are absent on purpose: a row born
   with a verdict is a row that skipped the walk."
   [:run_id :change :head_sha :check_name :conclusion :log_excerpt
-   :started_at :finished_at :url])
+   :log_note :started_at :finished_at :url])
 
 (def red-conclusions
   "The two conclusions that mint a red run. `cancelled` is not one of
@@ -375,15 +379,17 @@
                                       {:excerpt nil
                                        :note (str "the log could not be read ("
                                                   (ex-message e) ")")}))
-        ;; the kind has no field for the note, so the note IS the
-        ;; excerpt when there is no log — an empty string would tell
-        ;; the classifier nothing about why it is empty
-        excerpt (if (str/blank? (str excerpt))
-                  (when note (str "(no log excerpt: " note ")"))
-                  excerpt)
+        ;; THE NOTE HAS A FIELD OF ITS OWN (bead waymark-fp62.6.9). A
+        ;; sentence written inside `log_excerpt` reads as the end of a
+        ;; build log to the next reader, and the classifier reasons
+        ;; about it as one. So the excerpt stays empty and `log_note`
+        ;; says why it is empty. `present` drops a nil, which is what
+        ;; makes each of the two absent when the other answers.
+        blank? (str/blank? (str excerpt))
         body (present (assoc check
                              :change (str (:id change-row))
-                             :log_excerpt excerpt)
+                             :log_excerpt (when-not blank? excerpt)
+                             :log_note (when blank? note))
                       ci-run-create-fields)]
     (try
       (inv/create! eng :ci_run body (as-opts))
@@ -418,11 +424,9 @@
    checks))
 
 (defn- stale-reds
-  "The red rows of this change that ran on a head it no longer carries.
-  The ci_run machine has three states and no door that says
-  `superseded`, so the pass COUNTS these rows and leaves them where
-  they are. The census is what makes the gap visible until the kind
-  has that door."
+  "The red rows of this change that ran on a head it no longer
+  carries. A run of a dead commit is a run nobody can answer, so
+  these are the rows the `supersede` door is for."
   [eng change-row]
   (let [st (:storage eng)
         head (str (get-in change-row [:data :head_sha]))
@@ -431,18 +435,31 @@
                                           {:state "red"
                                            :change (str (:id change-row))}
                                           {:limit label-scan-limit})))]
-    (count (filter #(not= head (str (get-in % [:data :head_sha]))) rows))))
+    (filterv #(not= head (str (get-in % [:data :head_sha]))) rows)))
 
 (defn- stale-pass!
-  "Every change this pass saw → how many of its red runs belong to a
-  dead head."
-  [eng changes census]
-  (reduce (fn [census doc]
-            (if-some [row (row-by eng :change {:change_id (:change_id doc)})]
-              (update census :runs-stale + (stale-reds eng row))
-              census))
-          census
-          changes))
+  "Every red run of a head its change no longer carries → the
+  `supersede` door. The row leaves the classifier's queue and the
+  transition says it left with no verdict. A row the engine refuses is
+  counted and skipped: the next pass offers it again."
+  [eng changes census log-fn]
+  (reduce
+   (fn [census doc]
+     (if-some [change-row (row-by eng :change {:change_id (:change_id doc)})]
+       (reduce
+        (fn [census row]
+          (try
+            (inv/invoke! eng :ci_run (str (:id row)) :supersede {} (as-opts))
+            (update census :runs-superseded inc)
+            (catch Exception e
+              (log-fn "the red run " (get-in row [:data :run_id])
+                      " was refused the supersede door (" (ex-message e) ")")
+              (update census :refused inc))))
+        census
+        (stale-reds eng change-row))
+       census))
+   census
+   changes))
 
 ;; ── the one write ───────────────────────────────────────────────────
 
@@ -508,7 +525,7 @@
 
 (def ^:private fresh-census
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
-   :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-stale 0
+   :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
    :runs-orphan 0 :labelled 0 :refused 0})
 
 (defn pass!
@@ -535,7 +552,7 @@
                         :complete? (boolean complete?))
           census (change-pass! eng changes census log-fn)
           census (run-pass! eng source checks census log-fn)
-          census (stale-pass! eng changes census)
+          census (stale-pass! eng changes census log-fn)
           census (label-pass! eng source census log-fn)
           census (assoc census :calls (forge-calls source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
@@ -543,9 +560,9 @@
               " changes adopted, " (:moved census)
               " changes moved, " (:runs-minted census) " red runs minted, "
               (:labelled census) " labels pushed"
-              (when (pos? (long (:runs-stale census)))
-                (str ", " (:runs-stale census) " red runs on a head that "
-                     "moved"))
+              (when (pos? (long (:runs-superseded census)))
+                (str ", " (:runs-superseded census) " red runs superseded "
+                     "on a head that moved"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
               (when-not (:complete? census)

@@ -16,6 +16,17 @@
   is ABSENT for it — not discouraged, absent. This is inbox_item's
   shape (workqueue10), one domain over.
 
+  A HEAD THAT MOVES TAKES ITS RED RUNS WITH IT (bead
+  waymark-fp62.6.9). A run ran on one commit. When the change's head
+  moves, that commit is gone and there is nothing left to classify —
+  but the row was at `red`, and `red` departed only through the three
+  verdicts, so the queue held runs no seat could answer. The fourth
+  state `superseded` is where those runs rest, and the hidden door
+  `supersede` is how they get there. The source walks it, because the
+  source is the one reader that knows which commit the branch carries
+  now. A superseded run is a TRANSITION and not a delete: the ledger
+  sees it, and a person reads why the run left the queue unclassified.
+
   EACH CLASSIFY DOOR DEMANDS THE REMEDY. The door takes one sentence:
   what somebody should do about this red run. A door that took the
   verdict and nothing else would let a seat file three words a day and
@@ -47,7 +58,12 @@
   the TAIL of the failed job's log. The whole log is never here: the
   source fetches the last 200 lines at mint time and the field caps
   the string. The classifier reads the tail, which is where a failure
-  says what it was. Nothing in this row carries a token.
+  says what it was. A log the forge will not hand over costs the
+  excerpt and never the row: `log_note` then carries one sentence
+  about why the tail is missing, and the excerpt stays empty. The two
+  are separate fields BECAUSE a sentence inside `log_excerpt` reads as
+  the end of a build log to the next reader. Nothing in this row
+  carries a token.
 
   :nav :secondary, for change's reason: a red build is the day job's
   work, not the family's."
@@ -181,18 +197,25 @@
    :plural "ci_runs"
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
-   :states [:red :classified :reclassified]
+   :states [:red :classified :reclassified :superseded]
    :initial :red
-   ;; A correction is the last word. Nothing departs it, so it is a
-   ;; tomb, and the tree ends where the person ended it.
-   :terminal #{:reclassified}
-   ;; NO :over, deliberately. `:over` shuts the household's doors on a
-   ;; row whose work is over (waymark-fp62.4.1), and the machine shows
-   ;; a way back only where the door lands OUTSIDE an ending. A
-   ;; classified run still owes two doors — the person's reclassify
-   ;; and the mirror's stamp_label — so naming `classified` an ending
-   ;; would shut the correction this kind exists to count. The tomb
-   ;; says what is over here, and it says it about one state.
+   ;; Two tombs. A correction is the last word, so nothing departs
+   ;; `reclassified`. A superseded run ran on a commit that is gone,
+   ;; so nothing departs `superseded` either: there is no verdict left
+   ;; to write about a build nobody will run again.
+   :terminal #{:reclassified :superseded}
+   ;; `:over` NAMES THE TWO ENDINGS APART, and it names nothing else.
+   ;; `:over` shuts the household's doors on a row whose work is over
+   ;; (waymark-fp62.4.1), and it shuts them on the states it lists —
+   ;; so `classified` is in neither list, and the two doors a
+   ;; classified run still owes, the person's reclassify and the
+   ;; mirror's stamp_label, stay open. What the lists say is which
+   ;; ending the house stands behind: the person's correction is the
+   ;; deed this kind is graded by, and a run the head moved under is a
+   ;; run the house LET GO. Unspelled, both tombs would read as
+   ;; accomplishments and a superseded run would count as a week's
+   ;; work in the seasons panel.
+   :over {:accomplished #{:reclassified} :let-go #{:superseded}}
    :summary "{data.check_name} · {data.conclusion} · {state}"
    ;; the check's own line, not the kind label
    :label-template "{data.check_name}"
@@ -257,6 +280,16 @@
                     :label "The end of the log"
                     :help "The last 200 lines of the failed job, as the source read them at mint time. Read the end first: a failure says what it was there. The whole log is not kept."}}
      [:maybe [:string {:max 20000}]]]
+    ;; WHY THERE IS NO TAIL, when there is none. A job log the forge
+    ;; will not answer, or will not answer in plain text, costs the
+    ;; excerpt and never the row. The reason rides in a field of its
+    ;; own: written inside `log_excerpt` it would read as the end of a
+    ;; build log, and the classifier would reason about it as one.
+    [:log_note {:optional true
+                :x-display
+                {:label "Why there is no log"
+                 :help "One sentence from the source, when the failed job's log could not be read. The excerpt is empty then, and this says why it is empty."}}
+     [:maybe [:string {:max 400}]]]
     [:started_at {:optional true
                   :x-display
                   {:label "When it started"
@@ -331,6 +364,9 @@
     [:log_excerpt {:optional true
                    :x-display {:widget "prose" :label "The end of the log"}}
      [:maybe [:string {:max 20000}]]]
+    [:log_note {:optional true
+                :x-display {:label "Why there is no log"}}
+     [:maybe [:string {:max 400}]]]
     [:started_at {:optional true :x-display {:label "When it started"}}
      [:maybe :waymark/instant]]
     [:finished_at {:optional true :x-display {:label "When it ended"}}
@@ -429,7 +465,21 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The correction stands on the record beside the verdict it overrules. Nothing about the first verdict is erased; this adds the correction to it, and the ledger counts it."}
      :display {:label "Reclassify" :order 5
-               :description "The classifier was wrong — say what actually went wrong, and what to do"}}}
+               :description "The classifier was wrong — say what actually went wrong, and what to do"}}
+
+    ;; THE DOOR OUT OF RED WHEN THE COMMIT IS GONE (bead
+    ;; waymark-fp62.6.9). Hidden, and the engine's hand alone, as
+    ;; `stamp_label` is: the source is the one reader that knows which
+    ;; commit the branch carries now, so the source walks this door on
+    ;; every red run of a head the change no longer names. It takes no
+    ;; input, because the row already says which commit it ran on.
+    :supersede
+    {:from #{:red} :to :superseded
+     :guards [the-mirror-writes-this-row]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The run leaves the queue with no verdict on it, and the transition says so. The commit it ran on is not the head any more, so there is nothing left to classify; the new head's own red runs are the work now."}
+     :display {:label "Superseded" :order 6
+               :description "The commit this run ran on is not the head any more — the run leaves the queue unclassified"}}}
    :links [{:rel "origin" :href "{data.url}" :external true
             :summary "The check run, at GitHub"}]
    :scenarios [an-agent-may-not-correct-its-own-verdict

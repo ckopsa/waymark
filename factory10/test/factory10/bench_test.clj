@@ -1616,3 +1616,212 @@
                        [{:id "02AB"}]))}))))
   (testing "a person's hand names neither: a commit is an office's or it is theirs"
     (is (= [] (bench/trailers {:principal {:id "colton" :type :human}})))))
+
+;; ── the seat that walks red runs (bead waymark-fp62.6.7) ────────────
+;;
+;; THE FIRST SEAT AT WORK READS AND LABELS, AND DOES NOTHING ELSE. The
+;; CI failure classifier walks `ci_run` rows and writes one of three
+;; verdicts with the remedy. It holds no bench power, no GitHub power
+;; and no correction: the mirror pushes the label from the verdict
+;; (`stamp_label`), and the person's `reclassify` is how the seat's
+;; judgment is measured. This half proves the walk is really that
+;; narrow — the queue it opens, the doors on each row, and the doors
+;; that are ABSENT from it.
+;;
+;; The seat itself is DATA on a deployment: a seat row, a scope and a
+;; Routine (docs/routines/ci-classifier.md). What is law is here.
+
+(def ^:private classifier-scope
+  "What the classifier seat holds, whole: the three classify doors on
+  the queue it walks, and the change a run ran on, read-only. No
+  reclassify, no stamp_label, no supersede and no bench power."
+  [{:kind "ci_run" :actions ["classify_infra" "classify_base_red"
+                             "classify_this_change"]}
+   {:kind "change" :actions []}])
+
+(def ^:private classifier-charter
+  "Read the end of the log first. Say which of three things went wrong,
+  and write one sentence that says what somebody must do. Classify each
+  red run one time. If the log does not say, leave the run red.")
+
+(def ^:private a-log-tail
+  "What the source left on the row: the end of the failed job, which is
+  where a failure says what it was."
+  (str "Running shard 3…\n"
+       "FAIL waymark10.conformance-test/every-kind-answers-its-own-schema\n"
+       "expected: (= 200 (:status resp))\n"
+       "  actual: 500"))
+
+(defn- a-red-run!
+  "One red `ci_run` row, minted under the source's own hand as the
+  GitHub pass mints one."
+  [eng change run-id started extra]
+  (:row (inv/create! eng :ci_run
+                     (merge {:run_id run-id
+                             :change (str (:id change))
+                             :head_sha a-head
+                             :check_name "test10 (shard 3)"
+                             :conclusion "failure"
+                             :started_at started
+                             :log_excerpt a-log-tail}
+                            extra)
+                     {:principal mirror/source-principal})))
+
+(defn- classifier-world
+  "An engine with one change, two red runs on it, one run the head
+  moved under, and a seat that WALKS ci_runs under the three classify
+  doors — with a session sat in it."
+  []
+  (let [st (state)
+        eng (fresh-engine st)
+        change (a-change! eng {})
+        first-run (a-red-run! eng change
+                              "github:ckopsa/waymark/check-run/41752098311"
+                              "2026-09-18T13:41:00Z" {})
+        second-run (a-red-run! eng change
+                               "github:ckopsa/waymark/check-run/41752098312"
+                               "2026-09-18T13:44:00Z"
+                               {:check_name "test-queue (shard 1)"
+                                :log_excerpt nil
+                                :log_note "the job log did not arrive as plain text"})
+        gone (a-red-run! eng change
+                         "github:ckopsa/waymark/check-run/41752098300"
+                         "2026-09-18T12:00:00Z"
+                         {:head_sha "0000111122223333444455556666777788889999"})
+        _ (inv/invoke! eng :ci_run (str (:id gone)) :supersede {}
+                       {:principal mirror/source-principal})
+        seat (open-seat! eng {:name "ci-classifier"
+                              :charter classifier-charter
+                              :scope classifier-scope
+                              :walk "ci_run"
+                              :rows_per_firing 5})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})]
+    {:eng eng :state st :h h :sid sid :seat seat :change change
+     :first-run first-run :second-run second-run :gone gone
+     :sat sat :answer (doc-of sat)}))
+
+(defn- doors-of
+  "The action names one walk row advertises, as the sitter reads them."
+  [row]
+  (into #{} (map :action) (:doors row)))
+
+(deftest the-classifier-walks-the-red-runs-and-nothing-else
+  (let [w (classifier-world)
+        answer (:answer w)
+        rows (get-in answer [:walk :rows])]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (= :active (:state (:seat w)))
+        "a seat walking ci_run is created with no refusal: the kind
+         declares a default filter, so the collection a firing opens is
+         the work that waits")
+
+    (testing "the walk is the red runs, oldest first"
+      (is (= "ci_run" (get-in answer [:walk :kind])))
+      (is (= classifier-charter (get-in answer [:walk :charter])))
+      (is (= [(str (:id (:first-run w))) (str (:id (:second-run w)))]
+             (mapv :id rows))
+          "the queue's own default sort is started_at, and the house
+           answers its red builds in the order they broke"))
+
+    (testing "and the run the head moved under is NOT in it"
+      (is (= 2 (count rows)))
+      (is (not (contains? (into #{} (map :id) rows) (str (:id (:gone w)))))
+          "a superseded run rests outside the kind's default filter, so
+           no seat walks a build of a commit that is gone (bead
+           waymark-fp62.6.9)"))
+
+    (testing "each row offers the three verdicts and nothing else"
+      (doseq [row rows]
+        (is (= #{"classify_infra" "classify_base_red" "classify_this_change"}
+               (doors-of row))
+            "the scope names three doors, so the grant's projection
+             drops every other one: reclassify, stamp_label and
+             supersede are ABSENT from the row as the seat reads it —
+             not discouraged, absent")))
+
+    (testing "and each door carries the sentence it demands"
+      (let [door (first (filter #(= "classify_infra" (:action %))
+                                (:doors (first rows))))]
+        (is (some? door))
+        (is (contains? (set (get-in door [:input :required])) "remedy")
+            "the seat reads what the door wants from the sit, and never
+             from the kind's schema")))
+
+    (testing "what the row says on the page, and what costs a read"
+      (is (= "test10 (shard 3)" (get-in (first rows) [:fields :check_name])))
+      (is (= "the job log did not arrive as plain text"
+             (get-in (second rows) [:fields :log_note]))
+          "a run with no readable log says so on the page itself, so the
+           seat does not spend a read to find an empty field (bead
+           waymark-fp62.6.9)"))
+
+    (testing "the seat opens no worktree at all"
+      (is (nil? (:bench answer)))
+      (is (nil? (:bench_note answer))
+          "a seat that holds no bench power is told nothing about a
+           bench — there is none to be dark about")
+      (is (nil? (:change answer))
+          "the change a run ran on is read with waymark_get when the
+           seat wants it; it is not the row this firing works")
+      (is (empty? (calls-of (:state w) "bench__prepare"))
+          "and the rig is asked for nothing: a read-only classifier
+           costs one sit and no checkout"))))
+
+(deftest the-classifier-reads-the-end-of-the-log-through-its-own-grant
+  (let [w (classifier-world)
+        got (call! (:h w) (:sid w) "waymark_get"
+                   {:kind "ci_run" :id (str (:id (:first-run w)))})
+        doc (doc-of got)]
+    (is (false? (:isError got)) (text-of got))
+    (is (= a-log-tail (get-in doc [:data :log_excerpt]))
+        "the tail is the whole of what a verdict is written from, so
+         the read answers it whole")
+    (is (= #{:classify_infra :classify_base_red :classify_this_change}
+           (set (keys (:actions doc))))
+        "the envelope the seat reads holds its three doors and no
+         others")))
+
+(deftest a-classified-run-leaves-the-queue-and-offers-the-seat-nothing
+  (let [w (classifier-world)
+        id (str (:id (:first-run w)))
+        remedy (str "Re-run the shard: the dependency cache died and the "
+                    "job never reached a test.")
+        done (call! (:h w) (:sid w) "waymark_invoke"
+                    {:kind "ci_run" :id id :action "classify_infra"
+                     :input {:remedy remedy}})
+        moved (doc-of done)]
+    (is (false? (:isError done)) (text-of done))
+    (is (= "classified" (:state moved)))
+    (is (= "infra" (get-in moved [:data :verdict])))
+    (is (= remedy (get-in moved [:data :remedy]))
+        "the door demands the sentence, so a verdict is never three
+         words on its own")
+    (is (nil? (get-in moved [:data :pushed_label]))
+        "the seat holds no GitHub power: the mirror pushes the label
+         from the verdict, and the seat never sees it")
+
+    (testing "the next firing does not walk it again"
+      (let [again (doc-of (call! (:h w) (:sid w) "waymark_sit" {:key a-key}))]
+        (is (= [(str (:id (:second-run w)))]
+               (mapv :id (get-in again [:walk :rows])))
+            "the queue IS the collection under its default filter, so a
+             run with a verdict on it has left it")))
+
+    (testing "and the classified row offers the seat no door at all"
+      (let [doc (doc-of (call! (:h w) (:sid w) "waymark_get"
+                               {:kind "ci_run" :id id}))]
+        (is (empty? (:actions doc))
+            "the seat's own verdict opens nothing further for it. The
+             scope is the first wall; the kind is the second, and it
+             holds with no scope at all — reclassify refuses every
+             agent hand, and stamp_label is hidden behind the mirror's
+             guard")
+        (is (not (contains? (set (keys (:unavailable doc))) :stamp_label))
+            "a hidden door is ABSENT from the envelope, not listed as
+             unavailable — nobody spends a call to learn it is shut")))))

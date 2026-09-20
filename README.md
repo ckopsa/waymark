@@ -46,7 +46,7 @@ reads:
 | kind | what it is | the walk |
 | --- | --- | --- |
 | `change` | one pull request — repository, number, branches, head sha, counts, labels, review state | open → merged, open → closed, closed → open; every door is the mirror's |
-| `ci_run` | one red check run, with the last 200 lines of the failed job | red → classified, by `classify_infra`, `classify_base_red` or `classify_this_change`, each demanding the remedy in one sentence; classified → reclassified, a person's door and nobody else's |
+| `ci_run` | one red check run, with the last 200 lines of the failed job — or, when the log could not be read, `log_note` saying why | red → classified, by `classify_infra`, `classify_base_red` or `classify_this_change`, each demanding the remedy in one sentence; classified → reclassified, a person's door and nobody else's; red → superseded, the mirror's `supersede` for a run whose commit is not the head any more |
 
 It boots alone (`make check-factory`, `cd factory10 && clojure -M:test`)
 and beside the household: `workqueue10.main` folds its kinds into the

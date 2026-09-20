@@ -49,8 +49,8 @@
   because the blob is a signed URL at another host and a bearer must
   not travel there. A log that is not plain text, or that will not
   answer at all, costs the excerpt and never the row: the pass stores
-  a note in place of the tail, so the classifier reads why the log is
-  missing instead of an empty field.
+  a note in `log_note`, so the classifier reads why the log is missing
+  instead of an empty field.
 
   THE ONE WRITE. A classified run's label goes to the issues labels
   route, which ADDS a label and removes none. The source pushes one
@@ -73,13 +73,15 @@
   polls nothing and says so once. The static `:repos` list stays for
   the suite's fake, which has no engine behind it.
 
-  PUNTS, recorded. A head that moves leaves the old head's red rows at
-  `red`: the ci_run machine has no `supersede` door, and this bead
-  adds no doors to a kind. The pass mints nothing for the dead head
-  and counts those rows in its census. Reading B, the webhook door, is
-  its own bead: when it lands it will tell this source to poll one
-  repository now, and it will read nothing from the payload but the
-  repository name."
+  A HEAD THAT MOVES. The pass mints nothing for a dead head, and the
+  red rows already here leave the queue through the ci_run kind's
+  `supersede` door (bead waymark-fp62.6.9). A log this source cannot
+  read costs the excerpt and never the row: the reason rides in the
+  row's `log_note`, beside an empty excerpt.
+
+  PUNTS, recorded. Reading B, the webhook door, is its own bead: when
+  it lands it will tell this source to poll one repository now, and it
+  will read nothing from the payload but the repository name."
   (:require [clojure.string :as str]
             [factory10.resources.ci-run :as ci]
             [factory10.sources.forge :as forge]
