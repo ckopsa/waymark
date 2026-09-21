@@ -2057,13 +2057,23 @@
   narrower `queue`, not a longer read."
   500)
 
+(defn- filter-params
+  "One filter map as query parameters — a plain-equality filter in the
+  collection's own vocabulary. `name` reads a stored key whether it
+  came back a keyword or a string.
+
+  Two filters ride this one spelling: a judgment's `queue`
+  (`queue-params` below) and the walk's own scope entry (R-1 of bead
+  waymark-fp62.12). Both are `grants/filter-map-schema` maps, and a
+  second spelling would be a second answer to what a filter means."
+  [filter-map]
+  (into {} (map (fn [[k v]] [(name k) (str v)])) filter-map))
+
 (defn- queue-params
   "The judgment's `queue` as query parameters — a plain-equality
-  filter on the subject kind, the collection's own vocabulary. `name`
-  reads a stored key whether it came back a keyword or a string."
+  filter on the subject kind."
   [judgment]
-  (into {} (map (fn [[k v]] [(name k) (str v)]))
-        (get-in judgment [:data :queue])))
+  (filter-params (get-in judgment [:data :queue])))
 
 (defn- judged-subjects
   "The subject ids this judgment has already spoken on: every verdict
@@ -2102,6 +2112,15 @@
   that sorts by when the work arrived — at most `rows_per_firing`
   rows, and never more than one page.
 
+  THE WALK'S FILTER IS ITS SCOPE ENTRY'S (R-1 of bead
+  waymark-fp62.12). When the entry that opens the walked kind carries
+  a `filter`, that filter rides as query parameters and the kind's own
+  default stands aside for it, exactly as a caller's query string
+  does. Then the rows the seat MAY see are the rows it walks, and a
+  row that leaves the filter leaves both in the same commit. An entry
+  with no filter adds no parameter at all, so the plain walk is the
+  request it has always been, byte for byte.
+
   A SEAT THAT SAYS A JUDGMENT WALKS THE JUDGMENT'S QUEUE (R-4): the
   judgment's `queue` rides as the filter, the subjects already judged
   are subtracted, and the answer carries the `judgment` block beside
@@ -2124,6 +2143,10 @@
   (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
     (when-some [rdef (get (inv/resources eng) (keyword walk))]
       (let [judgment (row-of eng :judgment (get-in seat [:data :judgment]))
+            ;; a judgment seat walks the judgment's own queue (R-3),
+            ;; and that queue is the filter; the scope entry's filter
+            ;; is the walk's for every other seat
+            walk-filter (when-not judgment (seats/walk-filter seat))
             n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
                    coll/page-size-max)
             asked (if judgment coll/page-size-max n)
@@ -2131,7 +2154,10 @@
                                 {:query (query-string
                                          (cond-> {"page[size]" (str asked)}
                                            judgment (merge (queue-params
-                                                            judgment))))}))
+                                                            judgment))
+                                           walk-filter (merge
+                                                        (filter-params
+                                                         walk-filter))))}))
             doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
         (when (collection-doc? doc)
           (let [items (get-in doc ["data" "items"])

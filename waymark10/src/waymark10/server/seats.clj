@@ -140,6 +140,11 @@
   (:require [clojure.string :as str]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
+            ;; the walked kind's own doors, read out of its rdef: the
+            ;; filter guard asks whether one of them LEAVES the state
+            ;; the walk filters by (bead waymark-fp62.12, R-2), and
+            ;; the computed wake names every one of them (R-4)
+            [waymark10.machine :as machine]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.grants :as grants]
@@ -386,6 +391,49 @@
     ;; real invoke, which DOES carry them, is the wall
     (t/allow)))
 
+
+;; ── the walk's own filter (bead waymark-fp62.12, R-1) ───────────────
+;;
+;; A seat walked its kind under the KIND's default filter and nothing
+;; else, so a kind that declares none could not be walked at all —
+;; mealplan10's `plan` is one. A scope entry already carries a filter
+;; in the grant's own grammar (grants/filter-map-schema): field=value,
+;; equality only. That filter is now the walk's, and the seat row
+;; gains no field for it. One map therefore says what the seat SEES
+;; and what it WALKS, and a row that leaves the filter leaves both in
+;; the same commit.
+
+(defn- walk-entries
+  "Every scope entry that names this kind, in the order they were
+  written."
+  [scope walk]
+  (when walk
+    (filterv #(= walk (str (:kind %))) scope)))
+
+(defn- entry-filter
+  "The filter those entries put on the walk, or nil.
+
+  ONE entry, or none: openness absorbs (grants/surface-of), so a
+  second entry naming the kind with no filter widens the leash back
+  to the whole collection — and a walk narrower than the sight it
+  runs under would break the promise this bead is about. Two entries
+  therefore walk the kind unfiltered, exactly as the grant reads
+  them."
+  [entries]
+  (when (= 1 (count entries))
+    (not-empty (:filter (first entries)))))
+
+(defn walk-filter
+  "The filter a seat's walk runs under (R-1), or nil when the walk
+  runs under the kind's own default filter as it always has.
+
+  Read from the stored row, because the sit reads it (mcp/walk-of)
+  and the wake reads it (`effective-wake-on`). The guards below ask
+  the same question of the input at the door."
+  [seat-row]
+  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
+    (entry-filter (walk-entries (get-in seat-row [:data :scope]) walk))))
+
 (g/defguard walk-names-a-kind-in-scope
   ;; :judges names :walk alone, though the check reads the scope beside
   ;; it: the refusal is ABOUT the walk, and a judged field needs either
@@ -400,7 +448,8 @@
   [_row inp ctx]
   (if-some [walk (some-> (:walk inp) str str/trim not-empty)]
     (let [rdef-of (:rdef-of ctx)
-          in-scope? (boolean (some #(= walk (str (:kind %))) (:scope inp)))
+          entries (walk-entries (:scope inp) walk)
+          in-scope? (boolean (seq entries))
           rdef (when rdef-of (rdef-of walk))]
       (cond
         (not in-scope?)
@@ -428,19 +477,140 @@
         ;; judgment's `queue` minus the subjects already judged, so
         ;; the collection a firing opens is the work waiting whatever
         ;; the kind declares — the filter stands where the kind's own
-        ;; default would have. The relaxation is ONLY for that seat:
-        ;; a walk with no judgment still owes the kind's own filter,
-        ;; because nothing else narrows it.
+        ;; default would have.
+        ;; A SCOPE ENTRY'S FILTER IS THE THIRD (bead waymark-fp62.12,
+        ;; R-1). The entry that opens the kind may narrow it itself,
+        ;; and then the collection a firing opens is that narrowing.
+        ;; So one of three must hold, and this clause refuses the
+        ;; seat that has none of them; `walk-leaves-its-filter` next
+        ;; door asks whether the filter it does have can be emptied.
         (and (empty? (:default-filters rdef))
+             (nil? (entry-filter entries))
              (nil? (some-> (:judgment inp) str not-empty)))
         (t/deny {:vars {:walk walk
                         :problem (str "declares no default filter at all,"
                                       " so the collection a firing opens is"
                                       " every row of it rather than the work"
-                                      " waiting — walk a kind whose queue"
+                                      " waiting — give its scope entry a"
+                                      " filter, walk a kind whose queue"
                                       " filters itself, or name a judgment"
                                       " whose queue filters it for you")}})
         :else (t/allow)))
+    (t/allow)))
+
+;; ── the walk must be able to empty its own filter (R-2) ─────────────
+;;
+;; A filter the seat cannot get a row out of is a queue that never
+;; drains: the firing opens the same rows tomorrow, the sitting bills
+;; for them again, and nothing on the row says why. So the engine
+;; asks for the PROOF at the door, and it can only ask for the proof
+;; it can see.
+;;
+;; Over `state` it sees everything it needs: the machine is declared,
+;; and a door of the walked kind whose `from` includes the filtered
+;; state and whose `to` is not that state moves a row out of the
+;; filter. The entry must NAME that door — a door the seat may not
+;; take is not the seat's way out.
+;;
+;; Over a data field it sees nothing: a handler writes that field, the
+;; declaration does not say which one, and no reading of the rdef can
+;; prove a row ever leaves. The one filter it can accept blind is the
+;; kind's OWN default, which the kind wrote about itself and which
+;; `walk-names-a-kind-in-scope` already accepts as the queue.
+
+(defn- named-filter
+  "One filter map as {field-name value-string} — the shape two
+  spellings of one field (a keyword off the wire, a string out of the
+  store) both reduce to."
+  [fm]
+  (into {} (map (fn [[k v]] [(name k) (str v)])) fm))
+
+(defn- leaves-the-state?
+  "Does one action of `rdef` named in `actions` move a row out of
+  `state`? `usability/leaves-state?`'s reading, narrowed to the doors
+  this scope entry opens: `:from` is a set and `:to` is one state, so
+  a self-loop frees nothing and is not an exit."
+  [rdef actions state]
+  (let [named (into #{} (map str) actions)]
+    (boolean
+     (some (fn [a]
+             (and (contains? named (name (:name a)))
+                  (contains? (into #{} (map name) (:from a)) state)
+                  (not= state (some-> (:to a) name))))
+           (machine/actions-seq rdef)))))
+
+(g/defguard walk-leaves-its-filter
+  ;; :judges [:walk] and :reads [:services], the way
+  ;; `walk-names-a-kind-in-scope` does it and for its reason: the
+  ;; refusal is ABOUT the walk, and the scope entry beside it is what
+  ;; the walk is judged against.
+  {:judges [:walk]
+   :reads [:services]
+   :vars [:walk :problem]
+   :open "The walked kind's doors are its published schema's, one GET away; no form can recite another kind's state machine, and the way out of this refusal is the scope entry in this same form."
+   :explain "A seat walks a collection its own doors can empty: {problem}."}
+  [_row inp ctx]
+  (if-some [walk (some-> (:walk inp) str str/trim not-empty)]
+    (let [rdef-of (:rdef-of ctx)
+          rdef (when rdef-of (rdef-of walk))
+          entries (walk-entries (:scope inp) walk)
+          entry (when (= 1 (count entries)) (first entries))
+          fm (named-filter (entry-filter entries))
+          state (get fm "state")
+          problem
+          (cond
+            ;; the probe ctx carries no registry, and a walk naming a
+            ;; kind this engine does not serve is the guard next door's
+            ;; refusal — decline to guess at both, its own posture
+            (or (nil? rdef-of) (nil? rdef)) nil
+
+            ;; R-3: a judgment seat keeps its relaxation. It walks the
+            ;; judgment's `queue` minus the subjects already judged,
+            ;; and the verdict row is the exit — a door on another
+            ;; kind, which nothing here could read off this one.
+            (some-> (:judgment inp) str not-empty) nil
+
+            (empty? fm)
+            (when (empty? (:default-filters rdef))
+              (str "the scope entry for " walk " carries no filter, " walk
+                   " declares no default filter, and this seat names no"
+                   " judgment — narrow the entry with a filter, or name a"
+                   " judgment whose queue narrows it"))
+
+            state
+            (when-not (leaves-the-state? rdef (:actions entry) state)
+              (str "no door this seat may take moves a " state " " walk
+                   " out of " state " — add a door of " walk
+                   " that leaves " state " to that scope entry's actions,"
+                   " or filter the entry by a state one of its doors"
+                   " leaves"))
+
+            ;; A DATA FIELD OVER A KIND THAT NARROWS ITSELF IS THE
+            ;; LEASH, NOT THE QUEUE. The bead's sentence is "a filter
+            ;; over a field that is not state is accepted only when it
+            ;; equals the kind's default filter", and the departure
+            ;; recorded here is that a kind which declares ANY default
+            ;; filter has already answered the question this guard
+            ;; asks: its own default is what opens the collection on
+            ;; the work waiting, `walk-names-a-kind-in-scope` accepts
+            ;; it for that (R-12.32), and the entry's data filter
+            ;; narrows the leash beside it as it always has. The rule
+            ;; bites where it was written to bite — a kind with NO
+            ;; default filter, where the entry's filter is the whole
+            ;; of what narrows the walk and nothing in the
+            ;; declaration can prove a row ever leaves it.
+            :else
+            (when (empty? (:default-filters rdef))
+              (str "the scope entry for " walk " filters by "
+                   (str/join ", " (map (fn [[f v]] (str f "=" v))
+                                       (sort-by key fm)))
+                   ", which is the whole of what narrows this walk: " walk
+                   " declares no default filter of its own, and the engine"
+                   " cannot see the handler that writes a data field — so it"
+                   " cannot prove a row ever leaves that filter. Filter by"
+                   " state, and name the door that leaves it, or walk a kind"
+                   " whose own default filter narrows the queue")))]
+      (if problem (t/deny {:vars {:walk walk :problem problem}}) (t/allow)))
     (t/allow)))
 
 ;; ── the seat that says a judgment (bead waymark-fp62.11, R-4) ───────
@@ -1344,7 +1514,7 @@
             :x-options {:from :kinds}
             :x-display
             {:label "The queue it walks"
-             :help "One kind this seat works through, a row at a time, in the order that kind's own default sort gives. The kind must be in the scope above and must filter its own queue by state — the collection a firing opens IS the work waiting for it. Leave it empty for a seat that walks nothing."}}
+             :help "One kind this seat works through, a row at a time, in the order that kind's own default sort gives. The kind must be in the scope above, and the collection a firing opens IS the work waiting for it: give that kind's scope entry a filter, or walk a kind that filters its own queue, or name a judgment below. When the entry filters by state, that same entry must name a door that moves a row out of that state — no door this seat may take, no queue it can empty. Leave it empty for a seat that walks nothing."}}
      [:maybe [:string {:min 1 :max 64}]]]
     ;; THE JUDGMENT THIS SEAT SAYS (R-4 of waymark-fp62.11). The queue
     ;; is a query and nothing is copied: the walk is the judgment's
@@ -1519,7 +1689,7 @@
             :x-options {:from :kinds}
             :x-display
             {:label "The queue it walks"
-             :help "One kind this seat works through, a row at a time. It must be in the scope above and must filter its own queue by state — or name a judgment below, whose queue filters it instead."}}
+             :help "One kind this seat works through, a row at a time. It must be in the scope above, and its scope entry must carry a filter — or the kind must filter its own queue, or the seat must name a judgment below. When the entry filters by state, that same entry must name a door that moves a row out of that state."}}
      [:maybe [:string {:min 1 :max 64}]]]
     [:judgment {:optional true
                 :kind :judgment
@@ -1582,6 +1752,7 @@
                    ttl-within-standing
                    held-for-active-models
                    walk-names-a-kind-in-scope
+                   walk-leaves-its-filter
                    walk-matches-the-judgment
                    wake-on-names-real-kinds
                    wake-on-names-real-actions]
@@ -1726,6 +1897,7 @@
               ttl-within-standing
               held-for-active-models
               walk-names-a-kind-in-scope
+              walk-leaves-its-filter
               walk-matches-the-judgment
               wake-on-names-real-kinds
               wake-on-names-real-actions
@@ -2576,17 +2748,40 @@
   seat with neither wakes on its cadence and a person's fire alone,
   which is the empty vector.
 
+  THE DEFAULT FOLLOWS THE FILTER (bead waymark-fp62.12, R-4). When
+  the walk's scope entry carries a filter (`walk-filter`), a row
+  ARRIVES in the queue two ways: somebody creates it there, and
+  somebody moves it there. The computed entry is therefore the walk's
+  kind, EVERY action of it, under that filter — the wake consumer
+  judges the row that moved against the entry's filter after the
+  transition committed (`wakes/moved-under?`), so a row a person
+  finalizes into the walk wakes the seat and a row that leaves it does
+  not. Every action INCLUDES the birth door: `create` is a door every
+  kind serves and no kind lists in `:actions`, and dropping it would
+  take away the one wake the unfiltered default already gives.
+  `walk-rdef` is the walked kind's own declaration, which is where
+  those action names live; called without it this answers the
+  `create` default it always has.
+
   The count wake (R-12.24) asks nothing of the default: the computed
   entry carries no `at_least`, so it stays the transition wake it has
   always been — a walk seat wakes on the row that arrived, and a seat
   that wants a batch says how big a batch is."
-  [seat-row]
-  (let [written (get-in seat-row [:data :wake_on])
-        walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
-    (cond
-      (seq written) (vec written)
-      walk [{:kind walk :actions [walk-create-action]}]
-      :else [])))
+  ([seat-row] (effective-wake-on seat-row nil))
+  ([seat-row walk-rdef]
+   (let [written (get-in seat-row [:data :wake_on])
+         walk (some-> (get-in seat-row [:data :walk]) str not-empty)
+         fm (walk-filter seat-row)]
+     (cond
+       (seq written) (vec written)
+       (and walk fm walk-rdef)
+       [{:kind walk
+         :actions (into [walk-create-action]
+                        (map (comp name :name))
+                        (machine/actions-seq walk-rdef))
+         :filter fm}]
+       walk [{:kind walk :actions [walk-create-action]}]
+       :else []))))
 
 (defn open-sitting-for-grant
   "The open sitting a request under `grant-id` is counted against, or

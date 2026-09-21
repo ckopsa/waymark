@@ -335,6 +335,99 @@
                                                     [:data :judgment])))
                 "and the stored judgment did not move")))))))
 
+;; ── the walk under its scope entry's filter (waymark-fp62.12) ───────
+;;
+;; `model` declares no default filter, which is what the case above
+;; refuses. A scope entry that narrows the kind itself is the third
+;; way a walk can be narrowed, and the engine asks for the PROOF that
+;; the seat can get a row back out of that narrowing: a filter nothing
+;; leaves is a queue that never drains, and the seat bills for the
+;; same rows at every wake.
+
+(defn- named-filter
+  "One filter map as {field value}, both strings — the shape a stored
+  keyword key and a string key both reduce to, so an assertion is
+  about the filter and not about how it came back off the wire."
+  [fm]
+  (into {} (map (fn [[k v]] [(name k) (str v)])) fm))
+
+(deftest a-walk-filtered-by-its-scope-entry-must-name-the-door-out
+  (testing "an entry that filters by state and names a door out of it is opened"
+    (let [row (open-seat! "walks-the-active-models"
+                          {:walk "model"
+                           :scope [{:kind "model" :actions ["retire"]
+                                    :filter {:state "active"}}]})]
+      (is (= :active (:state row)))
+      (is (= {"state" "active"} (named-filter (seats/walk-filter row)))
+          "the walk's filter IS the scope entry's")
+      (is (nil? (get-in row [:data :walk_filter]))
+          "and the seat row gained no field for it")
+      (is (= "model" (get-in row [:data :walk]))
+          "`model` declares no default filter, and is walked all the same")))
+
+  (testing "an entry whose only door is a self-loop is refused"
+    (let [p (refusal #(open-seat! "walks-and-never-leaves"
+                                  {:walk "model"
+                                   :scope [{:kind "model"
+                                            :actions ["reprice"]
+                                            :filter {:state "active"}}]}))]
+      (is (= :walk-leaves-its-filter (:guard p)))
+      (is (str/includes?
+           (str (:detail p))
+           "no door this seat may take moves a active model out of active")
+          "the sentence names the kind, the state and what the entry opens")))
+
+  (testing "an entry naming no door at all is refused the same way"
+    (let [p (refusal #(open-seat! "walks-and-takes-nothing"
+                                  {:walk "model"
+                                   :scope [{:kind "model" :actions []
+                                            :filter {:state "active"}}]}))]
+      (is (= :walk-leaves-its-filter (:guard p)))
+      (is (str/includes? (str (:detail p)) "out of active"))))
+
+  (testing "a data-field filter on a kind with no default filter is refused"
+    (let [p (refusal #(open-seat! "walks-the-strong-models"
+                                  {:walk "model"
+                                   :scope [{:kind "model" :actions ["retire"]
+                                            :filter {:tier "strong"}}]}))]
+      (is (= :walk-leaves-its-filter (:guard p)))
+      (is (str/includes? (str (:detail p)) "tier=strong"))
+      (is (str/includes? (str (:detail p)) "cannot see the handler")
+          "the engine says what it cannot prove, rather than guessing")))
+
+  (testing "and a restate onto a filter with no way out is refused too"
+    (let [seat (open-seat! "restates-its-filter"
+                           {:walk "model"
+                            :scope [{:kind "model" :actions ["retire"]
+                                     :filter {:state "active"}}]})
+          p (refusal #(restate! (:id seat)
+                                (restate-body
+                                 {:walk "model"
+                                  :scope [{:kind "model"
+                                           :actions ["reprice"]
+                                           :filter {:state "active"}}]})))
+          stored (row-of :seat (:id seat))]
+      (is (= :walk-leaves-its-filter (:guard p)))
+      (is (= {"state" "active"} (named-filter (seats/walk-filter stored)))
+          "and the stored scope did not move")
+      (is (= ["retire"]
+             (mapv str (:actions (first (get-in stored [:data :scope])))))
+          "…nor did the door it opens")))
+
+  (testing "a seat that names a judgment is not judged here at all"
+    ;; R-3: it walks the judgment's own queue minus the subjects
+    ;; already judged, and the exit is the verdict row — a door on
+    ;; ANOTHER kind, which nothing this guard reads could see.
+    (let [live (judgment! "prices-for-the-filter-guard" true)
+          row (open-seat! "judges-the-active-models"
+                          {:walk "model"
+                           :judgment (str (:id live))
+                           :scope [{:kind "model" :actions []
+                                    :filter {:state "active"}}
+                                   {:kind "verdict" :actions ["judge"]}]})]
+      (is (= :active (:state row))
+          "no door of `model` leaves `active` here, and the seat opens anyway"))))
+
 ;; ── case 22 · a seat is a person's office ───────────────────────────
 
 (deftest a-seat-is-opened-by-a-person-and-not-by-an-agent

@@ -736,6 +736,123 @@
         "no rows, and no refusal either: the sit answers what the seat's own
          grant admits, which behind a wall is nothing")))
 
+
+;; ── 6b. the walk under its scope entry's filter (waymark-fp62.12) ───
+;;
+;; `post` above filters its own queue, which is the only kind a seat
+;; could walk before this bead. `memo` declares NO default filter, so
+;; its collection opens on every row it has ever held. What narrows
+;; the walk is the scope entry, and the entry is also the leash: the
+;; rows the seat may see are the rows it walks, and a row that takes
+;; the exit door leaves both in the same commit.
+
+(def ^:private memo
+  "A queue that does not filter itself: no `:default-filters` at all.
+  Two doors, and they name each other — `send` is the way out of the
+  filter a seat walks, and `recall` is the way back in."
+  (r/resource
+   {:kind :memo
+    :plural "memos"
+    :states [:draft :sent]
+    :initial :draft
+    :terminal #{}
+    :summary "{data.subject} · {state}"
+    :schema
+    [:map
+     [:subject {:x-display {:label "What it is about"}}
+      [:string {:min 1 :max 120}]]
+     [:written_at {:x-display {:label "When it was written"}}
+      :waymark/instant]]
+    :filterable {:state #{:eq :in}}
+    :sortable {:fields [:written_at] :default "written_at"}
+    :actions
+    {:send {:from #{:draft} :to :sent
+            :safety {:idempotent true :reversible true :confirm false}
+            :display {:label "Send" :style :primary :order 1}}
+     :recall {:from #{:sent} :to :draft
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Recall" :order 2}}}}))
+
+(def ^:private memo-key
+  "The memo clerk's own key — a third office, so the two above keep
+  the keys their own tests present."
+  "c2VhdC1rZXktZm9yLXRoZS1tZW1vLWNsZXJr")
+
+(def ^:private memo-charter
+  "Send each memo the house has finished writing.")
+
+(defn- open-memo-seat!
+  "A seat whose scope entry NARROWS the memo queue to its drafts, and
+  names the one door that takes a draft out of it."
+  [eng]
+  (let [model (:row (inv/create! eng :model
+                                 {:name "claude-memo-5" :display "Memo 5"
+                                  :vendor "anthropic" :tier "strong"
+                                  :price_input_per_mtok 3M
+                                  :price_output_per_mtok 15M
+                                  :price_cache_read_per_mtok 0.3M
+                                  :price_cache_write_per_mtok 3.75M}
+                                 {:principal person}))
+        seat (:row (inv/create!
+                    eng :seat
+                    {:name "memo-clerk"
+                     :charter memo-charter
+                     :scope [{:kind "memo" :actions ["send"]
+                              :filter {:state "draft"}}]
+                     :walk "memo"
+                     :held_for [(:id model)]
+                     :standing_ttl_seconds 604800
+                     :cadence_seconds 3600
+                     :budget_usd_per_week 5M
+                     :sitting_budget_tokens 60000}
+                    {:principal person}))]
+    (schedules/ensure-schedule! eng seat)
+    (inv/invoke! eng :seat (:id seat) :offer_key {:key memo-key}
+                 {:principal person})
+    seat))
+
+(defn- memo! [eng subject at]
+  (:row (inv/create! eng :memo {:subject subject :written_at at}
+                     {:principal person})))
+
+(deftest the-walk-reads-its-kind-under-the-scope-entrys-filter
+  (let [eng (fresh-engine [fx/meal memo])
+        h (engine/handler eng)
+        _ (open-memo-seat! eng)
+        gas (memo! eng "The gas bill" "2026-09-18T07:00:00Z")
+        note (memo! eng "The school note" "2026-09-18T08:00:00Z")
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit" {:key memo-key})
+        walk (:walk (doc-of r))]
+
+    (testing "a kind that declares no default filter is walked all the same"
+      (is (false? (:isError r)) (text-of r))
+      (is (= "memo" (:kind walk)))
+      (is (= memo-charter (:charter walk)))
+      (is (= [(str (:id gas)) (str (:id note))] (mapv :id (:rows walk)))
+          "both drafts, oldest first")
+      (is (= 2 (:total walk))
+          "and the count is the collection's under the same filter"))
+
+    (testing "the sitter is handed the one door the entry opens"
+      (is (= ["send"] (mapv :action (:doors (first (:rows walk)))))))
+
+    (testing "a row that walked the exit door is not in the next walk"
+      (inv/invoke! eng :memo (str (:id gas)) :send nil {:principal person})
+      (let [again (tool h (with-session sid) "waymark_sit" {:key memo-key})
+            walk' (:walk (doc-of again))]
+        (is (false? (:isError again)) (text-of again))
+        (is (= [(str (:id note))] (mapv :id (:rows walk')))
+            "the sent memo left the filter, so it left the walk")
+        (is (= 1 (:total walk'))
+            "and the queue's own count went with it")))
+
+    (testing "and the row that left the filter left the seat's sight too"
+      (let [got (tool h (with-session sid) "waymark_get"
+                      {:kind "memo" :id (str (:id gas))})]
+        (is (true? (:isError got))
+            "one map says what the seat sees and what it walks")))))
+
 ;; ── 7. the seat may be NAMED, and its chair's key opens it ──────────
 ;;
 ;; Bead waymark-fp62.7.23, R-4: one Routine stands for one MODEL, so

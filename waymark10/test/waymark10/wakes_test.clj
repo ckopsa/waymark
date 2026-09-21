@@ -23,6 +23,11 @@
   - the walk seat's computed default: a seat that walks a queue and
     wrote no `wake_on` wakes when a row of that queue is created, and
     the row holds no `wake_on` at all (the engine writes nothing).
+  - and the FILTERED walk's computed default (waymark-fp62.12): when
+    the walk's scope entry carries a filter, the computed entry names
+    every action of that kind under it, so the door that moves a row
+    INTO the filter wakes the seat and the one that moves it out does
+    not. The row still holds no `wake_on`.
   - the tick: a wake the GAP held is released once the gap has
     passed, by `sweep-pending!` — the body of the thread the module
     starts.
@@ -141,10 +146,38 @@
              :safety {:idempotent true :reversible true :confirm false}
              :display {:label "Touch" :order 2}}}}))
 
+(def ^:private wake-memo
+  "The queue a FILTERED walk walks (bead waymark-fp62.12). It
+  declares NO default filter at all, so its collection opens on every
+  row it has ever held — what narrows a seat's walk over it is the
+  seat's own scope entry. Its two doors name each other: `send` takes
+  a row out of the drafts and `recall` puts it back, which is what
+  lets one test watch a row leave the filter and come back into it."
+  (r/resource
+   {:kind :wake_memo
+    :plural "wake_memos"
+    :states [:draft :sent]
+    :initial :draft
+    :terminal #{}
+    :summary "{data.subject} · {state}"
+    :schema [:map
+             [:subject {:examples ["The gas bill"]
+                        :x-display {:label "What it is about"
+                                    :help "One line naming the memo."}}
+              [:string {:min 1 :max 80}]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:send {:from #{:draft} :to :sent
+            :safety {:idempotent true :reversible true :confirm false}
+            :display {:label "Send" :style :primary :order 1}}
+     :recall {:from #{:sent} :to :draft
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Recall" :order 2}}}}))
+
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["wake_tasks" "wake_items" "schedules" "seats" "models" "sittings" "definitions"
+  ["wake_tasks" "wake_items" "wake_memos" "schedules" "seats" "models" "sittings" "definitions"
    "members" "roles" "grants" "approval_requests" "attachments"
    "subscriptions" "jobs"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"
@@ -165,7 +198,7 @@
         (let [fake (sch/fake-scheduler)
               fire (sch/fake-fire)
               eng (engine/engine {:storage st
-                                  :resources [wake-task wake-item]})]
+                                  :resources [wake-task wake-item wake-memo]})]
           (binding [*eng* (assoc eng
                                  :schedule-adapters {:claude_routine fake}
                                  :fire-adapter fire)
@@ -250,6 +283,14 @@
 
 (defn- item-do! [id action]
   (inv/invoke! *eng* :wake_item (str id) action nil {:principal elena}))
+
+
+(defn- memo! [subject]
+  (:id (:row (inv/create! *eng* :wake_memo {:subject subject}
+                          {:principal elena}))))
+
+(defn- memo-do! [id action]
+  (inv/invoke! *eng* :wake_memo (str id) action nil {:principal elena}))
 
 
 (defn- model! [nm]
@@ -511,6 +552,68 @@
       (let [quiet (seat! "quietclerk" {})]
         (is (= [] (seats/effective-wake-on (raw :seat quiet))))
         (seat-do! quiet :retire)))
+
+    (seat-do! seat :retire)))
+
+;; ── 4b · the FILTERED walk's computed default (R-4 of fp62.12) ──────
+;;
+;; A walk seat that wrote no `wake_on` wakes on `create` of its queue.
+;; When the walk's scope entry carries a filter, the queue is that
+;; filter — and a row arrives in it two ways, because somebody can
+;; also MOVE a row into it. So the computed entry names every action
+;; of the kind, under the same filter, and the consumer judges the row
+;; after the transition committed.
+
+(deftest a-filtered-walk-wakes-on-a-door-that-moves-a-row-into-it
+  (let [wn :wake-filtered
+        fn' :wake-filtered-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        ;; written and sent BEFORE the seat exists: both transitions
+        ;; are in the log the drain will read, and the row is OUTSIDE
+        ;; the filter at the moment the drain judges it
+        memo-id (memo! "a memo for the filtered walk")
+        _ (memo-do! memo-id :send)
+        {:keys [seat token]}
+        (linked-seat! "memoclerk"
+                      {:walk "wake_memo"
+                       :scope [{:kind "wake_memo" :actions ["send"]
+                                :filter {:state "draft"}}]}
+                      fn')]
+
+    (testing "the engine writes nothing and computes the filtered entry"
+      (let [row (raw :seat seat)
+            computed (seats/effective-wake-on row wake-memo)
+            entry (first computed)]
+        (is (nil? (get-in row [:data :wake_on]))
+            "R-12.22: no default is WRITTEN, here as anywhere")
+        (is (= 1 (count computed)))
+        (is (= "wake_memo" (str (:kind entry))))
+        (is (= ["create" "recall" "send"] (mapv str (:actions entry)))
+            "every action of the kind, and the birth door with them")
+        (is (= {"state" "draft"}
+               (into {} (map (fn [[k v]] [(name k) (str v)])) (:filter entry)))
+            "under the walk's own scope entry filter")
+        (is (nil? (:at_least entry))
+            "and it is a transition wake, as the create default always was")))
+
+    (testing "a row that sits outside the filter wakes nothing"
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (is (= 0 (count (fires-of token)))
+          "its create and its send are both in the log, and the row is sent"))
+
+    (testing "and the door that moves it back INTO the filter fires once"
+      (memo-do! memo-id :recall)
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token))))
+      (let [text (str (:text (last (fires-of token))))]
+        (is (str/includes? text (str memo-id)))
+        (is (str/includes? text "wake_memo"))
+        (is (str/includes? text "recall")
+            "the text names the door that moved it, so the session walks it")))
 
     (seat-do! seat :retire)))
 

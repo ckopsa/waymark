@@ -165,7 +165,9 @@
 (defn- active-seats
   "Every active seat a wake can reach, as the three facts a match
   needs: its id, what wakes it (`effective-wake-on`, so a walk seat's
-  computed default is already in), and its own gap.
+  computed default is already in — it is handed the WALKED kind's
+  declaration, because a filtered walk's default names every action
+  of that kind), and its own gap.
 
   AN INTERACTIVE SEAT IS NOT HERE (R-10.8). A person sits in it and
   nothing fires it — its own `fire` door refuses the engine — so it is
@@ -173,13 +175,16 @@
   judged and then refused would warn once per matching transition in
   a house where nothing is wrong."
   [eng]
-  (into []
-        (comp (remove seats/interactive-seat?)
-              (map (fn [row]
-                     {:id (str (:id row))
-                      :wake-on (seats/effective-wake-on row)
-                      :interval (interval-of row)})))
-        (rows-where eng :seat {:state :active} seat-page)))
+  (let [walk-rdef (fn [row]
+                    (some->> (get-in row [:data :walk]) str not-empty
+                             keyword (get (inv/resources eng))))]
+    (into []
+          (comp (remove seats/interactive-seat?)
+                (map (fn [row]
+                       {:id (str (:id row))
+                        :wake-on (seats/effective-wake-on row (walk-rdef row))
+                        :interval (interval-of row)})))
+          (rows-where eng :seat {:state :active} seat-page))))
 
 (defn- seats-of
   "The active seats, cached for the life of the registration and
