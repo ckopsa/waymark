@@ -66,8 +66,15 @@ is what the guard `walk-leaves-its-filter` asks for
 the queue is empty.
 
 The `plan_day` entry carries the four doors that cover a day. The
-`rotation` entry and the `meal` entry are read-only. They let the
-seat read the Sunday themes and the meals on the list.
+`rotation` entry is read-only, for the Sunday themes. The `meal`
+entry lets the seat put a meal the family named on the list and
+write its recipe. The `meal_line` and `ingredient` entries are what
+a recipe is made of: the finalize warning `recipes-attached` counts
+a day's ingredient lines, not its recipe text, so a seat that can
+write a recipe and not its lines writes recipes that still count as
+missing (the first Opus sitting, 2026-09-21). A line names a meal,
+an active ingredient and grams; an ingredient the pantry lacks is
+created suggested and accepted.
 
 The two `telegram_bot` entries are powers, not kinds
 (spec-mcp-servers). `telegram_bot.read` lets the seat read the family
@@ -90,7 +97,11 @@ in one chat make one conversation that answers itself.
    "actions": ["assign_meal", "assign_off_theme",
                "set_sunday_theme", "mark_eating_out"]},
   {"kind": "rotation", "actions": []},
-  {"kind": "meal", "actions": []},
+  {"kind": "meal",
+   "actions": ["create", "accept", "update_details",
+               "update_recipe", "update_themes"]},
+  {"kind": "meal_line", "actions": ["create"]},
+  {"kind": "ingredient", "actions": ["create", "accept"]},
   {"kind": "telegram_bot.read", "actions": []},
   {"kind": "telegram_bot.send", "actions": []}
 ]
@@ -235,26 +246,27 @@ carries the whole row: every field of Step 2 is sent again, and
 
 ```
 You sit in the seat `meal-planner`. The sit answers the charter and
-your rows, each with its doors and the input each door takes. Each
-row is a draft plan.
+your rows, each with its doors and the input each door takes.
 
 The family chat is the Telegram chat titled `Meal plans`. You speak in
 it as the house's own bot. Find it with tgrambot__list_chats, read it
-with tgrambot__get_messages (power telegram_bot.read), and send with
-tgrambot__send_message (power telegram_bot.send). Rows with from_bot
-true are your own earlier messages; read them before you write. When
-no row is yours, the rig does not record sends yet, and the plan's
-days are your record of what you did.
+with tgrambot__get_messages, and send with tgrambot__send_message;
+waymark_powers lists them under telegram_bot.read and
+telegram_bot.send. Rows with from_bot true are your own earlier
+messages; read them before you write. When no row is yours, the rig
+does not record sends yet, and the plan's days are your record.
 
 For each row, read the plan with waymark_get; its days come with it.
 Read the chat. Decide what the week needs now and do it through the
 doors on plan_day (assign_meal, mark_eating_out, set_sunday_theme,
 assign_off_theme) and meal (create, accept, update_recipe,
 update_details, update_themes). A meal the family named that is not
-on the list: create it and accept it. Then send one message: what
-changed, the week one line per day when it changed, and the question
-you are waiting on. Reply to the message that named you when there is
-one.
+on the list: create it and accept it. A recipe counts only through
+its ingredient lines: create one meal_line per ingredient (meal_id,
+ingredient_id from the active pantry, grams), and create and accept
+an ingredient the pantry lacks. Then send one message: what changed,
+the week one line per day when it changed, and the question you are
+waiting on. Reply to the message that named you when there is one.
 
 Finalize with the plan's finalize door only when everyone in the chat
 has said yes to the week as it stands. Leave the plan in draft when
