@@ -15,7 +15,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: migrate-queue-prod test-calendar probe-calendar db db10 test10 test-queue dev-queue migrate-queue check-queue check-factory test-factory image-queue deploy-queue
+.PHONY: migrate-queue-prod test-calendar probe-calendar db db10 test10 test-queue dev-queue migrate-queue check-queue check-factory test-factory check-localfire serve-localfire image-queue deploy-queue
 
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
@@ -110,6 +110,18 @@ test-factory:  ## (moved to CI) the factory's suite — GitHub Actions runs thes
 	@echo ""
 	@echo "To run THIS suite by hand anyway, call clojure directly:"
 	@echo "  cd factory10 && clojure -M:test   (no database, no network)"
+
+# The local fire server lives under localfire/ (waymark-fp62.19): it
+# answers the engine's fire the way a Claude Routine does, so a seat
+# runs on a machine of the house. Its suite needs no database and no
+# network past the loopback, so it stays a local target like
+# check-queue rather than a CI-only one. Design: docs/spec-local-fire.md.
+
+check-localfire:  ## the fire wire suite (no database, so it runs locally like check-queue)
+	cd localfire && clojure -M:test
+
+serve-localfire:  ## serve the local fire server; LOCALFIRE_TOKEN is its bearer, LOCALFIRE_CONFIG names the EDN config
+	cd localfire && clojure -M:serve $(LOCALFIRE_CONFIG)
 
 test-calendar:  ## (moved to CI) calendar10 transport tests — GitHub Actions runs these
 	@echo "Tests run in CI, not here. The GitHub Actions pipeline"
