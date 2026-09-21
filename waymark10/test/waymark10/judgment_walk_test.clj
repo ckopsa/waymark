@@ -168,7 +168,7 @@
                    eng :judgment
                    (merge {:name "kitchen-spend"
                            :subject_kind "expense"
-                           :queue {"team" "kitchen"}
+                           :queue {:team "kitchen"}
                            :verdicts [{:name "keep" :sentence keep-sentence}
                                       {:name "query" :sentence query-sentence}]
                            :remedy_max 200
