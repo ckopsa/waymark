@@ -76,6 +76,18 @@
   `revoke_key`, and `key-not-written-by-hand` refuses it at every
   other door.
 
+  ── the chair, and the one Routine a model holds ───────────────────
+
+  A Routine stands for a MODEL, not for a seat. The model row is the
+  CHAIR: it holds the key its sessions present (`sitter_key`) and the
+  link its firings go out on (`fire_url` and `fire_token`), on the
+  seat's own two doors and the schedule's own two. A seat's chair is
+  the FIRST model of its `held_for` — `chair-of` says so in one place
+  — so a step down the ladder is one `restate` of that list and no
+  second Routine. What the seat holds instead is `instructions`: the
+  words the engine composes into the fire text, so a firing can no
+  longer run on instructions nobody in this house can read.
+
   Recorded deviations and named punts (each a sentence, per the
   discipline; the per-kind `:deviations` carry the ones that belong to
   a declaration):
@@ -176,6 +188,20 @@
   [seat-row]
   (= interactive-mode (some-> (get-in seat-row [:data :mode]) str)))
 
+(defn chair-of
+  "The seat's CHAIR — the first model of its `held_for` (R-2 of
+  waymark-fp62.7.23), or nil.
+
+  FIRST, and said here so it is said once: the chair is the model
+  whose Routine fires this seat and whose key its sessions present, so
+  a step down the ladder is one `restate` of that list and no second
+  Routine. A seat held for nothing has no chair — any model may sit in
+  it and none of them answers for it. Reads a STORED row as happily as
+  a decoded one, `interactive-seat?`'s posture and its reason: a ref
+  is a string in the document either way."
+  [seat-row]
+  (some-> (first (get-in seat-row [:data :held_for])) str not-empty))
+
 (def ^:private million (bigdec 1000000))
 
 (def cost-scale
@@ -208,6 +234,22 @@
       (t/allow)
       (t/deny))))
 
+(g/defguard a-person-at-the-chair
+  {:reads [:principal]
+   :explain "The chair's key and the chair's link are a person's to write: a person mints the key, a person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes both here. An agent does not write a chair's credential."}
+  [_row _inp ctx]
+  ;; `a-person`'s three-line check, spelled again rather than reused,
+  ;; and schedules.clj's `a-person-or-a-delegate` makes the same trade
+  ;; for the same reason: that guard's sentence is about opening an
+  ;; OFFICE, and what a caller reads at a model's door is about a
+  ;; credential. One admission, two sentences, and the refusal names
+  ;; the thing the caller was actually touching.
+  (let [{:keys [type acts-for]} (:principal ctx)]
+    (if (or (= :human type)
+            (and (= :agent type) (not (str/blank? (str acts-for)))))
+      (t/allow)
+      (t/deny))))
+
 ;; THE SITTER KEY'S WRITE FENCE (R-12.12), members.clj's
 ;; `reentry-not-written-by-hand` made real for this kind: sitter_key is
 ;; a schema field and a :secret one, so a create or a restate that
@@ -220,9 +262,23 @@
 ;; are :secret, so no form asks and no advertised input names it.
 (g/defguard key-not-written-by-hand
   {:judges [:sitter_key]
-   :explain "The sitter key is written by offer_key alone, never by hand — a create or a restate may not carry sitter_key. Open the seat first, then offer it a key."}
+   :explain "The sitter key is written by offer_key alone, never by hand — a create or a restate may not carry sitter_key. Open the seat, or add the model, and offer the key at its own door."}
   [_row inp _ctx]
   (if (contains? inp :sitter_key)
+    (t/deny)
+    (t/allow)))
+
+;; THE CHAIR'S LINK HAS ONE WRITING DOOR TOO (R-2 of
+;; waymark-fp62.7.23). The model kind declares no create-schema of
+;; its own, so its row schema IS its create door, and the fence the
+;; schedule gets by OMISSION has to be a guard here. `fire_token` is
+;; the credential; `fire_url` is judged beside it because half a link
+;; written by hand is a link the engine would fire at nothing.
+(g/defguard link-not-written-by-hand
+  {:judges [:fire_url :fire_token]
+   :explain "The Routine's fire URL and its token are written by link alone, never by hand. Add the model first, then link the Routine to it."}
+  [_row inp _ctx]
+  (if (or (contains? inp :fire_url) (contains? inp :fire_token))
     (t/deny)
     (t/allow)))
 
@@ -598,16 +654,26 @@
     (t/allow)))
 
 (g/defguard linked-for-fire
-  {:reads [:schedule]
-   :explain "Link the Routine's fire URL and token to the schedule first."}
+  {:reads [:schedule :model]
+   :explain "Link the Routine's fire URL and token first — to this seat's schedule, or to the model it is held for."}
   [row _inp ctx]
   ;; The schedule is read through the ctx `:find` hook — the write's
   ;; own transaction, `schedules/one-per-seat?`'s spelling exactly. A
   ;; ctx without the hook (the pure render probe) advertises
   ;; optimistically, as every cross-row guard here does.
+  ;;
+  ;; A SEAT WITH NO LINK OF ITS OWN FIRES THROUGH ITS CHAIR (R-5 of
+  ;; waymark-fp62.7.23). One Routine stands for one model, so the
+  ;; door asks the schedule first — a seat a person linked keeps its
+  ;; own Routine — and then the first model of `held_for`, which is
+  ;; the chair.
   (if-some [find' (:find ctx)]
-    (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))]
-      (if (some-> (get-in sched [:data :fire_url]) str not-empty)
+    (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))
+          read' (:read ctx)
+          chair (when read'
+                  (some->> (chair-of row) (read' :model)))]
+      (if (or (some-> (get-in sched [:data :fire_url]) str not-empty)
+              (some-> (get-in chair [:data :fire_url]) str not-empty))
         (t/allow)
         (t/deny)))
     (t/allow)))
@@ -630,7 +696,8 @@
 (def ^:private restatable
   "The fields a `restate` states again. `name` is not among them (one
   spelling per seat) and neither is anything the engine writes."
-  [:charter :mode :scope :substitute_drop :held_for :substitute_for
+  [:charter :instructions :mode :scope :substitute_drop :held_for
+   :substitute_for
    :standing_ttl_seconds :cadence_seconds :sitting_idle_seconds
    :budget_usd_per_week
    :sitting_budget_tokens :walk :rows_per_firing
@@ -700,6 +767,19 @@
 
 (defhandler clear-sitter-key [row _inp _ctx]
   (update row :data dissoc :sitter_key))
+
+;; THE CHAIR'S LINK, written and forgotten by its own two doors —
+;; the schedule's `write-link` and `clear-link` exactly, less the note
+;; a model row does not carry. A second link REPLACES the first, so a
+;; person who rotates the Routine's token pastes the new one and
+;; nothing else moves.
+(defhandler set-chair-link [row inp _ctx]
+  (-> row
+      (assoc-in [:data :fire_url] (:fire_url inp))
+      (assoc-in [:data :fire_token] (:token inp))))
+
+(defhandler clear-chair-link [row _inp _ctx]
+  (update row :data dissoc :fire_url :fire_token))
 
 ;; R-12.19: a fire moves nothing on the seat. The row is returned as
 ;; it stands, and the transition IS the record — `:record true` puts
@@ -1023,6 +1103,9 @@
         {:kind "task" :actions ["create"]
          :filter {:state "open"} :at_least 20}))
 
+(def ^:private instructions-example
+  "Read the fire text below and do what it says. Sit in the seat it names with waymark_sit, passing the seat's name and the key you were given. Then walk the rows the sit hands you, one at a time, and take the door the charter chooses for each.")
+
 (def ^:private charter-example
   "Decide whether a message asks something of this house, and say what it asks in one line. A receipt for something already bought asks nothing. A person waiting on an answer asks something, even when they are polite about it.")
 
@@ -1060,6 +1143,24 @@
                 :label "The judgment, in your words"
                 :help "What this seat has to DECIDE that the engine cannot say at a door — and nothing else. Leave out which door comes next (the envelope offers only the open ones) and leave out what is forbidden (a door the scope does not open is not there). If you find yourself writing the same correction twice, that sentence belongs in a guard, a filter or a reason string, not here."}}
      [:string {:min 1 :max 1200}]]
+    ;; THE ROUTINE'S OWN WORDS (R-1 of waymark-fp62.7.23). One Routine
+    ;; stands for one MODEL, and its prompt says one thing: read the
+    ;; fire text and do what it says. This is what the engine composes
+    ;; that text FROM, which is the whole point of the field being
+    ;; here — instructions
+    ;; pasted into a Routine by hand are instructions a seat can go
+    ;; stale on with nobody the wiser, and these a person restates
+    ;; like anything else about the office. R-12.10 still holds: the
+    ;; pointer and the walk rule, and nothing else. No guard fences
+    ;; the length past the schema's own 2000 — the cap is the priming
+    ;; budget, and the refusal a schema writes already says so.
+    [:instructions {:optional true
+                    :examples [instructions-example]
+                    :x-display
+                    {:widget "prose"
+                     :label "The instructions"
+                     :help "What the Routine's session reads at the top of every firing: how to sit in this seat, and how to walk its queue. Not the judgment — that is the charter, and the session reads it off the row when it sits. Leave this empty and the seat fires the way it always did, on a Routine of its own."}}
+     [:maybe [:string {:max 2000}]]]
     ;; ── WHO SITS HERE (R-10.8) ──────────────────────────────────────
     ;; The mode is the SEAT'S, not the principal's: one office is
     ;; fired and another is sat in, and the ledger compares seat with
@@ -1221,6 +1322,13 @@
                 :label "The judgment, in your words"
                 :help "What this seat has to DECIDE that the engine cannot say at a door — and nothing else. A new seat's judgment is not known yet; open it on a model you trust and let the first weeks find out what the judgment actually is."}}
      [:string {:min 1 :max 1200}]]
+    [:instructions {:optional true
+                    :examples [instructions-example]
+                    :x-display
+                    {:widget "prose"
+                     :label "The instructions"
+                     :help "What the Routine's session reads at the top of every firing: how to sit in this seat, and how to walk its queue. Not the judgment — the session reads that off the row when it sits. Leave it empty and the seat fires the way a seat with a Routine of its own always did."}}
+     [:maybe [:string {:max 2000}]]]
     [:mode {:default default-mode
             :x-display
             {:label "How it is sat in"
@@ -1349,6 +1457,13 @@
                          :label "The judgment, in your words"
                          :help "State the seat's judgment again, whole. If a sentence here is one you have written because the model kept getting something wrong, the fix is a guard, a filter, a door or a reason string — and then the sentence leaves."}}
               [:string {:min 1 :max 1200}]]
+             [:instructions {:optional true
+                             :examples [instructions-example]
+                             :x-display
+                             {:widget "prose"
+                              :label "The instructions"
+                              :help "The words every firing of this seat reads first, stated again. They reach the session through the fire text the engine composes, so a change here is live at the next wake — nothing is pasted anywhere and no Routine is touched."}}
+              [:maybe [:string {:max 2000}]]]
              [:mode {:default default-mode
                      :x-display
                      {:label "How it is sat in"
@@ -1448,7 +1563,8 @@
      ;; sitter_key is NOT prefilled and cannot be: the draft view
      ;; serves prefill from the raw row, and resource/check-secret!
      ;; refuses a :secret field there at the declaration.
-     :edit {:prefill [:charter :mode :scope :substitute_drop :held_for
+     :edit {:prefill [:charter :instructions :mode :scope :substitute_drop
+                      :held_for
                       :substitute_for :standing_ttl_seconds :cadence_seconds
                       :sitting_idle_seconds
                       :budget_usd_per_week :sitting_budget_tokens :walk
@@ -1749,7 +1865,41 @@
              :x-display
              {:label "Anything else worth knowing"
               :help "A line for whoever reads the ladder later — a context window, a deprecation date, why this rung exists."}}
-     [:maybe [:string {:max 240}]]]]
+     [:maybe [:string {:max 240}]]]
+    ;; ── THE CHAIR (waymark-fp62.7.23) ───────────────────────────────
+    ;; ONE ROUTINE FOR EACH MODEL, so the credentials that Routine
+    ;; needs live on the model. Both fields are the seat's and the
+    ;; schedule's own, worn here without a change of meaning: a
+    ;; session presenting `sitter_key` is a sitter of any seat this
+    ;; model is the chair of (`waymark_sit`, R-4), and a seat with no
+    ;; link of its own fires through `fire_url` and `fire_token`
+    ;; (R-5). A step down the ladder is then one restate of the
+    ;; seat's `held_for` — the seat moves to another chair, and
+    ;; nobody makes a second Routine.
+    [:sitter_key {:optional true :secret true
+                  :x-display
+                  {:hidden true
+                   :label "Chair key"
+                   :spelled-by-hand "Written by offer_key and cleared by revoke_key; never typed into a form, and never rendered back."}}
+     [:maybe [:string {:min 22 :max 128}]]]
+    ;; HIDDEN, and the seat's `schedule` field is the precedent and the
+    ;; reason: this kind declares no create-schema, so its row schema
+    ;; is its create door as well, and a form offering the fire URL
+    ;; would be a form inviting a person to write by hand the one
+    ;; thing `link` exists to write. The value is on the row for
+    ;; anything that reads it; the door that puts it there is Link.
+    [:fire_url {:optional true
+                :x-display
+                {:hidden true
+                 :label "The Routine's fire URL"
+                 :spelled-by-hand "Written by Link and cleared by Unlink: the endpoint of the Routine a person made for this model. Every seat it is the chair of, and that nobody linked a Routine of its own, fires through this."}}
+     [:maybe [:string {:min 1 :max 400}]]]
+    [:fire_token {:optional true :secret true
+                  :x-display
+                  {:hidden true
+                   :label "The Routine's token"
+                   :spelled-by-hand "Written by Link and cleared by Unlink; never shown again, and never asked for by a form that already holds it."}}
+     [:maybe [:string {:min 16 :max 400}]]]]
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :tier #{:eq :in}}
@@ -1758,7 +1908,15 @@
    ;; sentence: a second row for one model would split its prices, and
    ;; a sitting costed against the wrong half would be wrong forever.
    :unique [[:name]]
-   :create-guards [one-model-spelling]
+   ;; the two write fences of R-2, and the seat's own note about why a
+   ;; fence must have something to name: a guard judges a field of the
+   ;; door it stands on. This kind declares no create-schema, so its
+   ;; row schema IS that door and both fields are already there to be
+   ;; refused — which is the whole of what the seat had to declare
+   ;; them for.
+   :create-guards [one-model-spelling
+                   key-not-written-by-hand
+                   link-not-written-by-hand]
    :actions
    {:retire {:from #{:active} :to :retired
              :safety {:idempotent true :reversible true :confirm true
@@ -1796,9 +1954,72 @@
               :safety {:idempotent true :reversible true :confirm false}
               :handler reprice-model
               :display {:label "Reprice" :order 2
-                        :description "The vendor moved its prices — record the new four; nothing already closed changes"}}}
+                        :description "The vendor moved its prices — record the new four; nothing already closed changes"}}
+
+    ;; ── the chair's four doors (waymark-fp62.7.23) ──────────────────
+    ;; The seat's `offer_key`/`revoke_key` and the schedule's
+    ;; `link`/`unlink`, on the row that is the chair. None of the four
+    ;; records, and it is the seat's `offer_key` reason verbatim: a
+    ;; recorded action persists its RAW inputs into the transition
+    ;; log, and two of these inputs ARE credentials (R-12.11). The
+    ;; transition row — actor, input digest, summary — is still the
+    ;; audit that each was written, by whom, when.
+    :offer_key
+    {:from #{:active} :to :active
+     :input [:map
+             [:key {:x-display
+                    {:raw true
+                     :label "Chair key"
+                     :help "The secret this model's Routine hands back to the engine when it sits, minted by YOU — at least 22 characters of real randomness, which is 128 bits a machine made and no hand typed. The engine never generates it and never shows it again. A new offer replaces the old one."}}
+              [:string {:min 22 :max 128}]]]
+     :guards [a-person-at-the-chair]
+     :safety {:idempotent true :reversible true :confirm false}
+     :handler set-sitter-key
+     :display {:label "Offer key" :order 3
+               :description "Hand this model a secret to paste into its Routine — a session presenting it may sit in any seat this model is the chair of"}}
+
+    :revoke_key
+    {:from #{:active} :to :active
+     :guards [a-person-at-the-chair]
+     :safety {:idempotent true :reversible true :confirm false}
+     :handler clear-sitter-key
+     :display {:label "Revoke key" :order 4
+               :description "The key answers for nothing; a session presenting it is told no seat answers, and the seats themselves are untouched"}}
+
+    :link
+    {:from #{:active} :to :active
+     :input [:map
+             [:fire_url {:x-display
+                         {:raw true
+                          :label "The Routine's fire URL"
+                          :help "The endpoint that starts a run, copied from the Routine's own page. It carries the Routine's id, which is not a secret."}}
+              [:string {:min 1 :max 400}]]
+             [:token {:x-display
+                      {:raw true
+                       :label "The Routine's token"
+                       :help "The credential that opens that one Routine. The engine holds it and never shows it again. Paste it once; a later link replaces it."}}
+              [:string {:min 16 :max 400}]]]
+     :guards [a-person-at-the-chair]
+     :edit {:prefill [:fire_url] :fence false
+            :unfenced-reason
+            "The token comes from the Routine's own page, not from this row; a link replaces what stands rather than editing it."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The link replaces whatever this model held; Unlink takes it off again."}
+     :handler set-chair-link
+     :display {:label "Link the Routine" :style :primary :order 5
+               :description "Paste the fire URL and the token of the Routine you made for this model — its seats fire through it from then on"}}
+
+    :unlink
+    {:from #{:active} :to :active
+     :guards [a-person-at-the-chair]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The fire URL and the token leave this model; linking again means pasting both once more."}
+     :handler clear-chair-link
+     :display {:label "Unlink the Routine" :style :danger :order 6
+               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}}
    :deviations
-   ["R-9.2 calls `name` unique and R-4.7's precedent (roles.clj's `one-spelling`) judges only ACTIVE rows. The two disagree about a retired model, so this kind takes the index's reading: `one_model_spelling` refuses any spelling already on record, active or retired, and its sentence sends the reader to `reactivate`. A second row for one identifier would split its prices, and a closed sitting costed against the wrong half would be wrong forever."]})
+   ["THE CHAIR'S TWO WRITE FENCES ARE BOTH GUARDS, where the schedule fences its link by omission. `sitter_key`, `fire_url` and `fire_token` are declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry all three. `key-not-written-by-hand` and `link-not-written-by-hand` are what refuse them, and each refusal names the door that writes the field instead. Both secrets stay `{:secret true}`, so the advertised create body drops them, no form asks, and the usability policies skip them; what a caller gains over silent omission is the sentence."
+    "R-9.2 calls `name` unique and R-4.7's precedent (roles.clj's `one-spelling`) judges only ACTIVE rows. The two disagree about a retired model, so this kind takes the index's reading: `one_model_spelling` refuses any spelling already on record, active or retired, and its sentence sends the reader to `reactivate`. A second row for one identifier would split its prices, and a closed sitting costed against the wrong half would be wrong forever."]})
 
 ;; ── :sitting ────────────────────────────────────────────────────────
 
@@ -2408,6 +2629,18 @@
 
 ;; ── the keyed sitter session's seam (R-12.13) ───────────────────────
 
+(defn- key-matches?
+  "Is this row's `sitter_key` exactly the key the caller presented?
+
+  `MessageDigest/isEqual` over UTF-8 bytes — constant time in the
+  length of the two arrays, so a caller cannot walk a key one
+  character at a time off the clock. A row holding no key matches
+  nothing, which is why a blank key must never reach here."
+  [row ^bytes wanted]
+  (boolean
+   (when-some [held (some-> (get-in row [:data :sitter_key]) str not-empty)]
+     (MessageDigest/isEqual wanted (.getBytes held StandardCharsets/UTF_8)))))
+
 (defn seat-by-key
   "The ACTIVE seat whose `sitter_key` is exactly this key, or nil.
 
@@ -2430,12 +2663,59 @@
           (fn [tx]
             (->> (store/query-rows (:storage eng) tx :seat {:state :active}
                                    {:limit 500})
-                 (filter (fn [row]
-                           (when-some [held (some-> (get-in row [:data :sitter_key])
-                                                    str not-empty)]
-                             (MessageDigest/isEqual
-                              wanted (.getBytes held StandardCharsets/UTF_8)))))
+                 (filter #(key-matches? % wanted))
                  first)))))))
+
+(defn seat-named
+  "The ACTIVE seat this token names, or nil — an id first, then the
+  seat's own name (R-4 of waymark-fp62.7.23).
+
+  The id first because a Routine handed one spells it exactly, and
+  the name because that is what a person writes into a seat's
+  instructions. ACTIVE only, `seat-by-key`'s own rule and its reason:
+  a parked, merged or retired seat serves nothing, and a sit that
+  landed in one would be a sitting nobody can spend."
+  [eng named]
+  (when-some [named (some-> named str str/trim not-empty)]
+    (when (get (inv/resources eng) :seat)
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (let [st (:storage eng)
+                by-id (store/load-row st tx :seat named {})]
+            (or (when (= :active (:state by-id)) by-id)
+                (first (store/query-rows st tx :seat
+                                         {:name named :state :active}
+                                         {:limit 1})))))))))
+
+(defn seat-for-key
+  "The seat `named` names, when this key may sit in it — nil for
+  everything else (R-4 of waymark-fp62.7.23).
+
+  TWO KEYS OPEN ONE SEAT. The seat's own `sitter_key` is the first,
+  and it is R-12.12 unchanged. The second is the CHAIR'S — the
+  `sitter_key` of the first model in `held_for` — which is what makes
+  one Routine for each model possible: the model's key sits in every
+  seat that model is the chair of, and the name is what says which
+  one this firing is.
+
+  Nil is the only other answer, and the caller says the same sentence
+  for all of it: a name nobody answers to, a seat that is not active,
+  a key the seat and its chair both refuse. Saying which would turn
+  the door into an oracle over the house's offices, and the compare
+  is `key-matches?`, constant time, for the same reason."
+  [eng named key]
+  (when-some [key (some-> key str not-empty)]
+    (when-some [seat (seat-named eng named)]
+      (let [wanted (.getBytes key StandardCharsets/UTF_8)]
+        (when (or (key-matches? seat wanted)
+                  (when-some [chair (and (get (inv/resources eng) :model)
+                                         (chair-of seat))]
+                    (some-> (store/with-tx (:storage eng)
+                              (fn [tx]
+                                (store/load-row (:storage eng) tx :model
+                                                chair {})))
+                            (key-matches? wanted))))
+          seat)))))
 
 (defn sitter-id
   "The member id of the seat's sitter — `seat:<the seat's id>`.

@@ -599,3 +599,177 @@
     (testing "and a parked seat is not an active one"
       (inv/invoke! *eng* :seat (:id theirs) :park nil {:principal colton})
       (is (nil? (seats/seat-by-key *eng* lookup-other-key))))))
+
+;; ── the instructions are a field of the office (waymark-fp62.7.23) ─
+
+(def ^:private a-pointer
+  "What a person writes for a Routine that reads the fire text: the
+  pointer and the walk rule, and nothing else (R-12.10)."
+  "Read the fire text and do what it says. Sit in the seat it names, then walk the rows the sit hands you, one at a time.")
+
+(def ^:private another-pointer
+  "Walk the rows the sit hands you oldest first, and stop at ten.")
+
+(defn- instructions-of [id]
+  (get-in (row-of :seat id) [:data :instructions]))
+
+(deftest a-seat-carries-the-words-its-firing-reads
+  (testing "a person writes them at the create door"
+    (let [seat (open-seat! "instructed" {:instructions a-pointer})]
+      (is (= a-pointer (instructions-of (:id seat))))))
+
+  (testing "and a seat that says nothing carries nothing — it fires as it always did"
+    (let [seat (open-seat! "uninstructed")]
+      (is (nil? (instructions-of (:id seat))))))
+
+  (testing "a restate states them again, whole"
+    (let [seat (open-seat! "restated-instructions" {:instructions a-pointer})]
+      (restate! (:id seat) (restate-body {:instructions another-pointer}))
+      (is (= another-pointer (instructions-of (:id seat))))
+      (testing "and a restate that leaves them out clears them — the office
+                is stated whole, never patched"
+        (restate! (:id seat) (restate-body {}))
+        (is (nil? (instructions-of (:id seat)))))))
+
+  (testing "past the priming budget the schema refuses them, at both doors"
+    (let [too-long (apply str (repeat 2001 "x"))]
+      (let [p (refusal #(inv/create! *eng* :seat
+                                     (seat-body "over-instructed"
+                                                {:instructions too-long})
+                                     {:principal colton}))]
+        (is (= 422 (:status p)))
+        (is (contains? (:errors p) :instructions)))
+      (let [seat (open-seat! "terse-instructions")
+            p (refusal #(restate! (:id seat)
+                                  (restate-body {:instructions too-long})))]
+        (is (= 422 (:status p)))
+        (is (contains? (:errors p) :instructions)))))
+
+  (testing "the field renders as prose, so a person writes it in a box
+            rather than on a line"
+    (doseq [[where form] [["the row" (:schema seats/seat)]
+                          ["the create door" (:create-schema seats/seat)]
+                          ["restate" (:input (get-in seats/seat
+                                                     [:actions :restate]))]]]
+      (is (= "prose" (get-in (schema/entry-map form)
+                             [:instructions :properties :x-display :widget]))
+          (str where " asks for the instructions in a prose box")))))
+
+;; ── the model is the chair (waymark-fp62.7.23) ─────────────────────
+
+(def ^:private chair-key "Y2hhaXIta2V5LWZvci10aGUtbW9kZWw")
+(def ^:private chair-second-key "Y2hhaXIta2V5LXRoZS1zZWNvbmQtb25l")
+(def ^:private chair-planted-key "Y2hhaXIta2V5LXBsYW50ZWQtYnktaGFuZA")
+
+(def ^:private a-chair-url
+  "https://api.anthropic.com/v1/claude_code/routines/trig_01CHAIR/fire")
+
+(def ^:private a-chair-token "rk-test-chair-0123456789abcdef")
+(def ^:private a-second-chair-token "rk-test-chair-ABCDEFGHIJKLMNOP")
+
+(defn- model-of [id] (row-of :model id))
+
+(deftest the-chair-is-the-first-model-a-seat-is-held-for
+  (let [one (add-model! "chair-first" "strong")
+        two (add-model! "chair-second" "economy")
+        seat (open-seat! "two-rungs" {:held_for [(:id one) (:id two)]})]
+    (is (= (:id one) (seats/chair-of (row-of :seat (:id seat))))
+        "the first of held_for, and the order of that list is the ladder")
+    (testing "a seat held for nothing has no chair"
+      (is (nil? (seats/chair-of (row-of :seat (:id (open-seat! "no-rungs")))))))))
+
+(deftest a-person-hands-the-chair-its-key-and-its-routine
+  (let [model (add-model! "chair-office" "strong")]
+    (testing "both credentials are :secret, which is what conceals them everywhere"
+      (is (= #{:sitter_key :fire_token}
+             (schema/secret-fields (:schema seats/model)))))
+
+    (testing "a person's offer stores the key, and a second offer replaces it"
+      (inv/invoke! *eng* :model (:id model) :offer_key {:key chair-key}
+                   {:principal colton})
+      (is (= chair-key (get-in (model-of (:id model)) [:data :sitter_key])))
+      (inv/invoke! *eng* :model (:id model) :offer_key {:key chair-second-key}
+                   {:principal colton})
+      (is (= chair-second-key
+             (get-in (model-of (:id model)) [:data :sitter_key]))))
+
+    (testing "a person's link writes the fire URL and the token"
+      (inv/invoke! *eng* :model (:id model) :link
+                   {:fire_url a-chair-url :token a-chair-token}
+                   {:principal colton})
+      (let [row (model-of (:id model))]
+        (is (= a-chair-url (get-in row [:data :fire_url])))
+        (is (= a-chair-token (get-in row [:data :fire_token]))))
+      (testing "and a second link replaces the first, for a rotated token"
+        (inv/invoke! *eng* :model (:id model) :link
+                     {:fire_url a-chair-url :token a-second-chair-token}
+                     {:principal colton})
+        (is (= a-second-chair-token
+               (get-in (model-of (:id model)) [:data :fire_token])))))
+
+    (testing "a delegate — the person's own tool — may write both too"
+      (inv/invoke! *eng* :model (:id model) :offer_key {:key chair-key}
+                   {:principal delegate})
+      (is (= chair-key (get-in (model-of (:id model)) [:data :sitter_key]))))
+
+    (testing "a bare agent may not pull any of the four levers"
+      (doseq [[action body] [[:offer_key {:key chair-second-key}]
+                             [:revoke_key nil]
+                             [:link {:fire_url a-chair-url
+                                     :token a-chair-token}]
+                             [:unlink nil]]]
+        (is (= :a-person-at-the-chair
+               (:guard (refusal #(inv/invoke! *eng* :model (:id model) action
+                                              body {:principal clerk}))))
+            (str action " is a person's door")))
+      (is (= chair-key (get-in (model-of (:id model)) [:data :sitter_key]))
+          "and nothing moved")
+      (is (= a-second-chair-token
+             (get-in (model-of (:id model)) [:data :fire_token]))))
+
+    (testing "no projection carries either secret"
+      (let [rdef (get (inv/resources *eng*) :model)
+            row (model-of (:id model))
+            env (render/envelope rdef row {:principal colton
+                                           :now ((:now-fn *eng*))})]
+        (is (not (contains? (get env "data") "sitter_key")))
+        (is (not (contains? (get env "data") "fire_token")))
+        (is (not (str/includes? (pr-str env) chair-key)))
+        (is (not (str/includes? (pr-str env) a-second-chair-token))
+            "a :secret field is absent from the document, not blanked")))
+
+    (testing "and no form asks for the link: the create door is this
+              kind's own schema, and Link is the door that writes it"
+      (is (true? (get-in (schema/entry-map (:schema seats/model))
+                         [:fire_url :properties :x-display :hidden]))))
+
+    (testing "revoke_key and unlink forget what the person wrote"
+      (inv/invoke! *eng* :model (:id model) :revoke_key nil
+                   {:principal colton})
+      (is (nil? (get-in (model-of (:id model)) [:data :sitter_key])))
+      (inv/invoke! *eng* :model (:id model) :unlink nil {:principal colton})
+      (let [row (model-of (:id model))]
+        (is (nil? (get-in row [:data :fire_url])))
+        (is (nil? (get-in row [:data :fire_token])))))
+
+    (testing "and the log says each was written, by whose hand, without the value"
+      (let [log (log-of :model (:id model))]
+        (is (some #(= :offer_key (:action %)) log))
+        (is (some #(= :link (:action %)) log))
+        (is (not (str/includes? (pr-str log) chair-key)))
+        (is (not (str/includes? (pr-str log) a-chair-token))
+            "neither door records: the credential is not in the inputs")))))
+
+(deftest the-chairs-credentials-are-never-written-by-hand
+  (testing "a create carrying sitter_key is refused, and names the door that writes it"
+    (let [p (refusal #(add-model! "planted-key-model" "strong"
+                                  {:sitter_key chair-planted-key}))]
+      (is (= :key-not-written-by-hand (:guard p)))
+      (is (str/includes? (str (:detail p)) "offer_key")
+          "and the refusal names the door that writes it")))
+  (testing "and a create carrying the Routine's link is refused the same way"
+    (let [p (refusal #(add-model! "planted-link-model" "strong"
+                                  {:fire_url a-chair-url
+                                   :fire_token a-chair-token}))]
+      (is (= :link-not-written-by-hand (:guard p)))
+      (is (str/includes? (str (:detail p)) "link")))))

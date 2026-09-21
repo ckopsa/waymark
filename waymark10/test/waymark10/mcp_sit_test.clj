@@ -725,3 +725,106 @@
     (is (empty? (get-in answer [:walk :rows]))
         "no rows, and no refusal either: the sit answers what the seat's own
          grant admits, which behind a wall is nothing")))
+
+;; ── 7. the seat may be NAMED, and its chair's key opens it ──────────
+;;
+;; Bead waymark-fp62.7.23, R-4: one Routine stands for one MODEL, so
+;; its session presents the model's key and its fire text names the
+;; seat. The key alone still answers for a seat that holds one of its
+;; own, which is R-12.12 unchanged.
+
+(def ^:private chair-key
+  "The CHAIR's key — the one a model's single Routine presents."
+  "Y2hhaXIta2V5LWZvci10aGUtbW9kZWw")
+
+(defn- seat-of
+  "One more office on this house, held for whichever model it names."
+  [eng nm extra]
+  (:row (inv/create!
+         eng :seat
+         (merge {:name nm
+                 :charter "Decide whether a meal belongs on the list."
+                 :scope [{:kind "meal" :actions ["accept"]}]
+                 :standing_ttl_seconds 604800
+                 :cadence_seconds 3600
+                 :budget_usd_per_week 5M
+                 :sitting_budget_tokens 60000}
+                extra)
+         {:principal person})))
+
+(deftest a-named-seat-sits-with-its-chairs-key
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-seat! eng)
+        _ (inv/invoke! eng :model (:id model) :offer_key {:key chair-key}
+                       {:principal person})
+        ;; each sit on a session of its own: a bind is per session, and
+        ;; a test that reused one would be asking a second question
+        sit! (fn [args]
+               (let [[sid _] (initialize! h)]
+                 (tool h (with-session sid) "waymark_sit" args)))]
+
+    (testing "the chair's key and the seat's NAME bind this session"
+      (let [r (sit! {:key chair-key :seat "meal-clerk"})
+            answer (doc-of r)]
+        (is (false? (:isError r)) (text-of r))
+        (is (= "meal-clerk" (:seat answer)))
+        (is (= (seats/sitter-id seat) (:sitter answer)))
+        (is (= "claude-sit-5" (:model answer))
+            "the chair is the model the sitter claims")
+        (is (string? (:grant answer)))))
+
+    (testing "the seat's id names it too — a run handed one spells it exactly"
+      (is (= "meal-clerk"
+             (:seat (doc-of (sit! {:key chair-key :seat (:id seat)}))))))
+
+    (testing "the seat's OWN key still binds it, named or not"
+      (is (= "meal-clerk" (:seat (doc-of (sit! {:key a-key :seat "meal-clerk"})))))
+      (is (= "meal-clerk" (:seat (doc-of (sit! {:key a-key}))))
+          "R-12.12 unchanged: with no seat named the key answers for itself"))
+
+    (testing "a key neither the seat nor its chair holds is the sentence it always was"
+      (let [r (sit! {:key "c2VhdC1rZXktbm9ib2R5LWhvbGRz" :seat "meal-clerk"})]
+        (is (true? (:isError r)))
+        (is (= "No seat answers this key." (text-of r)))))
+
+    (testing "and a name no seat answers to says exactly the same thing"
+      (let [r (sit! {:key chair-key :seat "no-such-office"})]
+        (is (true? (:isError r)))
+        (is (= "No seat answers this key." (text-of r))
+            "uniform: the door is not an oracle over the house's offices")))
+
+    (testing "a chair's key does not open a seat that model is not the chair of"
+      (let [other (:row (inv/create! eng :model
+                                     {:name "claude-other-5" :display "Other 5"
+                                      :vendor "anthropic" :tier "economy"
+                                      :price_input_per_mtok 1M
+                                      :price_output_per_mtok 5M
+                                      :price_cache_read_per_mtok 0.1M
+                                      :price_cache_write_per_mtok 1.25M}
+                                     {:principal person}))
+            _ (seat-of eng "note-clerk" {:held_for [(:id other)]})
+            r (sit! {:key chair-key :seat "note-clerk"})]
+        (is (true? (:isError r)))
+        (is (= "No seat answers this key." (text-of r)))))
+
+    (testing "and an interactive seat refuses a Routine's run, named or not (R-10.8)"
+      (seat-of eng "training-chair" {:held_for [(:id model)]
+                                     :mode "interactive"})
+      (let [[sid _] (initialize! h)
+            r (tool h {"x-waymark-principal" "lone-agent"
+                       "x-waymark-actor-type" "agent"
+                       "mcp-session-id" sid}
+                    "waymark_sit" {:key chair-key :seat "training-chair"})]
+        (is (true? (:isError r)))
+        (is (= "The seat `training-chair` is an interactive seat. A person sits here."
+               (text-of r)))))))
+
+(deftest the-sit-tool-says-the-seat-may-be-named
+  (let [sit (first (filter #(= "waymark_sit" (:name %)) (mcp/listing)))]
+    (is (contains? (get-in sit [:inputSchema :properties]) :seat))
+    (is (= ["key"] (get-in sit [:inputSchema :required]))
+        "the seat is optional: a key that answers for one office needs no name")
+    (is (str/includes? mcp/sit-description "pass it as `seat`"))
+    (is (str/includes? mcp/instructions "as `seat`")
+        "and the connect-time instructions tell a firing to pass it")))

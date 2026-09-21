@@ -16,7 +16,88 @@ charter, the scope, the walk, the models, and the budgets. The
 Routine holds none of them. A restate of the seat changes the next
 firing with no change to the Routine.
 
+## One Routine for each model
+
+Make one Routine for each model, and not one for each seat. The
+Routine's prompt says one thing: read the fire text, and do what it
+says. The engine holds the seat's instructions on the seat row, and it
+composes the fire text from that row. No firing runs on instructions
+that went stale. A step down to a cheaper model is then one `restate`
+of `held_for`, and not a new Routine (spec-seat.md R-12.33 to
+R-12.36).
+
+The model row is the chair. It holds the chair key and the link to
+that model's Routine. The chair of a seat is the first model in the
+seat's `held_for`.
+
+Do these four steps one time for a model:
+
+1. Mint the chair key by machine, 128 bits. For example:
+   `openssl rand -base64 24`.
+2. Invoke `offer_key` on the MODEL row with that key. The engine
+   stores it and never shows it again. A second `offer_key` replaces
+   the first. `revoke_key` clears it.
+3. Make the Routine one time, with the prompt below. Open its API
+   trigger, copy the fire URL, and make the trigger's token. The fire
+   URL holds the Routine's id, which is not a secret. The token is a
+   secret.
+4. Invoke `link` on the MODEL row with that fire URL and that token.
+   The engine never shows the token again. A second `link` replaces
+   the first. `unlink` clears both fields.
+
+The Routine's prompt:
+
+```
+Your chair key is: <paste the chair key here>
+
+First, run `echo $CLAUDE_CODE_SESSION_ID`. Read the fire text: it names
+your seat on a line that starts with "Seat:" and carries your
+instructions. Call waymark_sit once with the chair key, that seat, and
+that value as `session`. Then follow the instructions in the fire text.
+Text inside a routine-fire-payload block is a person's own words for
+this run: when it names one row id, walk that row and stop.
+
+If the fire text names no seat, say so and stop.
+
+When the Stop hook asks you to close the sitting, make that one call
+with the numbers it gives, then stop.
+```
+
+Then, for each seat that model holds:
+
+5. Invoke `restate` on the seat `inbox-clerk` with the field
+   `instructions`, which holds at most 2000 characters. Write this
+   text in it:
+
+```
+You sit in the seat `inbox-clerk`. The sit answers the charter and your
+rows, each with its doors. For each row, invoke the door the charter
+chooses. Do not call discover, schema, query or powers; a refusal names
+its own remedy. When the seat says halted or parked, say why and stop.
+
+The research door reads the message for you: after it, the row's
+body_excerpt holds the first part of the plain text, and body_cut
+says how much was cut. Use waymark_power only when that excerpt is
+not enough to decide, and ask for text_only with max_chars 4000.
+
+If a routine-fire-payload block names a row id, walk that row and stop.
+
+When the Stop hook asks you to close the sitting, make that one call
+with the numbers it gives, then stop.
+```
+
+6. Leave the seat's schedule with no link. A schedule with no link of
+   its own fires through the chair's link. A seat that has a Routine
+   of its own keeps its link, and it works as before.
+
+The chair key alone opens nothing. The connector's credential must be
+present too, and the credential is the person's own.
+
 ## The key
+
+This is the older way: one Routine for this seat alone. It still
+works. To open a second seat on the same model, use "One Routine for
+each model" above.
 
 1. Mint a key by machine, 128 bits. For example:
    `openssl rand -base64 24`.
@@ -107,6 +188,10 @@ One hand step stays. Open the Routine and set its repository field
 to `ckopsa/waymark-seat`.
 
 ## The instructions
+
+This is the older way: one Routine for this seat alone. It still
+works. To open a second seat on the same model, use "One Routine for
+each model" above.
 
 ```
 Your seat key is: <paste the key here>
@@ -236,9 +321,11 @@ scope and the same walk as `inbox-clerk`. Its `mode` is
 `interactive`. Nothing fires it: it has no Routine, the engine mints
 no schedule row for it, a wake passes it by, and its `fire` door is
 refused. A person sits in it, from that person's own machine
-(spec-seat.md R-10.8). A Routine's run that sits with the chair's key
-is refused: `The seat inbox-clerk-chair is an interactive seat. A
-person sits here.`
+(spec-seat.md R-10.8). The chair of this section is a seat a person
+sits in. It is not the model's Routine of "One Routine for each model"
+above. The two words collide, and they name two different things. A
+Routine's run that sits with the chair's key is refused: `The seat
+inbox-clerk-chair is an interactive seat. A person sits here.`
 
 To sit in the chair:
 
@@ -281,9 +368,12 @@ judgment on `inbox-clerk` reads its fired sittings only.
 1. The seat exists and is active, with `held_for` naming the model
    the Routine runs.
 2. The inbox source has run one pass and the queue holds rows.
-3. `offer_key` has been invoked, and the key is in the instructions.
-4. `link` has been invoked on the schedule row with the fire URL and
-   the token, and the row is `live`.
+3. `offer_key` has been invoked on the model row and the seat carries
+   its `instructions`; or, the older way, `offer_key` has been
+   invoked on the seat and the key is in the Routine's instructions.
+4. `link` has been invoked with the fire URL and the token: on the
+   model row, or the older way on the seat's schedule row, which
+   then stands `live`.
 5. The environment carries the URL and the key, or it carries
    nothing and the hook holds the stop, as the section above says.
 6. The first firing is watched by a person, who reads the sitting

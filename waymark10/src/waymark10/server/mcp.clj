@@ -232,7 +232,8 @@
        "each carrying its own acknowledge. "
        "\n\n"
        "IF YOU WERE HANDED A SEAT KEY, sit before anything else: call "
-       "waymark_sit once, first, with that key. From then on this "
+       "waymark_sit once, first, with that key — and with the seat your "
+       "instructions name, as `seat`, when they name one. From then on this "
        "session is that seat's sitter — it wears the seat's grant, its "
        "transitions and refusals count against the seat's sitting, and "
        "the seat's schedule names its model. Your person's other "
@@ -964,6 +965,9 @@
   "The tool's own sentence, named because the door's tests and the
   connect-time instructions both read it rather than repeating it."
   (str "Sit in the seat whose key you were given. Call it once, first. "
+       "When your instructions name a seat, pass it as `seat` — one key "
+       "can hold several offices, and the name is what says which one this "
+       "run is. "
        "From then on this session is that seat's sitter: it wears the "
        "seat's grant, its transitions and refusals count against the "
        "seat's sitting, and the seat's schedule names its model. Your "
@@ -977,7 +981,7 @@
 
 (def ^:private sit-tool
   {:name "waymark_sit"
-   :title "Sit in the seat your key names"
+   :title "Sit in the seat your instructions name"
    :description sit-description
    :input-schema
    {:type "object"
@@ -985,6 +989,12 @@
     {:key {:type "string"
            :description (str "The seat key your instructions handed you, "
                              "exactly as written.")}
+     :seat {:type "string" :maxLength 120
+            :description (str "The seat your instructions name — its name, "
+                              "or its id, exactly as written. Pass it "
+                              "whenever you were given one: the key may be "
+                              "the seat's own or its model's, and a model's "
+                              "key holds every seat that model sits in.")}
      :session {:type "string" :maxLength 128
                :description (str "Your harness's own session id, if you have "
                                  "one — the same id the hook that ends your "
@@ -1861,20 +1871,27 @@
 (defn- seat-model
   "The model row the sitter claims (R-12.8). For a schedule this engine
   pushes, the schedule's `model` is the declaration and the copy
-  mirrors it. For a LINKED schedule the copy is never pushed (R-12.18),
-  so its `model` is the value at link time and drifts when the seat
-  steps down; the seat's first `held_for` is the declaration then, and
-  the schedule's copy is only the fallback when the seat names none.
-  With neither, nil. The row, not the name, because the sitting's
-  birth wants the ref and the sitter's claim wants the identifier."
+  mirrors it. For a schedule it does NOT push, that `model` is the
+  value at mint or at link time and drifts the moment the seat steps
+  down; the seat's first `held_for` — the CHAIR — is the declaration
+  then, and the schedule's copy is only the fallback when the seat
+  names no model at all. With neither, nil. The row, not the name,
+  because the sitting's birth wants the ref and the sitter's claim
+  wants the identifier.
+
+  TWO SCHEDULES ARE NEVER PUSHED: one a person linked (R-12.18), and
+  one whose seat fires through its chair's Routine
+  (waymark-fp62.7.23). The chair's row is read here anyway, so asking
+  it costs nothing. Both readings are `schedules/linked?`'s, spelled
+  here rather than required: this surface does not depend on the
+  consumer."
   [eng seat]
   (let [schedule (row-of eng :schedule (get-in seat [:data :schedule]))
-        ;; `schedules/linked?`'s own reading, spelled here rather than
-        ;; required: this surface does not depend on the consumer
-        linked? (boolean (some-> (get-in schedule [:data :fire_url]) str not-empty))
         held (row-of eng :model (first (get-in seat [:data :held_for])))
+        url-of (fn [row] (some-> (get-in row [:data :fire_url]) str not-empty))
+        by-hand? (boolean (or (url-of schedule) (url-of held)))
         copy (row-of eng :model (get-in schedule [:data :model]))]
-    (if linked?
+    (if by-hand?
       (or held copy)
       (or copy held))))
 
@@ -2737,10 +2754,20 @@
   [eng call gate-rpc session args]
   (let [sid (some-> (:mcp-session-id session) str not-empty)
         person (some-> (:acts-for (:principal session)) str not-empty)
-        ;; the seat is read before the person is judged, so an
-        ;; INTERACTIVE seat can answer with its own sentence (R-10.8)
-        ;; rather than with the general one about delegates
-        seat (when sid (seats/seat-by-key eng (:key args)))]
+        ;; the seat the instructions NAMED, when they named one (R-4 of
+        ;; waymark-fp62.7.23): the key is then the seat's own or its
+        ;; chair's, which is what lets one Routine hold several
+        ;; offices. With no seat named the key answers for itself,
+        ;; exactly as it always did.
+        ;;
+        ;; Either way the seat is read before the person is judged, so
+        ;; an INTERACTIVE seat can answer with its own sentence
+        ;; (R-10.8) rather than with the general one about delegates.
+        named (some-> (:seat args) str str/trim not-empty)
+        seat (when sid
+               (if named
+                 (seats/seat-for-key eng named (:key args))
+                 (seats/seat-by-key eng (:key args))))]
     (cond
       ;; a · a session to bind to
       (nil? sid) (result sit-no-session true)

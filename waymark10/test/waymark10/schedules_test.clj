@@ -21,8 +21,12 @@
   engine assembled with no resources at all already serves them, and
   the suite's own `:resources` is empty.
 
+  Section 9 is the chair (bead waymark-fp62.7.23): the text one fire
+  carries, composed from the seat row, and the seat with no link of
+  its own that fires through its model's one Routine.
+
   Real Postgres (WAYMARK10_TEST_DSN); no network — the fake scheduler
-  stands at the provider."
+  and the fake fire endpoint stand at the provider."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -46,6 +50,7 @@
 
 (def ^:dynamic *eng* nil)
 (def ^:dynamic *fake* nil)
+(def ^:dynamic *fire* nil)
 
 (use-fixtures :once
   (fn [f]
@@ -56,9 +61,13 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [fake (sch/fake-scheduler)
+              fire (sch/fake-fire)
               eng (engine/engine {:storage st :resources []})]
-          (binding [*eng* (assoc eng :schedule-adapters {:claude_routine fake})
-                    *fake* fake]
+          (binding [*eng* (assoc eng
+                                 :schedule-adapters {:claude_routine fake}
+                                 :fire-adapter fire)
+                    *fake* fake
+                    *fire* fire]
             (f)))
         (finally (pg/close! st))))))
 
@@ -84,20 +93,23 @@
                            :price_cache_write_per_mtok 3.75M}
                           {:principal elena}))))
 
-(defn- seat! [nm cadence held]
-  (:id (:row (inv/create! *eng* :seat
-                          {:name nm
-                           :charter a-charter
-                           :scope a-scope
-                           :substitute_drop []
-                           :held_for (vec held)
-                           :substitute_for []
-                           :standing_ttl_seconds 604800
-                           :cadence_seconds cadence
-                           :budget_usd_per_week 5M
-                           :sitting_budget_tokens 60000
-                           :rows_per_firing 20}
-                          {:principal elena}))))
+(defn- seat!
+  ([nm cadence held] (seat! nm cadence held {}))
+  ([nm cadence held extra]
+   (:id (:row (inv/create! *eng* :seat
+                           (merge {:name nm
+                                   :charter a-charter
+                                   :scope a-scope
+                                   :substitute_drop []
+                                   :held_for (vec held)
+                                   :substitute_for []
+                                   :standing_ttl_seconds 604800
+                                   :cadence_seconds cadence
+                                   :budget_usd_per_week 5M
+                                   :sitting_budget_tokens 60000
+                                   :rows_per_firing 20}
+                                  extra)
+                           {:principal elena})))))
 
 (defn- raw [kind id]
   (store/with-tx (:storage *eng*)
@@ -479,3 +491,183 @@
     (testing "the deviations are on the record"
       (is (seq (:deviations rd)))
       (is (some #(str/includes? % "mirror") (:deviations rd))))))
+
+;; ── 9 · the chair: one Routine for each model (waymark-fp62.7.23) ───
+
+(def ^:private a-chair-url
+  "https://api.anthropic.com/v1/claude_code/routines/trig_01CHAIR/fire")
+
+(def ^:private a-chair-token "rk-test-chair-0123456789abcdef")
+
+(def ^:private a-seat-url
+  "https://api.anthropic.com/v1/claude_code/routines/trig_01SEAT/fire")
+
+(def ^:private a-seat-token "rk-test-seat-0123456789abcdef")
+
+(def ^:private the-instructions
+  "Read the fire text and do what it says. Sit in the seat it names, then walk the rows the sit hands you.")
+
+(defn- link-model!
+  "A person links the Routine they made for this model — the one every
+  seat it is the chair of fires through."
+  [model-id url token]
+  (inv/invoke! *eng* :model (str model-id) :link
+               {:fire_url url :token token} {:principal elena}))
+
+(defn- link-schedule! [schedule-id url token]
+  (inv/invoke! *eng* :schedule (str schedule-id) :link
+               {:fire_url url :token token} {:principal elena}))
+
+(defn- fire-seat!
+  "A person's fire. The door is not idempotent, so every call carries
+  its own key — fire_door_test's posture, for its reason."
+  [seat-id text]
+  (inv/invoke! *eng* :seat (str seat-id) :fire (when text {:text text})
+               {:principal elena
+                :idempotency-key (str "chair-test:" (random-uuid))}))
+
+(defn- log-of [kind id]
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (store/transitions (:storage *eng*) tx
+                         {:kind kind :resource-id (str id)} {}))))
+
+(defn- fires-of
+  "The POSTs that carried this token, in order. The fake provider is
+  shared by every deftest here, so a count of all its fires would be a
+  count of the suite."
+  [token]
+  (filterv #(= token (:token %)) (sch/fires *fire*)))
+
+(deftest fire-text-is-composed-from-the-seat-row
+  ;; PURE, and no database: the composition is a function of the row
+  ;; and the prose, which is what lets the consumer stay one call.
+  (let [seat {:id "seat_01" :data {:name "inbox-clerk"
+                                   :instructions the-instructions}}
+        bare {:id "seat_02" :data {:name "composer"}}]
+    (testing "a seat with no instructions fires the prose it always fired"
+      (is (= "Walk the three messages." (sch/fire-text bare "Walk the three messages.")))
+      (is (nil? (sch/fire-text bare nil))
+          "and a textless fire stays textless — that run walks the queue")
+      (is (nil? (sch/fire-text bare ""))))
+
+    (testing "instructions and no prose: the instructions, then the seat line"
+      (is (= (str the-instructions "\n\nSeat: seat_01 (inbox-clerk).")
+             (sch/fire-text seat nil))))
+
+    (testing "instructions and prose: the prose inside the block they name"
+      (is (= (str the-instructions "\n\n"
+                  "Seat: seat_01 (inbox-clerk).\n\n"
+                  "<routine-fire-payload>\n"
+                  "Walk the three messages.\n"
+                  "</routine-fire-payload>")
+             (sch/fire-text seat "Walk the three messages."))))
+
+    (testing "and nothing is ever cut — both are somebody's whole words"
+      (let [long-prose (apply str (repeat 2000 "x"))
+            long-instructions (apply str (repeat 2000 "y"))
+            out (sch/fire-text {:id "seat_03"
+                                :data {:name "long-winded"
+                                       :instructions long-instructions}}
+                               long-prose)]
+        (is (str/includes? out long-instructions))
+        (is (str/includes? out long-prose))))))
+
+(deftest a-seat-with-no-link-of-its-own-fires-through-its-chair
+  (let [cn :sched-chair
+        _ (drain! cn)
+        chair (model! "claude-chair-5")
+        _ (link-model! chair a-chair-url a-chair-token)
+        copies-before (count (sch/copies *fake*))
+        seat-id (seat! "chair-clerk" 3600 [chair]
+                       {:instructions the-instructions})]
+    (drain! cn)
+
+    (testing "the schedule stands, and the engine pushed no copy of its own —
+              the Routine it fires through was made by hand, one row over"
+      (is (some? (sched-of seat-id)))
+      (is (nil? (get-in (sched-of seat-id) [:data :external_id])))
+      (is (= copies-before (count (sch/copies *fake*)))))
+
+    (testing "the row carries no link, and the chair's is the one a fire uses"
+      (let [row (sched-of seat-id)]
+        (is (false? (sch/linked? row)) "nothing of its own")
+        (is (true? (sch/linked? *eng* row)) "and everything through the chair")
+        (is (= {:fire_url a-chair-url :fire_token a-chair-token}
+               (sch/link-of *eng* row)))))
+
+    (testing "a person's fire goes out on the chair's URL and token"
+      (fire-seat! seat-id "Walk the three messages.")
+      (drain! cn)
+      (let [f (last (fires-of a-chair-token))]
+        (is (some? f) "the POST reached the chair's Routine")
+        (is (= a-chair-url (:fire-url f)))
+        (is (str/starts-with? (str (:text f)) the-instructions)
+            "and it carries the seat's own instructions")
+        (is (str/includes? (str (:text f)) (str "Seat: " seat-id " (chair-clerk).")))
+        (is (str/includes? (str (:text f))
+                           "<routine-fire-payload>\nWalk the three messages.\n</routine-fire-payload>"))))
+
+    (testing "the transition log carries the prose ALONE — not the
+              instructions, and not the token"
+      (let [t (last (filter #(= :fire (:action %)) (log-of :seat seat-id)))]
+        (is (= "Walk the three messages." (str (get-in t [:inputs :text]))))
+        (is (not (str/includes? (pr-str t) the-instructions)))
+        (is (not (str/includes? (pr-str t) a-chair-token)))))
+
+    (testing "and the seat's own row is where the fire is stamped"
+      (is (= :live (:state (sched-of seat-id))))
+      (is (some? (get-in (sched-of seat-id) [:data :last_fired_at]))))
+
+    (testing "a step down the ladder is one restate of held_for, and no
+              second Routine"
+      (let [cheaper (model! "claude-chair-economy")
+            _ (link-model! cheaper a-seat-url a-seat-token)
+            row (raw :seat seat-id)]
+        (inv/invoke! *eng* :seat (str seat-id) :restate
+                     {:charter a-charter
+                      :instructions the-instructions
+                      :scope a-scope
+                      :substitute_drop []
+                      :held_for [cheaper]
+                      :substitute_for []
+                      :standing_ttl_seconds 604800
+                      :cadence_seconds 3600
+                      :budget_usd_per_week 5M
+                      :sitting_budget_tokens 60000
+                      :rows_per_firing 20
+                      :note "Down a rung: the judgment held over five sittings."}
+                     {:principal elena
+                      :if-match (inv/etag :seat (str seat-id) (:version row))})
+        (drain! cn)
+        (fire-seat! seat-id "Walk them again.")
+        (drain! cn)
+        (is (= a-seat-url (:fire-url (last (fires-of a-seat-token))))
+            "the next fire goes out on the new chair's Routine")))
+
+    (seat-do! seat-id :retire)))
+
+(deftest a-seat-with-its-own-link-keeps-it
+  (let [cn :sched-own-link
+        _ (drain! cn)
+        chair (model! "claude-chair-shared")
+        _ (link-model! chair a-chair-url a-chair-token)
+        seat-id (seat! "own-routine-clerk" 3600 [chair])
+        _ (drain! cn)
+        own-token "rk-test-own-0123456789abcdef"]
+    (link-schedule! (:id (sched-of seat-id)) a-seat-url own-token)
+
+    (testing "the row's own link wins over the chair's"
+      (is (= {:fire_url a-seat-url :fire_token own-token}
+             (sch/link-of *eng* (sched-of seat-id)))))
+
+    (testing "and the fire goes out on it"
+      (fire-seat! seat-id "Only this seat's Routine.")
+      (drain! cn)
+      (let [f (last (fires-of own-token))]
+        (is (some? f))
+        (is (= a-seat-url (:fire-url f)))
+        (is (= "Only this seat's Routine." (:text f))
+            "a seat with no instructions fires the prose, as it always did")))
+
+    (seat-do! seat-id :retire)))

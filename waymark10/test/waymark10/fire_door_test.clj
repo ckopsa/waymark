@@ -349,8 +349,11 @@
       (is (nil? (get-in (sched-of bare-id) [:data :fire_url])))
       (let [p (refusal #(fire-seat! bare-id "now please"))]
         (is (= :linked-for-fire (:guard p)))
-        (is (= "Link the Routine's fire URL and token to the schedule first."
-               (str (:detail p))))))
+        (is (= (str "Link the Routine's fire URL and token first — to this "
+                    "seat's schedule, or to the model it is held for.")
+               (str (:detail p)))
+            "the sentence names both places a link may stand
+             (waymark-fp62.7.23)")))
 
     (testing "a bare agent, with no person behind it"
       (let [p (refusal #(fire-seat! seat-id "now please" clerk))]

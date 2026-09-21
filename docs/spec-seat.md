@@ -114,6 +114,7 @@ work.
 |---|---|---|
 | `name` | string, 1 to 40 | the token a grant and an ask spell. One spelling per seat. |
 | `charter` | string, 1 to 1200 | the residual: the seat's judgment, in the person's words. R-4.10. |
+| `instructions` | string, up to 2000, optional | what one firing does, in the person's words. The engine puts it at the head of the fire text. R-12.33. |
 | `scope` | scope schema | the seat's authority |
 | `substitute_drop` | scope schema | the entries a substitute does not get |
 | `held_for` | list of model refs | the models that can sit as the full sitter. Empty means any. The seat's place on the ladder. |
@@ -384,6 +385,9 @@ seat's own sitter writes here."
 | `price_cache_read_per_mtok` | decimal | dollars per million cache-read tokens |
 | `price_cache_write_per_mtok` | decimal | dollars per million cache-write tokens |
 | `notes` | string | free prose |
+| `sitter_key` | string, secret, optional | the chair key a firing sends to `waymark_sit`. Two doors write it. The engine never answers it. R-12.34. |
+| `fire_url` | string, optional | the fire endpoint of this model's Routine. A person writes it. R-12.34. |
+| `fire_token` | string, secret, optional | the token a fire carries. A person writes it. The engine never answers it. R-12.34. |
 
 **R-9.3** A model must have the actions `retire`, `reactivate`, and
 `reprice`. Each reprice is a transition, so the history of prices is
@@ -1136,7 +1140,9 @@ the Routine's id, which is not a secret. The token is a secret.
 fields: `fire_url` and `fire_token`, which a person writes, and
 `last_fired_at` and `last_run_url`, which the engine writes. The
 engine shows `fire_url`. The engine never shows `fire_token`. It
-holds that token as it holds the seat's `sitter_key`.
+holds that token as it holds the seat's `sitter_key`. The link may
+stand on the model row instead (R-12.34), and a schedule with no link
+of its own fires through the model's link (R-12.36).
 
 The schedule must have a door `link`, with the input `{fire_url,
 token}`. Only a person or a delegate opens it. A `link` moves the row
@@ -1268,6 +1274,79 @@ The engine must refuse an `at_least` below 1, at `create` and at
 `restate`: `at_least must be 1 or more.` A `filter` that names a
 field the kind does not have is refused with the query's own
 sentence.
+
+One Routine for each model. Today each seat has its own Routine, and
+a person pastes the seat's instructions and the seat's key into that
+Routine by hand. The engine does not hold the instructions, so a seat
+can run on stale ones and nobody sees it. A step down to a cheaper
+model is then a new Routine. The rules below move the instructions to
+the seat row, the key and the link to the model row, and the fire text
+to the engine. One Routine serves each model, and its prompt says one
+thing: read the fire text, and do what it says.
+
+**R-12.33** The seat must have a field `instructions`, a string of at
+most 2000 characters, with a prose widget. A person writes it at
+`create` and at `restate`. The engine shows the field. R-12.10 holds
+for what the field says: the instructions carry the pointer and the
+walk rule, and nothing else. The instructions must name the
+`routine-fire-payload` block, as R-12.21 says. A seat with no
+instructions fires as before.
+
+**R-12.34** The model row is the chair. A model must have a field
+`sitter_key`, secret, written only by two doors: `offer_key`, with the
+input `{key}`, and `revoke_key`, which clears the field. Both doors
+are the person's, guarded by `a-person-at-the-chair`. A `create` that
+carries the field is refused by `key-not-written-by-hand`, because the
+key is not written by hand. The engine never answers a key. The doors
+are the seat's own (R-12.12).
+
+A model must also have the fields `fire_url` and `fire_token`.
+`fire_token` is a secret. Two doors write them: `link`, with the input
+`{fire_url, token}`, and `unlink`, which clears both fields. A second
+`link` replaces the first. The doors are the schedule's own (R-12.18).
+The engine shows `fire_url`. The engine never shows `fire_token`. It
+holds that token as it holds the seat's `sitter_key`. A person links
+the model's Routine one time.
+
+The chair of a seat is the FIRST model in the seat's `held_for`. A
+step down to a cheaper model is therefore one `restate` of `held_for`,
+and not a new Routine.
+
+**R-12.35** The schedules consumer must compose the fire text when the
+seat has instructions. The text has three parts, in this order: the
+seat's instructions; then one line `Seat: {seat id} ({seat name}).`;
+then the person's prose inside a `routine-fire-payload` block. The
+block is there only when the fire carried a text. The shape is this:
+
+```
+{the seat's instructions}
+
+Seat: {seat id} ({seat name}).
+
+<routine-fire-payload>
+{the person's prose}
+</routine-fire-payload>
+```
+
+The transition log keeps the prose only, as it does today (R-12.19).
+The composed text is the wire's, and not the record's. A seat with no
+instructions fires with the person's prose alone, as today. The engine
+never cuts the composed text.
+
+**R-12.36** `waymark_sit` must take `seat` beside `key`. `seat` is
+optional. Its value is the seat's name or the seat's id. When the call
+names a seat, the key must be that seat's `sitter_key`, or the
+`sitter_key` of that seat's chair. When the call names no seat, the
+sit works as today (R-12.14). An interactive seat refuses a Routine's
+run, as today (R-10.8). A key that matches nothing is refused with the
+sentence of R-12.14, which is uniform: no seat answers this key.
+
+A seat's schedule with no link of its own must fire through the chair's
+link. The engine reads `fire_url` and `fire_token` from the seat's
+chair when the schedule carries neither. `linked?` and the guard
+`linked-for-fire` read the chair's link in that case, and the refusal
+of R-12.20 stands only when the chair has no link too. A schedule with
+its own link keeps it, so a seat with its own Routine works as before.
 
 ### 12.3 The interactive sitting
 
@@ -2099,6 +2178,21 @@ above. The cases:
     walk row's id, gets the new branch through `rebranch` at the next
     sit and stands at `open`. A change that has spent a round keeps
     its branch. (R-12.29, R-12.32)
+
+52. A fire on a seat with `instructions` sends the composed text: the
+    instructions, then the `Seat:` line with the seat's id and name,
+    then the person's prose in a `routine-fire-payload` block. A fire
+    with no text sends the first two parts only. The transition holds
+    the prose alone. A seat with no instructions sends the prose
+    alone, as before. Nothing is cut. A `restate` writes
+    `instructions`; a `create` on a model that carries `sitter_key` is
+    refused. A `waymark_sit` with a seat and that seat's own key
+    binds it, and so does the `sitter_key` of the seat's chair. A key
+    that answers no seat is refused with the uniform sentence. A sit
+    with a seat on an interactive seat is refused as before. A seat
+    whose schedule has no link fires through the chair's link, and a
+    schedule with its own link fires through that link.
+    (R-12.33, R-12.34, R-12.35, R-12.36)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,

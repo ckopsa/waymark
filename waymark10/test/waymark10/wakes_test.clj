@@ -835,3 +835,48 @@
       (is (= [{:kind "wake_task" :actions ["create"] :at_least 1}]
              (get-in (raw :seat seat) [:data :wake_on])))
       (seat-do! seat :retire))))
+
+;; ── 13 · a wake's fire carries the composed text ────────────────────
+;;
+;; Bead waymark-fp62.7.23, R-3: the wake writes the PROSE — the row
+;; that moved, as JSON — and the schedules consumer wraps the seat's
+;; own instructions around it. Both fires are one rule (R-5), so what
+;; a person's fire carries is what a wake's carries.
+
+(def ^:private the-instructions
+  "Read the fire text and do what it says. Sit in the seat it names, then walk the rows the sit hands you.")
+
+(deftest a-wake-fires-the-seats-instructions-around-the-row-it-names
+  (let [wn :wake-instructed
+        fn' :wake-instructed-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "instructedclerk"
+                      {:instructions the-instructions
+                       :wake_on [{:kind "wake_task" :actions ["complete"]}]}
+                      fn')
+        row-id (task! "the thing that woke it")]
+    (task-do! row-id :complete)
+    (drain-wakes! wn)
+    (drain-fires! fn')
+
+    (testing "the POST carries the seat's instructions first"
+      (let [text (str (:text (last (fires-of token))))]
+        (is (str/starts-with? text the-instructions))
+        (is (str/includes? text (str "Seat: " seat " (instructedclerk).")))
+        (is (str/includes? text "<routine-fire-payload>"))
+        (is (str/includes? text (str row-id))
+            "and the wake's own prose, whole, inside the block")
+        (is (str/includes? text "</routine-fire-payload>"))))
+
+    (testing "and the transition log still carries the prose alone"
+      (let [logged (fire-text seat 0)]
+        (is (= (str row-id) (str (:id logged))))
+        (is (= "wake_task" (:kind logged)))
+        (is (not (str/includes? (str (get-in (first (seat-fires seat))
+                                             [:inputs :text]))
+                                the-instructions))
+            "what a person restates is composed after the door closed")))
+
+    (seat-do! seat :retire)))
