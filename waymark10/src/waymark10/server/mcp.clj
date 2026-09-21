@@ -233,7 +233,11 @@
        "\n\n"
        "IF YOU WERE HANDED A SEAT KEY, sit before anything else: call "
        "waymark_sit once, first, with that key — and with the seat your "
-       "instructions name, as `seat`, when they name one. From then on this "
+       "instructions name, as `seat`, when they name one. YOUR KEY IS IN "
+       "THE FIRE TEXT when a seat fired your run: read the line `Key:`, "
+       "under the line `Seat:`, and sit with those two. A key from the "
+       "fire text opens that seat one time, so make that call one time. "
+       "From then on this "
        "session is that seat's sitter — it wears the seat's grant, its "
        "transitions and refusals count against the seat's sitting, and "
        "the seat's schedule names its model. Your person's other "
@@ -968,6 +972,11 @@
        "When your instructions name a seat, pass it as `seat` — one key "
        "can hold several offices, and the name is what says which one this "
        "run is. "
+       "YOUR KEY MAY BE IN THE FIRE TEXT: a firing carries its own key on "
+       "the line `Key:`, under the line `Seat:`, and that key opens the "
+       "seat named there one time. Pass the two together, exactly as "
+       "written. A key you were handed in your instructions works the same "
+       "way. "
        "From then on this session is that seat's sitter: it wears the "
        "seat's grant, its transitions and refusals count against the "
        "seat's sitting, and the seat's schedule names its model. Your "
@@ -987,8 +996,12 @@
    {:type "object"
     :properties
     {:key {:type "string"
-           :description (str "The seat key your instructions handed you, "
-                             "exactly as written.")}
+           :description (str "The key you sit with, exactly as written. It "
+                             "is on the `Key:` line of the fire text, under "
+                             "the `Seat:` line, when your run was fired by "
+                             "a seat; that key opens that seat one time. It "
+                             "is otherwise the key your instructions handed "
+                             "you.")}
      :seat {:type "string" :maxLength 120
             :description (str "The seat your instructions name — its name, "
                               "or its id, exactly as written. Pass it "
@@ -1823,6 +1836,15 @@
 ;; machinery does the rest — R-5.2's walls, the sitting's counters,
 ;; the ledger — because a bound session is, from the router's side,
 ;; simply a different principal wearing a different leash.
+;;
+;; THE KEY MAY BE THE FIRING'S OWN (R-12.37). A key a person pastes
+;; into a Routine is a secret in a prompt a person writes by hand, and
+;; a missed step is silent until the first firing. So the engine mints
+;; one key for each fire of a seat that has instructions, the fire text
+;; carries it on the line under the seat's, and the seat row keeps the
+;; hash. This door takes that key exactly as it takes a standing one,
+;; with one difference: it SPENDS it. The key opens one sit, and the
+;; next session that presents it reads the uniform sentence.
 ;;
 ;; The sit also names the RUN, when the harness knows its own session
 ;; id (R-12.15): the sitting is stamped with it at birth, and the hook
@@ -2886,7 +2908,24 @@
         seat (when sid
                (if named
                  (seats/seat-for-key eng named (:key args))
-                 (seats/seat-by-key eng (:key args))))]
+                 (seats/seat-by-key eng (:key args))))
+        now ((:now-fn eng))
+        ;; THE FIRING'S OWN KEY IS SPENT HERE, and one time (R-12.37).
+        ;; A standing key (the seat's own, or its chair's) is spent by
+        ;; nothing and answers true at once. Anything else that got
+        ;; this far is the key one fire text carried, and the spend is
+        ;; what takes its hash off the seat row: the next sit that
+        ;; presents it reads a row that no longer answers, and gets
+        ;; the uniform sentence.
+        ;;
+        ;; THE `and` IS WHAT FENCES THE WRITE. A session with no seat
+        ;; and a session with nobody behind it stop at the first two
+        ;; terms, so neither can burn a key it may not use. The cond
+        ;; below then reads this as its last wall, after the walls
+        ;; that cost nothing.
+        spent? (and seat person
+                    (or (seats/standing-key? eng seat (:key args))
+                        (true? (seats/spend-fire-key! eng seat (:key args)))))]
     (cond
       ;; a · a session to bind to
       (nil? sid) (result sit-no-session true)
@@ -2901,9 +2940,11 @@
               true)
       ;; c · a seat that answers the key
       (nil? seat) (result sit-no-seat true)
+      ;; c' · and a key still worth something: a firing's key that a
+      ;; second session took first says what an unknown key says
+      (not spent?) (result sit-no-seat true)
       :else
-      (let [now ((:now-fn eng))
-            seat-id (str (:id seat))
+      (let [seat-id (str (:id seat))
             named (str (get-in seat [:data :name]))
             ;; the run's own id, when the harness knows one — the same
             ;; id its session-end hook will report (R-12.15)

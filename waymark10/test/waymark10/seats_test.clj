@@ -29,7 +29,8 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time Instant)))
 
 (def ^:dynamic *eng* nil)
 
@@ -841,6 +842,114 @@
     (testing "and a parked seat is not an active one"
       (inv/invoke! *eng* :seat (:id theirs) :park nil {:principal colton})
       (is (nil? (seats/seat-by-key *eng* lookup-other-key))))))
+
+;; ── R-12.37 · the key of one firing ─────────────────────────────────
+;;
+;; The key above is standing, and a person pastes it into a Routine by
+;; hand. These are the engine's own: one key for each fire of a seat
+;; that has instructions, carried in the fire text and spent by one
+;; sit. The seat row keeps the hash and never the key.
+
+(def ^:private a-pointer-for-keys
+  "The instructions a seat must carry before the engine mints it a key.
+  A seat with none fires as it always did."
+  "Read the fire text and do what it says. Sit in the seat it names, then walk the rows.")
+
+(defn- fire-keys-of
+  "The entries on the row, read off the row itself: the projections
+  are what must not show them."
+  [id]
+  (get-in (row-of :seat id) [:data :fire_keys]))
+
+(deftest the-fire-keys-are-never-written-by-hand
+  (testing "the field is :secret, which is what conceals it everywhere"
+    (is (contains? (schema/secret-fields (:schema seats/seat)) :fire_keys)))
+
+  (testing "a create carrying fire_keys is refused, and names the fence"
+    (let [p (refusal #(inv/create!
+                       *eng* :seat
+                       (seat-body "keys-at-birth"
+                                  {:fire_keys [{:hash "not-a-hash"
+                                                :expires_at "2099-01-01T00:00:00Z"}]})
+                       {:principal colton}))]
+      (is (= :fire-keys-not-written-by-hand (:guard p)))))
+
+  (testing "and a restate carrying them is refused on a seat born honest"
+    (let [seat (open-seat! "keys-later")
+          p (refusal #(restate! (:id seat)
+                                (restate-body
+                                 {:fire_keys [{:hash "not-a-hash"
+                                               :expires_at "2099-01-01T00:00:00Z"}]})))]
+      (is (= :fire-keys-not-written-by-hand (:guard p)))
+      (is (nil? (fire-keys-of (:id seat))) "and the seat holds none"))))
+
+(deftest a-fire-mints-one-key-and-one-sit-spends-it
+  (let [^Instant now ((:now-fn *eng*))
+        bare (open-seat! "keyless-office")
+        seat (open-seat! "keyed-firing-office"
+                         {:instructions a-pointer-for-keys})]
+
+    (testing "a seat with no instructions mints nothing: its Routine
+              holds a standing key of its own"
+      (is (nil? (seats/hold-fire-key! *eng* bare now)))
+      (is (nil? (fire-keys-of (:id bare)))))
+
+    (let [key (seats/hold-fire-key! *eng* seat now)]
+      (testing "the key is 128 bits of base64url, as a session id is"
+        (is (string? key))
+        (is (<= 22 (count key)))
+        (is (not (str/includes? key "="))))
+
+      (testing "the row keeps the HASH and no key at all"
+        (let [held (fire-keys-of (:id seat))]
+          (is (= 1 (count held)))
+          (is (= (seats/key-hash key) (str (:hash (first held)))))
+          (is (not= key (str (:hash (first held)))))
+          (is (some? (:expires_at (first held))))))
+
+      (testing "the key opens the seat it fired, by name and by id"
+        (is (= (:id seat) (:id (seats/seat-for-key *eng* "keyed-firing-office"
+                                                   key))))
+        (is (= (:id seat) (:id (seats/seat-for-key *eng* (:id seat) key)))))
+
+      (testing "and a key nobody minted opens nothing"
+        (is (nil? (seats/seat-for-key *eng* "keyed-firing-office"
+                                      "bm90LWEtbWludGVkLWtleS1hdC1hbGw"))))
+
+      (testing "ONE KEY OPENS ONE SIT: the spend is true once and nil after"
+        (is (true? (seats/spend-fire-key! *eng* (row-of :seat (:id seat)) key)))
+        (is (nil? (seats/spend-fire-key! *eng* (row-of :seat (:id seat)) key)))
+        (is (empty? (fire-keys-of (:id seat))))
+        (is (nil? (seats/seat-for-key *eng* "keyed-firing-office" key))
+            "and the next session that presents it reads the uniform
+             sentence"))
+
+      (testing "a standing key is spent by nothing"
+        (inv/invoke! *eng* :seat (:id seat) :offer_key {:key a-key}
+                     {:principal colton})
+        (is (nil? (seats/spend-fire-key! *eng* (row-of :seat (:id seat))
+                                         a-key)))
+        (is (= (:id seat) (:id (seats/seat-for-key *eng* "keyed-firing-office"
+                                                   a-key)))
+            "it opens the seat again, and again")
+        (inv/invoke! *eng* :seat (:id seat) :revoke_key nil
+                     {:principal colton})))
+
+    (testing "a key no sit spent stops answering after sitting_idle_seconds"
+      ;; the seat's default is an hour, so a fire two hours back is a
+      ;; key that expired an hour ago
+      (let [stale (seats/hold-fire-key! *eng* (row-of :seat (:id seat))
+                                        (.minusSeconds now 7200))]
+        (is (string? stale))
+        (is (nil? (seats/seat-for-key *eng* "keyed-firing-office" stale)))
+        (is (nil? (seats/spend-fire-key! *eng* (row-of :seat (:id seat))
+                                         stale)))))
+
+    (testing "and the next fire drops what expired"
+      (let [fresh (seats/hold-fire-key! *eng* (row-of :seat (:id seat)) now)]
+        (is (= [(seats/key-hash fresh)]
+               (mapv #(str (:hash %)) (fire-keys-of (:id seat))))
+            "one live key on the row, and the expired one is gone")))))
 
 ;; ── the instructions are a field of the office (waymark-fp62.7.23) ─
 

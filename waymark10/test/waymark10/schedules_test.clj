@@ -563,6 +563,23 @@
                   "</routine-fire-payload>")
              (sch/fire-text seat "Walk the three messages."))))
 
+    ;; R-12.37: the engine mints a key for each firing, and the line
+    ;; that carries it sits under the line that names the seat, because
+    ;; the sit takes the two together.
+    (testing "the key of one firing rides under the seat line"
+      (is (= (str the-instructions "\n\n"
+                  "Seat: seat_01 (inbox-clerk).\nKey: bWludGVkLWJ5LXRoZS1lbmdpbmU")
+             (sch/fire-text seat nil "bWludGVkLWJ5LXRoZS1lbmdpbmU"))))
+
+    (testing "no key leaves the line out, for a Routine that holds a
+              standing key of its own"
+      (is (= (sch/fire-text seat nil) (sch/fire-text seat nil nil))))
+
+    (testing "and a seat with no instructions carries no key at all"
+      (is (= "Walk the three messages."
+             (sch/fire-text bare "Walk the three messages."
+                            "bWludGVkLWJ5LXRoZS1lbmdpbmU"))))
+
     (testing "and nothing is ever cut — both are somebody's whole words"
       (let [long-prose (apply str (repeat 2000 "x"))
             long-instructions (apply str (repeat 2000 "y"))

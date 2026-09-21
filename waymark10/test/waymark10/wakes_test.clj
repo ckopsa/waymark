@@ -987,6 +987,41 @@
                                 the-instructions))
             "what a person restates is composed after the door closed")))
 
+    ;; ── R-12.37 · and the key of THIS firing, on the line under the
+    ;; seat's. The Routine's prompt holds no secret, so there is no
+    ;; step for a person to miss.
+    (let [text (str (:text (last (fires-of token))))
+          key (second (re-find #"(?m)^Key: (\S+)$" text))
+          held (get-in (raw :seat seat) [:data :fire_keys])]
+
+      (testing "the fire text carries a key, under the line that names
+                the seat"
+        (is (string? key) "one line, and the engine minted it")
+        (is (<= 22 (count (str key))) "128 bits, base64url")
+        (is (str/includes? text (str "Seat: " seat " (instructedclerk).\nKey: "
+                                     key))
+            "the two the sit needs, side by side"))
+
+      (testing "the seat row keeps the HASH and never the key"
+        (is (= 1 (count held)))
+        (is (= (seats/key-hash key) (str (:hash (first held)))))
+        (is (not (str/includes? (pr-str held) (str key)))
+            "nothing on the row could be presented at the door"))
+
+      (testing "the transition of the fire carries no key"
+        (is (not (str/includes? (str (get-in (first (seat-fires seat))
+                                             [:inputs :text]))
+                                (str key)))
+            "the composed text is the wire's, and the record is the
+             person's prose"))
+
+      (testing "the key opens this seat one time, and then answers nothing"
+        (is (= (str seat)
+               (str (:id (seats/seat-for-key *eng* "instructedclerk" key)))))
+        (is (true? (seats/spend-fire-key! *eng* (raw :seat seat) key)))
+        (is (nil? (seats/seat-for-key *eng* "instructedclerk" key))
+            "a second sit with the same key reads the uniform sentence")))
+
     (seat-do! seat :retire)))
 
 ;; ── 14 · R-12.24: the count wake that waits for an empty queue ──────

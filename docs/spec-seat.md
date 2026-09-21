@@ -129,6 +129,7 @@ work.
 | `rows_per_firing` | int, default 20 | the most rows one firing moves to a leaf. The walk's cap. |
 | `stale` | list of scope entries | written by the sweep. A person never writes it. |
 | `halt` | map, optional | `{reason, since, detail}`, written by the router at a wall and cleared when it lifts. R-7.7. |
+| `fire_keys` | list, secret, optional | one entry for each unspent key of a firing: the hash of the key, and the moment it stops answering. No door writes it. The engine never answers it. R-12.37. |
 | `schedule` | schedule ref | the means by which a sitting is created for this seat. Engine-written. R-12.0. |
 | `merged_into` | seat ref | the seat this one merged into |
 
@@ -1372,6 +1373,9 @@ Seat: {seat id} ({seat name}).
 </routine-fire-payload>
 ```
 
+R-12.37 adds one line under the `Seat:` line. It is the key of this
+firing, and the text carries it when the engine mints one.
+
 The transition log keeps the prose only, as it does today (R-12.19).
 The composed text is the wire's, and not the record's. A seat with no
 instructions fires with the person's prose alone, as today. The engine
@@ -1379,9 +1383,11 @@ never cuts the composed text.
 
 **R-12.36** `waymark_sit` must take `seat` beside `key`. `seat` is
 optional. Its value is the seat's name or the seat's id. When the call
-names a seat, the key must be that seat's `sitter_key`, or the
-`sitter_key` of that seat's chair. When the call names no seat, the
-sit works as today (R-12.14). An interactive seat refuses a Routine's
+names a seat, the key must be one of three: that seat's `sitter_key`,
+the `sitter_key` of that seat's chair, or a key of that seat's own
+firing (R-12.37). When the call names no seat, the sit works as today
+(R-12.14), and a firing's key is not one of the keys it answers. That
+key names its seat on the line above it in the fire text. An interactive seat refuses a Routine's
 run, as today (R-10.8). A key that matches nothing is refused with the
 sentence of R-12.14, which is uniform: no seat answers this key.
 
@@ -1391,6 +1397,99 @@ chair when the schedule carries neither. `linked?` and the guard
 `linked-for-fire` read the chair's link in that case, and the refusal
 of R-12.20 stands only when the chair has no link too. A schedule with
 its own link keeps it, so a seat with its own Routine works as before.
+
+### 12.2a A key for each firing
+
+The meal planner's first firing (2026-09-21) ran on a Routine whose
+prompt had no key. The session read the seat's id and the seat's name
+from the fire text. It had nothing to sit with. It guessed, it was
+refused, and it stopped. The design put a secret in a prompt that a
+person writes by hand, and a missed step stays silent until the first
+firing. The rule below takes the secret out of the prompt. The engine
+mints a key for each firing, and the fire text carries it.
+
+**R-12.37** The engine must mint the key of each firing. The seat must
+have a field `fire_keys`. The field is secret. It holds one entry for
+each key that no sit has spent. An entry holds two things: the SHA-256
+of the key, and the moment the key stops answering. The engine keeps
+the hash alone. The engine stores no key and answers no key.
+
+The engine mints the key when it composes the fire text, and only for
+a seat that has `instructions`. The key is 128 bits of machine
+randomness, base64url, as `waymark_sit`'s own session id is. The
+engine writes the hash on the seat row before the fire goes out. A
+seat with no instructions gets no key, and it fires as R-12.35 says.
+
+The fire text carries the key on one line, under the line that names
+the seat:
+
+```
+{the seat's instructions}
+
+Seat: {seat id} ({seat name}).
+Key: {the key of this firing}
+
+<routine-fire-payload>
+{the person's prose}
+</routine-fire-payload>
+```
+
+One `waymark_sit` spends the key. The call must carry the key and the
+seat, as R-12.36 says. The engine takes the hash off the seat row at
+that sit. A second sit with the same key is refused. The refusal is
+the uniform sentence of R-12.14: no seat answers this key. An unknown
+key, an expired key and a spent key all read the same.
+
+A key that no sit spends stops answering after the seat's
+`sitting_idle_seconds`. That limit is the seat's own, and it is the
+limit the sweep measures an idle sitting by. The engine drops the
+expired entries at the next fire of that seat.
+
+The engine must never render a key. It must never write a key in a
+transition's recorded inputs. It must never write a key in a log line.
+The fire transition keeps the person's prose alone, as R-12.19 says.
+The composed text is the wire's, and the key is part of it. R-12.11
+gives the posture for a credential the engine holds.
+
+No door writes `fire_keys`. The fire writes the list, and the sit
+writes it again. Both are maintenance writes, as the sitting's
+counters are. A `create` or a `restate` that carries `fire_keys` is
+refused by `fire-keys-not-written-by-hand`. The refusal names the fire
+as the writer.
+
+The standing keys keep their work. A person may still offer a key to a
+seat (R-12.12) or to a chair (R-12.34). A Routine whose prompt carries
+such a key still sits. The key of a firing is one more key that
+`waymark_sit` accepts for the seat the call names.
+
+The Routine's prompt must hold no key. The prompt says one thing: read
+the fire text, and do what it says. The prompt tells the session to
+read the `Key:` line and the `Seat:` line together, and to sit with
+the two. A person makes the Routine one time and links it to the model
+row (R-12.34). A person mints no key for a Routine, and invokes no
+`offer_key` for it.
+
+One consequence is named here, because it is a trade and not an
+oversight. A session that loses its bind (R-12.16) cannot sit again
+with the key of its firing, because that key is spent. The session
+stops, and the seat's next wake fires a new key. A seat that must
+survive a lost bind keeps a standing key of its own.
+
+Two firings of one seat in one hour each carry a key of their own.
+Each key opens the run that reads it. The pairing of a run with its
+sitting stays R-12.15's: the harness names its own session at the sit,
+and the sitting keeps that name.
+
+**Deviation.** R-3 of the bead asked for the hash to live on the
+sitting. The fire would give birth to the sitting, and the sit would
+find it by the key. The sitting's `grant` is a required ref at its
+create door, and it is a promoted column the router reads on every
+write (`open-sitting-for-grant`). The fire knows no grant and no
+sitter, so a sitting born there would need an optional grant, a birth
+state of its own, and a second door to stamp the member and the grant
+at the sit. The hash lives on the seat row instead. The seat is what
+the sit names, so one read answers the key, and no kind changes its
+shape.
 
 ### 12.3 The interactive sitting
 
@@ -2258,6 +2357,18 @@ above. The cases:
     leaves the verdict as it is. Two judgments on one kind each take
     one verdict on one subject. The ledger answers the correction
     count for each seat and for each judgment. (R-13.1 to R-13.9)
+
+54. A fire on a seat with `instructions` carries a key. The key is on
+    the line under the `Seat:` line. The seat row holds the hash of
+    that key and holds no key. A `waymark_sit` with that key and that
+    seat binds the session. A second sit with the same key is refused
+    with the uniform sentence. A key that no sit spends stops
+    answering after the seat's `sitting_idle_seconds`, and it is then
+    refused with the same sentence. The fire transition holds the
+    person's prose alone, and it holds no key. A seat with no
+    instructions fires with no key. A Routine whose prompt carries a
+    chair key still sits. A `create` or a `restate` that carries
+    `fire_keys` is refused. (R-12.37)
 
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
