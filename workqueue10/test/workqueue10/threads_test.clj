@@ -33,8 +33,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.wire :as wire])
-  (:import (java.time Instant)))
+            [waymark10.wire :as wire]))
 
 ;; ── the verified live shapes ────────────────────────────────────────
 
@@ -693,8 +692,8 @@
               one chat is one row, whichever rig heard it"
       (is (some? (row-of xid)))
       (is (= "Bros. 🧠" (get-in (row-of xid) [:data :title])))
-      (is (= (Instant/parse "2026-08-25T18:40:00Z")
-             (get-in (row-of xid) [:data :last_mention_at]))))
+      (is (= "2026-08-25T18:40:00Z"
+             (str (get-in (row-of xid) [:data :last_mention_at])))))
 
     (testing "a message nobody addressed to the house moves the etag
               and nothing else: observe_external, and no mention"
@@ -703,8 +702,8 @@
                    (assoc bros :last_message_date "2026-08-26 09:00:00+00:00")
                    tote-bot])
       (mirror/resync! *eng* :thread)
-      (is (= (Instant/parse "2026-08-26T09:00:00Z")
-             (get-in (row-of xid) [:data :last_message_at])))
+      (is (= "2026-08-26T09:00:00Z"
+             (str (get-in (row-of xid) [:data :last_message_at]))))
       (is (= before (mentions)) "the mention door stayed shut")
       (is (= (inc observed) (observes))))
 
@@ -718,8 +717,8 @@
       (mirror/resync! *eng* :thread)
       (is (= (inc before) (mentions)))
       (is (= (+ 2 observed) (observes)))
-      (is (= (Instant/parse "2026-08-26T09:05:00Z")
-             (get-in (row-of xid) [:data :last_mention_at]))
+      (is (= "2026-08-26T09:05:00Z"
+             (str (get-in (row-of xid) [:data :last_mention_at])))
           "and the row carries the new time"))
 
     (testing "a second pass over the same listing opens nothing: the
