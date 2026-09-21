@@ -115,6 +115,10 @@
     :states [:filed :settled]
     :initial :filed
     :terminal #{:settled}
+    ;; no door settles an expense here: the test needs a queue and one
+    ;; self-loop, and a tomb nothing reaches is what the check asks to
+    ;; be said out loud
+    :allow-dead #{:settled}
     :summary "{data.vendor} · {state}"
     :schema
     [:map
