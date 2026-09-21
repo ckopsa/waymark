@@ -193,6 +193,10 @@ out where they said so, and for the rest a meal on the day's theme
 from the rotation. Then send the week to the chat as one message, one
 line per day, and ask for a yes. Stop.
 
+A request changes a covered day too. When somebody asks for a meal, a
+night out, or something easy on a day, change that day, then send the
+week again.
+
 Finalize only when everyone in the chat has said yes to that exact
 week. When somebody asks for a change, change those days, send the
 week again, and stop. Silence is not a yes.
@@ -206,6 +210,12 @@ close of the sitting. Never acknowledge a warning. A person does that.
 
 The charter names the chat, the stages and the one rule: silence is
 not a yes. It does not name the message shapes. The instructions do.
+
+The sentence on a covered day was added on 2026-09-21. The first
+family reply asked for creamy soups and an easy Tuesday after the
+seat had covered every day, and the seat sent the week unchanged,
+because the charter only covered undecided days. A request now
+changes the day it names, whether the day was covered or not.
 
 ## Step 3: the instructions
 
