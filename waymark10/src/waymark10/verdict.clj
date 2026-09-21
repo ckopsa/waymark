@@ -410,17 +410,7 @@
     (entry :verdict {} [:string {:min 1 :max 40}])
     (entry :remedy {} [:string {:min 1 :max 1000}])
     (entry :corrects {:optional true :kind :verdict} [:maybe :waymark/ref])]
-   ;; THE COUNT IS A QUERY (R-3, R-6 of waymark-fp62.11): corrections
-   ;; per seat and per judgment are read off this collection, and the
-   ;; sit subtracts the standing verdicts of one judgment. Each of those
-   ;; reads names a field here, and a filterable field is a promoted
-   ;; column, which is what the store's own query needs.
-   :filterable {:state #{:eq :in}
-                :judgment #{:eq}
-                :subject_kind #{:eq}
-                :subject_id #{:eq :in}
-                :verdict #{:eq :in}
-                :said_by #{:eq}}
+   :filterable {:state #{:eq :in}}
    :sortable {:fields [:created_at] :default "-created_at"}
    ;; whoever judged reads their own verdicts with no grant — an answer
    ;; you cannot re-read is not an answer. Reading only: the doors here
