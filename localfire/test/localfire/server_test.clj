@@ -233,17 +233,22 @@
 
           (is (wait-for #(= 1 (count @(:calls w)))))
           (let [{:keys [argv dir]} (first @(:calls w))]
-            (testing "R-5.4: the argument vector, prompt last"
-              (is (= ["claude" "-p"
-                      "--session-id" id
+            (testing "R-5.4: the argument vector, prompt FIRST"
+              ;; `--mcp-config` and `--allowedTools` are variadic, so
+              ;; every argument behind them is swallowed. The prompt
+              ;; sits ahead of both or the session is started with no
+              ;; prompt at all.
+              (is (= ["claude" "-p"]
+                     (vec (take 2 argv))))
+              (is (= ["--session-id" id
                       "--model" "claude-sonnet-4-5"
                       "--output-format" "json"
                       "--strict-mcp-config"
                       "--mcp-config" (.getPath (runs/mcp-file (:runs w) id))
                       "--allowedTools" "mcp__waymark__*" "Bash(echo *)"]
-                     (vec (butlast argv))))
-              (is (str/includes? (last argv) "<routine-fire-payload>"))
-              (is (str/includes? (last argv) "Key: sk-secret-abc")))
+                     (vec (drop 3 argv))))
+              (is (str/includes? (nth argv 2) "<routine-fire-payload>"))
+              (is (str/includes? (nth argv 2) "Key: sk-secret-abc")))
 
             (testing "R-5.3: the run runs in its own copy of the place"
               (is (= (.getPath (runs/place-dir (:runs w) id)) dir))

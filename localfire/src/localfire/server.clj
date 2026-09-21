@@ -97,18 +97,26 @@
   `--session-id` makes the session's id the one the engine already
   holds, so `CLAUDE_CODE_SESSION_ID` inside the session is the id the
   Routine prompt asks the session to echo and pass to the sit. The
-  prompt is the last argument, whole and unquoted — it is the run's
+  prompt is the FIRST argument, whole and unquoted — it is the run's
   entire payload and the server never cuts it."
   [cfg routine id prompt-text]
-  (-> [(:claude cfg) "-p"
+  ;; THE PROMPT COMES FIRST, right behind `-p`, and not last. Both
+  ;; `--mcp-config` and `--allowedTools` are VARIADIC in Claude Code —
+  ;; `<configs...>` and `<tools...>` — so each one eats every argument
+  ;; that follows it. A prompt appended at the end is read as one more
+  ;; allowed tool, the session is left with no prompt at all, and it
+  ;; waits three seconds on a stdin nobody writes before it exits:
+  ;;   Error: Input must be provided either through stdin or as a
+  ;;   prompt argument when using --print
+  ;; Ahead of both flags it is the positional the parser expects.
+  (-> [(:claude cfg) "-p" (str prompt-text)
        "--session-id" (str id)
        "--model" (:model routine)
        "--output-format" "json"
        "--strict-mcp-config"
        "--mcp-config" (.getPath (runs/mcp-file (:runs-dir cfg) id))
        "--allowedTools"]
-      (into (map str) (:allowed-tools cfg))
-      (conj (str prompt-text))))
+      (into (map str) (:allowed-tools cfg))))
 
 (defn- log-run!
   "One line per fire (R-7.3): the routine, the run, the status. Not the
