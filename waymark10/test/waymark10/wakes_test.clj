@@ -1449,8 +1449,11 @@
                  "2026-09-20T18:05:00Z")
           (mirror/resync! *eng* :wake_chat)
           (is (= 1 (count (mentions-of chat))))
-          (is (= (Instant/parse "2026-09-20T18:05:00Z")
-                 (get-in (chat-row chat) [:data :last_mention_at]))))
+          ;; the row is read raw off the store, where the instant is
+          ;; its wire spelling; a decoded row holds an Instant, and
+          ;; `str` of either is the same text
+          (is (= "2026-09-20T18:05:00Z"
+                 (str (get-in (chat-row chat) [:data :last_mention_at])))))
 
         (testing "and the seat wakes on it — on the trailing edge, so
                   the session reads a conversation and not its first
