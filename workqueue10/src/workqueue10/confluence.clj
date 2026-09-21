@@ -58,6 +58,15 @@
   discovers, the documents merge in authority order, and a rig that
   is dark costs the tag its pass instead of half a document.
 
+  AND THE RIG THAT OWNS AN INSTANT ANSWERS FOR IT ALONE
+  (waymark-fp62.18.3). The framework's ADVANCE BEAT asks an adapter
+  which declared instants moved, every :advance-every seconds, and
+  refreshes only the rows where one did. AdvanceSource is that
+  question at this seam: the bot rig answers it from the one listing
+  call it already makes, the account rig and the phone never hear it,
+  and a tag whose source cannot answer is simply absent from the
+  beat.
+
   fake-source is the scriptable in-memory twin (the FakeFeed
   precedent): canonical docs, the SAME push-plan the real boundaries
   run, and an unseeded id reads as an open task the authority simply
@@ -144,6 +153,29 @@
     "→ {id [canonical-thread-doc etag]} for the threads the authority
     still lists; one it can prove is gone answers :gone. Throw on
     unreachable."))
+
+(defprotocol AdvanceSource
+  "The one question the ADVANCE BEAT asks, for the rigs that can
+  answer it (waymark-fp62.18.3). The kind's advance door —
+  observe_mention — used to open only when the mirror looked, and the
+  mirror looked on the hour. A mention of the house asks for an
+  answer at once, so the framework beats every :advance-every seconds
+  and asks WHICH instants moved, not what every document now says.
+
+  It is its own protocol for the reason TaskListSource is: a source
+  should not have to answer a question its authority never asks. Only
+  the rig that OWNS an advance field implements it — the house's bot,
+  and no other — so the beat costs one listing call at one rig, never
+  the account rig and never the phone.
+
+  One verb, and no more. A source that cannot answer simply does not
+  satisfy it, and its threads keep healing on :resync-every."
+  (thread-advances [s]
+    "→ {source-local-id {field instant}} — the declared advance
+    instants this rig carries, for every conversation it can speak
+    for. A conversation with no such instant may be left out
+    entirely. Throw on unreachable: the beat costs that pass and
+    nothing else."))
 
 (defn list-sources
   "The confluence's sources, narrowed to the ones that keep lists —
@@ -440,13 +472,50 @@
                         ;; every rig that answered says the chat is
                         ;; not in its listing
                         :gone)])))
-            ids))))
+            ids)))
+
+  AdvanceSource
+  ;; the union again, by the same authority rule: the rig listed
+  ;; first wins a field two rigs answer. In practice one rig answers
+  ;; each advance field and nothing collides — the bot alone hears
+  ;; the house named — and a chorus whose rigs answer none of them
+  ;; answers an empty listing rather than refusing.
+  (thread-advances [_]
+    (reduce (fn [acc s]
+              (merge-with (fn [first-rig later] (merge later first-rig))
+                          acc (thread-advances s)))
+            {}
+            (filterv #(satisfies? AdvanceSource %) sources))))
 
 (defn chorus
   "Several ThreadSources under one routing tag → one ThreadSource.
   The order is the authority order (see merge-heard)."
   [sources]
   (->Chorus (vec sources)))
+
+(defn- fan-advances
+  "Every tagged source's advance instants, namespaced — the whole of
+  the ADVANCE BEAT's read. A tag whose source cannot answer the
+  question is simply absent from the answer (its threads still heal
+  on the kind's :resync-every), and a tag whose source THROWS costs
+  the beat this pass and nothing else: nothing is written from a
+  listing, so a missing rig means only that no move was seen."
+  [sources report-fn]
+  (reduce-kv
+   (fn [acc tag src]
+     (if-not (satisfies? AdvanceSource src)
+       acc
+       (try (let [m (thread-advances src)]
+              (tell report-fn tag true nil)
+              (reduce-kv (fn [m' id fields] (assoc m' (xid tag id) fields))
+                         acc m))
+            (catch Exception e
+              (warn! "thread advances for " tag " failed (" (ex-message e)
+                     "); no move is seen this beat")
+              (tell report-fn tag false (ex-message e))
+              acc))))
+   {}
+   sources))
 
 (defrecord ThreadConfluence [sources report-fn]
   mirror/MirrorAdapter
@@ -468,7 +537,15 @@
                          " is mirrored from the rig that carries it, and "
                          "saying something in it happens there, under a "
                          "capability a person approves")
-                    {}))))
+                    {})))
+
+  mirror/MirrorAdvanceAdapter
+  ;; the beat's read, routed exactly as the other three verbs are:
+  ;; the tag namespaces the id, so the instant the bot answers lands
+  ;; against the row the account rig owns. The confluence stamps the
+  ;; routing tag here and the sources stamp nothing, which is the
+  ;; same law all three feeds keep.
+  (advance-listing [_] (fan-advances sources report-fn)))
 
 (defn thread-confluence
   "sources: {tag ThreadSource} — {\"tgram\" … \"messa\" …}. One adapter
@@ -585,7 +662,17 @@
                    [(str id) (if-some [doc (get lists (str id))]
                                [doc (content-etag doc)]
                                :gone)]))
-            ids))))
+            ids)))
+
+  AdvanceSource
+  ;; and the fake answers the ADVANCE BEAT's question too, so a test
+  ;; can move an instant without standing up a rig (seed-advance!).
+  ;; down! silences this verb exactly as it silences the other two
+  ;; feeds — a beat over a dark source must cost one pass and no row.
+  (thread-advances [_]
+    (let [{:keys [down advances]} @state]
+      (when down (throw (ex-info "source unreachable" {})))
+      (update-vals advances #(into {} (map (fn [[f v]] [f (str v)])) %)))))
 
 (defn fake-source
   "One authority in memory: scriptable via seed! / seed-list! /
@@ -593,7 +680,7 @@
   confluence stamps :source (and namespaces a task's :list_key)."
   []
   (->FakeSource (atom {:docs {} :discoverable [] :removed #{} :lists {}
-                       :down false :push-fail false})))
+                       :advances {} :down false :push-fail false})))
 
 (defn seed!
   "Put a canonical task doc in the fake source (and, unless told
@@ -613,6 +700,14 @@
   :task_list ref is made of."
   [fake id doc]
   (swap! (:state fake) assoc-in [:lists (str id)] doc))
+
+(defn seed-advance!
+  "Say what the fake rig answers the ADVANCE BEAT for one id:
+  {field instant}, the instants whose movement the kind declared an
+  event. Seeding the same id again replaces its answer — a mention
+  moving forward is one value, not two."
+  [fake id fields]
+  (swap! (:state fake) assoc-in [:advances (str id)] fields))
 
 (defn remove!
   "Simulate the authority no longer carrying the task: the next pull

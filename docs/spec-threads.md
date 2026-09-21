@@ -160,6 +160,29 @@ did not move this minute. The meal-planner runbook names the door in a
 `wake_on` entry with a filter on the one chat and a settle of five
 minutes.
 
+**The beat.** A door opens only when the mirror looks. The looking was
+`:resync-every`, which is one hour. A mention at 18:26 sat unseen until
+19:00, while the bot rig had already stamped it. A mention of the house
+asks for an answer at once, so the kind also declares
+`:advance-every 20` (`mirror/declaration`). Every twenty seconds the
+elected discovery daemon runs one ADVANCE BEAT. It asks the adapter for
+the ADVANCE LISTING alone, which is external id to `{last_mention_at
+instant}`. It compares each instant to the stored row. It refreshes only
+the rows whose instant moved forward. A refreshed row takes the ordinary
+single-row pull, so the document stays whole and `observe_mention` opens
+once.
+
+**The beat is cheap, and who answers it is the reason.**
+`last_mention_at` is the bot's alone, so the confluence asks the bot rig
+alone: one `tgrambot__list_chats` call for every conversation in the
+house. The account rig is not asked, and the phone's browser is not
+asked, because neither can answer. A chat that did not move costs
+nothing. A rig that is dark costs the beat that one pass: no move is
+seen, nothing is written from a listing, and the next beat asks again.
+An adapter that cannot answer the listing is skipped with one warning at
+boot. Its advance doors still open on the heal and on a read past the
+TTL.
+
 ### `:status`, and what an ending means here
 
 `live` and `dropped`, and **a thread is never done**. There is no
@@ -300,7 +323,9 @@ the array is the rig's own structure and the parts are its rendering.
 
 There is no per-thread route on either rig, so — flickr's shape exactly —
 **`pull-many` IS the full listing**: one call, absence answered `:gone`.
-`:resync-every` rides that batch.
+`:resync-every` rides that batch. The ADVANCE BEAT reads the same
+window at the bot rig, and answers `{chat-id {last_mention_at instant}}`
+for the chats with a mention. `:advance-every` rides that read.
 
 ### The messa gap
 

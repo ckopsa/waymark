@@ -29,6 +29,7 @@
             [workqueue10.sources.tgram :as tgram]
             [workqueue10.sources.tgrambot :as tgrambot]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -485,6 +486,59 @@
         (gc/down! down true)
         (is (= ["tgram:5061625694"] (mirror/discover partial-feed)))))))
 
+;; ── the advance beat's own read (waymark-fp62.18.3) ─────────────────
+;;
+;; The framework beats every :advance-every seconds and asks ONE
+;; question: which declared instants moved? Only the rig that owns an
+;; instant can answer it, which here is the bot and nobody else.
+
+(deftest the-beat-asks-the-rig-that-owns-the-mention
+  (let [state (gate-with {tgram/tool [wellesley bros]
+                          tgrambot/tool [bot-bros bot-meals bot-wellesley]})
+        bot (tgrambot/fake-source state)
+        account (tgram/fake-source state)]
+
+    (testing "the bot answers the mention it alone hears, from the
+              SAME listing read its three other verbs make"
+      (is (= {"-550048080" {:last_mention_at "2026-08-25T18:40:00Z"}
+              "-5091757250" {:last_mention_at "2026-09-20T17:58:40Z"}}
+             (conf/thread-advances bot)))
+      (is (nil? (get (conf/thread-advances bot) "5061625694"))
+          "a chat nobody has named the house in is left OUT, not
+           answered nil: the beat asks which instants moved"))
+
+    (testing "the house's own account is not asked at all — it cannot
+              answer, so it does not satisfy the protocol"
+      (is (not (satisfies? conf/AdvanceSource account))))
+
+    (testing "the chorus answers the union of the rigs that can, and
+              the confluence stamps the routing tag — so the bot's
+              instant lands against the row the account owns"
+      (let [feed (conf/thread-confluence {"tgram" [account bot]
+                                          "messa" (messa/fake-source state)})]
+        (is (= {"tgram:-550048080" {:last_mention_at "2026-08-25T18:40:00Z"}
+                "tgram:-5091757250" {:last_mention_at "2026-09-20T17:58:40Z"}}
+               (mirror/advance-listing feed)))))
+
+    (testing "a dark rig costs the beat that pass and nothing else:
+              no move is seen, and nothing is written from a listing"
+      (let [feed (conf/thread-confluence {"tgram" [account bot]})]
+        (gc/down! state true)
+        (is (= {} (mirror/advance-listing feed)))
+        (gc/down! state false)
+        (is (seq (mirror/advance-listing feed))))))
+
+  (testing "the scriptable twin holds the same law: a seeded advance
+            is answered, and a down source refuses the verb"
+    (let [fake (conf/fake-source)]
+      (conf/seed-advance! fake "c-1" {:last_mention_at "2026-09-21T18:26:00Z"})
+      (is (= {"c-1" {:last_mention_at "2026-09-21T18:26:00Z"}}
+             (conf/thread-advances fake)))
+      (conf/down! fake true)
+      (is (thrown? Exception (conf/thread-advances fake)))
+      (conf/down! fake false)
+      (is (= 1 (count (conf/thread-advances fake)))))))
+
 ;; ── end to end, over the engine ─────────────────────────────────────
 
 (def ^:private tables
@@ -724,6 +778,52 @@
     (testing "a second pass over the same listing opens nothing: the
               door is a MOVE and not a level"
       (mirror/resync! *eng* :thread)
+      (is (= (inc before) (mentions))))
+
+    ;; leave the listings as every other scene here expects them
+    (seed-gate!)))
+
+;; ── …and the house hears it within the beat, not within the hour ────
+
+(deftest the-beat-brings-a-mention-in-within-seconds
+  (seed-gate!)
+  (let [xid "tgram:-550048080"
+        rdef (get (inv/resources *eng*) :thread)
+        mentions #(count (filterv #{:observe_mention} (actions-on xid)))
+        before (mentions)]
+
+    (gc/answer! *gate* tgrambot/tool
+                [(assoc bot-bros :last_mention_at "2026-09-21T18:26:00Z"
+                        :mentions 7)])
+
+    (testing "the row is fresh inside its TTL, so the pull-through
+              alone serves the stored truth — which is why the hourly
+              heal was the only thing that ever saw a mention"
+      (mirror/refresh! *eng* rdef (inv/decode-row rdef (row-of xid)))
+      (is (= "2026-08-25T18:40:00Z"
+             (str (get-in (row-of xid) [:data :last_mention_at]))))
+      (is (= before (mentions))))
+
+    (testing "one beat asks the bot rig which mentions moved — one
+              list_chats call, the account rig and the phone unasked —
+              and refreshes that row alone"
+      (is (= 1 (:moved (mirror/advance-beat! *eng* :thread))))
+      (is (= "2026-09-21T18:26:00Z"
+             (str (get-in (row-of xid) [:data :last_mention_at]))))
+      (is (= (inc before) (mentions))
+          "the mention door opened once, and the seat's wake reads it"))
+
+    (testing "a beat over a dark Gate costs that pass and nothing
+              else: the confluence's partial tolerance answers an
+              empty listing, so no move is seen and no row is touched"
+      (gc/down! *gate* true)
+      (is (= {:listed 0 :moved 0} (mirror/advance-beat! *eng* :thread)))
+      (is (= (inc before) (mentions)))
+      (gc/down! *gate* false))
+
+    (testing "and the door is a MOVE: a second beat over the same
+              listing opens nothing"
+      (is (= 0 (:moved (mirror/advance-beat! *eng* :thread))))
       (is (= (inc before) (mentions))))
 
     ;; leave the listings as every other scene here expects them

@@ -2807,7 +2807,8 @@ The bead asked for the clause to name the authority if the declaration
 carried a display name for it, and to say something honest if it did
 not. **It does not.** `mirror/declaration` mints a `Spec` whose keys
 are `adapter / ttl-seconds / discover-every / document / push-on-write
-/ create-push / local-rows / priority / on-gone / resync-every` —
+/ create-push / local-rows / priority / on-gone / resync-every /
+advances / advance-every` —
 machinery, every one of them, and `fingerprint/authority-fp` reads
 them by name. There is no household word for *Google Tasks* anywhere
 in it; the adapter is a protocol object. So the clause **names the
