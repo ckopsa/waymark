@@ -43,6 +43,11 @@
     counts on every action of its kind, where a transition entry with
     none matches nothing; and `at_least` below one is refused by the
     schema at the create door.
+  - R-12.24 · the count wake that counts DOWN (waymark-fp62.13): an
+    entry with `at_most` 0 is not woken while one matching row is
+    left, and fires the moment the last one leaves the filter. Its
+    text carries `at_most` and no row. An entry that names both
+    sizes is refused by the schema, in the entry's own place.
   - R-12.22 · the entry's `filter` is read on a TRANSITION wake too:
     the seat that names one batch wakes on that batch's completion
     and not on another's, and the same entry with no filter wakes on
@@ -880,3 +885,134 @@
             "what a person restates is composed after the door closed")))
 
     (seat-do! seat :retire)))
+
+;; ── 14 · R-12.24: the count wake that waits for an empty queue ──────
+;;
+;; Bead waymark-fp62.13. `at_least` counts UP and nothing could wake a
+;; seat on absence: the planner whose work begins when no plan is
+;; waiting had its cadence and nothing else. `at_most` counts DOWN,
+;; and `at_most` 0 is the empty queue.
+
+(deftest an-at-most-wake-fires-when-the-last-row-leaves-the-filter
+  (let [wn :wake-at-most
+        fn' :wake-at-most-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        batch "count-to-empty"
+        {:keys [seat token]}
+        (linked-seat! "emptyclerk"
+                      {:scope count-scope
+                       :wake_on [{:kind "wake_item"
+                                  :actions ["complete"]
+                                  :filter {:batch batch}
+                                  :at_most 0}]}
+                      fn')
+        ids (vec (repeatedly 2 #(item! batch)))]
+
+    (testing "two rows arrive, and `create` is not one of this entry's
+              actions, so nothing is counted and nothing fires"
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (testing "the first completion leaves one row waiting, which is
+              not an empty queue"
+      (item-do! (first ids) :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))
+          "and nothing waits on the schedule row: a queue above the
+           size is no match at all, not a match the damper held")
+      (drain-fires! fn')
+      (is (empty? (fires-of token))))
+
+    (testing "the second empties the filter, and the seat fires once"
+      (item-do! (second ids) :complete)
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (let [text (fire-text seat 0)]
+        (is (= "wake_item" (:kind text)))
+        (is (= 0 (:count text)))
+        (is (= 0 (:at_most text))
+            "the size it was asked in, in the entry's own word")
+        (is (nil? (:at_least text))
+            "and not the size it was not asked in")
+        (is (nil? (:id text))
+            "no row id: the session walks the queue, and the charter
+             says what to make when the queue is empty")))
+
+    (testing "and exactly one POST reached this seat's Routine"
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token))))
+      (is (str/includes? (str (:text (last (fires-of token)))) "at_most")))
+
+    (seat-do! seat :retire)))
+
+;; ── 15 · an entry names one size, never two ─────────────────────────
+
+(deftest an-entry-that-names-both-sizes-is-refused
+
+  (testing "at_least and at_most in one entry is the schema's own
+            refusal, and it lands in the entry's own place"
+    (let [p (refusal #(inv/create!
+                       *eng* :seat
+                       (seat-body "countboth"
+                                  {:wake_on [{:kind "wake_task"
+                                              :actions ["create"]
+                                              :at_least 5
+                                              :at_most 0}]})
+                       {:principal elena}))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "wake_on"))
+      (is (str/includes? (pr-str (:errors p))
+                         "An entry names at_least or at_most, not both.")
+          "the sentence says which two fields quarrelled, not 'invalid'")))
+
+  (testing "a size below zero is refused as at_least's below one is"
+    (let [p (refusal #(inv/create!
+                       *eng* :seat
+                       (seat-body "countbelowzero"
+                                  {:wake_on [{:kind "wake_task"
+                                              :actions ["create"]
+                                              :at_most -1}]})
+                       {:principal elena}))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "at_most"))
+      (is (str/includes? (pr-str (:errors p)) "wake_on"))))
+
+  (testing "and a seat woken by an empty queue is born with its entry"
+    (let [seat (seat! "countempty"
+                      {:wake_on [{:kind "wake_task"
+                                  :actions ["complete"]
+                                  :at_most 0}]})]
+      (is (= [{:kind "wake_task" :actions ["complete"] :at_most 0}]
+             (get-in (raw :seat seat) [:data :wake_on])))
+      (seat-do! seat :retire))))
+
+;; ── 16 · the count text says which way the seat was counting ────────
+
+(deftest the-count-text-carries-the-size-the-entry-asked-in
+  (testing "an at_least entry's text is the one R-12.24 spells"
+    (let [text (wire/read-json (wakes/count-text :wake_item 23 :at_least 20))]
+      (is (= {:kind "wake_item" :count 23 :at_least 20} text))))
+  (testing "and an at_most entry's carries at_most in its place"
+    (let [text (wire/read-json (wakes/count-text :wake_item 0 :at_most 0))]
+      (is (= {:kind "wake_item" :count 0 :at_most 0} text))))
+  (testing "either way the text names no row, so the session walks
+            the queue rather than one row"
+    (is (nil? (:id (wire/read-json (wakes/count-text :wake_item 0 :at_most 0)))))))
+
+;; ── 17 · an at_most entry is a count entry ──────────────────────────
+
+(deftest an-at-most-entry-is-a-count-entry
+  (let [at-most {:kind "wake_item" :actions [] :at_most 0}
+        at-least {:kind "wake_item" :actions [] :at_least 5}
+        transition {:kind "wake_item" :actions ["complete"]}]
+    (is (wakes/count-entry? at-most))
+    (is (wakes/count-entry? at-least))
+    (is (not (wakes/count-entry? transition)))
+    (testing "so an at_most entry with no actions counts on every
+              action of its kind, as an at_least entry does"
+      (is (wakes/matches? at-most :wake_item :complete))
+      (is (wakes/matches? at-most :wake_item :create))
+      (is (not (wakes/matches? at-most :wake_task :complete))))))

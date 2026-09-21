@@ -168,6 +168,51 @@
       (is (= good-scope (get-in (row-of :seat (:id seat)) [:data :scope]))
           "and the stored scope did not move"))))
 
+;; ── R-12.24 · a wake entry names ONE size (bead waymark-fp62.13) ────
+;;
+;; `at_least` counts UP and `at_most` counts DOWN, and an entry that
+;; named both would ask the engine two questions it cannot answer with
+;; one count. The rule is the SCHEMA's, so it is said once and both
+;; write doors say it.
+
+(deftest a-wake-entry-names-one-size-and-not-two
+  (testing "a seat is opened with at_most, and the entry is stored"
+    (let [seat (open-seat! "wakes-on-an-empty-queue"
+                           {:wake_on [{:kind "model"
+                                       :actions ["retire"]
+                                       :at_most 0}]})]
+      (is (= [{:kind "model" :actions ["retire"] :at_most 0}]
+             (get-in (row-of :seat (:id seat)) [:data :wake_on])))))
+
+  (testing "an entry that names both sizes is refused at create"
+    (let [p (refusal #(open-seat! "wakes-both-ways"
+                                  {:wake_on [{:kind "model"
+                                              :actions ["retire"]
+                                              :at_least 5
+                                              :at_most 0}]}))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p))
+                         "An entry names at_least or at_most, not both.")
+          "the sentence names the two fields that quarrelled")
+      (is (str/includes? (pr-str (:errors p)) "wake_on")
+          "and it lands on the field a person would look at")))
+
+  (testing "and at restate, on a seat that was born with one size"
+    (let [seat (open-seat! "wakes-one-way"
+                           {:wake_on [{:kind "model"
+                                       :actions ["retire"]
+                                       :at_most 0}]})
+          p (refusal #(restate! (:id seat)
+                                (restate-body
+                                 {:wake_on [{:kind "model"
+                                             :actions ["retire"]
+                                             :at_least 5
+                                             :at_most 0}]})))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (= [{:kind "model" :actions ["retire"] :at_most 0}]
+             (get-in (row-of :seat (:id seat)) [:data :wake_on]))
+          "and the stored entry did not move"))))
+
 (deftest a-walk-names-a-kind-whose-queue-filters-itself
   ;; bead waymark-fp62.6.3.10, R-12.32: the guard asked for a default
   ;; filter over STATE, which refused every kind that keeps its

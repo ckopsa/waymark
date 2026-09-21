@@ -1117,8 +1117,8 @@
 ;; rows must be waiting before the seat is worth waking — so the
 ;; entry has a schema of its own here. The scope's `kind` and
 ;; `actions` are the same two fields, judged by the same two guards
-;; (`wake-on-names-real-kinds`, `wake-on-names-real-actions`), and two
-;; fields a leash has no use for join them:
+;; (`wake-on-names-real-kinds`, `wake-on-names-real-actions`), and
+;; three fields a leash has no use for join them:
 ;;
 ;;   filter     which rows count, in the shape of that kind's query
 ;;              where clause — `grants/filter-map-schema`, the scope
@@ -1128,14 +1128,30 @@
 ;;              rows counted. Absent, a transition wake matches every
 ;;              row and a count wake counts the kind's default filter:
 ;;              the queue a walk works through.
-;;   at_least   the size that wakes the seat. Absent, the entry is a
-;;              transition wake and behaves exactly as it always did.
+;;   at_least   the size that wakes the seat counting UP: the count
+;;              at or ABOVE which it is worth waking. Absent, the
+;;              entry is a transition wake and behaves exactly as it
+;;              always did.
+;;   at_most    the size that wakes the seat counting DOWN: the count
+;;              at or BELOW which it is worth waking (waymark-fp62.13).
+;;              Zero is the EMPTY queue, and the empty queue is the
+;;              one thing nothing could wake a seat on before: a
+;;              planner's work begins when no plan is waiting, and a
+;;              cadence was the only thing that could start it.
+;;
+;; An entry names ONE of the two sizes. Both in one entry is not a
+;; narrower wake, it is two questions the engine cannot answer with
+;; one count, so the SCHEMA refuses it (`wake-entry-one-size?`) and
+;; the create and the restate say so in the entry's own place.
 ;;
 ;; The rest of a scope entry — ids, fields, hashed, args — is a
 ;; leash's vocabulary and not a wake's: WHAT a woken session may see
 ;; is decided by the seat's `scope`, one field up, and a wake entry
 ;; that repeated it would be a second leash nobody is holding.
-(def wake-entry-schema
+(def ^:private wake-entry-fields
+  "The wake entry's FIELDS, as the map a client draws a row from. The
+  law of the entry is `wake-entry-schema` below, which is this map and
+  the one rule a map cannot say."
   [:map
    [:kind {:x-options {:from :kinds}
            :x-display {:label "Kind"
@@ -1157,7 +1173,42 @@
                :examples [20]
                :x-display {:label "Rows waiting before it wakes"
                            :help "The size that wakes this seat. The engine counts the rows matching this entry when one of its actions commits, and fires once the count is at or above this number; the fire names no row, so the session walks the queue. Omit it and every matching transition wakes the seat, one row at a time."}}
-    [:int {:min 1}]]])
+    [:int {:min 1}]]
+   [:at_most {:optional true
+              :examples [0]
+              :x-display {:label "Rows left before it wakes"
+                          :help "The size that wakes this seat as the queue DRAINS. The engine counts the rows matching this entry when one of its actions commits, and fires once the count is at or below this number; the fire names no row, so the session walks the queue and the charter says what to make. Zero wakes the seat when the last matching row leaves, which is the seat whose work begins on an empty queue. An entry names at_least or at_most, and never both."}}
+    [:int {:min 0}]]])
+
+(defn- wake-entry-one-size?
+  "R-12.24's one rule a `:map` cannot say: an entry names at_least or
+  at_most, never both. A non-map answers true, because the map beside
+  this one has already refused it and one wrong entry owes a person
+  one sentence."
+  [e]
+  (not (and (map? e) (some? (:at_least e)) (some? (:at_most e)))))
+
+(def wake-entry-schema
+  "One `wake_on` entry: the fields above, and the rule that the two
+  sizes are alternatives.
+
+  The rule is malli's, not a guard's, so it lands where a person's
+  eyes are — the entry's own place in the 422 — and it lands at BOTH
+  write doors without either of them repeating it.
+
+  The `:json-schema` property is what keeps the form. A client draws a
+  list of maps as ROWS when the items projection carries `properties`
+  (waymark-fp62.7.9), and an `:and` projects to `allOf`, which carries
+  none: the seat's wake_on would have fallen back to the JSON box the
+  rows replaced. So the projection published for this node is the
+  MAP's own, computed from `wake-entry-fields` rather than spelled a
+  second time. Nothing is hidden by that: the rule refuses a shape
+  JSON Schema has no word for, and the field help says it in prose."
+  [:and
+   {:json-schema (schema/json-schema wake-entry-fields)}
+   wake-entry-fields
+   [:fn {:error/message "An entry names at_least or at_most, not both."}
+    #'wake-entry-one-size?]])
 
 (def wake-on-schema
   "What a seat may write in `wake_on`: a list of wake entries."
@@ -1325,7 +1376,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -1485,7 +1536,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]

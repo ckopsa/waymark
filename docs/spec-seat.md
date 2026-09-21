@@ -1242,8 +1242,8 @@ is a punt (section 18).
 two optional fields, and the shape becomes `{kind, actions, filter,
 at_least}`. `filter` is a map in the shape of a query's where clause
 for that kind, which is the shape a scope entry's filter already has.
-`at_least` is a whole number, 1 or more. An entry with no `at_least`
-is a transition wake (R-12.22). An entry with `at_least` is a count
+`at_least` is a whole number, 1 or more. An entry with no size is a
+transition wake (R-12.22). An entry with `at_least` is a count
 wake.
 
 A count wake does not poll. The engine counts only when a committed
@@ -1274,6 +1274,28 @@ The engine must refuse an `at_least` below 1, at `create` and at
 `restate`: `at_least must be 1 or more.` A `filter` that names a
 field the kind does not have is refused with the query's own
 sentence.
+
+A count wake must also be able to count DOWN. The entry gains a third
+optional field, `at_most`, a whole number, 0 or more. An entry with
+`at_most` is a count wake. The engine counts the same rows, under the
+entry's `filter`, when a committed transition of that kind matches
+the entry's actions. It fires the seat when the count is at or below
+`at_most`. The count is the engine's own, and not the seat's leash:
+a seat whose scope hides the rows it counts still counts them. An
+`at_most` of 0 fires when the last matching row leaves the filter,
+which is the one wake a seat could not have before. A planner that
+must make the next plan when none is waiting is woken by it. A count
+fire's text carries `at_most` where an `at_least` entry's text
+carries `at_least`: `{"kind": "plan", "count": 0, "at_most": 0}`. The
+fire names no row. The session walks the queue, and the charter says
+what to make when the queue is empty. An entry names `at_least` or
+`at_most`. The schema must refuse an entry that names both, at
+`create` and at `restate`: `An entry names at_least or at_most, not
+both.` The trigger stays a transition, and the engine adds no clock.
+The seat's cadence stays the floor for a house where nobody walks the
+door that empties the queue. A count wake is level and not edge: it
+fires each time it is evaluated and its condition holds, `at_least`
+and `at_most` alike, and `fire_interval_seconds` is the damper.
 
 One Routine for each model. Today each seat has its own Routine, and
 a person pastes the seat's instructions and the seat's key into that
