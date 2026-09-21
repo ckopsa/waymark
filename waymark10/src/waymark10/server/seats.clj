@@ -154,7 +154,9 @@
             [waymark10.types :as t])
   (:import (java.math RoundingMode)
            (java.nio.charset StandardCharsets)
-           (java.security MessageDigest)))
+           (java.security MessageDigest SecureRandom)
+           (java.time Instant)
+           (java.util Base64)))
 
 (set! *warn-on-reflection* true)
 
@@ -1398,6 +1400,29 @@
 (def ^:private charter-example
   "Decide whether a message asks something of this house, and say what it asks in one line. A receipt for something already bought asks nothing. A person waiting on an answer asks something, even when they are polite about it.")
 
+(def fire-keys-schema
+  "What the seat keeps of the keys its firings carried (R-12.37): one
+  entry for each key the engine minted and no sit has spent yet.
+
+  THE HASH AND NOT THE KEY. The key is on the wire one time, in the
+  fire text, and the engine stores nothing a reader could present. The
+  sit hashes what it was given and compares; a house whose seat rows
+  leaked would leak no key.
+
+  Worn by the row alone. Neither the create door nor the restate
+  declares the field, and a closed map refuses an unknown key: that
+  omission is the fence, the way the schedule fences its link."
+  [:vector
+   [:map
+    [:hash {:x-display
+            {:label "The hash of one key"
+             :help "The SHA-256 of the key one fire text carried, base64url. The key itself is on the wire one time and is stored nowhere."}}
+     [:string {:min 1 :max 128}]]
+    [:expires_at {:x-display
+                  {:label "When it stops answering"
+                   :help "One sitting_idle_seconds after the fire. A key no session spent stops answering at this moment."}}
+     :waymark/instant]]])
+
 (defresource seat
   {:kind :seat
    :plural "seats"
@@ -1586,6 +1611,34 @@
                    :label "Sitter key"
                    :spelled-by-hand "Written by offer_key and cleared by revoke_key; never typed into a form, and never rendered back."}}
      [:maybe [:string {:min 22 :max 128}]]]
+    ;; ── THE KEY OF ONE FIRING (R-12.37) ─────────────────────────────
+    ;; The key above is standing, and a person pastes it into a
+    ;; Routine by hand. A Routine made without that step fires a
+    ;; session that has the seat's name and nothing to sit with, which
+    ;; is what the meal planner's first firing showed. These keys are
+    ;; the other half: the engine mints 128 bits for EACH fire of a
+    ;; seat that has instructions, the fire text carries the key on one
+    ;; line, and the row keeps the hash alone. One key opens one sit.
+    ;; The Routine's prompt then holds no secret at all.
+    ;;
+    ;; WRITTEN BY NO DOOR, where `sitter_key` has two. A transition per
+    ;; fire and per sit would double the log of a run and put a
+    ;; credential's record in it twice, so the list is a maintenance
+    ;; write (`hold-fire-key!` and `spend-fire-key!`, the sitting
+    ;; counters' own spelling). The fence at the two doors a hand can
+    ;; reach is OMISSION, the schedule's own way with its link:
+    ;; neither the create door nor the restate declares the field, so
+    ;; a body that carries it is refused as an unknown key. A guard
+    ;; here would have had to say what the field wants, and a list of
+    ;; hashes wants nothing from anybody. :secret, the `sitter_key`
+    ;; posture: the list leaves the engine in no projection, scoped
+    ;; or not.
+    [:fire_keys {:optional true :secret true
+                 :x-display
+                 {:hidden true
+                  :label "Keys of the firings"
+                  :spelled-by-hand "Written by the fire and spent by the sit. The engine mints each key, keeps the hash alone, and never shows a key again."}}
+     [:maybe fire-keys-schema]]
     ;; THE MEANS BY WHICH A SITTING IS CREATED (R-12.0). The seat is
     ;; the only thing a person manages; the schedule is the engine's
     ;; own record of how this seat wakes, and it is written when the
@@ -1725,6 +1778,9 @@
                    :label "Sitter key"
                    :spelled-by-hand "Refused here: the key is offer_key's to write."}}
      [:maybe [:string {:min 22 :max 128}]]]]
+   ;; `fire_keys` is NOT declared here (R-12.37): the create door is
+   ;; a closed map, and a body that carries the field is refused as
+   ;; an unknown key. That omission is the fence.
    :filterable {:state #{:eq :in}
                 :name #{:eq}}
    :sortable {:fields [:name] :default "name"}
@@ -1874,6 +1930,10 @@
                             :label "Sitter key"
                             :spelled-by-hand "Refused here: the key is offer_key's to write."}}
               [:maybe [:string {:min 22 :max 128}]]]]
+     ;; `fire_keys` is not declared here either (R-12.37): the
+     ;; closed map refuses it, and `restate-seat` writes only the
+     ;; restatable fields, so the keys a firing holds survive a
+     ;; restate the way `sitter_key` does
      :record true
      ;; sitter_key is NOT prefilled and cannot be: the draft view
      ;; serves prefill from the raw row, and resource/check-secret!
@@ -2111,6 +2171,7 @@
     "R-4.9's own-surface for sitters is NOT declared here, and wave two settled why: `:own-surface :by` names a field of the row being read, and a sitter is identified through `grant.seat` — a field of the GRANT. A seat with a sitter column would be a second copy of the grant, so the courtesy is spelled where the sitter is actually identified: the seat resolve adds the citing seat's row as a synthetic, unstored scope entry (`{kind \"seat\", ids [<this seat>], actions []}`), and `:kind?`, `:row?`, `:field?` and `:ids-of` then answer for it exactly as they answer for anything granted. One admission algebra, read-only, one row — and `:whole-kind?` stays false, because one row is not the collection."
     "R-4.6's consequence sentence is kept verbatim, `{into}` included. The framework does not interpolate a consequence (render substitutes only a per-origin map, never a template), so the brace renders literally. The alternative was rewording the one sentence the spec pins, and a spec-pinned string is worth more than a tidy dialog."
     "`sitter_key` IS DECLARED on the create door and on `restate`, which reads at first like the opposite of this file's write fence. It is the fence: a guard may judge only a field of the door it stands on (checks/check-create-guards and check-guard-declarations are definition ERRORS otherwise), so a `key-not-written-by-hand` that could be READ had to have something to name — members.clj's `reentry-not-written-by-hand` has it for free, because that kind has no separate create-schema. Both spellings carry `{:secret true}`, so the advertised create body drops the field (collections.clj unions the row schema's secret set with the create model's for exactly this), no form asks for it, and the usability policies skip it. What the caller gains over silent omission is the refusal's own sentence, which names the door that writes the key instead."
+    "`fire_keys` is written by NO door (R-12.37), where `sitter_key` has two. The fire mints one key and the sit spends it, and both are maintenance writes (`hold-fire-key!`, `spend-fire-key!`) rather than transitions. Two reasons, and the second is the stronger. A transition for each fire and each sit would double the log of one run, beside the `fire` the log already holds. And a recorded transition persists its raw inputs (R-12.19 keeps the person's prose alone), so a door here would put a credential's own record in the log twice per run. The field is `:secret`, and it is declared on the row ALONE, not at the create door and not at the restate: a closed map refuses an unknown key, which is the schedule's own fence for its link. A guard was tried first and refused at declaration time, for a reason worth keeping: a guard that judges a field must tell the client what the field wants, and one that cannot says so with `:open`, which the usability policy reads as a vocabulary the engine is hiding. A list of hashes is no vocabulary. Nobody may write it, so no door names it."
     "`fire` declares `:idempotent false`, so every call must carry an Idempotency-Key (invoke's phase 2). That is the truthful spelling: a second fire starts a second run. It is also the safe one: an idempotent door is subject to invoke's natural replay, which compares only the row's LATEST transition, so a textless fire following a textless fire with nothing else on the seat would have been answered as a replay and never gone out — the wake's release fire (R-12.22) and a person's second press, both lost. The key costs nobody anything: the MCP door signs every invoke, and the wake consumer keys each fire by the transition it heard, which doubles as its own dedupe. The consumer's replay of the POST is deduped separately, where it happens: `schedules/already-fired?` compares `last_fired_at` against the transition's own instant."
     "R-12.22's `wake_on` is judged by its OWN two guards, `wake-on-names-real-kinds` and `wake-on-names-real-actions`, which say what the scope guards next door already say. A guard grades the fields it names in `:judges` (checks/check-guard-declarations refuses anything else), and the scope guards name `:scope`; borrowing one for `wake_on` would have had it refuse a scope the caller never sent. The duplication is two short bodies over a shared helper, against a wake entry nobody can match — a seat that never wakes and never says why."
     "`wake_on` has NO default in the row and `walk` is not copied into it. R-12.22 asks for exactly that: the walk seat's one entry is computed at read time by `effective-wake-on`. A default written at the create door would be a value a person never chose, and the first restate of `walk` would leave it naming the queue the seat no longer walks."
@@ -3028,35 +3089,227 @@
                                          {:name named :state :active}
                                          {:limit 1})))))))))
 
+(defn standing-key?
+  "Is this key the seat's OWN, or its chair's?
+
+  TWO STANDING KEYS OPEN ONE SEAT. The seat's own `sitter_key` is the
+  first, and it is R-12.12 unchanged. The second is the CHAIR'S: the
+  `sitter_key` of the first model in `held_for`. That second one is
+  what makes one Routine for each model possible. The model's key sits
+  in every seat that model is the chair of, and the name says which
+  seat this firing is.
+
+  The two are asked as one question because the sit asks them for one
+  reason. A standing key is spent by nothing. A firing's key (R-12.37)
+  is spent by the sit that presents it. The compare is `key-matches?`,
+  constant time, for its own reason."
+  [eng seat-row key]
+  (boolean
+   (when-some [key (some-> key str not-empty)]
+     (when seat-row
+       (let [wanted (.getBytes ^String key StandardCharsets/UTF_8)]
+         (or (key-matches? seat-row wanted)
+             (when-some [chair (and (get (inv/resources eng) :model)
+                                    (chair-of seat-row))]
+               (some-> (store/with-tx (:storage eng)
+                         (fn [tx]
+                           (store/load-row (:storage eng) tx :model
+                                           chair {})))
+                       (key-matches? wanted)))))))))
+
+;; ── the key of one firing (R-12.37) ─────────────────────────────────
+;;
+;; The two keys above are STANDING. A person mints one, offers it at a
+;; door, and pastes it into a Routine. That puts a secret in a prompt a
+;; person writes by hand, and a missed step stays silent until the
+;; first firing: the meal planner's first run (2026-09-21) had the
+;; seat's id and name from the fire text, and nothing to sit with.
+;;
+;; A FIRE KEY IS THE OTHER KIND. The engine mints one for each fire of
+;; a seat that has instructions. The fire text carries it on one line,
+;; and the seat row keeps the hash alone. One key opens one sit. A key
+;; no session spent stops answering after the seat's
+;; `sitting_idle_seconds`, which is the same limit the sweep measures
+;; an idle sitting by. The Routine's prompt then holds no secret, so
+;; there is no step for a person to miss.
+
+(defonce ^:private ^SecureRandom key-random (SecureRandom.))
+
+(def ^:private default-idle-seconds
+  "The seat schema's own default for `sitting_idle_seconds`, for a row
+  written before that field existed. One hour."
+  3600)
+
+(def ^:private key-ceiling
+  "How many unspent keys one seat keeps. A seat fires far fewer times
+  than this inside one idle window, so the ceiling never drops a key a
+  live session is about to present. It is the fence against a row that
+  grows without a bound when a Routine is dark and nobody sits."
+  32)
+
+(defn- instant-of
+  "An instant, however the row spells it: a stored string, or an
+  Instant already. Unparsable is nil, which reads as never."
+  [v]
+  (cond
+    (instance? Instant v) v
+    (some-> v str not-empty) (try (Instant/parse (str v))
+                                  (catch Exception _ nil))
+    :else nil))
+
+(defn- mint-key
+  "128 bits of real randomness, base64url, unpadded. It is
+  `mcp/new-session-id`'s own shape. A machine mints it for
+  `offer_key`'s own reason: 22 characters of randomness is what no
+  hand types."
+  []
+  (let [b (byte-array 16)]
+    (.nextBytes key-random b)
+    (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) b)))
+
+(defn key-hash
+  "The SHA-256 of one key, base64url, unpadded.
+
+  IT IS THE ONLY THING THE ROW KEEPS. The key is on the wire one time,
+  in the fire text, and a seat row read by anybody at all hands over
+  nothing a session could present. A blank key hashes to nil, so a row
+  that holds no key matches nothing."
+  [key]
+  (when-some [key (some-> key str not-empty)]
+    (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
+                     (.digest (MessageDigest/getInstance "SHA-256")
+                              (.getBytes ^String key StandardCharsets/UTF_8)))))
+
+(defn- live-keys
+  "The entries of this row that still answer at `now`: the keys no sit
+  has spent, whose moment has not passed. An entry the engine cannot
+  date is dropped, because a key it cannot expire is a key it must not
+  answer."
+  [row ^Instant now]
+  (into []
+        (filter (fn [e]
+                  (when-some [^Instant at (instant-of (:expires_at e))]
+                    (.isAfter at now))))
+        (get-in row [:data :fire_keys])))
+
+(defn- fire-key-entry
+  "The live entry of this row that answers `key` at `now`, or nil. The
+  compare is `MessageDigest/isEqual` over the two hashes, constant
+  time in their length, for `key-matches?`'s own reason."
+  [row key ^Instant now]
+  (when-some [wanted (key-hash key)]
+    (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)]
+      (first (filter (fn [e]
+                       (MessageDigest/isEqual
+                        wanted
+                        (.getBytes (str (:hash e)) StandardCharsets/UTF_8)))
+                     (live-keys row now))))))
+
+(defn hold-fire-key!
+  "Mint the key ONE fire carries, and keep its hash on the seat row.
+  The key comes back, for the fire text to carry. Nil comes back when
+  this seat has no instructions.
+
+  A SEAT WITH NO INSTRUCTIONS FIRES AS IT ALWAYS DID. Its Routine
+  holds a key of its own, and the composed text is the person's prose
+  alone (R-12.35). A key no session would read is a key not worth
+  minting.
+
+  The write is a MAINTENANCE write, `bump-counter!`'s own spelling and
+  its reason: a transition for each fire would put the record of a
+  credential in the log, beside the fire that is already there. The
+  row is read FOR UPDATE inside the write's own transaction, so a
+  restate that lands at the same moment is not lost, and two fires of
+  one seat do not write over each other's key.
+
+  The expired entries go at the same moment, and the newest keys stay,
+  up to `key-ceiling`."
+  [eng seat-row at]
+  (when (and seat-row
+             (some-> (get-in seat-row [:data :instructions]) str not-empty)
+             (get (inv/resources eng) :seat))
+    (let [^Instant at (or (instant-of at) ((:now-fn eng)))
+          key (mint-key)
+          ttl (long (or (get-in seat-row [:data :sitting_idle_seconds])
+                        default-idle-seconds))
+          entry {:hash (key-hash key)
+                 :expires_at (str (.plusSeconds at ttl))}]
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (when-some [row (store/load-row (:storage eng) tx :seat
+                                          (str (:id seat-row))
+                                          {:for-update true})]
+            (let [kept (vec (take-last (dec (long key-ceiling))
+                                       (live-keys row at)))]
+              (store/update-data! (:storage eng) tx :seat (str (:id seat-row))
+                                  (assoc (:data row) :fire_keys
+                                         (conj kept entry))
+                                  (:next-flip-at row))
+              key)))))))
+
+(defn fire-key-held?
+  "Does this seat hold an unspent, unexpired key for `key`?
+
+  A READ, and it spends nothing. The sit asks it to learn which seat a
+  key answers for, and it spends the key only after every other wall
+  has passed."
+  [eng seat-row key]
+  (boolean (and seat-row
+                (some? (fire-key-entry seat-row key ((:now-fn eng)))))))
+
+(defn spend-fire-key!
+  "Spend the key of one firing: take its hash off the seat row, so the
+  next sit that presents it is refused. → true when this call is the
+  one that spent it, and nil when this key is no firing's key of this
+  seat.
+
+  ONE KEY OPENS ONE SIT, and this is where that holds. The row is read
+  FOR UPDATE and written in the same transaction, so two sessions that
+  present one key at the same moment do not both come away with it.
+  The second reads the row the first already wrote, finds no entry,
+  and is refused with the sentence of R-12.14.
+
+  A standing key reaches here too, and it answers nil. `standing-key?`
+  is what the caller asks first, and a key the seat answers for by its
+  own credential is spent by nothing."
+  [eng seat-row key]
+  (when (and seat-row (get (inv/resources eng) :seat))
+    (let [now ((:now-fn eng))]
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (when-some [row (store/load-row (:storage eng) tx :seat
+                                          (str (:id seat-row))
+                                          {:for-update true})]
+            (when-some [entry (fire-key-entry row key now)]
+              (let [kept (into [] (remove #(= (str (:hash %))
+                                              (str (:hash entry))))
+                               (live-keys row now))]
+                (store/update-data! (:storage eng) tx :seat (str (:id seat-row))
+                                    (assoc (:data row) :fire_keys kept)
+                                    (:next-flip-at row))
+                true))))))))
+
 (defn seat-for-key
-  "The seat `named` names, when this key may sit in it — nil for
-  everything else (R-4 of waymark-fp62.7.23).
+  "The seat `named` names, when this key may sit in it. Nil for
+  everything else (R-4 of waymark-fp62.7.23, R-12.37).
 
-  TWO KEYS OPEN ONE SEAT. The seat's own `sitter_key` is the first,
-  and it is R-12.12 unchanged. The second is the CHAIR'S — the
-  `sitter_key` of the first model in `held_for` — which is what makes
-  one Routine for each model possible: the model's key sits in every
-  seat that model is the chair of, and the name is what says which
-  one this firing is.
+  THREE KEYS OPEN ONE SEAT. The seat's own and its chair's are the two
+  standing ones (`standing-key?`). The third is the key of one firing:
+  the engine minted it when the seat fired, the fire text carried it,
+  and it answers for this seat alone until a sit spends it or its
+  moment passes.
 
-  Nil is the only other answer, and the caller says the same sentence
-  for all of it: a name nobody answers to, a seat that is not active,
-  a key the seat and its chair both refuse. Saying which would turn
-  the door into an oracle over the house's offices, and the compare
-  is `key-matches?`, constant time, for the same reason."
+  Nil is the only other answer, and the caller says one sentence for
+  all of it: a name nobody answers to, a seat that is not active, a
+  key the seat and its chair both refuse, a firing's key already
+  spent. Saying which would turn the door into an oracle over the
+  house's offices."
   [eng named key]
   (when-some [key (some-> key str not-empty)]
     (when-some [seat (seat-named eng named)]
-      (let [wanted (.getBytes key StandardCharsets/UTF_8)]
-        (when (or (key-matches? seat wanted)
-                  (when-some [chair (and (get (inv/resources eng) :model)
-                                         (chair-of seat))]
-                    (some-> (store/with-tx (:storage eng)
-                              (fn [tx]
-                                (store/load-row (:storage eng) tx :model
-                                                chair {})))
-                            (key-matches? wanted))))
-          seat)))))
+      (when (or (standing-key? eng seat key)
+                (fire-key-held? eng seat key))
+        seat))))
 
 (defn sitter-id
   "The member id of the seat's sitter — `seat:<the seat's id>`.

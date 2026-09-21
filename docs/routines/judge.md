@@ -147,11 +147,12 @@ Never correct a verdict. A person does that.
 ## The instructions
 
 This seat uses the "One Routine for each model" way of
-docs/routines/ci-classifier.md. That file gives the four steps for the
-model row: mint the chair key, invoke `offer_key` on the MODEL row,
-make the one Routine with its prompt, and invoke `link` with the fire
-URL and the token. Do those steps one time for a model, and then do
-this one step for this seat.
+docs/routines/ci-classifier.md. That file gives the two steps for the
+model row: make the one Routine with its prompt, and invoke `link`
+with the fire URL and the token. The prompt holds no key, because the
+engine mints a key for each firing and the fire text carries it
+(spec-seat.md R-12.37). Do those steps one time for a model, and then
+do this one step for this seat.
 
 Invoke `restate` on the seat `ci-verdict-judge` with the field
 `instructions`, which holds at most 2000 characters. Write this text
@@ -257,8 +258,8 @@ on one kind, and each holds its own verdict on one row (R-13.6).
 3. The seat exists and is active, with the scope above, the judgment
    in its `judgment` field, and `held_for` naming the model the
    Routine runs.
-4. `offer_key` and `link` have been invoked on the model row
-   (ci-classifier.md, "One Routine for each model"), and the seat
+4. `link` has been invoked on the model row (ci-classifier.md, "One
+   Routine for each model"), and the seat
    carries its `instructions`.
 5. The environment carries the URL and the key, or it carries nothing
    and the hook holds the stop (inbox-clerk.md, "The environment").

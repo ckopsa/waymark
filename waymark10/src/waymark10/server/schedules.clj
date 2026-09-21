@@ -141,6 +141,13 @@
   into a Routine where they can go stale in the dark. The transition
   log keeps the prose alone, as it always did.
 
+  AND THE KEY (R-12.37). The text carries one line more, under the
+  line that names the seat: the key of this one firing, minted here by
+  `seats/hold-fire-key!` and kept on the seat row as a hash. The
+  Routine then holds no secret of its own, so a Routine made without
+  one is no longer a firing with nothing to sit with. The key is on
+  the wire one time and it is in no record at all.
+
   The fire itself is a second seam, `FireAdapter`, with one
   operation. It runs AFTER the commit, in this same consumer, when
   the seat's own `fire` door is heard: the door refuses what a door
@@ -1408,14 +1415,16 @@
   "routine-fire-payload")
 
 (defn fire-text
-  "The text ONE fire carries (R-3 of waymark-fp62.7.23): the seat's
-  instructions, the line
-  that names the seat, and the person's prose inside the block the
+  "The text ONE fire carries (R-3 of waymark-fp62.7.23, R-12.37): the
+  seat's instructions, the line
+  that names the seat, the line that carries this firing's own key,
+  and the person's prose inside the block the
   instructions name.
 
       <the instructions>
 
       Seat: <id> (<name>).
+      Key: <the key of this firing>
 
       <routine-fire-payload>
       <the prose>
@@ -1427,24 +1436,34 @@
   words and the prose is a person's, and a fire that quietly dropped
   half of either would be a run doing something nobody asked for.
 
+  THE KEY SITS UNDER THE SEAT LINE, and the two are one paragraph
+  because the sit takes both together: the session reads the seat it
+  is to name and the key it is to present, side by side, at the head
+  of the text. The key is the engine's own (`seats/hold-fire-key!`)
+  and the caller hands it in. Nil leaves the line out, which is the
+  firing of a seat whose Routine holds a standing key of its own.
+
   The payload block is there only when there is prose, so a cadence
-  wake reads the instructions and the seat line and stops. The
-  transition log keeps the prose alone, as it always did: this is
-  composed after the door closed, and the record is what a person
-  wrote."
-  [seat-row prose]
-  (let [prose (some-> prose str not-empty)]
-    (if-some [instructions (some-> (get-in seat-row [:data :instructions])
-                                   str not-empty)]
-      (str/join "\n\n"
-                (remove nil?
-                        [instructions
-                         (str "Seat: " (:id seat-row)
-                              " (" (get-in seat-row [:data :name]) ").")
-                         (when prose
-                           (str "<" fire-payload-tag ">\n" prose
-                                "\n</" fire-payload-tag ">"))]))
-      prose)))
+  wake reads the instructions, the seat line and the key, and stops.
+  The transition log keeps the prose alone, as it always did: this is
+  composed after the door closed, the record is what a person wrote,
+  and a key is in no record at all (R-12.11)."
+  ([seat-row prose] (fire-text seat-row prose nil))
+  ([seat-row prose key]
+   (let [prose (some-> prose str not-empty)
+         key (some-> key str not-empty)]
+     (if-some [instructions (some-> (get-in seat-row [:data :instructions])
+                                    str not-empty)]
+       (str/join "\n\n"
+                 (remove nil?
+                         [instructions
+                          (str "Seat: " (:id seat-row)
+                               " (" (get-in seat-row [:data :name]) ")."
+                               (when key (str "\nKey: " key)))
+                          (when prose
+                            (str "<" fire-payload-tag ">\n" prose
+                                 "\n</" fire-payload-tag ">"))]))
+       prose))))
 
 (defn fire!
   "Start one run of this row's linked Routine, and land the provider's
@@ -1704,10 +1723,21 @@
             ;; link is this row's, or else the chair's (R-5).
             (when-some [row (schedule-for-seat eng (:resource-id t))]
               (when-not (already-fired? row (:at t))
+                ;; AND THE KEY OF THIS ONE FIRING (R-12.37), minted
+                ;; here because here is where the text is composed. The
+                ;; engine mints 128 bits, the seat row keeps the hash,
+                ;; and the key itself is on the wire one time, in the
+                ;; line under the seat's. The hash is written BEFORE
+                ;; the POST goes out, so a session that sits inside the
+                ;; same second finds its key already held. A seat with
+                ;; no instructions mints nothing: its Routine holds a
+                ;; standing key of its own, and the text is the
+                ;; person's prose alone.
                 (fire! eng (fire-adapter-of eng) row
                        (fire-text seat-row
                                   (some-> (get-in t [:inputs :text])
-                                          str not-empty))
+                                          str not-empty)
+                                  (seats/hold-fire-key! eng seat-row (:at t)))
                        (:at t)
                        (link-of eng row seat-row)))))))
 

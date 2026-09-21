@@ -955,3 +955,98 @@
     (is (str/includes? mcp/sit-description "pass it as `seat`"))
     (is (str/includes? mcp/instructions "as `seat`")
         "and the connect-time instructions tell a firing to pass it")))
+
+;; ── 8. the key of ONE FIRING (R-12.37) ──────────────────────────────
+;;
+;; The two keys above are standing: a person mints one and pastes it
+;; into a Routine. The meal planner's first firing (2026-09-21) showed
+;; what that costs when the step is missed. The session read the
+;; seat's name off the fire text and had nothing to sit with. So the
+;; engine mints a key for each fire of a seat that has instructions,
+;; the fire text carries it, and this door spends it.
+
+(def ^:private fired-instructions
+  "What the seat's row holds, and what the fire text puts at the head
+  of every firing (R-12.33)."
+  "Read the fire text and do what it says. Sit in the seat it names, then walk the rows the sit hands you.")
+
+(defn- seat-row-of
+  "The stored seat row, read off storage the way the engine reads it."
+  [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx :seat (str id) {}))))
+
+(deftest a-firings-own-key-sits-one-time-and-then-answers-nothing
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [model]} (open-seat! eng)
+        seat (seat-of eng "fired-clerk" {:held_for [(:id model)]
+                                         :instructions fired-instructions})
+        ;; the fire is what mints the key. The schedules consumer is
+        ;; not running behind this bare handler, so the engine's own
+        ;; call stands in for the line the consumer composes.
+        key (seats/hold-fire-key! eng seat ((:now-fn eng)))
+        sit! (fn [args]
+               ;; each sit on a session of its own: a bind is per
+               ;; session, and a test that reused one would be asking
+               ;; a second question
+               (let [[sid _] (initialize! h)]
+                 (tool h (with-session sid) "waymark_sit" args)))]
+
+    (testing "the fire minted 128 bits, and the row keeps the hash alone"
+      (is (string? key))
+      (is (<= 22 (count key)))
+      (let [held (get-in (seat-row-of eng (:id seat)) [:data :fire_keys])]
+        (is (= 1 (count held)))
+        (is (= (seats/key-hash key) (str (:hash (first held)))))
+        (is (not (str/includes? (pr-str held) key)))))
+
+    (testing "the key and the seat the fire text named bind this session"
+      (let [r (sit! {:key key :seat "fired-clerk"})
+            answer (doc-of r)]
+        (is (false? (:isError r)) (text-of r))
+        (is (= "fired-clerk" (:seat answer)))
+        (is (= (seats/sitter-id seat) (:sitter answer)))
+        (is (string? (:grant answer)))
+        (is (string? (:sitting answer))
+            "and the sit opened the sitting this firing is counted against")))
+
+    (testing "a SECOND sit with the same key is refused, in the uniform
+              sentence: one key opens one sit"
+      (let [r (sit! {:key key :seat "fired-clerk"})]
+        (is (true? (:isError r)))
+        (is (= "No seat answers this key." (text-of r)))))
+
+    (testing "a firing's key answers for the seat it names, and for no
+              seat when the call names none"
+      (let [k (seats/hold-fire-key! eng seat ((:now-fn eng)))]
+        (let [r (sit! {:key k})]
+          (is (true? (:isError r)))
+          (is (= "No seat answers this key." (text-of r))
+              "the fire text names the seat on the line above the key"))
+        (is (= "fired-clerk" (:seat (doc-of (sit! {:key k :seat "fired-clerk"}))))
+            "and the same key still opens the seat it was minted for")))
+
+    (testing "a key this seat never minted says what it always said"
+      (let [r (sit! {:key "bm90LWEtbWludGVkLWtleS1hdC1hbGw" :seat "fired-clerk"})]
+        (is (true? (:isError r)))
+        (is (= "No seat answers this key." (text-of r)))))
+
+    (testing "and a Routine whose prompt carries a chair key still sits"
+      (inv/invoke! eng :model (:id model) :offer_key {:key chair-key}
+                   {:principal person})
+      (is (= "fired-clerk"
+             (:seat (doc-of (sit! {:key chair-key :seat "fired-clerk"})))))
+      (is (= "fired-clerk"
+             (:seat (doc-of (sit! {:key chair-key :seat "fired-clerk"}))))
+          "a standing key is spent by nothing, and it sits again"))))
+
+(deftest the-sit-tool-says-the-key-may-come-from-the-fire-text
+  (let [sit (first (filter #(= "waymark_sit" (:name %)) (mcp/listing)))]
+    (is (str/includes? (str (get-in sit [:inputSchema :properties :key
+                                         :description]))
+                       "`Key:`")
+        "the tool's own field says where a firing's key is")
+    (is (str/includes? mcp/sit-description "`Key:`"))
+    (is (str/includes? mcp/instructions "`Key:`")
+        "and the connect-time instructions say it too")))

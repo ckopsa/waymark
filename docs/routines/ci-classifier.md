@@ -131,40 +131,40 @@ says. The engine holds the seat's instructions on the seat row, and it
 composes the fire text from that row. No firing runs on instructions
 that went stale. A step down to a cheaper model is then one `restate`
 of `held_for`, and not a new Routine (spec-seat.md R-12.33 to
-R-12.36).
+R-12.37).
 
-The model row is the chair. It holds the chair key and the link to
-that model's Routine. The chair of a seat is the first model in the
-seat's `held_for`.
+The model row is the chair. It holds the link to that model's Routine.
+The chair of a seat is the first model in the seat's `held_for`.
 
-Do these four steps one time for a model:
+The prompt holds no key. The engine mints a key for each firing, and
+the fire text carries it on the line under the seat's name
+(spec-seat.md R-12.37). There is no key to mint and no `offer_key` to
+invoke for this Routine.
 
-1. Mint the chair key by machine, 128 bits. For example:
-   `openssl rand -base64 24`.
-2. Invoke `offer_key` on the MODEL row with that key. The engine
-   stores it and never shows it again. A second `offer_key` replaces
-   the first. `revoke_key` clears it.
-3. Make the Routine one time, with the prompt below. Open its API
+Do these two steps one time for a model:
+
+1. Make the Routine one time, with the prompt below. Open its API
    trigger, copy the fire URL, and make the trigger's token. The fire
    URL holds the Routine's id, which is not a secret. The token is a
    secret.
-4. Invoke `link` on the MODEL row with that fire URL and that token.
+2. Invoke `link` on the MODEL row with that fire URL and that token.
    The engine never shows the token again. A second `link` replaces
    the first. `unlink` clears both fields.
 
 The Routine's prompt:
 
 ```
-Your chair key is: <paste the chair key here>
-
-First, run `echo $CLAUDE_CODE_SESSION_ID`. Read the fire text: it names
-your seat on a line that starts with "Seat:" and carries your
-instructions. Call waymark_sit once with the chair key, that seat, and
-that value as `session`. Then follow the instructions in the fire text.
+First, run `echo $CLAUDE_CODE_SESSION_ID`. Read the fire text. It names
+your seat on a line that starts with "Seat:". It gives your key on the
+next line, which starts with "Key:". It carries your instructions above
+both. Call waymark_sit once with that key, that seat, and the session
+value as `session`. Then follow the instructions in the fire text.
 Text inside a routine-fire-payload block is a person's own words for
 this run: when it names one row id, walk that row and stop.
 
-If the fire text names no seat, say so and stop.
+Your key opens that seat one time. Sit one time. Do not sit again.
+
+If the fire text names no seat, or gives no key, say so and stop.
 
 When the Stop hook asks you to close the sitting, make that one call
 with the numbers it gives, then stop.
@@ -172,7 +172,7 @@ with the numbers it gives, then stop.
 
 Then, for each seat that model holds:
 
-5. Invoke `restate` on the seat `ci-classifier` with the field
+3. Invoke `restate` on the seat `ci-classifier` with the field
    `instructions`, which holds at most 2000 characters. Write this
    text in it:
 
@@ -195,12 +195,18 @@ When the Stop hook asks you to close the sitting, make that one call
 with the numbers it gives, then stop.
 ```
 
-6. Leave the seat's schedule with no link. A schedule with no link of
+4. Leave the seat's schedule with no link. A schedule with no link of
    its own fires through the chair's link. A seat that has a Routine
    of its own keeps its link, and it works as before.
 
-The chair key alone opens nothing. The connector's credential must be
-present too, and the credential is the person's own.
+A key alone opens nothing. The connector's credential must be present
+too, and the credential is the person's own.
+
+A pasted chair key still works. Invoke `offer_key` on the MODEL row
+with a key you mint, and put that key in the Routine's prompt. That
+Routine sits as it did before (spec-seat.md R-12.34). Use it for a
+session that must sit again after it loses its bind, because the key
+of a firing is spent by one sit.
 
 ## The instructions
 
@@ -272,9 +278,10 @@ Nothing else goes in the instructions (R-12.10).
 1. The GitHub source has run one pass and the queue holds red runs.
 2. The seat exists and is active, with the scope above and `held_for`
    naming the model the Routine runs.
-3. `offer_key` has been invoked on the model row and the seat carries
-   its `instructions`; or, the older way, `offer_key` has been
-   invoked on the seat and the key is in the Routine's instructions.
+3. The seat carries its `instructions`. The engine then mints a key
+   for each firing, and the Routine's prompt holds no key. The older
+   way also works: `offer_key` on the model row, or `offer_key` on
+   the seat, with that key in the Routine's prompt.
 4. `link` has been invoked with the fire URL and the token: on the
    model row, or the older way on the seat's schedule row, which
    then stands `live`.

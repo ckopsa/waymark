@@ -19,15 +19,15 @@ Written in ASD-STE100 Simplified Technical English.
 
 ## Step 1: the chair
 
-Do the four steps of "One Routine for each model" in
+Do the two steps of "One Routine for each model" in
 docs/routines/ci-classifier.md. Do them one time for a model. Do not
 repeat them for this seat.
 
-The four steps are the chair key, `offer_key` on the MODEL row, the
-one Routine with its prompt, and `link` with the fire URL and the
-token. The chair of this seat is the first model in its `held_for`.
-A seat with no schedule link of its own fires through the chair's
-link (R-12.36).
+The two steps are the one Routine with its prompt, and `link` with the
+fire URL and the token. The prompt holds no key: the engine mints a
+key for each firing, and the fire text carries it (R-12.37). The chair
+of this seat is the first model in its `held_for`. A seat with no
+schedule link of its own fires through the chair's link (R-12.36).
 
 ## Step 2: the seat
 
@@ -240,8 +240,9 @@ firings. The chat is the seat's memory. Each firing reads the plan,
 reads the chat, and finds the stage from the messages the seat sent
 before. Each message names the week by its first day.
 
-1. The Routine's session sits with the chair key. The engine binds
-   the session to this seat. The sit answers the charter and at most
+1. The Routine's session reads the `Key:` line of the fire text and
+   sits with that key and the seat the `Seat:` line names. The engine
+   binds the session to this seat. The sit answers the charter and at most
    two `plan` rows (R-12.28): the draft plans, under the scope
    entry's filter.
 2. Stage 1. No request for this week is in the chat. The session
@@ -301,9 +302,9 @@ one the seat's own work clears.
    A Telegram chat titled `Meal plans` exists, with everyone who
    decides the week in it, and the house's Telegram connection can
    read it and write to it.
-4. `offer_key` and `link` have been invoked on the model row
-   (ci-classifier.md, "One Routine for each model"), and the seat
-   carries its `instructions`.
+4. `link` has been invoked on the model row (ci-classifier.md, "One
+   Routine for each model"), and the seat carries its `instructions`.
+   The Routine's prompt holds no key.
 5. The environment carries the URL and the key, or it carries nothing
    and the hook holds the stop (inbox-clerk.md, "The environment").
 6. A person watches the first firing. The person reads the sitting
