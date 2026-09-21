@@ -45,6 +45,7 @@
             [mealplan10.main :as main]
             [next.jdbc :as jdbc]
             [waymark10.server.engine :as engine]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store]
@@ -157,7 +158,11 @@
   "128 bits of base64url — what a machine mints and no hand types."
   "bWVhbC1wbGFubmVyLWNoYWlyLWtleS0x")
 
-(def ^:private mcp-session "meal-planner-routine-run-1")
+(def ^:dynamic *sid*
+  "The MCP session the Routine's run holds: opened on the engine the
+  way the transport's initialize opens one, so `waymark_sit` can bind
+  the sitter to it and every later call can run as the sitter."
+  nil)
 
 (defn- req
   ([method uri] (req method uri nil colton))
@@ -228,7 +233,8 @@
             (inv/invoke! eng :seat seat-id :offer_key {:key chair-key}
                          {:principal person}))
           (binding [*eng* eng *h* h *made* made *seat-id* seat-id
-                    *model-id* (id-of model)]
+                    *model-id* (id-of model)
+                    *sid* (mcp/open-session! eng)]
             (f)))
         (finally (pg/close! st))))))
 
@@ -311,20 +317,36 @@
   its member row, its grant, its sitting — the engine makes itself."
   []
   (let [r (mcp/call-tool *eng* (mcp/door *eng*)
-                         {:principal delegate :mcp-session-id mcp-session}
+                         {:principal delegate :mcp-session-id *sid*}
                          "waymark_sit" {:key chair-key})
         text (str (get-in r [:content 0 :text]))]
     (is (false? (:isError r)) text)
     (wire/read-json text)))
 
+(defn- sitter-session
+  "The session a BOUND MCP session runs as, built the way the transport
+  builds it for every call after the bind (routes/mcp.clj's
+  `sitter-session`): the sitter's principal off the binding
+  `waymark_sit` wrote, and the sitter's own visibility, the worn seat
+  grant or the bootstrap surface when nothing stands. The in-process
+  door takes the session the transport would have resolved, so a test
+  that hands it the delegate's would run unleashed."
+  []
+  (let [bound (get-in @(:mcp-sessions *eng*) [*sid* :bound])
+        sitter (:sitter bound)]
+    (is (some? sitter) "waymark_sit bound this session to the seat's sitter")
+    {:principal sitter
+     :mcp-session-id *sid*
+     :visibility (or (grants/worn-visibility *eng* sitter)
+                     (grants/bootstrap-visibility *eng* sitter))}))
+
 (defn- tool!
-  "One tool call on the sitter's own session: the session `waymark_sit`
-  bound, so every call below is under the seat's leash and nobody
-  else's. The answer carries the parsed document under :doc, whether
-  it is a row, a page or a refusal."
+  "One tool call as the sitter: the session `waymark_sit` bound, so
+  every call below is under the seat's leash and nobody else's. The
+  answer carries the parsed document under :doc, whether it is a row,
+  a page or a refusal."
   [tool-name args]
-  (let [r (mcp/call-tool *eng* (mcp/door *eng*)
-                         {:principal delegate :mcp-session-id mcp-session}
+  (let [r (mcp/call-tool *eng* (mcp/door *eng*) (sitter-session)
                          tool-name args)
         text (str (get-in r [:content 0 :text]))]
     (assoc r :text text
