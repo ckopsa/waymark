@@ -314,7 +314,12 @@
            [:int {:min 40 :max 1000}])
     (entry :consequence {:optional true} [:maybe [:string {:max 60}]])
     (entry :notes {:optional true} [:maybe [:string {:max 1200}]])]
-   :filterable {:state #{:eq :in}}
+   ;; `name` is unique, and a unique field is a filterable one: the
+   ;; index stands on the promoted column. `subject_kind` is how a
+   ;; reader asks which judges stand over one kind (R-6).
+   :filterable {:state #{:eq :in}
+                :name #{:eq}
+                :subject_kind #{:eq}}
    :sortable {:fields [:name :created_at] :default "name"}
    :links [{:rel "verdicts" :kind :verdict
             :href "/api/verdicts?judgment={id}"

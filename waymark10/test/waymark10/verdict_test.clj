@@ -48,11 +48,16 @@
 (def ^:private seat-id "seat-ari")
 
 (defn- call!
+  ;; a query rides in :query-string, never inside :uri — a router
+  ;; handed "/api/verdicts?state=said" as a path answers not-found,
+  ;; and every count below would read nil
   [eng method uri & {:keys [body headers]}]
-  (let [resp ((engine/handler eng)
-              (cond-> {:request-method method :uri uri
+  (let [[path query] (str/split (str uri) #"\?" 2)
+        resp ((engine/handler eng)
+              (cond-> {:request-method method :uri path
                        :headers (merge {"content-type" "application/json"}
                                        as-mom headers)}
+                query (assoc :query-string query)
                 body (assoc :body (wire/write-json body))))]
     (assoc resp :doc (some-> (:body resp) wire/read-json))))
 
