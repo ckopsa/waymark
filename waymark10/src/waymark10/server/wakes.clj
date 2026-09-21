@@ -72,6 +72,27 @@
   asks the same question of every pending row on a clock (the gap is
   a duration, and nothing commits when a duration ends).
 
+  ── the settle, and which edge a wake fires on ─────────────────────
+
+  The damper above holds the matches AFTER the first one. The first
+  one still fires at once, which is the LEADING edge, and for a queue
+  that is right: the row is there and the work is to walk it.
+
+  A conversation is the other case (waymark-fp62.17). The first reply
+  in a family chat is the middle of the week's decision, not the end
+  of it, and a seat woken by it reads a chat that is half answered.
+  So an entry may name `settle_seconds`, and such an entry fires on
+  the TRAILING edge. A match writes `wake_pending` and `wake_due_at`
+  (the match's own instant plus the settle) on the schedule row and
+  fires NOTHING, not even the first one. A later match moves
+  `wake_due_at` forward. `release!` then holds the wake until that
+  moment has passed, beside the walls it already keeps, and the tick
+  is what asks: the settle is a duration, so the answer comes within
+  one tick of the moment it ends. The release fires with no text, as
+  every release does, so the session walks the queue.
+
+  An entry with no `settle_seconds` behaves exactly as it always did.
+
   ── the replay ─────────────────────────────────────────────────────
 
   At-least-once means the drain re-delivers, so every fire this file
@@ -330,9 +351,18 @@
   [kind n size-field size]
   (wire/write-json {:kind (name kind) :count n size-field size}))
 
-(defn- wake-text-for
-  "The text this seat's fire carries for this transition, or nil when
-  the transition wakes it not at all.
+(defn- settle-of
+  "The entry's quiet time in seconds, or nil for an entry that fires
+  on the match (waymark-fp62.17). Read off the entry that MATCHED, so
+  one settled entry does not settle the seat's other entries."
+  [e]
+  (some-> (:settle_seconds e) long))
+
+(defn- wake-for
+  "What this transition asks of this seat, as `{:text … :settle …}`,
+  or nil when the transition wakes it not at all. The text is what
+  the fire carries and the settle is the matched entry's own quiet
+  time, which decides WHICH EDGE the wake fires on.
 
   A TRANSITION entry that matches answers with the transition
   (R-12.22), once the row that moved is under the entry's filter
@@ -358,23 +388,28 @@
   it heard."
   [eng entries t]
   (let [matched (matching-entries entries (:kind t) (:action t))]
-    (if (some (fn [e]
-                (and (not (count-entry? e))
-                     (moved-under? eng (:kind t) (:resource-id t) (:filter e))))
+    (or (some (fn [e]
+                (when (and (not (count-entry? e))
+                           (moved-under? eng (:kind t) (:resource-id t)
+                                         (:filter e)))
+                  {:text (wake-text t) :settle (settle-of e)}))
               matched)
-      (wake-text t)
-      (some (fn [e]
-              (when (count-entry? e)
-                (when-some [n (count-under eng (keyword (name (:kind e)))
-                                           (:filter e))]
-                  (let [n (long n)]
-                    (if-some [at-least (:at_least e)]
-                      (when (>= n (long at-least))
-                        (count-text (:kind e) n :at_least (long at-least)))
-                      (let [at-most (long (:at_most e))]
-                        (when (<= n at-most)
-                          (count-text (:kind e) n :at_most at-most))))))))
-            matched))))
+        (some (fn [e]
+                (when (count-entry? e)
+                  (when-some [n (count-under eng (keyword (name (:kind e)))
+                                             (:filter e))]
+                    (let [n (long n)
+                          settle (settle-of e)]
+                      (if-some [at-least (:at_least e)]
+                        (when (>= n (long at-least))
+                          {:text (count-text (:kind e) n :at_least
+                                             (long at-least))
+                           :settle settle})
+                        (let [at-most (long (:at_most e))]
+                          (when (<= n at-most)
+                            {:text (count-text (:kind e) n :at_most at-most)
+                             :settle settle})))))))
+              matched))))
 
 ;; ── the damper ──────────────────────────────────────────────────────
 
@@ -400,13 +435,15 @@
 (defn- stamp-fired!
   "The wake consumer's own clock (see `fired-recently?`), by the same
   maintenance write as the pending flag: no version bump, no
-  transition. Clears the flag in the same write when asked."
+  transition. Clears the flag in the same write when asked, and the
+  settle's due moment with it. The wake that was waiting has gone
+  out, so nothing is due any more."
   [eng schedule-row ^Instant at clear-pending?]
   (store/with-tx (:storage eng)
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
                           (cond-> (assoc (:data schedule-row) :wake_fired_at (str at))
-                            clear-pending? (dissoc :wake_pending))
+                            clear-pending? (dissoc :wake_pending :wake_due_at))
                           (:next-flip-at schedule-row))))
   nil)
 
@@ -429,6 +466,47 @@
   (when-not (true? (get-in schedule-row [:data :wake_pending]))
     (write-pending! eng schedule-row true))
   nil)
+
+(defn- due-at
+  "The moment a settled wake is due, as the row should hold it after
+  this match: the match's own instant plus the entry's quiet time, or
+  the moment already on the row when that one is LATER.
+
+  Forward only, and never back (waymark-fp62.17). The settle exists
+  to wait for the matches to stop, so a second entry with a shorter
+  quiet time must not pull the wake in front of the first entry's.
+  With one entry, which is the ordinary seat, the two readings are
+  the same moment."
+  ^Instant [schedule-row ^Instant at settle-seconds]
+  (let [asked (.plusSeconds at (long settle-seconds))
+        held (instant-of (get-in schedule-row [:data :wake_due_at]))]
+    (if (and held (.isAfter ^Instant held asked)) held asked)))
+
+(defn- mark-settling!
+  "A match on an entry that SETTLES: the seat is not woken now, and
+  it is not woken on the first match at all (waymark-fp62.17). The
+  match remembers itself as `wake_pending`, exactly as a damped match
+  does, and writes `wake_due_at` beside it, so `release!` knows the
+  wake is not ready. One maintenance write, and no transition, for
+  `write-pending!`'s reason."
+  [eng schedule-row ^Instant due]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                          (assoc (:data schedule-row)
+                                 :wake_pending true
+                                 :wake_due_at (str due))
+                          (:next-flip-at schedule-row))))
+  nil)
+
+(defn- settled?
+  "Has the quiet time passed? A row with no `wake_due_at` has nothing
+  to wait for, which is every wake an entry without `settle_seconds`
+  left behind."
+  [schedule-row ^Instant at]
+  (if-some [due (instant-of (get-in schedule-row [:data :wake_due_at]))]
+    (not (.isBefore at ^Instant due))
+    true))
 
 ;; ── the fire ────────────────────────────────────────────────────────
 
@@ -456,7 +534,7 @@
 
 (defn- wake-seat!
   "One active seat, one transition it asked to be woken by, and the
-  text that transition earned (`wake-text-for`: the row that moved,
+  text that transition earned (`wake-for`: the row that moved,
   or a count wake's count).
 
   No schedule, and no Routine to fire — the row's own link or the
@@ -467,15 +545,28 @@
   would set a flag on a row that has no way to clear it, since the
   release fires through the same refused door.
 
+  A SETTLED entry, one that names `settle_seconds`, fires nothing on
+  the match. It moves the due moment forward instead
+  (waymark-fp62.17). That branch is asked BEFORE the damper. The
+  damper's business is the matches after the FIRST fire, and a
+  settled entry has no first fire: the leading edge is the very thing
+  it gives up.
+
   Damped — an open sitting, or a fire inside this seat's gap — the
   match is REMEMBERED as `wake_pending` and nothing goes out.
   → true when a fire went out."
-  [eng seat t ^Instant at text]
+  [eng seat t ^Instant at {:keys [text settle]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
     (when (schedules/linked? eng row)
-      (if (or (some? (seats/open-sitting-for-seat eng (:id seat)))
-              (fired-recently? row (:interval seat) at))
+      (cond
+        settle
+        (mark-settling! eng row (due-at row at settle))
+
+        (or (some? (seats/open-sitting-for-seat eng (:id seat)))
+            (fired-recently? row (:interval seat) at))
         (mark-pending! eng row)
+
+        :else
         (when (fire! eng (:id seat) text
                      (str "wake:" (:id seat) ":" (:id t)))
           (stamp-fired! eng row at false)
@@ -487,15 +578,17 @@
   than one row (R-12.22), and then the flag is cleared.
 
   Silence when there is nothing pending, when the seat is not active,
-  when a sitting is still open, when the gap has not passed, or when
-  nobody linked the row or its chair. The flag is cleared only after
-  a fire went out, so a seat behind a wall keeps its pending wake
-  until the wall lifts. → true when a fire went out."
+  when a sitting is still open, when the gap has not passed, when the
+  settle has not passed (`settled?`, waymark-fp62.17), or when nobody
+  linked the row or its chair. The flag is cleared only after a fire
+  went out, so a seat behind a wall keeps its pending wake until the
+  wall lifts. → true when a fire went out."
   [eng seat-row schedule-row key ^Instant at]
   (when (and seat-row schedule-row
              (get-in schedule-row [:data :wake_pending])
              (= :active (:state seat-row))
              (schedules/linked? eng schedule-row)
+             (settled? schedule-row at)
              (not (fired-recently? schedule-row (interval-of seat-row) at))
              (nil? (seats/open-sitting-for-seat eng (:id seat-row))))
     (when (fire! eng (:id seat-row) nil key)
@@ -517,9 +610,9 @@
 
 (defn sweep-pending!
   "Every schedule row carrying a pending wake, released where the
-  damper has lifted. The tick's whole body, and the one call a test
-  makes instead of waiting for it. → the number of fires that went
-  out."
+  damper has lifted and the settle has passed. The tick's whole body,
+  and the one call a test makes instead of waiting for it. → the
+  number of fires that went out."
   [eng]
   (let [at (now eng)]
     (reduce (fn [n row]
@@ -565,9 +658,9 @@
         :else
         (let [at (now eng)]
           (doseq [seat (seats-of eng cache)
-                  :let [text (wake-text-for eng (:wake-on seat) t)]
-                  :when text]
-            (wake-seat! eng seat t at text)))))
+                  :let [wake (wake-for eng (:wake-on seat) t)]
+                  :when wake]
+            (wake-seat! eng seat t at wake)))))
     (catch Exception e
       (warn! "transition " (:id t) " could not be handled — " (ex-message e))
       nil))

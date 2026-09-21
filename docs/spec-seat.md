@@ -625,6 +625,7 @@ loop script.
 | `last_run_url` | string, optional | the provider's page for the last run. Engine-written. |
 | `wake_pending` | boolean, optional | a match waits for the damper to lift (R-12.22). Engine-written. |
 | `wake_fired_at` | instant, optional | when the engine last fired the seat for a matching transition (R-12.22). Engine-written. |
+| `wake_due_at` | instant, optional | when a waiting wake may go out, for an entry that settles (R-12.22). Engine-written. |
 
 States: `pending` (no copy yet), `live`, `paused`, `broken` (the
 adapter could not reach the provider; the note says why). The seat
@@ -1249,6 +1250,29 @@ the damper stops sets `wake_pending` on the schedule row. The next
 fire after the damper lifts names no row, so the session walks the
 queue. A replay after a restart is harmless, because the
 open-sitting check stops the second fire.
+
+An entry may settle. The entry gains an optional field,
+`settle_seconds`, a whole number from 1 to 604800. The entries above
+fire on the first match, which is the leading edge. An entry with
+`settle_seconds` fires on the trailing edge. A match on such an entry
+does not fire the seat. It sets `wake_pending` on the schedule row,
+and it writes `wake_due_at`, which is the match's own instant plus
+`settle_seconds`. A later match moves `wake_due_at` forward. The
+engine fires the seat after `wake_due_at` has passed and after the
+damper has lifted. That fire names no row, so the session walks the
+queue. The fire clears `wake_pending` and `wake_due_at` together. The
+engine asks on a clock, so a settle of 60 seconds lands within 90. A
+count entry may settle too, because a count is a level, and a settled
+level is a level that held for that long. A seat's computed default
+entry carries no settle. An entry with no `settle_seconds` fires on
+the match, as it always did. The engine must refuse a
+`settle_seconds` below 1, at `create` and at `restate`.
+
+A conversation is what the settle is for. The house mirrors a family
+chat as one row, and each reply moves that row. The first reply is
+the middle of the conversation and not the end of it, so a seat woken
+by it reads a chat that is half answered. A settle of 900 seconds
+wakes the seat when the replies stop.
 
 The inbox source has no fire code. The cadence stays for a seat with
 no `wake_on`. Three things begin a sitting: the cadence, a person's

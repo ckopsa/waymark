@@ -1310,6 +1310,19 @@
 ;;              one thing nothing could wake a seat on before: a
 ;;              planner's work begins when no plan is waiting, and a
 ;;              cadence was the only thing that could start it.
+;;   settle_seconds
+;;              the quiet time before the seat wakes
+;;              (waymark-fp62.17). Every other entry fires on the
+;;              LEADING edge: the first match wakes the seat. An
+;;              entry with a settle fires on the TRAILING edge
+;;              instead. A match writes the moment the wake is due on
+;;              the schedule row, and a later match moves that moment
+;;              forward, so the seat wakes after the matches stop. A
+;;              family chat is the case: the first reply is the
+;;              middle of a conversation, and a seat woken by it
+;;              reads a chat that is half answered. A count entry may
+;;              settle too, because a count is a LEVEL, and a settled
+;;              level is a level that held for that long.
 ;;
 ;; An entry names ONE of the two sizes. Both in one entry is not a
 ;; narrower wake, it is two questions the engine cannot answer with
@@ -1350,7 +1363,13 @@
               :examples [0]
               :x-display {:label "Rows left before it wakes"
                           :help "The size that wakes this seat as the queue DRAINS. The engine counts the rows matching this entry when one of its actions commits, and fires once the count is at or below this number; the fire names no row, so the session walks the queue and the charter says what to make. Zero wakes the seat when the last matching row leaves, which is the seat whose work begins on an empty queue. An entry names at_least or at_most, and never both."}}
-    [:int {:min 0}]]])
+    [:int {:min 0}]]
+   [:settle_seconds {:optional true
+                     :examples [900]
+                     :x-display
+                     {:label "Quiet time before it wakes, in seconds"
+                      :help "How long the matches must stop before this entry wakes the seat. A match does not fire the seat; it moves the wake forward by this many seconds, and the seat wakes when nothing has matched for that long. The fire names no row, so the session walks the queue. Use it for a conversation, where the first message is not the whole of it. Omit it and the first match wakes the seat at once."}}
+    [:int {:min 1 :max 604800}]]])
 
 (defn- wake-entry-one-size?
   "R-12.24's one rule a `:map` cannot say: an entry names at_least or
@@ -1571,7 +1590,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -2827,7 +2846,11 @@
   The count wake (R-12.24) asks nothing of the default: the computed
   entry carries no `at_least`, so it stays the transition wake it has
   always been — a walk seat wakes on the row that arrived, and a seat
-  that wants a batch says how big a batch is."
+  that wants a batch says how big a batch is. The settle
+  (waymark-fp62.17) asks nothing of it either: the computed entry
+  carries no `settle_seconds`, so the default wakes on the row that
+  arrived and not after the arrivals stop. A seat that wants the
+  trailing edge writes the entry and says how long the quiet is."
   ([seat-row] (effective-wake-on seat-row nil))
   ([seat-row walk-rdef]
    (let [written (get-in seat-row [:data :wake_on])

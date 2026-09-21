@@ -214,6 +214,59 @@
              (get-in (row-of :seat (:id seat)) [:data :wake_on]))
           "and the stored entry did not move"))))
 
+;; ── R-12.22 · a wake entry may SETTLE (bead waymark-fp62.17) ───────
+;;
+;; Every other entry fires on the first match. An entry that names
+;; `settle_seconds` fires after the matches STOP, so the quiet time
+;; must be a real duration. Zero seconds is no quiet at all, and the
+;; schema is what says so, at both write doors.
+
+(deftest a-settled-wake-entry-names-a-quiet-time-of-one-second-or-more
+  (testing "a seat is opened with a settle, and the entry is stored"
+    (let [seat (open-seat! "wakes-when-it-goes-quiet"
+                           {:wake_on [{:kind "model"
+                                       :actions ["retire"]
+                                       :settle_seconds 900}]})]
+      (is (= [{:kind "model" :actions ["retire"] :settle_seconds 900}]
+             (get-in (row-of :seat (:id seat)) [:data :wake_on])))))
+
+  (testing "a settle of zero seconds is refused at create"
+    (let [p (refusal #(open-seat! "wakes-with-no-quiet"
+                                  {:wake_on [{:kind "model"
+                                              :actions ["retire"]
+                                              :settle_seconds 0}]}))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "settle_seconds")
+          "the refusal names the field that failed")
+      (is (str/includes? (pr-str (:errors p)) "wake_on")
+          "and it lands on the field a person would look at")))
+
+  (testing "and at restate, on a seat that was born with a real one"
+    (let [seat (open-seat! "wakes-after-a-quarter-hour"
+                           {:wake_on [{:kind "model"
+                                       :actions ["retire"]
+                                       :settle_seconds 900}]})
+          p (refusal #(restate! (:id seat)
+                                (restate-body
+                                 {:wake_on [{:kind "model"
+                                             :actions ["retire"]
+                                             :settle_seconds 0}]})))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (= [{:kind "model" :actions ["retire"] :settle_seconds 900}]
+             (get-in (row-of :seat (:id seat)) [:data :wake_on]))
+          "and the stored entry did not move")))
+
+  (testing "a COUNT entry may settle too: a count is a level, and a
+            settled level is a level that held for that long"
+    (let [seat (open-seat! "wakes-when-the-queue-stays-empty"
+                           {:wake_on [{:kind "model"
+                                       :actions ["retire"]
+                                       :at_most 0
+                                       :settle_seconds 60}]})]
+      (is (= [{:kind "model" :actions ["retire"]
+               :at_most 0 :settle_seconds 60}]
+             (get-in (row-of :seat (:id seat)) [:data :wake_on]))))))
+
 (deftest a-walk-names-a-kind-whose-queue-filters-itself
   ;; bead waymark-fp62.6.3.10, R-12.32: the guard asked for a default
   ;; filter over STATE, which refused every kind that keeps its
