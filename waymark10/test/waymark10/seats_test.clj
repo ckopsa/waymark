@@ -865,14 +865,15 @@
   (testing "the field is :secret, which is what conceals it everywhere"
     (is (contains? (schema/secret-fields (:schema seats/seat)) :fire_keys)))
 
-  (testing "a create carrying fire_keys is refused, and names the fence"
+  (testing "a create carrying fire_keys is refused: the door does not declare the field"
     (let [p (refusal #(inv/create!
                        *eng* :seat
                        (seat-body "keys-at-birth"
                                   {:fire_keys [{:hash "not-a-hash"
                                                 :expires_at "2099-01-01T00:00:00Z"}]})
                        {:principal colton}))]
-      (is (= :fire-keys-not-written-by-hand (:guard p)))))
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "fire_keys"))))
 
   (testing "and a restate carrying them is refused on a seat born honest"
     (let [seat (open-seat! "keys-later")
@@ -880,7 +881,8 @@
                                 (restate-body
                                  {:fire_keys [{:hash "not-a-hash"
                                                :expires_at "2099-01-01T00:00:00Z"}]})))]
-      (is (= :fire-keys-not-written-by-hand (:guard p)))
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "fire_keys"))
       (is (nil? (fire-keys-of (:id seat))) "and the seat holds none"))))
 
 (deftest a-fire-mints-one-key-and-one-sit-spends-it

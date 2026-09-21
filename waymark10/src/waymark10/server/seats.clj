@@ -283,28 +283,6 @@
     (t/deny)
     (t/allow)))
 
-;; THE FIRING'S OWN KEYS HAVE NO WRITING DOOR AT ALL (R-12.37). The
-;; engine mints one key for each fire of a seat that has instructions,
-;; and the row keeps the hash alone. A hand that could write the list
-;; could put its own hash there and sit in the office whenever it
-;; liked. This is a SECOND guard and not one more field on the one
-;; above, because that guard stands at the model's create door too and
-;; a model holds no fire keys: a guard judges a field of the door it
-;; stands on, and a guard naming a field that door does not declare is
-;; a definition error (checks/check-create-guards).
-(g/defguard fire-keys-not-written-by-hand
-  {:judges [:fire_keys]
-   ;; :open where `key-not-written-by-hand` needs none: that field's
-   ;; own length bounds tell a client what it wants, and a list of
-   ;; hashes has no such bound. Nothing tells a client what the field
-   ;; wants because no client may write it at all.
-   :open "The keys of the firings are the engine's own; no form asks for one and no client fills one in. The refusal is the whole of what a hand needs to know."
-   :explain "The keys of the firings are the engine's own. A create or a restate may not carry fire_keys. Each fire mints one key, and the fire text carries it."}
-  [_row inp _ctx]
-  (if (contains? inp :fire_keys)
-    (t/deny)
-    (t/allow)))
-
 ;; THE CHAIR'S LINK HAS ONE WRITING DOOR TOO (R-2 of
 ;; waymark-fp62.7.23). The model kind declares no create-schema of
 ;; its own, so its row schema IS its create door, and the fence the
@@ -1431,10 +1409,9 @@
   sit hashes what it was given and compares; a house whose seat rows
   leaked would leak no key.
 
-  Spelled one time and worn three times: the row, the create door and
-  the restate. The two doors declare the field only so
-  `fire-keys-not-written-by-hand` has something to refuse. Three
-  spellings of one shape would be three things to keep in step."
+  Worn by the row alone. Neither the create door nor the restate
+  declares the field, and a closed map refuses an unknown key: that
+  omission is the fence, the way the schedule fences its link."
   [:vector
    [:map
     [:hash {:x-display
@@ -1648,10 +1625,14 @@
     ;; fire and per sit would double the log of a run and put a
     ;; credential's record in it twice, so the list is a maintenance
     ;; write (`hold-fire-key!` and `spend-fire-key!`, the sitting
-    ;; counters' own spelling) and `fire-keys-not-written-by-hand` is
-    ;; the fence at the two doors a hand can reach. :secret, the
-    ;; `sitter_key` posture: the list leaves the engine in no
-    ;; projection, scoped or not.
+    ;; counters' own spelling). The fence at the two doors a hand can
+    ;; reach is OMISSION, the schedule's own way with its link:
+    ;; neither the create door nor the restate declares the field, so
+    ;; a body that carries it is refused as an unknown key. A guard
+    ;; here would have had to say what the field wants, and a list of
+    ;; hashes wants nothing from anybody. :secret, the `sitter_key`
+    ;; posture: the list leaves the engine in no projection, scoped
+    ;; or not.
     [:fire_keys {:optional true :secret true
                  :x-display
                  {:hidden true
@@ -1796,16 +1777,10 @@
                   {:hidden true
                    :label "Sitter key"
                    :spelled-by-hand "Refused here: the key is offer_key's to write."}}
-     [:maybe [:string {:min 22 :max 128}]]]
-    ;; the same fence, one field over (R-12.37): declared so
-    ;; `fire-keys-not-written-by-hand` has something to name, :secret
-    ;; so no form asks for it and no advertised body carries it
-    [:fire_keys {:optional true :secret true
-                 :x-display
-                 {:hidden true
-                  :label "Keys of the firings"
-                  :spelled-by-hand "Refused here: the engine mints a key at each fire, and no hand writes one."}}
-     [:maybe fire-keys-schema]]]
+     [:maybe [:string {:min 22 :max 128}]]]]
+   ;; `fire_keys` is NOT declared here (R-12.37): the create door is
+   ;; a closed map, and a body that carries the field is refused as
+   ;; an unknown key. That omission is the fence.
    :filterable {:state #{:eq :in}
                 :name #{:eq}}
    :sortable {:fields [:name] :default "name"}
@@ -1824,7 +1799,6 @@
    :create-guards [a-person
                    not-a-sitter
                    key-not-written-by-hand
-                   fire-keys-not-written-by-hand
                    one-seat-spelling
                    grants/scope-names-real-kinds
                    grants/scope-names-real-actions
@@ -1955,15 +1929,11 @@
                            {:hidden true
                             :label "Sitter key"
                             :spelled-by-hand "Refused here: the key is offer_key's to write."}}
-              [:maybe [:string {:min 22 :max 128}]]]
-             ;; and the firing's own keys, for the same reason
-             ;; (R-12.37): a fence must have something to name
-             [:fire_keys {:optional true :secret true
-                          :x-display
-                          {:hidden true
-                           :label "Keys of the firings"
-                           :spelled-by-hand "Refused here: the engine mints a key at each fire, and no hand writes one."}}
-              [:maybe fire-keys-schema]]]
+              [:maybe [:string {:min 22 :max 128}]]]]
+     ;; `fire_keys` is not declared here either (R-12.37): the
+     ;; closed map refuses it, and `restate-seat` writes only the
+     ;; restatable fields, so the keys a firing holds survive a
+     ;; restate the way `sitter_key` does
      :record true
      ;; sitter_key is NOT prefilled and cannot be: the draft view
      ;; serves prefill from the raw row, and resource/check-secret!
@@ -1979,7 +1949,6 @@
      :guards [a-person
               not-a-sitter
               key-not-written-by-hand
-              fire-keys-not-written-by-hand
               grants/scope-names-real-kinds
               grants/scope-names-real-actions
               grants/scope-filters-are-filterable
@@ -2202,7 +2171,7 @@
     "R-4.9's own-surface for sitters is NOT declared here, and wave two settled why: `:own-surface :by` names a field of the row being read, and a sitter is identified through `grant.seat` — a field of the GRANT. A seat with a sitter column would be a second copy of the grant, so the courtesy is spelled where the sitter is actually identified: the seat resolve adds the citing seat's row as a synthetic, unstored scope entry (`{kind \"seat\", ids [<this seat>], actions []}`), and `:kind?`, `:row?`, `:field?` and `:ids-of` then answer for it exactly as they answer for anything granted. One admission algebra, read-only, one row — and `:whole-kind?` stays false, because one row is not the collection."
     "R-4.6's consequence sentence is kept verbatim, `{into}` included. The framework does not interpolate a consequence (render substitutes only a per-origin map, never a template), so the brace renders literally. The alternative was rewording the one sentence the spec pins, and a spec-pinned string is worth more than a tidy dialog."
     "`sitter_key` IS DECLARED on the create door and on `restate`, which reads at first like the opposite of this file's write fence. It is the fence: a guard may judge only a field of the door it stands on (checks/check-create-guards and check-guard-declarations are definition ERRORS otherwise), so a `key-not-written-by-hand` that could be READ had to have something to name — members.clj's `reentry-not-written-by-hand` has it for free, because that kind has no separate create-schema. Both spellings carry `{:secret true}`, so the advertised create body drops the field (collections.clj unions the row schema's secret set with the create model's for exactly this), no form asks for it, and the usability policies skip it. What the caller gains over silent omission is the refusal's own sentence, which names the door that writes the key instead."
-    "`fire_keys` is written by NO door (R-12.37), where `sitter_key` has two. The fire mints one key and the sit spends it, and both are maintenance writes (`hold-fire-key!`, `spend-fire-key!`) rather than transitions. Two reasons, and the second is the stronger. A transition for each fire and each sit would double the log of one run, beside the `fire` the log already holds. And a recorded transition persists its raw inputs (R-12.19 keeps the person's prose alone), so a door here would put a credential's own record in the log twice per run. The field is `:secret` and it is declared at the create door and at the restate for `sitter_key`'s reason exactly: a fence must have something to name, and `fire-keys-not-written-by-hand` is the sentence a hand reads."
+    "`fire_keys` is written by NO door (R-12.37), where `sitter_key` has two. The fire mints one key and the sit spends it, and both are maintenance writes (`hold-fire-key!`, `spend-fire-key!`) rather than transitions. Two reasons, and the second is the stronger. A transition for each fire and each sit would double the log of one run, beside the `fire` the log already holds. And a recorded transition persists its raw inputs (R-12.19 keeps the person's prose alone), so a door here would put a credential's own record in the log twice per run. The field is `:secret`, and it is declared on the row ALONE, not at the create door and not at the restate: a closed map refuses an unknown key, which is the schedule's own fence for its link. A guard was tried first and refused at declaration time, for a reason worth keeping: a guard that judges a field must tell the client what the field wants, and one that cannot says so with `:open`, which the usability policy reads as a vocabulary the engine is hiding. A list of hashes is no vocabulary. Nobody may write it, so no door names it."
     "`fire` declares `:idempotent false`, so every call must carry an Idempotency-Key (invoke's phase 2). That is the truthful spelling: a second fire starts a second run. It is also the safe one: an idempotent door is subject to invoke's natural replay, which compares only the row's LATEST transition, so a textless fire following a textless fire with nothing else on the seat would have been answered as a replay and never gone out — the wake's release fire (R-12.22) and a person's second press, both lost. The key costs nobody anything: the MCP door signs every invoke, and the wake consumer keys each fire by the transition it heard, which doubles as its own dedupe. The consumer's replay of the POST is deduped separately, where it happens: `schedules/already-fired?` compares `last_fired_at` against the transition's own instant."
     "R-12.22's `wake_on` is judged by its OWN two guards, `wake-on-names-real-kinds` and `wake-on-names-real-actions`, which say what the scope guards next door already say. A guard grades the fields it names in `:judges` (checks/check-guard-declarations refuses anything else), and the scope guards name `:scope`; borrowing one for `wake_on` would have had it refuse a scope the caller never sent. The duplication is two short bodies over a shared helper, against a wake entry nobody can match — a seat that never wakes and never says why."
     "`wake_on` has NO default in the row and `walk` is not copied into it. R-12.22 asks for exactly that: the walk seat's one entry is computed at read time by `effective-wake-on`. A default written at the create door would be a value a person never chose, and the first restate of `walk` would leave it naming the queue the seat no longer walks."

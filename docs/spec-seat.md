@@ -1453,9 +1453,9 @@ gives the posture for a credential the engine holds.
 
 No door writes `fire_keys`. The fire writes the list, and the sit
 writes it again. Both are maintenance writes, as the sitting's
-counters are. A `create` or a `restate` that carries `fire_keys` is
-refused by `fire-keys-not-written-by-hand`. The refusal names the fire
-as the writer.
+counters are. Neither the `create` door nor the `restate` declares the
+field. A body that carries `fire_keys` is refused as an unknown key,
+the way the schedule refuses a link written by hand.
 
 The standing keys keep their work. A person may still offer a key to a
 seat (R-12.12) or to a chair (R-12.34). A Routine whose prompt carries
