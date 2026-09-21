@@ -50,6 +50,14 @@
   from the protocols they satisfy, so adding the third one is
   declaring it, not editing a map.
 
+  AND ONE TAG MAY HOLD TWO RIGS (waymark-fp62.18.2). A tag is the
+  row's IDENTITY, not the count of authorities behind it: the house's
+  Telegram account and the house's bot both list the family chat, and
+  it is one conversation with one address. Such a tag names a vector
+  of sources, and the `chorus` reads them as one — the union
+  discovers, the documents merge in authority order, and a rig that
+  is dark costs the tag its pass instead of half a document.
+
   fake-source is the scriptable in-memory twin (the FakeFeed
   precedent): canonical docs, the SAME push-plan the real boundaries
   run, and an unseeded id reads as an open task the authority simply
@@ -273,6 +281,16 @@
 
 (defn- stamp-list [tag doc] (assoc doc :source tag))
 
+(defn- stamp-thread
+  "The thread feed's stamp, and the one place a routing tag is not the
+  last word. One tag can hold MORE THAN ONE RIG — the house's own
+  Telegram account and the house's bot both list the family chat, and
+  it is one conversation — so the tag is the row's identity and the
+  document may name the rig that actually answered for it. A document
+  that names nobody is the tag's, exactly as on the other two feeds."
+  [tag doc]
+  (assoc doc :source (or (:source doc) tag)))
+
 (defn- unstamp-list-key
   "stamp-task, run backwards, for the one direction a document travels
   OUT: a birth names the list it should land in the way the queue
@@ -363,15 +381,82 @@
   ([sources] (list-confluence sources nil))
   ([sources report-fn] (->ListConfluence sources report-fn)))
 
+;; ── two rigs over one conversation ──────────────────────────────────
+
+(defn- merge-heard
+  "The documents two rigs answered for ONE conversation, as one
+  document. THE RIG LISTED FIRST IS THE AUTHORITY: a rig listed after
+  it can only ADD what the first does not carry, and only the first
+  names the row's source. That rule is the whole ownership law, in
+  one sentence — the house's Telegram account carries the
+  participants, so it keeps them; it carries no mention, so the bot's
+  mention lands beside them."
+  [docs]
+  (let [[primary & others] docs]
+    (reduce (fn [acc doc] (merge (dissoc doc :source) acc)) primary others)))
+
+(defrecord Chorus [sources]
+  ;; several rigs under ONE routing tag: one chat is one row, whichever
+  ;; rig heard it. Identity is the tag's, so the chorus adds no second
+  ;; prefix and mints no second row.
+  ThreadSource
+  (thread-discover [_]
+    ;; the union: a conversation one rig hears and the other does not
+    ;; is still an address
+    (into [] (comp (mapcat thread-discover) (distinct)) sources))
+
+  (thread-pull [_ id]
+    ;; A RIG THAT THROWS THROWS THROUGH, and it is deliberate. The
+    ;; document is whole, so a half-heard conversation would look like
+    ;; a conversation that LOST half its facts — the mention would
+    ;; nil out while the bot was dark and move forward again when it
+    ;; came back, which is a door opening for nothing. Described by
+    ;; both rigs or by neither; the stored truth serves in between.
+    (let [heard (into [] (keep (fn [s]
+                                 (try (thread-pull s id)
+                                      (catch clojure.lang.ExceptionInfo e
+                                        (when-not (= 404 (:status (ex-data e)))
+                                          (throw e))
+                                        nil))))
+                      sources)]
+      (if (seq heard)
+        [(merge-heard (mapv first heard))
+         (str/join "+" (map second heard))]
+        (throw (ex-info (str id " is not a conversation any rig lists")
+                        {:status 404})))))
+
+  (thread-pull-many [_ ids]
+    (let [answers (mapv #(thread-pull-many % ids) sources)]
+      (into {}
+            (map (fn [id]
+                   (let [heard (into [] (keep (fn [m]
+                                                (let [e (get m (str id))]
+                                                  (when (vector? e) e))))
+                                     answers)]
+                     [(str id)
+                      (if (seq heard)
+                        [(merge-heard (mapv first heard))
+                         (str/join "+" (map second heard))]
+                        ;; every rig that answered says the chat is
+                        ;; not in its listing
+                        :gone)])))
+            ids))))
+
+(defn chorus
+  "Several ThreadSources under one routing tag → one ThreadSource.
+  The order is the authority order (see merge-heard)."
+  [sources]
+  (->Chorus (vec sources)))
+
 (defrecord ThreadConfluence [sources report-fn]
   mirror/MirrorAdapter
   (discover [_] (fan-discover sources report-fn "thread" thread-discover))
   (pull [_ x]
     (let [[tag id] (split-xid x)
           [doc etag] (thread-pull (source-for sources tag) id)]
-      [(stamp-list tag doc) etag]))
+      [(stamp-thread tag doc) etag]))
   (pull-many [_ xids]
-    (fan-pull-many sources report-fn "thread" thread-pull-many stamp-list
+    (fan-pull-many sources report-fn "thread" thread-pull-many stamp-thread
                    xids))
   (push [_ x _document]
     ;; unreachable through the sync machine — :thread declares no
@@ -390,9 +475,17 @@
   for the :thread kind, routing on exactly the tags the other two
   feeds route on, and declaring NO MirrorCreateAdapter: a conversation
   has no birth at this door, structurally. report-fn as on confluence
-  — all three feeds speak the same tag to the same breaker."
+  — all three feeds speak the same tag to the same breaker.
+
+  A tag may name a VECTOR of sources instead of one: several rigs over
+  one set of conversations, in authority order (chorus). The house's
+  Telegram account and the house's bot are the pair this exists for —
+  two rigs, one Telegram, and one row for each chat."
   ([sources] (thread-confluence sources nil))
-  ([sources report-fn] (->ThreadConfluence sources report-fn)))
+  ([sources report-fn]
+   (->ThreadConfluence (update-vals sources
+                                    #(if (sequential? %) (chorus %) %))
+                       report-fn)))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 

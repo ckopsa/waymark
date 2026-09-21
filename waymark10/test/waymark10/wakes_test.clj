@@ -65,6 +65,13 @@
     fire goes out a minute after the LAST of them. The same
     transition wakes an unsettled seat at once. The damper is still a
     wall beside the settle, and the release clears both marks.
+  - waymark-fp62.18.2 · the ADVANCE DOOR: a mirrored kind declares
+    that one of its instants is an event, the driver opens that door
+    when a pulled document moves the instant forward, and a seat
+    wakes on the door and not on the etag. A birth opens nothing, a
+    plain change opens nothing, an instant that moves backward opens
+    nothing, and the entry's filter keeps another conversation's
+    mention out of this seat.
 
   Each seat here links its OWN fire token, and the assertions count
   the fires carrying that token: the suite shares one fake provider
@@ -80,6 +87,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mirror :as mirror]
             [waymark10.server.schedules :as sch]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -181,10 +189,77 @@
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Recall" :order 2}}}}))
 
+;; ── the conversations an ADVANCE DOOR speaks about ──────────────────
+;;
+;; waymark-fp62.18.2. A mirrored kind may declare that one of its
+;; instants is an EVENT: the driver opens the declared door when a
+;; pulled document carries a later instant than the stored row, beside
+;; the observe the etag decides. This is the queue's `thread` kind in
+;; miniature — one chat, when it last moved, and when the house was
+;; last spoken to — because a seat that wants "the family mentioned
+;; us" and not "somebody said something" can only ask for it when the
+;; two are two doors.
+
+(def ^:private chat-feed-state
+  "The scriptable rig: {external-id document}."
+  (atom {}))
+
+(defrecord ChatFeed [state]
+  mirror/MirrorAdapter
+  (discover [_] (vec (sort (keys @state))))
+  (pull [_ xid]
+    (if-some [doc (get @state xid)]
+      [doc (wire/digest doc)]
+      (throw (ex-info (str xid " is not a chat this rig lists")
+                      {:status 404}))))
+  (pull-many [_ xids]
+    (into {}
+          (map (fn [xid]
+                 [xid (if-some [doc (get @state xid)]
+                        [doc (wire/digest doc)]
+                        :gone)]))
+          xids))
+  (push [_ _ _]
+    (throw (ex-info "the house does not write a conversation" {}))))
+
+(def ^:private chat-feed (->ChatFeed chat-feed-state))
+
+(def ^:private wake-chat
+  (r/resource
+   (mirror/declaration
+    {:kind :wake_chat
+     :plural "wake_chats"
+     :summary "{data.title}"
+     :schema
+     [:map
+      [:title {:optional true
+               :examples ["Meal plans"]
+               :x-display {:label "What the conversation is called"
+                           :help "The name the rig shows for this chat."}}
+       [:maybe [:string {:max 80}]]]
+      [:last_message_at {:optional true
+                         :x-display
+                         {:label "When something was last said"
+                          :help "The rig's own time for the last message in this chat."}}
+       [:maybe :waymark/instant]]
+      [:last_mention_at {:optional true
+                         :x-display
+                         {:label "When the house was last spoken to"
+                          :help "The time of the last message that named the house."}}
+       [:maybe :waymark/instant]]]}
+    {:adapter chat-feed
+     :ttl-seconds 300
+     :discover-every 300
+     :advances {:observe_mention
+                {:field :last_mention_at
+                 :label "Observed a mention of the house"
+                 :help "The rig heard a message that named the house."}}})))
+
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["wake_tasks" "wake_items" "wake_memos" "schedules" "seats" "models" "sittings" "definitions"
+  ["wake_tasks" "wake_items" "wake_memos" "wake_chats"
+   "schedules" "seats" "models" "sittings" "definitions"
    "members" "roles" "grants" "approval_requests" "attachments"
    "subscriptions" "jobs"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"
@@ -204,8 +279,9 @@
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [fake (sch/fake-scheduler)
               fire (sch/fake-fire)
-              eng (engine/engine {:storage st
-                                  :resources [wake-task wake-item wake-memo]})]
+              eng (engine/engine
+                   {:storage st
+                    :resources [wake-task wake-item wake-memo wake-chat]})]
           (binding [*eng* (assoc eng
                                  :schedule-adapters {:claude_routine fake}
                                  :fire-adapter fire)
@@ -1293,5 +1369,129 @@
           (is (= 2 (count (fires-of token))))
           (is (not (get-in (sched-of seat) [:data :wake_pending])))
           (is (nil? (due-of seat))))
+
+        (seat-do! seat :retire)))))
+
+;; ── 19 · the wake an ADVANCE DOOR opens (bead waymark-fp62.18.2) ────
+;;
+;; The last wake in this file, and the narrowest. Every change to a
+;; mirrored row moves its etag and lands `observe_external`, so a seat
+;; woken by that door is woken by every word in every conversation. A
+;; kind that declares an advance door gets a second sentence — "the
+;; instant I named moved forward" — and the seat asks for THAT one.
+;;
+;; The seat here is the meal-planner's shape from
+;; docs/routines/meal-planner.md: one chat named by its external id,
+;; the mention door, and a settle, because the family is still talking
+;; when the first message arrives.
+
+(defn- chat-row
+  "The mirrored row for one external id."
+  [xid]
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (first (store/query-rows (:storage *eng*) tx :wake_chat
+                               {:external_id xid} {:limit 1})))))
+
+(defn- mentions-of
+  "The `observe_mention` transitions on one chat row."
+  [xid]
+  (filterv #(= :observe_mention (:action %))
+           (log-of :wake_chat (:id (chat-row xid)))))
+
+(deftest a-seat-wakes-on-a-mention-and-not-on-a-plain-message
+  (let [wn :wake-mention
+        fn' :wake-mention-fires
+        chat "tgram:-5091757250"
+        other "tgram:-4400000001"
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (reset! chat-feed-state
+            {chat {:title "Meal plans"
+                   :last_message_at "2026-09-20T17:00:00Z"
+                   :last_mention_at "2026-09-20T16:30:00Z"}
+             other {:title "Bros."
+                    :last_message_at "2026-09-20T17:00:00Z"
+                    :last_mention_at "2026-09-20T16:30:00Z"}})
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (mirror/discover! *eng* :wake_chat)
+
+      (testing "a BIRTH opens no advance door: the rig has held that
+                mention for half an hour, and a row minted with it did
+                not move this minute"
+        (is (some? (chat-row chat)))
+        (is (empty? (mentions-of chat))))
+
+      (let [{:keys [seat token]}
+            (linked-seat! "mentionclerk"
+                          {:wake_on [{:kind "wake_chat"
+                                      :actions ["observe_mention"]
+                                      :filter {:external_id chat}
+                                      :settle_seconds 300}]}
+                          fn')]
+
+        (testing "a plain message moves the row and wakes nobody: the
+                  etag changed, the mention did not"
+          (swap! chat-feed-state assoc-in [chat :last_message_at]
+                 "2026-09-20T18:00:00Z")
+          (is (= 1 (:rewritten (mirror/resync! *eng* :wake_chat))))
+          (drain-wakes! wn)
+          (is (empty? (mentions-of chat)))
+          (is (empty? (seat-fires seat)))
+          (is (nil? (due-of seat))))
+
+        (testing "a mention lands ONE transition, beside the observe,
+                  and the row carries the new time"
+          (swap! chat-feed-state assoc-in [chat :last_mention_at]
+                 "2026-09-20T18:05:00Z")
+          (mirror/resync! *eng* :wake_chat)
+          (is (= 1 (count (mentions-of chat))))
+          ;; the row is read raw off the store, where the instant is
+          ;; its wire spelling; a decoded row holds an Instant, and
+          ;; `str` of either is the same text
+          (is (= "2026-09-20T18:05:00Z"
+                 (str (get-in (chat-row chat) [:data :last_mention_at])))))
+
+        (testing "and the seat wakes on it — on the trailing edge, so
+                  the session reads a conversation and not its first
+                  word"
+          (drain-wakes! wn)
+          (is (empty? (seat-fires seat)))
+          (is (= (.plusSeconds t0 300) (due-of seat)))
+          (at 301)
+          (wakes/sweep-pending! *eng*)
+          (is (= 1 (count (seat-fires seat))))
+          (drain-fires! fn')
+          (is (= 1 (count (fires-of token)))))
+
+        (testing "a mention in ANOTHER conversation is not this seat's:
+                  the entry's filter names one chat, and every chat in
+                  the house would be one sitting an hour"
+          (swap! chat-feed-state assoc-in [other :last_mention_at]
+                 "2026-09-20T19:00:00Z")
+          (mirror/resync! *eng* :wake_chat)
+          (is (= 1 (count (mentions-of other)))
+              "the door opened on the row that moved")
+          (drain-wakes! wn)
+          (at 700)
+          (wakes/sweep-pending! *eng*)
+          (is (= 1 (count (seat-fires seat)))
+              "and no second fire reached the seat")
+          (is (nil? (due-of seat))))
+
+        (testing "a mention that moves BACKWARD opens nothing: a rig
+                  that re-reads its own history is not the family
+                  speaking again"
+          (swap! chat-feed-state assoc-in [chat :last_mention_at]
+                 "2026-09-20T17:05:00Z")
+          (mirror/resync! *eng* :wake_chat)
+          (is (= 1 (count (mentions-of chat))))
+          (drain-wakes! wn)
+          (at 1100)
+          (wakes/sweep-pending! *eng*)
+          (is (= 1 (count (seat-fires seat)))))
 
         (seat-do! seat :retire)))))

@@ -27,6 +27,7 @@
             [workqueue10.sources.hub :as hub]
             [workqueue10.sources.messa :as messa]
             [workqueue10.sources.tgram :as tgram]
+            [workqueue10.sources.tgrambot :as tgrambot]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.store :as store]
@@ -69,11 +70,39 @@
   {:name "41646" :snippet "We're sorry, please return the item"
    :time "" :hash "6d7a4fd2" :last_message_at nil})
 
+;; ── the bot rig's shapes (waymark-fp62.18.2) ────────────────────────
+;;
+;; The house's own bot lists the chats it has heard from, and for each
+;; one the time of the last message that named it. The chat_id is
+;; Telegram's own, so it is the SAME id the account rig answers for
+;; the same chat.
+
+(def ^:private bot-bros
+  {:chat_id -550048080 :title "Bros. 🧠" :type "group"
+   :last_message_at "2026-08-25T18:47:31+00:00"
+   :last_mention_at "2026-08-25T18:40:00+00:00" :mentions 2})
+
+(def ^:private bot-meals
+  "A chat the bot hears and the house's account does not list: the
+  row the bot alone owns."
+  {:chat_id -5091757250 :title "Meal plans" :type "supergroup"
+   :last_message_at "2026-09-20T18:02:11+00:00"
+   :last_mention_at "2026-09-20T17:58:40+00:00" :mentions 4})
+
+(def ^:private bot-wellesley
+  {:chat_id 5061625694 :title "Wellesley Kopsa" :type "private"
+   :last_message_at "2026-08-28T03:54:19+00:00"
+   :last_mention_at nil :mentions 0})
+
 ;; the words that must never appear in a stored document, whatever
 ;; shape the translation grows into
 (def ^:private forbidden-fields
   [:last_message_preview :snippet :preview :text :body :unread_count
-   :username :time])
+   :username :time
+   ;; the bot's `mentions` is a COUNT of what its rig has heard since
+   ;; it started, so it moves when the rig restarts and says nothing
+   ;; the mention's own time does not say better
+   :mentions])
 
 (defn- carries-no-body?
   "One canonical document, judged against the kind's whole promise:
@@ -177,6 +206,153 @@
          Exception #"the rig refused"
          (gc/rows {:isError true
                    :content [{:type "text" :text "no session"}]})))))
+
+;; ── tgrambot: the second clock, and the row it shares ───────────────
+
+(deftest tgrambot-translation
+  (testing "the bot's document carries the two clocks and names its
+            own rig — the house was last spoken to, and the chat last
+            moved"
+    (let [d (tgrambot/chat->doc bot-bros)]
+      (is (= "Bros. 🧠" (:title d)))
+      (is (= "group" (:chat_kind d)))
+      (is (= "live" (:status d)))
+      (is (= "tgrambot" (:source d)))
+      (is (= "2026-08-25T18:47:31Z" (:last_message_at d)))
+      (is (= "2026-08-25T18:40:00Z" (:last_mention_at d)))))
+
+  (testing "Telegram's own words for a two-person chat, from either
+            entry point of the rig"
+    (is (= "direct" (:chat_kind (tgrambot/chat->doc bot-wellesley))))
+    (is (= "direct" (:chat_kind (tgrambot/chat->doc
+                                 (assoc bot-wellesley :type "user")))))
+    (is (= "group" (:chat_kind (tgrambot/chat->doc bot-meals)))))
+
+  (testing "a chat the bot has heard from and nobody named it in:
+            the mention is ABSENT rather than invented"
+    (let [d (tgrambot/chat->doc bot-wellesley)]
+      (is (not (contains? d :last_mention_at)))))
+
+  (testing "and it names NO participants at all — absent, not empty:
+            an empty list is a fact about a group, and this rig has
+            no opinion, so the account's names stand where it has
+            them"
+    (is (not (contains? (tgrambot/chat->doc bot-bros)
+                        :participant_names))))
+
+  (testing "no body, no preview, and no mention COUNT"
+    (is (carries-no-body? (tgrambot/chat->doc bot-meals) [4 "supergroup"]))))
+
+(deftest tgrambot-feed
+  (let [state (gate-with {tgrambot/tool [bot-bros bot-meals]})
+        src (tgrambot/fake-source state)]
+    (testing "the ids are Telegram's own, so they are the ids the
+              account rig answers for the same chats"
+      (is (= #{"-550048080" "-5091757250"}
+             (set (conf/thread-discover src)))))
+
+    (testing "pull answers the document and a content etag"
+      (let [[doc etag] (conf/thread-pull src "-5091757250")]
+        (is (= "Meal plans" (:title doc)))
+        (is (str/ends-with? etag (str "|" tgrambot/translation-rev)))))
+
+    (testing "the batch IS the listing here too"
+      (is (= :gone (get (conf/thread-pull-many src ["999"]) "999"))))
+
+    (testing "a chat with no title is inventory, not a conversation"
+      (is (not (tgrambot/mirrorable? (assoc bot-bros :title ""))))
+      (is (not (tgrambot/mirrorable? (dissoc bot-bros :chat_id)))))))
+
+;; ── the chorus: two rigs, one conversation ──────────────────────────
+
+(deftest two-rigs-over-one-telegram
+  (let [state (gate-with {tgram/tool [wellesley bros]
+                          tgrambot/tool [bot-bros bot-meals]})
+        pair (conf/chorus [(tgram/fake-source state)
+                           (tgrambot/fake-source state)])]
+
+    (testing "the ids are the UNION: a chat one rig hears and the
+              other does not is still an address, and a chat both
+              list is ONE id"
+      (is (= #{"5061625694" "-550048080" "-5091757250"}
+             (set (conf/thread-discover pair)))))
+
+    (testing "where both rigs list a chat, the account is the
+              authority and the bot ADDS what it alone knows"
+      (let [[doc etag] (conf/thread-pull pair "-550048080")]
+        (is (= "Bros. 🧠" (:title doc)))
+        (is (= "2026-08-25T18:47:31Z" (:last_message_at doc))
+            "the account's own time, not the bot's")
+        (is (= "2026-08-25T18:40:00Z" (:last_mention_at doc))
+            "and the mention only the bot can answer")
+        (is (= [] (:participant_names doc))
+            "the account's word about who is in the group, kept")
+        (is (nil? (:source doc))
+            "the document names no rig, so the routing tag is the row's")
+        (is (str/includes? etag "+")
+            "and either rig moving moves the etag")))
+
+    (testing "a chat only the BOT hears is its own row, and it says so"
+      (let [[doc _] (conf/thread-pull pair "-5091757250")]
+        (is (= "Meal plans" (:title doc)))
+        (is (= "tgrambot" (:source doc)))
+        (is (= "2026-09-20T17:58:40Z" (:last_mention_at doc)))))
+
+    (testing "a chat only the ACCOUNT lists keeps its nil mention —
+              the tgram source never touches that field"
+      (let [[doc _] (conf/thread-pull pair "5061625694")]
+        (is (= "Wellesley Kopsa" (:title doc)))
+        (is (nil? (:last_mention_at doc)))))
+
+    (testing "an id no rig lists is gone, in both shapes"
+      (is (= 404 (:status (ex-data (try (conf/thread-pull pair "999")
+                                        (catch clojure.lang.ExceptionInfo e
+                                          e))))))
+      (is (= :gone (get (conf/thread-pull-many pair ["999"]) "999"))))
+
+    (testing "the batch merges the same way, id by id"
+      (let [batch (conf/thread-pull-many
+                   pair ["-550048080" "-5091757250" "5061625694"])]
+        (is (= "2026-08-25T18:40:00Z"
+               (:last_mention_at (first (get batch "-550048080")))))
+        (is (nil? (:last_mention_at (first (get batch "5061625694")))))))
+
+    (testing "and a DARK rig costs the tag its pass rather than half a
+              document: a mention that nils out while the bot is down
+              and moves forward when it returns is a door opening for
+              nothing"
+      ;; one Gate for each rig here, so exactly ONE of them goes dark
+      (let [account-state (gate-with {tgram/tool [bros]})
+            bot-state (gate-with {tgrambot/tool [bot-bros]})
+            split (conf/chorus [(tgram/fake-source account-state)
+                                (tgrambot/fake-source bot-state)])]
+        (is (some? (conf/thread-pull split "-550048080")))
+        (gc/down! bot-state true)
+        (is (thrown? Exception (conf/thread-pull split "-550048080")))
+        (is (thrown? Exception (conf/thread-discover split)))
+        (is (thrown? Exception (conf/thread-pull-many split
+                                                      ["-550048080"])))))))
+
+;; ── the confluence stamps the tag, and the document may name the rig ─
+
+(deftest the-tag-is-the-identity-and-the-rig-may-name-itself
+  (let [state (gate-with {tgram/tool [bros]
+                          tgrambot/tool [bot-bros bot-meals]})
+        feed (conf/thread-confluence
+              {"tgram" [(tgram/fake-source state)
+                        (tgrambot/fake-source state)]})]
+    (testing "one chat is ONE row whichever rig heard it — the bot
+              mints no second address"
+      (is (= #{"tgram:-550048080" "tgram:-5091757250"}
+             (set (mirror/discover feed)))))
+
+    (testing "a chat the account lists drinks from the tag"
+      (is (= "tgram" (:source (first (mirror/pull feed
+                                                  "tgram:-550048080"))))))
+
+    (testing "a chat only the bot hears says which rig answered"
+      (is (= "tgrambot" (:source (first (mirror/pull
+                                         feed "tgram:-5091757250"))))))))
 
 ;; ── messa: the group trick, and the clock gap ───────────────────────
 
@@ -327,6 +503,7 @@
   (fn [f]
     (let [st (pg/storage db/dsn)
           gate (gate-with {tgram/tool [wellesley bros tote-bot]
+                           tgrambot/tool [bot-bros]
                            messa/tool [kathy shumways]})
           engine-ref (atom nil)
           birth-fn (gc/roster-birth-fn {:engine-ref engine-ref})]
@@ -345,8 +522,12 @@
                                   "todo" (conf/fake-source)
                                   "gtasks" (conf/fake-source)}
                                  {"hub" (hub/source)}
-                                 {"tgram" (tgram/fake-source
-                                           gate {:birth-fn birth-fn})
+                                 ;; the tgram TAG holds two rigs, in
+                                 ;; authority order: the house's own
+                                 ;; account, then the house's bot
+                                 {"tgram" [(tgram/fake-source
+                                            gate {:birth-fn birth-fn})
+                                           (tgrambot/fake-source gate)]
                                   "messa" (messa/fake-source
                                            gate {:birth-fn birth-fn})}
                                  (gcal/fake-calendar)
@@ -380,12 +561,34 @@
 
 (defn- seed-gate!
   "Put the verified listings back, so each scene below is independent
-  of which order clojure.test ran them in."
+  of which order clojure.test ran them in. The bot hears ONE of the
+  chats the account lists, so the row set is the account's and the
+  mention rides the row the account already owns."
   []
   (gc/answer! *gate* tgram/tool [wellesley bros tote-bot])
+  (gc/answer! *gate* tgrambot/tool [bot-bros])
   (gc/answer! *gate* messa/tool [kathy shumways])
   (mirror/discover! *eng* :thread)
   (mirror/resync! *eng* :thread))
+
+(defn- row-of
+  "One thread row, by its external id."
+  [xid]
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (first (store/query-rows (:storage *eng*) tx :thread
+                               {:external_id xid} {:limit 1})))))
+
+(defn- actions-on
+  "The actions recorded on one thread row, oldest first."
+  [xid]
+  (mapv :action
+        (store/with-tx (:storage *eng*)
+          (fn [tx]
+            (store/transitions (:storage *eng*) tx
+                               {:kind :thread
+                                :resource-id (str (:id (row-of xid)))}
+                               {})))))
 
 (deftest the-house-gets-addresses-for-its-conversations
   (seed-gate!)
@@ -474,3 +677,54 @@
             nothing was deleted"
     (seed-gate!)
     (is (= "live" (:status (get (rows-by-title) "Kathy Peppas"))))))
+
+;; ── the house hears itself named ────────────────────────────────────
+
+(deftest a-mention-of-the-house-opens-a-door-of-its-own
+  (seed-gate!)
+  (let [xid "tgram:-550048080"
+        mentions #(count (filterv #{:observe_mention} (actions-on xid)))
+        observes #(count (filterv #{:observe_external} (actions-on xid)))
+        before (mentions)
+        observed (observes)]
+
+    (testing "the bot's mention lands on the row the ACCOUNT owns:
+              one chat is one row, whichever rig heard it"
+      (is (some? (row-of xid)))
+      (is (= "Bros. 🧠" (get-in (row-of xid) [:data :title])))
+      (is (= "2026-08-25T18:40:00Z"
+             (str (get-in (row-of xid) [:data :last_mention_at])))))
+
+    (testing "a message nobody addressed to the house moves the etag
+              and nothing else: observe_external, and no mention"
+      (gc/answer! *gate* tgram/tool
+                  [wellesley
+                   (assoc bros :last_message_date "2026-08-26 09:00:00+00:00")
+                   tote-bot])
+      (mirror/resync! *eng* :thread)
+      (is (= "2026-08-26T09:00:00Z"
+             (str (get-in (row-of xid) [:data :last_message_at]))))
+      (is (= before (mentions)) "the mention door stayed shut")
+      (is (= (inc observed) (observes))))
+
+    (testing "and a mention moves BOTH doors, once: the etag changed,
+              so the document landed, and the house was named, so the
+              mention door opened beside it"
+      (gc/answer! *gate* tgrambot/tool
+                  [(assoc bot-bros :last_mention_at
+                          "2026-08-26T09:05:00+00:00"
+                          :mentions 3)])
+      (mirror/resync! *eng* :thread)
+      (is (= (inc before) (mentions)))
+      (is (= (+ 2 observed) (observes)))
+      (is (= "2026-08-26T09:05:00Z"
+             (str (get-in (row-of xid) [:data :last_mention_at])))
+          "and the row carries the new time"))
+
+    (testing "a second pass over the same listing opens nothing: the
+              door is a MOVE and not a level"
+      (mirror/resync! *eng* :thread)
+      (is (= (inc before) (mentions))))
+
+    ;; leave the listings as every other scene here expects them
+    (seed-gate!)))

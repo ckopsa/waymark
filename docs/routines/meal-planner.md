@@ -42,7 +42,7 @@ It does not change the Routine.
 | rows_per_firing | 2 | one row is a whole week of days, a rotation read and one finalize. Two weeks is a full sitting, and a third draft waits one wake |
 | cadence_seconds | 86400 | one day. The week is decided in the family chat, and the conversation moves at the pace of replies. The daily cadence is the floor that reads them. The wake below fires the seat sooner when a week begins |
 | fire_interval_seconds | 3600 | the damper. A count wake is a level and not an edge, so each transition of a `plan` is evaluated again. One hour holds a burst of them to one firing |
-| wake_on | one count entry, under "The wake" | the seat wakes when no planned week is waiting (waymark-fp62.13) |
+| wake_on | the two entries under "The wake" | the seat wakes when no planned week is waiting (waymark-fp62.13), and when the family speaks to the house in the chat (waymark-fp62.18.2) |
 | held_for | the model the Routine runs | the seat's place on the ladder. The sit frames the week, and the doors of one day are the whole answer |
 | standing_ttl_seconds | 604800 | the ceiling the engine enforces, and one cadence of this seat |
 | sitting_idle_seconds | 3600 | a sitting that says nothing for an hour is abandoned by the sweep |
@@ -69,10 +69,17 @@ The `plan_day` entry carries the four doors that cover a day. The
 `rotation` entry and the `meal` entry are read-only. They let the
 seat read the Sunday themes and the meals on the list.
 
-The two `telegram` entries are powers, not kinds (spec-mcp-servers).
-`telegram.read` lets the seat read the family chat. `telegram.send`
-lets it write to that chat. A power takes no action name. The gate
-lists no filter for either, so the entries carry none.
+The two `telegram_bot` entries are powers, not kinds
+(spec-mcp-servers). `telegram_bot.read` lets the seat read the family
+chat as the house's own bot. `telegram_bot.send` lets it write to that
+chat as the bot. A power takes no action name. The gate lists no
+filter for either, so the entries carry none.
+
+The seat speaks as the BOT and not as a person. The house has a voice
+of its own in the chat, the family can name it, and a mention of it is
+the wake below. The powers of the person's own Telegram account,
+`telegram.read` and `telegram.send`, are not in this scope: two voices
+in one chat make one conversation that answers itself.
 
 ```json
 [
@@ -84,8 +91,8 @@ lists no filter for either, so the entries carry none.
                "set_sunday_theme", "mark_eating_out"]},
   {"kind": "rotation", "actions": []},
   {"kind": "meal", "actions": []},
-  {"kind": "telegram.read", "actions": []},
-  {"kind": "telegram.send", "actions": []}
+  {"kind": "telegram_bot.read", "actions": []},
+  {"kind": "telegram_bot.send", "actions": []}
 ]
 ```
 
@@ -131,24 +138,34 @@ hide them from the count.
 The entry names no action, so every action of a `plan` is counted on.
 `fire_interval_seconds` is the damper on that.
 
-A reply in the family chat does not wake the seat today. The house
-mirrors each Telegram chat as a `thread` row, and each reply moves
-that row. Add this second entry to wake the seat on the chat:
+The count wake makes the week. It does not hear the family. Add this
+second entry to wake the seat when the family speaks to the house:
 
 ```json
-{"kind": "thread", "actions": ["observe_external"],
+{"kind": "thread", "actions": ["observe_mention"],
  "filter": {"external_id": "tgram:-5091757250"},
- "settle_seconds": 900}
+ "settle_seconds": 300}
 ```
 
-The entry settles, and 900 seconds is a quarter of an hour. The seat
-must read a conversation and not its first word. A wake on the first
-reply gives the seat a chat that is half answered, and the family is
-still deciding. Each reply moves the wake forward, and the seat wakes
-when the chat has been quiet for fifteen minutes.
+The house mirrors each Telegram chat as a `thread` row. Each message
+in the chat moves that row, and `observe_external` is the door for
+that. A message that names the house's bot, replies to it, or gives it
+a command moves the row's `last_mention_at`, and `observe_mention` is
+the door for THAT. The entry above names the second door only. The
+family talks in the chat all day. The seat wakes when the family talks
+to the house.
 
-Do not add the wake without the filter. Every Telegram chat in the
-house would wake the seat, one sitting an hour.
+The entry settles, and 300 seconds is five minutes. The seat must read
+a conversation and not its first word. Each mention moves the wake
+forward, and the seat wakes when the family has been quiet for five
+minutes.
+
+Do not add the wake without the filter. Every Telegram chat the bot
+hears would wake the seat.
+
+The wake needs the bot rig. The `tgrambot` server answers
+`last_mention_at`; the person's own account rig does not. Until that
+rig is live, the entry is lawful and it never fires.
 
 ## The charter
 
@@ -194,10 +211,12 @@ You sit in the seat `meal-planner`. The sit answers the charter and
 your rows, each with its doors and the input each door takes. Each
 row is a draft plan.
 
-The family chat is the Telegram chat titled `Meal plans`. Read it
-with the power telegram.read; waymark_powers lists the tool. Send to
-it with the power telegram.send. Every message you send names the
-week by its first day, so a later firing can find it.
+The family chat is the Telegram chat titled `Meal plans`. You speak in
+it as the house's own bot. Find it with tgrambot__list_chats and read
+it with tgrambot__get_messages, under the power telegram_bot.read.
+Send to it with tgrambot__send_message, under telegram_bot.send.
+Every message you send names the week by its first day, so a later
+firing can find it.
 
 For each row, read the plan with waymark_get. Its days come with it.
 Then read the chat, and find which stage the week is at.
@@ -303,11 +322,19 @@ one the seat's own work clears.
    hand through `set_sunday_theme`.
 2. Meals stand in `on_list`, with themes on them. A week cannot be
    covered from an empty list.
-3. The seat exists and is active, with the scope above, the wake
-   above, and `held_for` naming the model the Routine runs.
+3. The seat exists and is active, with the scope above, the two wake
+   entries above, and `held_for` naming the model the Routine runs.
    A Telegram chat titled `Meal plans` exists, with everyone who
-   decides the week in it, and the house's Telegram connection can
-   read it and write to it.
+   decides the week in it.
+   The house's bot is a member of that chat, and it can read it: a
+   bot with privacy mode on hears only the messages that name it, so
+   make the bot an admin of the group or turn privacy mode off.
+   An `mcp_server` row named `tgrambot` points at the bot rig, and its
+   powers name `telegram_bot.read` and `telegram_bot.send`. The
+   powers of a server row are the vocabulary a scope entry may name,
+   so the scope above is refused until that row exists.
+   A restate of the seat carries the new scope, the new wake and the
+   new instructions. Do it by hand, after the bot rig is live.
 4. `link` has been invoked on the model row (ci-classifier.md, "One
    Routine for each model"), and the seat carries its `instructions`.
    The Routine's prompt holds no key.
