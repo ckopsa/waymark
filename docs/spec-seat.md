@@ -1295,10 +1295,10 @@ instructions fires as before.
 **R-12.34** The model row is the chair. A model must have a field
 `sitter_key`, secret, written only by two doors: `offer_key`, with the
 input `{key}`, and `revoke_key`, which clears the field. Both doors
-are the person's, guarded by `a-person`. A `create` or a `reprice`
-that carries the field is refused, because the key is not written by
-hand. The engine never answers a key. The doors and the guard are the
-seat's own (R-12.12).
+are the person's, guarded by `a-person-at-the-chair`. A `create` that
+carries the field is refused by `key-not-written-by-hand`, because the
+key is not written by hand. The engine never answers a key. The doors
+are the seat's own (R-12.12).
 
 A model must also have the fields `fire_url` and `fire_token`.
 `fire_token` is a secret. Two doors write them: `link`, with the input

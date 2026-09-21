@@ -427,7 +427,8 @@
   text that transition earned (`wake-text-for`: the row that moved,
   or a count wake's count).
 
-  No schedule, or one nobody linked: silence, and the link is asked
+  No schedule, and no Routine to fire — the row's own link or the
+  chair's (waymark-fp62.7.23) — is silence, and the link is asked
   BEFORE the damper. The `fire` door would refuse an unlinked seat
   with its own sentence, and a refusal logged per matching transition
   is that sentence a hundred times; remembering the match instead
@@ -439,7 +440,7 @@
   → true when a fire went out."
   [eng seat t ^Instant at text]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
-    (when (schedules/linked? row)
+    (when (schedules/linked? eng row)
       (if (or (some? (seats/open-sitting-for-seat eng (:id seat)))
               (fired-recently? row (:interval seat) at))
         (mark-pending! eng row)
@@ -455,14 +456,14 @@
 
   Silence when there is nothing pending, when the seat is not active,
   when a sitting is still open, when the gap has not passed, or when
-  nobody linked the row. The flag is cleared only after a fire went
-  out, so a seat behind a wall keeps its pending wake until the wall
-  lifts. → true when a fire went out."
+  nobody linked the row or its chair. The flag is cleared only after
+  a fire went out, so a seat behind a wall keeps its pending wake
+  until the wall lifts. → true when a fire went out."
   [eng seat-row schedule-row key ^Instant at]
   (when (and seat-row schedule-row
              (get-in schedule-row [:data :wake_pending])
              (= :active (:state seat-row))
-             (schedules/linked? schedule-row)
+             (schedules/linked? eng schedule-row)
              (not (fired-recently? schedule-row (interval-of seat-row) at))
              (nil? (seats/open-sitting-for-seat eng (:id seat-row))))
     (when (fire! eng (:id seat-row) nil key)

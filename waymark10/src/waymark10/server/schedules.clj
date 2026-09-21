@@ -123,6 +123,24 @@
   operation and move no field, and `delete!` still ends the row. The
   `link` is the whole of the engine's knowledge of that Routine.
 
+  ── one Routine for each MODEL (waymark-fp62.7.23) ─────────────────
+
+  A Routine per seat is a Routine a person makes, links and keeps in
+  step by hand, and a step down the ladder was a second one. So the
+  link lives on the model as well — the seat's CHAIR, the first of
+  its `held_for` — and a schedule with no link of its own fires
+  through it (`chair-link-of`, `link-of`). The chair's row is left
+  alone by the adapter exactly as a linked row is, for the same
+  reason: that Routine was made by hand, one row over.
+
+  What tells the firings apart is then the TEXT, not the Routine.
+  `fire-text` composes it from the seat row — the seat's own
+  instructions, the line that names the seat, and the person's prose
+  in the block those instructions point at — so the words a firing
+  reads are on a row a person can see and restate, and never pasted
+  into a Routine where they can go stale in the dark. The transition
+  log keeps the prose alone, as it always did.
+
   The fire itself is a second seam, `FireAdapter`, with one
   operation. It runs AFTER the commit, in this same consumer, when
   the seat's own `fire` door is heard: the door refuses what a door
@@ -1179,11 +1197,53 @@
   (note! eng row (or (not-empty (str (ex-message e)))
                      "The adapter could not reach the provider.")))
 
-(defn linked?
-  "Does a person manage this row's Routine by hand (R-12.18)? A linked
-  row carries a fire URL, and the adapter of R-12.2 leaves it alone."
+(defn own-link-of
+  "The link a person put on THIS row (R-12.18), or nil. A map of the
+  two fields, so every caller reads a link the same shape whether it
+  came off the schedule or off the chair."
   [schedule-row]
-  (boolean (some-> (get-in schedule-row [:data :fire_url]) str not-empty)))
+  (when-some [url (some-> (get-in schedule-row [:data :fire_url]) str not-empty)]
+    {:fire_url url
+     :fire_token (some-> (get-in schedule-row [:data :fire_token]) str not-empty)}))
+
+(defn chair-link-of
+  "The CHAIR'S link (waymark-fp62.7.23), or nil: the fire URL and
+  token of the
+  first model in this seat's `held_for`.
+
+  One Routine stands for one model, so this is where most seats' fire
+  goes out — and why a step down the ladder is one restate of
+  `held_for`. A seat held for nothing has no chair and no link here."
+  [eng seat-row]
+  (when-some [chair (seats/chair-of seat-row)]
+    (own-link-of (raw-row eng :model chair))))
+
+(defn link-of
+  "The link ONE fire of this schedule goes out on: the row's own when
+  a person linked it, or else the chair's (waymark-fp62.7.23).
+
+  The row's own wins, so a seat somebody gave a Routine of its own
+  keeps firing through it. Everything else rides the model's one
+  Routine."
+  ([eng schedule-row]
+   (link-of eng schedule-row
+            (raw-row eng :seat (get-in schedule-row [:data :seat]))))
+  ([eng schedule-row seat-row]
+   (or (own-link-of schedule-row)
+       (chair-link-of eng seat-row))))
+
+(defn linked?
+  "Is there a Routine a person manages for this row (R-12.18, and
+  waymark-fp62.7.23's chair)?
+
+  The ONE-ARITY asks about this row alone: a linked row carries a fire
+  URL, and the adapter of R-12.2 leaves it alone. The TWO-ARITY asks
+  the question a FIRE asks — this row's link, or the chair's — and the
+  adapter leaves a chair-linked row alone for the same reason it
+  leaves a linked one alone: the Routine was made by hand and this
+  engine has no endpoint that could write it."
+  ([schedule-row] (some? (own-link-of schedule-row)))
+  ([eng schedule-row] (some? (link-of eng schedule-row))))
 
 (defn- adapter-for [adapters row]
   (let [p (keyword (str (get-in row [:data :provider])))]
@@ -1210,7 +1270,10 @@
   other seat.
 
   A LINKED row is skipped whole (R-12.18): its Routine was made by
-  hand and this engine has no endpoint that could write it."
+  hand and this engine has no endpoint that could write it. A
+  CHAIR-LINKED row is skipped for the same reason
+  (waymark-fp62.7.23): the Routine it fires through is the model's,
+  made by hand one row over."
   [eng adapters schedule-row]
   (let [seat-id (get-in schedule-row [:data :seat])
         seat-row (raw-row eng :seat seat-id)]
@@ -1223,6 +1286,8 @@
       (do (warn! "schedule " (:id schedule-row) " names seat " seat-id
                  ", which this engine cannot read — nothing pushed")
           nil)
+
+      (some? (chair-link-of eng seat-row)) nil
 
       :else
       (let [adapter (adapter-for adapters schedule-row)
@@ -1249,12 +1314,13 @@
   "Park the seat: the copy stops firing and keeps its settings. A row
   that is already paused, ended or never pushed is left alone — the
   transition would 409 and park the drain. A LINKED row is left alone
-  too: a person manages that Routine, and parking the seat is already
-  the wall the fire door refuses at (R-12.18, R-12.20)."
+  too, the chair's link included: a person manages that Routine, and
+  parking the seat is already the wall the fire door refuses at
+  (R-12.18, R-12.20, and waymark-fp62.7.23's chair)."
   [eng adapters schedule-row]
   (when-some [xid (some-> (get-in schedule-row [:data :external_id]) str not-empty)]
     (when (and (= :live (:state schedule-row))
-               (not (linked? schedule-row)))
+               (not (linked? eng schedule-row)))
       (try
         (pause-copy (adapter-for adapters schedule-row) xid)
         (act! eng (:id schedule-row) :pause nil)
@@ -1269,7 +1335,7 @@
   row's own state there is the provider's answer to a fire, not a
   park, and only a fire that goes out moves it."
   [eng adapters schedule-row]
-  (when-not (linked? schedule-row)
+  (when-not (linked? eng schedule-row)
     (case (:state schedule-row)
       :paused (if-some [xid (some-> (get-in schedule-row [:data :external_id])
                                     str not-empty)]
@@ -1293,7 +1359,7 @@
   (when-not (= :ended (:state schedule-row))
     (let [xid (some-> (get-in schedule-row [:data :external_id]) str not-empty)]
       (try
-        (when (and xid (not (linked? schedule-row)))
+        (when (and xid (not (linked? eng schedule-row)))
           (delete-copy (adapter-for adapters schedule-row) xid))
         (act! eng (:id schedule-row) :end nil)
         (catch Exception e (break! eng schedule-row e))))))
@@ -1336,6 +1402,50 @@
     404 "No Routine answers the fire URL."
     nil))
 
+(def fire-payload-tag
+  "The block a seat's instructions name, spelled here so the engine's
+  text and a person's instructions cannot drift apart."
+  "routine-fire-payload")
+
+(defn fire-text
+  "The text ONE fire carries (R-3 of waymark-fp62.7.23): the seat's
+  instructions, the line
+  that names the seat, and the person's prose inside the block the
+  instructions name.
+
+      <the instructions>
+
+      Seat: <id> (<name>).
+
+      <routine-fire-payload>
+      <the prose>
+      </routine-fire-payload>
+
+  A seat that wrote no instructions fires the prose as it always did,
+  nil and all — a textless fire is a run that walks the queue. PURE,
+  and nothing here is ever cut: the instructions are the seat's own
+  words and the prose is a person's, and a fire that quietly dropped
+  half of either would be a run doing something nobody asked for.
+
+  The payload block is there only when there is prose, so a cadence
+  wake reads the instructions and the seat line and stops. The
+  transition log keeps the prose alone, as it always did: this is
+  composed after the door closed, and the record is what a person
+  wrote."
+  [seat-row prose]
+  (let [prose (some-> prose str not-empty)]
+    (if-some [instructions (some-> (get-in seat-row [:data :instructions])
+                                   str not-empty)]
+      (str/join "\n\n"
+                (remove nil?
+                        [instructions
+                         (str "Seat: " (:id seat-row)
+                              " (" (get-in seat-row [:data :name]) ").")
+                         (when prose
+                           (str "<" fire-payload-tag ">\n" prose
+                                "\n</" fire-payload-tag ">"))]))
+      prose)))
+
 (defn fire!
   "Start one run of this row's linked Routine, and land the provider's
   answer on the row.
@@ -1353,27 +1463,37 @@
   `at` is the FIRE TRANSITION's own instant, and it is what gets
   stamped — not this machine's clock. The stamp is what `already-fired?`
   compares a replay against, so the two must be read off one clock;
-  the log's is the one both the engine and the database agree on."
-  [eng adapter schedule-row text at]
-  (let [url (some-> (get-in schedule-row [:data :fire_url]) str not-empty)
-        token (some-> (get-in schedule-row [:data :fire_token]) str not-empty)]
-    (when url
-      (try
-        (let [answer (fire-routine adapter url token text)]
-          (try-act! eng schedule-row :fired
-                    (cond-> {:last_fired_at (str (or (instant-of at) (now eng)))}
-                      (some-> (:session-url answer) str not-empty)
-                      (assoc :last_run_url (str (:session-url answer))))))
-        (catch Exception e
-          (let [{:keys [status retry-after]} (ex-data e)
-                sentence (provider-note status retry-after)]
-            (cond
-              ;; a paused Routine, where the row can say so as a state
-              (and (= 400 (some-> status long)) (= :live (:state schedule-row)))
-              (try-act! eng schedule-row :pause nil)
+  the log's is the one both the engine and the database agree on.
 
-              sentence (note! eng schedule-row sentence)
-              :else (break! eng schedule-row e))))))))
+  THE LINK IS AN ARGUMENT, and the stamp is not (waymark-fp62.7.23).
+  The URL and the
+  token come from this row or from the chair — `link-of` decides, and
+  the caller that already read the seat hands the answer in — while
+  `fired`, `last_fired_at` and the provider's own sentence land HERE,
+  on the seat's own row. One Routine for many seats, and each seat
+  still keeps its own record of when it fired."
+  ([eng adapter schedule-row text at]
+   (fire! eng adapter schedule-row text at (link-of eng schedule-row)))
+  ([eng adapter schedule-row text at link]
+   (let [url (some-> (:fire_url link) str not-empty)
+         token (some-> (:fire_token link) str not-empty)]
+     (when url
+       (try
+         (let [answer (fire-routine adapter url token text)]
+           (try-act! eng schedule-row :fired
+                     (cond-> {:last_fired_at (str (or (instant-of at) (now eng)))}
+                       (some-> (:session-url answer) str not-empty)
+                       (assoc :last_run_url (str (:session-url answer))))))
+         (catch Exception e
+           (let [{:keys [status retry-after]} (ex-data e)
+                 sentence (provider-note status retry-after)]
+             (cond
+               ;; a paused Routine, where the row can say so as a state
+               (and (= 400 (some-> status long)) (= :live (:state schedule-row)))
+               (try-act! eng schedule-row :pause nil)
+
+               sentence (note! eng schedule-row sentence)
+               :else (break! eng schedule-row e)))))))))
 
 ;; ── the read-back (R-12.3) ──────────────────────────────────────────
 
@@ -1576,11 +1696,20 @@
             ;; the door, so a person's fire and a wake's fire are one
             ;; rule (R-5): both write this one transition.
             (lift-the-fired-line! eng seat-row t)
+            ;; THE TEXT IS COMPOSED HERE (R-3 of waymark-fp62.7.23),
+            ;; from the seat row the door just moved. The log keeps
+            ;; the prose a person wrote; what goes out carries the
+            ;; seat's instructions around it, so a firing cannot run
+            ;; on instructions nobody in this house can read. And the
+            ;; link is this row's, or else the chair's (R-5).
             (when-some [row (schedule-for-seat eng (:resource-id t))]
               (when-not (already-fired? row (:at t))
                 (fire! eng (fire-adapter-of eng) row
-                       (some-> (get-in t [:inputs :text]) str not-empty)
-                       (:at t)))))))
+                       (fire-text seat-row
+                                  (some-> (get-in t [:inputs :text])
+                                          str not-empty))
+                       (:at t)
+                       (link-of eng row seat-row)))))))
 
       (and (= :schedule kind) (= :restate action))
       (when-some [row (raw-row eng :schedule (:resource-id t))]
