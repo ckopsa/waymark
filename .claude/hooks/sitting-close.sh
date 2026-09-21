@@ -33,14 +33,11 @@ HOOK=$(cat)   # the hook's JSON, on stdin. Both paths read it.
 # nothing when the session must be left alone. BOTH print one status
 # line first — "<mode>|<sitting>|<closed>" — so one walk of the
 # transcript answers every question this script asks of it.
-#
-# `read -d ''` and not `$(cat <<'PY' ...)`: macOS ships bash 3.2, which
-# scans a heredoc inside `$(...)` for quotes and parens, and the first
-# apostrophe in the Python below breaks the parse of the whole file
-# (`syntax error near unexpected token ;;`, blamed on a later line).
-# `read` hits EOF on the NUL it never finds and answers false, so the
-# `|| true` keeps the script going under `set -e` should it ever be set.
-IFS= read -r -d '' SUM <<'PY' || true
+# NB: read, not $(cat <<PY). bash 3.2 quote-scans a heredoc that sits
+# inside a command substitution, so one apostrophe in the Python below
+# inverts every quote after it and the script stops parsing (the error
+# lands far away, on the first ;; of a later case). No $( ), no scan.
+read -r -d '' SUM <<'PY'
 import glob, json, os, re, sys
 FIELDS = ("input_tokens", "output_tokens",
           "cache_read_input_tokens", "cache_creation_input_tokens")

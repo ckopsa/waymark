@@ -41,7 +41,7 @@ It does not change the Routine.
 | walk | `plan` | the queue is the draft plans. The `plan` kind declares no default filter, so the scope entry's own filter is what makes the queue (waymark-fp62.12) |
 | rows_per_firing | 2 | one row is a whole week of days, a rotation read and one finalize. Two weeks is a full sitting, and a third draft waits one wake |
 | cadence_seconds | 86400 | one day. The week is decided in the family chat, and the conversation moves at the pace of replies. The daily cadence is the floor that reads them. The wake below fires the seat sooner when a week begins |
-| fire_interval_seconds | 3600 | the damper. A count wake is a level and not an edge, so each transition of a `plan` is evaluated again. One hour holds a burst of them to one firing |
+| fire_interval_seconds | 300 | the damper. A count wake is a level and not an edge, so each transition of a `plan` is evaluated again. Five minutes holds a burst of them to one firing, and a second mention of the bot inside that gap waits at most five minutes |
 | wake_on | the two entries under "The wake" | the seat wakes when no planned week is waiting (waymark-fp62.13), and when the family speaks to the house in the chat (waymark-fp62.18.2) |
 | held_for | the model the Routine runs | the seat's place on the ladder. The sit frames the week, and the doors of one day are the whole answer |
 | standing_ttl_seconds | 604800 | the ceiling the engine enforces, and one cadence of this seat |
@@ -143,8 +143,7 @@ second entry to wake the seat when the family speaks to the house:
 
 ```json
 {"kind": "thread", "actions": ["observe_mention"],
- "filter": {"external_id": "tgram:-5091757250"},
- "settle_seconds": 300}
+ "filter": {"external_id": "tgram:-1004383242252"}}
 ```
 
 The house mirrors each Telegram chat as a `thread` row. Each message
@@ -155,13 +154,22 @@ the door for THAT. The entry above names the second door only. The
 family talks in the chat all day. The seat wakes when the family talks
 to the house.
 
-The entry settles, and 300 seconds is five minutes. The seat must read
-a conversation and not its first word. Each mention moves the wake
-forward, and the seat wakes when the family has been quiet for five
-minutes.
+The entry does not settle. A mention of the house wants an answer at
+once, so the first mention wakes the seat and the seat reads the chat
+as it stands. A second mention while the seat sits is remembered and
+released when the sitting closes. To wait for a conversation to end
+instead, add `settle_seconds` to the entry (waymark-fp62.17): each
+mention then moves the wake forward by that many seconds, and the
+seat wakes when the chat has been quiet for that long.
 
 Do not add the wake without the filter. Every Telegram chat the bot
 hears would wake the seat.
+
+The id is the chat's id as Telegram gives it today. When the bot was
+made an admin on 2026-09-21, Telegram turned the group `-5091757250`
+into the supergroup `-1004383242252`, and both rigs name the new id.
+The old thread row stays as the record of the messages before that
+moment. When Telegram migrates the chat again, restate this filter.
 
 The wake needs the bot rig. The `tgrambot` server answers
 `last_mention_at`; the person's own account rig does not. Until that
