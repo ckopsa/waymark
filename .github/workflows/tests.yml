@@ -434,11 +434,40 @@ jobs:
       # on its LAN address, not loopback; a GitHub-hosted VM leaves it
       # unset and localhost is right there. create-test-databases.sh
       # and the DSN below both read PGHOST/PGPORT.
+      #
+      # AND IT CAN ARRIVE AS THE LITERAL TEMPLATE. That variable is
+      # `${attr.unique.network.ip-address}` in the jobspec, and when Nomad
+      # cannot resolve an interpolation it leaves the RAW TEXT rather than
+      # erroring or emptying it -- so an allocation created while the
+      # node's network fingerprint was missing carries the string itself.
+      # `:-` cannot catch that: the value is neither unset nor empty.
+      #
+      # It does not heal. Env is interpolated once, at allocation
+      # creation, and an ephemeral runner restarts its task inside the
+      # same allocation, so the bad value lives as long as the alloc does.
+      # On 2026-09-20 three of twenty-six runners were poisoned that way
+      # and ~1 shard in 8 failed for hours with
+      #   postgres never accepted a connection on ${attr.unique...}:32790
+      # which reads like a slow service container and is nothing of the
+      # kind. Recovering needs `nomad alloc stop` on the host side; this
+      # guard is so CI does not care.
+      #
+      # The fallback is the routing table, not localhost: the runner uses
+      # host networking, so this is the node's own LAN address -- which is
+      # exactly what the service container is published on, and what
+      # localhost is NOT on that box.
       - name: Locate the postgres service
         env:
           SERVICE_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
           host="${CI_SERVICE_HOST:-localhost}"
+          case "$host" in
+            *'${'*)
+              host="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+              host="${host:-localhost}"
+              echo "::warning::CI_SERVICE_HOST arrived unresolved; using ${host}."
+              ;;
+          esac
           {
             echo "PGHOST=${host}"
             echo "PGPORT=${SERVICE_PORT}"
@@ -550,11 +579,40 @@ jobs:
       # on its LAN address, not loopback; a GitHub-hosted VM leaves it
       # unset and localhost is right there. create-test-databases.sh
       # and the DSN below both read PGHOST/PGPORT.
+      #
+      # AND IT CAN ARRIVE AS THE LITERAL TEMPLATE. That variable is
+      # `${attr.unique.network.ip-address}` in the jobspec, and when Nomad
+      # cannot resolve an interpolation it leaves the RAW TEXT rather than
+      # erroring or emptying it -- so an allocation created while the
+      # node's network fingerprint was missing carries the string itself.
+      # `:-` cannot catch that: the value is neither unset nor empty.
+      #
+      # It does not heal. Env is interpolated once, at allocation
+      # creation, and an ephemeral runner restarts its task inside the
+      # same allocation, so the bad value lives as long as the alloc does.
+      # On 2026-09-20 three of twenty-six runners were poisoned that way
+      # and ~1 shard in 8 failed for hours with
+      #   postgres never accepted a connection on ${attr.unique...}:32790
+      # which reads like a slow service container and is nothing of the
+      # kind. Recovering needs `nomad alloc stop` on the host side; this
+      # guard is so CI does not care.
+      #
+      # The fallback is the routing table, not localhost: the runner uses
+      # host networking, so this is the node's own LAN address -- which is
+      # exactly what the service container is published on, and what
+      # localhost is NOT on that box.
       - name: Locate the postgres service
         env:
           SERVICE_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
           host="${CI_SERVICE_HOST:-localhost}"
+          case "$host" in
+            *'${'*)
+              host="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+              host="${host:-localhost}"
+              echo "::warning::CI_SERVICE_HOST arrived unresolved; using ${host}."
+              ;;
+          esac
           {
             echo "PGHOST=${host}"
             echo "PGPORT=${SERVICE_PORT}"
