@@ -120,9 +120,12 @@
 (deftest a-selection-never-drops-core
   (testing "naming one module keeps the law's own vocabulary"
     ;; …and the seat, the model, the sitting and the schedule, which
-    ;; are core's since the grant carries a typed ref to the seat
+    ;; are core's since the grant carries a typed ref to the seat —
+    ;; and the judgment and the verdict (waymark-fp62.11), core's
+    ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
-             :seat :model :sitting :schedule :mcp_server}
+             :seat :model :sitting :schedule :mcp_server
+             :judgment :verdict}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
