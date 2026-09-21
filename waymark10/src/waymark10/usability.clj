@@ -178,8 +178,15 @@
   ;; as a null arm beside the array, and the vocabulary sits on the
   ;; array's items exactly as before, so the question is asked of that
   ;; arm (the seat's `wake_on` is the case that found this)
+  ;; …and an OPTIONAL SCALAR is the same scalar: the entry's recipe
+  ;; rides the projection's outer node, which for `[:maybe :string]`
+  ;; is the oneOf wrapper and not the string arm, so the question is
+  ;; asked of the wrapper first (the seat's `walk` is the case that
+  ;; found this — a walk-judging guard's :open bought a picker warning
+  ;; nobody could clear, bead waymark-fp62.12)
   (let [p (unwrap-maybe prop)]
-    (boolean (or (:x-options p)
+    (boolean (or (:x-options prop)
+                 (:x-options p)
                  (some :x-options (vals (get-in p [:items :properties])))))))
 
 (defn effort-honesty

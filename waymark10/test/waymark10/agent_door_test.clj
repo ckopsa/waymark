@@ -553,10 +553,14 @@
       (is (contains? #{409 422}
                      (:status (try-grant [{:kind "guest_chore" :actions []
                                            :filter {:title "Dishes"}}])))))
-    (testing "state is never a grant filter"
-      (is (contains? #{409 422}
-                     (:status (try-grant [{:kind "guest_chore" :actions []
-                                           :filter {:state "open"}}])))))
+    ;; state WAS never a grant filter: both halves of the leash read
+    ;; the JSON document and `state` is a column, so the filter was one
+    ;; nothing could answer. Both halves address the column since
+    ;; waymark-fp62.12, because a seat walks its queue under its own
+    ;; scope entry's filter and that filter is a state.
+    (testing "state is a grant filter, and it lands"
+      (is (= 201 (:status (try-grant [{:kind "guest_chore" :actions []
+                                       :filter {:state "open"}}])))))
     (testing "two filtered entries on one kind refuse"
       (is (contains? #{409 422}
                      (:status (try-grant [{:kind "guest_chore" :actions []

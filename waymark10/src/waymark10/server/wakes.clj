@@ -26,18 +26,27 @@
 
   ── the two kinds of entry ─────────────────────────────────────────
 
-  R-12.24 gives a `wake_on` entry a second reading. An entry with no
-  `at_least` is the TRANSITION wake above: the row that moved wakes
-  the seat, and the text names it. The entry's `filter` is read on
-  both — on this one it names which MOVED rows wake the seat
+  R-12.24 gives a `wake_on` entry a second reading. An entry that
+  names NEITHER size is the TRANSITION wake above: the row that moved
+  wakes the seat, and the text names it. The entry's `filter` is read
+  on both — on this one it names which MOVED rows wake the seat
   (`moved-under?`), so a seat that watches one change's runs is not
-  woken by every other change's. An entry WITH one is a COUNT wake:
-  the seat is not woken by a row, it is woken by a queue reaching a
-  size. It does not poll — the count is read only when a transition
-  of that kind matches the entry's actions, which is the one moment
-  the number can have changed — and the count itself is the
-  collection's own (`count-under`), so the number in the text is the
-  number the list page would show under the same filter.
+  woken by every other change's. An entry that names `at_least` or
+  `at_most` is a COUNT wake: the seat is not woken by a row, it is
+  woken by a queue reaching a size. It does not poll — the count is
+  read only when a transition of that kind matches the entry's
+  actions, which is the one moment the number can have changed — and
+  the count itself is the collection's own (`count-under`), so the
+  number in the text is the number the list page would show under the
+  same filter.
+
+  The two sizes are the two directions (waymark-fp62.13). `at_least`
+  wakes the seat when the queue has grown to the size: the work is
+  the rows waiting. `at_most` wakes it when the queue has come DOWN
+  to the size, and `at_most` 0 is the empty queue — the work is that
+  nothing is waiting, which is the planner who must make the next
+  plan. An entry names one of the two; the seat's schema refuses
+  both, so nothing here has to choose between them.
 
   ── the damper, and what it is for ─────────────────────────────────
 
@@ -156,7 +165,9 @@
 (defn- active-seats
   "Every active seat a wake can reach, as the three facts a match
   needs: its id, what wakes it (`effective-wake-on`, so a walk seat's
-  computed default is already in), and its own gap.
+  computed default is already in — it is handed the WALKED kind's
+  declaration, because a filtered walk's default names every action
+  of that kind), and its own gap.
 
   AN INTERACTIVE SEAT IS NOT HERE (R-10.8). A person sits in it and
   nothing fires it — its own `fire` door refuses the engine — so it is
@@ -164,13 +175,16 @@
   judged and then refused would warn once per matching transition in
   a house where nothing is wrong."
   [eng]
-  (into []
-        (comp (remove seats/interactive-seat?)
-              (map (fn [row]
-                     {:id (str (:id row))
-                      :wake-on (seats/effective-wake-on row)
-                      :interval (interval-of row)})))
-        (rows-where eng :seat {:state :active} seat-page)))
+  (let [walk-rdef (fn [row]
+                    (some->> (get-in row [:data :walk]) str not-empty
+                             keyword (get (inv/resources eng))))]
+    (into []
+          (comp (remove seats/interactive-seat?)
+                (map (fn [row]
+                       {:id (str (:id row))
+                        :wake-on (seats/effective-wake-on row (walk-rdef row))
+                        :interval (interval-of row)})))
+          (rows-where eng :seat {:state :active} seat-page))))
 
 (defn- seats-of
   "The active seats, cached for the life of the registration and
@@ -180,9 +194,12 @@
   (or @cache (reset! cache (active-seats eng))))
 
 (defn count-entry?
-  "Is this a COUNT wake (R-12.24)? One field decides it: `at_least`."
+  "Is this a COUNT wake (R-12.24)? Either size says so: `at_least`,
+  the queue grown to a size, or `at_most`, the queue drained to one.
+  An entry that names neither is a transition wake. An entry that
+  names both never reaches here — the seat's schema refuses it."
   [e]
-  (some? (:at_least e)))
+  (or (some? (:at_least e)) (some? (:at_most e))))
 
 (defn matches?
   "Does this ONE entry match the transition? The kind and the action,
@@ -304,9 +321,14 @@
 (defn count-text
   "The count, as the text a count wake's fire carries (R-12.24): the
   kind, the rows waiting, and the size that was asked for. NO row id,
-  so the session walks the queue rather than one row."
-  [kind n at-least]
-  (wire/write-json {:kind (name kind) :count n :at_least at-least}))
+  so the session walks the queue rather than one row.
+
+  `size-field` is the entry's own word — `:at_least` or `:at_most` —
+  so the text says which way the seat was counting, and a session
+  reading `{\"count\": 0, \"at_most\": 0}` is told the queue is empty
+  rather than left to infer it."
+  [kind n size-field size]
+  (wire/write-json {:kind (name kind) :count n size-field size}))
 
 (defn- wake-text-for
   "The text this seat's fire carries for this transition, or nil when
@@ -317,8 +339,15 @@
   (`moved-under?`: one read by id, and an entry with no filter asks
   for no read at all). A COUNT entry that matches costs one count
   query (R-12.24) and answers only once the rows waiting have reached
-  its `at_least`; below that the seat is not woken and nothing is
-  remembered, because the entry has not matched yet.
+  its size: at or above `at_least`, or at or below `at_most`. Short
+  of that the seat is not woken and nothing is remembered, because
+  the entry has not matched yet.
+
+  A count that could not be taken wakes NOBODY. `count-under` answers
+  nil for a kind this engine does not serve and for a filter the kind
+  cannot answer, and nil is not zero: an `at_most` entry read as zero
+  would fire on the engine's own failure to count, and say the queue
+  was empty.
 
   A seat that wrote both kinds and matched both is woken by the
   transition: it is the more specific of the two and names the row
@@ -336,12 +365,15 @@
       (wake-text t)
       (some (fn [e]
               (when (count-entry? e)
-                (let [at-least (long (:at_least e))
-                      n (or (count-under eng (keyword (name (:kind e)))
-                                         (:filter e))
-                            0)]
-                  (when (>= n at-least)
-                    (count-text (:kind e) n at-least)))))
+                (when-some [n (count-under eng (keyword (name (:kind e)))
+                                           (:filter e))]
+                  (let [n (long n)]
+                    (if-some [at-least (:at_least e)]
+                      (when (>= n (long at-least))
+                        (count-text (:kind e) n :at_least (long at-least)))
+                      (let [at-most (long (:at_most e))]
+                        (when (<= n at-most)
+                          (count-text (:kind e) n :at_most at-most))))))))
             matched))))
 
 ;; ── the damper ──────────────────────────────────────────────────────

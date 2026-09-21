@@ -149,7 +149,7 @@
   - own-id collections cap at 200 held grants/requests per principal
     (the member-visibility page waymark9 also capped).
   - a scope entry may carry :filter {field value} — admission by
-    MATCH (eq on a declared-filterable data field, never state; one
+    MATCH (eq on `state`, or on a declared-filterable data field; one
     filtered entry per kind), judged at the row (row?) and ANDed
     into the collection query (conds-of), so rows minted after the
     grant land inside the leash the moment they match. The worksheet
@@ -229,7 +229,7 @@
   every other field of an entry is a widget — this one is the map-of
   the client can only hand a person as a box, and waymark-2hd0's rule
   is that such a box wears the declaration's own reason."
-  "No form can list another kind's field names, so this pair is typed: write the field name, then the value it must equal. The field must be one that kind declares filterable.")
+  "No form can list another kind's field names, so this pair is typed: write the field name, then the value it must equal. The field is `state`, or one that kind declares filterable.")
 
 ;; The scope form is where a person decides whether to trust an agent,
 ;; so it is the last form in this codebase that should have been a
@@ -283,7 +283,7 @@
     [:filter {:optional true
               :x-display {:label "Only rows matching"
                           :spelled-by-hand filter-spelled-by-hand
-                          :help "One field=value pair, judged at render — rows minted later land inside the leash the moment they match. The field must be one the kind declares filterable with eq; one filtered entry per kind."}}
+                          :help "One field=value pair, judged at render — rows minted later land inside the leash the moment they match. The field is `state`, or one the kind declares filterable with eq; one filtered entry per kind."}}
      [:maybe filter-map-schema]]
     [:args {:optional true
             :x-display {:label "Argument limits"
@@ -419,7 +419,7 @@
    :reads [:services]
    :vars [:kind :field]
    :open "A grant filter narrows by a field the kind already declares filterable with eq, or — for a dotted power — by a field its server's entry lists in `constraints`; both vocabularies are one GET away."
-   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names a data field the kind declares filterable (eq), never state, and only ONE entry may filter a kind; a filter on a dotted power names a field the server's powers entry lists in `constraints`, and a power that lists none admits no filter at all."}
+   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), and only ONE entry may filter a kind; a filter on a dotted power names a field the server's powers entry lists in `constraints`, and a power that lists none admits no filter at all."}
   [_row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
     (let [entries (filter :filter (:scope inp))
@@ -453,8 +453,21 @@
                      [f _] (:filter e)
                      :let [fname (name f)
                            ops (get (:filterable rdef) (keyword fname))]
-                     :when (or (= "state" fname)
-                               (not (contains? (or ops #{}) :eq)))]
+                     ;; STATE IS FILTERABLE HERE (bead waymark-fp62.12).
+                     ;; It was refused until this bead, because the
+                     ;; query half and the row half both read the JSON
+                     ;; document and `state` is a column — a filter
+                     ;; nothing could answer. Both halves now address
+                     ;; the column (`conds-of`, `row-matches?`), and a
+                     ;; seat whose walk is a state needs it: the rows
+                     ;; it may see are the rows it walks, and a row
+                     ;; that leaves the filter leaves its sight in the
+                     ;; same commit. Every kind's collection grammar
+                     ;; answers `state` (collections/param-map adds it
+                     ;; whatever `:filterable` says), so no
+                     ;; `:filterable` entry is owed for it.
+                     :when (and (not= "state" fname)
+                                (not (contains? (or ops #{}) :eq)))]
                  {:kind (:kind e) :field fname}))
           bad-power (first
                      (for [e entries
@@ -1536,13 +1549,21 @@
   "Does this decoded row sit inside one of the entry's filter maps?
   Exact text comparison against the data field — the same value the
   collection's :eq cond compares in SQL, so the row check and the
-  query check tell one story."
+  query check tell one story.
+
+  `state` is the one name that is not a data field: it is the row's
+  own column, and it reads off the row rather than out of the
+  document (bead waymark-fp62.12). `conds-of` addresses the same
+  column, so the two halves stay one story here too."
   [row filter-maps]
   (boolean
    (some (fn [fm]
            (every? (fn [[f v]]
-                     (= (str (get-in row [:data (keyword (name f))]))
-                        (str v)))
+                     (let [fname (name f)]
+                       (= (str (if (= "state" fname)
+                                 (some-> (:state row) name)
+                                 (get-in row [:data (keyword fname)])))
+                          (str v))))
                    fm))
          filter-maps)))
 
@@ -2182,9 +2203,16 @@
                           ;; field's own client conds so options don't
                           ;; collapse, and must never strip this one
                           ;; (hospitality audit, guest walk #3)
-                          {:target :data :field (keyword (name f))
-                           :cast "text" :op := :value (str v)
-                           :vis? true}))))
+                          (if (= "state" (name f))
+                            ;; the state column, not the document
+                            ;; (bead waymark-fp62.12) — `row-matches?`
+                            ;; reads the same column, and facet
+                            ;; counting already knows a :state cond
+                            {:target :state :op := :value (str v)
+                             :vis? true}
+                            {:target :data :field (keyword (name f))
+                             :cast "text" :op := :value (str v)
+                             :vis? true})))))
      :ids-of (fn [kind]
                (let [k (name kind)]
                  (if-some [e (get surface k)]

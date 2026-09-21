@@ -79,7 +79,8 @@
                 (is (zero? broken))))]
     (is (re-find #"check_probe ✓" out))
     (is (not (re-find #"\(enrolled\) — " out))
-        "every enrolled kind is silent, so none of them takes a WARNING row")
+        (str "every enrolled kind is silent, so none of them takes a WARNING"
+             " row — the report, so a red run names the warning:\n" out))
     (is (re-find #"approval_request \(enrolled\) ✓" out)
         "and core's own four-eyes scenario is judged where the author looks")))
 

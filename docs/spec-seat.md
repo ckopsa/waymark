@@ -171,7 +171,8 @@ sitter of this seat loses its grant and must ask to sit in {into}."
 | `drop-inside-scope` | create, restate | each `substitute_drop` entry is inside `scope` |
 | `ttl-within-standing` | create, restate | `standing_ttl_seconds` is not more than `reentry-standing-ttl-seconds` |
 | `held-for-active-models` | create, restate | each model in the two lists is active |
-| `walk-names-a-kind-in-scope` | create, restate | `walk` names a kind the scope admits, and the kind declares a `:default-filters` over one of its own fields |
+| `walk-names-a-kind-in-scope` | create, restate | `walk` names a kind the scope admits, and one of three narrows it: that kind's scope entry carries a `filter`, or the kind declares a `:default-filters` over one of its own fields, or the seat names a `judgment` |
+| `walk-leaves-its-filter` | create, restate | the walk can empty the collection it opens. A filter over `state` must come with a door in that same scope entry whose `from` includes the filtered state and whose `to` is another state. A filter over a data field is accepted when the walked kind declares a default filter of its own, which is what opens the collection on the work waiting; a kind that declares none is refused, because nothing in the declaration proves a row ever leaves a data filter. A seat that names a `judgment` is not judged here |
 | `step-carries-a-note` | restate | a restate that changes `held_for` or `substitute_for` carries `note`, 1 to 240 characters. `note` is a transition input; the log's `inputs` column holds it, and no column is added. |
 | `merge-target-is-active` | merge | `into` is active, and is not this seat |
 
@@ -866,7 +867,10 @@ of transitions and refusals stand.
 **R-12.28** The sit must answer the walk. When the seat names a
 `walk`, the answer to `waymark_sit` carries `walk`: the seat's
 charter, and the rows. The rows are the rows of that kind, under the
-kind's own default filter and its own default sort, and there are not
+seat's filter on that kind, or the kind's default when the seat names
+none. The filter the seat names is the `filter` on the scope entry
+that opens that kind. The seat row carries no filter of its own. The
+rows come back under the kind's own default sort, and there are not
 more of them than `rows_per_firing`. The engine reads them as the
 sitter, under the seat's grant, through the same route
 `waymark_query` uses. A row that the grant does not admit is absent;
@@ -884,6 +888,14 @@ under `waymark_sit`, as the bytes of every other tool count
 (R-10.6a). `rows_per_firing` and the size of one summary bound the
 answer; a seat whose answer is too large is a seat the person
 restates.
+
+A seat therefore walks a kind that declares no default filter, which
+it could not do before. The scope entry says which rows the seat
+walks. The same entry says what the seat may do to them. So one map
+says what the seat sees and what it walks, and a row that leaves the
+filter leaves the seat's sight in the same commit. The guard
+`walk-leaves-its-filter` asks that the seat can move a row out of
+that filter (R-4.7).
 
 **R-12.29** The sit must answer the bench for a code seat. When the
 seat's walk is `change` or `ci_run`, and the first row of the walk
@@ -1207,6 +1219,16 @@ with no `wake_on` behaves as one entry: the walk's kind, with the
 action `create`. The engine computes that default when it reads the
 seat, and it writes nothing.
 
+The default follows the walk's filter. When the walk's scope entry
+carries a `filter` (R-12.28), the computed entry is the walk's kind,
+every action of that kind, under that filter. Every action includes
+`create`, the birth door every kind serves. A row reaches such a
+queue two ways: a person creates it there, or a person moves it
+there. The engine judges the row that moved after the transition
+commits, so a row moved into the filter wakes the seat and a row
+moved out of it does not. The engine still writes nothing, and it
+still computes the entry when it reads the seat.
+
 Each entry is a subscription over the transition log. The engine
 already has this: the subscription kind, one cursor for each
 subscription, at-least-once delivery, and a fail or skip policy. The
@@ -1242,8 +1264,8 @@ is a punt (section 18).
 two optional fields, and the shape becomes `{kind, actions, filter,
 at_least}`. `filter` is a map in the shape of a query's where clause
 for that kind, which is the shape a scope entry's filter already has.
-`at_least` is a whole number, 1 or more. An entry with no `at_least`
-is a transition wake (R-12.22). An entry with `at_least` is a count
+`at_least` is a whole number, 1 or more. An entry with no size is a
+transition wake (R-12.22). An entry with `at_least` is a count
 wake.
 
 A count wake does not poll. The engine counts only when a committed
@@ -1274,6 +1296,28 @@ The engine must refuse an `at_least` below 1, at `create` and at
 `restate`: `at_least must be 1 or more.` A `filter` that names a
 field the kind does not have is refused with the query's own
 sentence.
+
+A count wake must also be able to count DOWN. The entry gains a third
+optional field, `at_most`, a whole number, 0 or more. An entry with
+`at_most` is a count wake. The engine counts the same rows, under the
+entry's `filter`, when a committed transition of that kind matches
+the entry's actions. It fires the seat when the count is at or below
+`at_most`. The count is the engine's own, and not the seat's leash:
+a seat whose scope hides the rows it counts still counts them. An
+`at_most` of 0 fires when the last matching row leaves the filter,
+which is the one wake a seat could not have before. A planner that
+must make the next plan when none is waiting is woken by it. A count
+fire's text carries `at_most` where an `at_least` entry's text
+carries `at_least`: `{"kind": "plan", "count": 0, "at_most": 0}`. The
+fire names no row. The session walks the queue, and the charter says
+what to make when the queue is empty. An entry names `at_least` or
+`at_most`. The schema must refuse an entry that names both, at
+`create` and at `restate`: `An entry names at_least or at_most, not
+both.` The trigger stays a transition, and the engine adds no clock.
+The seat's cadence stays the floor for a house where nobody walks the
+door that empties the queue. A count wake is level and not edge: it
+fires each time it is evaluated and its condition holds, `at_least`
+and `at_most` alike, and `fire_interval_seconds` is the damper.
 
 One Routine for each model. Today each seat has its own Routine, and
 a person pastes the seat's instructions and the seat's key into that
@@ -2403,6 +2447,34 @@ trusts.
   writes the counts on the open sitting on each turn, so the ledger,
   the week's wall and the sitting's own ceiling all read a sitting
   that is still open (R-12.25, R-12.27).
+- **The walk's filter lives on the scope entry, not on the seat
+  row.** A seat could walk only a kind that filtered its own queue,
+  so a kind that declares no default filter could not be walked at
+  all. `plan` in mealplan10 is one of those kinds. The first fix
+  considered was a `walk_filter` field beside `walk` on the seat row.
+  A scope entry already carries a filter in the grant's own grammar,
+  and a second field would have been a second place to say the same
+  thing. Two places disagree the first time somebody edits one of
+  them. So the walk reads the filter on the scope entry that opens
+  the walked kind. Then one map says what the seat sees and what it
+  walks. A row that leaves the filter leaves the seat's sight in the
+  same commit, which is the behaviour a queue wants: work that is
+  done is out of the collection and out of the leash together. The
+  price is the guard `walk-leaves-its-filter`. A filter the seat
+  cannot get a row out of is a queue that never drains, and the seat
+  bills for the same rows every wake. Over `state` the engine can
+  prove the way out, because the machine is declared: one door in
+  that entry must leave the filtered state. Over a data field the
+  engine can prove nothing, because a handler writes that field and
+  no reading of the declaration says which one. A filter over a data
+  field is therefore accepted only when the walked kind declares a
+  default filter of its own. That default is the kind's own word
+  about which rows are the work waiting, and the entry's data filter
+  narrows the leash beside it. A kind that declares no default filter
+  is refused a data filter, because there the entry is the whole of
+  what narrows the walk. The filter grammar stays equality only. A
+  seat cannot walk two states in one filter, and widening that
+  grammar is a change to the grant (waymark-fp62.12).
 
 ## 18. Recorded punts
 

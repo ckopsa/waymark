@@ -23,6 +23,11 @@
   - the walk seat's computed default: a seat that walks a queue and
     wrote no `wake_on` wakes when a row of that queue is created, and
     the row holds no `wake_on` at all (the engine writes nothing).
+  - and the FILTERED walk's computed default (waymark-fp62.12): when
+    the walk's scope entry carries a filter, the computed entry names
+    every action of that kind under it, so the door that moves a row
+    INTO the filter wakes the seat and the one that moves it out does
+    not. The row still holds no `wake_on`.
   - the tick: a wake the GAP held is released once the gap has
     passed, by `sweep-pending!` — the body of the thread the module
     starts.
@@ -43,6 +48,11 @@
     counts on every action of its kind, where a transition entry with
     none matches nothing; and `at_least` below one is refused by the
     schema at the create door.
+  - R-12.24 · the count wake that counts DOWN (waymark-fp62.13): an
+    entry with `at_most` 0 is not woken while one matching row is
+    left, and fires the moment the last one leaves the filter. Its
+    text carries `at_most` and no row. An entry that names both
+    sizes is refused by the schema, in the entry's own place.
   - R-12.22 · the entry's `filter` is read on a TRANSITION wake too:
     the seat that names one batch wakes on that batch's completion
     and not on another's, and the same entry with no filter wakes on
@@ -136,10 +146,38 @@
              :safety {:idempotent true :reversible true :confirm false}
              :display {:label "Touch" :order 2}}}}))
 
+(def ^:private wake-memo
+  "The queue a FILTERED walk walks (bead waymark-fp62.12). It
+  declares NO default filter at all, so its collection opens on every
+  row it has ever held — what narrows a seat's walk over it is the
+  seat's own scope entry. Its two doors name each other: `send` takes
+  a row out of the drafts and `recall` puts it back, which is what
+  lets one test watch a row leave the filter and come back into it."
+  (r/resource
+   {:kind :wake_memo
+    :plural "wake_memos"
+    :states [:draft :sent]
+    :initial :draft
+    :terminal #{}
+    :summary "{data.subject} · {state}"
+    :schema [:map
+             [:subject {:examples ["The gas bill"]
+                        :x-display {:label "What it is about"
+                                    :help "One line naming the memo."}}
+              [:string {:min 1 :max 80}]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:send {:from #{:draft} :to :sent
+            :safety {:idempotent true :reversible true :confirm false}
+            :display {:label "Send" :style :primary :order 1}}
+     :recall {:from #{:sent} :to :draft
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Recall" :order 2}}}}))
+
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["wake_tasks" "wake_items" "schedules" "seats" "models" "sittings" "definitions"
+  ["wake_tasks" "wake_items" "wake_memos" "schedules" "seats" "models" "sittings" "definitions"
    "members" "roles" "grants" "approval_requests" "attachments"
    "subscriptions" "jobs"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"
@@ -160,7 +198,7 @@
         (let [fake (sch/fake-scheduler)
               fire (sch/fake-fire)
               eng (engine/engine {:storage st
-                                  :resources [wake-task wake-item]})]
+                                  :resources [wake-task wake-item wake-memo]})]
           (binding [*eng* (assoc eng
                                  :schedule-adapters {:claude_routine fake}
                                  :fire-adapter fire)
@@ -245,6 +283,14 @@
 
 (defn- item-do! [id action]
   (inv/invoke! *eng* :wake_item (str id) action nil {:principal elena}))
+
+
+(defn- memo! [subject]
+  (:id (:row (inv/create! *eng* :wake_memo {:subject subject}
+                          {:principal elena}))))
+
+(defn- memo-do! [id action]
+  (inv/invoke! *eng* :wake_memo (str id) action nil {:principal elena}))
 
 
 (defn- model! [nm]
@@ -506,6 +552,68 @@
       (let [quiet (seat! "quietclerk" {})]
         (is (= [] (seats/effective-wake-on (raw :seat quiet))))
         (seat-do! quiet :retire)))
+
+    (seat-do! seat :retire)))
+
+;; ── 4b · the FILTERED walk's computed default (R-4 of fp62.12) ──────
+;;
+;; A walk seat that wrote no `wake_on` wakes on `create` of its queue.
+;; When the walk's scope entry carries a filter, the queue is that
+;; filter — and a row arrives in it two ways, because somebody can
+;; also MOVE a row into it. So the computed entry names every action
+;; of the kind, under the same filter, and the consumer judges the row
+;; after the transition committed.
+
+(deftest a-filtered-walk-wakes-on-a-door-that-moves-a-row-into-it
+  (let [wn :wake-filtered
+        fn' :wake-filtered-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        ;; written and sent BEFORE the seat exists: both transitions
+        ;; are in the log the drain will read, and the row is OUTSIDE
+        ;; the filter at the moment the drain judges it
+        memo-id (memo! "a memo for the filtered walk")
+        _ (memo-do! memo-id :send)
+        {:keys [seat token]}
+        (linked-seat! "memoclerk"
+                      {:walk "wake_memo"
+                       :scope [{:kind "wake_memo" :actions ["send"]
+                                :filter {:state "draft"}}]}
+                      fn')]
+
+    (testing "the engine writes nothing and computes the filtered entry"
+      (let [row (raw :seat seat)
+            computed (seats/effective-wake-on row wake-memo)
+            entry (first computed)]
+        (is (nil? (get-in row [:data :wake_on]))
+            "R-12.22: no default is WRITTEN, here as anywhere")
+        (is (= 1 (count computed)))
+        (is (= "wake_memo" (str (:kind entry))))
+        (is (= ["create" "recall" "send"] (mapv str (:actions entry)))
+            "every action of the kind, and the birth door with them")
+        (is (= {"state" "draft"}
+               (into {} (map (fn [[k v]] [(name k) (str v)])) (:filter entry)))
+            "under the walk's own scope entry filter")
+        (is (nil? (:at_least entry))
+            "and it is a transition wake, as the create default always was")))
+
+    (testing "a row that sits outside the filter wakes nothing"
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (is (= 0 (count (fires-of token)))
+          "its create and its send are both in the log, and the row is sent"))
+
+    (testing "and the door that moves it back INTO the filter fires once"
+      (memo-do! memo-id :recall)
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token))))
+      (let [text (str (:text (last (fires-of token))))]
+        (is (str/includes? text (str memo-id)))
+        (is (str/includes? text "wake_memo"))
+        (is (str/includes? text "recall")
+            "the text names the door that moved it, so the session walks it")))
 
     (seat-do! seat :retire)))
 
@@ -880,3 +988,134 @@
             "what a person restates is composed after the door closed")))
 
     (seat-do! seat :retire)))
+
+;; ── 14 · R-12.24: the count wake that waits for an empty queue ──────
+;;
+;; Bead waymark-fp62.13. `at_least` counts UP and nothing could wake a
+;; seat on absence: the planner whose work begins when no plan is
+;; waiting had its cadence and nothing else. `at_most` counts DOWN,
+;; and `at_most` 0 is the empty queue.
+
+(deftest an-at-most-wake-fires-when-the-last-row-leaves-the-filter
+  (let [wn :wake-at-most
+        fn' :wake-at-most-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        batch "count-to-empty"
+        {:keys [seat token]}
+        (linked-seat! "emptyclerk"
+                      {:scope count-scope
+                       :wake_on [{:kind "wake_item"
+                                  :actions ["complete"]
+                                  :filter {:batch batch}
+                                  :at_most 0}]}
+                      fn')
+        ids (vec (repeatedly 2 #(item! batch)))]
+
+    (testing "two rows arrive, and `create` is not one of this entry's
+              actions, so nothing is counted and nothing fires"
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (testing "the first completion leaves one row waiting, which is
+              not an empty queue"
+      (item-do! (first ids) :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))
+          "and nothing waits on the schedule row: a queue above the
+           size is no match at all, not a match the damper held")
+      (drain-fires! fn')
+      (is (empty? (fires-of token))))
+
+    (testing "the second empties the filter, and the seat fires once"
+      (item-do! (second ids) :complete)
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (let [text (fire-text seat 0)]
+        (is (= "wake_item" (:kind text)))
+        (is (= 0 (:count text)))
+        (is (= 0 (:at_most text))
+            "the size it was asked in, in the entry's own word")
+        (is (nil? (:at_least text))
+            "and not the size it was not asked in")
+        (is (nil? (:id text))
+            "no row id: the session walks the queue, and the charter
+             says what to make when the queue is empty")))
+
+    (testing "and exactly one POST reached this seat's Routine"
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token))))
+      (is (str/includes? (str (:text (last (fires-of token)))) "at_most")))
+
+    (seat-do! seat :retire)))
+
+;; ── 15 · an entry names one size, never two ─────────────────────────
+
+(deftest an-entry-that-names-both-sizes-is-refused
+
+  (testing "at_least and at_most in one entry is the schema's own
+            refusal, and it lands in the entry's own place"
+    (let [p (refusal #(inv/create!
+                       *eng* :seat
+                       (seat-body "countboth"
+                                  {:wake_on [{:kind "wake_task"
+                                              :actions ["create"]
+                                              :at_least 5
+                                              :at_most 0}]})
+                       {:principal elena}))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "wake_on"))
+      (is (str/includes? (pr-str (:errors p))
+                         "An entry names at_least or at_most, not both.")
+          "the sentence says which two fields quarrelled, not 'invalid'")))
+
+  (testing "a size below zero is refused as at_least's below one is"
+    (let [p (refusal #(inv/create!
+                       *eng* :seat
+                       (seat-body "countbelowzero"
+                                  {:wake_on [{:kind "wake_task"
+                                              :actions ["create"]
+                                              :at_most -1}]})
+                       {:principal elena}))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "at_most"))
+      (is (str/includes? (pr-str (:errors p)) "wake_on"))))
+
+  (testing "and a seat woken by an empty queue is born with its entry"
+    (let [seat (seat! "countempty"
+                      {:wake_on [{:kind "wake_task"
+                                  :actions ["complete"]
+                                  :at_most 0}]})]
+      (is (= [{:kind "wake_task" :actions ["complete"] :at_most 0}]
+             (get-in (raw :seat seat) [:data :wake_on])))
+      (seat-do! seat :retire))))
+
+;; ── 16 · the count text says which way the seat was counting ────────
+
+(deftest the-count-text-carries-the-size-the-entry-asked-in
+  (testing "an at_least entry's text is the one R-12.24 spells"
+    (let [text (wire/read-json (wakes/count-text :wake_item 23 :at_least 20))]
+      (is (= {:kind "wake_item" :count 23 :at_least 20} text))))
+  (testing "and an at_most entry's carries at_most in its place"
+    (let [text (wire/read-json (wakes/count-text :wake_item 0 :at_most 0))]
+      (is (= {:kind "wake_item" :count 0 :at_most 0} text))))
+  (testing "either way the text names no row, so the session walks
+            the queue rather than one row"
+    (is (nil? (:id (wire/read-json (wakes/count-text :wake_item 0 :at_most 0)))))))
+
+;; ── 17 · an at_most entry is a count entry ──────────────────────────
+
+(deftest an-at-most-entry-is-a-count-entry
+  (let [at-most {:kind "wake_item" :actions [] :at_most 0}
+        at-least {:kind "wake_item" :actions [] :at_least 5}
+        transition {:kind "wake_item" :actions ["complete"]}]
+    (is (wakes/count-entry? at-most))
+    (is (wakes/count-entry? at-least))
+    (is (not (wakes/count-entry? transition)))
+    (testing "so an at_most entry with no actions counts on every
+              action of its kind, as an at_least entry does"
+      (is (wakes/matches? at-most :wake_item :complete))
+      (is (wakes/matches? at-most :wake_item :create))
+      (is (not (wakes/matches? at-most :wake_task :complete))))))
