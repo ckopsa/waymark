@@ -27,6 +27,7 @@
             [waymark10.server.mcp-client :as client]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.store :as store]
+            [waymark10.summary :as summary]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
@@ -238,9 +239,14 @@
         (is (= (.plusSeconds clock-start 86400)
                (get-in row [:data :expires_at]))
             "R-7: 24 hours, stamped at birth")
-        (is (str/includes? (:summary row) "emila__send"))
-        (is (str/includes? (:summary row) "mail-clerk"))
-        (is (str/includes? (:summary row) "otto@example.test"))))
+        ;; a decoded row carries no summary line; the envelope renders
+        ;; it from the kind's template, so render that here
+        (let [line (summary/render (:summary (get (inv/resources (:eng w))
+                                                   :held_call))
+                                   (assoc row :kind :held_call))]
+          (is (str/includes? line "emila__send"))
+          (is (str/includes? line "mail-clerk"))
+          (is (str/includes? line "otto@example.test")))))
 
     (testing "an entry that marks no shown fields leaves the line to
               the why"
@@ -514,7 +520,12 @@
                                             :tools ["send"]
                                             :why true
                                             :approval "none"}]}
-                                 {:principal colton}))]
+                                 {:principal colton
+                                  ;; the restate is fenced, so the call
+                                  ;; hands over the etag an honest client
+                                  ;; would have read off the row
+                                  :if-match (inv/etag :mcp_server (:id row)
+                                                      (:version row))}))]
     (is (some? e))
     (is (= 422 (:status (ex-data e)))
         (str "the entry's own place in the refusal, which is malli's and"
@@ -545,6 +556,18 @@
           eng (:eng w)
           entry {:power "email.send" :tools ["send"] :approval "person"
                  :shown ["to"]}
+          ;; the ref guard asks that the sitting stands, so one is
+          ;; planted raw, past the doors: the test is about the
+          ;; stamp and not about how a sitting is born
+          _ (store/with-tx (:storage eng)
+              (fn [tx]
+                (store/insert-row! (:storage eng) tx :sitting
+                                   {:id "sitting-1" :state :open :version 1
+                                    :data {:seat "seat-1" :model "model-1"
+                                           :grant "grant-1"}
+                                    :shape (:shape (get (inv/resources eng)
+                                                        :sitting) 1)
+                                    :owner "mail-clerk"})))
           sat (held/hold! eng {:tool "emila__send" :entry entry
                                :why "The household asked."
                                :caller "mail-clerk"
