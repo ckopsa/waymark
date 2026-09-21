@@ -47,6 +47,14 @@
   sentences, and a seat can only ask for the second when it has a
   name.
 
+  AND THE MENTION HAS A BEAT (waymark-fp62.18.3). The door opens when
+  the mirror looks, and the looking was :resync-every — an hour. A
+  mention of the house asks for an answer at once, so this kind also
+  declares :advance-every 20: the framework asks the bot rig alone
+  which chats' :last_mention_at moved, every twenty seconds, and
+  refreshes only those rows. One listing call at one rig; the
+  account's chats and the phone's texts still heal on the hour.
+
   PULL-ONLY, structurally. There is no :push-on-write, no local
   writes and no domain actions — and the seam under it, ThreadSource,
   has no push method at all. The queue mirrors the house's
@@ -233,6 +241,16 @@
                 {:field :last_mention_at
                  :label "Observed a mention of the house"
                  :help "The house's bot heard a message that named it, replied to it, or gave it a command."}}
+     ;; …AND THE DOOR HAS A BEAT OF ITS OWN. A door opens only when
+     ;; the mirror looks, and the looking below is hourly: a mention
+     ;; at 18:26 sat unseen until 19:00 while the bot rig had already
+     ;; stamped it. A mention of the house asks for an answer at
+     ;; once, so the framework beats every twenty seconds — the bot's
+     ;; own listing read, and a refresh only where the mention moved
+     ;; (mirror's ADVANCE BEAT). The account rig and the phone are
+     ;; never asked: neither answers :last_mention_at, so the beat
+     ;; costs one `tgrambot__list_chats` call and nothing else.
+     :advance-every 20
      ;; the cadenced whole-kind heal — one listing read per pass per
      ;; rig, so a dropped thread and a renamed group land within the
      ;; hour rather than at the next boot. It is also what re-resolves

@@ -162,6 +162,13 @@ instead, add `settle_seconds` to the entry (waymark-fp62.17): each
 mention then moves the wake forward by that many seconds, and the
 seat wakes when the chat has been quiet for that long.
 
+The door opens when the house looks at the chat. The house looks every
+twenty seconds. The `thread` kind declares `:advance-every 20`, and the
+engine asks the bot rig on that beat which chats the house was named
+in (waymark-fp62.18.3). A mention moves the row within that beat, and
+the wake fires the seat at once. A mention wakes the seat within about
+twenty seconds, plus the run's own start.
+
 Do not add the wake without the filter. Every Telegram chat the bot
 hears would wake the seat.
 

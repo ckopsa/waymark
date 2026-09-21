@@ -220,7 +220,18 @@
                         :gone)]))
           xids))
   (push [_ _ _]
-    (throw (ex-info "the house does not write a conversation" {}))))
+    (throw (ex-info "the house does not write a conversation" {})))
+
+  mirror/MirrorAdvanceAdapter
+  ;; the rig can also say, cheaply, WHICH chats the house was named
+  ;; in and when — the one question the advance beat asks
+  ;; (waymark-fp62.18.3)
+  (advance-listing [_]
+    (into {}
+          (keep (fn [[xid doc]]
+                  (when-some [m (:last_mention_at doc)]
+                    [xid {:last_mention_at m}])))
+          @state)))
 
 (def ^:private chat-feed (->ChatFeed chat-feed-state))
 
@@ -253,7 +264,10 @@
      :advances {:observe_mention
                 {:field :last_mention_at
                  :label "Observed a mention of the house"
-                 :help "The rig heard a message that named the house."}}})))
+                 :help "The rig heard a message that named the house."}}
+     ;; and the door has a beat of its own: the seat must hear the
+     ;; house named in seconds, not at the top of the hour
+     :advance-every 20})))
 
 ;; ── the world ───────────────────────────────────────────────────────
 
@@ -1493,5 +1507,84 @@
           (at 1100)
           (wakes/sweep-pending! *eng*)
           (is (= 1 (count (seat-fires seat)))))
+
+        (seat-do! seat :retire)))))
+
+;; ── and the beat is what makes that wake quick ──────────────────────
+;;
+;; waymark-fp62.18.3. The door above opens when the mirror LOOKS, and
+;; the looking was the whole-kind heal (an hour) or a read past the
+;; TTL. The seat is the house answering a person, so the kind declares
+;; :advance-every 20: the daemon asks the rig which mentions moved and
+;; refreshes those rows alone.
+
+(deftest the-beat-wakes-the-seat-in-seconds-and-not-at-the-hour
+  (let [wn :wake-beat
+        fn' :wake-beat-fires
+        chat "tgram:-5091757260"
+        quiet "tgram:-4400000002"
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (reset! chat-feed-state
+            {chat {:title "Meal plans"
+                   :last_message_at "2026-09-21T17:00:00Z"
+                   :last_mention_at "2026-09-21T16:30:00Z"}
+             quiet {:title "Bros."
+                    :last_message_at "2026-09-21T17:00:00Z"
+                    :last_mention_at "2026-09-21T16:30:00Z"}})
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (mirror/discover! *eng* :wake_chat)
+      (let [{:keys [seat token]}
+            (linked-seat! "beatclerk"
+                          {:wake_on [{:kind "wake_chat"
+                                      :actions ["observe_mention"]
+                                      :filter {:external_id chat}
+                                      :settle_seconds 300}]}
+                          fn')
+            rdef (get (inv/resources *eng*) :wake_chat)
+            untouched (count (log-of :wake_chat (:id (chat-row quiet))))]
+
+        (swap! chat-feed-state assoc-in [chat :last_mention_at]
+               "2026-09-21T18:26:00Z")
+
+        (testing "the pull-through alone would not have seen it: the
+                  row is fresh inside its TTL, so a read serves the
+                  stored truth and the mention waits for the hour"
+          (mirror/refresh! *eng* rdef
+                           (inv/decode-row rdef (chat-row chat)))
+          (is (= "2026-09-21T16:30:00Z"
+                 (str (get-in (chat-row chat) [:data :last_mention_at]))))
+          (is (empty? (mentions-of chat))))
+
+        (testing "one beat asks the rig which mentions moved and
+                  refreshes THAT row: the instant lands, and the door
+                  opens once beside the observe"
+          (is (= {:listed 2 :moved 1} (mirror/advance-beat! *eng* :wake_chat)))
+          (is (= "2026-09-21T18:26:00Z"
+                 (str (get-in (chat-row chat) [:data :last_mention_at]))))
+          (is (= 1 (count (mentions-of chat)))))
+
+        (testing "the chat nobody named is not touched at all — a beat
+                  costs the rows that moved and no others"
+          (is (= untouched (count (log-of :wake_chat (:id (chat-row quiet)))))))
+
+        (testing "and the seat wakes on it, on the settle's trailing
+                  edge: seconds after the family spoke, not at the top
+                  of the hour"
+          (drain-wakes! wn)
+          (is (= (.plusSeconds t0 300) (due-of seat)))
+          (at 301)
+          (wakes/sweep-pending! *eng*)
+          (is (= 1 (count (seat-fires seat))))
+          (drain-fires! fn')
+          (is (= 1 (count (fires-of token)))))
+
+        (testing "a second beat over the same listing opens nothing:
+                  the door is a MOVE and not a level"
+          (is (= {:listed 2 :moved 0} (mirror/advance-beat! *eng* :wake_chat)))
+          (is (= 1 (count (mentions-of chat)))))
 
         (seat-do! seat :retire)))))

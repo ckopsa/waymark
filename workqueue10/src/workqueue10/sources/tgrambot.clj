@@ -55,6 +55,13 @@
   per-chat route, so pull-many reads the window once and answers
   :gone for every id it no longer carries.
 
+  THE ADVANCE BEAT reads that same window (waymark-fp62.18.3). This
+  rig is an AdvanceSource, which is what lets the framework ask every
+  twenty seconds which chats the house was named in, instead of
+  waiting for the hourly heal to re-pull every conversation from
+  every rig. The beat costs ONE `list_chats` call; the account rig
+  and the phone are never asked, because neither can answer.
+
   NO BODIES. The bot hears whole messages and this source reads none
   of them. `tgrambot__get_messages` and `tgrambot__send_message` are
   a seat's leashed powers at Gate's own door, never a sync pass's."
@@ -157,7 +164,25 @@
                       (let [doc (chat->doc chat)]
                         [doc (gc/content-etag doc translation-rev)])
                       :gone)]))
-            ids))))
+            ids)))
+
+  conf/AdvanceSource
+  ;; THE ADVANCE BEAT'S ANSWER, and this rig is the only one that can
+  ;; give it: `last_mention_at` is the bot's, always and alone. It is
+  ;; the SAME listing read the three verbs above make — one
+  ;; `list_chats` call, no per-chat route, no message — so a beat
+  ;; every twenty seconds costs the house one call and the other two
+  ;; rigs nothing at all.
+  ;;
+  ;; A chat with no mention is LEFT OUT rather than answered nil: the
+  ;; beat asks which instants moved, and a chat nobody has ever named
+  ;; the house in has no such instant to speak about.
+  (thread-advances [this]
+    (into {}
+          (keep (fn [[id chat]]
+                  (when-some [m (instant-string (:last_mention_at chat))]
+                    [id {:last_mention_at m}])))
+          (listing this))))
 
 (defn source
   "The real boundary over Gate.

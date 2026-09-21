@@ -42,6 +42,20 @@
     lets a seat ask for the first and not the second. A DISCOVERY
     MINT never opens it — a birth records what the authority already
     holds, and a row born with an old mention must not wake anybody.
+  - THE ADVANCE BEAT (:advance-every, waymark-fp62.18.3): a door that
+    opens only when the mirror looks is as slow as the looking, and
+    the looking was the hourly heal or a read past the TTL. A mention
+    of the house asks for an answer at once, so a kind that declares
+    :advances may declare :advance-every N seconds: on that cadence
+    the elected discovery daemon asks the adapter for the ADVANCE
+    LISTING alone (MirrorAdvanceAdapter, external id → {field
+    instant}), compares each instant to the stored row, and refreshes
+    ONLY the rows whose instant moved forward — the ordinary
+    single-row pull (refresh!, TTL ignored) and the doors
+    observe-and-advance! opens beside it. Rows that did not move cost
+    nothing: the beat is one listing read, whatever the kind's size.
+    An adapter that cannot answer the listing is skipped with ONE
+    warning at boot, never a warning per beat.
   - PUSH ON WRITE (batch E, waymark9 push_mirror at this scope): a
     kind declaring {:push-on-write true} may also declare its own
     domain actions (moves between sync states — the machine stays the
@@ -207,6 +221,25 @@
     Throw on unreachable or refused; the failure lands as the
     conflicted state on a row that still has no external id, and
     resolve_conflict keep=local retries the create."))
+
+(defprotocol MirrorAdvanceAdapter
+  "The optional READ, for kinds declared :advances with an
+  :advance-every cadence: the one question the advance beat asks, and
+  the reason the beat is cheap. It is not pull-many with a narrower
+  answer — an adapter answers it from the feed that OWNS the instant
+  (for the queue's conversations, the bot rig's single listing call),
+  so a kind whose documents cost three authorities a round trip pays
+  one here.
+
+  An adapter that does not implement it is not broken: its kind heals
+  on :resync-every as before, and the beat skips it with one warning
+  at boot."
+  (advance-listing [a]
+    "→ {external-id {field instant}} — for each external id the
+    authority can speak for, the declared advance fields it carries.
+    Instants are wire-shaped (the strings a document carries); an id
+    the authority has no instant for may be omitted entirely. Throw
+    on unreachable: the beat costs that pass and nothing else."))
 
 ;; ── the woven declaration ───────────────────────────────────────────
 
@@ -872,10 +905,14 @@
   driver opens it when a pulled document carries a later instant than
   the stored row, beside the observe the etag decides (see ADVANCE
   DOORS in the ns docstring). An entry takes an optional :label and
-  :help for the door's own display."
+  :help for the door's own display. Beside it, {:advance-every 20}
+  puts those doors on a beat of their own: the discovery daemon asks
+  the adapter's advance-listing every 20 seconds and refreshes only
+  the rows whose instant moved (see THE ADVANCE BEAT). It refuses
+  without :advances — there would be nothing to ask about."
   [rmap {:keys [adapter ttl-seconds discover-every push-on-write document
                 create-push on-gone resync-every priority local-rows
-                advances]}]
+                advances advance-every]}]
   (when (nil? adapter)
     (throw (t/definition-error
             (str (some-> (:kind rmap) name) ": a mirror declares its :adapter"))))
@@ -902,6 +939,21 @@
                  ": :resync-every is a positive number of seconds — the "
                  "whole-kind heal's cadence (omitted, resync runs at boot "
                  "alone), got " (pr-str resync-every)))))
+  (when (and (some? advance-every) (not (pos-int? advance-every)))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :advance-every is a positive number of seconds — the "
+                 "advance beat's cadence (omitted, an advance door opens "
+                 "on the heal and the pull-through alone), got "
+                 (pr-str advance-every)))))
+  (when (and (some? advance-every) (empty? advances))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :advance-every rides :advances — the beat asks the "
+                 "adapter which instants moved, and a kind that declares "
+                 "no advance door has no instant to ask about; declare "
+                 ":advances {<door> {:field <instant field>}} or drop "
+                 ":advance-every"))))
   (when (and create-push (not push-on-write))
     (throw (t/definition-error
             (str (some-> (:kind rmap) name)
@@ -1046,7 +1098,8 @@
                                             {:set gone-patch}
                                             :keep)})
                          resync-every (assoc :resync-every resync-every)
-                         (seq advances) (assoc :advances advances))
+                         (seq advances) (assoc :advances advances)
+                         advance-every (assoc :advance-every advance-every))
                :actions
                (merge
                 (:actions rmap)
@@ -1267,15 +1320,24 @@
   actor) → fresh; unreachable → mark_unreachable once, stored truth
   stands; unchanged → nothing written; conflicted → never pulled
   (leaving conflicted is a person's move, not the clock's). Returns
-  the (possibly refreshed) decoded row."
-  [eng rdef row]
+  the (possibly refreshed) decoded row.
+
+  The optional opts {:ignore-ttl? true} asks for the pull the TTL
+  would have skipped — the ADVANCE BEAT's own call, and nobody
+  else's. The beat already KNOWS the row moved (the advance listing
+  said so), so serving a stored row inside its TTL would answer a
+  question it did not ask. Every other rule holds: conflicted still
+  never pulls, an unclaimed local birth still has nothing to pull, and an
+  unchanged etag still writes nothing but the freshness stamp."
+  [eng rdef row & [{:keys [ignore-ttl?]}]]
   (let [spec (:mirror rdef)]
     (if (or (= :conflicted (:state row))
             ;; a local birth the authority hasn't minted yet: nothing
             ;; external names it, so there is nothing to pull — the
             ;; push pass (or resolve keep=local) owns its claim
             (nil? (get-in row [:data :external_id]))
-            (and (= :fresh (:state row))
+            (and (not ignore-ttl?)
+                 (= :fresh (:state row))
                  (within-ttl? row ((:now-fn eng)) (:ttl-seconds spec))))
       row
       (let [xid (get-in row [:data :external_id])
@@ -1891,6 +1953,93 @@
              rewritten " rewritten"
              (when (pos? (long gone)) (str ", " gone " gone-from-feed"))))))
 
+;; ── the advance beat: the doors on a cadence of their own ───────────
+
+(defn beats?
+  "Whether this kind's advance doors have a beat at all: it declared
+  :advance-every, and its adapter can answer the one question the
+  beat asks. The daemon reads this ONCE at boot — an adapter that
+  cannot answer is a wiring fact, not news a beat should repeat every
+  twenty seconds."
+  [rdef]
+  (let [spec (:mirror rdef)]
+    (boolean (and (:advance-every spec)
+                  (satisfies? MirrorAdvanceAdapter (:adapter spec))))))
+
+(defn advance-beat!
+  "One ADVANCE BEAT for one mirror kind: ask the adapter for the
+  advance listing, and refresh ONLY the rows whose declared instant
+  moved forward. → {:listed n :moved n}, or nil when the adapter
+  cannot answer (it lacks the verb, or the listing threw — the beat
+  costs that pass and nothing else; stored truth keeps serving and
+  the next beat asks again).
+
+  The beat exists because the ADVANCE DOORS were only as quick as the
+  looking, and the looking was the hourly heal or a read past the
+  TTL: a mention of the house sat unseen for an hour while the rig
+  had already stamped it. It is cheap by construction — one listing
+  read for the whole kind, the rows read in the one bounded fetch
+  resync! uses, and a row that did not move costs nothing at all.
+
+  A moved row goes through the ORDINARY single-row path (refresh!
+  with the TTL ignored), so the document stays :whole and
+  observe-and-advance! opens the door exactly once. The beat itself
+  writes nothing and decides nothing: the listing says where to look
+  and the pull says what is true. A listing that runs ahead of the
+  document (the instant moved, the pull does not carry it yet) opens
+  no door — the next beat sees the same move and asks again."
+  [eng kind]
+  (let [rdef (get (inv/resources eng) kind)
+        spec (:mirror rdef)
+        adapter (:adapter spec)
+        fields (into #{} (map (comp :field val)) (:advances spec))]
+    (when (and (seq fields) (satisfies? MirrorAdvanceAdapter adapter))
+      (when-some [listing (try (let [m (advance-listing adapter)]
+                                 (report-pass! eng kind :advance true nil)
+                                 m)
+                               (catch Exception e
+                                 (warn! "advance beat for " (name kind)
+                                        " failed (" (ex-message e)
+                                        "); stored truth keeps serving")
+                                 (report-pass! eng kind :advance false
+                                               (ex-message e))
+                                 nil))]
+        (let [st (:storage eng)
+              rows (store/with-tx st
+                     (fn [tx] (store/query-rows st tx kind {}
+                                                {:limit backfill-limit})))
+              ;; conflicted stays a person's decision and an unclaimed
+              ;; local birth has nothing to pull — the same two
+              ;; exclusions resync! and the pull-through make
+              by-xid (into {}
+                           (keep (fn [row]
+                                   (when-not (= :conflicted (:state row))
+                                     (when-some [x (get-in row [:data :external_id])]
+                                       [(str x) row]))))
+                           rows)
+              ;; the comparison reads the row as the store holds it
+              ;; (wire-shaped instants — `advanced` reads either
+              ;; spelling); the refresh takes the decoded row the
+              ;; pull-through takes
+              moved (into []
+                          (keep (fn [[xid answered]]
+                                  (when-some [row (get by-xid (str xid))]
+                                    (when (seq (advanced
+                                                spec row
+                                                (select-keys answered fields)))
+                                      (inv/decode-row rdef row)))))
+                          listing)]
+          (doseq [row moved]
+            (try (refresh! eng rdef row {:ignore-ttl? true})
+                 (catch Exception e
+                   ;; one row's refusal is one row's: the rest of the
+                   ;; beat still runs, and this row's move is still in
+                   ;; the next listing
+                   (warn! "advance refresh of " (name kind) " " (:id row)
+                          " failed (" (ex-message e) "); the next beat "
+                          "sees the same move"))))
+          {:listed (count listing) :moved (count moved)})))))
+
 ;; ── manual sync: the trigger door's jobs ────────────────────────────
 ;; A sync otherwise runs only on the boot heal, the declared cadences,
 ;; TTL pull-through and push-on-write. The manual trigger rides the
@@ -2059,7 +2208,14 @@
   trigger's rows (request-sync!/service-sync-jobs!) — so a manual
   pass runs in the same one process as the cadenced ones; the
   heartbeat renews the active job's lease alongside the discovery
-  lease (renewal never waits on work)."
+  lease (renewal never waits on work).
+
+  A kind declaring :advance-every beats beside its resync, on the
+  same elected daemon and keyed the same way: the ADVANCE BEAT
+  (advance-beat!), which asks the adapter which instants moved and
+  refreshes only those rows. A declared beat whose adapter cannot
+  answer the listing is named ONCE here, at boot, and then skipped —
+  a wiring fact deserves one sentence, not one every twenty seconds."
   [eng]
   (let [stop (CountDownLatch. 1)
         st (:storage eng)
@@ -2067,6 +2223,11 @@
         held? (atom false)
         last-run (atom {})
         last-resync (atom {})
+        last-advance (atom {})
+        ;; the beat's enrolment, decided once: the kinds that declared
+        ;; :advance-every AND have an adapter that can answer
+        beating (into #{} (filter #(beats? (get (inv/resources eng) %)))
+                      (mirror-kinds eng))
         healed? (atom false)
         active-sync-job (atom nil)
         lease! (fn []
@@ -2137,7 +2298,22 @@
                        :when (and every-s
                                   (<= (* 1000 (long every-s)) (- now last)))]
                  (swap! last-resync assoc kind now)
-                 (resync! eng kind)))
+                 (resync! eng kind))
+               ;; …and kinds declaring :advance-every beat on top of
+               ;; that heal: the advance listing alone, and a refresh
+               ;; only where an instant moved. This is what makes a
+               ;; mention of the house an answer in seconds instead of
+               ;; at the top of the hour (advance-beat!)
+               (doseq [kind (mirror-kinds eng)
+                       :while @held?
+                       :when (contains? beating kind)
+                       :let [every-s (get-in (get (inv/resources eng) kind)
+                                             [:mirror :advance-every])
+                             now (System/currentTimeMillis)
+                             last (get @last-advance kind 0)]
+                       :when (<= (* 1000 (long every-s)) (- now last))]
+                 (swap! last-advance assoc kind now)
+                 (advance-beat! eng kind)))
         hb (Thread. ^Runnable
                     (fn []
                       (loop []
@@ -2176,6 +2352,18 @@
                        (when-not (.await stop 5000 TimeUnit/MILLISECONDS)
                          (recur))))
                    "waymark10-mirror-discovery")]
+    ;; the beat's one warning, at boot: a kind that asked for a
+    ;; cadence its adapter cannot serve is a declaration and a wiring
+    ;; that disagree, and the remedy is at the adapter
+    (doseq [kind (mirror-kinds eng)
+            :when (and (get-in (get (inv/resources eng) kind)
+                               [:mirror :advance-every])
+                       (not (contains? beating kind)))]
+      (warn! "the advance beat for " (name kind)
+             " is declared but its adapter answers no advance-listing "
+             "(MirrorAdvanceAdapter) — the beat is skipped; the kind's "
+             "advance doors still open on its resync and on a read past "
+             "the TTL"))
     (doto ^Thread hb (.setDaemon true) (.start))
     (doto ^Thread t (.setDaemon true) (.start))
     {:thread t :heartbeat hb :stop stop :storage st :holder holder}))
