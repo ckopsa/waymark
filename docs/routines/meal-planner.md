@@ -143,7 +143,7 @@ second entry to wake the seat when the family speaks to the house:
 
 ```json
 {"kind": "thread", "actions": ["observe_mention"],
- "filter": {"external_id": "tgram:-5091757250"},
+ "filter": {"external_id": "tgram:-1004383242252"},
  "settle_seconds": 300}
 ```
 
@@ -162,6 +162,12 @@ minutes.
 
 Do not add the wake without the filter. Every Telegram chat the bot
 hears would wake the seat.
+
+The id is the chat's id as Telegram gives it today. When the bot was
+made an admin on 2026-09-21, Telegram turned the group `-5091757250`
+into the supergroup `-1004383242252`, and both rigs name the new id.
+The old thread row stays as the record of the messages before that
+moment. When Telegram migrates the chat again, restate this filter.
 
 The wake needs the bot rig. The `tgrambot` server answers
 `last_mention_at`; the person's own account rig does not. Until that
