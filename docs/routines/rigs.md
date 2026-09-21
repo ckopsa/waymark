@@ -9,6 +9,18 @@ row and no deploy of the engine.
 
 Written in ASD-STE100 Simplified Technical English.
 
+## Where the move stands
+
+Done on 2026-09-21. Seven rows are live: emila, tgram, messa, ynab,
+amzn, keep and costco, each on its port below. Every entry Gate marked
+`require_approval` is restated with `"approval": "person"`, so the
+engine holds those calls for a person's tap. The gate row is retired
+and the gate job is stopped in home-infrastructure. Two rows remain to
+be made: `tgrambot` when the bot job answers on 8110, and none for gsd.
+
+The steps below stay as the record of how, and as the recipe for the
+next rig.
+
 ## Who does the steps
 
 A person does them, in the UI or through a tool the person is signed in
@@ -62,9 +74,11 @@ engine forwards `read` to the row named `emila`. Gate's row lists the
 prefixed names because Gate is a passthrough; a rig's row does not.
 
 `why` is true on every tool Gate's policy marked `require_approval`.
-When waymark-fp62.10.2 is live, restate those entries with
-`"approval": "person"` so the engine holds the call for a person's tap,
-as Gate did. Until then `why` demands the sentence and forwards at once.
+Those entries also carry `"approval": "person"` (waymark-fp62.10.2), so
+the engine holds the call as a `held_call` row for a person's tap, as
+Gate did. A person with the `approver` role invokes `allow` or `refuse`
+on the row. Until a `role` row named `approver` exists, a held call
+waits until it expires, one day after it was made.
 
 The nine inputs follow. `note` is free text and optional.
 
@@ -76,8 +90,8 @@ emila:
   {"power": "email.read", "why": false,
    "tools": ["inbox", "list_messages", "search", "read", "read_batch",
              "download_attachment", "summary", "folders"]},
-  {"power": "email.move", "why": true, "tools": ["move", "move_from_sender"]},
-  {"power": "email.send", "why": true, "tools": ["send"]}]}
+  {"power": "email.move", "why": true, "approval": "person", "tools": ["move", "move_from_sender"]},
+  {"power": "email.send", "why": true, "approval": "person", "tools": ["send"]}]}
 ```
 
 tgram:
@@ -86,7 +100,7 @@ tgram:
 {"name": "tgram", "transport": "http", "url": "http://192.168.1.40:8103/mcp/",
  "powers": [
   {"power": "telegram.read", "why": false, "tools": ["get_messages", "list_chats"]},
-  {"power": "telegram.send", "why": true, "tools": ["send_message"]}]}
+  {"power": "telegram.send", "why": true, "approval": "person", "tools": ["send_message"]}]}
 ```
 
 The gate row's `telegram.read` names two search tools the rig does not
@@ -97,8 +111,11 @@ messa:
 ```json
 {"name": "messa", "transport": "http", "url": "http://192.168.1.40:8104/mcp/",
  "powers": [
-  {"power": "messages.read", "why": false, "tools": ["threads", "read_messages", "reset"]}]}
+  {"power": "messages.read", "why": false, "tools": ["threads", "read_messages"]}]}
 ```
+
+The gate row's `messages.read` named a `reset` tool the rig does not
+offer. Do not copy it.
 
 keep:
 
@@ -115,7 +132,7 @@ ynab:
  "powers": [
   {"power": "ynab.read", "why": false,
    "tools": ["accounts", "transactions", "budget_month", "categories"]},
-  {"power": "ynab.write", "why": true,
+  {"power": "ynab.write", "why": true, "approval": "person",
    "tools": ["update_transaction", "split_transaction", "bulk_approve", "create_transaction"]}]}
 ```
 
@@ -126,7 +143,7 @@ amzn:
  "powers": [
   {"power": "amazon.read", "why": false,
    "tools": ["orders", "search", "product_details", "view_cart", "reset"]},
-  {"power": "amazon.cart", "why": true, "tools": ["add_to_cart"]}]}
+  {"power": "amazon.cart", "why": true, "approval": "person", "tools": ["add_to_cart"]}]}
 ```
 
 costco:
@@ -148,7 +165,7 @@ tgram-bot (waymark-fp62.18.1):
 {"name": "tgrambot", "transport": "http", "url": "http://192.168.1.40:8110/mcp/",
  "powers": [
   {"power": "telegram_bot.read", "why": false, "tools": ["list_chats", "get_messages", "me"]},
-  {"power": "telegram_bot.send", "why": true, "tools": ["send_message"]}]}
+  {"power": "telegram_bot.send", "why": true, "approval": "person", "tools": ["send_message"]}]}
 ```
 
 ### Step 2: read the row
@@ -182,10 +199,11 @@ stays live for the rigs not yet moved.
 1. Invoke `retire` on the gate row. A retired row answers no tool, and
    `restore` brings it back to `dark` if a rig must go back behind Gate.
 2. Stop the gate job. In ckopsa/home-infrastructure remove
-   `terraform/nomad-jobs/gate.hcl` and `nomad_variable.gate` in
-   `terraform/nomad_variables.tf`, apply, and merge the same day. The
-   gate's bot token is free after that. It is the approval channel of
-   Gate and nothing else uses it.
+   `terraform/nomad-jobs/gate.hcl`, `nomad_variable.gate` in
+   `terraform/nomad_variables.tf` and the two `gate/deploy` grants in
+   `terraform/nomad_acl_policies.tf`, apply, and merge the same day.
+   The gate's bot token is free after that. It is the approval channel
+   of Gate and nothing else uses it.
 3. Leave `WORKQUEUE10_GATE_URL` set in `workqueue10.hcl`. The comment
    beside it says what it means now. Renaming it is a deploy of the
    engine and buys nothing.
