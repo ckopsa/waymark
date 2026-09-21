@@ -32,6 +32,21 @@
   stands, the sync machine renders its staleness, and the address an
   old insight cites is still an address.
 
+  THE HOUSE HEARS ITSELF NAMED (waymark-fp62.18.2). A third rig
+  answers for the same Telegram: the house's own BOT. It lists the
+  chats it has heard from and, for each, the time of the last message
+  that named it, replied to it, or gave it a command —
+  :last_mention_at. The bot's chat and the account's chat are ONE
+  row: the external id is the same spelling at both rigs, so an
+  insight that cites the family chat cites the same address whichever
+  rig heard it, and the confluence merges the two listings into one
+  document (sources/tgrambot.clj holds the ownership rule). Beside
+  the etag, a mention opens a door of its own — `observe_mention`,
+  driver-invoked — because \"somebody said something\" and \"somebody
+  said something to the house\" are one etag move and two different
+  sentences, and a seat can only ask for the second when it has a
+  name.
+
   PULL-ONLY, structurally. There is no :push-on-write, no local
   writes and no domain actions — and the seam under it, ThreadSource,
   has no push method at all. The queue mirrors the house's
@@ -102,13 +117,18 @@
                            :help "The name the phone shows for this chat — a person's name for a one-to-one thread, everybody's names for a group."}}
        [:maybe [:string {:max 400}]]]
       ;; the confluence's routing tag — which rig this row drinks
-      ;; from; the enum is the tag set main wires
+      ;; from; the enum is the tag set main wires. tgram and tgrambot
+      ;; are two rigs over ONE Telegram: the house's own account and
+      ;; the house's bot, and a chat both of them list is one row
+      ;; (the external id is the same spelling at both), so this tag
+      ;; says which rig wrote the row last and not which chat it is
       [:source {:optional true :filter #{:eq :in}
                 :x-display
                 {:label "Where the conversation lives"
                  :choices {"tgram" "Telegram"
+                           "tgrambot" "Telegram, heard by the house's bot"
                            "messa" "Text messages on the phone"}}}
-       [:maybe [:enum "tgram" "messa"]]]
+       [:maybe [:enum "tgram" "tgrambot" "messa"]]]
       ;; :chat_kind and not :kind — `kind` is the row envelope's own
       ;; word, and a data field wearing it reads as the row's type
       ;; everywhere a card is rendered
@@ -140,6 +160,20 @@
                          {:showcase true
                           :label "When something was last said"
                           :help "The rig's own timestamp for the last message. A rig that could not read a time leaves this empty rather than guessing one."}}
+       [:maybe :waymark/instant]]
+      ;; THE SECOND CLOCK, and the one the house is IN. The bot rig
+      ;; answers when somebody last spoke TO the house — an @mention
+      ;; of the bot, a reply to it, or a command. The door
+      ;; observe_mention moves when this moves, so a seat can ask to
+      ;; be woken by the family talking to the house and not by the
+      ;; family talking. Nil at tgram and at messa: the user account
+      ;; hears a chat and no rig but the bot knows what a mention of
+      ;; the bot is.
+      [:last_mention_at {:optional true
+                         :x-display
+                         {:showcase true
+                          :label "When the house was last spoken to"
+                          :help "The time of the last message that named the house's bot, replied to it, or gave it a command. Empty for a conversation the bot does not hear."}}
        [:maybe :waymark/instant]]
       ;; declared and nil at both wired rigs: the only way to count
       ;; messages is to READ them, which is the thing this kind exists
@@ -173,17 +207,32 @@
     {:adapter adapter
      :ttl-seconds ttl-seconds
      :discover-every discover-every
-     ;; :whole, and it is honest: every field comes from one listing
-     ;; entry and there are no hub-local words on this kind at all, so
-     ;; absence really is unset rather than silence. (The ref is
-     ;; engine-maintained and excluded from the replace by the
-     ;; framework's own rule.)
+     ;; :whole, and it is honest: every field comes from the rigs'
+     ;; own listing entries for this one chat and there are no
+     ;; hub-local words on this kind at all, so absence really is
+     ;; unset rather than silence. (The ref is engine-maintained and
+     ;; excluded from the replace by the framework's own rule.) Where
+     ;; two rigs list one chat, the confluence merges their entries
+     ;; into the ONE document this mode reads — and a rig that is
+     ;; dark costs its tag the pass rather than half the document,
+     ;; which is what keeps :whole true.
      :document :whole
      ;; the rig ANSWERED and the thread was absent from its listing:
      ;; the house stopped talking there, or the window rolled past.
      ;; Either way the row keeps serving — nothing is deleted, and the
      ;; address an old insight cites is still an address.
      :on-gone {:set {:status "dropped"}}
+     ;; THE MENTION IS A DOOR. Any change to a chat moves the etag
+     ;; and lands observe_external, so a wake on that door hears every
+     ;; word in every chat. A mention of the house is rarer and it
+     ;; asks for an answer, so it gets a door of its own: the driver
+     ;; opens observe_mention when the bot's :last_mention_at for a
+     ;; chat is later than the row's, beside the observe. A mention
+     ;; moves both, and a seat picks which sentence it wants.
+     :advances {:observe_mention
+                {:field :last_mention_at
+                 :label "Observed a mention of the house"
+                 :help "The house's bot heard a message that named it, replied to it, or gave it a command."}}
      ;; the cadenced whole-kind heal — one listing read per pass per
      ;; rig, so a dropped thread and a renamed group land within the
      ;; hour rather than at the next boot. It is also what re-resolves

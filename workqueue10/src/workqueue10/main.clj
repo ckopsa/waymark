@@ -37,9 +37,9 @@
   media engine — the :media domain's first authority; unset falls
   back to the in-memory fake, the hub's noop source always wired
   beside it), WORKQUEUE10_GATE_URL (the household's Gate — the
-  :thread domain's two rigs, tgram and messa, share ONE caller
-  against it; unset falls back to the in-memory twin, so offline dev
-  and the declaration gate never reach for the LAN) and
+  :thread domain's three rigs, tgram, tgrambot and messa, share ONE
+  caller against it; unset falls back to the in-memory twin, so
+  offline dev and the declaration gate never reach for the LAN) and
   WORKQUEUE10_GATE_CHAT_LIMIT (how many conversations a listing asks
   for — the window, default 40), WORKQUEUE10_INBOX_TOOL / _INBOX_LIMIT
   / _INBOX_FOLDER / _INBOX_EVERY (the inbox header source, spec-seat
@@ -116,6 +116,7 @@
             [workqueue10.sources.mealplan :as meals]
             [workqueue10.sources.messa :as messa]
             [workqueue10.sources.tgram :as tgram]
+            [workqueue10.sources.tgrambot :as tgrambot]
             [waymark10.dashboard :as dashboard]
             [workqueue10.connections :as connections :refer [connection]]
             [waymark10.dsl :refer [in-domain]]
@@ -197,6 +198,11 @@
   (messa/fake-source fake-gate
                      {:birth-fn (gate-chat/roster-birth-fn
                                  {:engine-ref engine-ref})}))
+;; the bot rig's twin, over the same scriptable Gate. It names no
+;; participants, so it takes no birth-fn: the account rig beside it
+;; owns that half (sources/tgrambot.clj, "who owns which field")
+(defonce fake-tgrambot
+  (tgrambot/fake-source fake-gate))
 
 (defn- ui-base []
   (or (System/getenv "WAYMARK10_OIDC_APP_URL") "http://localhost:8014"))
@@ -358,15 +364,26 @@
   "The THREAD confluence's tag → ThreadSource map — the confluence
   instantiated a third time (docs/spec-threads.md): one :thread kind
   over the household's conversations, from Telegram and from the
-  phone's texts. Both rigs answer through Gate, so BOTH share ONE
+  phone's texts. Every rig answers through Gate, so they all share ONE
   caller — gate-proxy's own client, built once here, which is the
-  session reuse the door asks for and the reason this is not two
+  session reuse the door asks for and the reason this is not three
   transports.
+
+  THE `tgram` TAG HOLDS TWO RIGS (waymark-fp62.18.2), in authority
+  order: the house's own Telegram account first, the house's bot
+  second. One chat is one row whichever rig heard it, so the tag is
+  the identity and the pair is a chorus (confluence/chorus). The
+  account names the people in a chat; the bot alone answers when the
+  family last spoke TO the house, which is what the observe_mention
+  door moves on.
 
   Real when WORKQUEUE10_GATE_URL names the Gate (the every-boundary
   rule; Gate publishes a deployment default, but a source that went
   real by default would have offline dev and the declaration gate
-  reaching for the LAN), the shared in-memory twin otherwise."
+  reaching for the LAN), the shared in-memory twin otherwise. The bot
+  needs NO env var of its own: `tgrambot__list_chats` resolves by its
+  prefix to the mcp_server row of that name (spec-mcp-servers R-7),
+  exactly as `tgram__list_chats` resolves to the gate row."
   []
   (if (some-> (System/getenv "WORKQUEUE10_GATE_URL") str not-empty)
     (let [;; the dispatcher over the engine-ref: each call resolves
@@ -378,9 +395,9 @@
                         parse-long)
           birth-fn (gate-chat/roster-birth-fn {:engine-ref engine-ref})
           cfg {:rpc-fn rpc :limit limit :birth-fn birth-fn}]
-      {"tgram" (tgram/source cfg)
+      {"tgram" [(tgram/source cfg) (tgrambot/source cfg)]
        "messa" (messa/source cfg)})
-    {"tgram" fake-tgram "messa" fake-messa}))
+    {"tgram" [fake-tgram fake-tgrambot] "messa" fake-messa}))
 
 (defn inbox-source
   "The inbox header source (docs/spec-seat.md § 13.8): one Gate
@@ -566,7 +583,8 @@
   ([srcs media-srcs adapter]
    (resources srcs media-srcs adapter nil))
   ([srcs media-srcs adapter report-fn]
-   (resources srcs media-srcs {"tgram" fake-tgram "messa" fake-messa}
+   (resources srcs media-srcs
+              {"tgram" [fake-tgram fake-tgrambot] "messa" fake-messa}
               adapter report-fn))
   ([srcs media-srcs thread-srcs adapter report-fn]
    (-> (in-domain :queue [(task-resource (conf/confluence srcs report-fn))
@@ -854,7 +872,7 @@
   (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos
               "gtasks" fake-gtasks "day_plan" fake-dayplan}
              {"flickr" fake-flickr "hub" (hub/source)}
-             {"tgram" fake-tgram "messa" fake-messa}
+             {"tgram" [fake-tgram fake-tgrambot] "messa" fake-messa}
              fake-calendar
              nil))
 
@@ -927,11 +945,14 @@
    "flickr" {:mode (if (System/getenv "WORKQUEUE10_FLICKR_URL")
                      "real" "fake")}
    "hub" {:mode "real"}
-   ;; the two thread rigs, both behind ONE Gate caller — so they are
+   ;; the thread rigs, all behind ONE Gate caller — so they are
    ;; real or fake together, and the panel says which by the same env
    ;; gate thread-sources judges by. NO :provider: that key advertises
    ;; a /auth/<provider>/reconsent door, and Gate's credential is
    ;; Gate's own — there is nothing here for a person to re-consent to
+   ;; `tgram` is the TAG and not one rig: the house's account and the
+   ;; house's bot answer for it together (thread-sources), so they
+   ;; break together and one breaker says so
    "tgram" {:mode (if (System/getenv "WORKQUEUE10_GATE_URL") "real" "fake")}
    "messa" {:mode (if (System/getenv "WORKQUEUE10_GATE_URL") "real" "fake")}
    "calendar" {:provider "google"

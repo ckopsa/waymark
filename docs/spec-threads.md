@@ -57,20 +57,22 @@ declared and reviewed, and CI is the gate.
 - `waymark10/server/gate_proxy.clj` — the engine's power door. `rpc-of`
   is the seam; since waymark-fp62.10 the `gate` mcp_server row's `powers`
   bind `tgram__list_chats` to `telegram.read` and `messa__threads` to
-  `messages.read` (docs/spec-mcp-servers.md).
+  `messages.read` (docs/spec-mcp-servers.md). The bot rig rides the same
+  seam under its own row, `tgrambot` — see "The bot rig" below.
 
 ## The canonical doc
 
-One kind, two rigs, and email folders later on the same protocol.
+One kind, three rigs, and email folders later on the same protocol.
 
 ```clojure
 {:kind :thread :plural "threads" :nav :secondary
  [:title                 string]      ; the household's own word for the chat
- [:source                enum "tgram" "messa"]
+ [:source                enum "tgram" "tgrambot" "messa"]
  [:chat_kind             enum "direct" "group", maybe nil]
  [:status                enum "live" "dropped"]
  [:last_message_at       instant, maybe nil]   ; the cursor the DRIVER windows on
- [:message_count_window  int, maybe nil]       ; nil at both wired rigs — see below
+ [:last_mention_at       instant, maybe nil]   ; the bot rig alone — see below
+ [:message_count_window  int, maybe nil]       ; nil at every wired rig — see below
  [:participant_names     vector of string]     ; the rig's own words
  [:participants          vector of ref → :person, :match :name]}
 ```
@@ -103,14 +105,60 @@ rendered.
   reasons, one verdict: not stored.
 - **Sender ids.** Not needed; see "The row set is the sender directory".
 
-### `message_count_window`: declared, and nil at both rigs
+### `message_count_window`: declared, and nil at every rig
 
-Neither listing answers a message count, and the only way to compute one is
+No listing answers a message count, and the only way to compute one is
 to *read the messages* — which is exactly the thing this kind exists not to
 do. So the field is declared and left nil, and the gap renders. It is
 declared rather than punted because an email-folder source (the next one)
 answers a count for free, and a field added later is a migration where a
 field left nil is a sentence.
+
+### The bot rig, `last_mention_at`, and the door beside the etag
+
+Added by waymark-fp62.18.2, after the rest of this spec was live. The
+house speaks in the family chat as a BOT of its own (waymark-fp62.18.1),
+and the bot rig is a third source: `tgrambot__list_chats` answers, for
+each chat it has heard from, `last_mention_at` — the time of the last
+message that named the bot by `@username`, replied to it, or gave it a
+command. The `mentions` count beside it is dropped: it counts what the
+rig has heard since it started, so it moves when the rig restarts.
+
+**One chat is one row.** The bot's external id is `tgram:<chat_id>` —
+the account rig's own spelling, because it is the same chat and the same
+Telegram id. The confluence holds both rigs under the one `tgram` tag (a
+`chorus`), so an insight that cites the family chat cites one address
+whichever rig heard it. The ownership rule is one sentence: **the rig
+listed first is the authority, and a rig listed after it can only ADD
+what the first does not carry.** The account rig is listed first, so the
+participants stay its own; it answers no mention, so the bot's mention
+lands beside them. A chat only the bot hears is its own row, and its
+`:source` says `tgrambot`.
+
+**A dark rig costs its tag the pass**, rather than half a document. The
+document is `:whole`, so a chat described by one rig of two would look
+like a chat that LOST half its facts: the mention would nil out while
+the bot was dark and move forward again when it came back, which is a
+door opening for nothing.
+
+**The rig's own row, and its powers.** The bot needs no environment
+variable here: `tgrambot__list_chats` resolves by its prefix to the
+`mcp_server` row named `tgrambot` (spec-mcp-servers R-7), exactly as
+`tgram__list_chats` resolves to the `gate` row. That row's `powers` are
+also the vocabulary a seat's scope may name — `telegram_bot.read` and
+`telegram_bot.send` — so nothing static in this engine declares them,
+and the row is a hand step beside the rig.
+
+**The door.** Any change moves the etag and lands `observe_external`, so
+a seat woken by that door is woken by every word in every chat. A
+mention is rarer and it asks for an answer, so the kind declares an
+ADVANCE DOOR (`mirror/declaration`'s `:advances`): the driver opens
+`observe_mention` when a pulled document's `last_mention_at` is later
+than the stored one, beside the observe. A mention moves both doors,
+once each. A birth opens neither — a row minted with a week-old mention
+did not move this minute. The meal-planner runbook names the door in a
+`wake_on` entry with a filter on the one chat and a settle of five
+minutes.
 
 ### `:status`, and what an ending means here
 
@@ -236,14 +284,14 @@ call `rpc "tools/call"` directly, and the leash lands where it belongs:
 
 ## The wire
 
-| | tgram | messa |
-|---|---|---|
-| listing | `tgram__list_chats {limit}` | `messa__threads {limit}` |
-| identity | `id` (numeric, stable across renames) | `hash` ("d0d1123a") |
-| title | `title` | `name` |
-| kind | `type`: user \| group | commas in `name` |
-| time | `last_message_date` "2026-08-26 17:03:21+00:00" | `time` — **always `""`** |
-| dropped | `last_message_preview`, `unread_count`, `username` | `snippet` |
+| | tgram | tgrambot | messa |
+|---|---|---|---|
+| listing | `tgram__list_chats {limit}` | `tgrambot__list_chats {limit}` | `messa__threads {limit}` |
+| identity | `id` (numeric, stable across renames) | `chat_id` — the SAME id | `hash` ("d0d1123a") |
+| title | `title` | `title` | `name` |
+| kind | `type`: user \| group | `type`: private \| group \| supergroup | commas in `name` |
+| time | `last_message_date` "2026-08-26 17:03:21+00:00" | `last_message_at`, and `last_mention_at` beside it | `time` — **always `""`** |
+| dropped | `last_message_preview`, `unread_count`, `username` | `mentions` | `snippet` |
 
 Both answer one JSON object per row as separate MCP content parts AND as
 `structuredContent.result`, an array. The sources read
@@ -288,7 +336,7 @@ never ranks, and still never arrives.
 | (e) cursor | **none** — the listing is the window | neither rig takes a `since=`; what flickr's cursor buys (a small delta) the listing gives for free at ≤40 rows, and `last_message_at` on the ROW is the cursor that actually matters — it is what the driver windows on |
 | (f) `unread_count` | not stored | a fact about the phone, not the conversation: it churns on reading, it makes "moved" ambiguous, and it publishes what the house has not answered |
 | (g) previews / snippets | not stored | bodies in a shorter coat |
-| (h) `message_count_window` | declared, nil at both rigs | filling it means reading the messages, which is the thing this kind exists not to do |
+| (h) `message_count_window` | declared, nil at every rig | filling it means reading the messages, which is the thing this kind exists not to do |
 | (i) participant linking | `:many` external-keyed ref, `:match :name` | the framework already has the shape; the raw names stay whole beside the resolvable projection |
 | (j) `person.handle` | not added | a second identity system one source could fill; the direct chat's own `external_id` already IS the handle, and the heal is one keyword |
 | (k) observed births | yes, from the source's translation, best-effort | the bead's "the roster grows on its own"; the alternative is a second pass with a second cadence for one write |
@@ -298,6 +346,8 @@ never ranks, and still never arrives.
 | (o) `:nav` | `:secondary`, no population | a conversation is not a thing to do; a card for it would be the feed manufacturing work |
 | (p) `synced_at` / `external_etag` | not declared | `mirror/declaration` weaves them; two fields with one meaning is worse than none |
 | (q) domain | domainless, beside `person` | who the house talks to is not a domain of logistics beside queue/chores/meals |
+| (r) two rigs over one Telegram | ONE row under the `tgram` tag (a chorus), never a second row per chat | the chat is one conversation with one address; a second row forks every citation, and the wake would name the half nobody cites |
+| (s) the mention | an ADVANCE DOOR beside the etag, never a field a wake reads | a wake reads ACTIONS: "somebody spoke" and "somebody spoke to us" are one etag move and two sentences |
 
 ## What the driver does with it (waymark-36s, deliverable 3)
 
