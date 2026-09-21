@@ -458,7 +458,10 @@
    {:allow
     {:from #{:held} :to :allowed
      :guards decider-walls
-     :record true
+     ;; no :record here: the door takes no input, so there is nothing
+     ;; to retain. The transition itself is the record of the tap, with
+     ;; the actor and the instant on it, and `refuse` records because
+     ;; its reason is the thing the caller reads back.
      :handler record-allow
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The engine forwards the call once and keeps what the server answered. A held call is answered one time; a second allow is refused because the row is no longer held."}
