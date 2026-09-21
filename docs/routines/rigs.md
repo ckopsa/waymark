@@ -166,8 +166,12 @@ tgram-bot (waymark-fp62.18.1):
 {"name": "tgrambot", "transport": "http", "url": "http://192.168.1.40:8110/mcp/",
  "powers": [
   {"power": "telegram_bot.read", "why": false, "tools": ["list_chats", "get_messages", "me"]},
-  {"power": "telegram_bot.send", "why": true, "approval": "person", "tools": ["send_message"]}]}
+  {"power": "telegram_bot.send", "why": false, "tools": ["send_message"]}]}
 ```
+
+The bot's send holds for nobody and asks no why. The seat speaks as
+the house, and the chat is the record. The person's own account rig,
+`tgram`, keeps the hold on its `send_message`.
 
 ### Step 2: read the row
 
