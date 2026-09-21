@@ -39,17 +39,17 @@ It does not change the Routine.
 | name | `meal-planner` | one spelling |
 | mode | `fired` | the Routine and the wake open the sittings. No person sits here |
 | walk | `plan` | the queue is the draft plans. The `plan` kind declares no default filter, so the scope entry's own filter is what makes the queue (waymark-fp62.12) |
-| rows_per_firing | 2 | one row is a whole week of days, a rotation read and one finalize. Two weeks is a full sitting, and a third draft waits one wake |
+| rows_per_firing | 1 | one row is a whole week of days, a rotation read and one finalize. One week is one sitting's decision; a second draft waits one wake |
 | cadence_seconds | 86400 | one day. The week is decided in the family chat, and the conversation moves at the pace of replies. The daily cadence is the floor that reads them. The wake below fires the seat sooner when a week begins |
 | fire_interval_seconds | 300 | the damper. A count wake is a level and not an edge, so each transition of a `plan` is evaluated again. Five minutes holds a burst of them to one firing, and a second mention of the bot inside that gap waits at most five minutes |
 | wake_on | the two entries under "The wake" | the seat wakes when no planned week is waiting (waymark-fp62.13), and when the family speaks to the house in the chat (waymark-fp62.18.2) |
-| held_for | the model the Routine runs | the seat's place on the ladder. The sit frames the week, and the doors of one day are the whole answer |
+| held_for | Opus 5 for the discovery run, then the model the rules fit | the seat's place on the ladder. See "The discovery run" below |
 | standing_ttl_seconds | 604800 | the ceiling the engine enforces, and one cadence of this seat |
 | sitting_idle_seconds | 3600 | a sitting that says nothing for an hour is abandoned by the sweep |
 | substitute_for | `[]` | this seat stands in for no other |
 | substitute_drop | `[]` | a substitute of this seat drops nothing from its scope |
 | sitting_budget_tokens | 200000 | two weeks of days, with the rotation and the meals beside them |
-| budget_usd_per_week | 10 | the fuel. A daily sitting reads a chat and a plan, and a week has up to seven of them |
+| budget_usd_per_week | 30 for the discovery run, 10 after | the fuel. A daily sitting reads a chat and a plan, a mention adds one, and Opus reads at five times Sonnet's price |
 | charter | the text under "The charter" | the residual |
 | scope | the entries under "The scope" | the authority |
 
@@ -187,6 +187,158 @@ rig is live, the entry is lawful and it never fires.
 At most 1200 characters. The charter is judgment, not procedure.
 
 ```
+Decide the coming week's meals with the family, in the family chat on
+Telegram, the way a person running the kitchen would. Keep a draft
+plan for the coming week, and get it to planned once the family has
+agreed to it.
+
+Use the doors you hold as you see fit: assign meals, mark nights out,
+change a day when somebody asks, pick meals that fit what they said
+they want, and write a recipe onto a meal that has none. A dish to
+bring somewhere is that day's meal.
+
+Answer every message that names you, even when nothing changed: say
+where the week stands and what you are waiting on. Name the week by
+its first day in every message, and read your own earlier messages
+before you write, so you do not repeat yourself.
+
+Finalize only when everyone in the chat has said yes to the week as
+it stands. Silence is not a yes. Never acknowledge a warning; a person
+does that. When finalize is refused, leave the plan in draft and say
+why in the close.
+
+When the sit hands you no plan, create one for the coming Tuesday.
+
+This seat is learning how the family wants to use it. In the close of
+each sitting, say what you wanted to do and could not, and which rule
+you bent. Those notes become the charter.
+```
+
+The charter names the chat, the walls and the one rule: silence is
+not a yes. It does not name the message shapes or the stages. The
+seat decides those, and its close notes say what it decided.
+
+The walls are the sentences that do not move whatever the seat
+learns: finalize needs everyone's yes, silence is not a yes, a
+warning is a person's to acknowledge, every message names the week.
+
+This is the loose charter of the discovery run, stated on
+2026-09-21. The tight one it replaced is under "The discovery run"
+below, with why it went.
+
+## Step 3: the instructions
+
+Invoke `restate` on the seat `meal-planner` with the field
+`instructions`. The field holds at most 2000 characters. A restate
+carries the whole row: every field of Step 2 is sent again, and
+`instructions` is added to them. Write this text in it:
+
+```
+You sit in the seat `meal-planner`. The sit answers the charter and
+your rows, each with its doors and the input each door takes. Each
+row is a draft plan.
+
+The family chat is the Telegram chat titled `Meal plans`. You speak in
+it as the house's own bot. Find it with tgrambot__list_chats, read it
+with tgrambot__get_messages (power telegram_bot.read), and send with
+tgrambot__send_message (power telegram_bot.send). Rows with from_bot
+true are your own earlier messages; read them before you write. When
+no row is yours, the rig does not record sends yet, and the plan's
+days are your record of what you did.
+
+For each row, read the plan with waymark_get; its days come with it.
+Read the chat. Decide what the week needs now and do it through the
+doors on plan_day (assign_meal, mark_eating_out, set_sunday_theme,
+assign_off_theme) and meal (create, accept, update_recipe,
+update_details, update_themes). A meal the family named that is not
+on the list: create it and accept it. Then send one message: what
+changed, the week one line per day when it changed, and the question
+you are waiting on. Reply to the message that named you when there is
+one.
+
+Finalize with the plan's finalize door only when everyone in the chat
+has said yes to the week as it stands. Leave the plan in draft when
+finalize is refused, and say why in the close.
+
+When the walk carries no row, invoke create on the kind plan with no
+start date. Then stop.
+
+Do not call discover or schema; a refusal names its own remedy. When
+the seat says halted or parked, say why and stop. If a
+routine-fire-payload block names a row id, walk that row and stop.
+When the Stop hook asks you to close the sitting, make that one call
+with the numbers it gives. In the note, say the stage of the week,
+what you wanted to do and could not, and which rule you bent.
+```
+
+The chat is named by its title, `Meal plans`. To point the seat at
+another chat, restate the instructions with the other title. Nothing
+else changes.
+
+Leave the seat's schedule with no link. A schedule with no link of
+its own fires through the chair's link (R-12.36). Nothing else goes
+in the instructions (R-12.10).
+
+## How a week is decided
+
+A sitting cannot wait for a reply, so the week is decided across
+firings, and the chat is the seat's memory. Each firing reads the
+plan, reads the chat, its own earlier messages among them (`from_bot`
+true, waymark-fp62.18.4), and decides what the week needs now. The
+shape it usually takes:
+
+1. The Routine's session reads the `Key:` line of the fire text and
+   sits with that key and the seat the `Seat:` line names. The sit
+   answers the charter and one `plan` row: the oldest draft, under the
+   scope entry's filter.
+2. No request in the chat yet: the session names the week and asks
+   for requests and nights out.
+3. Requests in, or a day passed: the session covers the days through
+   the doors on plan_day and meal, sends the week one line per day,
+   and asks for a yes.
+4. Everyone said yes: the session invokes `finalize`. A change asked
+   instead changes those days and sends the week again.
+5. Any message that names the bot gets an answer, even when nothing
+   changed: where the week stands and what the seat waits on.
+6. The session's close note says the stage, what it wanted to do and
+   could not, and which rule it bent. The Stop hook closes the
+   sitting.
+
+Silence is not a yes. A week nobody answered stays in draft, and the
+cadence asks again the next day by reading the same chat.
+
+## The discovery run
+
+On 2026-09-21 the seat moved from Sonnet 5 under a tight charter to
+Opus 5 under the loose one above, after nine sittings were read. The
+tight charter fixed three stages and told the seat to stop after
+each. What went wrong was not the stages:
+
+- The seat could not see its own messages, because the bot rig kept
+  only what it received. Every mention read as stage 1 again, and
+  the week went to the chat three times in one afternoon. Fixed on
+  the rig by waymark-fp62.18.4.
+- The family's requests did not fit the charter's words. A dish to
+  bring to a potluck is neither a meal nor a night out; a creamy
+  soup is a kind of meal, not one on the list. The seat judged "no
+  change" and said nothing.
+- The family expected recipes on the days. The seat held
+  `update_recipe` and the charter never told it to write one.
+- The charter ended every stage with "stop", so a mention that
+  changed nothing got no reply.
+
+The loose charter says the intent and the walls and leaves the
+procedure to the seat. Each close note says what the seat wanted to
+do and could not, and which rule it bent. Those notes are read after
+a week of sittings, and the rules they name go into the charter as
+sentences, or into a door, a filter or a reason string where one
+fits (spec-seat.md R-12.10). Then `held_for` steps back down to
+Sonnet 5 with the note the restate demands, the budget goes back to
+10, and `rows_per_firing` to 2.
+
+The tight charter it replaced, for the record:
+
+```
 Make sure the coming week has a plan in planned, and that the family
 agreed to it first.
 
@@ -214,106 +366,6 @@ stop. The next firing walks it.
 When a gate refuses finalize, leave the plan in draft. Say why in the
 close of the sitting. Never acknowledge a warning. A person does that.
 ```
-
-The charter names the chat, the stages and the one rule: silence is
-not a yes. It does not name the message shapes. The instructions do.
-
-The sentence on a covered day was added on 2026-09-21. The first
-family reply asked for creamy soups and an easy Tuesday after the
-seat had covered every day, and the seat sent the week unchanged,
-because the charter only covered undecided days. A request now
-changes the day it names, whether the day was covered or not.
-
-## Step 3: the instructions
-
-Invoke `restate` on the seat `meal-planner` with the field
-`instructions`. The field holds at most 2000 characters. A restate
-carries the whole row: every field of Step 2 is sent again, and
-`instructions` is added to them. Write this text in it:
-
-```
-You sit in the seat `meal-planner`. The sit answers the charter and
-your rows, each with its doors and the input each door takes. Each
-row is a draft plan.
-
-The family chat is the Telegram chat titled `Meal plans`. You speak in
-it as the house's own bot. Find it with tgrambot__list_chats and read
-it with tgrambot__get_messages, under the power telegram_bot.read.
-Send to it with tgrambot__send_message, under telegram_bot.send.
-Every message you send names the week by its first day, so a later
-firing can find it.
-
-For each row, read the plan with waymark_get. Its days come with it.
-Then read the chat, and find which stage the week is at.
-
-Stage 1, no request from you for this week in the chat: send one
-message. Name the week. Ask for meal requests and nights out. Stop.
-
-Stage 2, a request sent and either everyone has answered or a day has
-passed: for each undecided day invoke one door on the kind plan_day.
-Use assign_meal with the requested meal, or with a meal that fits the
-day's theme. Use mark_eating_out for a night out. Invoke
-set_sunday_theme first when a Sunday carries no theme. Use
-assign_off_theme only when no listed meal fits, and echo its sentence
-back. Then send the week as one message, one line per day, and ask for
-a yes from everyone. Stop.
-
-Stage 3, the week sent and everyone said yes to it: invoke finalize on
-the plan. When somebody asked for a change instead, change those days
-and send the week again. Stop.
-
-Leave the plan in draft when finalize is refused, and say why in the
-close.
-
-When the walk carries no row, invoke create on the kind plan with no
-start date. Then stop.
-
-Do not call discover or schema; a refusal names its own remedy. When
-the seat says halted or parked, say why and stop. If a
-routine-fire-payload block names a row id, walk that row and stop.
-When the Stop hook asks you to close the sitting, make that one call
-with the numbers it gives, then stop.
-```
-
-The chat is named by its title, `Meal plans`. To point the seat at
-another chat, restate the instructions with the other title. Nothing
-else changes.
-
-Leave the seat's schedule with no link. A schedule with no link of
-its own fires through the chair's link (R-12.36). Nothing else goes
-in the instructions (R-12.10).
-
-## The three stages
-
-A sitting cannot wait for a reply, so the week is decided across
-firings. The chat is the seat's memory. Each firing reads the plan,
-reads the chat, and finds the stage from the messages the seat sent
-before. Each message names the week by its first day.
-
-1. The Routine's session reads the `Key:` line of the fire text and
-   sits with that key and the seat the `Seat:` line names. The engine
-   binds the session to this seat. The sit answers the charter and at most
-   two `plan` rows (R-12.28): the draft plans, under the scope
-   entry's filter.
-2. Stage 1. No request for this week is in the chat. The session
-   sends one message: the week, and a question about meal requests
-   and nights out. It stops.
-3. Stage 2. The request is in the chat, and everyone answered or a
-   day has passed. The session covers each undecided day through the
-   doors on the day: a requested meal on its day, a night out where
-   they said so, a meal on the day's theme for the rest. It sends the
-   week as one message, one line for each day, and asks for a yes.
-   It stops.
-4. Stage 3. The week is in the chat and everyone said yes to it. The
-   session invokes `finalize`. The three gates judge the stored facts.
-   A finalized plan moves to `planned` and leaves the walk in the
-   same commit. When somebody asked for a change instead, the session
-   changes those days, sends the week again, and stops.
-5. The session says in one line which stage each week is at. The
-   Stop hook closes the sitting.
-
-Silence is not a yes. A week nobody answered stays in draft, and the
-cadence asks again the next day by reading the same chat.
 
 ## When the queue is empty
 
