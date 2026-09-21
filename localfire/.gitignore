@@ -1,0 +1,5 @@
+# the CLI's classpath cache, rebuilt by any `clojure -M:…` in here
+.cpcache/
+# a person's own config, which names their machine's paths; the
+# committed one is localfire.example.edn (R-4.2)
+localfire.edn

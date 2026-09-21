@@ -1375,7 +1375,9 @@ A model must also have the fields `fire_url` and `fire_token`.
 `link` replaces the first. The doors are the schedule's own (R-12.18).
 The engine shows `fire_url`. The engine never shows `fire_token`. It
 holds that token as it holds the seat's `sitter_key`. A person links
-the model's Routine one time.
+the model's Routine one time. The link can name the local fire server
+(docs/spec-local-fire.md) instead of a Routine in the cloud. The wire is
+the same, and the engine does not know which one answers.
 
 The chair of a seat is the FIRST model in the seat's `held_for`. A
 step down to a cheaper model is therefore one `restate` of `held_for`,
@@ -2662,7 +2664,10 @@ trusts.
 - A price source that restates model rows on a cadence (section 15).
 - Adapters for providers beyond the Claude Routine. Jules and cron
   are named in the enum; the first adapter built is the Routine's,
-  because the trial runs on it.
+  because the trial runs on it. The local fire server
+  (docs/spec-local-fire.md, waymark-fp62.19) takes the other path and
+  answers the Routine wire itself, so no adapter is necessary for a
+  machine of the house.
 - A refusal log with the door, the guard, and the sentence, beyond
   the count. The count is enough to find the seat. The log is what
   the fence census (leg 2) reads to find the guard.

@@ -151,6 +151,12 @@ Do these two steps one time for a model:
    The engine never shows the token again. A second `link` replaces
    the first. `unlink` clears both fields.
 
+The same two steps link a model row to the local fire server, for a
+model that runs on a machine of the house. Step 1 is then no Routine in
+the cloud: the fire URL is `{public-url}/fire/{routine}` and the token
+is the server's `LOCALFIRE_TOKEN`. Step 2 does not change. See
+docs/spec-local-fire.md section 10.
+
 The Routine's prompt:
 
 ```

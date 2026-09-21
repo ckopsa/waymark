@@ -1,0 +1,16 @@
+;; localfire (spec-local-fire.md R-4.1): a server on a machine of the
+;; house that answers the engine's fire the way a cloud Routine's fire
+;; endpoint does. It depends on nothing of the engine at run time —
+;; http-kit and jsonista at the versions waymark10/deps.edn pins, and
+;; nothing else. The :test alias adds waymark10 as a local root so the
+;; round trip of R-9.2 fires the engine's OWN adapter at this server.
+{:paths ["src"]
+ :deps  {org.clojure/clojure {:mvn/version "1.12.1"}
+         http-kit/http-kit   {:mvn/version "2.8.0"}
+         metosin/jsonista    {:mvn/version "0.3.13"}}
+ :aliases
+ {:serve {:main-opts ["-m" "localfire.main"]}
+  :test  {:extra-paths ["test"]
+          :extra-deps  {waymark10/waymark10  {:local/root "../waymark10"}
+                        lambdaisland/kaocha  {:mvn/version "1.91.1392"}}
+          :main-opts   ["-m" "kaocha.runner"]}}}

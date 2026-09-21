@@ -1,0 +1,54 @@
+;; localfire's config (spec-local-fire.md R-4.2).
+;;
+;; The path is the first argument to `clojure -M:serve`, or
+;; LOCALFIRE_CONFIG, or `localfire.edn` beside the working directory.
+;;
+;; THIS FILE HOLDS NO SECRET. The bearer token is read from the
+;; variable LOCALFIRE_TOKEN and from nowhere else (R-4.3). Mint one of
+;; 128 bits, base64url, and export it in the service's environment:
+;;
+;;   LOCALFIRE_TOKEN=$(openssl rand -base64 16 | tr '+/' '-_' | tr -d '=')
+;;
+;; Then invoke `link` on the MODEL row with `{public-url}/fire/{routine}`
+;; and that token, exactly as for a cloud Routine.
+{;; the rig table (docs/routines/rigs.md) gives 8111
+ :port 8111
+
+ ;; where the engine and a person reach this server. It goes into every
+ ;; run page URL, which the engine writes onto the schedule row as
+ ;; `last_run_url`, so it must be reachable from both.
+ :public-url "http://192.168.1.40:8111"
+
+ ;; a clone of ckopsa/waymark-seat (R-8.1): CLAUDE.md,
+ ;; .claude/settings.json, .claude/hooks/sitting-close.sh, and nothing
+ ;; else. A person or a timer pulls it. The server copies it for each
+ ;; run and never writes in it.
+ :place "/srv/waymark-seat"
+
+ ;; one directory per run, named by the session id. `paused/` under it
+ ;; holds the pause files, so a pause survives a restart.
+ :runs-dir "/var/lib/localfire/runs"
+
+ ;; the Claude Code binary. Default "claude".
+ :claude "claude"
+
+ ;; the engine's MCP door, written into each run's mcp.json and reached
+ ;; with --strict-mcp-config. The session's bearer at that door is the
+ ;; person's own stored credential (R-8.2), not anything this file
+ ;; holds.
+ :mcp {:name "waymark" :url "https://work.kopsa.info/api/-/mcp"}
+
+ ;; passed to --allowedTools, one argument each. This is the default.
+ :allowed-tools ["mcp__waymark__*" "Bash(echo *)"]
+
+ ;; one routine per CLI model — the local copy of "one Routine for each
+ ;; model" (docs/routines/ci-classifier.md). :model is required;
+ ;; :max-concurrent defaults to 1, :max-run-seconds to 3600, and
+ ;; :prompt to the fixed Routine prompt of R-6.1.
+ :routines
+ {"sonnet" {:model "claude-sonnet-5"
+            :max-concurrent 2
+            :max-run-seconds 3600}
+  "haiku"  {:model "claude-haiku-4-5"
+            :max-concurrent 1
+            :max-run-seconds 900}}}

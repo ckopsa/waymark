@@ -223,7 +223,7 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              waymark10/*|calendar10/*|workqueue10/*|factory10/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
+              waymark10/*|calendar10/*|workqueue10/*|factory10/*|localfire/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
                 echo "code path: $f"
                 code=true ;;
             esac
@@ -256,6 +256,12 @@ jobs:
         run: cd workqueue10 && clojure -Sdeps "$CLJ_SDEPS" -M:check
       - name: calendar10 — pure translation, no database or network
         run: cd calendar10 && clojure -Sdeps "$CLJ_SDEPS" -M:test
+      # localfire belongs here rather than in a job of its own: its
+      # suite needs no database and no network past the loopback, so it
+      # costs seconds beside the two above instead of minutes and a
+      # postgres service container (docs/spec-local-fire.md R-9.1).
+      - name: localfire — the fire wire, loopback only, no database
+        run: cd localfire && clojure -Sdeps "$CLJ_SDEPS" -M:test
       - name: JVM crash report
         if: failure()
         uses: ./.github/actions/jvm-crash-report

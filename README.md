@@ -62,6 +62,15 @@ and beside the household: `workqueue10.main` folds its kinds into the
 household registry when `FACTORY10=1`, so this repository's own gate is
 the classifier's first proving ground.
 
+**`localfire/`** is the local fire server, so a seat can also fire on a
+machine of the house. The engine fires a seat by one POST to a
+`fire_url` with a bearer token, and this server answers that wire the
+way a Claude Routine does. A person invokes `link` on the model row with
+the server's URL, and the same seat, the same key and the same sitting
+then run a headless Claude Code on the LAN. The engine does not change.
+Requirements:
+[`docs/spec-local-fire.md`](docs/spec-local-fire.md).
+
 ## Quickstart
 
 Everything runs against one dockerized Postgres on `:5433`
@@ -75,6 +84,7 @@ make test-calendar         # calendar transport tests
 make check-queue           # declaration-time checks + usability warnings (no database)
 make check-factory         # the same, for factory10's two kinds
 make test-factory          # the factory's suite (no database, no network)
+make check-localfire       # the local fire server's suite (no database, loopback only)
 
 make dev-queue             # serve the household engine on :8014 (UI at /api/-/ui)
 

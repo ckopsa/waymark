@@ -53,9 +53,12 @@ not add a server to the house it sits in.
 | keep | 8108 | `http://192.168.1.40:8108/mcp/` |
 | costco | 8109 | `http://192.168.1.40:8109/mcp/` |
 | tgram-bot | 8110 | `http://192.168.1.40:8110/mcp/` |
+| localfire | 8111 | `http://192.168.1.40:8111/` |
 
 Gate holds 8100 and the bench holds 8101. The address is the node the
-rigs are pinned to.
+rigs are pinned to. 8111 is the local fire server
+(docs/spec-local-fire.md), which is not a rig: it answers the engine's
+fire and no MCP tool, so it has no `mcp_server` row.
 
 ## One rig, one row
 
