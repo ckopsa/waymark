@@ -120,6 +120,7 @@
             [waymark10.server.events :as events]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.history :as history]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
@@ -978,9 +979,20 @@
                    ;; request wearing no live grant)
                    (count-committed!
                     eng req (:kind rdef)
-                    (grants/approval-effects!
+                    ;; the two wire-boundary effects, in the order a
+                    ;; reader needs them: an approved ask MINTS its
+                    ;; grant out here (grants/approval-effects!), and
+                    ;; an allowed held call FORWARDS out here
+                    ;; (held/after-allow!, waymark-fp62.10.2 R-14).
+                    ;; Each is out here because its full consequence
+                    ;; cannot live inside the transition it belongs
+                    ;; to. Both pass every other write through
+                    ;; untouched.
+                    (held/after-allow!
                      eng rdef (keyword action)
-                     (inv/invoke! eng (:kind rdef) id (keyword action) body opts)))
+                     (grants/approval-effects!
+                      eng rdef (keyword action)
+                      (inv/invoke! eng (:kind rdef) id (keyword action) body opts))))
                    (catch Exception e
                      (let [d (ex-data e)]
                        ;; beat 5: the wall the agent hit becomes the

@@ -268,8 +268,12 @@
         ;; itself, by :member — one wake's cost is the sitter's own
         ;; …and (waymark-fp62.11) the verdicts it passed itself, by
         ;; :said_by — the own surface once more
+        ;; …and (waymark-fp62.10.2) the held calls it MADE itself, by
+        ;; :caller. A power call that waits on a person is the
+        ;; caller's own to read the answer of, and an ask you cannot
+        ;; read the answer to is not an ask
         (is (= ["approval_request" "feed_view" "feed_view_consent"
-                "grant" "job" "ranking_note" "recipe_proposal"
+                "grant" "held_call" "job" "ranking_note" "recipe_proposal"
                 "remark" "sitting" "verdict" "verdict_reason"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))

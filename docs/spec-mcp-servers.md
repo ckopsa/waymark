@@ -29,7 +29,7 @@ Fields a person states:
 | `command`, `args` | What a stdio server is started with. |
 | `auth_env` | The NAME of an environment variable on the engine's host that holds the `Authorization` header value. Never the value. |
 | `passthrough` | True only on the row named `gate`. Its tools already wear their prefixes. |
-| `powers` | The policy. A list of `{power, tools, why, constraints}`. |
+| `powers` | The policy. A list of `{power, tools, approval, shown, constraints}` (`why` is `approval`'s older spelling). |
 | `note` | Free words for the next person. |
 
 Fields the engine writes: `tools` (the mirror of `tools/list`: each
@@ -71,18 +71,26 @@ resolved to.
 
 ## 4. The powers list is the policy
 
-One entry: `{"power": "email.read", "tools": ["read", "search"], "why": false}`.
+One entry: `{"power": "email.read", "tools": ["read", "search"], "approval": "none"}`.
 
 - `power` is the dotted token a grant names.
 - `tools` are tool names or globs with `*` on this server.
-- `why` true says each call must carry one sentence of reason.
+- `approval` is what a call must pass before it goes out: `none`, `why`
+  (one sentence of reason, and the call runs at once) or `person` (the
+  sentence, and the call waits for a person's tap, which is R-14).
+- `why` true is the older spelling of `approval why`, and the engine
+  still reads it as one. An entry states one or the other; an entry
+  whose two spellings disagree is refused at the write door.
+- `shown` names the two or three tool input fields a held call's own
+  line carries (R-14).
 - `constraints` are the tool input fields a grant's filter may name for
   this power. An entry that lists none admits no filter.
 
 A tool that no entry names does not exist through the power door,
 whatever the server offers. The engine judges a call in this order: no
 entry names the tool (404), the grant does not admit the power (403), the
-entry demands a `why` and the call has none (422), then the forward.
+entry demands a `why` and the call has none (422), the entry says
+`approval person` and the call is HELD (R-14), then the forward.
 Nothing before the forward touches a server.
 
 `waymark_powers` answers the mirrored tools of every live row that the
@@ -172,6 +180,72 @@ The discover answer publishes the fields. `doors.ask.constraints` maps
 each power to its field names. A power that admits no filter is absent
 from that map. `waymark_powers` shows `constraints` on each tool whose
 entry lists them.
+
+### The held call (R-14)
+
+An entry that says `approval person` does not forward its call. The
+engine mints one `held_call` row and answers the caller at once:
+
+```json
+{"held": true, "held_call": "<id>", "note": "waiting on a person's tap"}
+```
+
+That is an ANSWER and never a refusal. It counts as one served answer
+of its own size on the sitting's `served` line, and as no refusal.
+
+The row is both the notice and the record. It carries the server, the
+tool as the door resolved it, the call's arguments as the caller gave
+them, the `why`, the caller, the sitting the session sat in when it
+sat, and `expires_at`. It carries a second, hidden map, `forward`:
+what the server would actually receive, which the power door had
+already prepared: the filter's `allow` globs added, and the `why`
+translated for a passthrough row or removed for a server that never
+asked for one.
+
+Its own line names the caller, the tool and the fields the entry
+marked as `shown`: `{approval: person, shown: [to, text]}` makes the
+line read `to=… · text=…`. An entry that marks none leaves the line to
+the `why`.
+
+Two doors are a person's: `allow` and `refuse {reason}`. Two walls
+stand on both, and they are the permission slip's, reused by name.
+The first is `the-caller-does-not-decide`: `caller` is stamped at
+birth, so nobody answers their own call. The second is a role,
+`approver`. A person who is not the caller and holds no role meets the
+second wall and its sentence.
+
+The states are `held` (initial), `allowed`, `done`, `refused`,
+`failed` and `expired`. A person's tap lands `allowed`. The engine
+then forwards ONCE, at the wire boundary, under the row's own client
+and with the row's own `forward` arguments, and lands the ending: the
+answer on the row, cut to 16 KB with the bytes that went counted in
+`answer_dropped`, and the row `done`; or the wire's sentence in
+`reason`, and the row `failed`. A second allow is refused, because the
+row is no longer held. A refusal carries its reason, and the caller
+reads it on the row.
+
+The caller learns the decision by a wake or a read. A seat's `wake_on`
+may name `{kind: held_call, actions: [allow, refuse], filter: {caller:
+<its own id>}}`, so the seat wakes when a person decides its own call
+and not somebody else's. An interactive session reads the row: the
+kind's own surface is `by: caller`, so a caller reads its own held
+calls with no grant at all, and opens no door on them. The engine
+never calls the caller back.
+
+`expires_at` is stamped at birth, 24 hours out. The
+`held-call-expiry` cadence walks the `expire` door over every held row
+past it, so nothing runs late. A caller that reads an expired row
+reads that word.
+
+The engine's own calls never hold. `mcp-servers/call!`, `rpc-of` and
+`gate-proxy/power-of` reach a server without passing `invoke-for`, so
+a source, the `:power` hook of a handler and the bench helpers are not
+callers and mint no row.
+
+Approval and `safety.confirm` stay different and are meant to. A
+confirm is the caller's own acknowledgement of a consequence, echoed
+back at the door it stands on. An approval is another person's tap.
+A door may want both, and the order is confirm first, then hold.
 
 ## 5. The clients
 
@@ -268,9 +342,31 @@ Each step is one restate by a person and no deploy of the engine.
     feedback on that repository and refuses one on another. The rig
     receives no `allow`, because the filter narrows no path.
 
+18. A call on a tool whose entry says `approval person` answers
+    `held` and mints a row; the fake server records no call.
+19. The caller's own `allow` is refused by the not-the-caller wall. A
+    person who holds no role is refused by the role wall. A person
+    with the role allows.
+20. The allow forwards once, with the arguments the door prepared,
+    stores the capped answer and its dropped count, and moves the row
+    to `done`. A second allow is refused. A `refuse` carries its
+    reason and the rig hears nothing.
+21. A wire failure after the allow moves the row to `failed` with the
+    reason, and the rig heard exactly one call.
+22. A seat whose `wake_on` names `held_call`, the actions `allow` and
+    `refuse`, and a filter on its own `caller` wakes on its own call
+    and not on another caller's.
+23. The expiry sweep expires a held call past `expires_at`, and the
+    caller reads `expired`.
+24. The engine's own call on a `person` tool runs without holding.
+25. A held call counts one served answer and zero refusals on the
+    sitting, and `waymark_powers` says `approval: person` on the
+    tool.
+
 Tests: `waymark10/test/waymark10/mcp_servers_test.clj` (1 to 7, 9),
-`waymark10/test/waymark10/gate_proxy_test.clj` (8) and
-`waymark10/test/waymark10/narrow_power_test.clj` (10 to 17).
+`waymark10/test/waymark10/gate_proxy_test.clj` (8),
+`waymark10/test/waymark10/narrow_power_test.clj` (10 to 17) and
+`waymark10/test/waymark10/held_call_test.clj` (18 to 25).
 
 ## 9. Deviations on record
 
@@ -287,6 +383,36 @@ Tests: `waymark10/test/waymark10/mcp_servers_test.clj` (1 to 7, 9),
   `seen_hash`, optional and hidden, the hash the cadence read before it
   walked the door. It is what keeps two passes over two different tool
   lists two calls rather than one replayed call (section 6).
+
+### The held call (waymark-fp62.10.2)
+
+- The bead's R-1 lists five states and the kind has six. `allowed`
+  stands between the person's tap and the ending. A handler cannot
+  choose its door's destination, and an allow that reaches a server
+  has two honest endings: the answer, and the wire failure. It also
+  keeps a call that may take the client's whole timeout OUT of the
+  transaction that holds the row. The tap lands `allowed`; the wire
+  boundary forwards and walks `land` or `fail`.
+- R-3 names "the approver role of the engine's `approval_request`
+  door". That door carries the four-eyes wall and no role, so there
+  was no word to borrow: the kind spells `approver` itself, and a
+  deployment mints the `role` row.
+- R-1 names `input` as the call's arguments. The row carries a second,
+  hidden map, `forward`: what the server would actually receive,
+  prepared by the power door at call time. Without it the allow would
+  have to re-judge a grant at a moment the call was never judged in.
+- R-7 names the expiry of a HELD call. The sweep also expires a row a
+  stopped engine left `allowed` past its moment, because a call
+  nobody finished must not look like one somebody is about to.
+- A call that reaches the power door with no principal on it cannot be
+  held: a held call names its caller, and the first wall on answering
+  one is "not the caller". The door refuses such a call with a 403
+  rather than minting a row anybody could allow.
+- R-11 (the held call as a card on the approver's feed) and R-12 (the
+  corrections line reading a refused held call) are NOT built here.
+  The kind's `default-filters` open on the held queue and its
+  `sortable` is newest-first, so the collection is the queue; the feed
+  population is owed.
 
 ## 10. What this does not do
 

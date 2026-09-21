@@ -361,8 +361,11 @@
         ;; itself, by :said_by — the own surface once more. The
         ;; judgment those verdicts answer is NOT here: a judgment is
         ;; the house's law, nobody's own row.
+        ;; …and held_call (waymark-fp62.10.2), the power calls it
+        ;; made that wait on a person, own-surface by :caller
         (is (= ["approval_request" "feed_view" "feed_view_consent"
-                "grant" "job" "plan" "ranking_note" "recipe_proposal"
+                "grant" "held_call" "job" "plan" "ranking_note"
+                "recipe_proposal"
                 "remark" "sitting" "verdict" "verdict_reason"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"

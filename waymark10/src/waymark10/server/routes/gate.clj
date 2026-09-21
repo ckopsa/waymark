@@ -64,7 +64,16 @@
     (let [tool (get-in req [:path-params :tool])
           args (router/read-body req)]
       (router/json-response
-       200 (gate/invoke-for rpc (router/visibility-of req) tool args)))))
+       200 (gate/invoke-for rpc (router/visibility-of req) tool args
+                            ;; who is calling (waymark-fp62.10.2,
+                            ;; R-14): a tool whose powers entry says
+                            ;; `approval person` mints a held call in
+                            ;; this principal's name, and the first
+                            ;; wall on answering one is `not the
+                            ;; caller`. `named!` above has already
+                            ;; refused the anonymous request, so there
+                            ;; is always a name here.
+                            {:caller (:id (router/principal-of req))})))))
 
 (defn routes [eng]
   (let [rpc (gate/rpc-of eng)]
