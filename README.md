@@ -23,6 +23,15 @@ live in `waymark10/`. Design record with the 9→10 wire divergence table:
 vocabulary (all three dialects):
 [`docs/waymark10-vocabulary.md`](docs/waymark10-vocabulary.md).
 
+Two framework kinds hold judgment as data, so a person opens a judge on
+any kind with one row and one seat and no deployment
+([`docs/spec-seat.md`](docs/spec-seat.md) § 20, R-13.1 to R-13.9):
+
+| kind | what it is | the walk |
+| --- | --- | --- |
+| `judgment` | one judge, declared: the subject kind, the queue as a filter on it, the verdict names with a sentence for each, the remedy ceiling, and the consequence door the engine walks on the subject | draft → promoted, by `promote`, where the declaration checks run; promoted → superseded, a person's door, which can name the successor |
+| `verdict` | one row about one row: the judgment, the subject, one verdict name, the remedy in one sentence, and who said it | said → overruled; the seat's create door is `judge`, one verdict for each subject under each judgment; a person judges again with `corrects`, and the engine overrules the first row, which stays |
+
 Earlier generations (Python, waymark v0.1 through waymark9) are not part
 of this repository; `main`'s history records the Clojure lineage.
 
