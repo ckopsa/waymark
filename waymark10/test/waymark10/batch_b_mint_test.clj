@@ -266,9 +266,11 @@
         ;; …and (waymark-b4s) the remarks it said itself, by :said_by
         ;; …and (spec-seat.md, waymark-fp62.1) the sittings it opened
         ;; itself, by :member — one wake's cost is the sitter's own
+        ;; …and (waymark-fp62.11) the verdicts it passed itself, by
+        ;; :said_by — the own surface once more
         (is (= ["approval_request" "feed_view" "feed_view_consent"
                 "grant" "job" "ranking_note" "recipe_proposal"
-                "remark" "sitting" "verdict_reason"]
+                "remark" "sitting" "verdict" "verdict_reason"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))
           "the domain stays concealed")

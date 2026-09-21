@@ -357,9 +357,13 @@
         ;; …and sitting (spec-seat.md, waymark-fp62.1), the record of
         ;; one wake of a seat, own-surface by :member — what a wake
         ;; cost is the sitter's own to read
+        ;; …and verdict (waymark-fp62.11), the verdicts it passed
+        ;; itself, by :said_by — the own surface once more. The
+        ;; judgment those verdicts answer is NOT here: a judgment is
+        ;; the house's law, nobody's own row.
         (is (= ["approval_request" "feed_view" "feed_view_consent"
                 "grant" "job" "plan" "ranking_note" "recipe_proposal"
-                "remark" "sitting" "verdict_reason"]
+                "remark" "sitting" "verdict" "verdict_reason"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]

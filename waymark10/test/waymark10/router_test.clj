@@ -122,16 +122,19 @@
     ;; about a ranked row, the crown's sixth input;
     ;; waymark-b4s: and remark, the thread's turn — words on any
     ;; subject with no verdict attached
+    ;; waymark-fp62.11: and the judge declared as data — judgment, one
+    ;; row per judge, and verdict, the row about a row that answers it
     ;; spec-seat.md (waymark-fp62.1): and the four the seats and
     ;; schedules modules enrol everywhere — the office an agent sits
     ;; in, the price list its model is on, the record of one wake,
     ;; and the means by which a wake is scheduled
     (is (= ["approval_request" "attachment" "definition" "feed_recipe"
             "feed_view" "feed_view_consent"
-            "grant" "job" "mcp_server" "meal" "member" "model" "plan" "ranking_note"
+            "grant" "job" "judgment" "mcp_server" "meal" "member" "model"
+            "plan" "ranking_note"
             "recipe_proposal" "remark" "role" "schedule" "seat"
             "sitting" "subscription" "task"
-            "verdict_reason"]
+            "verdict" "verdict_reason"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))

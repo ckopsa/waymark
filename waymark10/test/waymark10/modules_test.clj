@@ -79,10 +79,17 @@
   ;; a sitting is four token counts, and none of it is any
   ;; application's vocabulary. What they are is the engine's own answer
   ;; to what an agent's work cost.
+  ;; …and :judgment with :verdict (waymark-fp62.11): the judge
+  ;; declared as a row, and the row about a row that answers it.
+  ;; :always, and both together or neither — a judgment with no
+  ;; verdict kind is a question nothing may answer. They name no
+  ;; application vocabulary either: a judgment names its subject as a
+  ;; kind TOKEN, which is what lets one pair serve every judge in the
+  ;; house, the engine's own rows included.
   (is (= #{:definition :member :role :grant :approval_request
            :attachment :subscription :job :feed_recipe :recipe_proposal
            :feed_view :feed_view_consent :verdict_reason :ranking_note
-           :remark :seat :model :sitting
+           :remark :judgment :verdict :seat :model :sitting
            ;; …and the schedule (spec-seat.md §12), for the same
            ;; reason a seat is always here: a cron, a model and a
            ;; provider are nobody's application vocabulary, and the

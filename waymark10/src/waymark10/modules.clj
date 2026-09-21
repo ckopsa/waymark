@@ -177,7 +177,9 @@
             [waymark10.server.wakes :as wakes]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.server.worksheet :as worksheet]
+            [waymark10.judgment :as judgment]
             [waymark10.remark :as remark]
+            [waymark10.verdict :as verdict]
             [waymark10.verdict-reason :as verdict-reason]
             [waymark10.test.packs :as packs]
             [waymark10.types :as t]))
@@ -552,6 +554,16 @@
    ;; subject_id}, no application vocabulary, and the conversation it
    ;; carries is about the cards this module minted — a house that
    ;; serves the feed serves the way to talk back to it.
+   ;; …and since waymark-fp62.11 an EIGHTH and NINTH, which are one law
+   ;; in two kinds: `judgment`, the judge declared as a row, and
+   ;; `verdict`, the row about a row that answers it. `:always`, and
+   ;; both together or neither: a judgment with no verdict kind is a
+   ;; question nothing may answer, and a verdict with no judgment kind
+   ;; is an answer under no question. They name no application
+   ;; vocabulary either — a judgment names its subject as a kind TOKEN
+   ;; ({subject_kind, subject_id} again), which is what lets one pair
+   ;; of kinds serve every judge in the house, the engine's own rows
+   ;; included (R-7).
    {:module :feed
     :enrols [{:kind :feed_recipe :enroll :always
               :kinds (fn [_] [feed-recipe/feed-recipe])}
@@ -566,7 +578,11 @@
              {:kind :ranking_note :enroll :always
               :kinds (fn [_] [ranking-note/ranking-note])}
              {:kind :remark :enroll :always
-              :kinds (fn [_] [remark/remark])}]
+              :kinds (fn [_] [remark/remark])}
+             {:kind :judgment :enroll :always
+              :kinds (fn [_] [judgment/judgment])}
+             {:kind :verdict :enroll :always
+              :kinds (fn [_] [verdict/verdict])}]
     ;; …and since waymark-1uv.9 it STARTS one thing, the first this
     ;; module has ever started: the sweep over the dropped pile, which
     ;; sets a tickler aside for every row the house let go and nobody
