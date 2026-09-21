@@ -45,6 +45,9 @@ It does not change the Routine.
 | wake_on | one count entry, under "The wake" | the seat wakes when no planned week is waiting (waymark-fp62.13) |
 | held_for | the model the Routine runs | the seat's place on the ladder. The sit frames the week, and the doors of one day are the whole answer |
 | standing_ttl_seconds | 604800 | the ceiling the engine enforces, and one cadence of this seat |
+| sitting_idle_seconds | 3600 | a sitting that says nothing for an hour is abandoned by the sweep |
+| substitute_for | `[]` | this seat stands in for no other |
+| substitute_drop | `[]` | a substitute of this seat drops nothing from its scope |
 | sitting_budget_tokens | 200000 | two weeks of days, with the rotation and the meals beside them |
 | budget_usd_per_week | 5 | the fuel |
 | charter | the text under "The charter" | the residual |
