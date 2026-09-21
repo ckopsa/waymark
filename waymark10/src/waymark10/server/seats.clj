@@ -294,6 +294,11 @@
 ;; a definition error (checks/check-create-guards).
 (g/defguard fire-keys-not-written-by-hand
   {:judges [:fire_keys]
+   ;; :open where `key-not-written-by-hand` needs none: that field's
+   ;; own length bounds tell a client what it wants, and a list of
+   ;; hashes has no such bound. Nothing tells a client what the field
+   ;; wants because no client may write it at all.
+   :open "The keys of the firings are the engine's own; no form asks for one and no client fills one in. The refusal is the whole of what a hand needs to know."
    :explain "The keys of the firings are the engine's own. A create or a restate may not carry fire_keys. Each fire mints one key, and the fire text carries it."}
   [_row inp _ctx]
   (if (contains? inp :fire_keys)
