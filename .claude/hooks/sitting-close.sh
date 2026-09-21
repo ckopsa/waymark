@@ -33,7 +33,14 @@ HOOK=$(cat)   # the hook's JSON, on stdin. Both paths read it.
 # nothing when the session must be left alone. BOTH print one status
 # line first — "<mode>|<sitting>|<closed>" — so one walk of the
 # transcript answers every question this script asks of it.
-SUM=$(cat <<'PY'
+#
+# `read -d ''` and not `$(cat <<'PY' ...)`: macOS ships bash 3.2, which
+# scans a heredoc inside `$(...)` for quotes and parens, and the first
+# apostrophe in the Python below breaks the parse of the whole file
+# (`syntax error near unexpected token ;;`, blamed on a later line).
+# `read` hits EOF on the NUL it never finds and answers false, so the
+# `|| true` keeps the script going under `set -e` should it ever be set.
+IFS= read -r -d '' SUM <<'PY' || true
 import glob, json, os, re, sys
 FIELDS = ("input_tokens", "output_tokens",
           "cache_read_input_tokens", "cache_creation_input_tokens")
@@ -136,7 +143,6 @@ json.dump({"decision": "block", "reason": (
     'Then stop.') % (sitting, count[0], count[1], count[2], count[3],
                      turns, session)}, sys.stdout)
 PY
-)
 
 # The tally door is the close's sibling, one word over. The variable
 # names the CLOSE door (it always has), so the tally is derived: swap a
