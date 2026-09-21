@@ -11,12 +11,13 @@ Written in ASD-STE100 Simplified Technical English.
 
 ## Where the move stands
 
-Done on 2026-09-21. Seven rows are live: emila, tgram, messa, ynab,
-amzn, keep and costco, each on its port below. Every entry Gate marked
-`require_approval` is restated with `"approval": "person"`, so the
-engine holds those calls for a person's tap. The gate row is retired
-and the gate job is stopped in home-infrastructure. Two rows remain to
-be made: `tgrambot` when the bot job answers on 8110, and none for gsd.
+Done on 2026-09-21. Eight rows are live: emila, tgram, messa, ynab,
+amzn, keep, costco and tgrambot, each on its port below. Every entry
+Gate marked `require_approval` is restated with `"approval": "person"`,
+so the engine holds those calls for a person's tap. The gate row is
+retired and the gate job is stopped in home-infrastructure. No row is
+made for gsd. The meal-planner seat is restated onto the bot's powers
+with the settled mention wake (docs/routines/meal-planner.md).
 
 The steps below stay as the record of how, and as the recipe for the
 next rig.
