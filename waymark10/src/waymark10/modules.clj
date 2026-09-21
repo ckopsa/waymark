@@ -151,6 +151,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.intents :as intents]
             [waymark10.server.jobs :as jobs]
+            [waymark10.server.judgments :as judgments]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
@@ -400,7 +401,26 @@
                             :poll-ms (:events-poll-ms eng 2000)
                             :tick-ms (:wake-tick-ms
                                       eng wakes/default-tick-ms)}))
-             :stop wakes/stop-wakes!}]}
+             :stop wakes/stop-wakes!}
+            ;; R-5 of waymark-fp62.11: the consequence a judgment
+            ;; names, walked on the subject AFTER the verdict is said.
+            ;; A third durable consumer on its own cursor
+            ;; (`:judgments`), here beside the wake's because this is
+            ;; the module that RUNS consumers — the two judgment kinds
+            ;; are enrolled elsewhere, and `:when` is what keeps an
+            ;; engine that does not serve them from running a thread
+            ;; for nothing. `:elected` for the wake's own reason: two
+            ;; processes walking one consequence open one door twice,
+            ;; and the cursor is shared and unguarded.
+            {:hook :judgments
+             :after [:dispatcher]
+             :elected :judgments
+             :when judgments/serving?
+             :start (fn [eng running]
+                      (judgments/start-judgments!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop judgments/stop-judgments!}]}
 
    ;; routes only, from here down — and their packs are route-shaped
    ;; to match: an obligation needing [:route m] is skipped, never

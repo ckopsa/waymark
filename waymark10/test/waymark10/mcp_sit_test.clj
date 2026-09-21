@@ -666,6 +666,16 @@
       (is (str/includes? (str (:note answer)) "Do not call discover"))
       (is (not (str/includes? (str (:note answer)) "waymark_get"))))
 
+    ;; bead waymark-fp62.11, R-4: a seat that SAYS a judgment gets a
+    ;; `judgment` block beside its rows and one more sentence in the
+    ;; note (judgment_walk_test pins that half). A seat that says none
+    ;; gets exactly what it always got, and this is where that stays
+    ;; true.
+    (testing "a seat that says no judgment carries none, and is told of none"
+      (is (not (contains? walk :judgment))
+          "absent, not empty: the walk of a plain queue seat is unchanged")
+      (is (not (str/includes? (str (:note answer)) "invoke judge"))))
+
     (testing "and the sit's own answer is on the sitting's served line"
       (let [row (store/with-tx (:storage eng)
                   (fn [tx] (store/load-row (:storage eng) tx :sitting
