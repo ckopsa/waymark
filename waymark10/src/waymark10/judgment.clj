@@ -131,7 +131,8 @@
      :label "What a verdict earns"
      :help "The name of a door on the subject kind that a landed verdict may walk — the action, not its label. Leave it blank and a verdict is a record and nothing more, which is the honest answer for a judgment that only measures."}}
    :notes
-   {:x-display
+   {:examples ["Written after the classifier's first month. The words are the ones the household already says in stand-up."]
+    :x-display
     {:widget "prose"
      :label "Notes"
      :help "Anything the fields could not carry: why this judgment exists, what an earlier one got wrong, where the words came from. Never required."}}})

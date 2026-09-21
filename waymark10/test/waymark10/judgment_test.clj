@@ -181,6 +181,10 @@
                                 [:doc :state])))
         "a judgment that fails a check does not project — and does not move")
     (let [fixed (call! eng :post (str "/api/judgments/" jid "/-/revise")
+                       ;; an :edit wears the fence — the etag says which
+                       ;; version this rewrite read, and a refused promote
+                       ;; moved nothing, so it is still the first
+                       :headers {"if-match" (str "W/\"judgment-" jid "-v1\"")}
                        :body {:name "Why did the build go red"
                               :subject_kind "jt_ticket"
                               :queue {:state "open"}
@@ -195,6 +199,7 @@
         made (draft! eng {:consequence "close" :notes "The first words."})
         jid (id-of (get-in made [:doc :self]))
         again (call! eng :post (str "/api/judgments/" jid "/-/revise")
+                     :headers {"if-match" (str "W/\"judgment-" jid "-v1\"")}
                      :body {:name "Why did the build go red"
                             :subject_kind "jt_ticket"
                             :verdicts [{:name "flake"

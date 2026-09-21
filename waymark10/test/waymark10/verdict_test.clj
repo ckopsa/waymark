@@ -215,10 +215,13 @@
       (let [page (call! eng :get "/api/verdicts")]
         (is (= 2 (get-in page [:doc :data :total])))))
     (testing "exactly one answer stands"
-      (let [page (call! eng :get "/api/verdicts?state=said")]
+      (let [page (call! eng :get "/api/verdicts?state=said")
+            ;; a collection item is the envelope minus its data, so the
+            ;; word is read off the row the item points at
+            standing (call! eng :get (str (get-in page [:doc :data :items 0 :self])))]
         (is (= 1 (get-in page [:doc :data :total])))
         (is (= "this_change"
-               (str (get-in page [:doc :data :items 0 :data :verdict]))))))
+               (str (get-in standing [:doc :data :verdict]))))))
     (testing "the ledger reads back: corrections per seat, per judgment —
               which is the measurement of the seat"
       (let [page (call! eng :get (str "/api/verdicts?judgment=" judgment

@@ -337,7 +337,8 @@
     {:label "The verdict"
      :help "One of the words this judgment names, exactly as it spells it. The judgment's own screen lists them with what each one means."}}
    :remedy
-   {:x-display
+   {:examples ["Re-run the job. The runner lost its network before the checkout, and the code did not change."]
+    :x-display
     {:widget "prose"
      :label "What to do about it"
      :help "The one thing to do next, in a sentence — not why, and not a report. The judgment sets how long this may be; two hundred and forty characters is the usual ceiling."}}
