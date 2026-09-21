@@ -131,15 +131,21 @@ hide them from the count.
 The entry names no action, so every action of a `plan` is counted on.
 `fire_interval_seconds` is the damper on that.
 
-A reply in the family chat does not wake the seat. The daily cadence
-reads it. The house mirrors each Telegram chat as a `thread` row, and
-a transition wake on that one row would wake the seat the moment a
-reply lands. Add it when the chat's `external_id` is known:
+A reply in the family chat does not wake the seat today. The house
+mirrors each Telegram chat as a `thread` row, and each reply moves
+that row. Add this second entry to wake the seat on the chat:
 
 ```json
 {"kind": "thread", "actions": ["observe_external"],
- "filter": {"external_id": "<the family chat's id>"}}
+ "filter": {"external_id": "tgram:-5091757250"},
+ "settle_seconds": 900}
 ```
+
+The entry settles, and 900 seconds is a quarter of an hour. The seat
+must read a conversation and not its first word. A wake on the first
+reply gives the seat a chat that is half answered, and the family is
+still deciding. Each reply moves the wake forward, and the seat wakes
+when the chat has been quiet for fifteen minutes.
 
 Do not add the wake without the filter. Every Telegram chat in the
 house would wake the seat, one sitting an hour.

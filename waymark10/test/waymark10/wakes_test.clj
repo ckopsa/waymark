@@ -59,6 +59,12 @@
     both. The row is judged AFTER the transition committed, so the
     kind's own default filter (state=open) does not hide a row the
     completion just moved.
+  - waymark-fp62.17 · the SETTLE: an entry with `settle_seconds`
+    fires on the TRAILING edge. Three matches inside one minute fire
+    nothing, each one moves `wake_due_at` forward, and one textless
+    fire goes out a minute after the LAST of them. The same
+    transition wakes an unsettled seat at once. The damper is still a
+    wall beside the settle, and the release clears both marks.
 
   Each seat here links its OWN fire token, and the assertions count
   the fires carrying that token: the suite shares one fake provider
@@ -81,7 +87,8 @@
             [waymark10.server.wakes :as wakes]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
-            [waymark10.wire :as wire]))
+            [waymark10.wire :as wire])
+  (:import (java.time Instant)))
 
 ;; ── the queue this house walks ──────────────────────────────────────
 
@@ -1154,3 +1161,137 @@
       (is (wakes/matches? at-most :wake_item :complete))
       (is (wakes/matches? at-most :wake_item :create))
       (is (not (wakes/matches? at-most :wake_task :complete))))))
+
+;; ── 18 · the wake that SETTLES (bead waymark-fp62.17) ──────────────
+;;
+;; Every entry above fires on the LEADING edge: the first match wakes
+;; the seat. An entry that names `settle_seconds` fires on the
+;; trailing edge instead, and this is the case the family chat asks
+;; for. The first reply is the middle of the conversation. The seat
+;; must read the chat when the replies stop.
+;;
+;; The settle is a duration of a minute, and this suite waits for no
+;; minute: the engine's clock is an atom for the length of this
+;; deftest, so the sweep can be asked before the quiet time ends and
+;; again after it. The tick's body is that same `sweep-pending!`.
+
+(defn- due-of
+  "The moment the seat's waiting wake is due, as an Instant, or nil
+  when nothing is due."
+  [seat-id]
+  (some-> (get-in (sched-of seat-id) [:data :wake_due_at]) str Instant/parse))
+
+(deftest a-settled-wake-fires-after-the-matches-stop-and-not-before
+  (let [wn :wake-settle
+        fn' :wake-settle-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "settleclerk"
+                          {:fire_interval_seconds 120
+                           :wake_on [{:kind "wake_task"
+                                      :actions ["complete"]
+                                      :settle_seconds 60}]}
+                          fn')
+            plain (linked-seat! "nosettleclerk"
+                                {:wake_on [{:kind "wake_task"
+                                            :actions ["complete"]}]}
+                                fn')]
+
+        (testing "the first match fires nothing, and the wake is due
+                  one minute after it"
+          (task-do! (task! "the first word of a conversation") :complete)
+          (drain-wakes! wn)
+          (is (empty? (seat-fires seat)))
+          (drain-fires! fn')
+          (is (empty? (fires-of token)))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+              "the match is remembered, as a damped match is")
+          (is (= (.plusSeconds t0 60) (due-of seat))))
+
+        (testing "and the very same transition wakes an UNSETTLED seat
+                  at once. The settle is the only difference between
+                  these two seats"
+          (is (= 1 (count (seat-fires (:seat plain)))))
+          (is (= 1 (count (fires-of (:token plain)))))
+          (is (nil? (due-of (:seat plain)))
+              "nothing is due on a seat that fires on the match")
+          (seat-do! (:seat plain) :retire))
+
+        (testing "a second match inside the window moves the due
+                  moment forward"
+          (at 20)
+          (task-do! (task! "the second word") :complete)
+          (drain-wakes! wn)
+          (is (empty? (seat-fires seat)))
+          (is (= (.plusSeconds t0 80) (due-of seat))))
+
+        (testing "and a third moves it forward again"
+          (at 40)
+          (task-do! (task! "the third word") :complete)
+          (drain-wakes! wn)
+          (is (empty? (seat-fires seat)))
+          (is (= (.plusSeconds t0 100) (due-of seat))))
+
+        (testing "the sweep holds the wake while the window is open,
+                  one minute after the FIRST match and past it"
+          (at 40)
+          (wakes/sweep-pending! *eng*)
+          (is (empty? (seat-fires seat)))
+          (at 99)
+          (wakes/sweep-pending! *eng*)
+          (is (empty? (seat-fires seat))
+              "99 seconds is long past the first match's own minute")
+          (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+        (testing "one minute after the LAST match the sweep fires once,
+                  and the fire names no row"
+          (at 100)
+          (wakes/sweep-pending! *eng*)
+          (let [ts (seat-fires seat)]
+            (is (= 1 (count ts)))
+            (is (nil? (get-in (first ts) [:inputs :text]))
+                "a textless fire walks the queue, so the session reads
+                 the whole conversation and not its first word"))
+          (drain-fires! fn')
+          (is (= 1 (count (fires-of token))))
+          (is (nil? (:text (last (fires-of token))))))
+
+        (testing "and the release clears both marks together"
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (nil? (due-of seat)))
+          (wakes/sweep-pending! *eng*)
+          (is (= 1 (count (seat-fires seat)))
+              "a second sweep releases nothing: there is nothing left"))
+
+        (testing "the damper is still a wall of its own: a settled
+                  wake whose window has closed waits for the gap"
+          (at 110)
+          (task-do! (task! "a word of the next conversation") :complete)
+          (drain-wakes! wn)
+          (is (= (.plusSeconds t0 170) (due-of seat)))
+          (at 175)
+          (wakes/sweep-pending! *eng*)
+          (is (= 1 (count (seat-fires seat)))
+              "the settle has passed, and the seat fired 75 seconds
+               ago inside its own gap of 120")
+          (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+              "so the wake is still waiting, and it is not lost"))
+
+        (testing "and once the gap has passed too, the second wake
+                  goes out"
+          (at 225)
+          (wakes/sweep-pending! *eng*)
+          (let [ts (seat-fires seat)]
+            (is (= 2 (count ts)))
+            (is (nil? (get-in (last ts) [:inputs :text]))))
+          (drain-fires! fn')
+          (is (= 2 (count (fires-of token))))
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (nil? (due-of seat))))
+
+        (seat-do! seat :retire)))))

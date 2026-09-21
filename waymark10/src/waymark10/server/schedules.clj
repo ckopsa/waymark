@@ -548,6 +548,16 @@
                      :x-display
                      {:label "Last wake"
                       :help "When the engine last fired this seat for a matching transition. Engine-written."}}
+     [:maybe :waymark/instant]]
+    ;; The TRAILING edge's clock (waymark-fp62.17). A `wake_on` entry
+    ;; that names `settle_seconds` does not fire on the match: the
+    ;; match moves this moment forward, and the wake goes out after
+    ;; it has passed. The maintenance write that sets `wake_pending`
+    ;; sets this beside it, and the release clears the two together.
+    [:wake_due_at {:optional true
+                   :x-display
+                   {:label "The wake is due"
+                    :help "When the waiting wake may go out. The engine writes it when a transition matched a wake_on entry that settles, and a later match moves it forward. The wake goes out after this moment has passed. Engine-written."}}
      [:maybe :waymark/instant]]]
    :create-schema
    [:map
