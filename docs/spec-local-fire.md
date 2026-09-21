@@ -271,9 +271,9 @@ R-12.17). That is what a cloud run with no environment does. The server
 sets no seat variable.
 
 **R-8.4** The hook must parse under the machine's bash. macOS ships
-bash 3.2, which could not parse the hook until 2026-09-21; the fix is
-in `sitting-close.sh` and reaches the place through the seat-place
-workflow.
+bash 3.2, which could not parse the hook until 2026-09-21 (PR #180,
+`read -d ''` in place of a heredoc inside `$(...)`). The fix reaches
+the place through the seat-place workflow.
 
 ## 9. Requirements: the tests
 
