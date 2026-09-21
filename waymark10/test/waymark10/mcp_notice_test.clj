@@ -51,7 +51,7 @@
 
 (def ^:private tables
   ["capabilities" "members" "roles" "grants" "approval_requests"
-   "mcp_servers"
+   "mcp_servers" "held_calls"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors" "waymark10_job_leases"])
 

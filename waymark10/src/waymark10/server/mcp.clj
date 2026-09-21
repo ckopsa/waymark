@@ -3222,8 +3222,24 @@
                      sent (bench-stamped
                            eng session tname
                            (gate/bench-capped (or (:arguments args) {}) tname
-                                              (seat-byte-ceiling session)))]
-                 (-> (gate/invoke-for gate-rpc (:visibility session) tname sent)
+                                              (seat-byte-ceiling session)))
+                     ;; WHO IS CALLING, and from which office
+                     ;; (waymark-fp62.10.2, R-14). A tool whose powers
+                     ;; entry says `approval person` is held rather
+                     ;; than forwarded, and the row it mints names
+                     ;; both: the caller, because the first wall on
+                     ;; answering is `not the caller`, and the
+                     ;; sitting, so a seat's ledger and its wake read
+                     ;; the call in the session it was made in. The
+                     ;; door itself is a function of a grant and a
+                     ;; call, and a session is neither, so the stamp
+                     ;; rides in from here, exactly as the bench's
+                     ;; office does.
+                     who {:caller (:id (:principal session))
+                          :sitting (bound-sitting
+                                    eng (:mcp-session-id session))}]
+                 (-> (gate/invoke-for gate-rpc (:visibility session) tname
+                                      sent who)
                      (shaped args)
                      (rig-dropped))))
 

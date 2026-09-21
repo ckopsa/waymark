@@ -7,10 +7,15 @@
   THE ROW IS THE POLICY. A row names a server, says how to reach it
   (http url or stdio command), mirrors what the server offers
   (`tools`, from tools/list, with a hash), and holds `powers`: a list
-  of entries {power, tools, why, constraints}. A power is the dotted
-  token a grant names (email.read). `tools` are names or globs on this
-  server. `why` true says a call must carry one sentence of reason.
-  `constraints` names the tool input fields a grant's filter may narrow
+  of entries {power, tools, approval, shown, constraints}. A power is
+  the dotted token a grant names (email.read). `tools` are names or
+  globs on this server. `approval` is what a call must pass before it
+  goes out: `none`, `why` (one sentence of reason, and the call runs
+  at once) or `person` (the sentence, and the call waits for a
+  person's tap, in waymark10.server.held-calls). `why true` is the older
+  spelling of `approval why` and still reads as one (`approval-of`).
+  `shown` names the two or three input fields a held call's own line
+  carries. `constraints` names the tool input fields a grant's filter may narrow
   this power by, and an entry naming none admits no filter at all
   (waymark-fp62.6.3.5). A tool that no entry names does not exist
   through the power door, whatever the server offers (R-5). This list
@@ -72,6 +77,7 @@
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.problems :as p]
@@ -251,6 +257,56 @@
           (when (some #(glob-matches? % bare) (:tools e)) e))
         (get-in row [:data :powers])))
 
+;; ── the approval a powers entry demands (waymark-fp62.10.2) ─────────
+
+(def approvals
+  "What an entry may demand before a call goes out, weakest first.
+
+  `none` forwards at once. `why` demands one sentence of reason and
+  forwards at once, which is what `why true` has always meant. `person`
+  demands the same sentence and holds the call until a person allows
+  it (R-14 of docs/spec-mcp-servers.md)."
+  ["none" "why" "person"])
+
+(defn approval-of
+  "The approval this entry demands, as a keyword: `:none`, `:why` or
+  `:person`.
+
+  THE ENGINE READS BOTH SPELLINGS AND WRITES THE NEW ONE. `approval`
+  is the field a person states now. `why true` is the older spelling
+  of `approval why`, and a row written before this leg still carries
+  it, so an entry that names no `approval` and says `why true` reads
+  as `:why`. An entry that names both is judged at the write door
+  (`entry-approval-agrees?`), so the two can never disagree here."
+  [entry]
+  (let [a (str/lower-case (str (:approval entry)))]
+    (cond
+      (= "person" a) :person
+      (= "why" a) :why
+      (= "none" a) :none
+      (true? (:why entry)) :why
+      :else :none)))
+
+(defn why-demanded?
+  "Must a call on this entry carry one sentence of reason? Both
+  `why` and `person` demand it: a person who must tap reads the
+  sentence first, so an approval that held the call and had nothing
+  to show would be a notice with no words on it."
+  [entry]
+  (not= :none (approval-of entry)))
+
+(defn person-approval?
+  "Does this entry hold the call until a person allows it?"
+  [entry]
+  (= :person (approval-of entry)))
+
+(defn shown-fields
+  "The input fields this entry marks as `shown` (R-8): the two or
+  three the person reads on the held call's own line. Names only, in
+  the order the entry wrote them."
+  [entry]
+  (into [] (comp (map str) (remove str/blank?)) (:shown entry)))
+
 (defn- passthrough? [row]
   (true? (get-in row [:data :passthrough])))
 
@@ -279,7 +335,11 @@
         (assoc hit
                :entry entry
                :token (some-> (:power entry) str)
-               :why (boolean (:why entry)))))))
+               ;; `:why` is the DEMAND for a sentence and not the
+               ;; entry's old boolean: an entry that says
+               ;; `approval person` demands one too
+               :why (boolean (and entry (why-demanded? entry)))
+               :approval (if entry (approval-of entry) :none))))))
 
 (defn capability-of
   "The power token a prefixed tool name is bound to, or nil."
@@ -365,7 +425,8 @@
       :row row
       :entry entry
       :token (some-> (:power entry) str)
-      :why (boolean (:why entry))
+      :why (boolean (and entry (why-demanded? entry)))
+      :approval (if entry (approval-of entry) :none)
       :description (str (:description tool))
       :input-schema (:input_schema tool)})))
 
@@ -788,7 +849,7 @@
 
 ;; ── the kind ────────────────────────────────────────────────────────
 
-(def ^:private power-entry
+(def ^:private power-entry-fields
   [:map
    [:power {:examples ["email.read"]
             :x-display {:raw true
@@ -801,8 +862,30 @@
     [:vector [:string {:min 1 :max 120}]]]
    [:why {:optional true
           :x-display {:label "A why is required"
-                      :help "True when each call must carry one sentence of reason."}}
+                      :help "The older spelling of an approval: true means the same as approval why. State approval instead; this field stays here because rows written before it exist."}}
     [:maybe :boolean]]
+   ;; waymark-fp62.10.2: what a call on this power must pass before it
+   ;; goes out. `none` forwards at once, `why` demands one sentence,
+   ;; and `person` demands the sentence and HOLDS the call in a
+   ;; held_call row until a person taps allow (R-14).
+   [:approval {:optional true
+               :examples ["person"]
+               :x-display {:label "Approval"
+                           :choices {"none" "none: the call goes out at once"
+                                     "why" "why: the call carries one sentence of reason and goes out at once"
+                                     "person" "person: the call carries the sentence and waits for a person to allow it"}
+                           :help "What a call on this power must pass before the engine makes it. person holds the call: the engine mints a held_call row, answers the caller that it is waiting, and forwards only after a person allows it."}}
+    [:maybe (into [:enum] approvals)]]
+   ;; R-8: the row IS the notice, so the person's line names the two
+   ;; or three input fields that say what the call would do. A send's
+   ;; recipient and text; a payment's amount. The list is on the
+   ;; ENTRY, because only the policy knows which fields of which tool
+   ;; carry the consequence.
+   [:shown {:optional true
+            :examples [["to" "text"]]
+            :x-display {:label "Fields shown to the approver"
+                        :help "The two or three tool input fields the held call's own line names, such as to and text for a send. A person reads this line and decides. Keep it short."}}
+    [:maybe [:vector {:max 3} [:string {:min 1 :max 60}]]]]
    ;; waymark-fp62.6.3.5: the row says which SENTENCES a grant may
    ;; narrow this power with. The power door interprets a filter only
    ;; on a field named here, so a server that has not taught the door
@@ -814,6 +897,45 @@
                   :x-display {:label "Constraints"
                               :help "The tool input fields a grant's filter may name for this power — repo, path. Leave it empty and no grant may filter this power at all."}}
     [:maybe [:vector [:string {:min 1 :max 60}]]]]])
+
+(defn entry-approval-agrees?
+  "R-14's one rule a `:map` cannot say: the two spellings of the same
+  demand must not contradict each other.
+
+  `why true` beside `approval none` is a policy that says both `ask
+  for a sentence` and `ask for nothing`. `why false` beside `approval
+  why` or `approval person` is the same contradiction the other way
+  round. Either field alone is fine, and `why true` beside `approval
+  why` or `approval person` agrees, because both of those demand the
+  sentence. A non-map answers true: the map beside this one has
+  already refused it, and one wrong entry owes a person one
+  sentence."
+  [e]
+  (if-not (map? e)
+    true
+    (let [a (str/lower-case (str (:approval e)))]
+      (cond
+        (str/blank? a) true
+        (true? (:why e)) (not= "none" a)
+        (false? (:why e)) (= "none" a)
+        :else true))))
+
+(def ^:private power-entry
+  "One `powers` entry: the fields above, and the rule that `why` and
+  `approval` say the same thing.
+
+  The rule is malli's, not a guard's, so it lands where a person's
+  eyes are, which is the entry's own place in the 422, and it lands at the
+  create door and the restate door without either of them repeating
+  it. The `:json-schema` property is the MAP's own, for the seat's
+  `wake_on` reason verbatim: a client draws a list of maps as rows
+  only when the items projection carries `properties`, and an `:and`
+  projects to `allOf`, which carries none."
+  [:and
+   {:json-schema (schema/json-schema power-entry-fields)}
+   power-entry-fields
+   [:fn {:error/message "An entry says why or approval, and the two must agree: why true is approval why, so it cannot sit beside approval none."}
+    #'entry-approval-agrees?]])
 
 (def ^:private tool-entry
   [:map
@@ -866,7 +988,7 @@
    [:powers {:optional true
              :examples [[{:power "email.read" :tools ["read" "search"] :why false}]]
              :x-display {:label "Powers"
-                         :help "The policy: which tools each power token admits, and whether a call must say why. A tool that no entry names does not exist through the power door."}}
+                         :help "The policy: which tools each power token admits, and what a call must pass before it goes out: nothing, one sentence of reason, or a person's tap. A tool that no entry names does not exist through the power door."}}
     [:maybe [:vector power-entry]]]
    [:note {:optional true
            :examples [note-example]
@@ -922,7 +1044,7 @@
     [:maybe [:string {:max 64}]]]
    [:powers {:optional true
              :x-display {:label "Powers"
-                         :help "The whole policy, stated again: which tools each power token admits, and whether a call must say why."}}
+                         :help "The whole policy, stated again: which tools each power token admits, and what a call must pass before it goes out."}}
     [:maybe [:vector power-entry]]]
    [:note {:optional true
            :examples [note-example]

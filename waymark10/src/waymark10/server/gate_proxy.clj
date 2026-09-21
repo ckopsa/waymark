@@ -51,6 +51,7 @@
   one; `mcp-servers/engine-of` reads all three."
   (:require [clojure.string :as str]
             [waymark10.server.grants :as grants]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.problems :as p]))
@@ -342,11 +343,15 @@
           (update :required #(vec (distinct (conj (vec %) "why")))))
       schema)))
 
-(defn- affordance [{:keys [name token description input-schema why entry]}]
+(defn- affordance [{:keys [name token description input-schema why entry
+                           approval]}]
   (cond-> {:href (str "/api/-/gate/" name)
            :method "POST"
            :capability token
-           :description (str description)
+           :description (cond-> (str description)
+                          (= :person approval)
+                          (str " A person must allow this call before the"
+                               " engine makes it."))
            :input (present-schema input-schema why)}
     ;; the fields a grant may narrow this power by (waymark-fp62.6.3.5)
     ;; — an agent reads them here and asks for the narrow grant itself,
@@ -362,7 +367,21 @@
                     :consequence
                     (str "This action acts on the outside: your `why` is "
                          "the sentence a person reads before or after "
-                         "it lands.")})))
+                         "it lands.")})
+
+    ;; THE APPROVAL IS SURFACED LIKE THE WHY (waymark-fp62.10.2, R-14).
+    ;; An agent that reads `approval: person` here knows the call will
+    ;; not run at once, that it will get a held_call id back rather
+    ;; than the tool's answer, and that the wait is the design and not
+    ;; a fault. A tool whose entry says so and does not say so here
+    ;; would teach the agent to retry.
+    (= :person approval)
+    (assoc :approval "person"
+           :held {:note (str "A person must allow this call. The engine "
+                             "answers {held: true, held_call: <id>} at "
+                             "once and forwards the call only after the "
+                             "tap. Read the held_call row for the "
+                             "answer; do not call again.")})))
 
 (defn- survivors
   "THE one computation both surfaces project: the live rows' mirrored
@@ -463,9 +482,28 @@
                                   " demands it and a person reads it.")
                      :remedies ["Call again with arguments.why set to one sentence."]})))
 
+(defn- refuse-anonymous
+  "The 403 for a call this door would HOLD and cannot: a held call
+  names its caller, and the first wall on answering it is `not the
+  caller`. A call that reached here with nobody's name on it would
+  mint a row anybody could allow, so the door refuses instead."
+  [tname]
+  (throw (p/problem :gate-not-granted 403 "Not granted"
+                    {:detail (str tname " waits on a person's tap, and a"
+                                  " held call names who made it. This"
+                                  " request carries no principal, so there"
+                                  " is nobody to hold the call for.")
+                     :remedies ["Call again as a named principal: a session that sat in a seat, or a signed-in person."]})))
+
 (defn- carries-why? [args]
   (or (not (str/blank? (str (:why args))))
       (not (str/blank? (str (:__why args))))))
+
+(defn- why-of
+  "The caller's one sentence, in either spelling. The held call keeps
+  it, because the person who taps reads it."
+  [args]
+  (first (remove str/blank? [(str (:why args)) (str (:__why args)) ""])))
 
 (defn- gate-args
   "The caller's arguments as Gate expects them: `why` translated to
@@ -502,38 +540,65 @@
   call outside the grant's FILTER 403s naming the field and the value
   (waymark-fp62.6.3.5), a missing why 422s, and NONE of them touches a
   server. A granted call forwards through the row's client — with
-  `allow` added when the filter narrowed paths and the call named none
-  — and answers the payload VERBATIM."
-  [eng-or-rpc vis tool args]
-  (let [eng (engine! eng-or-rpc)
-        asked (str tool)
-        ;; THE NAME FIRST (waymark-fp62.6.3.12): a one-tool power's
-        ;; token is that tool's name here, and everything below judges
-        ;; the tool it resolved to
-        tname (servers/tool-name-of eng asked)
-        {:keys [row entry token why] :as hit} (servers/resolve-tool eng tname)]
-    (when (or (nil? hit) (nil? entry))
-      (refuse-unknown eng asked))
-    (let [gentry (grants/capability-entry vis token)
-          verdict (when gentry (filter-verdict (:filters gentry) args))]
-      (cond
-        (nil? gentry)
-        (refuse-invoke
-         (str "Invoking " tname " is the " token
-              " capability, and this request wears no live grant that"
-              " names it. Present an accepted grant as X-Waymark-Grant,"
-              " or file the ask.")
-         token)
+  `allow` added when the filter narrowed paths and the call named
+  none. It answers the payload VERBATIM.
 
-        (:miss verdict)
-        (refuse-filter tname token (:miss verdict))
+  THE HOLD IS THE LAST GATE BEFORE THE FORWARD (waymark-fp62.10.2,
+  R-14). An entry that says `approval person` does not forward at
+  all: the engine mints a `held_call` row carrying the arguments this
+  door has just prepared, and answers {held true, held_call <id>} at
+  once. It is an ANSWER and never a refusal, so it stands AFTER every
+  refusal above and BEFORE the wire. `opts` is what only the caller's
+  side knows, {:caller <principal id> :sitting <id>}. A call
+  that names no caller cannot be held, because a row with nobody's
+  name on it is a row nobody is barred from allowing."
+  ([eng-or-rpc vis tool args] (invoke-for eng-or-rpc vis tool args nil))
+  ([eng-or-rpc vis tool args opts]
+   (let [eng (engine! eng-or-rpc)
+         asked (str tool)
+         ;; THE NAME FIRST (waymark-fp62.6.3.12): a one-tool power's
+         ;; token is that tool's name here, and everything below judges
+         ;; the tool it resolved to
+         tname (servers/tool-name-of eng asked)
+         {:keys [row entry token why approval] :as hit}
+         (servers/resolve-tool eng tname)]
+     (when (or (nil? hit) (nil? entry))
+       (refuse-unknown eng asked))
+     (let [gentry (grants/capability-entry vis token)
+           verdict (when gentry (filter-verdict (:filters gentry) args))]
+       (cond
+         (nil? gentry)
+         (refuse-invoke
+          (str "Invoking " tname " is the " token
+               " capability, and this request wears no live grant that"
+               " names it. Present an accepted grant as X-Waymark-Grant,"
+               " or file the ask.")
+          token)
 
-        (and why (not (carries-why? args)))
-        (refuse-why tname)
+         (:miss verdict)
+         (refuse-filter tname token (:miss verdict))
 
-        :else
-        (servers/call! eng tname
-                       (forward-args row (with-allow args (:allow verdict))))))))
+         (and why (not (carries-why? args)))
+         (refuse-why tname)
+
+         (and (= :person approval) (some-> (:caller opts) str not-empty))
+         (:answer (held/hold!
+                   eng
+                   {:server (:id row)
+                    :tool tname
+                    :entry entry
+                    :input (or args {})
+                    :forward (forward-args row (with-allow args (:allow verdict)))
+                    :why (why-of args)
+                    :caller (:caller opts)
+                    :sitting (:sitting opts)}))
+
+         (= :person approval)
+         (refuse-anonymous tname)
+
+         :else
+         (servers/call! eng tname
+                        (forward-args row (with-allow args (:allow verdict)))))))))
 
 ;; ── the engine's own hand (the write path) ──────────────────────────
 

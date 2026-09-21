@@ -160,7 +160,7 @@
 ;; ── the surfaces this engine actually turns ─────────────────────────
 
 (deftest the-started-engine-turns-every-surface-its-modules-declared
-  (testing "fifteen hooks, and the one that legitimately did not run"
+  (testing "sixteen hooks, and the one that legitimately did not run"
     ;; …the last four are the schedules module's (spec-seat.md § 12):
     ;; the consumer that mirrors a seat out, the read-back that
     ;; reports drift, the wake consumer of R-12.22, and the judgment
@@ -170,8 +170,10 @@
     (is (= #{:dispatcher :law-refresh :clock-sweeper
              ;; core's fourth since waymark-fp62.10: the mcp_server
              ;; rows' discover cadence (spec-mcp-servers R-4), elected
-             ;; like the clock sweeper beside it
-             :mcp-discover
+             ;; like the clock sweeper beside it. Core's fifth came
+             ;; with waymark-fp62.10.2: the held calls' expiry, so
+             ;; nothing a person never answered runs late (R-14, R-7)
+             :mcp-discover :held-call-expiry
              :attachments-purge :webhooks-deliverer
              :jobs-worker :jobs-orphan-sweeper
              :schedules-mirror :schedules-drift :wakes :judgments

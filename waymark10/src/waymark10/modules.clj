@@ -162,6 +162,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.routes.feed :as feed-routes]
+            [waymark10.server.held-calls :as held-calls]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.routes.gate :as gate-routes]
             [waymark10.server.routes.law-sweep :as law-sweep-routes]
@@ -238,6 +239,18 @@
              ;; dotted scope entry is core's too, beside the seat.
              {:kind :mcp_server :enroll :always
               :kinds (fn [_] [mcp-servers/mcp-server])}
+             ;; the held call (docs/spec-mcp-servers.md R-14,
+             ;; waymark-fp62.10.2): a powers entry that says
+             ;; `approval person` does not forward its call, it mints
+             ;; one of these and waits for a person. Core's beside the
+             ;; server row for the server row's own reason. The
+             ;; policy that holds a call is a field of `powers`, so
+             ;; the kind that holds it cannot be a module an engine
+             ;; leaves out while still serving the policy that names
+             ;; it. The row carries a typed ref to `sitting` too,
+             ;; which is core's already.
+             {:kind :held_call :enroll :always
+              :kinds (fn [_] [held-calls/held-call])}
              ;; the judgment and the verdict (waymark-fp62.11) are
              ;; core's for the seat's own reason: the seat — core's —
              ;; carries a typed ref to the judgment it walks, so an
@@ -291,7 +304,20 @@
                        eng {:interval-ms
                             (get-in eng [:services :mcp-servers :discover-ms]
                                     mcp-servers/default-discover-ms)}))
-             :stop mcp-servers/stop-discover-sweeper!}]
+             :stop mcp-servers/stop-discover-sweeper!}
+            ;; the held calls' expiry (R-14, R-7): nothing runs late.
+            ;; Elected for the discover pass's reason: two engines
+            ;; expiring the same row would walk the same door twice,
+            ;; and the second walk is a refusal in the log for
+            ;; nothing.
+            {:hook :held-call-expiry
+             :elected :held-call-expiry
+             :start (fn [eng _]
+                      (held-calls/start-expiry-sweeper!
+                       eng {:interval-ms
+                            (get-in eng [:services :held-calls :sweep-ms]
+                                    300000)}))
+             :stop held-calls/stop-expiry-sweeper!}]
     :pack packs/core}
 
    {:module :attachments

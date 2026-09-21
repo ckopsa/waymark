@@ -429,6 +429,9 @@
                    ;; spec-seat.md (waymark-fp62.1): and the sittings it
                    ;; opened — own-surface by :member
                    "sitting"
+                   ;; waymark-fp62.10.2: and the power calls it made that
+                   ;; wait on a person, own-surface by :caller
+                   "held_call"
                    ;; waymark-fp62.11: and the verdicts it passed —
                    ;; own-surface by :said_by
                    "verdict"}

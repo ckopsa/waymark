@@ -98,8 +98,11 @@
            :schedule
            ;; …and the MCP server as a row (spec-mcp-servers): the
            ;; policy behind a dotted scope entry, which the grant —
-           ;; core's own — names
-           :mcp_server}
+           ;; core's own, names. The held call beside it (R-14) is
+           ;; core's for the same reason: a `powers` entry that says
+           ;; `approval person` is policy on a core kind, and the row
+           ;; it waits in cannot be a module an engine leaves out.
+           :mcp_server :held_call}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -124,7 +127,7 @@
     ;; and the judgment and the verdict (waymark-fp62.11), core's
     ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
-             :seat :model :sitting :schedule :mcp_server
+             :seat :model :sitting :schedule :mcp_server :held_call
              :judgment :verdict}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
@@ -356,8 +359,9 @@
   (testing "every surface engine/start! hand-wired, in start order"
     (is (= [:dispatcher :law-refresh :clock-sweeper
             ;; the MCP servers' cadence (spec-mcp-servers R-4): core's
-            ;; fourth hook, elected, waiting on nothing
-            :mcp-discover
+            ;; fourth hook, elected, waiting on nothing. Its fifth
+            ;; sits beside it: the held calls' expiry (R-14, R-7)
+            :mcp-discover :held-call-expiry
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
@@ -401,9 +405,10 @@
 (deftest hooks-read-the-same-selection-everything-else-reads
   (testing "a named selection starts what it assembled, and core"
     (is (= [:dispatcher :law-refresh :clock-sweeper
-            ;; core's fourth (spec-mcp-servers R-4), so a selection
-            ;; that names :jobs still carries it
-            :mcp-discover
+            ;; core's fourth and fifth (spec-mcp-servers R-4 and
+            ;; R-14), so a selection that names :jobs still carries
+            ;; both
+            :mcp-discover :held-call-expiry
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))
