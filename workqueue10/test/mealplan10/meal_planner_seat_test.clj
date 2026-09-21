@@ -317,24 +317,24 @@
     (is (false? (:isError r)) text)
     (wire/read-json text)))
 
-(defn- sitter-headers
-  "The seat's own hand, as the sit names it: the sitter member the
-  engine minted, wearing the grant the engine minted for it. Every
-  request below is under the seat's leash and nobody else's."
-  [answer]
-  {"x-waymark-principal" (str (:sitter answer))
-   "x-waymark-actor-type" "agent"
-   "x-waymark-grant" (str (:grant answer))})
-
-(defn- etag-of [headers self]
-  (get-in (req :get self nil headers) [:headers "ETag"]))
+(defn- tool!
+  "One tool call on the sitter's own session: the session `waymark_sit`
+  bound, so every call below is under the seat's leash and nobody
+  else's. The answer carries the parsed document under :doc, whether
+  it is a row, a page or a refusal."
+  [tool-name args]
+  (let [r (mcp/call-tool *eng* (mcp/door *eng*)
+                         {:principal delegate :mcp-session-id mcp-session}
+                         tool-name args)
+        text (str (get-in r [:content 0 :text]))]
+    (assoc r :text text
+           :doc (try (wire/read-json text) (catch Exception _ nil)))))
 
 (deftest the-seat-walks-a-draft-week-and-finalizes-it
   (let [plan (created! "plans" {:start_date "2026-07-14" :weeks 1})
-        plan-self (str (:self plan))
+        plan-id (id-of plan)
         answer (sit!)
-        walk (:walk answer)
-        hands (sitter-headers answer)]
+        walk (:walk answer)]
 
     (testing "the sit binds the seat and answers its walk (R-12.28)"
       (is (= seat-name (str (:seat answer))))
@@ -346,45 +346,47 @@
            row to learn what the office is for"))
 
     (testing "the draft week is the row the walk hands over"
-      (is (= [(id-of plan)] (mapv :id (:rows walk))))
+      (is (= [plan-id] (mapv :id (:rows walk))))
       (is (= 1 (:total walk)))
       (is (= 7 (get-in plan [:data :total_days]))
           "the birth door made the days with the week")
       (is (= 7 (get-in plan [:data :undecided_days]))))
 
     (testing "finalize is refused while one day is undecided"
-      (let [resp (req :post (str plan-self "/-/finalize") nil
-                      (assoc hands "if-match" (etag-of hands plan-self)))]
-        (is (= 409 (:status resp)) (str (:body resp)))
-        (is (str/includes? (str (:detail (json resp)))
+      (let [r (tool! "waymark_invoke" {:kind "plan" :action "finalize"
+                                       :id plan-id})]
+        (is (true? (:isError r)) (:text r))
+        (is (str/includes? (:text r)
                            "Every day needs a meal or an eating-out mark")
             "the gate's own sentence, which the seat repeats in its
              close rather than working around")
-        (is (= "draft" (:state (json (req :get plan-self nil hands))))
+        (is (= "draft" (str (get-in (tool! "waymark_get"
+                                           {:kind "plan" :id plan-id})
+                                    [:doc :state])))
             "a refused finalize leaves the week in draft")))
 
     (testing "the seat covers every day through the doors its scope
               opens"
-      (let [days (get-in (json (req :get (str "/api/plan_days?plan_id="
-                                              (id-of plan)
-                                              "&page%5Bsize%5D=10")
-                                    nil hands))
-                         [:data :items])]
+      (let [page (tool! "waymark_query" {:kind "plan_day"
+                                         :filter {:plan_id plan-id}
+                                         :page_size 10})
+            days (get-in page [:doc :data :items])]
+        (is (false? (:isError page)) (:text page))
         (is (= 7 (count days))
             "the days are inside the leash: the scope names plan_day")
         (doseq [d days]
-          (let [self (str (:self d))
-                resp (req :post (str self "/-/mark_eating_out")
-                          {:where "Out"}
-                          (assoc hands "if-match" (etag-of hands self)))]
-            (is (= 200 (:status resp)) (str self ": " (:body resp)))))))
+          (let [r (tool! "waymark_invoke" {:kind "plan_day"
+                                           :action "mark_eating_out"
+                                           :id (id-of d)
+                                           :input {:where "Out"}})]
+            (is (false? (:isError r)) (str (:self d) ": " (:text r)))))))
 
     (testing "…and finalize is then served, under the seat's own leash"
-      (let [resp (req :post (str plan-self "/-/finalize") nil
-                      (assoc hands "if-match" (etag-of hands plan-self)))]
-        (is (= 200 (:status resp)) (str (:body resp)))
-        (is (= "planned" (:state (json resp))))
-        (is (true? (get-in (json resp) [:data :all_days_covered])))))
+      (let [r (tool! "waymark_invoke" {:kind "plan" :action "finalize"
+                                       :id plan-id})]
+        (is (false? (:isError r)) (:text r))
+        (is (= "planned" (str (get-in r [:doc :state]))))
+        (is (true? (get-in r [:doc :data :all_days_covered])))))
 
     (testing "a plan that walked finalize is not in the next walk"
       (let [again (:walk (sit!))]
@@ -397,7 +399,7 @@
 
     (testing "and the planned week is out of the seat's sight
               altogether"
-      (let [resp (req :get plan-self nil hands)]
-        (is (= 404 (:status resp))
+      (let [r (tool! "waymark_get" {:kind "plan" :id plan-id})]
+        (is (true? (:isError r))
             "absent, never refused: a row outside the leash is a row
              the sitter cannot tell from one that was never made")))))
