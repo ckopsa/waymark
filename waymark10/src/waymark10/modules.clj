@@ -151,6 +151,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.intents :as intents]
             [waymark10.server.jobs :as jobs]
+            [waymark10.server.judgments :as judgments]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
@@ -176,7 +177,9 @@
             [waymark10.server.wakes :as wakes]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.server.worksheet :as worksheet]
+            [waymark10.judgment :as judgment]
             [waymark10.remark :as remark]
+            [waymark10.verdict :as verdict]
             [waymark10.verdict-reason :as verdict-reason]
             [waymark10.test.packs :as packs]
             [waymark10.types :as t]))
@@ -234,7 +237,25 @@
              ;; is core's — so the row that holds the policy behind a
              ;; dotted scope entry is core's too, beside the seat.
              {:kind :mcp_server :enroll :always
-              :kinds (fn [_] [mcp-servers/mcp-server])}]
+              :kinds (fn [_] [mcp-servers/mcp-server])}
+             ;; the judgment and the verdict (waymark-fp62.11) are
+             ;; core's for the seat's own reason: the seat — core's —
+             ;; carries a typed ref to the judgment it walks, so an
+             ;; engine assembled from a module subset would refuse its
+             ;; own seat kind without them (checks/refs). One law in
+             ;; two kinds: `judgment`, the judge declared as a row, and
+             ;; `verdict`, the row about a row that answers it. Both
+             ;; together or neither: a judgment with no verdict kind is
+             ;; a question nothing may answer, and a verdict with no
+             ;; judgment kind is an answer under no question. They name
+             ;; no application vocabulary — a judgment names its
+             ;; subject as a kind TOKEN ({subject_kind, subject_id}),
+             ;; which is what lets one pair of kinds serve every judge
+             ;; in the house, the engine's own rows included (R-7).
+             {:kind :judgment :enroll :always
+              :kinds (fn [_] [judgment/judgment])}
+             {:kind :verdict :enroll :always
+              :kinds (fn [_] [verdict/verdict])}]
     ;; the three surfaces no waymark engine is a waymark engine
     ;; without: the outbox reader every other surface rides, the
     ;; law-refresh consumer (a core need in any multi-process
@@ -400,7 +421,26 @@
                             :poll-ms (:events-poll-ms eng 2000)
                             :tick-ms (:wake-tick-ms
                                       eng wakes/default-tick-ms)}))
-             :stop wakes/stop-wakes!}]}
+             :stop wakes/stop-wakes!}
+            ;; R-5 of waymark-fp62.11: the consequence a judgment
+            ;; names, walked on the subject AFTER the verdict is said.
+            ;; A third durable consumer on its own cursor
+            ;; (`:judgments`), here beside the wake's because this is
+            ;; the module that RUNS consumers — the two judgment kinds
+            ;; are enrolled elsewhere, and `:when` is what keeps an
+            ;; engine that does not serve them from running a thread
+            ;; for nothing. `:elected` for the wake's own reason: two
+            ;; processes walking one consequence open one door twice,
+            ;; and the cursor is shared and unguarded.
+            {:hook :judgments
+             :after [:dispatcher]
+             :elected :judgments
+             :when judgments/serving?
+             :start (fn [eng running]
+                      (judgments/start-judgments!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop judgments/stop-judgments!}]}
 
    ;; routes only, from here down — and their packs are route-shaped
    ;; to match: an obligation needing [:route m] is skipped, never

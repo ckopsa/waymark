@@ -35,7 +35,8 @@
 
 (def ^:private tables
   ["seats" "models" "sittings" "grants" "approval_requests" "members"
-   "roles" "definitions" "waymark10_transitions" "waymark10_idempotency"
+   "roles" "definitions" "judgments" "verdicts"
+   "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts"])
 
 (use-fixtures :once
@@ -185,6 +186,109 @@
                                   {:walk "sitting"}))]
       (is (= :walk-names-a-kind-in-scope (:guard p)))
       (is (str/includes? (str (:detail p)) "scope")))))
+
+;; ── the seat that says a judgment (bead waymark-fp62.11, R-4) ───────
+;;
+;; Three things must line up before such a seat is opened, and each
+;; one is refused in its own sentence: the judgment must be PROMOTED,
+;; the walk must be the judgment's OWN subject kind, and the scope
+;; must open the door that says a verdict. The fourth case is the
+;; pass, and it is also this bead's relaxation: `model` declares no
+;; default filter at all — the refusal the case above pins — and a
+;; seat that names a judgment walks it anyway, because the judgment's
+;; `queue` is the filter that narrows the collection.
+
+(defn- judgment!
+  "One judgment over models, promoted or left in draft."
+  [name' promote?]
+  (let [row (:row (inv/create!
+                   *eng* :judgment
+                   {:name name'
+                    :subject_kind "model"
+                    :queue {}
+                    :verdicts [{:name "sound"
+                                :sentence "The prices on this row are the ones the vendor publishes."}]
+                    :remedy_max 200
+                    :notes "The first pass over the price list."}
+                   {:principal colton}))]
+    (when promote?
+      (inv/invoke! *eng* :judgment (str (:id row)) :promote {}
+                   {:principal colton}))
+    row))
+
+(def ^:private judging-scope
+  "What a judging seat opens: the subjects READ-ONLY, and the one door
+  that makes a verdict. It does not name `correct` — a correction is a
+  person's, and R-4 says so."
+  [{:kind "model" :actions []}
+   {:kind "verdict" :actions ["judge"]}])
+
+(deftest a-seat-that-says-a-judgment-cites-a-promoted-one-and-can-say-it
+  (let [draft (judgment! "prices-in-draft" false)
+        live (judgment! "prices-on-record" true)]
+    (testing "a judgment still in draft is refused: only a promoted one is walked"
+      (let [p (refusal #(open-seat! "cites-a-draft"
+                                    {:walk "model"
+                                     :judgment (str (:id draft))
+                                     :scope judging-scope}))]
+        (is (= :walk-matches-the-judgment (:guard p)))
+        (is (str/includes? (str (:detail p)) "draft")
+            "the sentence names the state, and the remedy names promote")))
+
+    (testing "a walk that is not the judgment's subject kind is refused"
+      (let [p (refusal #(open-seat! "walks-the-wrong-kind"
+                                    {:walk "sitting"
+                                     :judgment (str (:id live))
+                                     :scope (conj judging-scope
+                                                  {:kind "sitting"
+                                                   :actions []})}))]
+        (is (= :walk-matches-the-judgment (:guard p)))
+        (is (str/includes? (str (:detail p)) "set the walk to model"))))
+
+    (testing "a scope with no way to say a verdict is refused"
+      (let [p (refusal #(open-seat! "cannot-say-one"
+                                    {:walk "model"
+                                     :judgment (str (:id live))
+                                     :scope [{:kind "model" :actions []}]}))]
+        (is (= :walk-matches-the-judgment (:guard p)))
+        (is (str/includes? (str (:detail p)) "kind verdict with the action judge"))))
+
+    (testing "and the seat that lines all three up is opened"
+      (let [row (open-seat! "says-the-price-judgment"
+                            {:walk "model"
+                             :judgment (str (:id live))
+                             :scope judging-scope})]
+        (is (= :active (:state row)))
+        (is (= (str (:id live)) (str (get-in row [:data :judgment])))
+            "the judgment is on the row, and the walk reads it at every sit")
+        (is (= "model" (get-in row [:data :walk]))
+            "`model` declares no default filter and is walked all the same:
+             the judgment's own queue is what narrows the collection")))
+
+    (testing "and a restate states the judgment again like anything else"
+      (let [seat (open-seat! "restates-its-judgment"
+                             {:walk "model"
+                              :judgment (str (:id live))
+                              :scope judging-scope})
+            second' (judgment! "prices-on-record-again" true)]
+        (restate! (:id seat) (restate-body {:walk "model"
+                                            :judgment (str (:id second'))
+                                            :scope judging-scope}))
+        (is (= (str (:id second')) (str (get-in (row-of :seat (:id seat))
+                                                [:data :judgment])))
+            "the office says a different law from the next sit on, and the
+             verdicts already said stand — a verdict is a row, not a mark
+             on the subject")
+        (testing "and a restate onto a draft is refused at that door too"
+          (let [p (refusal #(restate! (:id seat)
+                                      (restate-body
+                                       {:walk "model"
+                                        :judgment (str (:id draft))
+                                        :scope judging-scope})))]
+            (is (= :walk-matches-the-judgment (:guard p)))
+            (is (= (str (:id second')) (str (get-in (row-of :seat (:id seat))
+                                                    [:data :judgment])))
+                "and the stored judgment did not move")))))))
 
 ;; ── case 22 · a seat is a person's office ───────────────────────────
 

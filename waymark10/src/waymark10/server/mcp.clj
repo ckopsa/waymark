@@ -2037,12 +2037,76 @@
     (assoc "doors" (mapv (fn [[aname entry]] (walk-door aname entry))
                          (sort-by key (get item "actions"))))))
 
+;; ── the walk of a judgment (bead waymark-fp62.11, R-4) ──────────────
+;;
+;; THE QUEUE IS A QUERY. A seat that says a judgment walks the
+;; judgment's `subject_kind` under the judgment's `queue`, minus the
+;; subjects that already carry a verdict under it. Nothing is copied
+;; and no row is minted for work not yet done, so a judgment promoted
+;; this morning has a full queue by lunch with no backfill anywhere.
+;;
+;; The judgment row is read THROUGH THE ENGINE and not through the
+;; sitter (`repo-policy-of`'s posture): what the seat may see decides
+;; which SUBJECTS reach the page, and the law those subjects are
+;; judged under is the seat's own declaration, already on its row.
+
+(def ^:private judged-page
+  "The most standing verdicts one walk subtracts by. A judgment whose
+  said verdicts outrun this in a single queue has more decided
+  subjects than one page can hold, and the honest fix there is a
+  narrower `queue`, not a longer read."
+  500)
+
+(defn- queue-params
+  "The judgment's `queue` as query parameters — a plain-equality
+  filter on the subject kind, the collection's own vocabulary. `name`
+  reads a stored key whether it came back a keyword or a string."
+  [judgment]
+  (into {} (map (fn [[k v]] [(name k) (str v)]))
+        (get-in judgment [:data :queue])))
+
+(defn- judged-subjects
+  "The subject ids this judgment has already spoken on: every verdict
+  of it still `said`. An `overruled` row is not here on purpose — a
+  correction overrules the first and the second verdict is the one
+  standing, so a subject leaves the queue once and stays gone."
+  [eng judgment-id]
+  (if (get (inv/resources eng) :verdict)
+    (into #{}
+          (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
+          (store/with-tx (:storage eng)
+            (fn [tx] (store/query-rows (:storage eng) tx :verdict
+                                       {:judgment (str judgment-id)
+                                        :state "said"}
+                                       {:limit judged-page}))))
+    #{}))
+
+(defn- judgment-block
+  "What the sitter is told about the law it is saying: which judgment,
+  what its subjects are, the verdicts it may choose between with the
+  sentence each one means, and how long a remedy may be. The sitter
+  never reads the judgment row — this IS the read."
+  [judgment]
+  {"id" (str (:id judgment))
+   "name" (str (get-in judgment [:data :name]))
+   "subject_kind" (str (get-in judgment [:data :subject_kind]))
+   "verdicts" (mapv (fn [v] {"name" (str (:name v))
+                             "sentence" (str (:sentence v))})
+                    (get-in judgment [:data :verdicts]))
+   "remedy_max" (get-in judgment [:data :remedy_max])})
+
 (defn- walk-of
   "The seat's walk, read AS THE SITTER: the kind `walk` names, through
   the same plural route `waymark_query` takes, under that kind's own
   default filter and its own default sort — oldest first for a queue
   that sorts by when the work arrived — at most `rows_per_firing`
   rows, and never more than one page.
+
+  A SEAT THAT SAYS A JUDGMENT WALKS THE JUDGMENT'S QUEUE (R-4): the
+  judgment's `queue` rides as the filter, the subjects already judged
+  are subtracted, and the answer carries the `judgment` block beside
+  the rows. The subtraction can empty a page, so that read asks for a
+  WHOLE page and the cap bites after the minus rather than before it.
 
   nil when the seat walks nothing, when `walk` names a kind this
   engine does not serve, or when the read does not answer 2xx: a
@@ -2052,20 +2116,39 @@
 
   Nothing here decides what the sitter may see. The route reads under
   the seat grant's own visibility, so a row outside the grant is not
-  on the page it answers and cannot be in what this shapes."
+  on the page it answers and cannot be in what this shapes. `total`
+  stays the collection's own count under that filter — the queue as
+  the list page would show it — and the rows are what this firing
+  works."
   [eng call session seat]
   (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
     (when-some [rdef (get (inv/resources eng) (keyword walk))]
-      (let [n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
+      (let [judgment (row-of eng :judgment (get-in seat [:data :judgment]))
+            n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
                    coll/page-size-max)
+            asked (if judgment coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))
-                                {:query (query-string {"page[size]" (str n)})}))
+                                {:query (query-string
+                                         (cond-> {"page[size]" (str asked)}
+                                           judgment (merge (queue-params
+                                                            judgment))))}))
             doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
         (when (collection-doc? doc)
-          {"kind" walk
-           "charter" (str (get-in seat [:data :charter]))
-           "total" (get-in doc ["data" "total"])
-           "rows" (mapv walk-row (get-in doc ["data" "items"]))})))))
+          (let [items (get-in doc ["data" "items"])
+                items (if judgment
+                        (let [judged (judged-subjects eng (:id judgment))]
+                          (into []
+                                (comp (remove #(contains?
+                                                judged
+                                                (id-of-self (get % "self"))))
+                                      (take n))
+                                items))
+                        items)]
+            (cond-> {"kind" walk
+                     "charter" (str (get-in seat [:data :charter]))
+                     "total" (get-in doc ["data" "total"])
+                     "rows" (mapv walk-row items)}
+              judgment (assoc "judgment" (judgment-block judgment)))))))))
 
 (def ^:private walk-note
   "What a sitter holding its rows does next — and what it must not do.
@@ -2075,6 +2158,16 @@
   (str "Your rows are below, each with its doors. For each row, invoke "
        "the door the charter chooses. Do not call discover, schema, "
        "query or powers; a refusal names its own remedy."))
+
+(def ^:private judgment-walk-note
+  "The one sentence a seat that says a judgment gets on top of the
+  walk note. It names the door, the kind and every field the create
+  takes, because the sitter reads the verdict names and the remedy
+  cap out of the `judgment` block beside its rows and must not spend
+  a turn on waymark_schema to learn where to put them."
+  (str " For each row, invoke judge on kind verdict with judgment, "
+       "subject_kind, subject_id, the verdict name and one remedy "
+       "sentence under remedy_max characters."))
 
 (def ^:private no-walk-note
   "The seat that walks nothing still has a charter, and the seat row
@@ -2850,6 +2943,8 @@
                               seats/default-mode)
                     :note (str "You sit in `" named "`. "
                                (if walk walk-note no-walk-note)
+                               (when (get walk "judgment")
+                                 judgment-walk-note)
                                (when said change-beside-the-walk-note))})
             walk (assoc "walk" walk)
             said (assoc "change" said)

@@ -428,7 +428,10 @@
                    "remark"
                    ;; spec-seat.md (waymark-fp62.1): and the sittings it
                    ;; opened — own-surface by :member
-                   "sitting"}
+                   "sitting"
+                   ;; waymark-fp62.11: and the verdicts it passed —
+                   ;; own-surface by :said_by
+                   "verdict"}
                  (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"

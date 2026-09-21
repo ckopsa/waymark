@@ -101,6 +101,14 @@
     modules enrol `:always`, so the alternative (an opaque id string)
     would have bought nothing and lost the picker, the navigable
     reference and the dangling-ref check.
+  - `judgment` IS A TYPED REF FOR THE SAME REASON, AND CARRIES THE
+    SAME DEBT. The seat's `judgment` (R-4 of waymark-fp62.11) names
+    `:kind :judgment`, so this kind cannot boot on an engine that
+    leaves the judgment kind out — the judgment module must enrol
+    `:always`, exactly as `:schedules` does. Held as an opaque string
+    it would have lost the picker and the dangling-ref check, and a
+    seat citing a judgment no engine holds is precisely the drift
+    this kind exists to end.
   - THE SITTER'S OWN-SURFACE IS NOT A DECLARATION. R-4.9 wants the
     seat row readable by its sitters with no scope entry, and a sitter
     is identified THROUGH THE GRANT (`grant.seat`). `:own-surface :by`
@@ -415,14 +423,74 @@
         ;; WAITING and not every row ever mirrored, and a default
         ;; filter over any field says that. So the check asks for one
         ;; default filter, whichever field it names.
-        (empty? (:default-filters rdef))
+        ;; A JUDGMENT'S QUEUE IS THE DEFAULT FILTER (R-4 of
+        ;; waymark-fp62.11). A seat that names a judgment walks the
+        ;; judgment's `queue` minus the subjects already judged, so
+        ;; the collection a firing opens is the work waiting whatever
+        ;; the kind declares — the filter stands where the kind's own
+        ;; default would have. The relaxation is ONLY for that seat:
+        ;; a walk with no judgment still owes the kind's own filter,
+        ;; because nothing else narrows it.
+        (and (empty? (:default-filters rdef))
+             (nil? (some-> (:judgment inp) str not-empty)))
         (t/deny {:vars {:walk walk
                         :problem (str "declares no default filter at all,"
                                       " so the collection a firing opens is"
                                       " every row of it rather than the work"
                                       " waiting — walk a kind whose queue"
-                                      " filters itself")}})
+                                      " filters itself, or name a judgment"
+                                      " whose queue filters it for you")}})
         :else (t/allow)))
+    (t/allow)))
+
+;; ── the seat that says a judgment (bead waymark-fp62.11, R-4) ───────
+
+(g/defguard walk-matches-the-judgment
+  ;; :judges names :judgment alone, `walk-names-a-kind-in-scope`'s own
+  ;; reading: the refusal is ABOUT the judgment this seat cites, and
+  ;; the walk and the scope beside it are what it is judged against.
+  ;; `:remedies` names the one DOOR that turns a refusal into a pass
+  ;; without the person changing a word of what they typed — a draft
+  ;; judgment is promoted, and the other two readings name a field of
+  ;; the form the person is already standing in.
+  {:judges [:judgment]
+   :reads [:judgment]
+   :vars [:problem]
+   :remedies [:judgment/promote]
+   :explain "A seat that says a judgment walks that judgment's own subjects and answers with its verdicts: {problem}."}
+  [_row inp ctx]
+  (if-some [id (some-> (:judgment inp) str not-empty)]
+    ;; the pure render probe carries no read hooks — advertise
+    ;; optimistically there, `held-for-active-models`' posture
+    (if-some [read' (:read ctx)]
+      (let [j (read' :judgment id)
+            subject (some-> (get-in j [:data :subject_kind]) str not-empty)
+            walk (some-> (:walk inp) str str/trim not-empty)
+            says-verdicts? (boolean
+                            (some (fn [e]
+                                    (and (= "verdict" (str (:kind e)))
+                                         (some #(= "judge" (str %))
+                                               (:actions e))))
+                                  (:scope inp)))
+            problem (cond
+                      (nil? j)
+                      (str "there is no judgment " id " on this engine")
+
+                      (not= :promoted (:state j))
+                      (str "that judgment is " (name (:state j))
+                           ", and only a promoted one is walked — promote it,"
+                           " or name one that is already promoted")
+
+                      (not= walk subject)
+                      (str "its subjects are rows of kind " subject
+                           ", and this seat walks " (or walk "nothing")
+                           " — set the walk to " subject)
+
+                      (not says-verdicts?)
+                      (str "the scope opens no way to say one — add an entry"
+                           " for kind verdict with the action judge"))]
+        (if problem (t/deny {:vars {:problem problem}}) (t/allow)))
+      (t/allow))
     (t/allow)))
 
 ;; ── what wakes a seat is named the way its scope is (R-12.22) ───────
@@ -700,7 +768,7 @@
    :substitute_for
    :standing_ttl_seconds :cadence_seconds :sitting_idle_seconds
    :budget_usd_per_week
-   :sitting_budget_tokens :walk :rows_per_firing
+   :sitting_budget_tokens :walk :judgment :rows_per_firing
    :wake_on :fire_interval_seconds])
 
 (def ^:private wall-inputs
@@ -1227,6 +1295,18 @@
             {:label "The queue it walks"
              :help "One kind this seat works through, a row at a time, in the order that kind's own default sort gives. The kind must be in the scope above and must filter its own queue by state — the collection a firing opens IS the work waiting for it. Leave it empty for a seat that walks nothing."}}
      [:maybe [:string {:min 1 :max 64}]]]
+    ;; THE JUDGMENT THIS SEAT SAYS (R-4 of waymark-fp62.11). The queue
+    ;; is a query and nothing is copied: the walk is the judgment's
+    ;; `subject_kind` under its `queue`, MINUS the subjects that
+    ;; already carry a verdict under it. What the sitting produces is
+    ;; the verdict row; whether the subject moves at all is the
+    ;; judgment's `consequence`, and this seat never sees that door.
+    [:judgment {:optional true
+                :kind :judgment
+                :x-display
+                {:label "The judgment it says"
+                 :help "A promoted judgment this seat walks the subjects of, one at a time, saying one of its verdicts on each. The walk must be the judgment's own subject kind, and the scope must open kind verdict with the action judge. Leave it empty for a seat that works a queue rather than judging one."}}
+     [:maybe :waymark/ref]]
     [:rows_per_firing {:default 20
                        :x-display
                        {:label "Rows per firing"
@@ -1388,8 +1468,14 @@
             :x-options {:from :kinds}
             :x-display
             {:label "The queue it walks"
-             :help "One kind this seat works through, a row at a time. It must be in the scope above and must filter its own queue by state."}}
+             :help "One kind this seat works through, a row at a time. It must be in the scope above and must filter its own queue by state — or name a judgment below, whose queue filters it instead."}}
      [:maybe [:string {:min 1 :max 64}]]]
+    [:judgment {:optional true
+                :kind :judgment
+                :x-display
+                {:label "The judgment it says"
+                 :help "A promoted judgment this seat walks the subjects of, saying one of its verdicts on each. The walk above must be that judgment's subject kind, and the scope must open kind verdict with the action judge."}}
+     [:maybe :waymark/ref]]
     [:rows_per_firing {:default 20
                        :x-display
                        {:label "Rows per firing"
@@ -1445,6 +1531,7 @@
                    ttl-within-standing
                    held-for-active-models
                    walk-names-a-kind-in-scope
+                   walk-matches-the-judgment
                    wake-on-names-real-kinds
                    wake-on-names-real-actions]
    :actions
@@ -1523,8 +1610,14 @@
                      :x-options {:from :kinds}
                      :x-display
                      {:label "The queue it walks"
-                      :help "One kind this seat works through, in the scope above, filtering its own queue by state."}}
+                      :help "One kind this seat works through, in the scope above, filtering its own queue by state — or the subject kind of the judgment below."}}
               [:maybe [:string {:min 1 :max 64}]]]
+             [:judgment {:optional true
+                         :kind :judgment
+                         :x-display
+                         {:label "The judgment it says"
+                          :help "The judgment this seat says, stated again. Clear it and the seat goes back to working its queue rather than judging it; the verdicts already said stand, because a verdict is a row and not a mark on the subject."}}
+              [:maybe :waymark/ref]]
              [:rows_per_firing {:default 20
                                 :x-display
                                 {:label "Rows per firing"
@@ -1568,7 +1661,8 @@
                       :substitute_for :standing_ttl_seconds :cadence_seconds
                       :sitting_idle_seconds
                       :budget_usd_per_week :sitting_budget_tokens :walk
-                      :rows_per_firing :wake_on :fire_interval_seconds]
+                      :judgment :rows_per_firing :wake_on
+                      :fire_interval_seconds]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
@@ -1581,6 +1675,7 @@
               ttl-within-standing
               held-for-active-models
               walk-names-a-kind-in-scope
+              walk-matches-the-judgment
               wake-on-names-real-kinds
               wake-on-names-real-actions
               step-carries-a-note]

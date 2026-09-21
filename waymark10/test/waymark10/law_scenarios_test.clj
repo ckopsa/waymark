@@ -325,7 +325,7 @@
         mine (first (filter #(= :core/law-scenarios (:name %)) report))]
     (is (some? mine) "core's pack owes the obligation")
     (is (= [] (:violations mine)))
-    (is (= 10 (:covered mine))
+    (is (= 11 (:covered mine))
         (str "exactly the scenarios the check tier could not judge, and no"
              " more: ranking_note's one (waymark-1uv.6 — a person refused"
              " the birth door, deferred by the chain rule exactly as"
@@ -350,5 +350,15 @@
              " door it knocks on is walled by one-server-spelling, which"
              " counts the mcp_server rows that already wear the name; the"
              " kind's other six sit on action doors that read the caller"
-             " and nothing else, and the check tier judges all six). The"
+             " and nothing else, and the check tier judges all six), plus"
+             " verdict's one (waymark-fp62.11 — the chain rule a fourth"
+             " time: every wall on the judge door reads the judgment row"
+             " the body cites. It is the ONE scenario that kind declares,"
+             " and deliberately, because it is the one that writes"
+             " nothing: a conformance-tier scenario staging :given rows"
+             " would leave a fixed-name judgment behind in whatever"
+             " database the shard holds, and a judgment is :unique by"
+             " name — the sentence workqueue10's fixture already carries"
+             " about dayplan10's. The rest of that kind's law is proved"
+             " in waymark10.verdict-test, over a database it owns). The"
              " other three of errand's are not re-run here"))))

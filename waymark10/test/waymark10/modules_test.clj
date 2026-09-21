@@ -79,10 +79,17 @@
   ;; a sitting is four token counts, and none of it is any
   ;; application's vocabulary. What they are is the engine's own answer
   ;; to what an agent's work cost.
+  ;; …and :judgment with :verdict (waymark-fp62.11): the judge
+  ;; declared as a row, and the row about a row that answers it.
+  ;; :always, and both together or neither — a judgment with no
+  ;; verdict kind is a question nothing may answer. They name no
+  ;; application vocabulary either: a judgment names its subject as a
+  ;; kind TOKEN, which is what lets one pair serve every judge in the
+  ;; house, the engine's own rows included.
   (is (= #{:definition :member :role :grant :approval_request
            :attachment :subscription :job :feed_recipe :recipe_proposal
            :feed_view :feed_view_consent :verdict_reason :ranking_note
-           :remark :seat :model :sitting
+           :remark :judgment :verdict :seat :model :sitting
            ;; …and the schedule (spec-seat.md §12), for the same
            ;; reason a seat is always here: a cron, a model and a
            ;; provider are nobody's application vocabulary, and the
@@ -113,9 +120,12 @@
 (deftest a-selection-never-drops-core
   (testing "naming one module keeps the law's own vocabulary"
     ;; …and the seat, the model, the sitting and the schedule, which
-    ;; are core's since the grant carries a typed ref to the seat
+    ;; are core's since the grant carries a typed ref to the seat —
+    ;; and the judgment and the verdict (waymark-fp62.11), core's
+    ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
-             :seat :model :sitting :schedule :mcp_server}
+             :seat :model :sitting :schedule :mcp_server
+             :judgment :verdict}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
@@ -351,11 +361,13 @@
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
-            ;; jobs and realtime in the inventory, and its three hooks
+            ;; jobs and realtime in the inventory, and its four hooks
             ;; take that place in the stable order: the mirror waits
             ;; on :dispatcher only, the drift sweep on nothing, and
             ;; the wake consumer (R-12.22) on :dispatcher again
-            :schedules-mirror :schedules-drift :wakes
+            ;; …and the fourth (waymark-fp62.11): the consequence
+            ;; consumer, on :dispatcher like the wake's
+            :schedules-mirror :schedules-drift :wakes :judgments
             :curtain :presence :intents
             :discovery
             ;; the feed module's two surfaces. :tickler-sweeper

@@ -2194,6 +2194,27 @@ above. The cases:
     schedule with its own link fires through that link.
     (R-12.33, R-12.34, R-12.35, R-12.36)
 
+53. A person opens a judge on a kind the engine never judged before,
+    with one `judgment` row and one seat, and with no deployment. A
+    `promote` refuses a judgment whose subject kind is absent, whose
+    verdict names repeat, whose queue key is not filterable, or whose
+    consequence is not a door of the subject kind, and it names the
+    check. A seat with the judgment walks the subject rows under the
+    judgment's queue, minus the subjects with a standing verdict, and
+    the sit answers the verdict names, their sentences and
+    `remedy_max`. A `judge` with a name outside the vocabulary, with no
+    remedy, with a remedy past the ceiling, or on a subject that
+    already carries a standing verdict under that judgment is refused.
+    A verdict is a row about a row: it holds the judgment, the subject
+    kind, the subject id, the verdict, the remedy and `said_by`. An
+    agent's `judge` that carries `corrects` is refused; a person's is
+    served, it moves the first row to `overruled`, the first row
+    stays, and it fires no consequence. A judgment with a consequence
+    walks that door on the subject after a verdict, and a refused door
+    leaves the verdict as it is. Two judgments on one kind each take
+    one verdict on one subject. The ledger answers the correction
+    count for each seat and for each judgment. (R-13.1 to R-13.9)
+
 The conformance suite must invoke every new door. `make check-queue`
 must pass. The `approval_request` and `grant` fingerprints move,
 because both schemas gain fields; the pinned hash in
@@ -2481,3 +2502,160 @@ seat and three to the sitting, one door with a handler that prices an
 open sitting, one route beside the close route, one wall reason, one
 sum in the week's total, one branch in the sweep, and two events in
 the harness's hook.
+
+## 20. Requirements: the judgment and the verdict
+
+This section is the thirteenth group of requirements, and its numbers
+are R-13.1 to R-13.9. The section number 13 belongs to the email
+clerk's story, which holds no requirements. Bead: waymark-fp62.11.
+
+A judgment is data. One row names the subject, the queue, the
+verdicts and the correction. A verdict is a row about a row. A person
+opens a judge on a new kind with one row and one seat. The person
+writes no code, and the house makes no deployment.
+
+Today a judged kind writes its own verdict doors in code. The
+`ci_run` kind has three classify doors, a stamp door, a person's
+reclassify door and three scenarios. That is 437 lines for one kind.
+A judge on a second kind is a second file and a second deployment.
+Waymark holds its declarations as data, and a judgment must be data
+too.
+
+**R-13.1** The engine must serve a framework kind `judgment`. One row
+must declare one judgment. The row must name the subject kind. The
+row must name the queue, which is a filter on the subject kind. The
+row must name the verdicts. Each verdict must have a name and one
+sentence. The row must name the remedy ceiling. The default ceiling
+is 240 characters. The row can name a consequence door on the subject
+kind. A judgment must have the states of a definition: `draft`,
+`promoted` and `superseded`. `superseded` is terminal.
+
+A judgment must have these fields.
+
+| field | type | meaning |
+|---|---|---|
+| `name` | string | the token a seat and a verdict spell. One spelling for each promoted judgment. |
+| `subject_kind` | kind name | the kind this judgment judges |
+| `queue` | map of field to value, can be empty | the filter that makes the queue. Each entry is a plain equality. An empty map is the whole kind. |
+| `verdicts` | list of `{name, sentence}`, 1 to 12 | the vocabulary. The name is what the seat says. The sentence says when to say it. |
+| `remedy_max` | int, default 240 | the longest remedy one verdict can carry, in characters |
+| `consequence` | action name on the subject kind, optional | the door the engine walks on the subject after a verdict. R-13.5. |
+| `notes` | string, optional | why this judgment exists, in the person's words |
+
+A judgment must have these actions.
+
+| action | from | to | actor | effect |
+|---|---|---|---|---|
+| `create` | — | draft | the principal the grant admits | opens the judgment |
+| `revise` | draft | draft | the principal the grant admits | changes the fields |
+| `promote` | draft | promoted | a person | the checks run here. The judgment projects its queue. |
+| `supersede` | promoted | superseded | a person | the judgment stops. `successor` names the judgment that follows it, when there is one. |
+
+The declaration checks must run at `promote`. The checks are four.
+The subject kind must be a kind the engine serves. The verdict names
+must be distinct. Each key of the queue must be a filterable field of
+the subject kind. The consequence, when the row names one, must be a
+door of the subject kind. `promote` must refuse a judgment that fails
+one check, and the refusal must name the check. A judgment that fails
+a check must not project.
+
+**R-13.2** The engine must serve a framework kind `verdict`. A
+verdict is a row about a row. A verdict must have these fields.
+
+| field | type | meaning |
+|---|---|---|
+| `judgment` | judgment ref | the judgment this verdict is said under |
+| `subject_kind` | kind name | the kind of the row this verdict is about |
+| `subject_id` | row id | the row this verdict is about |
+| `verdict` | string | one name from the judgment's vocabulary |
+| `remedy` | string, 1 to the judgment's `remedy_max` | what somebody must do next, in one sentence |
+| `said_by` | member ref | who said it. Engine-written. |
+| `corrects` | verdict ref, optional | the verdict this one overrules. R-13.3. |
+
+A verdict must have the states `said` and `overruled`. `overruled` is
+terminal. The create door of the verdict kind must have the name
+`judge`. A seat writes a verdict through `judge` and through no other
+door. The door must take the verdict name and the remedy. The name
+must be one name of the judgment's vocabulary. The remedy is
+necessary. A door that gets no remedy must refuse.
+
+These guards must judge `judge`.
+
+| guard | rule |
+|---|---|
+| `judgment-is-promoted` | the judgment stands at `promoted` |
+| `verdict-is-in-the-vocabulary` | the verdict name is one of the judgment's names |
+| `remedy-within-the-ceiling` | the remedy is 1 to `remedy_max` characters |
+| `subject-is-a-row` | `subject_id` names a row of the judgment's subject kind |
+| `one-standing-verdict` | no verdict of this judgment stands at `said` on this subject |
+
+A seat must write one verdict for one subject under one judgment. A
+second `judge` on the same subject under the same judgment must be
+refused.
+
+**R-13.3** A person corrects. The correction is a second `judge` that
+carries `corrects`, and `corrects` names the verdict the person
+overrules. An agent must not carry `corrects`. The engine must refuse
+a `judge` with `corrects` from a bare agent.
+
+The correction is a second verdict row. The row cites the first row.
+The first row stays on the record. The engine must move the first row
+from `said` to `overruled` through the hidden door `overrule`. The
+engine walks that door with its own hand. No seat sees it.
+
+The ledger must count the corrections for each seat and for each
+judgment. A correction counts when three things are true: the verdict
+row carries `corrects`, a person said it, and the overruled verdict's
+`said_by` is the seat's sitter. That count is the measurement of the
+seat, as the reclassification count is today (R-11.3).
+
+**R-13.4** The queue is a query. The `seat` kind must gain one
+optional field, `judgment`, which is a judgment ref. When the seat
+names a judgment, the seat's `walk` must be that judgment's subject
+kind. The scope must name the `verdict` kind with the action `judge`.
+The scope must name the subject kind with no action. The engine must
+refuse a `create` or a `restate` that breaks one of these three
+rules. The scope must not name `correct`, because a correction is a
+person's work.
+
+The judgment changes the walk and the answer of the sit. The seat
+walks the subject kind under the judgment's queue, and it walks no
+other rows. The engine subtracts the subjects that carry a standing
+verdict under that judgment, so a subject leaves the queue at the
+moment the seat judges it. The sit answers the subject rows as
+R-12.28 gives them: each row with its summary projection and its
+doors, oldest first, and not more of them than `rows_per_firing`. The
+sit also answers a block `judgment`. That block holds the verdict
+names, the sentence of each name, and `remedy_max`. The sitter
+therefore reads its vocabulary from the sit, and the charter does not
+repeat it.
+
+**R-13.5** The consequence is the engine's, and not the seat's. When
+the judgment names a consequence, a consumer must hear each `judge`
+and walk that door on the subject. The consumer walks it under the
+engine's own hand, and it is best-effort: a door that refuses leaves
+the verdict as it is and raises no error. The seat must not see the
+consequence door. A correction must fire no consequence. A judgment
+that names no consequence must have no effect on the subject. The
+verdict is the product.
+
+**R-13.6** Two judgment rows can name one subject kind. Each judgment
+has its own verdicts, its own queue and its own count. One subject
+can carry one standing verdict under each judgment. The guard
+`one-standing-verdict` counts under one judgment alone.
+
+**R-13.7** The subject can be the engine's own row. A judgment can
+name `sitting`, `grant` or `seat` as its subject kind. The audit
+brief of waymark-fp62.8 is a judgment on `sitting`.
+
+**R-13.8** The `ci_run` kind keeps its inline doors. Its verdict
+moves the subject's own state, and the label push of the GitHub
+source hangs on that state. That is the one special case. A judgment
+on `ci_run` is the worked example of the routine, and it does not
+replace those doors.
+
+**R-13.9** The documents must show the judgment. This section gives
+the requirements. `docs/routines/judge.md` gives one routine that
+opens a judge on any kind in three steps: make the judgment row,
+promote it, and open the seat with the judgment in its scope.
+`README.md` names the two kinds in a kind table.
