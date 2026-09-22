@@ -114,11 +114,13 @@ async function renderNav(current) {
   const tucked = entries.filter(([, r]) =>
     (navTier(r) === "secondary" || navTier(r) === "system")
     && (!r.domain || r.domain === active));
-  if (tucked.length || hasFeed)
-    nav.append(overflowMenu(tucked, {dashboard: hasFeed,
-                                     here: current === "dashboard",
-                                     feed: hasFeed && MOBILE,
-                                     feedHere: current === "feed"}));
+  /* the ⋯ is unconditional since the jump box moved into it
+     (waymark-sv9v): a deployable with nothing tucked away still has a
+     way to the box and to the other shell — the menu is never empty */
+  nav.append(overflowMenu(tucked, {dashboard: hasFeed,
+                                   here: current === "dashboard",
+                                   feed: hasFeed && MOBILE,
+                                   feedHere: current === "feed"}));
 }
 
 function overflowMenu(tuckedEntries, extra = {}) {
@@ -166,6 +168,15 @@ function overflowMenu(tuckedEntries, extra = {}) {
       title(kind) + "s");
   const domain = tuckedEntries.filter(([, r]) => navTier(r) === "secondary");
   const system = tuckedEntries.filter(([, r]) => navTier(r) === "system");
+  /* the jump box needs a way in that is not a keyboard: a phone has
+     no ⌘K, and a menu is where someone looks for "where else can I
+     go" (waymark-sv9v). The shortcut rides along as a hint. */
+  menu.append(el("a", {role: "menuitem", href: "#", "data-nav": "jump",
+                       class: "jump-row",
+                       onclick: ev => { ev.preventDefault(); close();
+                                        jumpOpen(); }},
+    "Jump to a kind…",
+    MOBILE ? null : el("span", {class: "jump-key"}, JUMPKEY)));
   /* the dashboard, displaced from home by the day (waymark-i89n.8):
      still one tap away and still deep-linkable at #dashboard */
   if (extra.feed)

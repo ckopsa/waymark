@@ -513,3 +513,49 @@
     (is (not (str/includes? page "pendingOptions")))
     (is (not (str/includes? page "flickr"))
         "the generic page never learns whose chapters these are")))
+
+(deftest the-jump-box-answers-to-typing
+  ;; waymark-sv9v. The ⋯ menu is a list to scan; past a couple of dozen
+  ;; kinds a deployable is faster to type at. ⌘K (ctrl-K off a Mac)
+  ;; opens one filter over the destinations the nav ALREADY builds from
+  ;; well-known — so a grant that admits nothing extra offers nothing
+  ;; extra here, and the page still learns no kind of its own.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "id=\"jump\"") "the shell carries the box")
+    (is (str/includes? page "placeholder=\"jump to a kind…\""))
+    (is (str/includes? page "aria-controls=\"jumplist\"")
+        "the input owns the list it filters")
+    (is (str/includes? page "try { w = await wellKnown(); } catch { return []; }")
+        "the targets come off discovery, never a list kept here")
+    (is (str/includes? page "if ((ev.metaKey || ev.ctrlKey) && !ev.altKey")
+        "either modifier opens it; the hint names the reader's own")
+    (is (str/includes? page "jumpIsOpen() ? jumpClose() : jumpOpen();\n  }\n}, true);")
+        "caught on the way DOWN: the deck and the feed hold keys of their own")
+    (is (str/includes? page "function jumpFuzzy")
+        "every letter in order, anywhere in the label")
+    (is (str/includes? page "score += at === last + 1 ? 0 : (at === 0 ? 1 : 4 + Math.min(at - from, 9));")
+        "a run that continues is free, a hit at the start is cheapest")
+    (is (str/includes? page "if (t.href) go(t.href);")
+        "⏎ goes to the address the wire advertised")
+    (is (str/includes? page "if (jumpReturn && jumpReturn.isConnected) jumpReturn.focus();")
+        "esc gives the focus back where it came from")
+    (is (str/includes? page "\"data-nav\": \"jump\"")
+        "a phone has no ⌘K, so the ⋯ menu opens the same box")
+    (is (< (str/index-of page "const JUMPKEY")
+           (str/last-index-of page "render();"))
+        "wired before boot paints: the ⋯ menu reads JUMPKEY as it builds")
+    ;; the box is a filter over the wire's kinds, not a menu of its own
+    (doseq [word ["\"Recipes\"" "\"Chores\"" "\"Queues\""]]
+      (is (not (str/includes? page word))
+          (str "the generic page must not learn " word)))))
+
+(deftest the-jump-box-is-capped-and-scrolls
+  ;; a filter that lists everything is a list that must not run off the
+  ;; screen — the same lesson the ⋯ menu learned (waymark-t3tx)
+  (let [css (stylesheet (sut/assemble))]
+    (is (contains? (block css ".jump {") "max-height: 72dvh"))
+    (is (contains? (block css ".jump-list {") "overflow-y: auto"))
+    (is (contains? (block css ".jump-list {") "overscroll-behavior: contain")
+        "scrolling the list never drags the page behind it")
+    (is (contains? (block css ".nav-menu {") "overflow-y: auto")
+        "…and the menu it grew out of stays capped too")))
