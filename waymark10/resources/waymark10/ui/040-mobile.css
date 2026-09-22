@@ -61,6 +61,11 @@
      a phone a list with rows a thumb can hit */
   html[data-ui="mobile"] .nav-menu a {
     display: block; padding: 10px 16px; }
+  /* the jump box on a phone: nearer the top, because the keyboard
+     takes the bottom half the moment it opens, and rows a thumb hits */
+  html[data-ui="mobile"] .jump {
+    top: 6vh; width: 94vw; max-height: 76dvh; }
+  html[data-ui="mobile"] .jump-item { padding: 11px 14px; }
   /* the fixed strips stack above the tab bar */
   html[data-ui="mobile"] #ticker { bottom: var(--tabbar-h); }
   html[data-ui="mobile"] #toast {

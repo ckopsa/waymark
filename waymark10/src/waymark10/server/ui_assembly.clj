@@ -17,6 +17,7 @@
    "waymark10/ui/100-core.js"
    "waymark10/ui/110-discovery-routing.js"
    "waymark10/ui/120-nav-home.js"
+   "waymark10/ui/125-palette.js"      ; the ⌘K jump box (opened from 120)
    "waymark10/ui/130-collection.js"
    "waymark10/ui/133-deck.js"          ; VIEW_RENDERERS.deck (registry: 110)
    "waymark10/ui/134-feed.js"          ; VIEW_RENDERERS.feed (registry: 110)
