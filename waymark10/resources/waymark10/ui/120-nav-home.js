@@ -127,10 +127,28 @@ function overflowMenu(tuckedEntries, extra = {}) {
   const btn = el("button", {class:"nav-more", type:"button",
     "aria-haspopup":"true", "aria-expanded":"false",
     title: "more kinds — and the machinery's own resources"}, "⋯");
+  /* a deployable with enough kinds overruns the screen: cap the menu
+     at the room it actually has and let it scroll inside that. The
+     stylesheets carry a floor; this measures the real one, because the
+     room depends on where the ⋯ sits — below it on the desktop, above
+     the tab bar on a phone, where the menu is anchored to the bottom
+     (040-mobile.css) and so grows upward off the top instead. */
+  const fit = () => {
+    menu.style.maxHeight = "";
+    const box = menu.getBoundingClientRect();
+    const room = MOBILE ? box.bottom - 8 : innerHeight - box.top - 8;
+    menu.style.maxHeight = Math.max(120, room) + "px";
+  };
   const close = () => { menu.style.display = "none";
-                        btn.setAttribute("aria-expanded", "false"); };
+                        btn.setAttribute("aria-expanded", "false");
+                        /* the listener lives only as long as the menu is
+                           open: renderNav builds a fresh menu per screen */
+                        removeEventListener("resize", fit); };
   const open = () => { menu.style.display = "block";
                        btn.setAttribute("aria-expanded", "true");
+                       fit();
+                       /* a rotated phone changes the room mid-open */
+                       addEventListener("resize", fit);
                        (menu.querySelector("a") || btn).focus(); };
   btn.addEventListener("click", () =>
     menu.style.display === "block" ? close() : open());

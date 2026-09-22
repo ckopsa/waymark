@@ -152,11 +152,16 @@
               font-size: 15px; line-height: 1; padding: 2px 7px;
               border-radius: 3px; }
   .nav-more:hover { color: var(--ink); background: var(--chipbg); border: none; }
+  /* a deployable with many kinds fills this menu past the bottom of
+     the screen, so it is capped at the room it has and scrolls inside
+     that; 120-nav-home.js measures the exact room at open (the header
+     is not always the same height), this is the floor under it */
   .nav-menu { position: absolute; top: calc(100% + 4px); left: 0;
               z-index: 30; background: var(--panel);
               border: 1px solid var(--line); border-radius: var(--radius);
               box-shadow: var(--shadow); padding: 6px 0; min-width: 170px;
-              display: none; }
+              max-height: calc(100dvh - 96px); overflow-y: auto;
+              overscroll-behavior: contain; display: none; }
   .nav-menu a { display: block; padding: 5px 14px; margin: 0;
                 font-size: 13px; color: var(--ink); white-space: nowrap; }
   .nav-menu-sect { margin: 6px 0 2px; padding: 4px 14px 2px;

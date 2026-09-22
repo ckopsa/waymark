@@ -53,7 +53,14 @@
     display: inline-flex; align-items: center; }
   html[data-ui="mobile"] .nav-menu {          /* opens upward now */
     position: fixed; top: auto; left: auto; right: 6px;
-    bottom: calc(var(--tabbar-h) + 4px); }
+    bottom: calc(var(--tabbar-h) + 4px);
+    /* …so a long list runs off the TOP: it stops short of the header */
+    max-height: calc(100dvh - var(--tabbar-h) - 52px); }
+  /* the tab bar's own rule (inline-flex, side padding only) must not
+     reach down into the menu it holds: those items are a list, and on
+     a phone a list with rows a thumb can hit */
+  html[data-ui="mobile"] .nav-menu a {
+    display: block; padding: 10px 16px; }
   /* the fixed strips stack above the tab bar */
   html[data-ui="mobile"] #ticker { bottom: var(--tabbar-h); }
   html[data-ui="mobile"] #toast {
