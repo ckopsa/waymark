@@ -18,7 +18,7 @@ async function renderResource(view, doc, hints) {
     el("span", {class:"version"},
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
-      (meta.updated_at ? ` · ${String(meta.updated_at).slice(0, 19).replace("T", " ")}` : "")),
+      (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : "")),
     el("span", {class:"version", title: doc.self}, doc.self)));
   /* the viewing dots: who else is looking at this screen right now
      (painted from the known truth on mount — a presence that arrived

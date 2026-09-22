@@ -92,7 +92,7 @@ async function renderFeed(view, doc, hints, decl) {
       el("div", {class: "feed-meta"},
         el("span", {class: "statechip"}, item.state),
         el("span", {class: "version"},
-          ((item.meta || {}).updated_at || "").slice(0, 16).replace("T", " "))),
+          localStamp((item.meta || {}).updated_at))),
       el("h2", {class: "feed-title prose"}, heading));
     /* the server's own sentence — skipped only when it IS the heading */
     if (item.summary && item.summary !== heading)
