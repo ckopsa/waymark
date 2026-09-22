@@ -174,16 +174,36 @@
 
 (defn- dev-principal [headers]
   (if-some [id (get headers "x-waymark-principal")]
-    (t/principal {:id id
-                  :roles (set (csv (get headers "x-waymark-roles")))
-                  :type (let [at (some-> (get headers "x-waymark-actor-type")
-                                         str/trim str/lower-case keyword)]
-                          (if (contains? t/actor-types at) at :human))
-                  ;; the model claim's dev spelling, beside the actor
-                  ;; type's: the doors mint it into the session
-                  ;; (oidc-rp), and a bare handler declares it by
-                  ;; header like everything else here
-                  :model (get headers "x-waymark-model")})
+    (cond-> (t/principal {:id id
+                          :roles (set (csv (get headers "x-waymark-roles")))
+                          :type (let [at (some-> (get headers "x-waymark-actor-type")
+                                                 str/trim str/lower-case keyword)]
+                                  (if (contains? t/actor-types at) at :human))
+                          ;; the model claim's dev spelling, beside the actor
+                          ;; type's: the doors mint it into the session
+                          ;; (oidc-rp), and a bare handler declares it by
+                          ;; header like everything else here
+                          :model (get headers "x-waymark-model")})
+      ;; the DELEGATE's dev spelling, for the same reason and in the
+      ;; same place. oidc.clj assocs :acts-for outside t/principal's
+      ;; closed shape when a token names a tool acting for a person;
+      ;; without a spelling here, no local engine can produce a
+      ;; delegate at all — and `waymark_sit` reads exactly this to
+      ;; decide whether a seat key may bind the session, so the keyed
+      ;; sitter (R-12.14) was untestable without an IdP in front.
+      ;; Absent, not nil, like :model: a principal that declared
+      ;; nothing says nothing.
+      ;;
+      ;; THIS WAS DROPPED ONCE, between 76c2363 and da24ebb, and the
+      ;; cost was silent: `gate!` unions the member row's ROLES onto
+      ;; the principal and nothing else, so a row carrying acts_for
+      ;; never reaches :acts-for on its own. Every fired seat then
+      ;; refuses at sit-not-a-delegate — the proxy sends the header,
+      ;; the engine reads none, and the refusal blames the caller.
+      ;; mcp_sit_test/a-delegate-declared-by-header-binds-the-key
+      ;; is the test that should have caught it.
+      (not (str/blank? (str (get headers "x-waymark-acts-for"))))
+      (assoc :acts-for (str/trim (str (get headers "x-waymark-acts-for")))))
     t/anonymous))
 
 (defn principal-of
