@@ -235,6 +235,38 @@ each seat and for each judgment (R-13.3). Read the seat's ledger
 against that count, and step the model down when the corrections stop.
 A correction fires no consequence.
 
+## Step 4: the reopen
+
+A correction needs a word for the new state. Some judgments have
+none: every word of pull-request follow-up is final. When the story is
+not over, a person reopens the verdict instead.
+
+```json
+{
+  "kind": "verdict",
+  "action": "reopen",
+  "id": "<the standing verdict's id>",
+  "input": {"note": "The bench bug that turned this red is fixed; keep following it."},
+  "acknowledge": "The subject re-enters this judgment's queue and the seat that walks it will judge it again."
+}
+```
+
+The verdict moves to `overruled`. Nothing is written in its place, so
+the subject has no standing verdict and the next sit hands it back.
+The row keeps `reopened_by` and `reopen_note`, and the transition
+keeps the note.
+
+Who may reopen: the person who owns the judgment, and a seat whose
+scope names `reopen` on kind `verdict`. Never the seat that said the
+verdict. Only the standing verdict reopens; a refusal names the one
+that stands. A `corrects` that cites a reopened verdict is refused,
+because nothing stands to correct.
+
+A seat that names a judgment and wrote no `wake_on` wakes on the
+reopen by default. A seat that wrote its own `wake_on` adds
+`{"kind": "verdict", "actions": ["reopen"], "filter": {"judgment":
+"<the judgment's id>"}}` to be woken by it.
+
 ## A judgment on the engine's own rows
 
 The subject can be a row of the engine itself. A judgment can name

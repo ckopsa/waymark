@@ -683,6 +683,16 @@
              (and (t/deny? v) (:hide d))))
          (:guards defn))))
 
+(defn- out-of-state-says
+  "The action's own sentence about a row outside its `:from`
+  (`:out-of-state-says`, a fn of row and the GUARD ctx — reads, no
+  pen), or nil. Narration only: the refusal is already decided, so a
+  narrator that throws costs its sentence and never the 409."
+  [defn row ctx]
+  (when-some [f (:out-of-state-says defn)]
+    (try (some-> (f row ctx) str str/trim not-empty)
+         (catch Exception _ nil))))
+
 (defn- narration-row
   "The row a refusal narrates over (waymark-kyg): secret fields
   concealed so a guard's :vars-fn garnish cannot surface a value the
@@ -1135,7 +1145,8 @@
                 (throw (p/not-found kind id)))
               (throw (p/wrong-state action-name (:state row) (:from defn)
                                     {:kind kind :id id
-                                     :summary (summary-of rdef row)})))
+                                     :summary (summary-of rdef row)}
+                                    (out-of-state-says defn row guard-ctx))))
           (do
             ;; concealment precedes everything in-state too (phase 8's
             ;; ordering amendment, forced by the mirror's sync doors):

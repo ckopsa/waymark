@@ -27,7 +27,8 @@
 
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit
-    :place :bulk :batch :waives :touches :unless :record :undo :engine})
+    :place :bulk :batch :waives :touches :unless :record :undo :engine
+    :out-of-state-says})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display

@@ -2815,6 +2815,14 @@
   arriving in the queue is the work this seat exists to do."
   "create")
 
+(def judgment-reopen-kind
+  "The kind whose `reopen` puts a subject back in a judgment's queue."
+  "verdict")
+
+(def judgment-reopen-action
+  "The door on it: a verdict taken back with nothing in its place."
+  "reopen")
+
 (defn effective-wake-on
   "What actually wakes this seat (R-12.22), as `wake-entry-schema`
   entries.
@@ -2850,21 +2858,38 @@
   (waymark-fp62.17) asks nothing of it either: the computed entry
   carries no `settle_seconds`, so the default wakes on the row that
   arrived and not after the arrivals stop. A seat that wants the
-  trailing edge writes the entry and says how long the quiet is."
+  trailing edge writes the entry and says how long the quiet is.
+
+  A SEAT THAT SAYS A JUDGMENT HAS A THIRD WAY IN. Its queue is the
+  judgment's subjects minus the ones with a standing verdict
+  (`mcp/judged-subjects`), so a subject re-enters it when its verdict
+  is REOPENED — a transition on kind verdict, not on the walked kind.
+  The computed default therefore carries a second entry, `verdict`
+  `reopen` under this seat's own judgment, and a reopen wakes the
+  seat exactly as a new subject does. A seat that WROTE its `wake_on`
+  gets no such entry: what it wrote is what wakes it, and it names
+  `{kind verdict, actions [reopen], filter {judgment …}}` itself if
+  it wants the reopen too."
   ([seat-row] (effective-wake-on seat-row nil))
   ([seat-row walk-rdef]
    (let [written (get-in seat-row [:data :wake_on])
          walk (some-> (get-in seat-row [:data :walk]) str not-empty)
-         fm (walk-filter seat-row)]
+         judgment (some-> (get-in seat-row [:data :judgment]) str not-empty)
+         fm (walk-filter seat-row)
+         reopened (when judgment
+                    [{:kind judgment-reopen-kind
+                      :actions [judgment-reopen-action]
+                      :filter {:judgment judgment}}])]
      (cond
        (seq written) (vec written)
        (and walk fm walk-rdef)
-       [{:kind walk
-         :actions (into [walk-create-action]
-                        (map (comp name :name))
-                        (machine/actions-seq walk-rdef))
-         :filter fm}]
-       walk [{:kind walk :actions [walk-create-action]}]
+       (into [{:kind walk
+               :actions (into [walk-create-action]
+                              (map (comp name :name))
+                              (machine/actions-seq walk-rdef))
+               :filter fm}]
+             reopened)
+       walk (into [{:kind walk :actions [walk-create-action]}] reopened)
        :else []))))
 
 (defn open-sitting-for-grant

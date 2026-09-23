@@ -40,6 +40,28 @@
   hiding conceals (factory10.mirror's `the-mirror-writes-this-row`,
   spelled here because this kind carries its own machine).
 
+  ── THE REOPEN: A STORY THAT IS NOT OVER ──
+
+  A correction needs an honest word for the new state, and some
+  judgments have none: every word pull-request follow-up names is
+  final, so a `ci_red` that turned out to be a bench bug since fixed
+  could not be answered with \"keep following it\" (verdict aed87c06,
+  pcore PR 554). `reopen` is that answer. It moves the standing
+  verdict to `overruled` and writes NOTHING in its place, so the
+  subject has no standing verdict under the judgment and is back in
+  its queue — by the walk's one existing rule (`mcp/judged-subjects`
+  subtracts `said` rows and nothing else), not by a second mechanism.
+  The row stays; the note rides the transition and the row, so the
+  record says who reopened it and why.
+
+  Who may: the person who owns the judgment, and a seat whose scope
+  names `verdict.reopen`. Never the seat that said it — its own error
+  is what the reopen corrects, and a seat that could reopen its own
+  verdict could skip any answer it did not want to stand behind. Only
+  the answer that stands reopens, and a refusal of any other names the
+  one that does. Verdicts ABOUT the reopened one (a later seat judging
+  it) are rows of their own and do not move.
+
   ── WHAT THE LEDGER READS ──
 
   `judgment`, `said_by`, `subject_kind`, `subject_id` and `corrects`
@@ -235,6 +257,12 @@
         (if-some [prior (when read' (read' verdict-kind cited))]
           (if-some [problem
                     (cond
+                      (and (not= standing-state (name (:state prior)))
+                           (some? (get-in prior [:data :reopened_by])))
+                      (str "The verdict this cites was reopened — nothing"
+                           " stands on this subject under this judgment, so"
+                           " there is nothing to correct. Judge it afresh:"
+                           " the same verdict, with no corrects.")
                       (not= standing-state (name (:state prior)))
                       (str "The verdict this cites has already been corrected"
                            " — it is " (name (:state prior)) ", and only the"
@@ -268,6 +296,107 @@
     (t/allow)
     (t/deny)))
 
+;; ── the reopen's walls ──────────────────────────────────────────────
+
+(def reopen-consequence
+  "The sentence the reopen's confirm gate asks a caller to echo back.
+  A def of its own because the test and the door must read one
+  spelling of it."
+  "The subject re-enters this judgment's queue and the seat that walks it will judge it again.")
+
+(defn- standing-others
+  "The `said` verdicts on this row's subject under this row's
+  judgment, other than this row, newest first — or nil when no find
+  is in scope (the storage-free probe advertises optimistically)."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (->> (find' verdict-kind
+                {:judgment (str (get-in row [:data :judgment]))
+                 :subject_id (str (get-in row [:data :subject_id]))
+                 :state standing-state}
+                {:limit 5 :newest-first true})
+         (remove #(= (str (:id %)) (str (:id row))))
+         (seq))))
+
+(defn- naming
+  "One verdict, as a refusal names it: its id and its word."
+  [v]
+  (str (:id v) " (" (get-in v [:data :verdict]) ")"))
+
+(defn- what-stands-instead
+  "The reopen's `:out-of-state-says`: a verdict already out of `said`
+  is not the answer that stands, so the refusal names the one that
+  does — or says that nothing does, which means the subject is
+  already back in the queue and there is nothing to reopen."
+  [row ctx]
+  (when (:find ctx)
+    (if-some [s (first (standing-others row ctx))]
+      (str "Only the answer that stands can be reopened, and the one"
+           " standing on this subject under this judgment is " (naming s)
+           ". Reopen that one.")
+      (str "Nothing stands on this subject under this judgment, so it is"
+           " already in the judgment's queue."))))
+
+(g/defguard only-the-standing-verdict-reopens
+  {:reads [:verdict]
+   :vars [:standing]
+   :open "One judgment has one standing answer about one row, and that answer is the only one a reopen can take back. Reopening an older one would leave the newer standing and the queue unchanged — a record that says the story reopened while the walk still skips it."
+   :explain "A newer verdict stands on this subject under this judgment — {standing}. Only the answer that stands can be reopened; reopen that one."}
+  [row _inp ctx]
+  ;; the `said` half of the law. A row already `overruled` never
+  ;; reaches a guard — the machine refuses it at step 5, and
+  ;; `what-stands-instead` names the standing verdict there. This wall
+  ;; is the belt under the one-standing invariant: a subject with two
+  ;; `said` rows (a race the unique index is not there to catch) takes
+  ;; back only the newest.
+  (let [others (standing-others row ctx)
+        newer (first (filter #(pos? (compare (str (:created-at %))
+                                             (str (:created-at row))))
+                             others))]
+    (if-some [s newer]
+      (t/deny {:vars {:standing (naming s)}})
+      (t/allow))))
+
+(g/defguard who-may-reopen
+  {:reads [:principal :judgment]
+   :vars [:problem]
+   :open "A reopen says a seat's answer was wrong in a way the judgment has no word for, so it is the judgment's owner's to say, or a seat's the household has named for it. It is never the saying seat's: its own error is what a reopen exists to correct, and a seat that could reopen its own verdict could skip any answer it did not want to stand behind — which is the measurement R-3 counts it by."
+   :explain "{problem}"}
+  [row _inp ctx]
+  (let [p (:principal ctx)
+        me (str (:id p))
+        author (str (get-in row [:data :said_by]))
+        read' (:read ctx)]
+    (cond
+      (= :system (:type p)) (t/allow)
+
+      ;; "a person" is `(not= :agent …)` everywhere in this tree
+      ;; (`a-person-corrects` above): the hand this law is about is
+      ;; the agent's
+      (and (= :agent (:type p)) (= me author))
+      (t/deny {:vars {:problem
+                      (str "This verdict is yours, and a seat does not"
+                           " reopen its own answer. Its owner or another"
+                           " seat named for reopening may; if you think it"
+                           " was wrong, say so where an agent may say things.")}})
+
+      ;; any other seat reached this door through a scope that names
+      ;; verdict.reopen — the router's default deny answers the rest
+      (= :agent (:type p)) (t/allow)
+
+      (nil? read') (t/allow)
+
+      :else
+      (let [jid (str (get-in row [:data :judgment]))
+            owner (some-> (read' judgment/judgment-kind jid) :owner str)]
+        (if (or (nil? owner) (= me owner))
+          (t/allow)
+          (t/deny {:vars {:problem
+                          (str "This judgment is " owner "'s, and reopening"
+                               " a verdict under it is theirs to do, or a"
+                               " seat's they name for it. A person who"
+                               " disagrees with the verdict corrects it.")}}))))))
+
 ;; ── the hands ───────────────────────────────────────────────────────
 
 (defhandler stamp-and-overrule
@@ -283,6 +412,16 @@
     (when (and cited (:invoke ctx))
       ((:invoke ctx) verdict-kind cited :overrule nil))
     row))
+
+(defhandler record-the-reopen
+  [row inp ctx]
+  ;; the transition carries the note already (`:record true`); the row
+  ;; carries it too, so the verdict's own screen — and the correction
+  ;; wall above — can read that this answer was taken back rather than
+  ;; answered again. The stamp is whoever reopened, never the body's.
+  (-> row
+      (assoc-in [:data :reopened_by] (:id (:principal ctx)))
+      (assoc-in [:data :reopen_note] (:note inp))))
 
 ;; ── the law, written down as a scenario ─────────────────────────────
 ;;
@@ -348,6 +487,16 @@
      :label "Said by"
      :spelled-by-hand "Refused here: whoever judges is whose verdict it is, and the engine stamps it from the hand that posted."
      :help "Whose verdict this is. The engine writes it from whoever judged; no body may name somebody else."}}
+   :reopened_by
+   {:x-display
+    {:hidden true
+     :label "Reopened by"
+     :spelled-by-hand "Refused here: whoever reopens is who reopened it, and the engine stamps it from the hand that posted."
+     :help "Who took this verdict back so its subject is judged again. The engine writes it from whoever reopened."}}
+   :reopen_note
+   {:x-display
+    {:label "Why it was reopened"
+     :help "The one sentence the reopener gave for putting the subject back in the judgment's queue."}}
    :corrects
    {:x-display
     {:label "Corrects"
@@ -402,7 +551,12 @@
     (entry :said_by {:optional true :filter #{:eq}}
            [:maybe [:string {:max 128}]])
     (entry :corrects {:optional true :kind :verdict :filter #{:eq}}
-           [:maybe :waymark/ref])]
+           [:maybe :waymark/ref])
+    ;; written by `reopen` and by nothing else — not in the create
+    ;; model, so no body may name them
+    (entry :reopened_by {:optional true :filter #{:eq}}
+           [:maybe [:string {:max 128}]])
+    (entry :reopen_note {:optional true} [:maybe [:string {:max 240}]])]
    ;; :said_by is NOT in the create model, and that is the difference
    ;; from `verdict_reason`'s deliberate redundancy. There the field is
    ;; declared so a body naming somebody else can be refused by NAME;
@@ -452,5 +606,27 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The verdict stops standing and stays on the record under the name of whoever said it. The correction that replaced it cites it, so both rows read as one story."}
      :display {:label "Overrule" :order 1
-               :description "The engine's own hand: a correction has replaced this verdict"}}}
+               :description "The engine's own hand: a correction has replaced this verdict"}}
+    ;; THE STORY IS NOT OVER (see the ns docstring). Same tomb as
+    ;; `overrule`, and the difference is what is NOT written: no
+    ;; replacement, so nothing stands and the walk takes the subject
+    ;; back. A normal, visible transition, so a seat's `wake_on` can
+    ;; name it — and a judgment seat that wrote none wakes on it by
+    ;; default (`seats/effective-wake-on`).
+    :reopen
+    {:from #{:said} :to :overruled
+     :input [:map
+             [:note {:x-display
+                     {:widget "prose"
+                      :label "Why it is reopened"
+                      :help "One sentence: what the verdict missed, or what changed since. It stays on the record beside your name."}}
+              [:string {:min 1 :max 240}]]]
+     :record true
+     :guards [who-may-reopen
+              only-the-standing-verdict-reopens]
+     :out-of-state-says what-stands-instead
+     :handler record-the-reopen
+     :safety {:idempotent true :reversible false :confirm true
+              :consequence reopen-consequence}
+     :display {:label "Reopen" :order 2}}}
    :scenarios [a-verdict-answers-a-judgment-in-force]})

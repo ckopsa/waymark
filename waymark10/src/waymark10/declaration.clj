@@ -29,7 +29,14 @@
    ;; and a mirror must go on recording what its authority says about
    ;; a task the house finished last month. Outside the fingerprint's
    ;; action facet, like the weave that stamps it
-   :engine])
+   :engine
+   ;; what the out-of-state refusal ADDS about this row: a fn of
+   ;; (row ctx) → one sentence or nil, read at invoke's step 5 with the
+   ;; guard ctx's reads. Prose, never law — the machine has already
+   ;; refused, and this only says what to do instead (the verdict's
+   ;; `reopen` names the verdict that stands). Outside the
+   ;; fingerprint's action facet, like :display
+   :out-of-state-says])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and

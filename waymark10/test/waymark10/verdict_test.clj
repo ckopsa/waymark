@@ -18,7 +18,9 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.verdict :as verdict]
             [waymark10.wire :as wire]))
 
 ;; ── the world: something to judge ───────────────────────────────────
@@ -71,11 +73,12 @@
   already answered 404 by the router's default deny, which proves
   nothing about any wall — so every claim below about what an agent
   may not do is made by an agent holding exactly the leash a household
-  would approve for a judging seat."
-  [eng audience]
+  would approve for a judging seat. `actions` widens it, for the seat
+  a household names to reopen."
+  [eng audience & {:keys [actions] :or {actions ["judge"]}}]
   (let [made (call! eng :post "/api/grants"
                     :body {:audience audience
-                           :scope [{:kind "verdict" :actions ["judge"]}]})
+                           :scope [{:kind "verdict" :actions actions}]})
         gid (id-of (get-in made [:doc :self]))
         hs {"x-waymark-principal" audience "x-waymark-actor-type" "agent"}]
     (call! eng :post (str "/api/grants/" gid "/-/accept") :headers hs)
@@ -87,11 +90,13 @@
 
 (defn- judgment!
   "A promoted judgment over vt_ticket, named as the caller likes."
-  [eng nm & {:keys [promote? verdicts] :or {promote? true verdicts words}}]
+  [eng nm & {:keys [promote? verdicts subject-kind queue]
+             :or {promote? true verdicts words
+                  subject-kind "vt_ticket" queue {:state "open"}}}]
   (let [made (call! eng :post "/api/judgments"
                     :body {:name nm
-                           :subject_kind "vt_ticket"
-                           :queue {:state "open"}
+                           :subject_kind subject-kind
+                           :queue queue
                            :verdicts verdicts})
         jid (id-of (get-in made [:doc :self]))]
     (when promote?
@@ -322,3 +327,170 @@
     (testing "and one value still means exactly that one"
       (is (= 2 (total (str "judgment=" red))))
       (is (= 1 (total "verdict=thin"))))))
+
+;; ── 5. the reopen: a story that is not over ─────────────────────────
+;;
+;; A correction needs a word for the new state, and some judgments
+;; have none — every word pull-request follow-up names is final. The
+;; reopen takes the standing answer back and writes NOTHING in its
+;; place, so the subject is back in the judgment's queue.
+
+(defn- reopen!
+  [eng hs vid note]
+  (call! eng :post (str "/api/verdicts/" vid "/-/reopen")
+         :headers hs :body {:note note}))
+
+(defn- state-of [eng vid]
+  (str (get-in (call! eng :get (str "/api/verdicts/" vid)) [:doc :state])))
+
+(def ^:private why "The bench bug that turned this red has been fixed.")
+
+(deftest a-reopen-takes-the-answer-back-and-writes-nothing-in-its-place
+  (let [{:keys [eng seat] :as w} (world)
+        said (judge! eng seat (verdict-body w))
+        vid (id-of (get-in said [:doc :self]))
+        out (reopen! eng nil vid why)]
+    (is (= 200 (:status out)) (detail-of out))
+    (testing "said → overruled, and the row stays"
+      (is (= "overruled" (state-of eng vid)))
+      (is (= 1 (get-in (call! eng :get "/api/verdicts") [:doc :data :total]))
+          "no replacement verdict was written")
+      (is (= 0 (get-in (call! eng :get "/api/verdicts?state=said")
+                       [:doc :data :total]))
+          "and nothing stands"))
+    (testing "the record says who reopened it and why — on the row"
+      (let [row (call! eng :get (str "/api/verdicts/" vid))]
+        (is (= "mom" (str (get-in row [:doc :data :reopened_by]))))
+        (is (= why (str (get-in row [:doc :data :reopen_note]))))
+        (is (= seat-id (str (get-in row [:doc :data :said_by])))
+            "and the sayer is still the sayer")))
+    (testing "…and on the transition"
+      (let [ts (store/with-tx (:storage eng)
+                 (fn [tx] (store/transitions (:storage eng) tx
+                                             {:kind :verdict :resource-id vid}
+                                             {})))
+            t (first (filter #(= :reopen (:action %)) ts))]
+        (is (some? t))
+        (is (= "mom" (str (get-in t [:actor :id]))))
+        (is (= why (str (get-in t [:inputs :note]))))))
+    (testing "the subject may be judged again — nothing stands on it"
+      (is (= 201 (:status (judge! eng seat (verdict-body w :verdict "this_change"
+                                                          :remedy "Fix the change.")))))))
+  (testing "the note is required, and one sentence"
+    (let [{:keys [eng seat] :as w} (world)
+          vid (id-of (get-in (judge! eng seat (verdict-body w)) [:doc :self]))]
+      (is (= 422 (:status (call! eng :post (str "/api/verdicts/" vid "/-/reopen")
+                                 :body {}))))
+      (is (= 422 (:status (reopen! eng nil vid (apply str (repeat 241 "x"))))))
+      (is (= "said" (state-of eng vid))))))
+
+(deftest the-reopen-door-carries-the-confirm-sentence
+  (let [{:keys [eng seat] :as w} (world)
+        vid (id-of (get-in (judge! eng seat (verdict-body w)) [:doc :self]))
+        entry (get-in (call! eng :get (str "/api/verdicts/" vid))
+                      [:doc :actions :reopen])]
+    (is (true? (get-in entry [:safety :confirm])))
+    (is (= verdict/reopen-consequence
+           (str (get-in entry [:display :description]))))))
+
+(deftest only-the-standing-verdict-reopens
+  (let [{:keys [eng seat] :as w} (world)
+        vid (id-of (get-in (judge! eng seat (verdict-body w)) [:doc :self]))
+        fix (judge! eng nil (verdict-body w :verdict "this_change"
+                                          :remedy "The change dropped a migration."
+                                          :corrects vid))
+        fix-id (id-of (get-in fix [:doc :self]))]
+    (is (= 201 (:status fix)))
+    (testing "an overruled verdict is refused, and the refusal names the
+              verdict that stands"
+      (let [out (reopen! eng nil vid why)]
+        (is (= 409 (:status out)))
+        (is (str/ends-with? (str (get-in out [:doc :type])) "wrong-state"))
+        (is (str/includes? (detail-of out) fix-id))
+        (is (str/includes? (detail-of out) "this_change"))
+        (is (= "overruled" (state-of eng vid)))
+        (is (= "said" (state-of eng fix-id)) "the standing one did not move")))
+    (testing "a verdict already reopened is refused too, and says nothing
+              stands — the subject is already in the queue"
+      (is (= 200 (:status (reopen! eng nil fix-id why))))
+      (let [out (reopen! eng nil fix-id "Again, with feeling.")]
+        (is (= 409 (:status out)))
+        (is (str/includes? (detail-of out) "Nothing stands"))))))
+
+(deftest who-may-reopen
+  (let [{:keys [eng judgment] :as w} (world)
+        author (leash! eng seat-id :actions ["judge" "reopen"])
+        other (leash! eng "seat-bo" :actions ["reopen"])
+        said (judge! eng author (verdict-body w))
+        vid (id-of (get-in said [:doc :self]))]
+    (is (= 201 (:status said)))
+    (testing "never the seat that said it, even holding verdict.reopen"
+      (let [out (reopen! eng author vid why)]
+        (is (= 409 (:status out)))
+        (is (= :who-may-reopen (guard-of out)))
+        (is (str/includes? (detail-of out) "does not reopen its own answer"))
+        (is (= "said" (state-of eng vid)))))
+    (testing "a seat with only verdict.judge has no reopen door at all"
+      (let [judge-only (leash! eng "seat-cy")]
+        (is (not= 200 (:status (reopen! eng judge-only vid why))))
+        (is (= "said" (state-of eng vid)))))
+    (testing "a person who does not own the judgment does not reopen"
+      (let [out (reopen! eng {"x-waymark-principal" "dad"
+                              "x-waymark-actor-type" "human"}
+                         vid why)]
+        (is (= 409 (:status out)))
+        (is (= :who-may-reopen (guard-of out)))
+        (is (str/includes? (detail-of out) "mom"))
+        (is (= "said" (state-of eng vid)))))
+    (testing "another seat whose scope lists reopen does"
+      (let [out (reopen! eng other vid why)]
+        (is (= 200 (:status out)) (detail-of out))
+        (is (= "seat-bo" (str (get-in out [:doc :data :reopened_by]))))))
+    (testing "and the ledger can tell the two apart"
+      (is (= 1 (get-in (call! eng :get (str "/api/verdicts?judgment=" judgment
+                                            "&reopened_by=seat-bo"))
+                       [:doc :data :total]))))))
+
+(deftest the-judgments-owner-reopens
+  ;; the person who wrote the judgment, not merely any person
+  (let [{:keys [eng seat] :as w} (world)
+        vid (id-of (get-in (judge! eng seat (verdict-body w)) [:doc :self]))]
+    (is (= 200 (:status (reopen! eng nil vid why))))
+    (is (= "overruled" (state-of eng vid)))))
+
+(deftest a-verdict-about-the-reopened-one-stays-on-the-record
+  (let [{:keys [eng seat] :as w} (world)
+        vid (id-of (get-in (judge! eng seat (verdict-body w)) [:doc :self]))
+        ;; a later judgment whose subjects are verdicts themselves (R-7)
+        meta-j (judgment! eng "Did the seat read the log"
+                          :subject-kind "verdict"
+                          :queue {:state "said"}
+                          :verdicts [{:name "read" :sentence "It read the log."}
+                                     {:name "guessed" :sentence "It did not."}])
+        about (judge! eng (leash! eng "seat-dee")
+                      {:judgment meta-j
+                       :subject_kind "verdict"
+                       :subject_id vid
+                       :verdict "guessed"
+                       :remedy "Read the job log before answering."})
+        about-id (id-of (get-in about [:doc :self]))]
+    (is (= 201 (:status about)) (detail-of about))
+    (is (= 200 (:status (reopen! eng nil vid why))))
+    (is (= "overruled" (state-of eng vid)))
+    (is (= "said" (state-of eng about-id))
+        "the verdict ABOUT the reopened one is a row of its own, and
+         only the reopened verdict moves")
+    (is (nil? (get-in (call! eng :get (str "/api/verdicts/" about-id))
+                      [:doc :data :reopened_by])))))
+
+(deftest a-correction-cannot-cite-a-reopened-verdict
+  (let [{:keys [eng seat] :as w} (world)
+        vid (id-of (get-in (judge! eng seat (verdict-body w)) [:doc :self]))]
+    (is (= 200 (:status (reopen! eng nil vid why))))
+    (let [out (judge! eng nil (verdict-body w :verdict "this_change"
+                                            :remedy "The change dropped a migration."
+                                            :corrects vid))]
+      (is (= 409 (:status out)))
+      (is (= :a-person-corrects (guard-of out)))
+      (is (str/includes? (detail-of out) "was reopened"))
+      (is (str/includes? (detail-of out) "nothing to correct")))))
