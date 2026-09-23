@@ -147,6 +147,7 @@
             [waymark10.machine :as machine]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
@@ -312,7 +313,7 @@
     (t/allow)))
 
 (g/defguard not-a-sitter
-  {:reads [:principal :now :grant]
+  {:reads [:principal :now :grant :seat :held_call :within]
    :explain "A sitter does not widen its own office. The authority of a seat is decided by the person who opened it, and a hand that holds a grant citing this seat is the hand that would be widening itself. Ask a person, or file an approval_request naming what the seat is missing."}
   [row inp ctx]
   ;; A grant CITES a seat through `grant.seat` — the field wave two
@@ -334,6 +335,15 @@
                         (find' :grant {:audience (:id p)} {:limit 100}))]
         (cond
           (empty? cited) (t/allow)
+          ;; A DELEGATING SEAT'S SITTER IS AN AUTHOR (server/delegation).
+          ;; Its seat writes are judged by the delegation guards, which
+          ;; stand last on these doors and hold for the person's tap
+          ;; what this wall would have refused outright — its own seat
+          ;; included. The engine's replay of a held call the person
+          ;; allowed passes here for the same reason.
+          (or (some? (delegation/author-seat ctx cited))
+              (delegation/approved-hold? ctx :seat (:id row)))
+          (t/allow)
           ;; the create door: there is no seat yet to compare against,
           ;; and R-4.4 still says the actor is "a person, not a
           ;; sitter" — a sitter that could open a fresh office with a
@@ -626,11 +636,11 @@
   ;; judgment is promoted, and the other two readings name a field of
   ;; the form the person is already standing in.
   {:judges [:judgment]
-   :reads [:judgment]
+   :reads [:judgment :principal :now :grant :seat :held_call :within]
    :vars [:problem]
    :remedies [:judgment/promote]
    :explain "A seat that says a judgment walks that judgment's own subjects and answers with its verdicts: {problem}."}
-  [_row inp ctx]
+  [row inp ctx]
   (if-some [id (some-> (:judgment inp) str not-empty)]
     ;; the pure render probe carries no read hooks — advertise
     ;; optimistically there, `held-for-active-models`' posture
@@ -647,6 +657,17 @@
             problem (cond
                       (nil? j)
                       (str "there is no judgment " id " on this engine")
+
+                      ;; AN AUTHORED SEAT IS BORN PARKED (server/delegation,
+                      ;; invariant 5), and a parked seat walks nothing. So
+                      ;; its author may cite a DRAFT and promote it while
+                      ;; the seat still waits on its person's unpark —
+                      ;; `judgment-in-force` refuses the unpark until it
+                      ;; is promoted.
+                      (and (= :draft (:state j))
+                           (nil? (:id row))
+                           (some? (delegation/authoring-seat ctx :seat nil)))
+                      nil
 
                       (not= :promoted (:state j))
                       (str "that judgment is " (name (:state j))
@@ -826,6 +847,25 @@
     (t/deny)
     (t/allow)))
 
+(g/defguard judgment-in-force
+  {:reads [:judgment]
+   :vars [:judgment]
+   :remedies [:judgment/promote]
+   :explain "This seat says the judgment {judgment}, which is not promoted, and a seat walks only a judgment in force. Promote it, or restate the seat without it, then unpark."}
+  [row _inp ctx]
+  ;; An authored seat may be born citing a DRAFT (invariant 5), and
+  ;; the unpark is the moment it would start walking one. A person's
+  ;; unpark meets this wall too: it is about the seat, not the hand.
+  (let [id (some-> (get-in row [:data :judgment]) str not-empty)
+        read' (:read ctx)]
+    (if (and id read')
+      (let [j (read' :judgment id)]
+        (if (and j (not= :promoted (:state j)))
+          (t/deny {:vars {:judgment (or (some-> (get-in j [:data :name]) str)
+                                        id)}})
+          (t/allow)))
+      (t/allow))))
+
 (g/defguard not-interactive
   {:explain "The seat is an interactive seat. A person sits here; nothing fires it."}
   [row _inp _ctx]
@@ -940,8 +980,8 @@
    :substitute_for
    :standing_ttl_seconds :cadence_seconds :sitting_idle_seconds
    :budget_usd_per_week
-   :sitting_budget_tokens :walk :judgment :rows_per_firing
-   :wake_on :fire_interval_seconds])
+   :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
+   :rows_per_firing :wake_on :fire_interval_seconds :delegates])
 
 (def ^:private wall-inputs
   "The seat field each wall is judged against, for the walls a person
@@ -978,13 +1018,45 @@
                 (update :data dissoc :stale))
       lift? (update :data dissoc :halt))))
 
-(defhandler unpark-seat [row _inp _ctx]
+(defhandler unpark-seat [row _inp ctx]
   ;; R-2: the seat's state IS the input of the `seat_not_active` wall,
   ;; and `unpark` is the hand that moves it. The other three lines
   ;; stand — a park does not spend fuel and does not change the model
   ;; list — and the door that reads them judges them.
-  (if (= "seat_not_active" (str (get-in row [:data :halt :reason])))
-    (update row :data dissoc :halt)
+  ;;
+  ;; INVARIANT 4: an authored seat's FIRST unpark is its person's
+  ;; approval, and the row says who gave it and when. From then on its
+  ;; author restates it within the ceiling with no new tap.
+  (let [first-approval? (and (some-> (get-in row [:data :authored_by]) str
+                                     not-empty)
+                             (nil? (get-in row [:data :approved_by])))
+        approver (when first-approval?
+                   (or (some-> (delegation/allowed-hold ctx :seat (:id row))
+                               (get-in [:data :decided_by]) str not-empty)
+                       (str (get-in ctx [:principal :id]))))]
+    (cond-> row
+      (= "seat_not_active" (str (get-in row [:data :halt :reason])))
+      (update :data dissoc :halt)
+      first-approval?
+      (update :data assoc :approved_by approver :approved_at (:now ctx)))))
+
+(defn seat-born
+  "The seat's on-create (invariant 3 and 4 of server/delegation): a
+  seat whose author is a DELEGATING seat is born parked, and carries
+  `authored_by` and `owner` from its first moment. A person's seat is
+  born as it always was.
+
+  The author is read off the held call when this birth replays one,
+  so a sitter whose grant lapsed between the ask and the tap still
+  writes the author the person approved."
+  [row ctx]
+  (if-some [author (delegation/authoring-seat ctx :seat nil)]
+    (let [owner (or (delegation/owner-of ctx)
+                    (some-> (get-in author [:data :owner]) str not-empty))]
+      (-> row
+          (assoc :state :parked)
+          (update :data assoc :authored_by (str (:id author)))
+          (cond-> owner (assoc-in [:data :owner] owner))))
     row))
 
 (defhandler write-stale [row inp _ctx]
@@ -1442,6 +1514,42 @@
                    :help "One sitting_idle_seconds after the fire. A key no session spent stops answering at this moment."}}
      :waymark/instant]]])
 
+(def delegates-schema
+  "THE CEILING (server/delegation, invariant 2). A seat that carries one
+  is a delegating seat: its sitter may open and tune other seats, and
+  every seat it writes must fit under this. The scope is in `scope`'s
+  own shape, and a child's entries are fitted under it entry by entry
+  and filter by filter. It is not the author's own scope: a mayor may
+  give bench.write on repo bench without holding it. The three caps
+  bound the rest of the office."
+  [:map
+   [:scope {:examples [grants/scope-example]
+            :x-display
+            {:label "What its seats may open"
+             :help "The widest scope any seat it authors may carry, entry by entry: a child entry fits when it names the same kind, only actions listed here, only ids listed here when this names ids, and every filter pair this entry carries. It need not be inside the delegating seat's own scope."}}
+    grants/scope-schema]
+   [:budget_usd_per_week {:examples [5M]
+                          :x-display
+                          {:label "Most fuel per authored seat, in dollars a week"
+                           :help "No seat it authors may be given more than this for seven days."}}
+    [:decimal {:min 0 :max 100000}]]
+   [:sitting_budget_tokens {:examples [60000]
+                            :x-display
+                            {:label "Most tokens per sitting of an authored seat"
+                             :help "No seat it authors may carry a larger sitting ceiling, and none may ignore the ceiling."}}
+    [:int {:min 20000 :max 10000000}]]
+   [:held_for {:optional true
+               :x-display
+               {:label "Models its seats may be held for"
+                :help "The model row ids a seat it authors may name in held_for and substitute_for. Leave it empty and any model may be named."}}
+    [:maybe [:vector [:string {:min 1 :max 64}]]]]])
+
+(def ^:private delegates-field-help
+  "Leave it empty for a seat that authors nothing. Fill it and the seat's sitter may open and tune other seats inside it; each one is born parked and waits on your unpark, and anything past it waits on your tap.")
+
+(def ^:private ignore-budget-help
+  "Turn it on and a sitting of this seat has no token ceiling: the harness gets no cap, and the sitting_budget_reached wall never stands. The week's dollar budget still does.")
+
 (defresource seat
   {:kind :seat
    :plural "seats"
@@ -1554,6 +1662,11 @@
                              {:label "One sitting's token ceiling"
                               :help "Passed to the harness as the cap on a single wake. Twenty thousand is the floor the engine accepts — below it a sitting cannot read its queue and write anything back."}}
      [:int {:min 20000 :max 10000000}]]
+    [:ignore_sitting_budget {:optional true
+                             :x-display
+                             {:label "Ignore the token ceiling"
+                              :help ignore-budget-help}}
+     [:maybe :boolean]]
     [:walk {:optional true
             :x-options {:from :kinds}
             :x-display
@@ -1598,8 +1711,40 @@
                              {:label "Quietest gap between wakes, in seconds"
                               :help "The least time between two wakes the seat's own events start. A match inside the gap does not fire; it waits, and the first wake after the gap lifts walks the queue. Raise it for a busy queue: every wake costs one sitting's fuel."}}
      [:int {:min 1 :max 86400}]]
+    [:delegates {:optional true
+                 :x-display
+                 {:label "What it may author"
+                  :help delegates-field-help}}
+     [:maybe delegates-schema]]
     ;; ── engine-written from here down (absent from the create door
     ;;    and from restate; see the ns docstring's write fence) ───────
+    ;; WHO AUTHORED THIS SEAT, AND FOR WHOM (server/delegation,
+    ;; invariant 3). Stamped by `seat-born` when a delegating seat's
+    ;; sitter opens it, and absent from both input doors, so a closed
+    ;; map refuses a hand that tries to write it.
+    [:authored_by {:optional true
+                   :kind :seat
+                   :x-display
+                   {:label "Authored by"
+                    :spelled-by-hand "Written at birth when a delegating seat opens this one; never typed."}}
+     [:maybe :waymark/ref]]
+    [:owner {:optional true
+             :x-display
+             {:raw true
+              :label "For whom"
+              :spelled-by-hand "The person the authoring seat acts for, written at birth; never typed."}}
+     [:maybe [:string {:max 128}]]]
+    ;; INVARIANT 4's record: the person's first unpark of an authored
+    ;; seat, written by `unpark` and by nothing else
+    [:approved_by {:optional true
+                   :x-display
+                   {:raw true
+                    :label "Approved by"
+                    :spelled-by-hand "Written by the first unpark of an authored seat; never typed."}}
+     [:maybe [:string {:max 128}]]]
+    [:approved_at {:optional true
+                   :x-display {:label "Approved at"}}
+     [:maybe :waymark/instant]]
     [:stale {:optional true
              :x-display
              {:label "Entries the boot sweep refused"
@@ -1757,6 +1902,11 @@
                              {:label "One sitting's token ceiling"
                               :help "Passed to the harness as the cap on a single wake; twenty thousand is the floor."}}
      [:int {:min 20000 :max 10000000}]]
+    [:ignore_sitting_budget {:default false
+                             :x-display
+                             {:label "Ignore the token ceiling"
+                              :help ignore-budget-help}}
+     :boolean]
     [:walk {:optional true
             :x-options {:from :kinds}
             :x-display
@@ -1786,6 +1936,11 @@
                              {:label "Quietest gap between wakes, in seconds"
                               :help "The least time between two wakes the seat's own events start. A match inside the gap waits for it to lift. Five minutes is the default."}}
      [:int {:min 1 :max 86400}]]
+    [:delegates {:optional true
+                 :x-display
+                 {:label "What it may author"
+                  :help delegates-field-help}}
+     [:maybe delegates-schema]]
     ;; the write fence, named so it can be refused (R-12.12): the
     ;; create door and the restate DECLARE sitter_key only so
     ;; `key-not-written-by-hand` may judge it — a guard judges a field
@@ -1830,7 +1985,10 @@
                    walk-leaves-its-filter
                    walk-matches-the-judgment
                    wake-on-names-real-kinds
-                   wake-on-names-real-actions]
+                   wake-on-names-real-actions
+                   ;; LAST, so a hold is a call every other wall passed
+                   delegation/authors-within-the-ceiling]
+   :on-create seat-born
    :actions
    {:restate
     {:from #{:active} :to :active
@@ -1903,6 +2061,11 @@
                                       {:label "One sitting's token ceiling"
                                        :help "The cap on a single wake, passed to the harness."}}
               [:int {:min 20000 :max 10000000}]]
+             [:ignore_sitting_budget {:default false
+                                      :x-display
+                                      {:label "Ignore the token ceiling"
+                                       :help ignore-budget-help}}
+              :boolean]
              [:walk {:optional true
                      :x-options {:from :kinds}
                      :x-display
@@ -1932,6 +2095,11 @@
                                       {:label "Quietest gap between wakes, in seconds"
                                        :help "The least time between two wakes the seat's own events start. Raise it when a busy queue is waking this seat more often than the work deserves."}}
               [:int {:min 1 :max 86400}]]
+             [:delegates {:optional true
+                          :x-display
+                          {:label "What it may author"
+                           :help delegates-field-help}}
+              [:maybe delegates-schema]]
              ;; THE STEP'S RECORD (R-11.2). A transition input, so the
              ;; log's `inputs` column holds it and no column is added.
              [:note {:optional true
@@ -1961,9 +2129,10 @@
                       :held_for
                       :substitute_for :standing_ttl_seconds :cadence_seconds
                       :sitting_idle_seconds
-                      :budget_usd_per_week :sitting_budget_tokens :walk
+                      :budget_usd_per_week :sitting_budget_tokens
+                      :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
-                      :fire_interval_seconds]
+                      :fire_interval_seconds :delegates]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
@@ -1980,7 +2149,8 @@
               walk-matches-the-judgment
               wake-on-names-real-kinds
               wake-on-names-real-actions
-              step-carries-a-note]
+              step-carries-a-note
+              delegation/authors-within-the-ceiling]
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
      :display {:label "Restate" :style :primary :order 1
@@ -1991,6 +2161,9 @@
     ;; serves nothing until somebody unparks it.
     :park
     {:from #{:active} :to :parked
+     ;; no delegation guard: a park only takes authority away, and a
+     ;; wall that read rows here would move the two scenarios below
+     ;; out of the check tier (law_scenarios_test) for nothing
      :guards [a-person]
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Park" :order 2
@@ -1998,7 +2171,7 @@
 
     :unpark
     {:from #{:parked} :to :active
-     :guards [a-person]
+     :guards [a-person judgment-in-force delegation/the-persons-lever]
      :safety {:idempotent true :reversible true :confirm false}
      :handler unpark-seat
      :display {:label "Unpark" :style :primary :order 3
@@ -2082,7 +2255,8 @@
                       :help "The office this seat's work is moving to. Its scope grows to cover both, its ttl and budget take the larger of the two, and this seat closes."}}
               :waymark/ref]]
      :record true
-     :guards [a-person not-a-sitter merge-target-is-active]
+     :guards [a-person not-a-sitter merge-target-is-active
+              delegation/the-persons-lever]
      ;; the fold lands on `into` through its own concealed door, in
      ;; this transaction — declared so a reader can see it coming and
      ;; checks-assembly/check-touches can verify the pair at assembly
@@ -2094,7 +2268,7 @@
 
     :retire
     {:from #{:active :parked} :to :retired
-     :guards [a-person]
+     :guards [a-person delegation/the-persons-lever]
      :safety {:idempotent true :reversible false :confirm true
               :consequence "The office closes for good. Its sittings and its whole history stay on record; its grants scope to nothing and expire on their own clocks. Opening the work again is a new seat."}
      :display {:label "Retire" :style :danger :order 9}}

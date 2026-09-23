@@ -63,6 +63,7 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.delegation :as delegation]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -362,7 +363,13 @@
      :guards [verdict-names-are-distinct
               subject-kind-is-served
               queue-names-filterable-fields
-              consequence-is-a-door]
+              consequence-is-a-door
+              ;; LAST (server/delegation, invariant 5): a delegating
+              ;; seat promotes only the judgment of a seat it authored
+              ;; that is still parked; any other promotion from it waits
+              ;; on the person's tap, so a live seat's work never
+              ;; changes unseen
+              delegation/promotes-under-a-parked-child]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "From here the judgment projects: its queue is a queue, its verdicts are the words a seat may write, and the verdicts written under it are rows. Nothing comes back to draft — a judgment that turned out wrong is superseded by the next one, and both stay on the record."}
      :display {:label "Promote" :order 2
@@ -382,6 +389,9 @@
      ;; here would open the form on a field that is empty by
      ;; construction.
      :waives #{:edit-shape}
+     ;; a supersede takes the judgment out from under every seat that
+     ;; says it, so from a delegating seat it waits on the person
+     :guards [delegation/the-persons-judgment]
      :handler name-the-successor
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The judgment stops being in force and stays on the record with every verdict written under it. There is no way back to draft; a judge the house wants again is a new row."}
