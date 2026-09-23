@@ -31,15 +31,23 @@
   (problem :not-found 404 "Not found"
            {:detail (str (name kind) " has no action " (name action) ".")}))
 
-(defn wrong-state [action state from resource]
-  (problem :wrong-state 409 "Wrong state"
-           {:detail (str "Available in state(s) "
-                         (str/join ", " (map summary/state-label (sort from)))
-                         "; the resource is " (summary/state-label state) ".")
-            :action-attempted action
-            :state state
-            :becomes-available {:in-states (vec (sort from))}
-            :resource resource}))
+(defn wrong-state
+  "The out-of-state refusal. `said`, when present, is the action's own
+  sentence about THIS row (`:out-of-state-says`, invoke's step 5):
+  appended to the machine's, never in place of it, so the states a
+  client reads off `becomes-available` and the prose still agree."
+  ([action state from resource] (wrong-state action state from resource nil))
+  ([action state from resource said]
+   (problem :wrong-state 409 "Wrong state"
+            {:detail (str "Available in state(s) "
+                          (str/join ", " (map summary/state-label (sort from)))
+                          "; the resource is " (summary/state-label state) "."
+                          (when-some [s (some-> said str str/trim not-empty)]
+                            (str " " s)))
+             :action-attempted action
+             :state state
+             :becomes-available {:in-states (vec (sort from))}
+             :resource resource})))
 
 (defn version-conflict [action resource]
   (problem :version-conflict 412 "Version conflict"

@@ -2101,7 +2101,13 @@
   "The subject ids this judgment has already spoken on: every verdict
   of it still `said`. An `overruled` row is not here on purpose — a
   correction overrules the first and the second verdict is the one
-  standing, so a subject leaves the queue once and stays gone."
+  standing, so a subject leaves the queue once and stays gone.
+
+  …until its verdict is REOPENED. `verdict.reopen` moves the standing
+  row to `overruled` and writes nothing in its place, so this set no
+  longer holds the subject and the next walk hands it back. That is
+  the whole of the reopen's queue mechanism: this one rule, read the
+  same way, and no second list of subjects to re-admit."
   [eng judgment-id]
   (if (get (inv/resources eng) :verdict)
     (into #{}

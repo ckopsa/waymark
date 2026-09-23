@@ -38,8 +38,10 @@
             [waymark10.server.judgments :as judgments]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.schedules :as schedules]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
@@ -375,3 +377,104 @@
       (is (empty? (filter #(= :nudge (:action %)) ts))
           "R-5: a judgment that names no consequence is a judgment whose
            whole product is the verdict"))))
+
+;; ── 4 · a reopened verdict puts its subject back in the queue ───────
+;;
+;; The walk subtracts subjects with a SAID verdict and nothing else
+;; (`mcp/judged-subjects`), so a reopen — which moves the standing
+;; verdict to overruled and writes nothing in its place — hands the
+;; subject back by that one rule. And because the reopen is an
+;; ordinary transition, the seat that walks the judgment wakes on it
+;; the way it wakes on a new subject: its computed default carries a
+;; `verdict` `reopen` entry under its own judgment.
+
+(def ^:private reopen-note
+  "The bench bug that turned this red has been fixed; keep following it.")
+
+(defn- reopen!
+  "The judgment's owner takes a verdict back."
+  [eng vid]
+  (inv/invoke! eng :verdict (str vid) :reopen {:note reopen-note}
+               {:principal person}))
+
+(deftest a-reopened-subject-re-enters-the-walk
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        [sid _ _] (sit! h)
+        said (judge! h sid (verdict-input judgment (:id knives) {}))
+        ;; the default return is the envelope, whose address is `self`
+        vid (last (str/split (str (:self (doc-of said))) #"/"))]
+    (is (false? (:isError said)) (text-of said))
+    (is (some? vid))
+    (testing "judged, the subject is out of the queue"
+      (let [[_ _ answer] (sit! h)]
+        (is (= [(str (:id flour))] (mapv :id (get-in answer [:walk :rows]))))))
+    (testing "reopened, it is back — and nothing was written in its place"
+      (reopen! eng vid)
+      (let [[_ _ answer] (sit! h)
+            verdicts (store/with-tx (:storage eng)
+                       (fn [tx] (store/query-rows (:storage eng) tx :verdict
+                                                  {} {:limit 10})))]
+        (is (= [(str (:id knives)) (str (:id flour))]
+               (mapv :id (get-in answer [:walk :rows])))
+            "oldest first, as before it was judged")
+        (is (= 1 (count verdicts)))
+        (is (= "overruled" (name (:state (first verdicts)))))))))
+
+(deftest the-seat-that-walks-the-judgment-wakes-on-a-reopen
+  (let [eng (fresh-engine)
+        judgment (promoted-judgment! eng {})
+        seat (open-judge-seat! eng judgment {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        ;; the verdict is said BEFORE the wake cursor is seeded, so the
+        ;; only transition the drain hears is the reopen
+        verdict (:row (inv/create! eng :verdict
+                                   (verdict-input judgment (:id knives) {})
+                                   {:principal (t/principal
+                                                {:id "expense-sitter"
+                                                 :type :agent})}))
+        cursor :judgment-reopen-wakes-test
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng (:id seat))))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_expense_judge/fire")
+                        :token "rk-test-expense-judge-0123456789abcdef"}
+                       {:principal person})
+        _ (consumers/drain-consumer! eng cursor (wakes/consumer-fn eng))
+        seat-row (store/with-tx (:storage eng)
+                   (fn [tx] (store/load-row (:storage eng) tx :seat
+                                            (str (:id seat)) {})))]
+
+    (testing "the computed default carries the reopen, under this judgment"
+      (is (nil? (get-in seat-row [:data :wake_on])) "nothing is WRITTEN")
+      (is (some #(and (= "verdict" (str (:kind %)))
+                      (= ["reopen"] (mapv str (:actions %)))
+                      (= (str (:id judgment))
+                         (str (get-in % [:filter :judgment]))))
+                (seats/effective-wake-on seat-row expense))))
+
+    (testing "a reopen wakes the seat, and the text names what moved"
+      (reopen! eng (:id verdict))
+      (consumers/drain-consumer! eng cursor (wakes/consumer-fn eng))
+      (let [fires (filterv #(= :fire (:action %))
+                           (store/with-tx (:storage eng)
+                             (fn [tx] (store/transitions
+                                       (:storage eng) tx
+                                       {:kind :seat :resource-id (str (:id seat))}
+                                       {}))))
+            text (str (get-in (first fires) [:inputs :text]))]
+        (is (= 1 (count fires)))
+        (is (str/includes? text (str (:id verdict))))
+        (is (str/includes? text "reopen"))))
+
+    (testing "a seat that WROTE its wake_on is woken by what it wrote"
+      (let [written (assoc-in seat-row [:data :wake_on]
+                              [{:kind "expense" :actions ["create"]}])]
+        (is (= [{:kind "expense" :actions ["create"]}]
+               (seats/effective-wake-on written expense))
+            "it names verdict.reopen itself if it wants the reopen too")))))
