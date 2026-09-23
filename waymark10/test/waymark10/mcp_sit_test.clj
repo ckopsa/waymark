@@ -225,6 +225,63 @@
 
 ;; ── 4. the bound session IS the sitter ──────────────────────────────
 
+;; ── 3b. the delegate a LOCAL engine declares by header ──────────────
+;;
+;; R-12.14 without an IdP in front. A household running its own engine
+;; configures no :oidc, so a fired run arrives as dev headers and
+;; nothing else — a proxy states who the run is. If `dev-principal`
+;; does not read `x-waymark-acts-for`, such an engine cannot produce a
+;; delegate AT ALL: every seat key meets sit-not-a-delegate, and the
+;; sentence blames the caller for a header the engine never read.
+;;
+;; THIS HAPPENED. The branch was dropped between 76c2363 and da24ebb
+;; and nothing here failed, because every delegate in this file
+;; arrives on a bearer. The bare-agent case above proves the refusal;
+;; this proves the acceptance, and the two together pin the header.
+
+(defn- delegate-headers
+  "What a proxy in front of a local engine sends: the run's own name,
+  the agent type, and the person it acts for. No bearer at all."
+  ([] {"x-waymark-principal" "localfire-runner"
+       "x-waymark-actor-type" "agent"
+       "x-waymark-acts-for" "colton"})
+  ([sid] (assoc (delegate-headers) "mcp-session-id" sid)))
+
+(defn- init-as
+  "The handshake under whatever credential `headers` carries."
+  [h headers]
+  (get-in (rpc h headers "initialize"
+               {:protocolVersion mcp/protocol-version
+                :capabilities {} :clientInfo {:name "routine" :version "0"}})
+          [:headers "Mcp-Session-Id"]))
+
+(deftest a-delegate-declared-by-header-binds-the-key
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat]} (open-seat! eng)
+        sid (init-as h (delegate-headers))
+        sat (tool h (delegate-headers sid) "waymark_sit" {:key a-key})]
+
+    (testing "x-waymark-acts-for is what makes a run a person's tool"
+      (is (false? (:isError sat)) (text-of sat))
+      (is (= "meal-clerk" (:seat (doc-of sat)))))
+
+    (testing "the sitter it mints acts for the person the header named"
+      (let [row (store/with-tx (:storage eng)
+                  (fn [tx] (store/load-row (:storage eng) tx :member
+                                           (seats/sitter-id seat) {})))]
+        (is (= "colton" (get-in row [:data :acts_for])))))
+
+    (testing "the same run WITHOUT that one header is refused"
+      (let [bare (dissoc (delegate-headers) "x-waymark-acts-for")
+            sid2 (init-as h bare)
+            r (tool h (assoc bare "mcp-session-id" sid2) "waymark_sit"
+                    {:key a-key})]
+        (is (true? (:isError r)))
+        (is (str/includes? (text-of r) "A seat key binds a person's tool")
+            "one header is the whole difference between a delegate and
+             an agent holding its own key")))))
+
 (deftest a-key-binds-this-session-and-leaves-the-persons-others-alone
   (let [eng (fresh-engine)
         h (engine/handler eng)

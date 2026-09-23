@@ -295,3 +295,30 @@
                        [:doc :data :total])))
       (is (= 1 (get-in (call! eng :get (str "/api/verdicts?judgment=" said-enough))
                        [:doc :data :total]))))))
+
+(deftest a-comma-list-names-several-judgments-and-several-words
+  ;; A steward follows more than one desk, and an engineer wakes on
+  ;; more than one word. Under :eq alone the comma list was ONE literal
+  ;; value and every one of these counts read 0 — silently, in a queue
+  ;; and in a wake_on filter alike.
+  (let [eng (engine/engine {:storage (memory/storage) :resources [ticket]})
+        red (judgment! eng "Why did the build go red")
+        said-enough (judgment! eng "Did the ticket say what it needed"
+                               :verdicts [{:name "clear" :sentence "It said enough."}
+                                          {:name "thin" :sentence "It did not."}])
+        seat (leash! eng seat-id)
+        say! (fn [jid word]
+               (judge! eng seat {:judgment jid :subject_kind "vt_ticket"
+                                 :subject_id (ticket! eng (str jid word))
+                                 :verdict word :remedy "Because."}))
+        total #(get-in (call! eng :get (str "/api/verdicts?" %)) [:doc :data :total])]
+    (say! red "infra")
+    (say! red "this_change")
+    (say! said-enough "thin")
+    (testing "judgment=A,B is either judgment"
+      (is (= 3 (total (str "judgment=" red "," said-enough)))))
+    (testing "verdict=a,b is either word"
+      (is (= 2 (total "verdict=infra,thin"))))
+    (testing "and one value still means exactly that one"
+      (is (= 2 (total (str "judgment=" red))))
+      (is (= 1 (total "verdict=thin"))))))
