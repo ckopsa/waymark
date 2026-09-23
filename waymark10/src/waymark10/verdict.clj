@@ -616,9 +616,12 @@
     :reopen
     {:from #{:said} :to :overruled
      :input [:map
-             [:note {:x-display
-                     {:widget "prose"
-                      :label "Why it is reopened"
+             ;; one line, not a prose box: a reopen says why in a
+             ;; sentence, and a `composition` field would carry a draft
+             ;; policy and a scaffold for what is a single remark
+             [:note {:examples ["The bench bug that turned this red has been fixed; keep following it."]
+                     :x-display
+                     {:label "Why it is reopened"
                       :help "One sentence: what the verdict missed, or what changed since. It stays on the record beside your name."}}
               [:string {:min 1 :max 240}]]]
      :record true
