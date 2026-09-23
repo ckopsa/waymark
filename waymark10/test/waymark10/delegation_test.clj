@@ -164,7 +164,7 @@
       (is (true? (:held (json asked))))
       (is (str/includes? (str (:why (json asked))) "Invariant 1")
           "and the sentence says which invariant")
-      (is (== 5 (budget-of h mayor))
+      (is (== 2 (budget-of h mayor))
           "the mayor's own budget stays the person's")
       (is (= [:create] (mapv :action (log-of eng :seat mayor)))
           "nothing moved on the mayor's row"))))

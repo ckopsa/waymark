@@ -2904,8 +2904,8 @@ approves it.
 unpark is the approval, and it writes `approved_by` and
 `approved_at`. After that, the author may restate the child within
 the ceiling with no new tap, and each restate is a normal transition.
-The author may park its own children. Unpark, merge and retire are
-the owner's.
+Park is not fenced, because it only takes authority away. Unpark,
+merge and retire are the owner's.
 
 **R-14.6** A delegating seat may create a judgment. It may promote
 one only when a seat it authored cites the judgment and is still

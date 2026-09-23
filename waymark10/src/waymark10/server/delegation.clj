@@ -31,7 +31,8 @@
   4. An authored seat is born PARKED, and the person's first unpark
      is the approval. After it, the author restates its own child
      within the ceiling with no new tap. Unpark, merge and retire are
-     the person's: from the author they are held.
+     the person's: from the author they are held. Park is not fenced:
+     it only takes authority away, as it always could.
   5. A judgment is promoted by a delegating seat only when a seat it
      authored cites that judgment and is still parked, so a promotion
      never changes a live seat's work unseen. Anything else is held.
@@ -321,27 +322,6 @@
         (hold inv-ceiling m)
         (t/allow)))))
 
-(g/defguard parks-only-its-own
-  {:reads [:principal :now :grant :seat :held_call :within]
-   :vars [:invariant :detail]
-   :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
-  [row _inp ctx]
-  ;; a park narrows and costs nothing, so an author parks the seats it
-  ;; authored on its own. Every other park is the person's.
-  (let [cited (cited-seats ctx)
-        author (when (seq cited) (author-seat ctx cited))]
-    (cond
-      (nil? author) (t/allow)
-      (approved-hold? ctx :seat (:id row)) (t/allow)
-      (contains? cited (str (:id row)))
-      (hold inv-self (str (seat-name row) " is a seat whose grant "
-                          (seat-name author) " holds"))
-      (= (str (:id author)) (nonblank (get-in row [:data :authored_by])))
-      (t/allow)
-      :else
-      (hold inv-authored (str (seat-name row) " was not authored by "
-                              (seat-name author))))))
-
 (g/defguard the-persons-lever
   {:reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
@@ -401,7 +381,6 @@
   place of exactly these refusals, and passes every other one through
   as the 409 it always was."
   #{(:name authors-within-the-ceiling)
-    (:name parks-only-its-own)
     (:name the-persons-lever)
     (:name promotes-under-a-parked-child)
     (:name the-persons-judgment)})

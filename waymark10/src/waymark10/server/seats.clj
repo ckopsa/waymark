@@ -2161,7 +2161,10 @@
     ;; serves nothing until somebody unparks it.
     :park
     {:from #{:active} :to :parked
-     :guards [a-person delegation/parks-only-its-own]
+     ;; no delegation guard: a park only takes authority away, and a
+     ;; wall that read rows here would move the two scenarios below
+     ;; out of the check tier (law_scenarios_test) for nothing
+     :guards [a-person]
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Park" :order 2
                :description "The seat serves nothing and costs nothing; its grants stay, and unpark is one tap"}}
