@@ -388,10 +388,16 @@
             :summary "The verdict this one corrected"}]
    :schema
    [:map
-    (entry :judgment {:kind :judgment :filter #{:eq}} :waymark/ref)
+    ;; :in on the two fields a downstream seat names MORE THAN ONE of:
+    ;; a steward follows several desks' judgments, an engineer wakes on
+    ;; two words of one. Under :eq alone, `judgment=A,B` is one literal
+    ;; value, and a queue or a wake_on filter spelled that way matched
+    ;; nothing — no refusal, just a seat that was never woken and a
+    ;; queue that was always empty
+    (entry :judgment {:kind :judgment :filter #{:eq :in}} :waymark/ref)
     (entry :subject_kind {:filter #{:eq}} [:string {:min 1 :max 64}])
     (entry :subject_id {:filter #{:eq}} [:string {:min 1 :max 64}])
-    (entry :verdict {:filter #{:eq}} [:string {:min 1 :max 40}])
+    (entry :verdict {:filter #{:eq :in}} [:string {:min 1 :max 40}])
     (entry :remedy {} [:string {:min 1 :max 1000}])
     (entry :said_by {:optional true :filter #{:eq}}
            [:maybe [:string {:max 128}]])

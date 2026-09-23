@@ -193,6 +193,15 @@
       ;; sitter (R-12.14) was untestable without an IdP in front.
       ;; Absent, not nil, like :model: a principal that declared
       ;; nothing says nothing.
+      ;;
+      ;; THIS WAS DROPPED ONCE, between 76c2363 and da24ebb, and the
+      ;; cost was silent: `gate!` unions the member row's ROLES onto
+      ;; the principal and nothing else, so a row carrying acts_for
+      ;; never reaches :acts-for on its own. Every fired seat then
+      ;; refuses at sit-not-a-delegate — the proxy sends the header,
+      ;; the engine reads none, and the refusal blames the caller.
+      ;; mcp_sit_test/a-delegate-declared-by-header-binds-the-key
+      ;; is the test that should have caught it.
       (not (str/blank? (str (get headers "x-waymark-acts-for"))))
       (assoc :acts-for (str/trim (str (get headers "x-waymark-acts-for")))))
     t/anonymous))
