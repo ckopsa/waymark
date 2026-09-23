@@ -51,6 +51,19 @@ const uuid = () => {
   return `${h.slice(0,4).join("")}-${h.slice(4,6).join("")}-${h.slice(6,8).join("")}`
        + `-${h.slice(8,10).join("")}-${h.slice(10,16).join("")}`;
 };
+/* the wire speaks RFC 3339 instants (UTC); a person reads their own
+   wall clock — every stamp on screen passes through here */
+const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i;
+function localStamp(v, {seconds = false, dateOnly = false} = {}) {
+  if (v === undefined || v === null || v === "") return "";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v);
+  const p = n => String(n).padStart(2, "0");
+  const date = d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  if (dateOnly) return date;
+  return date + " " + p(d.getHours()) + ":" + p(d.getMinutes()) +
+         (seconds ? ":" + p(d.getSeconds()) : "");
+}
 const pretty = s => String(s).replace(/_/g, " ");
 const title = s => { const t = pretty(s); return t.charAt(0).toUpperCase() + t.slice(1); };
 const el = (tag, attrs={}, ...kids) => {
