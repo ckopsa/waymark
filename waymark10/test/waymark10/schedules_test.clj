@@ -483,11 +483,14 @@
       (is (= #{:model}
              (set (schema/entry-keys (:input (get-in rd [:actions :restate])))))
           "a person restates the model and nothing else")
-      (doseq [a [:link :unlink]]
+      (doseq [a [:link :link_like :unlink]]
         (is (not-any? :hide (get-in rd [:actions a :guards]))
             (str a " is a person's door")))
       (is (= #{:fire_url :token}
-             (set (schema/entry-keys (:input (get-in rd [:actions :link])))))))
+             (set (schema/entry-keys (:input (get-in rd [:actions :link]))))))
+      (is (= #{:like}
+             (set (schema/entry-keys (:input (get-in rd [:actions :link_like])))))
+          "the copy names a row and never a credential"))
     (testing "the deviations are on the record"
       (is (seq (:deviations rd)))
       (is (some #(str/includes? % "mirror") (:deviations rd))))))
@@ -688,3 +691,51 @@
             "a seat with no instructions fires the prose, as it always did")))
 
     (seat-do! seat-id :retire)))
+
+(def ^:private mayor (t/principal {:id "mayor" :type :agent :display "Mayor"}))
+
+(deftest link-like-copies-a-link-without-a-credential-crossing
+  (let [cn :sched-link-like
+        _ (drain! cn)
+        chair (model! "claude-chair-like")
+        _ (link-model! chair a-chair-url a-chair-token)
+        linked-id (seat! "linked-by-hand" 3600 [chair])
+        new-id (seat! "linked-like" 3600 [chair])
+        _ (drain! cn)
+        own-token "rk-test-like-0123456789abcdef"
+        source (:id (sched-of linked-id))
+        target (:id (sched-of new-id))]
+    (link-schedule! source a-seat-url own-token)
+
+    (testing "a row with no link of its own cannot be copied"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! *eng* :schedule (str source) :link_like
+                                {:like (str target)} {:principal mayor}))))
+
+    (testing "nor can a row be linked like itself"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! *eng* :schedule (str source) :link_like
+                                {:like (str source)} {:principal mayor}))))
+
+    (testing "an agent copies a person's link, and the copy is the link a fire uses"
+      (inv/invoke! *eng* :schedule (str target) :link_like
+                   {:like (str source)} {:principal mayor})
+      (is (= :live (:state (sched-of new-id))))
+      (is (= {:fire_url a-seat-url :fire_token own-token}
+             (sch/link-of *eng* (sched-of new-id)))
+          "the row's own link now, not the chair's"))
+
+    (testing "the log says where the link came from, and never what it was"
+      (let [t (last (filter #(= :link_like (:action %)) (log-of :schedule target)))]
+        (is (= (str source) (str (get-in t [:inputs :like]))))
+        (is (not (str/includes? (pr-str t) own-token)))))
+
+    (testing "and the fire goes out on the copied Routine"
+      (fire-seat! new-id "Through the copied link.")
+      (drain! cn)
+      (let [f (last (fires-of own-token))]
+        (is (some? f))
+        (is (= a-seat-url (:fire-url f)))))
+
+    (seat-do! linked-id :retire)
+    (seat-do! new-id :retire)))
