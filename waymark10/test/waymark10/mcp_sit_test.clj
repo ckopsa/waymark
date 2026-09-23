@@ -1050,3 +1050,69 @@
     (is (str/includes? mcp/sit-description "`Key:`"))
     (is (str/includes? mcp/instructions "`Key:`")
         "and the connect-time instructions say it too")))
+;; ── 9. the delegate a LOCAL engine can spell (dev headers) ──────────
+;;
+;; Everything above mints a bearer against a locally-generated IdP,
+;; because that is how a delegate is made in production. A local
+;; engine has no IdP: `dev-principal` is the whole of its identity
+;; layer, and it had a spelling for the actor type and for the model
+;; claim but none for `acts-for` — so no engine without an IdP in
+;; front of it could produce a delegate, and the keyed sitter was the
+;; one feature a person could not try on their own machine.
+;;
+;; `x-waymark-acts-for` closes that, beside the two spellings already
+;; there. It is not a new authority: dev headers are already the whole
+;; trust boundary of an engine that configures no :oidc, and this says
+;; one more thing about the principal they already name.
+
+(defn- local-engine
+  "A house with NO :oidc — the local posture, where dev headers are
+  the only identity there is."
+  []
+  (engine/engine {:storage (memory/storage) :resources [fx/meal]}))
+
+(def ^:private dev-delegate
+  "A tool's session, acting for the person at the keyboard."
+  {"x-waymark-principal" "sandbox-tool"
+   "x-waymark-actor-type" "agent"
+   "x-waymark-acts-for" "colton"})
+
+(def ^:private dev-bare
+  "The same session with nobody behind it."
+  {"x-waymark-principal" "sandbox-tool"
+   "x-waymark-actor-type" "agent"})
+
+(defn- dev-initialize!
+  "The handshake under dev headers, answering the session id."
+  [h headers]
+  (get-in (rpc h headers "initialize"
+                {:protocolVersion mcp/protocol-version
+                 :capabilities {} :clientInfo {:name "sandbox" :version "0"}})
+          [:headers "Mcp-Session-Id"]))
+
+(deftest a-dev-header-delegate-sits-with-the-key
+  (let [eng (local-engine)
+        h (engine/handler eng)
+        {:keys [seat]} (open-seat! eng)
+        sid (dev-initialize! h dev-delegate)
+        result (tool h (assoc dev-delegate "mcp-session-id" sid)
+                     "waymark_sit" {:key a-key})
+        doc (doc-of result)]
+    (testing "the key binds the session, and the seat's own grant comes back"
+      (is (not (:isError result)) (text-of result))
+      (is (= "meal-clerk" (:seat doc)))
+      (is (= (seats/sitter-id seat) (:sitter doc)))
+      (is (some? (:grant doc)) "the sit mints or reuses the seat's grant")
+      (is (some? (:sitting doc)) "and opens the sitting it is counted against"))))
+
+(deftest a-dev-header-session-with-nobody-behind-it-does-not-sit
+  (let [eng (local-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        sid (dev-initialize! h dev-bare)
+        result (tool h (assoc dev-bare "mcp-session-id" sid)
+                     "waymark_sit" {:key a-key})]
+    (testing "acts-for is what the door reads, not the actor type"
+      (is (:isError result))
+      (is (str/includes? (text-of result) "person")
+          (text-of result)))))

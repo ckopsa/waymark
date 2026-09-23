@@ -152,11 +152,16 @@
               font-size: 15px; line-height: 1; padding: 2px 7px;
               border-radius: 3px; }
   .nav-more:hover { color: var(--ink); background: var(--chipbg); border: none; }
+  /* a deployable with many kinds fills this menu past the bottom of
+     the screen, so it is capped at the room it has and scrolls inside
+     that; 120-nav-home.js measures the exact room at open (the header
+     is not always the same height), this is the floor under it */
   .nav-menu { position: absolute; top: calc(100% + 4px); left: 0;
               z-index: 30; background: var(--panel);
               border: 1px solid var(--line); border-radius: var(--radius);
               box-shadow: var(--shadow); padding: 6px 0; min-width: 170px;
-              display: none; }
+              max-height: calc(100dvh - 96px); overflow-y: auto;
+              overscroll-behavior: contain; display: none; }
   .nav-menu a { display: block; padding: 5px 14px; margin: 0;
                 font-size: 13px; color: var(--ink); white-space: nowrap; }
   .nav-menu-sect { margin: 6px 0 2px; padding: 4px 14px 2px;
@@ -165,6 +170,36 @@
                    letter-spacing: 0.08em; }
   .nav-menu a:hover { background: var(--chipbg); text-decoration: none; }
   .nav-menu .law-mark { color: var(--law); }
+  /* the jump row keeps its shortcut on the same line as its label */
+  .nav-menu a.jump-row { display: flex; align-items: baseline; gap: 18px; }
+  .nav-menu .jump-key { margin-left: auto; color: var(--muted);
+                        font-family: var(--mono); font-size: 11px; }
+  /* ── the jump box: ⌘K from any screen, one filter over every kind
+     the wire admits (125-palette.js). It sits above everything the
+     shell fixes in place, the drawer included. ──────────────────── */
+  .jump-backdrop { display: none; position: fixed; inset: 0; z-index: 60;
+    background: var(--scrim); }
+  .jump { display: none; position: fixed; z-index: 61;
+    top: 12vh; left: 50%; transform: translateX(-50%);
+    width: min(520px, 94vw); max-height: 72dvh;
+    flex-direction: column; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); box-shadow: var(--shadow-pop); }
+  body.jump-open .jump-backdrop { display: block; }
+  body.jump-open .jump { display: flex; }
+  #jumpq { border: none; border-bottom: 1px solid var(--line);
+    border-radius: 0; background: none; padding: 12px 14px; font-size: 15px; }
+  #jumpq:focus { outline: none; }
+  .jump-list { overflow-y: auto; overscroll-behavior: contain; padding: 4px 0; }
+  .jump-item { display: flex; align-items: baseline; gap: 10px;
+    padding: 7px 14px; cursor: pointer; font-size: 13.5px; color: var(--ink); }
+  .jump-item[aria-selected="true"] { background: var(--chipbg); }
+  .jump-item b { font-weight: 700; color: var(--verdigris-deep); }
+  .jump-where { margin-left: auto; font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
+  .jump-empty { padding: 12px 14px; color: var(--muted); font-size: 13px; }
+  .jump-hint { border-top: 1px solid var(--line); padding: 6px 14px;
+    color: var(--muted); font-size: 11px; }
   /* the law stamp: which revision of the law produced this screen */
   #lawstamp a { font-family: var(--mono); font-size: 11px; color: var(--law);
                 background: var(--law-wash); border: 1px solid var(--law-wash);

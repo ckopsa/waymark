@@ -114,11 +114,13 @@ async function renderNav(current) {
   const tucked = entries.filter(([, r]) =>
     (navTier(r) === "secondary" || navTier(r) === "system")
     && (!r.domain || r.domain === active));
-  if (tucked.length || hasFeed)
-    nav.append(overflowMenu(tucked, {dashboard: hasFeed,
-                                     here: current === "dashboard",
-                                     feed: hasFeed && MOBILE,
-                                     feedHere: current === "feed"}));
+  /* the ⋯ is unconditional since the jump box moved into it
+     (waymark-sv9v): a deployable with nothing tucked away still has a
+     way to the box and to the other shell — the menu is never empty */
+  nav.append(overflowMenu(tucked, {dashboard: hasFeed,
+                                   here: current === "dashboard",
+                                   feed: hasFeed && MOBILE,
+                                   feedHere: current === "feed"}));
 }
 
 function overflowMenu(tuckedEntries, extra = {}) {
@@ -127,10 +129,28 @@ function overflowMenu(tuckedEntries, extra = {}) {
   const btn = el("button", {class:"nav-more", type:"button",
     "aria-haspopup":"true", "aria-expanded":"false",
     title: "more kinds — and the machinery's own resources"}, "⋯");
+  /* a deployable with enough kinds overruns the screen: cap the menu
+     at the room it actually has and let it scroll inside that. The
+     stylesheets carry a floor; this measures the real one, because the
+     room depends on where the ⋯ sits — below it on the desktop, above
+     the tab bar on a phone, where the menu is anchored to the bottom
+     (040-mobile.css) and so grows upward off the top instead. */
+  const fit = () => {
+    menu.style.maxHeight = "";
+    const box = menu.getBoundingClientRect();
+    const room = MOBILE ? box.bottom - 8 : innerHeight - box.top - 8;
+    menu.style.maxHeight = Math.max(120, room) + "px";
+  };
   const close = () => { menu.style.display = "none";
-                        btn.setAttribute("aria-expanded", "false"); };
+                        btn.setAttribute("aria-expanded", "false");
+                        /* the listener lives only as long as the menu is
+                           open: renderNav builds a fresh menu per screen */
+                        removeEventListener("resize", fit); };
   const open = () => { menu.style.display = "block";
                        btn.setAttribute("aria-expanded", "true");
+                       fit();
+                       /* a rotated phone changes the room mid-open */
+                       addEventListener("resize", fit);
                        (menu.querySelector("a") || btn).focus(); };
   btn.addEventListener("click", () =>
     menu.style.display === "block" ? close() : open());
@@ -148,6 +168,15 @@ function overflowMenu(tuckedEntries, extra = {}) {
       title(kind) + "s");
   const domain = tuckedEntries.filter(([, r]) => navTier(r) === "secondary");
   const system = tuckedEntries.filter(([, r]) => navTier(r) === "system");
+  /* the jump box needs a way in that is not a keyboard: a phone has
+     no ⌘K, and a menu is where someone looks for "where else can I
+     go" (waymark-sv9v). The shortcut rides along as a hint. */
+  menu.append(el("a", {role: "menuitem", href: "#", "data-nav": "jump",
+                       class: "jump-row",
+                       onclick: ev => { ev.preventDefault(); close();
+                                        jumpOpen(); }},
+    "Jump to a kind…",
+    MOBILE ? null : el("span", {class: "jump-key"}, JUMPKEY)));
   /* the dashboard, displaced from home by the day (waymark-i89n.8):
      still one tap away and still deep-linkable at #dashboard */
   if (extra.feed)

@@ -52,6 +52,20 @@
   </div>
   <div class="feed" id="feed"></div>
 </aside>
+<!-- the jump box: ⌘K from any screen, one filter over every kind the
+     wire admits. 125-palette.js fills and drives it; a phone, which
+     has no ⌘K, reaches the same box from the ⋯ menu. -->
+<div id="jumpback" class="jump-backdrop"></div>
+<div id="jump" class="jump" role="dialog" aria-modal="true"
+     aria-label="jump to a kind">
+  <input id="jumpq" type="text" role="combobox" aria-expanded="true"
+         aria-controls="jumplist" aria-autocomplete="list"
+         autocomplete="off" autocapitalize="off" spellcheck="false"
+         placeholder="jump to a kind…">
+  <div id="jumplist" class="jump-list" role="listbox"
+       aria-label="kinds"></div>
+  <div class="jump-hint">↑↓ to choose · ⏎ to go · esc to close</div>
+</div>
 <div id="toast"></div>
 <div id="ticker"></div>
 <div id="intents" aria-live="polite" aria-label="live intents"></div>
