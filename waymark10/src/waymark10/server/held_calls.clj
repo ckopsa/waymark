@@ -207,17 +207,34 @@
                     "door: there is nothing to send that opens it. Ask "
                     "somebody who holds the approver role to answer.")))
 
-(def an-approver-decides
-  "The second wall, the permission slip's own: a role that may sign.
-  A principal who is not the caller and holds no role meets this one."
-  (assoc (g/role approver-role
-                 {:explain (str "A person who holds the approver role answers "
-                                "a held call. Somebody else's tool call is "
-                                "waiting, and the tap is theirs to make.")})
-         :name :an-approver-decides
-         :open (str "The role is a `role` row and a member's own list; "
-                    "no field of this door confers it. A person with the "
-                    "role answers, or somebody grants it first.")))
+(defn- the-owner?
+  "Is this principal the PERSON a door call was held for? The person
+  themselves, or a tool that person is signed in to — and never a
+  seat's sitter, whose id is `seat:<the seat>` (seats/sitter-id) and
+  who acts for the same person: the author does not approve itself."
+  [p owner]
+  (and (some? owner)
+       (not (str/starts-with? (str (:id p)) "seat:"))
+       (or (and (= :human (:type p)) (= owner (str (:id p))))
+           (and (= :agent (:type p)) (= owner (str (:acts-for p)))))))
+
+(g/defguard an-approver-decides
+  {:reads [:principal]
+   :open "The role is a `role` row and a member's own list, and the person a seat call waits on is the row's own owner; no field of this door confers either."
+   :explain "A person who holds the approver role answers a held tool call, and a held seat call is answered by the person it was held for. Somebody else's call is waiting, and the tap is theirs to make."}
+  [row _inp ctx]
+  ;; The second wall, the permission slip's own, grown by one reading
+  ;; (server/delegation). A call held at a SEAT OR JUDGMENT DOOR names
+  ;; the person its author acts for, and that person alone answers it:
+  ;; the delegation is theirs, so the approver role is not enough. A
+  ;; held TOOL call is the role's, as it always was.
+  (let [p (:principal ctx)
+        owner (some-> (get-in row [:data :owner]) str not-empty)]
+    (if (if (some? (get-in row [:data :door]))
+          (the-owner? p owner)
+          (contains? (:roles p) approver-role))
+      (t/allow)
+      (t/deny))))
 
 (def ^:private decider-walls
   "The two walls, apart rather than folded. The order is the refusal
@@ -378,6 +395,31 @@
              :x-display {:label "What it would do"
                          :help "The fields the powers entry marks as shown, on one line. It is the person's whole reading of the call."}}
      [:maybe [:string {:max 140}]]]
+    ;; A SEAT OR JUDGMENT DOOR THAT WAITS ON A PERSON
+    ;; (server/delegation). When this is present the call is not a
+    ;; tool call: it is a write a delegating seat's sitter asked for,
+    ;; and the allow replays it at this door, as that sitter, with
+    ;; `forward` as its body. `author` is the seat it was written for.
+    [:door {:optional true
+            :x-display {:label "The door"
+                        :help "The kind, the action and the row a held seat call would write, and the seat that asked."}}
+     [:maybe [:map
+              [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
+              [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
+              [:id {:optional true :x-display {:raw true :label "Row"}}
+               [:maybe [:string {:min 1 :max 128}]]]
+              [:author {:optional true :x-display {:raw true :label "Asked by the seat"}}
+               [:maybe [:string {:min 1 :max 128}]]]
+              ;; the version the author read, for a fenced door: the
+              ;; replay presents it, so a row that moved between the ask
+              ;; and the tap refuses rather than being written over
+              [:if_match {:optional true :x-display {:raw true :label "Read at"}}
+               [:maybe [:string {:min 1 :max 256}]]]]]]
+    [:owner {:optional true
+             :x-display {:raw true
+                         :label "Waits on"
+                         :help "The person a held seat call waits on: the one its author acts for. Only they answer it."}}
+     [:maybe [:string {:min 1 :max 128}]]]
     [:expires_at {:optional true
                   :x-display {:label "Waits until"
                               :help "When the sweep expires this call. Stamped at birth, 24 hours out, so the person reads the moment it will actually stop waiting."}}
@@ -435,6 +477,31 @@
              :x-display {:label "What it would do"
                          :help "The fields the powers entry marks as shown, on one line."}}
      [:maybe [:string {:max 140}]]]
+    ;; A SEAT OR JUDGMENT DOOR THAT WAITS ON A PERSON
+    ;; (server/delegation). When this is present the call is not a
+    ;; tool call: it is a write a delegating seat's sitter asked for,
+    ;; and the allow replays it at this door, as that sitter, with
+    ;; `forward` as its body. `author` is the seat it was written for.
+    [:door {:optional true
+            :x-display {:label "The door"
+                        :help "The kind, the action and the row a held seat call would write, and the seat that asked."}}
+     [:maybe [:map
+              [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
+              [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
+              [:id {:optional true :x-display {:raw true :label "Row"}}
+               [:maybe [:string {:min 1 :max 128}]]]
+              [:author {:optional true :x-display {:raw true :label "Asked by the seat"}}
+               [:maybe [:string {:min 1 :max 128}]]]
+              ;; the version the author read, for a fenced door: the
+              ;; replay presents it, so a row that moved between the ask
+              ;; and the tap refuses rather than being written over
+              [:if_match {:optional true :x-display {:raw true :label "Read at"}}
+               [:maybe [:string {:min 1 :max 256}]]]]]]
+    [:owner {:optional true
+             :x-display {:raw true
+                         :label "Waits on"
+                         :help "The person a held seat call waits on: the one its author acts for. Only they answer it."}}
+     [:maybe [:string {:min 1 :max 128}]]]
     [:expires_at {:optional true
                   :x-display {:label "Waits until"
                               :help "When the sweep expires this call. The engine stamps it at birth, 24 hours out."}}
@@ -552,6 +619,38 @@
                    {:principal engine-actor}))]
     {:row row :answer (held-answer (:id row))}))
 
+(defn hold-door!
+  "Mint the held call a delegating seat's write became
+  (server/delegation): the router refused to serve it because one of
+  `delegation/hold-guards` said the person must tap first, and this is
+  the row that waits for that tap. → the row.
+
+  `forward` is the body exactly as the author sent it, and `door`
+  names where the allow replays it. The engine writes the row
+  (`the-power-door-mints-it`), `caller` names the author's sitter and
+  `owner` the one person who may answer it."
+  [eng {:keys [kind action id body caller owner author why if-match]}]
+  (let [kind (name kind)
+        action (name action)
+        what (or (some-> (:name body) str not-empty) (some-> id str))
+        shown (str action " " kind (when what (str " " what)))]
+    (:row (inv/create!
+           eng :held_call
+           (cond-> {:tool (str kind "." action)
+                    :why (:text (capped (or (some-> why str not-empty)
+                                            "Held for the person's tap.")
+                                        240))
+                    :caller (str caller)
+                    :input (or body {})
+                    :forward (or body {})
+                    :shown (:text (capped shown 140))
+                    :door (cond-> {:kind kind :action action}
+                            (some-> id str not-empty) (assoc :id (str id))
+                            (some-> author str not-empty) (assoc :author (str author))
+                            (some-> if-match str not-empty) (assoc :if_match (str if-match)))}
+             (some-> owner str not-empty) (assoc :owner (str owner)))
+           {:principal engine-actor}))))
+
 ;; ── the forward, at the wire boundary (R-4) ─────────────────────────
 
 (defn- finish!
@@ -567,6 +666,55 @@
              " (" (ex-message e) ")")
       nil)))
 
+(defn- door-principal
+  "The author's sitter, as the replay wears it: the seat's own member
+  id, an agent, acting for the person the row was held for. It is the
+  hand that asked, so the write lands in history as the author's; the
+  person's yes is on this row, as `decided_by`."
+  [row]
+  (let [caller (str (get-in row [:data :caller]))]
+    (cond-> (t/principal {:id caller :type :agent :display caller})
+      (some-> (get-in row [:data :owner]) str not-empty)
+      (assoc :acts-for (str (get-in row [:data :owner]))))))
+
+(defn- forward-door!
+  "Replay one ALLOWED held seat call at its door, once (server/
+  delegation). The write runs as the author, under `:within` naming
+  this row, which is the one thing the delegation guards read as the
+  person's yes. Keyed by this row, so a replayed forward answers the
+  first one's result. A refusal lands `failed` with the door's own
+  sentence: the world may have moved between the ask and the tap."
+  [eng row]
+  (let [{:keys [kind action id if_match]} (get-in row [:data :door])
+        kind (keyword (str kind))
+        action (keyword (str action))
+        id (some-> id str not-empty)
+        body (or (get-in row [:data :forward]) {})
+        opts {:principal (door-principal row)
+              :within {:kind :held_call :action :allow :id (str (:id row))}
+              :idempotency-key (str "held_call:" (:id row))
+              :if-match (some-> if_match str not-empty)}]
+    (try
+      (let [res (if id
+                  (inv/invoke! eng kind id action body opts)
+                  (inv/create! eng kind body opts))
+            written (:row res)]
+        (finish! eng (:id row) :land
+                 {:answer (wire/write-json
+                           (cond-> {:kind (name kind) :action (name action)}
+                             written (assoc :id (str (:id written))
+                                            :state (some-> (:state written) name))))
+                  :dropped 0})
+        :done)
+      (catch Exception e
+        (let [{:keys [text]} (capped (str (or (:detail (ex-data e))
+                                              (ex-message e)))
+                                     240)]
+          (finish! eng (:id row) :fail {:reason text}))
+        :failed))))
+
+(declare forward-tool!)
+
 (defn forward!
   "Forward one ALLOWED held call, once, and land its ending. → the
   row's new state, or nil when there was nothing to forward.
@@ -580,18 +728,26 @@
   about the tap."
   [eng row]
   (when (= :allowed (:state row))
-    (let [tool (str (get-in row [:data :tool]))
-          args (or (get-in row [:data :forward]) {})]
-      (try
-        (let [payload (servers/call! eng tool args)
-              {:keys [text dropped]} (capped (wire/write-json payload)
-                                             answer-cap-bytes)]
-          (finish! eng (:id row) :land {:answer text :dropped dropped})
-          :done)
-        (catch Exception e
-          (let [{:keys [text]} (capped (str (ex-message e)) 240)]
-            (finish! eng (:id row) :fail {:reason text}))
-          :failed)))))
+    (if (some? (get-in row [:data :door]))
+      (forward-door! eng row)
+      (forward-tool! eng row))))
+
+(defn- forward-tool!
+  "The tool call's forward, as it always was: `mcp-servers/call!` on
+  the tool the row names, with the arguments the row carries."
+  [eng row]
+  (let [tool (str (get-in row [:data :tool]))
+        args (or (get-in row [:data :forward]) {})]
+    (try
+      (let [payload (servers/call! eng tool args)
+            {:keys [text dropped]} (capped (wire/write-json payload)
+                                           answer-cap-bytes)]
+        (finish! eng (:id row) :land {:answer text :dropped dropped})
+        :done)
+      (catch Exception e
+        (let [{:keys [text]} (capped (str (ex-message e)) 240)]
+          (finish! eng (:id row) :fail {:reason text}))
+        :failed))))
 
 (defn after-allow!
   "THE WIRE-BOUNDARY EFFECT of a person's allow (R-4), called by the

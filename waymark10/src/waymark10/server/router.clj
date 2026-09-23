@@ -116,6 +116,7 @@
             [waymark10.checks :as checks]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
             [waymark10.server.gate-proxy :as gate]
@@ -653,22 +654,71 @@
           (mark-read! eng req (str "/api/" plural))
           (json-response 200 env media-type nil))))))
 
+;; ── the held seat call (server/delegation) ──────────────────────────
+;;
+;; A delegating seat's sitter may do what its person may do at a seat's
+;; doors, and some of it waits on the person. The delegation guards
+;; stand last on those doors and refuse with a HOLD; this door turns
+;; exactly that refusal into a `held_call` row and a 202, so the author
+;; learns its call is waiting rather than that it was refused. Every
+;; other refusal is the 409 it always was, and a dry run rehearses the
+;; hold as the refusal it would be, because a rehearsal writes nothing.
+
+(defn- held-instead
+  "The 202 a hold becomes, or nil when `e` is not a hold. `id` is nil
+  at a create door."
+  [eng opts kind action id body e]
+  (let [d (ex-data e)]
+    (when (and (= :guard-refused (:waymark10/problem d))
+               (delegation/hold-guard? (:guard d))
+               (not (:dry-run opts))
+               (contains? (inv/resources eng) :held_call))
+      (let [p (:principal opts)
+            hooks (inv/render-hooks eng)
+            ctx {:principal p :now ((:now-fn eng))
+                 :read (:read hooks) :find (:find hooks)}
+            author (delegation/author-seat ctx)
+            row (held/hold-door! eng {:kind kind :action action :id id
+                                      :body body
+                                      :caller (:id p)
+                                      :owner (delegation/owner-of ctx)
+                                      :author (some-> author :id str)
+                                      :if-match (:if-match opts)
+                                      :why (:detail d)})
+            doc {:held true
+                 :held_call (str (:id row))
+                 :note held/held-note
+                 :why (:detail d)
+                 :self (str "/api/held_calls/" (:id row))}]
+        (json-response 202 doc media-type
+                       {"Location" (:self doc)})))))
+
 (defn- create [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
           _ (check-action! req rdef (first (:create-action-names rdef)))
           opts (invoke-opts req)
+          body (read-body req)
           ;; a birth is a committed transition under the leash that
           ;; presented it, and a walking seat's whole output is births
           ;; (R-10.6, R-12.9)
-          result (count-committed!
-                  eng req (:kind rdef)
-                  (inv/create! eng (:kind rdef) (read-body req)
-                               (select-keys opts [:principal :acknowledged
-                                                  :idempotency-key :dry-run
-                                                  :grant])))]
+          result (try
+                   (count-committed!
+                    eng req (:kind rdef)
+                    (inv/create! eng (:kind rdef) body
+                                 (select-keys opts [:principal :acknowledged
+                                                    :idempotency-key :dry-run
+                                                    :grant])))
+                   (catch clojure.lang.ExceptionInfo e
+                     (if-some [resp (held-instead eng opts (:kind rdef)
+                                                  (first (:create-action-names rdef))
+                                                  nil body e)]
+                       {::held resp}
+                       (throw e))))]
       (cond
+        (::held result) (::held result)
+
         ;; the create door's rehearsal (§23): the verdict body, and —
         ;; full mode only — a considering card naming the COLLECTION
         ;; self (no row exists to name yet; one card per door,
@@ -1014,22 +1064,29 @@
                       eng rdef (keyword action)
                       (inv/invoke! eng (:kind rdef) id (keyword action) body opts))))
                    (catch Exception e
-                     (let [d (ex-data e)]
-                       ;; beat 5: the wall the agent hit becomes the
-                       ;; question on the approver's screen — the
-                       ;; guard's own sentence, lingering until
-                       ;; answered, abandoned, or resolved by the
-                       ;; acknowledged retry
-                       (when (and announce?
-                                  (= :warning-required (:waymark10/problem d)))
-                         (report-intent! reg (:principal opts)
-                                         {:self self :action action
-                                          :status "asking"
-                                          :question (:reason (first (:warnings d)))
-                                          :warnings (mapv #(select-keys % [:name :reason])
-                                                          (:warnings d))
-                                          :acknowledge (:acknowledge d)}))
-                       (throw e))))
+                     (let [d (ex-data e)
+                           held (held-instead eng opts (:kind rdef)
+                                              (keyword action) id body e)]
+                       (if held
+                         ;; a hold is an answer, not a refusal: the
+                         ;; call waits as a row (see `held-instead`)
+                         {::held held}
+                         (do
+                           ;; beat 5: the wall the agent hit becomes the
+                           ;; question on the approver's screen — the
+                           ;; guard's own sentence, lingering until
+                           ;; answered, abandoned, or resolved by the
+                           ;; acknowledged retry
+                           (when (and announce?
+                                      (= :warning-required (:waymark10/problem d)))
+                             (report-intent! reg (:principal opts)
+                                             {:self self :action action
+                                              :status "asking"
+                                              :question (:reason (first (:warnings d)))
+                                              :warnings (mapv #(select-keys % [:name :reason])
+                                                              (:warnings d))
+                                              :acknowledge (:acknowledge d)}))
+                           (throw e))))))
           ;; beat 3: the dry-run's shadow — "considering — <action> on
           ;; <resource>", gone in a moment if abandoned. Only the FULL
           ;; rehearsal reports; the partial blur judge is mute (§23)
@@ -1040,6 +1097,8 @@
                                :warnings (some->> (:warnings result)
                                                   (mapv #(select-keys % [:name :reason])))}))]
       (cond
+        (::held result) (::held result)
+
         ;; stored replay: the first execution's bytes, verbatim
         (= :idempotency (:replayed? result))
         (let [hit (:response result)]
