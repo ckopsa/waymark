@@ -92,6 +92,10 @@ function valueCell(v, xd) {
      prose is a person's words and stays their words, whatever shape
      they happen to take */
   if (isAddress(v)) return addressCell(v);
+  /* a zoned instant reads on the viewer's clock; the wire value stays
+     one hover away */
+  if (typeof v === "string" && INSTANT.test(v))
+    return el("span", {title: v}, localStamp(v));
   return el("span", {}, String(v));
 }
 function nestedTable(rows) {

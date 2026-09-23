@@ -318,7 +318,7 @@ async function renderFeedScreen(view, doc) {
       bar.append(el("a", {class: "chip", href: "#" + s.self,
                           title: "your standing request — the composer"
                                + " reads it at its next sitting"},
-        "asked " + String(s.asked_at || "").slice(0, 10)
+        "asked " + localStamp(s.asked_at, {dateOnly: true})
           + (s.value_name ? " · for " + s.value_name : "") + " ↗"));
     if (crown.ask) {
       const problem = el("div", {"data-feed-problem": ""});
@@ -1141,7 +1141,7 @@ async function renderFeedScreen(view, doc) {
         : null,
       when ? el("span", {class: "version",
                          title: card.at ? "when this happened" : "last moved"},
-        "· " + String(when).slice(0, 16).replace("T", " ")) : null,
+        "· " + localStamp(when)) : null,
       card.state ? el("span", {class: "statechip"}, card.state) : null));
 
     if (quiet) {

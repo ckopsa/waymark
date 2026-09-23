@@ -513,7 +513,7 @@ function itemTable(items, opts) {
         {class:"c-field", "data-label": fieldLabel(opts.hints, f)},
         fieldCell(opts.hints, f, (item.fields || {})[f]))),
       el("td", {class:"metaline mono c-updated"},
-        ((item.meta || {}).updated_at || "").slice(0, 16).replace("T", " ")));
+        localStamp((item.meta || {}).updated_at)));
     if (opts.selectable) {
       const box = row.querySelector("[data-bulk-check]");
       const id = item.self.split("/").pop();
