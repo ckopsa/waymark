@@ -377,6 +377,28 @@
       (t/allow)
       (t/deny))))
 
+(g/defguard the-copy-is-linked
+  {:judges [:like]
+   :reads [:schedule]
+   :vars [:like]
+   :remedies [:schedule/link]
+   :explain "{like} is not a live schedule with a link of its own, or it is this schedule. Name a schedule a person has already linked by hand."}
+  [row inp ctx]
+  ;; `seats/merge-target-is-active`'s shape: the ref names another row,
+  ;; the row must stand, and the probe ctx declines to guess.
+  (let [like-id (some-> (:like inp) str)]
+    (cond
+      (nil? like-id) (t/allow)          ; the schema refuses the blank
+      (= like-id (str (:id row))) (t/deny {:vars {:like like-id}})
+      (nil? (:read ctx)) (t/allow)      ; probe ctx — decline to guess
+      :else (let [source ((:read ctx) :schedule like-id)]
+              (if (and source
+                       (= :live (:state source))
+                       (some-> (get-in source [:data :fire_url]) str not-empty)
+                       (some-> (get-in source [:data :fire_token]) str not-empty))
+                (t/allow)
+                (t/deny {:vars {:like like-id}}))))))
+
 (def no-link-note
   "The note an unlinked row carries (R-12.18), spelled once so the
   door and the test read the same words."
@@ -422,6 +444,17 @@
       (assoc-in [:data :fire_url] (:fire_url inp))
       (assoc-in [:data :fire_token] (:token inp))
       (update :data dissoc :note)))
+
+(defhandler copy-link
+  [row inp ctx]
+  ;; the guard has read the source in this same transaction; this
+  ;; read is the same row, and the token moves row to row without
+  ;; ever being an input, an output or a recorded value.
+  (let [source ((:read ctx) :schedule (str (:like inp)))]
+    (-> row
+        (assoc-in [:data :fire_url] (get-in source [:data :fire_url]))
+        (assoc-in [:data :fire_token] (get-in source [:data :fire_token]))
+        (update :data dissoc :note))))
 
 (defhandler clear-link
   [row _inp _ctx]
@@ -698,13 +731,40 @@
      :display {:label "Link the Routine" :style :primary :order 2
                :description "Paste the fire URL and the token of the Routine you made by hand — the engine fires it from then on"}}
 
+    ;; the credential-free twin of `link` (colton-tools' mayor): the
+    ;; fire URL and the token come off ANOTHER schedule a person has
+    ;; already linked, inside the engine. The only input is a ref, so
+    ;; this door RECORDS — the log says which row the link came from —
+    ;; and it carries no person guard: no secret crosses the wire, so
+    ;; the grant's scope is the whole of who may take it. A holder of
+    ;; `link_like` and not `link` can wire a new seat onto a Routine
+    ;; that already exists and can never introduce one.
+    :link_like
+    {:from #{:pending :live :paused :broken} :to :live
+     :input [:map
+             [:like {:kind :schedule
+                     :x-display
+                     {:label "Link it like which schedule"
+                      :help "A live schedule a person has already linked. This one takes its fire URL and token, copied inside the engine; neither is shown or sent."}}
+              :waymark/ref]]
+     :record true
+     :guards [the-copy-is-linked]
+     :edit {:prefill [] :fence false
+            :unfenced-reason
+            "The link comes from the named row, read in this transaction; a copy replaces what stands rather than editing it."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The copy replaces whatever link this row held; Unlink takes it off again."}
+     :handler copy-link
+     :display {:label "Link like another" :order 3
+               :description "Fire through the same Routine as {like} — its fire URL and token are copied inside the engine, and no credential is pasted"}}
+
     :unlink
     {:from #{:live :paused :broken} :to :broken
      :guards [a-person-or-a-delegate]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The fire URL and the token leave this row; linking again means pasting both once more."}
      :handler clear-link
-     :display {:label "Unlink the Routine" :style :danger :order 3
+     :display {:label "Unlink the Routine" :style :danger :order 4
                :description "The engine forgets the fire URL and the token; nothing wakes this seat until it is linked again"}}
 
     ;; the fire's landing (R-12.19). Hidden, engine-written, and the
