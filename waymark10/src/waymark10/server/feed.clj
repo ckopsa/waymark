@@ -328,6 +328,7 @@
                 " audit of it rather than a competitor for its place.")}
     {:section :do_now  :population :next_actions :take 5}
     {:section :decide  :population :asks         :take 3}
+    {:section :decide  :population :delegated    :take 3}
     {:section :decide  :population :letters      :take 3}
     {:section :decide  :population :ticklers     :take 2}
     {:section :decide  :population :conflicts    :take 2}
@@ -1539,6 +1540,35 @@
                      (filterv #(not= pid (get-in % [:data :requested_by]))
                               (rows-of ctx :approval_request
                                        {:state "offered"}))))))
+
+(defn delegated
+  "decide: what a seat you delegated to is waiting on YOU for
+  (server/delegation, invariants 3 and 4) — a seat it authored for you
+  that you have not unparked yet, since that first unpark is your
+  approval, and a seat or judgment call it made that waits on your
+  tap as a held call. Both rows name the person they wait on (`owner`),
+  so this reads the reader's own and nobody else's. A seat's sitter
+  acts for its person too, and is not the person: it sees none of
+  these, because the tap is not its to make."
+  [ctx]
+  (let [p (:principal ctx)
+        me (when-not (str/starts-with? (str (:id p)) "seat:")
+             (or (some-> (:acts-for p) str not-empty) (some-> (:id p) str)))]
+    (if (nil? me)
+      []
+      (into (if (get (resources ctx) :held_call)
+              (candidates-of :held_call
+                             (filterv #(some? (get-in % [:data :door]))
+                                      (rows-of ctx :held_call
+                                               {:state "held" :owner me})))
+              [])
+            (if (get (resources ctx) :seat)
+              (candidates-of :seat
+                             (filterv #(and (some? (get-in % [:data :authored_by]))
+                                            (nil? (get-in % [:data :approved_by])))
+                                      (rows-of ctx :seat
+                                               {:state "parked" :owner me})))
+              [])))))
 
 (defn letters
   "decide: the mail on this reader's shelf, unopened. The
@@ -4225,6 +4255,7 @@
    :outcomes outcomes
    :next_actions next-actions
    :asks asks
+   :delegated delegated
    :letters letters
    :ticklers ticklers
    :insights insights
@@ -4944,6 +4975,7 @@
    :outcomes "what this week could hold — composed bundles, with the friction already paid, waiting on a thumb"
    :next_actions "rows nobody has finished yet, from the kinds this house goes to"
    :asks "access somebody has asked for and somebody else must answer"
+   :delegated "seats a seat of yours opened for you, waiting on your unpark, and the calls it made that wait on your tap"
    :letters "mail on your shelf you have not opened"
    :ticklers "things you set aside, whose date has come round again"
    :conflicts "rows where the outside authority and this house disagree"

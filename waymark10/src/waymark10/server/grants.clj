@@ -1984,7 +1984,12 @@
             ;; it. The ceiling is the seat's own `sitting_budget_tokens`
             ;; — the number already passed to the harness as the cap on
             ;; one wake — so the wall says what the seat already said.
-            ceiling (long (or (get-in seat [:data :sitting_budget_tokens]) 0))
+            ;; …unless the person told the seat to ignore it: then
+            ;; there is no ceiling to read, and zero is how this line
+            ;; already says so
+            ceiling (if (true? (get-in seat [:data :ignore_sitting_budget]))
+                      0
+                      (long (or (get-in seat [:data :sitting_budget_tokens]) 0)))
             burnt (when (and (pos? ceiling)
                              (= "interactive"
                                 (some-> (get-in seat [:data :mode]) str)))

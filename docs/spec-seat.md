@@ -2871,3 +2871,57 @@ the requirements. `docs/routines/judge.md` gives one routine that
 opens a judge on any kind in three steps: make the judgment row,
 promote it, and open the seat with the judgment in its scope.
 `README.md` names the two kinds in a kind table.
+
+## 21. Requirements: delegated authorship (waymark-aj52)
+
+A seat can author other seats. The person writes it a ceiling, and
+its sitter may then do at a seat's doors what the person may do.
+Some of that goes straight through. The rest waits for the person's
+tap. `server/delegation.clj` holds the law.
+
+**R-14.1** `delegates` on a seat is the ceiling. It holds a `scope`
+in the shape of `scope`, and caps for `budget_usd_per_week`,
+`sitting_budget_tokens` and `held_for`. A seat that carries it is a
+delegating seat. The ceiling is not the author's own scope, so a mayor
+can give bench.write on repo `bench` without holding it.
+
+**R-14.2** A seat never restates itself or any seat whose grant it
+holds. Its own scope, charter, budgets and ceiling stay the person's.
+
+**R-14.3** A child must fit under the ceiling. Each child scope entry
+must fit one ceiling entry: the same kind, only the actions that entry
+lists, only its ids when it names ids, and every filter pair it
+carries. The child's budget, token ceiling and models must fit under
+the caps. A child cannot carry `delegates` of its own, and it cannot
+set `ignore_sitting_budget`.
+
+**R-14.4** Every authored seat records `authored_by` and `owner`.
+They are written at birth and are never typed. The seat appears in
+the owner's feed (the `delegated` population) until the owner
+approves it.
+
+**R-14.5** An authored seat is born `parked`. The owner's first
+unpark is the approval, and it writes `approved_by` and
+`approved_at`. After that, the author may restate the child within
+the ceiling with no new tap, and each restate is a normal transition.
+The author may park its own children. Unpark, merge and retire are
+the owner's.
+
+**R-14.6** A delegating seat may create a judgment. It may promote
+one only when a seat it authored cites the judgment and is still
+parked. An authored seat may be born citing a draft judgment, and the
+unpark is refused until that judgment is promoted.
+
+**R-14.7** Nothing the author asks for is refused outright. A call
+that breaks R-14.2 to R-14.6 becomes a `held_call` with a `door` and
+an `owner`, and the router answers `202` with the held row and the
+sentence. The sentence names the invariant, and for a ceiling miss
+it names the ceiling entry that would have admitted the call. Only
+the owner can answer a held seat call. The owner's Allow replays the
+call as the author. The replay presents the author's If-Match, and
+it lands in the target's history. A sitter of a seat with no ceiling
+is still refused by `not-a-sitter`.
+
+**R-14.8** `ignore_sitting_budget` on a seat lifts the per-sitting
+token ceiling. The `sitting_budget_reached` wall then never stands.
+The weekly dollar budget still applies.
