@@ -69,6 +69,7 @@
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
@@ -141,7 +142,11 @@
   wants the halt written by the request that MET the wall, and this is
   the request."
   [eng bound]
-  (let [sitter (:sitter bound)
+  (let [;; the sitter row's roles, read now rather than frozen at the
+        ;; sit: an assignment made after the bind is worn on the next
+        ;; call, and one taken away is gone from it
+        sitter (let [s (:sitter bound)]
+                 (assoc s :roles (members/held-roles eng (:id s))))
         vis (or (grants/worn-visibility eng sitter)
                 (grants/bootstrap-visibility eng sitter))]
     (router/mind-the-wall! eng (:seat vis))

@@ -1213,6 +1213,20 @@
     (catch Exception e
       (or (load-member eng (str seat-id)) (throw e)))))
 
+(defn held-roles
+  "The roles a member row holds, as the set a principal carries — empty
+  when the row is missing or holds none.
+
+  A seat's SITTER needs this: `gate!` unions a member's roles onto the
+  credential that arrived, but a sitter never arrives — `waymark_sit`
+  and the transport build its principal from the seat, after the gate
+  has run on the person's connector. Without it a role assigned to a
+  seat's `seat:<id>` row is recorded and never worn, and every role
+  guard refuses the office. The transport reads it per request, so an
+  assignment or a removal is live on the sitter's next call."
+  [eng member-id]
+  (set (some-> (load-member eng (str member-id)) (get-in [:data :roles]))))
+
 (defn- heal-subject!
   "The gate's heal (waymark-tti.10): a row the gate resolved BY ID
   whose :subject is blank gains one — its own id, which is the
