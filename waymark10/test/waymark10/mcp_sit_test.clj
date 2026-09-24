@@ -1179,6 +1179,16 @@
 (def ^:private engine-actor
   (t/principal {:id "test-engine" :type :system :display "Engine"}))
 
+(defn- assign-roles!
+  "assign_roles is fenced (it prefills :roles), so the write carries
+  the row's current etag, read just before it."
+  [eng member-id roles]
+  (let [row (store/with-tx (:storage eng)
+              (fn [tx] (store/load-row (:storage eng) tx :member member-id {})))]
+    (inv/invoke! eng :member member-id :assign_roles {:roles roles}
+                 {:principal engine-actor
+                  :if-match (inv/etag :member member-id (:version row))})))
+
 (deftest the-sitter-wears-the-roles-its-member-row-holds
   ;; gate! unions a member's roles onto the credential that arrives,
   ;; but a sitter never arrives: its principal is built from the seat
@@ -1200,8 +1210,7 @@
       (is (= #{} (roles-seen))))
 
     (inv/create! eng :role {:name "ranker"} {:principal engine-actor})
-    (inv/invoke! eng :member sitter-id :assign_roles {:roles ["ranker"]}
-                 {:principal engine-actor})
+    (assign-roles! eng sitter-id ["ranker"])
 
     (testing "a role assigned to the sitter row after the sit is worn on the next call"
       (is (= #{"ranker"} (roles-seen))))
@@ -1214,8 +1223,7 @@
                                           "waymark_discover" {}))
                             [:principal :roles]))))))
 
-    (inv/invoke! eng :member sitter-id :assign_roles {:roles []}
-                 {:principal engine-actor})
+    (assign-roles! eng sitter-id [])
 
     (testing "a role taken away is gone from the next call"
       (is (= #{} (roles-seen))))))
