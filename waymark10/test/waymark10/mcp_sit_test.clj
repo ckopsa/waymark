@@ -1173,3 +1173,57 @@
       (is (:isError result))
       (is (str/includes? (text-of result) "person")
           (text-of result)))))
+
+;; ── 7. the sitter wears the roles its row holds ─────────────────────
+
+(def ^:private engine-actor
+  (t/principal {:id "test-engine" :type :system :display "Engine"}))
+
+(defn- assign-roles!
+  "assign_roles is fenced (it prefills :roles), so the write carries
+  the row's current etag, read just before it."
+  [eng member-id roles]
+  (let [row (store/with-tx (:storage eng)
+              (fn [tx] (store/load-row (:storage eng) tx :member member-id {})))]
+    (inv/invoke! eng :member member-id :assign_roles {:roles roles}
+                 {:principal engine-actor
+                  :if-match (inv/etag :member member-id (:version row))})))
+
+(deftest the-sitter-wears-the-roles-its-member-row-holds
+  ;; gate! unions a member's roles onto the credential that arrives,
+  ;; but a sitter never arrives: its principal is built from the seat
+  ;; after the gate ran on the person's connector. A role assigned to
+  ;; the seat's own `seat:<id>` row must still be worn, or every role
+  ;; guard refuses the office.
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat]} (open-seat! eng)
+        sitter-id (seats/sitter-id seat)
+        [sid _] (initialize! h)
+        _ (tool h (with-session sid) "waymark_sit" {:key a-key})
+        roles-seen (fn []
+                     (set (get-in (doc-of (tool h (with-session sid)
+                                                "waymark_discover" {}))
+                                  [:principal :roles])))]
+
+    (testing "a sitter whose row holds no role wears none"
+      (is (= #{} (roles-seen))))
+
+    (inv/create! eng :role {:name "ranker"} {:principal engine-actor})
+    (assign-roles! eng sitter-id ["ranker"])
+
+    (testing "a role assigned to the sitter row after the sit is worn on the next call"
+      (is (= #{"ranker"} (roles-seen))))
+
+    (testing "and a sit after the assignment answers with it too"
+      (let [[other _] (initialize! h)]
+        (tool h (with-session other) "waymark_sit" {:key a-key})
+        (is (= #{"ranker"}
+               (set (get-in (doc-of (tool h (with-session other)
+                                          "waymark_discover" {}))
+                            [:principal :roles]))))))
+
+    (assign-roles! eng sitter-id [])
+
+    (testing "a role taken away is gone from the next call"
+      (is (= #{} (roles-seen))))))

@@ -2966,8 +2966,11 @@
             model-row (seat-model eng seat)
             model (some-> model-row (get-in [:data :name]) str not-empty)
             ;; g · the binding: this session, that sitter, from now on
+            ;; the roles the sitter row holds ride on the principal,
+            ;; as gate! puts them on any member who arrives
             sitter (assoc (t/principal {:id sitter-id :type :agent
-                                        :display display :model model})
+                                        :display display :model model
+                                        :roles (members/held-roles eng sitter-id)})
                           :acts-for person)
             ;; g' · the sitting the router counts against, opened here
             ;; because nobody else opens one for a keyed session
