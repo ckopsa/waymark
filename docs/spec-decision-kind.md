@@ -298,6 +298,10 @@ itself onto — every other one (a meal accepted, a substitution accepted, a
 plan finalized, a product's match confirmed) rides a noun that already existed
 for another reason.
 
+> **Retired (2026-09).** `workqueue10 :permission_slip` was removed from the
+> registry because the owner did not use it. The `:decision` projection and its
+> other instances stand; this section is kept as the design record.
+
 Its whole law is one `:decision` key and three scenarios, all check-tier —
 `make check-queue` judges them with no database. It is the first declaration
 to use the eligibility dimension the spec named as missing: `{:not :asked_by}`

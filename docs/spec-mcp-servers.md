@@ -208,7 +208,7 @@ line read `to=… · text=…`. An entry that marks none leaves the line to
 the `why`.
 
 Two doors are a person's: `allow` and `refuse {reason}`. Two walls
-stand on both, and they are the permission slip's, reused by name.
+stand on both, and they are a decision kind's, reused by name.
 The first is `the-caller-does-not-decide`: `caller` is stamped at
 birth, so nobody answers their own call. The second is a role,
 `approver`. A person who is not the caller and holds no role meets the

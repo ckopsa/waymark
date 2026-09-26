@@ -96,7 +96,6 @@
 0.375	choreplan10.queue-test
 0.368	waymark10.unique-index-test
 0.366	waymark10.batch-c-population-test
-0.355	workqueue10.permission-slip-test
 0.350	waymark10.drafts-test
 0.345	waymark10.batch-b-members-test
 0.331	waymark10.batch-f-openapi-test
