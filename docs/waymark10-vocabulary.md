@@ -362,7 +362,9 @@ this kind forever, which is why it is off until an author says otherwise.
 
 `:decision` is one key that projects a whole verdict machine
 ([spec](spec-decision-kind.md)) — for a decision that is not a transition on
-a domain row, where the decision IS the thing:
+a domain row, where the decision IS the thing. The example is the
+`workqueue10 :permission_slip` declaration, the first house-read instance
+(retired 2026-09: the owner did not use it; the key and its other instances stand):
 
 ```clojure
 :decision

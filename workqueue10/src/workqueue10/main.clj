@@ -94,7 +94,6 @@
             [workqueue10.resources.inbox-item :refer [inbox-item]]
             [workqueue10.resources.insight :refer [insight]]
             [workqueue10.resources.letters :refer [letter]]
-            [workqueue10.resources.permission-slip :refer [permission-slip]]
             [workqueue10.resources.media :refer [media-resource]]
             [workqueue10.resources.composition-request
              :refer [composition-request]]
@@ -541,7 +540,8 @@
   calendar (waymark-6k5.2), and the day plan's five (context,
   day_plan, block, span, decision — waymark-i89n, the :day domain).
   The evening fold (activity, evening_plan, evening_session —
-  waymark-26j) was retired in 2026-09.
+  waymark-26j) was retired in 2026-09, and the house's permission
+  slip (permission_slip — waymark-442.6) with it.
 
   The calendar's event kind comes from calendar10, NOT from
   mealplan/resources: it stopped being a meals concern when it became
@@ -635,15 +635,6 @@
        ;; :letter rides beside them (waymark-tti.3): the doorstep
        ;; shelf — addressed notes between inhabitants, two-party
        ;; own-surface (author OR recipient), never grantable.
-       ;; :permission_slip rides last (waymark-442.6): the house's own
-       ;; governance — somebody asks for leave, a grown-up answers,
-       ;; and the answer is the row. Domainless for the family reason
-       ;; the others are: asking permission is not a domain of family
-       ;; logistics beside queue/chores/meals, it is how the house
-       ;; decides. Own-surface (the asker reads their own answers)
-       ;; and the framework's first declared decision kind — every
-       ;; state, action and wall it has is projected from one
-       ;; :decision key.
        ;; :tickler rides last (waymark-iqa.4): the note on the dropped
        ;; pile — a marker naming {kind, id} anywhere in the house, a
        ;; date it comes back on, and three one-tap answers. Domainless
@@ -773,7 +764,7 @@
        ;; into is born through task's own create door inside the `yes`
        ;; handler, under the sitter's own name.
        (into (into [saved-view capability connection self journal letter
-                    permission-slip tickler insight value outcome outcome-piece
+                    tickler insight value outcome outcome-piece
                     person composition-request hypothesis inbox-item
                     (thread-resource (conf/thread-confluence thread-srcs
                                                              report-fn))]

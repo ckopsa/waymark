@@ -51,7 +51,7 @@
   ["tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
-   "letters" "ticklers" "insights" "permission_slips"
+   "letters" "ticklers" "insights"
    "selves" "journals" "dwellings" "connections" "capabilities"
    "saved_views" "dashboards" "dashboard_slots"
    "feed_recipes" "recipe_proposals" "feed_views" "feed_view_consents"

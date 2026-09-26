@@ -74,7 +74,7 @@ the spec is written so that bead is reachable in a week rather than a quarter.
 
 **`:decision` (`resource.clj:1253-1352`)** — nine keys projecting states,
 verdict actions, walls, schema, create model, queue filters and `:own-surface`.
-Four instances (`approval_request`, `permission_slip`, `tickler`, `insight`)
+Four instances (`approval_request`, `permission_slip` — retired 2026-09: the owner did not use it — `tickler`, `insight`)
 and one recorded **non**-instance (`recipe_proposal`). Its limits are what
 shape this epic, and three of them are load-bearing here:
 

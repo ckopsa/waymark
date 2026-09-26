@@ -466,7 +466,7 @@ over workqueue10: **108 → 94 warnings**, exit 0.
 | `approval_request` | 2 | 0 | the same item map; prose on `:grant_id`/`:scope` in its own schema and on `:task`/`:expires_at` **through the decision sugar** |
 | `role` | 2 | 0 | prose + `:examples`; policy 1 narrowed — no picker, and the refusal is why |
 | `member` | 7 | 0 | prose on the create door and four actions, `:choices` for `actor_type`/`provenance`, `:examples` for `:roles`; policy 1 narrowed |
-| `permission_slip` | 1 | 0 | nothing of its own — the sugar's new prose cleared it, which is the altitude working |
+| `permission_slip` (retired 2026-09: the owner did not use it) | 1 | 0 | nothing of its own — the sugar's new prose cleared it, which is the altitude working |
 
 ### `:x-options` reaches inside a list of entries, and needed nothing new
 

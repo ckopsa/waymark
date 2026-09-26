@@ -12,7 +12,7 @@
   That answer is an ANSWER, not a refusal (R-2): it counts as one
   served answer of its own size on the sitting, and as no refusal.
 
-  THE WALLS ARE THE PERMISSION SLIP'S, REUSED BY NAME (R-3). Nobody
+  THE WALLS ARE A DECISION KIND'S, REUSED BY NAME (R-3). Nobody
   allows their own call. `caller` is stamped at birth, and
   `the-caller-does-not-decide` is guards/not-the-field over it. The
   second wall is a ROLE, `approver`, which is guards/role. Two
@@ -195,7 +195,7 @@
     (t/deny)))
 
 (def the-caller-does-not-decide
-  "The first wall, the permission slip's own: whoever made the call
+  "The first wall, a decision kind's own: whoever made the call
   cannot be the one who answers it. `caller` is stamped at birth by
   the power door, so there is no earlier transition to be the actor
   of and four-eyes by ACTOR could say nothing here."
@@ -223,7 +223,7 @@
    :open "The role is a `role` row and a member's own list, and the person a seat call waits on is the row's own owner; no field of this door confers either."
    :explain "A person who holds the approver role answers a held tool call, and a held seat call is answered by the person it was held for. Somebody else's call is waiting, and the tap is theirs to make."}
   [row _inp ctx]
-  ;; The second wall, the permission slip's own, grown by one reading
+  ;; The second wall, a decision kind's own, grown by one reading
   ;; (server/delegation). A call held at a SEAT OR JUDGMENT DOOR names
   ;; the person its author acts for, and that person alone answers it:
   ;; the delegation is theirs, so the approver role is not enough. A
@@ -288,7 +288,7 @@
 
 (defscenario the-caller-does-not-allow-its-own-call
   "The agent that made the call cannot be the person who allows it.
-   It is the wall the permission slip wrote first, one kind over."
+   It is the wall the decision kinds wrote first, one kind over."
   {:kind    :held_call
    :attempt :allow
    :row     {:state :held :data a-held-send}

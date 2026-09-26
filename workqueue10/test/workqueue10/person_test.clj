@@ -61,7 +61,7 @@
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "contexts" "day_plans" "blocks" "spans" "decisions"
    "letters" "selves" "journals" "ticklers" "insights"
-   "permission_slips" "saved_views" "dashboards" "dashboard_slots"
+   "saved_views" "dashboards" "dashboard_slots"
    "connections" "capabilities"
    "members" "roles" "grants" "approval_requests"
    "feed_recipes" "recipe_proposals" "feed_views" "feed_view_consents"

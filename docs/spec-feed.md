@@ -111,7 +111,7 @@ the "a year ago this week" reads, with `fold-cap` 2000 and an honest
 schema, create door, `:default-filters {:state "offered"}`, `:sortable
 "-created_at"`, `:nav :system`. Two verdicts minimum; **at least one must leave
 the open state**, which means a verdict may also *return* to it. `permission_slip`
-is the first house-read instance.
+was the first house-read instance (retired 2026-09: the owner did not use it).
 
 **`invoke/finish!`** — the transition row: `kind resource_id action from_state
 to_state actor at law_revision input_digest inputs acknowledged judgment
