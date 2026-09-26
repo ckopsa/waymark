@@ -19,7 +19,7 @@ with no change to the Routine.
 |---|---|---|
 | name | `code-seat` | one spelling |
 | mode | `fired` | the Routine and the wake open the sittings |
-| walk | `ticket` | the queue: the tickets that are READY. The kind's default filter is `state=open`, and a blocked or deferred ticket is out of that state by construction, so the collection a firing opens is the work that waits and nothing that cannot be worked |
+| walk | `ticket` | the queue: the tickets that are READY. The kind's default filter is `state=open`, and a draft, blocked or deferred ticket is out of that state by construction, so the collection a firing opens is the work a person groomed and nothing that cannot be worked |
 | rows_per_firing | 1 | one ask is one worktree, one branch and one round; a second ask in the same firing would share the bill and the context |
 | held_for | the model the Routine runs | the seat's place on the ladder |
 | cadence_seconds | 3600 | the wake on `ticket` create fires it sooner (R-12.22) |
@@ -71,7 +71,11 @@ the session, and the Stop hook closes the sitting with the key.
 
 A person, or a seat that found work, writes one `ticket` row for each
 ask (docs/spec-ticket.md). One ask is one line, `title`: what to
-build; the how, and what done looks like, in `detail`. The ticket
+build; the how, and what done looks like, in `detail`. A ticket is
+born a draft, and a person grooms it into the queue with one tap —
+`groom` — when it is stated well enough to build as written. A seat
+cannot groom. Nothing reaches this seat's worktree that a person did
+not read first. The ticket
 names its `repo`, and the scope filter above is what keeps a ticket
 for another repository from this seat's worktree. A ticket that waits
 on other tickets is `blocked`, one that waits on a day is `deferred`,
@@ -309,8 +313,8 @@ Nothing else goes in the instructions (R-12.10).
    then stands `live`.
 7. The repository holds `docs/orientation.md`, or the person accepts
    the one-sentence default that says what submit means.
-8. One ticket is open for the repository, and it asks for something
-   small. The first firing is watched by a person, who reads the
+8. One ticket is groomed for the repository, and it asks for
+   something small. The first firing is watched by a person, who reads the
    sitting row, the ticket row, the change row and the pull request
    afterwards.
 

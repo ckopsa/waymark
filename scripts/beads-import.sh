@@ -22,7 +22,13 @@
 #                         (default ckopsa/waymark)
 #   DRY                   set to print the plan and post nothing
 #
-# ── WHAT IT DOES, IN FOUR PASSES ──────────────────────────────────────
+# EVERY TICKET IS BORN A DRAFT. The kind's birth lands in `draft`, and
+# nothing walks a draft: a person grooms a ticket into the queue, one
+# tap each (docs/spec-ticket.md D-8). So an import of the whole export
+# starts no seat on anything. Open beads stay drafts to be groomed;
+# closed beads are completed from draft, which the door allows.
+#
+# ── WHAT IT DOES, IN THREE PASSES ─────────────────────────────────────
 #
 #   1  BIRTHS, parents first. Sorted by the depth of the beads id
 #      (waymark-x, then waymark-x.y, then waymark-x.y.z), because a
@@ -34,10 +40,10 @@
 #      whose blocker is still open in beads become one block door
 #      call per ticket with the whole set. A blocker already closed
 #      holds nothing, and the door would refuse it by name, so it is
-#      left out here rather than refused there.
-#   3  DEFERRALS. A deferred bead with a date takes the defer door
-#      with that day; one with no date takes today plus ninety.
-#   4  ENDINGS, children first. Closed beads take `complete`, with
+#      left out here rather than refused there. A deferred bead stays
+#      a draft — `defer` is a queue door, and a draft is not in the
+#      queue — and its date rides in `detail`.
+#   3  ENDINGS, children first. Closed beads take `complete`, with
 #      the bead's own close_reason as the sentence (or "Closed in
 #      beads." when it had none). Deepest ids first, because a parent
 #      ends after its children and the door refuses otherwise. A
@@ -136,7 +142,7 @@ jq -c '
   {id: .id,
    depth: (.id | split(".") | length),
    title: (.title | .[0:200]),
-   detail: body,
+   detail: (body + (if .status == "deferred" then "\n\n## Deferred in beads" + (if (.defer_until // "") != "" then " until " + (.defer_until | .[0:10]) else "" end) else "" end) | .[0:20000]),
    type: kind,
    priority: ((.priority // 2) | if . < 0 then 0 elif . > 4 then 4 else . end),
    status: .status,
@@ -199,22 +205,7 @@ while IFS= read -r line; do
 done < <(jq -c 'select(.status != "closed" and (.blocks | length) > 0)' "$WORK/beads.jsonl")
 echo "pass 2 blockers: $blocked ticket(s) blocked" >&2
 
-# ── 3 · deferrals ────────────────────────────────────────────────────
-
-deferred=0
-default_day=$(date -u -d '+90 days' +%F 2>/dev/null || date -u -v+90d +%F)
-while IFS= read -r line; do
-  bid=$(jq -r .id <<<"$line")
-  rid=$(row_of "$bid"); [ -n "$rid" ] || continue
-  day=$(jq -r '.defer_until | .[0:10]' <<<"$line")
-  [ -n "$day" ] || day="$default_day"
-  call POST "/api/tickets/$rid/-/defer" "$(jq -c -n --arg d "$day" '{defer_until: $d}')" >/dev/null
-  if [ "$STATUS" = "200" ] || [ "$STATUS" = "201" ]; then deferred=$((deferred+1))
-  else echo "  $bid: the defer door answered $STATUS" >&2; fi
-done < <(jq -c 'select(.status == "deferred")' "$WORK/beads.jsonl")
-echo "pass 3 deferrals: $deferred deferred" >&2
-
-# ── 4 · endings, children first ──────────────────────────────────────
+# ── 3 · endings, children first ──────────────────────────────────────
 
 closed=0; held=0
 while IFS= read -r line; do
@@ -228,6 +219,6 @@ while IFS= read -r line; do
     echo "  $bid stays open: $(jq -r '.detail // .title // .' <<<"$out" 2>/dev/null | head -c 200)" >&2
   fi
 done < <(jq -c 'select(.status == "closed")' "$WORK/beads.jsonl" | jq -c -s 'sort_by(-.depth, .id) | .[]')
-echo "pass 4 endings: $closed completed, $held held open by the door" >&2
+echo "pass 3 endings: $closed completed, $held held open by the door" >&2
 
 echo "done: $(wc -l < "$MAP") ticket(s) carry a bead_id" >&2

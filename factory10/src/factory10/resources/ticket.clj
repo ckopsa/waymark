@@ -11,17 +11,31 @@
   day job's structure, which `change` already refuses to do. So the
   factory keeps its own ask, beside its own `change` and `ci_run`.
 
-  THE MACHINE IS FIVE STATES. `open` is the queue. `blocked` waits on
-  other tickets, `deferred` waits on a date; neither is an ending.
-  `done` and `dropped` are the two endings, and both come back through
-  `reopen`, so neither is a tomb. THERE IS NO `in_progress`: a ticket
-  is in progress when a `change` born from it is open, which is a fact
-  the engine already holds and not a status a model sets and forgets.
+  THE MACHINE IS SIX STATES. A ticket is born `draft`, and `groom` —
+  a person's door — moves it to `open`, which is the queue. `blocked`
+  waits on other tickets, `deferred` waits on a date; neither is an
+  ending. `done` and `dropped` are the two endings, and both come back
+  through `reopen` to `draft`, so neither is a tomb and a ticket that
+  ended wrongly is groomed again before a seat sees it. THERE IS NO
+  `in_progress`: a ticket is in progress when a `change` born from it
+  is open, which is a fact the engine already holds and not a status a
+  model sets and forgets.
+
+  GROOMED IS A STATE, AND A SEAT CANNOT REACH IT. The owner's ruling,
+  2026-09-26: a task is groomed before it is picked up. So the birth
+  lands in `draft`, where nothing walks, and `groom` is walled for a
+  model alone (repo_policy's shape: a person, the engine, or a
+  delegate acting for a person). A seat that could groom could fill
+  its own queue; a seat that cannot builds only what a person read
+  and stood behind. `ungroom` sends a ticket back, and `restate`
+  serves `draft` alone: a groomed statement is what the seat builds,
+  so changing it is ungrooming it.
 
   READY IS THE DEFAULT FILTER, NOT A STATE. The collection a walker
-  opens is `state=open`, and a blocked or deferred ticket is out of it
-  by construction. So the code seat walks `ticket`, one row at a time,
-  and never reads a ticket it cannot work (spec-seat.md R-12.9).
+  opens is `state=open`, and a draft, blocked or deferred ticket is
+  out of it by construction. So the code seat walks `ticket`, one row
+  at a time, and never reads a ticket it cannot work (spec-seat.md
+  R-12.9).
 
   AN EPIC IS A TICKET WITH CHILDREN. No `epic` type: a parent stays
   `open` while its children are worked, and `children-are-finished`
@@ -41,7 +55,8 @@
 
   :nav :secondary, for change's reason: an ask of the software
   factory is the day job's work, not the family's."
-  (:require [waymark10.dsl :refer [defguardfn defhandler defresource
+  (:require [clojure.string :as str]
+            [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.types :as t]))
 
@@ -185,6 +200,19 @@
                    :errors {:blocked_by [problem]}})
           (t/allow))))))
 
+(defguardfn a-person-or-their-delegate-grooms
+  {:reads [:principal]
+   :open "No door here changes this verdict. Grooming is a person's reading of an ask — that it is stated well enough to build as written — and a model alone does not stand behind its own statement. A seat that wants a ticket groomed says so where an agent may, and a person taps."
+   :explain "A ticket is groomed by a person, or by a delegate acting for one under a grant the person approved. A seat that could groom could fill its own queue with asks nobody read."}
+  [_row _inp ctx]
+  ;; repo_policy's `a-person-or-their-delegate-states-the-policy`, one
+  ;; kind over: the wall is against a model ALONE, and a delegate that
+  ;; names whom it acts for is the person's hand.
+  (let [{:keys [type acts-for]} (:principal ctx)]
+    (if (and (= :agent type) (str/blank? (str acts-for)))
+      (t/deny)
+      (t/allow))))
+
 (defguardfn only-a-person-reopens
   {:reads [:principal]
    :explain "A reopen is the person's correction of an ending, and a seat that could reopen tickets could refill its own queue. If you think this ticket ended wrongly, say so where an agent may — a new ticket that names this one in found_in — and let a person tap."
@@ -228,6 +256,28 @@
   {:kind    :ticket
    :attempt :reopen
    :row     {:state :done :data a-done-ticket}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(def ^:private a-draft-ticket
+  (dissoc a-done-ticket :close_reason))
+
+(defscenario a-seat-does-not-groom-a-ticket
+  "Grooming is a person's reading that the ask is stated well enough
+   to build as written. A seat alone is refused, so the queue holds
+   only what a person stood behind."
+  {:kind    :ticket
+   :attempt :groom
+   :row     {:state :draft :data a-draft-ticket}
+   :as      {:id "code-seat" :type :agent}
+   :expect  {:refused :a-person-or-their-delegate-grooms
+             :because "groomed by a person"}})
+
+(defscenario the-person-grooms-a-ticket
+  "And the door is really there for the person — one tap."
+  {:kind    :ticket
+   :attempt :groom
+   :row     {:state :draft :data a-draft-ticket}
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
@@ -347,15 +397,15 @@
    :plural "tickets"
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
-   :states [:open :blocked :deferred :done :dropped]
-   :initial :open
+   :states [:draft :open :blocked :deferred :done :dropped]
+   :initial :draft
    ;; NO TOMB. Both endings come back through `reopen`, a person's
-   ;; door: a ticket ended wrongly is a correction away from the queue.
+   ;; door, to `draft`: a ticket ended wrongly is groomed again.
    :terminal #{}
    ;; `:over` names the two endings apart: a done ticket is the deed
    ;; this kind is graded by, a dropped one is work the house let go.
-   ;; `blocked` and `deferred` are in neither list — they are waiting,
-   ;; not over, and their doors stay open.
+   ;; `draft`, `blocked` and `deferred` are in neither list — they are
+   ;; waiting, not over, and their doors stay open.
    :over {:accomplished #{:done} :let-go #{:dropped}}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
@@ -368,19 +418,19 @@
                 :repo #{:eq}
                 :bead_id #{:eq :set}}
    ;; THE QUEUE IS THE COLLECTION UNDER ITS DEFAULT FILTER: a walker
-   ;; opens /api/tickets and gets the work that is READY — open, not
-   ;; blocked, not deferred — lowest priority number first.
+   ;; opens /api/tickets and gets the work that is READY — groomed,
+   ;; not blocked, not deferred — lowest priority number first.
    :default-filters {:state "open"}
    :sortable {:fields [:priority :created_at] :default "priority"}
    :schema (into [:map] (concat stated-fields birth-fields engine-fields))
    ;; THE BIRTH IS THE STATEMENT AND WHERE IT SITS. The blockers, the
-   ;; date and the ending are on no birth: a ticket is born ready, and
-   ;; the doors below are how it stops being.
+   ;; date and the ending are on no birth: a ticket is born a draft,
+   ;; and the doors below are how it becomes ready and stops being.
    :create-schema (into [:map] (concat stated-fields birth-fields))
    :create-guards [the-parent-is-open-at-birth]
    :actions
    {:restate
-    {:from #{:open} :to :open
+    {:from #{:draft} :to :draft
      :input (into [:map] stated-fields)
      :handler restate-the-ticket
      :record true
@@ -388,6 +438,24 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :order 2
                :description "Say what needs doing again, whole"}}
+
+    ;; GROOMING IS THE PERSON'S TAP. A draft becomes the queue's when
+    ;; a person read it and stands behind it as written. The way back
+    ;; is `ungroom`, so a statement that needs work leaves the queue
+    ;; before it changes.
+    :groom
+    {:from #{:draft} :to :open
+     :guards [a-person-or-their-delegate-grooms]
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Groom" :style :primary :order 1
+               :description "It is stated well enough to build as written — into the queue"}}
+
+    :ungroom
+    {:from #{:open} :to :draft
+     :guards [a-person-or-their-delegate-grooms]
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Back to draft" :order 9
+               :description "Out of the queue — the statement needs work before a seat builds it"}}
 
     :prioritize
     {:from #{:open} :to :open
@@ -404,11 +472,14 @@
      :display {:label "Prioritize" :order 3
                :description "Move this ask up or down the queue"}}
 
-    ;; THE BLOCKERS, STATED WHOLE. From `open` the door blocks; from
-    ;; `blocked` it restates the set. One door, because both land in
-    ;; `blocked`.
+    ;; THE BLOCKERS, STATED WHOLE. From `draft` or `open` the door
+    ;; blocks; from `blocked` it restates the set. One door, because
+    ;; all three land in `blocked`. Stating what a ticket waits on is
+    ;; part of grooming it, so `unblock` lands in `open` and never back
+    ;; in `draft` — which is why this door is one-way and not
+    ;; reversible.
     :block
-    {:from #{:open :blocked} :to :blocked
+    {:from #{:draft :open :blocked} :to :blocked
      :input [:map
              [:blocked_by {:kind :ticket
                            :x-display
@@ -418,7 +489,8 @@
      :guards [the-blockers-are-open-and-not-itself]
      :handler state-the-blockers
      :edit {:prefill [:blocked_by]}
-     :safety {:idempotent true :reversible true :confirm false}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "This ticket leaves the queue until the tickets it waits on end. The way back is unblock, which lands it in the queue as groomed work: naming what it waits on was the grooming."}
      :display {:label "Blocked by" :order 4
                :description "Wait on other tickets — this one leaves the queue until they end"}}
 
@@ -450,39 +522,42 @@
      :display {:label "Resume" :style :primary :order 1
                :description "Back into the queue now"}}
 
-    ;; THE TWO ENDINGS, from `open` alone. A blocked or deferred ticket
-    ;; is not finished; unblock or resume it, and then end it. This
-    ;; keeps `reopen` an honest reverse: it lands in `open`, which is
-    ;; the one state either ending leaves from.
+    ;; THE TWO ENDINGS, from `draft` or `open`. A draft may already be
+    ;; done, or not wanted, before anyone groomed it. A blocked or
+    ;; deferred ticket is not finished; unblock or resume it, and then
+    ;; end it. Both are one-way: `reopen` lands in `draft` and never in
+    ;; `open`, because an ending that was wrong is an ask to read again.
     :complete
-    {:from #{:open} :to :done
+    {:from #{:draft :open} :to :done
      :input close-input
      :guards [children-are-finished]
      :handler close-the-ticket
      ;; the sentence is composed, so it is drafted (change's `stall`):
      ;; a mis-click must not discard what was typed
      :edit {:draft {:shared true :live true}}
-     :safety {:idempotent true :reversible true :confirm false}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "This is the ending on the record, with its sentence. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
      :display {:label "Complete" :style :primary :order 6
                :description "The work is done — say what was done"}}
 
     :drop
-    {:from #{:open} :to :dropped
+    {:from #{:draft :open} :to :dropped
      :input close-input
      :guards [children-are-finished]
      :handler close-the-ticket
      :edit {:draft {:shared true :live true}}
-     :safety {:idempotent true :reversible true :confirm false}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "This is the ending on the record, with its sentence. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
      :display {:label "Drop" :style :danger :order 7
                :description "Let this go — say why"}}
 
     :reopen
-    {:from #{:done :dropped} :to :open
+    {:from #{:done :dropped} :to :draft
      :guards [only-a-person-reopens]
      :handler reopen-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Reopen" :order 8
-               :description "It ended wrongly — back into the queue"}}}
+               :description "It ended wrongly — back to draft, to be groomed again"}}}
    :links [{:rel "parent" :kind :ticket
             :href "/api/tickets/{data.parent}"
             :summary "The larger ask this one is a piece of"}
@@ -493,9 +568,11 @@
             :href "/api/tickets/{data.found_in}"
             :summary "The ticket whose work surfaced this one"}]
    :deviations
-   ["`prioritize` and `restate` serve `open` alone. A v10 action declares one `:to`, so a self-loop that served `blocked` and `deferred` too would be three doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A blocked or deferred ticket is ranked and restated when it returns to the queue, which is where its rank matters."
-    "`complete` and `drop` leave from `open` alone, so `reopen` — which lands in `open` — is an honest reverse for both (checks/check-reversible asks for a transition back to each `:from`). A blocked or deferred ticket that is finished is unblocked or resumed first, one tap, and then ended."
+   ["`restate` serves `draft` alone and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
+    "`complete`, `drop` and `block` are one-way, not reversible. Each leaves from more than one state and its reverse lands in one (`reopen` in `draft`, `unblock` in `open`), and checks/check-reversible asks a reversible door for a way back to each `:from`. The way back is real in every case, and the `:one-way` sentence names it."
     "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."]
-   :scenarios [a-seat-does-not-reopen-a-ticket
+   :scenarios [a-seat-does-not-groom-a-ticket
+               the-person-grooms-a-ticket
+               a-seat-does-not-reopen-a-ticket
                the-person-reopens-a-ticket
                a-finished-ticket-is-not-put-back-by-a-side-door]})

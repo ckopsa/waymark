@@ -66,12 +66,21 @@ is not grantable.
 A change minted for a ticket carries `ticket:<id>` in `born_from`,
 and the merge completes the ticket with the engine's own hand.
 
+**D-8** A ticket is groomed before it is picked up. The owner's
+ruling, 2026-09-26. A ticket is born `draft`, and `groom` is a
+person's door (or a delegate's, acting for a person): a model alone
+is refused, and the wall is not grantable. A seat that could groom
+could fill its own queue. `ungroom` sends a ticket back, and
+`restate` serves `draft` alone, so a groomed statement is what the
+seat builds and changing it is ungrooming it. `reopen` lands in
+`draft`: an ending that was wrong is an ask to read again.
+
 ## 3. Requirements: the kind
 
 **R-3.1** The engine must serve `ticket`, in
 `factory10/src/factory10/resources/ticket.clj`, with the states
-`open`, `blocked`, `deferred`, `done` and `dropped`, initial `open`,
-and no terminal state.
+`draft`, `open`, `blocked`, `deferred`, `done` and `dropped`, initial
+`draft`, and no terminal state.
 
 **R-3.2** A ticket must have these fields.
 
@@ -91,23 +100,30 @@ and no terminal state.
 
 **R-3.3** The birth door must take `title`, `detail`, `type`,
 `priority`, `repo`, `parent`, `found_in` and `bead_id`, and nothing
-else. A ticket is born ready.
+else. A ticket is born a draft.
 
 **R-3.4** The default filter must be `state=open`, and the default
 sort `priority`, lowest first.
 
 **R-3.5** `:over` must name `done` accomplished and `dropped` let go,
-and name `blocked` and `deferred` in neither.
+and name `draft`, `blocked` and `deferred` in neither.
 
 ## 4. Requirements: the doors
 
-**R-4.1** `restate` (open → open) takes the four stated fields again,
-whole, and prefills them.
+**R-4.0** `groom` (draft → open) and `ungroom` (open → draft) take no
+input. `a-person-or-their-delegate-grooms` refuses a model alone and
+is not grantable; its scenarios are check-tier.
+
+**R-4.1** `restate` (draft → draft) takes the four stated fields
+again, whole, and prefills them. A groomed ticket is not restated: it
+is ungroomed first.
 
 **R-4.2** `prioritize` (open → open) takes `priority` and prefills it.
 
-**R-4.3** `block` (open or blocked → blocked) takes `blocked_by`, one
-to fifty refs, and REPLACES the list. The guard
+**R-4.3** `block` (draft, open or blocked → blocked) takes
+`blocked_by`, one to fifty refs, and REPLACES the list. It is one-way:
+`unblock` lands in `open`, because stating what a ticket waits on is
+part of grooming it. The guard
 `the-blockers-are-open-and-not-itself` refuses a blocker that is the
 ticket itself, that is not a ticket, or that has ended, and names
 which.
@@ -117,13 +133,14 @@ which.
 **R-4.5** `defer` (open → deferred) takes `defer_until`. `resume`
 (deferred → open) clears it.
 
-**R-4.6** `complete` (open → done) and `drop` (open → dropped) take
-`close_reason`, one sentence. Both leave from `open` alone, so a
-blocked or deferred ticket is unblocked or resumed first. The guard
+**R-4.6** `complete` (draft or open → done) and `drop` (draft or
+open → dropped) take `close_reason`, one sentence. Both are one-way:
+`reopen` lands in `draft`. A blocked or deferred ticket is unblocked
+or resumed first. The guard
 `children-are-finished` refuses either while a child is `open`,
 `blocked` or `deferred`, and names how many.
 
-**R-4.7** `reopen` (done or dropped → open) clears `close_reason`.
+**R-4.7** `reopen` (done or dropped → draft) clears `close_reason`.
 `only-a-person-reopens` refuses every agent hand and is not grantable.
 It reads nothing else, so its scenarios are check-tier; a child
 reopened under an ended parent is the person's next tap (§ 8).
@@ -143,7 +160,10 @@ walls).
 
 **R-5.1** `scripts/beads-import.sh` must read a beads JSONL export
 and make one ticket for each issue, through the doors and only the
-doors: the create door, then `block`, `defer` and `complete`.
+doors: the create door, then `block` and `complete`. Every ticket is
+born a draft, so the import starts no seat on anything; a person
+grooms tickets into the queue afterwards. A deferred bead stays a
+draft with its date in `detail`.
 
 **R-5.2** Births go parents first, by the depth of the beads id, so a
 child's `parent` resolves at the door. Endings go children first, so
@@ -178,6 +198,10 @@ in `born_from`. The merge completes the ticket with the engine's hand
 and the sentence `Merged: <change_id>.`
 (factory10.resources.change/complete-the-task-it-was-born-from).
 
+**R-6.2a** The seat's sit reads the queue under `state=open`, so a
+draft never reaches a worktree. Grooming is the one tap between an
+ask and a build.
+
 **R-6.3** A seat can create a ticket. A seat that finds work it must
 not do files a ticket with `found_in` naming the ticket it was
 working, which is what the reopen refusal tells it to do.
@@ -198,8 +222,8 @@ working, which is what the reopen refusal tells it to do.
 
 ## 8. Recorded punts
 
-- **Reopen under an ended parent.** `reopen` does not read the
-  parent. A guard that did would take the door's scenarios out of
+- **Reopen under an ended parent.** `reopen` lands in `draft` and
+  does not read the parent. A guard that did would take the door's scenarios out of
   the check tier, and the person-wall is the law the door is graded
   by. The birth door refuses the same shape, so the only way to
   reach it is a person's own tap, and the person's next tap fixes it.
