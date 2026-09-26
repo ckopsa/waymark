@@ -302,7 +302,6 @@
 
 (def ^:private tables
   ["errands" "members" "roles" "grants" "approval_requests" "definitions"
-   "verdict_reasons"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
    "waymark10_cursors" "events"])
 
@@ -325,40 +324,18 @@
         mine (first (filter #(= :core/law-scenarios (:name %)) report))]
     (is (some? mine) "core's pack owes the obligation")
     (is (= [] (:violations mine)))
-    (is (= 11 (:covered mine))
+    (is (= 3 (:covered mine))
         (str "exactly the scenarios the check tier could not judge, and no"
-             " more: ranking_note's one (waymark-1uv.6 — a person refused"
-             " the birth door, deferred by the chain rule exactly as"
-             " verdict_reason's is), errand's one, plus the two recipe_proposal staging"
-             " scenarios the :feed module enrols into every engine"
-             " (waymark-0k4 — their create door carries a wall that reads"
-             " the house's own recipe rows), plus the two feed_view ones"
-             " (waymark-8um.1 — the same shape, one door over: its create"
-             " reads the member's switch and this member's own day), plus"
-             " verdict_reason's TWO (waymark-jfv.16 and waymark-hcr — and"
-             " the deferral is the CHAIN's rather than either wall's:"
-             " nobody-explains-somebody-elses-no reads only the caller and"
-             " a-claim-is-not-answered-with-an-offers-word reads only the"
-             " body, but their door's last guard counts rows, and a create"
-             " scenario is judged against the whole chain), plus remark's one (waymark-vf8 — the chain"
-             " rule again: nobody-speaks-in-somebody-elses-voice reads only"
-             " the caller, and words-do-not-answer now stands beside it on"
-             " that door reading the SUBJECT's row and its kind's own"
-             " :answered-at-a-door), plus mcp_server's one (waymark-fp62.10"
-             " — the chain rule once more: a-create-does-not-carry-a-secret"
+             " more: errand's one, plus mcp_server's one (waymark-fp62.10"
+             " — the chain rule: a-create-does-not-carry-a-secret"
              "-as-auth-env reads only the body it refuses, but the create"
              " door it knocks on is walled by one-server-spelling, which"
              " counts the mcp_server rows that already wear the name; the"
              " kind's other six sit on action doors that read the caller"
              " and nothing else, and the check tier judges all six), plus"
-             " verdict's one (waymark-fp62.11 — the chain rule a fourth"
-             " time: every wall on the judge door reads the judgment row"
-             " the body cites. It is the ONE scenario that kind declares,"
-             " and deliberately, because it is the one that writes"
-             " nothing: a conformance-tier scenario staging :given rows"
-             " would leave a fixed-name judgment behind in whatever"
-             " database the shard holds, and a judgment is :unique by"
-             " name — the sentence workqueue10's fixture already carries"
-             " about dayplan10's. The rest of that kind's law is proved"
-             " in waymark10.verdict-test, over a database it owns). The"
-             " other three of errand's are not re-run here"))))
+             " verdict's one (waymark-fp62.11 — the chain rule again:"
+             " every wall on the judge door reads the judgment row the"
+             " body cites). The :feed module's deferred scenarios —"
+             " ranking_note's, recipe_proposal's, feed_view's,"
+             " verdict_reason's and remark's — went with it (retired"
+             " 2026-09). The other three of errand's are not re-run here"))))

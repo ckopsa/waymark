@@ -9,9 +9,10 @@
   THE RULE. `scope-names-real-kinds` reads the rows' power tokens
   FIRST: a dotted token any non-retired server names is real because
   the row that enforces it says so. The capability registry answers
-  only for a token no server names — this engine's own two powers,
-  `feed.preview_as` and `schedule.write`, which have no server row to
-  live in. A boot sweep retires the rest.
+  only for a token no server names — this engine's own power,
+  `schedule.write`, which has no server row to live in
+  (`feed.preview_as` stood beside it until the feed was retired,
+  2026-09). A boot sweep retires the rest.
 
   Memory storage, a held clock and an in-process fake server, the
   shape mcp-servers-test already uses: no network, no database, real
@@ -143,24 +144,23 @@
             "a retired row speaks for nothing")
         (is (re-find #"email\.read" (str (:detail p))))))))
 
-;; ── acceptance 2: the two the registry still answers for ────────────
+;; ── acceptance 2: the one the registry still answers for ────────────
 
-(deftest feed-preview-as-is-nameable-with-no-server-naming-it
+(deftest schedule-write-is-nameable-with-no-server-naming-it
   (let [eng (fresh-engine)
-        _ (a-capability! eng caps/feed-preview-as)
         _ (a-capability! eng schedules/write-capability)]
     (is (empty? (servers/power-tokens eng))
         "no mcp_server row exists at all, so the powers half is empty")
-    (let [entry (first (get-in (a-grant! eng [{:kind caps/feed-preview-as-token
+    (let [entry (first (get-in (a-grant! eng [{:kind schedules/write-capability-token
                                                :actions []
                                                :filter {:member "jack"}}])
                                [:data :scope]))]
-      (is (= "feed.preview_as" (:kind entry))
+      (is (= "schedule.write" (:kind entry))
           "this engine's own power is named from the registry, as before")
       (is (= {:member "jack"} (:filter entry))
           "and the constraint rides it, untouched"))
-    (is (= ["feed.preview_as" "schedule.write"] (servers/registered-tokens eng))
-        "and both engine powers stand in the registry")))
+    (is (= ["schedule.write"] (servers/registered-tokens eng))
+        "and the engine's power stands in the registry")))
 
 ;; ── acceptance 3: the boot sweep ────────────────────────────────────
 
@@ -170,7 +170,6 @@
         read-row (a-capability! eng (gate-row "email.read"))
         send-row (a-capability! eng (gate-row "email.send"))
         costco (a-capability! eng (gate-row "costco.read"))
-        feed (a-capability! eng caps/feed-preview-as)
         sched (a-capability! eng schedules/write-capability)
         swept (servers/sweep-capabilities! eng)]
     (is (= ["email.read" "email.send"] swept)
@@ -179,9 +178,8 @@
     (is (= :retired (state-of eng :capability (:id send-row))))
     (is (= :active (state-of eng :capability (:id costco)))
         "a Gate token no live server names is nobody's duplicate yet")
-    (is (= :active (state-of eng :capability (:id feed)))
-        "and this engine's own two powers stand: no server enforces them")
-    (is (= :active (state-of eng :capability (:id sched))))
+    (is (= :active (state-of eng :capability (:id sched)))
+        "and this engine's own power stands: no server enforces it")
 
     (testing "the retirement is a transition with the engine on it, not
               a store write nobody witnessed"
@@ -219,12 +217,12 @@
 (deftest doors-ask-powers-lists-the-servers-tokens-and-the-engines-own
   (let [eng (fresh-engine)
         _ (a-server! eng {:name "emila" :powers emila-powers})
-        _ (a-capability! eng caps/feed-preview-as)
+        _ (a-capability! eng schedules/write-capability)
         ;; an unscoped caller: the powers list is VOCABULARY, not a
         ;; leash's shadow, so it reads the same for everybody
         powers (get-in (discover-doc eng {:principal colton})
                        [:doors :ask :powers])]
-    (is (= ["email.read" "email.send" "feed.preview_as"] powers)
+    (is (= ["email.read" "email.send" "schedule.write"] powers)
         "the servers' tokens and the standing registry rows, as one list")
     (is (= powers (servers/nameable-tokens eng))
         "the door says exactly what the guard judges against")))

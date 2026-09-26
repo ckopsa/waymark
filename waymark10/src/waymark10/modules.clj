@@ -143,9 +143,6 @@
             [waymark10.server.belief :as server-belief]
             [waymark10.server.coherence :as coherence]
             [waymark10.server.curtain :as curtain]
-            [waymark10.feed-recipe :as feed-recipe]
-            [waymark10.feed-view :as feed-view]
-            [waymark10.server.feed :as feed]
             [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
@@ -156,12 +153,9 @@
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.presence :as presence]
-            [waymark10.ranking-note :as ranking-note]
-            [waymark10.recipe-proposal :as recipe-proposal]
             [waymark10.server.roles :as roles]
             [waymark10.server.seats :as seats]
             [waymark10.server.routes.attachments :as attachment-routes]
-            [waymark10.server.routes.feed :as feed-routes]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.routes.gate :as gate-routes]
@@ -179,9 +173,7 @@
             [waymark10.server.webhooks :as webhooks]
             [waymark10.server.worksheet :as worksheet]
             [waymark10.judgment :as judgment]
-            [waymark10.remark :as remark]
             [waymark10.verdict :as verdict]
-            [waymark10.verdict-reason :as verdict-reason]
             [waymark10.test.packs :as packs]
             [waymark10.types :as t]))
 
@@ -537,121 +529,28 @@
    ;; surface simply does not assemble it.
    {:module :law-sweep :routes law-sweep-routes/routes :pack packs/law-sweep}
 
-   ;; the feed (waymark-iqa.2): one GET answering a mixed, seeded,
-   ;; grant-projected read of the house — do-now, decide, the caught-up
-   ;; seam, the archive. It starts nothing (fork (a): read-time seeded
-   ;; queries, no materializing job, because a daily job is a whole
-   ;; extra failure mode and the seed already delivers what it was
-   ;; for).
+   ;; the belief layer (waymark-bug): the nightly fold that keeps every
+   ;; hypothesis's posterior equal to the arithmetic over its atoms.
+   ;; Elected — two processes folding one store would write the same
+   ;; numbers twice — and `:when`-gated on a hypothesis kind being
+   ;; served, so an engine with no belief layer starts nothing. A DAY
+   ;; rather than an hour, because decay is a per-day arithmetic against
+   ;; half-lives measured in months. It enrols no kind and mounts no
+   ;; route: the hypothesis kind is the application's.
    ;;
-   ;; Its RECIPE is an engine opt read at the route's build site with
-   ;; its default — `(:feed eng feed/default-recipe)`, the same
-   ;; spelling :events-poll-ms and :curtain-ttl-ms get — and never a
-   ;; fifth contribution column. The table is closed at four and this
-   ;; module is the first one built after that closure to want
-   ;; something; it wanted an opt, and an opt is what it took.
-   ;;
-   ;; …and since waymark-4yn it enrols ONE KIND: `feed_recipe`, the
-   ;; same opt authored at runtime, so a household tunes its own order
-   ;; without a deploy. `:always` rather than saved_view's
-   ;; `:app-opt-in`, and the difference is whose vocabulary is being
-   ;; composed: a saved view names APP kinds and an app may reasonably
-   ;; not want the surface, while a feed recipe names this module's own
-   ;; census and its own population registry. An engine that serves the
-   ;; feed serves the feed's recipe; there is nothing left to opt into.
-   ;; …and since waymark-0k4 a SECOND: `recipe_proposal`, the staged
-   ;; change an agent may write and only a person may apply. It rides
-   ;; the same module for the same reason and one more: it names
-   ;; feed_recipe's own doors and the feed's own census, so a house
-   ;; that serves the recipe serves the way to propose changes to it.
-   ;; `:always` too — the asymmetry (an agent may stage what it may
-   ;; not write) is the wall's other half, and half a wall is not a
-   ;; thing to opt into.
-   ;; …and since waymark-8um.1 a THIRD and FOURTH, which are one law in
-   ;; two kinds: `feed_view_consent`, the per-member switch, and
-   ;; `feed_view`, the record it lets exist. `:always` for the reason
-   ;; the other two are — they name this module's own card ids and its
-   ;; own populations — and both together or neither, because a record
-   ;; enrolled without its switch would be a door with the wall left in
-   ;; the other jar.
-   ;; …and since waymark-jfv.16 a FIFTH: `verdict_reason`, the four
-   ;; quick words a settled card offers after a decline lands, and the
-   ;; sentence one screen deeper. `:always` for the view door's own
-   ;; reason — the chips are drawn by the feed's generic screen, off a
-   ;; door the feed DOCUMENT names, so a house that serves the feed
-   ;; serves the way to say why. The kind itself names no application
-   ;; vocabulary at all ({subject_kind, subject_id, verdict}, the
-   ;; tickler's shape), which is what lets one kind answer every
-   ;; verdict in the house.
-   ;; …and since waymark-1uv.6 a SIXTH: `ranking_note`, an agent's
-   ;; score and one sentence about a ranked row, which the crown's
-   ;; rank reads as one weighted input and the card quotes as the
-   ;; agent's. `:always` for the reason kind's reason: it names no
-   ;; application vocabulary ({subject_kind, subject_id}, the same
-   ;; shape), and the rank that reads it is this module's own — a
-   ;; house that serves the crown serves the way an agent may speak
-   ;; to it.
-   ;; …and since waymark-b4s a SEVENTH: `remark`, the thread's turn —
-   ;; words on any subject with no verdict attached, a person's
-   ;; question and a composer's reply landing through the same create.
-   ;; `:always` for the reason kind's reason, again: {subject_kind,
-   ;; subject_id}, no application vocabulary, and the conversation it
-   ;; carries is about the cards this module minted — a house that
-   ;; serves the feed serves the way to talk back to it.
-   {:module :feed
-    :enrols [{:kind :feed_recipe :enroll :always
-              :kinds (fn [_] [feed-recipe/feed-recipe])}
-             {:kind :recipe_proposal :enroll :always
-              :kinds (fn [_] [recipe-proposal/recipe-proposal])}
-             {:kind :feed_view_consent :enroll :always
-              :kinds (fn [_] [feed-view/feed-view-consent])}
-             {:kind :feed_view :enroll :always
-              :kinds (fn [_] [feed-view/feed-view])}
-             {:kind :verdict_reason :enroll :always
-              :kinds (fn [_] [verdict-reason/verdict-reason])}
-             {:kind :ranking_note :enroll :always
-              :kinds (fn [_] [ranking-note/ranking-note])}
-             {:kind :remark :enroll :always
-              :kinds (fn [_] [remark/remark])}]
-    ;; …and since waymark-1uv.9 it STARTS one thing, the first this
-    ;; module has ever started: the sweep over the dropped pile, which
-    ;; sets a tickler aside for every row the house let go and nobody
-    ;; has yet marked. Elected for the orphan sweeper's reason — two
-    ;; processes sweeping one pile would knock on the dedupe guard
-    ;; twice for nothing — and it is a loop on a clock rather than a
-    ;; read with a side effect, because the feed is a GET (fork (a)).
-    ;; `:when`-gated on a tickler kind being served — the mirror
-    ;; module's discovery precedent, the second surface to wear it —
-    ;; so an engine with no tickler starts nothing and pays nothing.
-    ;; …and since waymark-bug it starts a SECOND one, on the same
-    ;; terms: the nightly fold that keeps every hypothesis's posterior
-    ;; equal to the arithmetic over its atoms. Elected for the sweep
-    ;; above's reason — two processes folding one store would write the
-    ;; same numbers twice — and `:when`-gated on a hypothesis kind
-    ;; being served, so an engine with no belief layer starts nothing.
-    ;; A DAY rather than an hour, because decay is a per-day
-    ;; arithmetic against half-lives measured in months: a belief
-    ;; refolded every minute reads exactly the same as one refolded
-    ;; every night, and this pass is cheap only because it is rare.
-    ;; What makes a fresh atom visible before the next night is not a
-    ;; faster clock — a hypothesis folds its own first posterior at
-    ;; birth, and the reading's brief falls back to computing the fold
-    ;; itself.
-    :hooks [{:hook :tickler-sweeper
-             :elected :tickler-sweeper
-             :when feed/serves-ticklers?
-             :start (fn [eng _]
-                      (feed/start-tickler-sweeper!
-                       eng {:interval-ms (:tickler-sweep-ms eng 3600000)}))
-             :stop feed/stop-tickler-sweeper!}
-            {:hook :belief-sweeper
+   ;; (This hook rode the `:feed` module until that module was retired
+   ;; 2026-09 — the feed document, its recipe, the view record, the
+   ;; ranking note, the quick reasons, the remark and the tickler sweep
+   ;; all went with it.)
+   {:module :belief
+    :hooks [{:hook :belief-sweeper
              :elected :belief-sweeper
              :when server-belief/serves-hypotheses?
              :start (fn [eng _]
                       (server-belief/start-belief-sweeper!
                        eng {:interval-ms (:belief-sweep-ms eng 86400000)}))
              :stop server-belief/stop-belief-sweeper!}]
-    :routes feed-routes/routes :pack packs/feed}
+    :pack packs/belief}
 
    ;; the power door's hypermedia surface (waymark-q95): two bespoke
    ;; doors — GET /api/-/gate, the affordance document (the live
@@ -666,7 +565,7 @@
    ;; the seat, the model and the sitting (docs/spec-seat.md, leg 1 of
    ;; waymark-fp62): the office an agent sits in, the price list its
    ;; model is on, and the record of what one wake cost. `:always`, and
-   ;; the feed module's reason word for word — these three name no
+   ;; for one reason — these three name no
    ;; application vocabulary at all. A seat's scope names whatever
    ;; kinds the house happens to serve, its model is an API identifier
    ;; and a price, and its sitting is four token counts; nothing in

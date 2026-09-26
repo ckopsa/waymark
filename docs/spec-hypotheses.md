@@ -1,5 +1,12 @@
 # Spec — hypotheses: the profile as graded belief
 
+> **Note (2026-09).** The feed, the outcome kinds, `verdict_reason` and
+> `ranking_note` were retired. The belief layer stands: the evidence table
+> (`default-evidence-lr`) now lives in `waymark10.belief` and is tuned through
+> the engine opt `:evidence-lr` rather than the feed's recipe, and the nightly
+> fold is the `:belief` module's hook. Passages below about the crown, outcomes
+> or the feed are the design record.
+
 **Thesis.** The house already holds the EVIDENCE layer and does not hold the
 BELIEF layer. Rows carry addresses; an insight cites them
 (`insight/cites-what-it-claims`); a sitting indexes what a person said and a

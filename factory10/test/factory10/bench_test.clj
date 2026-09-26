@@ -952,14 +952,14 @@
   "A title of more than 72 characters, as the mirror reads one off a
   pull request a person opened."
   (str "Reword the stale :spelled-by-hand waiver in grants.clj and "
-       "feed_recipe.clj, and say why a form cannot lift it"))
+       "value.clj, and say why a form cannot lift it"))
 
 (def ^:private a-long-sentence
   "The seat's own sentence: the whole story of the round, which is
   what made PR #160's title unreadable when the rig cut the commit's
   first line at 200 characters."
   (str "Reworded the stale :spelled-by-hand waiver (grants.clj twice, "
-       "the feed_recipe.clj comment and decision_sugar_test.clj twice) "
+       "the value.clj comment and decision_sugar_test.clj twice) "
        "from the old wording to the new one, because a form cannot "
        "lift the waiver on its own."))
 

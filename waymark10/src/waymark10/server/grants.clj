@@ -381,8 +381,8 @@
                                 ;; server's powers name is real. The
                                 ;; capability registry answers only
                                 ;; for a token NO server names — this
-                                ;; engine's own powers, feed.preview_as
-                                ;; and schedule.write — and a token
+                                ;; engine's own powers, today
+                                ;; schedule.write — and a token
                                 ;; neither knows refuses the same way
                                 ;; an unknown kind does
                                 (when-not (or (contains? @powers k)
@@ -439,8 +439,8 @@
           ;; one power to two repositories with two entries. A kind's
           ;; filters are a query's conds and keep the one-entry rule;
           ;; so does a dotted token only the capability registry names
-          ;; (feed.preview_as), whose own enforcement point reads the
-          ;; first filter and must not be handed a second.
+          ;; (this engine's own powers), whose own enforcement point
+          ;; reads the first filter and must not be handed a second.
           power? (fn [e] (and (str/includes? (str (:kind e)) ".")
                               (contains? @allowed (str (:kind e)))))
           dup (->> entries (remove power?) (map :kind) frequencies
@@ -2276,7 +2276,7 @@
 
   This is `wrap-identity`'s own else-branch, and it lives here rather
   than inline there because a SECOND door now needs it for somebody
-  other than the caller: `feed.preview_as` must build the visibility
+  other than the caller: `feed.preview_as` (retired 2026-09) had to build the visibility
   the previewed member would arrive with, and the only honest way to
   do that is to call the same expression the gate calls. A preview
   that re-derived 'what a member can see' would be a second definition

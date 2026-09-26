@@ -1,5 +1,10 @@
 # Spec — undo: taking back your own last tap
 
+> **Note (2026-09).** The feed was retired, and with it `feed_recipe`,
+> `recipe_proposal`, `feed_view`, `feed_view_consent`, `verdict_reason`,
+> `ranking_note`, `remark`, `tickler`, `outcome`, `outcome_piece` and
+> `composition_request`. Mentions of them below are the design record.
+
 **Thesis.** The owner's words, 2026-09-01:
 
 > make insights and hypotheses have their affordances be undo-able so we can

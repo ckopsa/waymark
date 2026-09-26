@@ -11,7 +11,7 @@
   and a program pointed at them.
 
   THE NUMBERS BELOW ARE THE SPEC'S OWN TABLE, spelled here rather than
-  read off `feed/default-evidence-lr`, and deliberately: a test that
+  read off `belief/default-evidence-lr`, and deliberately: a test that
   read the table it is checking would go green when somebody edited
   the table, which is the one change that most needs a person to look.
 

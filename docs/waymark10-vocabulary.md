@@ -1,5 +1,10 @@
 # The waymark10 vocabulary — the language the framework enforces, taught
 
+> **Note (2026-09).** The feed was retired, and with it `feed_recipe`,
+> `recipe_proposal`, `feed_view`, `feed_view_consent`, `verdict_reason`,
+> `ranking_note`, `remark`, `tickler`, `outcome`, `outcome_piece` and
+> `composition_request`. Mentions of them below are the design record.
+
 The authoring probe's first run (docs/waymark10-authoring-probe.md, D1/D2)
 found that waymark10 refuses unknown spellings precisely but teaches the
 known ones nowhere: the expression ops lived only in `expr.clj`, the

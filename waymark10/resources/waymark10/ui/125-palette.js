@@ -46,11 +46,9 @@ function jumpFuzzy(q, s) {
 async function jumpTargets() {
   let w;
   try { w = await wellKnown(); } catch { return []; }
-  const hasFeed = await feedDoor().catch(() => false);
   const out = [];
   const screen = (label, href, where) => out.push({label, href, where});
-  screen("Home", "", hasFeed ? "the day" : "dashboard");
-  if (hasFeed) screen("Feed", "feed", "census");
+  screen("Home", "", "dashboard");
   screen("Dashboard", "dashboard", "counts");
   if (w.resources && w.resources.member && w.resources.approval_request)
     screen("Access", "access", "grants");

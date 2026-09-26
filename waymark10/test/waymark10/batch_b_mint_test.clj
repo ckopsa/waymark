@@ -261,9 +261,9 @@
               (and its own jobs, and — waymark-0k4 — its own staged
               recipe proposals: the own surface rides every leash)"
       (let [b (json (req :get "/api/.well-known/waymark" nil scoped))]
-        ;; …and (waymark-1uv.6) the ranking notes it wrote itself, by
-        ;; :judged_by — the own surface again
-        ;; …and (waymark-b4s) the remarks it said itself, by :said_by
+        ;; (the feed module's own-surface kinds — the view record,
+        ;; recipe proposals, ranking notes, reasons and remarks — stood
+        ;; here too until the feed was retired, 2026-09)
         ;; …and (spec-seat.md, waymark-fp62.1) the sittings it opened
         ;; itself, by :member — one wake's cost is the sitter's own
         ;; …and (waymark-fp62.11) the verdicts it passed itself, by
@@ -272,9 +272,9 @@
         ;; :caller. A power call that waits on a person is the
         ;; caller's own to read the answer of, and an ask you cannot
         ;; read the answer to is not an ask
-        (is (= ["approval_request" "feed_view" "feed_view_consent"
-                "grant" "held_call" "job" "ranking_note" "recipe_proposal"
-                "remark" "sitting" "verdict" "verdict_reason"]
+        (is (= ["approval_request"
+                "grant" "held_call" "job"
+                "sitting" "verdict"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))
           "the domain stays concealed")

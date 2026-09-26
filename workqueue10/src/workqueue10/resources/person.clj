@@ -197,9 +197,8 @@
 
   THIS KIND POPULATES NOTHING AND THEREFORE OWES NO PACK OBLIGATION.
   Persons are a roster, not cards: nothing about a person is a thing to
-  do, and the feed's job is what the house could do next. What reads
-  the roster is `outcome/names-a-person` at the composer's create door,
-  and one day waymark-jfv.5's contract. When something DOES render
+  do. (`outcome/names-a-person` read it at the composer's create door
+  until the outcome kind was retired with the feed, 2026-09.) When something DOES render
   persons — a roster screen with the unanswered ones on top is the
   obvious first ask — that is when a population and its pack obligation
   are earned."
@@ -346,7 +345,7 @@
 (defn- stamp-the-writer
   "Whose hand wrote this row down — ANY principal, agent or person,
   written by the ENGINE and never trusted from the body (`value`'s
-  `written_by`, `insight`'s `authored_by`, `outcome`'s `composed_by`).
+  `written_by`, `insight`'s `authored_by`).
 
   There is no `owner` beside it here, because a person has no scope:
   see the ns docstring. This kind's rows are the house's, all of them."
@@ -412,8 +411,8 @@
 
 (def revise-input
   "What `revise` and `restate` both take: the whole authored surface,
-  overwritten wholesale. Public for the reason `value/revise-input` and
-  `feed_recipe/recipe-input` are — the door a staged correction would
+  overwritten wholesale. Public for the reason `value/revise-input`
+  is — the door a staged correction would
   one day be validated against has to be the door itself rather than a
   copy of it that could drift."
   [:map
@@ -621,10 +620,8 @@
    ;; the schema entries above — one concern, one home — so only the
    ;; machine's own column is spelled here. `relation` deliberately
    ;; carries none: exact-match on free prose is a trap, and the words
-   ;; there are the family's rather than a vocabulary. :state is what
-   ;; `outcome/names-a-person` reads when it asks whether a companion is
-   ;; somebody this house is actually in a relationship with, and it is
-   ;; also how a reader asks for the rows written down and not yet
+   ;; there are the family's rather than a vocabulary. :state is how a
+   ;; reader asks for the rows written down and not yet
    ;; answered. NO :default-filters, on purpose: a roster that opened on
    ;; the current people would hide exactly the rows that need a person.
    :filterable {:state #{:eq :in}}

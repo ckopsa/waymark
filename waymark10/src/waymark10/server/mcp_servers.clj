@@ -458,8 +458,8 @@
   set, which is not the same as absent: the empty set says a server
   names this power and admits no filter on it, and absent says no
   server names it at all (the capability registry's own powers —
-  `feed.preview_as` — whose enforcement point reads its filter itself
-  and is none of this door's business). Two entries naming one token
+  `schedule.write` — whose enforcement point is this engine and none
+  of this door's business). Two entries naming one token
   union their fields, because the token is what a grant names and a
   token cannot admit a field on Tuesdays only."
   [rows]
@@ -494,7 +494,7 @@
 ;; Since this leg the powers list is the FIRST vocabulary: a dotted
 ;; token a non-retired row names is a real token because the row says
 ;; so. The capability registry answers for the tokens no server names
-;; — this engine's own powers, feed.preview_as and schedule.write —
+;; — this engine's own powers, today schedule.write —
 ;; and that is the whole of what is left to it.
 
 (defn- capability-rows
@@ -1267,9 +1267,9 @@
   weigh the same judgment.
 
   A row whose `enforced_by` does NOT name Gate stands, and that is the
-  registry's remaining job: `feed.preview_as` and `schedule.write` are
-  this engine's own powers, no server enforces them, and a scope must
-  still be able to name them."
+  registry's remaining job: `schedule.write` is this engine's own
+  power, no server enforces it, and a scope must still be able to
+  name it."
   [caps tokens]
   (let [tokens (set tokens)]
     (filterv (fn [row]

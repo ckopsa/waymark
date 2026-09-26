@@ -23,9 +23,8 @@
   - the departure the whole bead was filed on — a caregiver an agent
     found in the record who has ALREADY LEFT, marked past straight out
     of `observed` without the owner having to affirm a lie on the way;
-  - and `outcome/names-a-person`, all three arms, which is the wall the
-    miscomposition would have hit: nobody there, an unanswered guess,
-    and somebody who is gone.
+  - (`outcome/names-a-person`, the wall the miscomposition would have
+    hit, was proved here until the outcome kind was retired, 2026-09.)
 
   EVERY AGENT HERE HOLDS A LEASH, and that is not decoration.
   `packs/leash!` says it in the same words one kind over: an UNLEASHED
@@ -54,17 +53,16 @@
   ;; boots every kind main/check-resources declares, so a fixture that
   ;; dropped only its own would boot into whatever shape another suite
   ;; left behind.
-  ["composition_requests" "outcome_pieces" "outcomes" "values" "people"
+  ["values" "people"
    "hypotheses" "inbox_items"
    "tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "contexts" "day_plans" "blocks" "spans" "decisions"
-   "letters" "selves" "journals" "ticklers" "insights"
+   "letters" "selves" "journals" "insights"
    "saved_views" "dashboards" "dashboard_slots"
    "connections" "capabilities"
    "members" "roles" "grants" "approval_requests"
-   "feed_recipes" "recipe_proposals" "feed_views" "feed_view_consents"
    "attachments" "subscriptions" "jobs"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors" "waymark10_job_leases"])
@@ -86,7 +84,6 @@
         ;; judging against another kind's ROW answers honestly.
         (let [eng (engine/engine {:storage st
                                   :resources (main/check-resources)
-                                  :feed main/feed-recipe
                                   :probe-reads true
                                   :suppress-mirror-refresh true})]
           (binding [*eng* eng
@@ -360,85 +357,7 @@
         (is (contains? log [:dismiss "colton-wrong"]))
         (is (not (contains? log [:now_past "colton-wrong"])))))))
 
-;; ── 6. the wall the miscomposition would have hit ───────────────────
-
-(defn- a-held-value!
-  "One declared value for an outcome to serve, by the owner's own hand."
-  [who name']
-  (id-of (req :post "/api/values"
-              {:name name'
-               :scope "household"
-               :says "Written by hand so an outcome has something to serve."
-               :loved ["the shop"]}
-              (human who))))
-
-(defn- compose!
-  "One outcome through the ordinary create door."
-  [who value-id goal extra]
-  (req :post "/api/outcomes"
-       (merge {:goal goal
-               :value_id value-id
-               :routing "It runs through the shop, which this house wrote down as something it loves."
-               :routes_through "the shop"
-               ;; the value is what the bundle SERVES;
-               ;; `composes-from-what-stands` (waymark-euj) subtracts
-               ;; it and asks whether anything the composer READ is
-               ;; still open. A fresh address in a collection this
-               ;; house serves names a row the wall cannot classify,
-               ;; and an unclassifiable row stands.
-               :evidence [(str "/api/values/" value-id)
-                          (str "/api/tasks/01HZQ7PERREAD"
-                               (subs (str (random-uuid)) 0 8))]}
-              extra)
-       (human who)))
-
-(deftest a-plan-may-not-name-a-companion-the-roster-cannot-support
-  (let [sous (leash! "sous-companion" ["create"])
-        vid (a-held-value! "colton-companion" "making things with the boys")
-        nobody (compose! "composer-c1" vid
-                         "A Saturday in the shop with somebody nobody wrote down"
-                         {:companion_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9C1"})]
-    (testing "THE MISCOMPOSITION'S OWN WALL: a companion is a checked reference to this house's roster rather than a name in a sentence nothing reads"
-      (is (= 409 (:status nobody)) (str "allowed: " (json nobody)))
-      (is (= "names-a-person" (guard-of nobody)))
-      (is (str/includes? (detail nobody) "/api/people")))
-    (let [guess (id-of (write-person! sous "Bram" "one of the boys"))
-          on-a-guess (compose! "composer-c2" vid
-                               "A Saturday in the shop on the strength of a guess"
-                               {:companion_id guess})]
-      (testing "an OBSERVED person is refused, and this is where jfv.10's widening honestly stops: an agent may write a person down, and if it could then compose against its own unanswered reading the wall would be paper"
-        (is (= 409 (:status on-a-guess)) (str "allowed: " (json on-a-guess)))
-        (is (= "names-a-person" (guard-of on-a-guess)))
-        (is (str/includes? (detail on-a-guess) "observed"))
-        (is (str/includes? (detail on-a-guess) "still with us"))))
-    (let [left (id-of (write-person! (human "colton-companion") "Nessa"
-                                     "the CNA on the cleaning rotation"))]
-      (is (= 200 (:status (invoke! "people" left :now_past nil
-                                   (human "colton-companion")))))
-      (let [r (compose! "composer-c3" vid
-                        "An afternoon built around somebody who has left"
-                        {:companion_id left})]
-        (testing "and a PAST person is refused with the relation and the finding in the sentence — a rotation still naming somebody who left is a staffing change, not a cadence problem"
-          (is (= 409 (:status r)) (str "allowed: " (json r)))
-          (is (= "names-a-person" (guard-of r)))
-          (is (str/includes? (detail r) "past"))
-          (is (str/includes? (detail r) "the CNA on the cleaning rotation"))
-          (is (str/includes? (detail r) "finding")))))))
-
-(deftest a-plan-with-a-companion-this-house-holds-lands-and-says-who
-  (let [vid (a-held-value! "colton-ok" "making things with the boys, together")
-        who (id-of (write-person! (human "colton-ok") "Marta" "contractor"))
-        o (compose! "composer-ok" vid
-                    "An hour walking the basement with the contractor"
-                    {:companion_id who})]
-    (testing "the ordinary case: somebody this house currently holds, and the outcome lands"
-      (is (= 201 (:status o)) (str "refused: " (json o)))
-      (is (= who (str (:companion_id (fields o))))))
-    (testing "and the engine keeps their name beside the reference, the same label doctrine value_name already wears — so a card reads who it is with without a second lookup"
-      (is (= "Marta" (str (:companion_name (fields o))))))
-    (testing "naming nobody is allowed and is the common case — a door that demanded a companion would teach the composer to invent one, which is the bug"
-      (let [alone (compose! "composer-alone" vid
-                            "An hour on the paperwork, which is nobody's afternoon but his"
-                            {})]
-        (is (= 201 (:status alone)) (str "refused: " (json alone)))
-        (is (nil? (:companion_id (fields alone))))))))
+;; ── 6. (retired 2026-09) ───────────────────────────────────────────
+;; `outcome/names-a-person` — the wall the miscomposition would have
+;; hit — was proved here, and went with the outcome kind when the feed
+;; was retired. The roster itself stands, and so does everything above.

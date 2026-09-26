@@ -1,5 +1,9 @@
 # Spec — the day plan: blocks, decisions, and the opening move
 
+> **Note (2026-09).** The feed was retired, and with it the `:now` population,
+> the day screen (`137-day.js`) and context's `feed_recipe_id` ref. The day plan
+> kinds stand; passages below about the feed are the design record.
+
 **Thesis.** The feed is context-blind. Its seed is member plus day, its
 populations are per-kind row queries, and the only domain question it asks
 of a row is *is this row's work over?* (`waymark10/server/feed.clj`,

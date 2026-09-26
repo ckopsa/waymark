@@ -107,7 +107,10 @@
       ;; …and 40 since the 2026-09 retirement of :permission_slip
       ;; (waymark-442.6), which the owner did not use. The :decision
       ;; key it first rode stays; only the kind goes.
-      (is (= 40 (count before)) "the whole household is under the lens")
+      ;; …and 36 since the 2026-09 retirement of the feed took the
+      ;; kinds that only existed to be carded on it: :tickler,
+      ;; :outcome, :outcome_piece and :composition_request.
+      (is (= 36 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)

@@ -1,5 +1,10 @@
 # Spec — the usability battery: the declaration is the form
 
+> **Note (2026-09).** The feed was retired, and with it `feed_recipe`,
+> `recipe_proposal`, `feed_view`, `feed_view_consent`, `verdict_reason`,
+> `ranking_note`, `remark`, `tickler`, `outcome`, `outcome_piece` and
+> `composition_request`. Mentions of them below are the design record.
+
 **Thesis.** Creating a saved view offers no hints. The right-gesture box wants
 an action name; the card box wants a list of field names; the target box wants
 a kind. The engine knows every one of those answers exhaustively — it *refuses*

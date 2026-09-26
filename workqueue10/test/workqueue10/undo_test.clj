@@ -58,18 +58,16 @@
   ;; reason: this engine boots every kind main/check-resources declares
   ;; plus what the module table enrols, so a fixture dropping only its
   ;; own would boot into whatever shape another suite left behind.
-  ["composition_requests" "outcome_pieces" "outcomes" "values" "people"
+  ["values" "people"
    "hypotheses" "inbox_items"
    "tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "contexts" "day_plans" "blocks" "spans" "decisions"
-   "letters" "selves" "journals" "ticklers" "insights"
+   "letters" "selves" "journals" "insights"
    "saved_views" "dashboards" "dashboard_slots"
    "connections" "capabilities"
    "members" "roles" "grants" "approval_requests"
-   "feed_recipes" "recipe_proposals" "feed_views" "feed_view_consents"
-   "verdict_reasons"
    "attachments" "subscriptions" "jobs"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors" "waymark10_job_leases"])

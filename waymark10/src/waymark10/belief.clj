@@ -821,3 +821,240 @@
          (sort-by (juxt #(- (double (:distance %)))
                         #(get-in % [:intent :href])))
          vec)))
+
+;; ── the evidence table (waymark-2m2, the hypotheses epic slice 1) ────
+;;
+;; What the house thinks a FACT is worth — the likelihood ratio of one
+;; typed atom on an `insight`, how fast that weight forgets, and the
+;; walls on the arithmetic itself. docs/spec-hypotheses.md § 'The LR
+;; table as data' is the design record. It rode the feed's recipe until
+;; the feed was retired (2026-09); it lives here now, beside the
+;; arithmetic that reads it, and a deployment tunes it through the
+;; engine opt `:evidence-lr`.
+;;
+;; EVERY KEY IS OPTIONAL AND SO IS THE WHOLE MAP. An untyped insight
+;; carries no `evidence_type` and weighs 1, which in log-odds is zero
+;; — silence.
+
+(def default-evidence-lr
+  "WHAT EACH KIND OF EVIDENCE IS WORTH, as the odds multiplier a
+  person can argue with, plus how fast each forgets and the two walls
+  on the arithmetic. docs/spec-hypotheses.md's own table, spelled as
+  the declaration.
+
+  Read a likelihood ratio as *how much likelier this observation is if
+  the claim is true than if it is false.* Above 1 an atom pushes UP,
+  below 1 it pushes DOWN, and 1 is silence. The reading adds the
+  natural logs, which is what makes the polarity arithmetic rather
+  than a special case: `declined_invite` at 0.2 subtracts as surely as
+  a costly action at 20 adds, and no `if` anywhere knows which way a
+  word points.
+
+  ── THE TEN RATIOS, and why each is priced there ──
+
+  `costly_action_high` 20 / `costly_action_low` 5 — he spent money, a
+  Saturday, or social capital on it. The strongest thing a record can
+  hold, because talk is free and this was not; `cost` chooses between
+  the two, and `cost: none` is refused at the door, since an action
+  that cost nothing is not a costly action.
+
+  `unprompted_mention` 8 — he brought it up when nobody asked. Nearly
+  all the diagnostic power in ordinary conversation lives here, which
+  is exactly why `solicited` exists to keep it honest.
+
+  `statement_against_interest` 6 — he said something that cost him to
+  say: an admission, a preference that makes him look bad, a plan that
+  inconveniences him.
+
+  `specific_detail` 4 — he knew the part number, the trail name, the
+  year. Detail is expensive to fake and cheap to have when the thing
+  is real.
+
+  `question_asked` 3 — curiosity is weaker than a deed and much
+  stronger than agreement.
+
+  `complaint_while_continuing` 3 — he grumbled and kept doing it. The
+  complaint reads as negative and THE CONTINUING is the evidence; this
+  entry exists so a naive reader does not score the grumble as a no.
+
+  `solicited_praise` 1.05 — we asked, he said yes. Almost worthless on
+  purpose: politeness is the null hypothesis in a family, and pricing
+  this at 2 would let a run manufacture belief by asking leading
+  questions.
+
+  `minimal_response` 0.9 — we raised it and he said little. Weak
+  evidence against, never strong: silence has a hundred causes and
+  only one of them is disinterest.
+
+  `declined_invite` 0.2 — he was offered the thing and said no. The
+  strongest ordinary evidence against, and the mirror of a costly
+  action.
+
+  ── THE MODIFIER ──
+
+  `solicited_discount` 0.25 — a discount rather than a tenth type. An
+  answer to a question you put in somebody's mouth is a quarter of the
+  evidence of the same words unprompted, so a solicited atom's
+  LOG-ODDS contribution is scaled by this. `solicited_praise` needs no
+  discount: the type IS the discount.
+
+  ── THE NINE HALF-LIVES, in days ──
+
+  Per type, because FORGETTING is per type. A Saturday spent building
+  something is still evidence eighteen months later; a polite yes at
+  dinner is not evidence at all by autumn. One global rate would have
+  made the weakest evidence outlive its usefulness and the strongest
+  evidence expire before the household's own memory of it.
+
+  540 for a costly action, 365 for an admission and for a no, 180 for
+  a detail, an unprompted mention and a complaint-while-continuing, 90
+  for a question, and 60 for asked-for praise and for a one-word
+  answer.
+
+  Zero is not legal: `2^(−age ÷ 0)` has no answer, and an atom that
+  vanished the instant a clerk wrote it would be a bug wearing a
+  number's clothes. The way to make a kind of evidence stop counting
+  is its RATIO, set to 1 — the atoms then stay on the record saying
+  nothing, which is the honest version of the same wish.
+
+  ── THE TWO WALLS ON THE ARITHMETIC ──
+
+  `episode_intensity` 1.5 — atoms sharing an occasion collapse to ONE
+  contribution, and if there were two or more the survivor is
+  multiplied by this and no further. Enthusiasm in a single
+  conversation is WARMTH, not four independent observations.
+
+  `log_odds_clamp` 6 — about 0.25% to 99.75%. No finite pile of atoms
+  becomes certainty, because a belief that reaches certainty stops
+  reading evidence, and this house's posture is that the system
+  proposes and never believes.
+
+  ── THE TWO NUMBERS THE READING ASKS QUESTIONS WITH (waymark-4t9) ──
+
+  `test_band` 1.1 — how near even odds, in log-odds, a belief has to
+  stand before a cheap test is worth a person's Saturday. About 25% to
+  75%: a belief the record already puts at nine-to-one is not a
+  question, it is an answer. The SAME number decides when two beliefs
+  DISAGREE in the reading's GAPS section, and the reuse is argued: it
+  is the one thing this household says about its own beliefs — how far
+  apart two numbers must be before the difference is worth reading —
+  and stating it twice would let one drift under the other.
+
+  `thin_evidence` 1.5 — how little evidence counts as none, measured
+  as the mass of the fold (`Σ|contribution|`, sign taken off). About
+  one unprompted mention, decayed a little. Below it a belief is
+  standing on its prior and whatever noise reached it, and the honest
+  word for that is THIN. It GRADES the experiments rather than gating
+  them: a thin belief near even odds is a candidate BECAUSE it is
+  thin, and the section says so.
+
+  Neither number can move a card, hide a row or route anything —
+  § 'What is deliberately lost', 3, holds whole. They decide what a
+  READING is shown and in what order, which is a rank on the house's
+  own claims about itself.
+
+  A deployment that disagrees with any of these passes its own numbers
+  as the engine opt `:evidence-lr` and the next fold uses them. That
+  is the whole of the tuning story, and it is why the numbers are here
+  rather than inside the driver."
+  {:costly_action_high 20
+   :costly_action_low 5
+   :unprompted_mention 8
+   :statement_against_interest 6
+   :specific_detail 4
+   :question_asked 3
+   :complaint_while_continuing 3
+   :solicited_praise 1.05
+   :minimal_response 0.9
+   :declined_invite 0.2
+   ;; the modifier
+   :solicited_discount 0.25
+   ;; how a type forgets, in DAYS
+   :half_life_costly_action 540
+   :half_life_statement_against_interest 365
+   :half_life_declined_invite 365
+   :half_life_specific_detail 180
+   :half_life_unprompted_mention 180
+   :half_life_complaint_while_continuing 180
+   :half_life_question_asked 90
+   :half_life_solicited_praise 60
+   :half_life_minimal_response 60
+   ;; the walls on the arithmetic itself
+   :episode_intensity 1.5
+   :log_odds_clamp 6
+   ;; …and the two the reading asks its questions with (waymark-4t9)
+   :test_band 1.1
+   :thin_evidence 1.5})
+
+(def evidence-lr-keys
+  "The table's keys, in reading order — the ten ratios strongest
+  first, then the modifier, then the nine half-lives, then the two
+  walls. The nine TYPE tokens inside them are `insight`'s own enum,
+  spelled here rather than read off that kind: this namespace is
+  arithmetic and requires no declaration."
+  [:costly_action_high :costly_action_low :unprompted_mention
+   :statement_against_interest :specific_detail :question_asked
+   :complaint_while_continuing :solicited_praise :minimal_response
+   :declined_invite
+   :solicited_discount
+   :half_life_costly_action :half_life_statement_against_interest
+   :half_life_declined_invite :half_life_specific_detail
+   :half_life_unprompted_mention :half_life_complaint_while_continuing
+   :half_life_question_asked :half_life_solicited_praise
+   :half_life_minimal_response
+   :episode_intensity :log_odds_clamp
+   :test_band :thin_evidence])
+
+(defn evidence-lr-of
+  "The table a deployment reads: its own numbers (the engine opt
+  `:evidence-lr`, a map), with the defaults filled in for anything it
+  did not state."
+  [table]
+  (merge default-evidence-lr (when (map? table) table)))
+
+(def ^:private ratio-keys
+  [:costly_action_high :costly_action_low :unprompted_mention
+   :statement_against_interest :specific_detail :question_asked
+   :complaint_while_continuing :solicited_praise
+   :minimal_response :declined_invite :solicited_discount])
+
+(def ^:private half-life-keys
+  [:half_life_costly_action :half_life_statement_against_interest
+   :half_life_declined_invite :half_life_specific_detail
+   :half_life_unprompted_mention :half_life_complaint_while_continuing
+   :half_life_question_asked :half_life_solicited_praise
+   :half_life_minimal_response])
+
+(defn evidence-lr-problems
+  "Why a table will not do, as sentences, or nil when it will. The
+  bounds are the arithmetic's rather than a taste's: a ratio is
+  strictly positive (0 would say an observation is impossible; 1 is
+  silence), a half-life is at least a day, an occasion may not count
+  for less than one fact, and the clamp and the two reading bands are
+  strictly positive."
+  [table]
+  (if-not (map? table)
+    ["the evidence table is a map of numbers"]
+    (let [num-in (fn [k lo hi strict-lo?]
+                   (when-some [v (get table k)]
+                     (when-not (and (number? v)
+                                    (if strict-lo?
+                                      (> (double v) (double lo))
+                                      (>= (double v) (double lo)))
+                                    (<= (double v) (double hi)))
+                       (str (name k) " is out of bounds: " (pr-str v)))))]
+      (not-empty
+       (into []
+             (remove nil?)
+             (concat
+              (map #(num-in % 0 1000 true) ratio-keys)
+              (map (fn [k]
+                     (when-some [v (get table k)]
+                       (when-not (and (int? v) (<= 1 (long v) 36500))
+                         (str (name k) " is a whole number of days, 1-36500: "
+                              (pr-str v)))))
+                   half-life-keys)
+              [(num-in :episode_intensity 1 10 false)
+               (num-in :log_odds_clamp 0 50 true)
+               (num-in :test_band 0 20 true)
+               (num-in :thin_evidence 0 50 true)]))))))

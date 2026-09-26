@@ -105,9 +105,9 @@
 ;; finished while its sync state says `fresh`. Those are the
 ;; household's own words, so the DECLARATION says them (`:over`).
 ;;
-;; This is where that declaration is read. The feed asks the same two
-;; questions of it (`waymark10.server.feed`, which delegates here), and
-;; since waymark-fp62.4.1 the ENVELOPE asks a third: which doors does
+;; This is where that declaration is read. The feed asked the same two
+;; questions of it until it was retired (2026-09), and since
+;; waymark-fp62.4.1 the ENVELOPE asks a third: which doors does
 ;; an ended row still offer? A door a finished task advertises and
 ;; cannot honestly take is a false promise, and a false promise makes
 ;; every other promise worth checking.
