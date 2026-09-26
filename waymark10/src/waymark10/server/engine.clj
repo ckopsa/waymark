@@ -171,7 +171,6 @@
                                       :webhook-timeout-ms :webhooks-poll-ms
                                       :jobs-poll-ms :jobs-batch-size
                                       :orphan-sweep-ms :purge-sweep-ms
-                                      :tickler-sweep-ms
                                       :role-retry-ms :law-refresh-debounce-ms
                                       :report-pass
                                       :members :collab-heartbeat-ms
@@ -180,16 +179,13 @@
                                       :intents-heartbeat-ms
                                       :intent-ttl-ms :intent-ask-ttl-ms
                                       :curtain-ttl-ms
-                                      ;; the feed's recipe (waymark-iqa.2):
-                                      ;; static data, read at the route's
-                                      ;; build site with its default and
-                                      ;; checked there. An opt rather than a
-                                      ;; fifth module column — the
-                                      ;; contribution table is closed at four
-                                      ;; and this is the spelling
-                                      ;; waymark10.modules already names for
-                                      ;; every other module's knob.
-                                      :feed
+                                      ;; the belief layer's evidence table
+                                      ;; (waymark-2m2): a map over
+                                      ;; belief/default-evidence-lr, read
+                                      ;; by the posterior fold. It rode
+                                      ;; the feed's recipe until the feed
+                                      ;; was retired (2026-09).
+                                      :evidence-lr
                                       ;; the schedule mirror's seam
                                       ;; (spec-seat.md R-12.11):
                                       ;; {provider adapter} handed in

@@ -35,11 +35,8 @@
   own deciding requirement — a bundle asking for a Saturday on the
   strength of a guess says so where the person answering it is
   looking. There are no observed values to card, so the test has
-  nothing to stage. `feed/value-standing`'s `:observed` arm is left
-  standing and unreached on purpose: slice 3 of the hypotheses epic
-  (waymark-4t9) repoints it at the intent hypothesis's POSTERIOR,
-  which is the same sentence with a number in it, and deleting the arm
-  now would leave that slice nothing to repoint.
+  nothing to stage (and the feed that carded bundles was retired,
+  2026-09).
 
   EVERY AGENT HERE HOLDS A LEASH, and that is not decoration.
   `packs/leash!` says it in the same words one kind over: an UNLEASHED
@@ -71,17 +68,16 @@
   ;; outcome_test's list verbatim: this engine boots every kind
   ;; main/check-resources declares, so a fixture that dropped only its
   ;; own would boot into whatever shape another suite left behind.
-  ["composition_requests" "outcome_pieces" "outcomes" "values" "people"
+  ["values" "people"
    "hypotheses" "inbox_items"
    "tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "contexts" "day_plans" "blocks" "spans" "decisions"
-   "letters" "selves" "journals" "ticklers" "insights"
+   "letters" "selves" "journals" "insights"
    "saved_views" "dashboards" "dashboard_slots"
    "connections" "capabilities"
    "members" "roles" "grants" "approval_requests"
-   "feed_recipes" "recipe_proposals" "feed_views" "feed_view_consents"
    "attachments" "subscriptions" "jobs"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors" "waymark10_job_leases"])
@@ -98,14 +94,11 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table
                                       " CASCADE")]))))
-        ;; the household's WHOLE registry over the offline fakes, and
-        ;; this house's own feed recipe — the outcomes line has to be
-        ;; in the order or the card sentence has nowhere to appear.
+        ;; the household's WHOLE registry over the offline fakes.
         ;; :probe-reads mirrors production's boot so a citation wall
         ;; judging against another kind's ROW answers honestly.
         (let [eng (engine/engine {:storage st
                                   :resources (main/check-resources)
-                                  :feed main/feed-recipe
                                   :probe-reads true
                                   :suppress-mirror-refresh true})]
           (binding [*eng* eng
@@ -402,23 +395,13 @@
 ;; house actually declared, and `restore`, which is also the way back
 ;; for a value the belief migration retired.
 
-(deftest a-value-the-house-retired-stops-being-composed-against
+(deftest a-value-the-house-retired-can-be-restored
   (let [id (id-of (write-value! (human "colton-wrong") "shipping more, on Sundays"))
         answered (invoke! "values" id :retire nil (human "colton-wrong"))]
     (testing "retiring is a person's own door and the log keeps whose hand it was"
       (is (= 200 (:status answered)) (str "refused: " (json answered)))
       (is (= "retired" (state-of answered)))
       (is (contains? (hands :value id) [:retire "colton-wrong"])))
-    (testing "and no outcome may be staged against it — names-a-value has always held this"
-      (let [r (req :post "/api/outcomes"
-                   {:goal "A Sunday spent on a value this house let go"
-                    :value_id id
-                    :routing "It runs through nothing this house said it loves."
-                    :evidence [(str "/api/values/" id)]}
-                   (human "composer-wrong"))]
-        (is (= 409 (:status r)) (str "allowed: " (json r)))
-        (is (= "names-a-value" (guard-of r)))
-        (is (str/includes? (detail r) "retired"))))
     (testing "restoring it holds it again, and holding it again is affirming it"
       (let [back (invoke! "values" id :restore nil (human "colton-wrong"))]
         (is (= 200 (:status back)))

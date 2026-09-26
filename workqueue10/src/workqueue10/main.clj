@@ -23,8 +23,7 @@
   comma-separated todo entity ids, the zone naive due datetimes
   parse in), WORKQUEUE10_ZONE (the household's one clock —
   dayplan10.zone reads it once, WORKQUEUE10_HA_ZONE is its fallback
-  and UTC the last resort; the feed's day rolls at midnight there and
-  a day plan's windows are minted there), WORKQUEUE10_GTASKS_CLIENT_ID / _CLIENT_SECRET /
+  and UTC the last resort; a day plan's windows are minted there), WORKQUEUE10_GTASKS_CLIENT_ID / _CLIENT_SECRET /
   _REFRESH_TOKEN / _LISTS / _CAPTURE (the google tasks boundary: an
   OAuth refresh token carrying the tasks scope — the calendar's token
   does NOT — the comma-separated task list ids to mirror, EVERY list
@@ -95,13 +94,9 @@
             [workqueue10.resources.insight :refer [insight]]
             [workqueue10.resources.letters :refer [letter]]
             [workqueue10.resources.media :refer [media-resource]]
-            [workqueue10.resources.composition-request
-             :refer [composition-request]]
-            [workqueue10.resources.outcome :refer [outcome outcome-piece]]
             [workqueue10.resources.person :refer [person]]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.resources.thread :refer [thread-resource]]
-            [workqueue10.resources.tickler :refer [tickler]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
             [workqueue10.resources.value :refer [value]]
             [workqueue10.sources.choreplan :as chores]
@@ -122,7 +117,6 @@
             [waymark10.saved-view :refer [saved-view]]
             [waymark10.server.capabilities :as cap :refer [capability]]
             [waymark10.server.engine :as engine]
-            [waymark10.server.feed :as feed]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
@@ -234,22 +228,8 @@
       :zone (System/getenv "WORKQUEUE10_HA_ZONE")
       :capture-list (System/getenv "WORKQUEUE10_HA_CAPTURE")})))
 
-(defn passage-link
-  "The feed's hook for a decision's PASSAGE launch (waymark-35eb,
-  dayplan10.resources.decision): the media row's data and the
-  decision's from/to words → the href that opens the row AT that
-  place, or nil. The framework's feed (waymark10.server.feed/
-  decision-doc) reads this off (:services eng) :passage-link so it
-  never learns flickr's name; the URL grammar is flickr's
-  (sources.flickr/passage-link) because the deep link it extends is
-  flickr's. A projection, stored nowhere — computed off the row on
-  every read, so a rescan that moves the row's deep link moves this
-  with it."
-  [media from to]
-  (flickr/passage-link (:source_ui_href media) (:medium media) from to))
-
 (defn places
-  "The passage's second hook (waymark-z8u4, the chapter picker): a
+  "The passage's hook (waymark-z8u4, the chapter picker): a
   media row's data → the places it offers a passage's from and to —
   a film's chapters, a show's episodes, a book's sections — as tokens
   in the grammar the decision's guards read (1:19:00, S02E05 0:00,
@@ -281,15 +261,13 @@
   start handler fires — (fn [service data]) over
   sources.homeassistant/call-service!. Both absent when no HA is
   configured, so a service launch refuses at the door rather than
-  no-oping. :passage-link is the feed's projection hook for a
-  decision's passage launch (passage-link above), always wired: it
-  reads rows, not a boundary. :places is its picker half (places
-  above), over the media confluence's sources — the same map the
-  :media kind drinks from, so the row and its chapters come from one
-  flickr."
+  no-oping. :places is the passage picker (places above), over the
+  media confluence's sources — the same map the :media kind drinks
+  from, so the row and its chapters come from one flickr. (A
+  :passage-link hook rode here for the feed's day screen until the
+  feed was retired, 2026-09.)"
   [ha-src media-srcs]
   (cond-> {:features []
-           :passage-link passage-link
            :places (partial places media-srcs)}
     ha-src (-> (update :features conj "home_assistant")
                (assoc :home-assistant
@@ -597,8 +575,7 @@
        (into (in-domain :meals (mealplan/meal-resources)))
        ;; the day plan (waymark-i89n, docs/spec-dayplan.md): the
        ;; template, the day, its blocks, their windows, and the
-       ;; decisions made into the blocks — the spine the feed's current
-       ;; block reads (slice .5). Materialisation is day_plan's own
+       ;; decisions made into the blocks. Materialisation is day_plan's own
        ;; :on-create, so no consumer registers in start!; a decision's
        ;; prep reaches the queue through the "day_plan" source above
        (into (in-domain :day [context day-plan block span decision]))
@@ -635,20 +612,10 @@
        ;; :letter rides beside them (waymark-tti.3): the doorstep
        ;; shelf — addressed notes between inhabitants, two-party
        ;; own-surface (author OR recipient), never grantable.
-       ;; :tickler rides last (waymark-iqa.4): the note on the dropped
-       ;; pile — a marker naming {kind, id} anywhere in the house, a
-       ;; date it comes back on, and three one-tap answers. Domainless
-       ;; for the same family reason the others are: what the
-       ;; household is putting off is not a domain of logistics beside
-       ;; queue/chores/meals, it is how the house carries what it has
-       ;; not done. A KIND and not a field on task, because task is
-       ;; :push-on-write and a "not now" must never call Google Tasks
-       ;; (docs/spec-feed.md fork (b)); household-wide, because
-       ;; abandoned media and unrun chores are the same pile.
-       ;; :insight rides last (waymark-iqa.6): the one card in the feed
-       ;; that is not a row the household already had — a finding, its
+       ;; :insight rides last (waymark-iqa.6): a finding, its
        ;; citations, and the one physical next step, published by a
-       ;; leashed agent at the MCP door and answered by a member.
+       ;; leashed agent at the MCP door and answered by a member — a
+       ;; standalone record since the feed was retired (2026-09).
        ;; Domainless for the same family reason the rest are: what the
        ;; house has NOTICED about itself is not a domain of logistics
        ;; beside queue/chores/meals. The compiler is not in the tree
@@ -663,31 +630,13 @@
        ;; logistics beside queue/chores/meals, it is what the
        ;; logistics are FOR. Hand-written rather than a :decision — a
        ;; value is long-lived law, not a one-shot verdict — and
-       ;; :nav :secondary on purpose, because a permanently-open row
-       ;; on a :primary kind would card in do-now forever and get
-       ;; congratulated as a deed when it retired. Declared is law;
-       ;; learned is evidence that files asks: an agent may not touch
-       ;; a value at any door, and petitions it by publishing an
-       ;; insight whose one next step is the value's own
-       ;; "these still stand" (docs/spec-outcome-menu.md § 'The value
-       ;; kind').
-       ;; :outcome and :outcome_piece ride last (waymark-jfv.3): the
-       ;; composed bundle and the pieces it is made of — the goal in a
-       ;; value's own terms, the routing citation, the rows the
-       ;; composer read, and two to five concrete units each already
-       ;; prepared to the shape its own door will take. Domainless for
-       ;; the same family reason value is: what this week COULD hold
-       ;; is not a domain of logistics beside queue/chores/meals, it is
-       ;; the arbitrage the logistics are for. Two kinds and not one
-       ;; because a verdict carrying a selection is inexpressible in
-       ;; the card grammar — so consent is per piece, one thumb at a
-       ;; time, and a decline can name WHICH part was wrong. The
-       ;; composer only proposes: every verdict on both kinds is
-       ;; walled against the principal that staged it and against
-       ;; agents in general, and materialization happens under the
-       ;; accepting member's own name through the target kinds' own
-       ;; create doors (docs/spec-outcome-menu.md § 'The outcome and
-       ;; its pieces').
+       ;; :nav :secondary on purpose. Declared is law; learned is
+       ;; evidence that files asks: an agent may not touch a value at
+       ;; any door, and petitions it by publishing an insight whose one
+       ;; next step is the value's own "these still stand"
+       ;; (docs/spec-outcome-menu.md § 'The value kind').
+       ;; (:tickler, :outcome, :outcome_piece and :composition_request
+       ;; rode here beside it until the feed was retired, 2026-09.)
        ;; :person rides last (waymark-jfv.11): the roster — who is who
        ;; in this house, so plans stop guessing. It exists because a
        ;; composer read correct rows and invented the relationship
@@ -701,23 +650,8 @@
        ;; household's people are is not a domain of logistics beside
        ;; queue/chores/meals, it is who the logistics are ABOUT. NOT
        ;; members: a member is a login principal and most of these
-       ;; people will never log in. :nav :secondary and no population,
-       ;; for value's reason — a roster is not a thing to do. What
-       ;; reads it is `outcome/names-a-person` at the composer's create
-       ;; door (docs/spec-outcome-menu.md § 'Built — jfv.11').
-       ;; :composition_request rides last (waymark-jfv.20): the
-       ;; person's own pull — "compose me another" — one tap, born by
-       ;; a person and never by an agent, standing a week, answered by
-       ;; the one outcome that cites it. It was born to get a person's
-       ;; own pull past the weekly cap on the machine's initiative
-       ;; (8um law 6, applied to composition), and outlived the cap
-       ;; (waymark-1uv.3) as the crown rank's first tier: a bundle
-       ;; that answers a request stands above every one nobody asked
-       ;; for. Domainless for value's reason, and
-       ;; :nav :system for outcome's: a request is neither work nor a
-       ;; decision, and a card for it would be the feed manufacturing
-       ;; a thing to answer. The crown carries it instead
-       ;; (docs/spec-outcome-menu.md § 'Built — jfv.20').
+       ;; people will never log in. :nav :secondary for value's reason
+       ;; — a roster is not a thing to do.
        ;; :thread rides last (waymark-36s): the household's
        ;; conversations as ADDRESSES — a row per chat, so a fact found
        ;; in a text has somewhere to point, the sitting's thread
@@ -764,8 +698,7 @@
        ;; into is born through task's own create door inside the `yes`
        ;; handler, under the sitter's own name.
        (into (into [saved-view capability connection self journal letter
-                    tickler insight value outcome outcome-piece
-                    person composition-request hypothesis inbox-item
+                    insight value person hypothesis inbox-item
                     (thread-resource (conf/thread-confluence thread-srcs
                                                              report-fn))]
                    dashboard/resources))
@@ -779,82 +712,6 @@
   "Both decision screens, one engine: the housekeeper's day board and
   the planner's week board."
   (into [day-board] mealplan/surfaces))
-
-(def feed-recipe
-  "This household's feed order (waymark-iqa.24). The default recipe
-  with one line split in two and one line added on top, and the two
-  edits are the whole point.
-
-  THE TOP LINE IS THE DAY (waymark-i89n.5, docs/spec-dayplan.md § 'The
-  feed: one population, one line'): `{:section :now :population
-  :current_block :take 6}` above even the crown — the block this reader
-  is in right now, its decisions in the order they wrote them, Go as
-  the verdict. Nothing from laws v3 applies inside it (the population
-  sorts by `order` and `:now` is outside `contested-sections`), and a
-  day nobody planned contributes nothing here: the document's `day`
-  key is where an unplanned morning reads *plan today*.
-
-  THE ZONE IS THE HOUSE'S (waymark-rptq). `feed/today` reads the
-  recipe's `:zone` and defaults it to UTC, and this recipe never set
-  it — so the household's day rolled at 18:00 Mountain: every evening
-  the order reshuffled, the seam re-formed and afternoon cursors 409'd
-  at dinner. It is set HERE, at the app's build site, from
-  `dayplan10.zone/id` — the ONE read of WORKQUEUE10_ZONE →
-  WORKQUEUE10_HA_ZONE → UTC — because the day plan's materialisation
-  turns *nine to noon* into instants with the same clock, and a
-  current-block population that read *today* six hours early would
-  answer tomorrow's plan at dinner. One household, one clock. It stays
-  out of the stored `feed_recipe` kind on purpose (feed_recipe.clj: a
-  zone is where the house IS, not a taste), so a household that edits
-  its order keeps this deployment's zone.
-
-  The first read of the real feed found do-now holding three movies
-  and a chore run somebody skipped a fortnight ago, and not one of
-  the thirty-three open tasks — sixteen of them overdue, a brake
-  booster and a caregiving cluster and an insurance policy among
-  them. The framework's spread now keeps any one kind from crowding
-  the others out by sheer count, and that alone would have let the
-  queue in. This says the rest out loud: in THIS house the queue is
-  what the morning is for, so two of do-now's five slots are the
-  queue's before anything else is considered.
-
-  It is static data and it ranks nothing. The mixer's claim is total,
-  so the second line never re-offers a task the first one named — the
-  two lines are disjoint by construction, and a house with an empty
-  queue simply reads a do-now of five other things.
-
-  BOTH LINES SAY WHAT THEY ARE FOR (waymark-iqa.29). `:says` is the
-  household's own sentence for a recipe line, and the feed's narrated
-  recipe reads it back to whoever asks why a card is here. A line
-  without one narrates itself perfectly well; these two earn theirs,
-  because *the queue comes first* is a decision this house made and
-  not a shape the framework would have inferred."
-  (assoc feed/default-recipe
-         :zone (str (zone/id))
-         :order
-         (into [{:section :now :population :current_block :take 6
-                 :says (str "Now: the block you are in, its decisions in the"
-                            " order you set them. Go is the verdict. Nothing"
-                            " here is ranked, cooled or drawn — a day you"
-                            " planned is not a contest.")}]
-               (mapcat (fn [e]
-                         (if (= :next_actions (:population e))
-                           [(assoc e :take 2 :kinds [:task]
-                                   :says (str "Do now, first two slots: the"
-                                              " work queue. In this house the"
-                                              " queue is what the morning is"
-                                              " for, so two cards are the"
-                                              " queue's before anything else"
-                                              " is considered."))
-                            (assoc e :take 3
-                                   :says (str "Do now, three more: anything"
-                                              " else the house goes to and"
-                                              " has not finished — a chore"
-                                              " run, a film, an errand — one"
-                                              " kind at a time so no pile"
-                                              " crowds the others out."))]
-                           [e])))
-               (:order feed/default-recipe))))
 
 (defn check-resources
   "Zero-arg so the declaration gate needs no env — every kind over
@@ -882,21 +739,18 @@
   when absent, never overwritten; retire/restore stay the humans'
   doors.
 
-  TWO ROWS, NOT FOURTEEN (waymark-fp62.10.4). The twelve Gate tokens
+  ONE ROW, NOT FOURTEEN (waymark-fp62.10.4). The twelve Gate tokens
   this seed used to carry are the `gate` mcp_server row's `powers`
   now, and the row is the vocabulary: seeding them here would
   register one word twice. They are not merely dropped from the seed
   — `mcp-servers/sweep-capabilities!` runs below and retires the rows
-  a deployment already carries. What is left are the two powers NO
-  server enforces, held by this engine itself, which have nowhere
-  else to be named."
+  a deployment already carries. What is left is the one power NO
+  server enforces, held by this engine itself, which has nowhere
+  else to be named (`feed.preview_as` stood beside it until the feed
+  was retired, 2026-09)."
   [eng]
   (doseq [{:keys [token] :as cap}
-          [;; the power granted is THIS engine's feed route
-           ;; (waymark-iqa.23): waymark holds the data and the law
-           ;; both, so there is no server row to put the token in
-           cap/feed-preview-as
-           ;; and its sibling (spec-seat.md R-12.11): this engine's own
+          [;; spec-seat.md R-12.11: this engine's own
            ;; hand on the harness's scheduler, held by the engine and
            ;; never by a grant a sitter can wear. Seeded because naming
            ;; the power is what makes it auditable
@@ -1009,10 +863,6 @@
                              :report-pass (connections/pass-reporter
                                            engine-ref {:event "calendar"})
                              :surfaces surfaces
-                             ;; the household's own feed order — the
-                             ;; recipe is an engine opt, read once at
-                             ;; the route's build site (waymark-iqa.24)
-                             :feed feed-recipe
                              :deploy-mode (deploy-mode)
                              ;; the render probe carries the read hooks
                              ;; (waymark-1pq): this is the boot prod

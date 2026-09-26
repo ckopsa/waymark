@@ -22,9 +22,8 @@
   of a shape they both serve. Touching ends are fine, the same rule
   span applies to instants; different shapes may overlap freely.
 
-  feed_recipe_id is declared and read by nothing yet — a block that
-  wants its own recipe under its decisions is a later bead over a ref
-  that already exists (the spec's recorded punt).
+  (A `feed_recipe_id` ref stood here, declared and read by nothing,
+  until the feed and its recipe kind were retired, 2026-09.)
 
   Spelled :schema + :actions: every field is authored and none is a
   lifecycle phase, and revise is an ordinary door with an input rather
@@ -327,11 +326,7 @@
                     :examples ["That's the workday. Whatever is left keeps until tomorrow."]
                     :x-display {:label "Seam sentence"
                                 :help "What the block reads when its work is done — the context's own 'that's everything'."}}
-             [:maybe [:string {:max 240}]]]
-            [:feed_recipe_id {:optional true :kind :feed_recipe
-                              :x-display {:label "Own recipe"
-                                          :help "A feed recipe for this block's own section. Declared ahead of any reader; nothing consults it yet."}}
-             [:maybe :waymark/ref]]]
+             [:maybe [:string {:max 240}]]]]
    ;; the grammar first, then the shape wall — a window the clock
    ;; cannot read is refused before anything is compared to it
    :create-guards [windows-read-as-clock-times no-overlap-in-shape]
@@ -372,16 +367,12 @@
                      :x-display {:widget "prose"
                                  :label "Seam sentence"
                                  :help "What the block reads when its work is done."}}
-              [:maybe [:string {:max 240}]]]
-             [:feed_recipe_id {:optional true :kind :feed_recipe
-                               :x-display {:label "Own recipe"
-                                           :help "A feed recipe for this block's own section; nothing consults it yet."}}
-              [:maybe :waymark/ref]]]
+              [:maybe [:string {:max 240}]]]]
      ;; the shape wall judges the template AS IT WOULD STAND — the
      ;; input merged over the row — so a revise that names only the
      ;; shapes is still held to the windows it keeps
      :guards [windows-read-as-clock-times no-overlap-in-shape]
-     :edit {:prefill [:name :default_shapes :default_spans :default_order :with :seam :feed_recipe_id]}
+     :edit {:prefill [:name :default_shapes :default_spans :default_order :with :seam]}
      :handler revise-template
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Revise" :order 1}}

@@ -1,5 +1,10 @@
 # Waymark 10.0 — the language migration
 
+> **Note (2026-09).** The feed was retired, and with it `feed_recipe`,
+> `recipe_proposal`, `feed_view`, `feed_view_consent`, `verdict_reason`,
+> `ranking_note`, `remark`, `tickler`, `outcome`, `outcome_piece` and
+> `composition_request`. Mentions of them below are the design record.
+
 A rewrite of waymark9 in Clojure, as a clean break (wire format
 `"10"`), at `waymark10/` + `mealplan10/`. Companion documents:
 `waymark8-design.md` (the law becomes data), `waymark9-design.md`

@@ -2,8 +2,8 @@
   "The household's one clock, read once (docs/spec-dayplan.md, *The
   day boundary*). A context says *nine to noon* — a local clock time —
   and a span is an instant, so turning a template into a day needs a
-  zone, and the feed's *today* needs the SAME zone or the current block
-  would answer tomorrow's plan at dinner (waymark-rptq).
+  zone (the feed's *today* read the same one, waymark-rptq, until the
+  feed was retired, 2026-09).
 
   WORKQUEUE10_ZONE names it; WORKQUEUE10_HA_ZONE (the Home Assistant
   boundary main.clj already reads) is the fallback; UTC is the last
@@ -23,8 +23,8 @@
                         "UTC"))))
 
 (defn id
-  "The household zone — the one place both the day plan's
-  materialisation and the feed's day boundary read it from."
+  "The household zone — the one place the day plan's materialisation
+  reads it from."
   ^ZoneId []
   @household)
 

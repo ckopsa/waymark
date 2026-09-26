@@ -57,9 +57,6 @@ function fillDrawer(w, current, active) {
 async function renderNav(current) {
   let w;
   try { w = await wellKnown(); } catch { return; }
-  /* both awaits happen BEFORE the bar is cleared: a probe resolving
-     late must never append to a bar a newer render already emptied */
-  const hasFeed = await feedDoor();
   const nav = $("#kinds"); nav.textContent = "";
   const entries = Object.entries(w.resources || {});
   const domains = w.domains || [];
@@ -68,9 +65,8 @@ async function renderNav(current) {
      present exactly when the wire declares domains */
   $("#drawerbtn").classList.toggle("on", domains.length > 0);
   if (domains.length) fillDrawer(w, current, active);
-  /* the tab bar has no header wordmark in reach — Home earns a tab
-     (and when the feed is mounted, Home IS the feed: one tab, below) */
-  if (MOBILE && !hasFeed) nav.append(el("a", {href: "#",
+  /* the tab bar has no header wordmark in reach — Home earns a tab */
+  if (MOBILE) nav.append(el("a", {href: "#",
     style: !current ? "font-weight:700" : ""}, "Home"));
   /* the active application as a breadcrumb back to its home */
   if (active) {
@@ -83,27 +79,6 @@ async function renderNav(current) {
     if (navTier(r) === "primary" && (!r.domain || r.domain === active))
       nav.append(el("a", {href: "#" + r.href,
         style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
-  /* the day's own read (waymark-iqa.7). The feed cannot advertise
-     itself on .well-known — the contribution table is closed at four
-     — so the page knows the address and asks whether it is mounted
-     for this reader (feedDoor, one probe a load). */
-  /* …and since waymark-i89n.8 the feed IS home: the link points at the
-     empty hash, and the dashboard it displaced moves behind ⋯ */
-  /* …and since waymark-i89n.14 home is the day ALONE: the census keeps
-     an address at #feed — a Feed link on the desktop nav, an item
-     behind ⋯ on a phone, where the tab bar has no room */
-  if (hasFeed) {
-    nav.append(el("a", {href: "#",
-      style: (!current || current === "/api/-/feed") ? "font-weight:700" : "",
-      title: "the day — the block you are in, and the rest of the day"},
-      "Home"));
-    if (!MOBILE)
-      nav.append(el("a", {href: "#feed",
-        style: current === "feed" ? "font-weight:700" : "",
-        title: "the feed: what to do now, what to answer, what the house"
-             + " already finished"},
-        "Feed"));
-  }
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
   if (w.resources && w.resources.member && w.resources.approval_request)
     nav.append(el("a", {href: "#access",
@@ -117,10 +92,7 @@ async function renderNav(current) {
   /* the ⋯ is unconditional since the jump box moved into it
      (waymark-sv9v): a deployable with nothing tucked away still has a
      way to the box and to the other shell — the menu is never empty */
-  nav.append(overflowMenu(tucked, {dashboard: hasFeed,
-                                   here: current === "dashboard",
-                                   feed: hasFeed && MOBILE,
-                                   feedHere: current === "feed"}));
+  nav.append(overflowMenu(tucked));
 }
 
 function overflowMenu(tuckedEntries, extra = {}) {
@@ -177,18 +149,6 @@ function overflowMenu(tuckedEntries, extra = {}) {
                                         jumpOpen(); }},
     "Jump to a kind…",
     MOBILE ? null : el("span", {class: "jump-key"}, JUMPKEY)));
-  /* the dashboard, displaced from home by the day (waymark-i89n.8):
-     still one tap away and still deep-linkable at #dashboard */
-  if (extra.feed)
-    menu.append(el("a", {href: "#feed", role: "menuitem", onclick: close,
-                         "data-nav": "feed",
-                         style: extra.feedHere ? "font-weight:700" : ""},
-      "Feed"));
-  if (extra.dashboard)
-    menu.append(el("a", {href: "#dashboard", role: "menuitem", onclick: close,
-                         "data-nav": "dashboard",
-                         style: extra.here ? "font-weight:700" : ""},
-      "Dashboard"));
   domain.forEach(e => menu.append(item(e)));
   if (domain.length && system.length)
     menu.append(el("div", {class:"nav-menu-sect", role:"separator"}, "system"));

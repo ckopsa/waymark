@@ -1,5 +1,11 @@
 # Spec — the outcome menu: values declared, plans composed, friction pre-paid
 
+> **Retired (2026-09).** The outcome menu went with the feed: `outcome`,
+> `outcome_piece`, `composition_request`, the crown and its rank, the
+> composer's diagnosis, `verdict_reason` and `ranking_note` were removed.
+> `value`, `person`, `insight` and `hypothesis` stand. This document is kept as
+> the design record.
+
 **Thesis.** The owner's own words, 2026-08-25, and everything below is
 downstream of them:
 

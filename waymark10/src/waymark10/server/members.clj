@@ -1508,7 +1508,7 @@
 (defn principal-for
   "The principal a member ARRIVES as — the gate's own resolution, run
   for somebody who is not the caller (waymark-iqa.23,
-  `feed.preview_as`). nil when nothing named `who` is a member of this
+  `feed.preview_as`, retired 2026-09). nil when nothing named `who` is a member of this
   house.
 
   `who` is a member row id OR the subject a binding wrote, the same

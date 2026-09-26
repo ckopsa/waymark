@@ -56,11 +56,6 @@
  {:guard :the-leash-is-short :bead "waymark-fp62.2"}
 
  ;; ── waymark10 framework kinds ──────────────────────────────────────
- {:guard :written-by-a-person :kind :feed_recipe :bead "waymark-fp62.2"}
- {:guard :a-switch-is-your-own :kind :feed_view_consent :bead "waymark-fp62.2"}
- {:guard :a-view-is-your-own :kind :feed_view :bead "waymark-fp62.2"}
- {:guard :a-remark-is-your-own :kind :remark :bead "waymark-fp62.2"}
- {:guard :a-reason-is-your-own :kind :verdict_reason :bead "waymark-fp62.2"}
  {:guard :bytes-route-only :kind :attachment :bead "waymark-fp62.2"}
  {:guard :token-wears-a-dot :kind :capability :bead "waymark-fp62.2"}
  {:guard :worker-writes-the-job :kind :job :bead "waymark-fp62.2"}
@@ -71,13 +66,6 @@
  {:guard :owner-revokes :kind :subscription :bead "waymark-fp62.2"}
  {:guard :engine-writes-schedules :kind :schedule :bead "waymark-fp62.2"}
  {:guard :a-person-or-a-delegate :kind :schedule :bead "waymark-fp62.2"}
-
- ;; recipe_proposal.clj
- {:guard :the-prepared-input-fits-the-door :kind :recipe_proposal :bead "waymark-fp62.2"}
- {:guard :it-cites-what-it-read :kind :recipe_proposal :bead "waymark-fp62.2"}
- {:guard :staged-changes-are-few :kind :recipe_proposal :bead "waymark-fp62.2"}
- {:guard :a-person-answers :kind :recipe_proposal :bead "waymark-fp62.2"}
- {:guard :the-proposer-does-not-decide :kind :recipe_proposal :bead "waymark-fp62.2"}
 
  ;; definitions.clj
  {:guard :deploy-writes-the-law :kind :definition :bead "waymark-fp62.2"}
@@ -164,8 +152,6 @@
  ;; ── workqueue10 ────────────────────────────────────────────────────
  {:guard :health-is-the-panels :kind :connection :bead "waymark-fp62.2"}
  {:guard :revoke-is-recovery-admins :kind :connection :bead "waymark-fp62.2"}
- {:guard :answered-by-a-composition :kind :composition_request :bead "waymark-fp62.2"}
- {:guard :only-a-person-asks :kind :composition_request :bead "waymark-fp62.2"}
  {:guard :owner-is-self-or-on-behalf :bead "waymark-fp62.2"}
  {:guard :edit-is-owner-or-human :bead "waymark-fp62.2"}
  {:guard :self-is-singleton :kind :self :bead "waymark-fp62.2"}
@@ -180,10 +166,6 @@
  {:guard :letters-are-paced :kind :letter :bead "waymark-fp62.2"}
  {:guard :opener-is-recipient :kind :letter :bead "waymark-fp62.2"}
  {:guard :discarder-is-recipient :kind :letter :bead "waymark-fp62.2"}
- {:guard :the-door-carries-its-own-effect :bead "waymark-fp62.2"}
- {:guard :only-its-composer-reworks :bead "waymark-fp62.2"}
- {:guard :the-composer-does-not-decide :bead "waymark-fp62.2"}
- {:guard :a-person-answers :kind :outcome :bead "waymark-fp62.2"}
  {:guard :only-the-observer-corrects :kind :person :bead "waymark-fp62.2"}
  {:guard :only-a-person-says-who-we-know :kind :person :bead "waymark-fp62.2"}
  {:guard :one-due :kind :task :bead "waymark-fp62.2"}

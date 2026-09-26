@@ -1,7 +1,7 @@
 (ns workqueue10.resources.insight
-  "The insight (waymark-iqa.6): the one card in the feed that is not a
-  row the household already had. Everything else the feed shows is a
-  projection of work somebody wrote down; an insight is a FINDING —
+  "The insight (waymark-iqa.6): a record of what the house has
+  noticed about itself, not a row the household already had. Every
+  other kind is work somebody wrote down; an insight is a FINDING —
   the compiler read the house, noticed that the porch project has been
   stalled since June, and says so in one sentence with the one
   physical next step attached.
@@ -16,15 +16,12 @@
     those.
   - NO OFFERED ACTION, NO PUBLISH. `offers-something-light` refuses
     an offer whose kind or action this engine does not declare, and
-    refuses one that would cost more than a tap. This is the ONE
-    place the feed's ≤-selection rule is a DOOR rather than a
-    projection, because it is the one place a verb is DECLARED
+    refuses one that would cost more than a tap — the ≤-selection
+    rule, as a DOOR, because this is the one place a verb is DECLARED
     (by the author, in data) rather than inherited from a row.
     A door that takes typing is not an offer: `task.prioritize` asks
     for a rank, which renders `recall`, and it is refused here however
-    natural it reads in a sentence. Prepared input belongs in an
-    outcome PIECE, which is where the house lets a composer type on
-    somebody's behalf; a card offers a decision.
+    natural it reads in a sentence; a finding offers a decision.
   - THE ADDRESS IS DERIVED, NEVER ASKED FOR (waymark-42m). An offer's
     href was declared hidden and required in the same breath: the
     guard refused a finding for omitting a field the composer's own
@@ -44,12 +41,9 @@
     left under the owner's ruling (docs/spec-outcome-menu.md § 'Ranked,
     not capped'): the finding IS the indexing that ruling said not to
     limit, its write pushes nothing and mails nobody, and the offer
-    below is an ADDRESS that writes no other row. What protects the
-    household's attention now is the feed's own rank on the insights
-    line (`feed/default-insight-rank`, six numbers on the recipe row,
-    read back on every insight card), with `:take` as the exposure
-    floor. A compiler may publish as many findings as it finds; the
-    rank decides which two a person reads today.
+    below is an ADDRESS that writes no other row. (The feed's rank on
+    the insights line that the ruling leaned on was retired with the
+    feed, 2026-09; the cap did not come back.)
   - ONE LIVE FINDING PER OFFER, and it is not the cap coming back
     (waymark-1ag). `one-live-finding-per-offer` refuses a finding
     whose `{offer_kind, offer_id, offer_action}` a PUBLISHED finding
@@ -57,10 +51,9 @@
     rows, naming that finding's address and the shared row. A cap
     refuses the Nth row because it is the Nth; this refuses a row
     because the house is already asking exactly that question, off
-    exactly that reading, and nobody has answered it —
-    `outcome/not-a-twin`'s law one kind over. Answer the standing one
-    and the question is open again: a dismissed prior blocks nothing,
-    it only weighs on the rank. The evidence half of the key is what
+    exactly that reading, and nobody has answered it. Answer the
+    standing one and the question is open again: a dismissed prior
+    blocks nothing. The evidence half of the key is what
     keeps the diagnosis duty dischargeable; the wall's own section
     below says why.
   - THE FINDER DOES NOT DECIDE. `:decider {:not {:field
@@ -75,8 +68,7 @@
   `waymark_query` / `waymark_get` / `waymark_invoke` like any other
   leash. This file is the engine's half of that contract: the kind,
   its law, and its scenarios. Automated cadence is waymark-53u; a
-  human running the probe is a valid v1 and the rank reads either
-  way.
+  human running the probe is a valid v1.
 
   WHAT ACCEPTING DOES, AND WHY IT DOES NOT FIRE THE OFFER ITSELF.
   `take` records the household's answer and moves the finding to
@@ -111,11 +103,11 @@
   handler ctx that carries the caller's visibility.
 
   AND BOTH ANSWERS ARE TAKEABLE BACK FOR FIFTEEN MINUTES
-  (waymark-qmo6, docs/spec-undo.md). This is the one card in the feed
-  a household triages in RUNS — thumb, thumb, thumb, on a phone — and
+  (waymark-qmo6, docs/spec-undo.md). This is the one kind a household
+  triages in RUNS — thumb, thumb, thumb, on a phone — and
   the failure mode of a run is a chip touched by mistake. Slowing the
-  tap down with a confirm would be the feed's own law broken (*a card
-  offers a decision, never a form*) and would make the honest taps cost
+  tap down with a confirm would break the one-tap law (*an offer is a
+  decision, never a form*) and would make the honest taps cost
   what the wrong one costs. So the tap stays instant and `undo` stands
   behind it: the same hand, within the window, only the newest
   transition on the row, and the restore RE-FACES
@@ -134,10 +126,8 @@
 
   NO NOTES ON EITHER VERDICT, DELIBERATELY. waymark-iqa.4 found it
   first: the sugar's note input is `[:maybe [:string {:max 240}]]`,
-  which `demand/field-class` reads as `recall` — heavier than the
-  feed's card ceiling — so `feed/split-verbs` would move that verdict
-  out of `actions` and into `heavier`, and the one-tap answer would
-  become a link. Both answers here are meant to be tapped. A finding
+  which `demand/field-class` reads as `recall` — heavier than a tap —
+  and the one-tap answer would become a form. Both answers here are meant to be tapped. A finding
   that wants a written reason wants a second door, not a note."
   (:require [clojure.string :as str]
             [waymark10.demand :as demand]
@@ -154,7 +144,7 @@
   "`/api/<plural>/<id>` → {:plural … :id …}, nil for anything else.
   An address is the ONE shape a citation and an offer may wear, and it
   is the shape the household's own URL bar already carries — the same
-  fact `feed/screen-of` prefixes with `/#` and the same one
+  one
   `workqueue10.sources.waymark/with-origin` derives a `source_ui_href`
   from. Query strings, action doors (`/-/`) and bare ids are not
   addresses and are refused rather than repaired."
@@ -213,7 +203,6 @@
 ;; about SHAPE: what a finding cites and what it offers. There is no
 ;; PACE wall after them any more — `insights-are-capped` stood third
 ;; until waymark-1uv.8 and left for the reason the ns docstring gives;
-;; how many findings a person reads is the feed's rank's business, and
 ;; how many an agent may write is nobody's.
 
 (defguardfn cites-what-it-claims
@@ -268,7 +257,7 @@
         (cond
           (nil? kind)
           (deny (str "it names no kind. A finding the household cannot act"
-                     " on is a sentence, and the feed already has prose."))
+                     " on is a sentence, not a finding."))
 
           (nil? rd)
           (deny (str "this house serves nothing called " (pr-str kind) "."))
@@ -305,9 +294,7 @@
                          "assent")]
             (cond
               ;; the ≤-selection rule, enforced at a door for the one
-              ;; and only time. feed/card-ceiling is the same word on
-              ;; the projection side; a second number here would be a
-              ;; second opinion about what fits under a thumb.
+              ;; and only time.
               (demand/heavier? effort "selection")
               (deny (str (name (:kind rd)) "." aname " asks for " effort
                          " — a card offers a decision, never a form."
@@ -335,29 +322,18 @@
 ;; nothing here brings it back. This wall refuses a finding because
 ;; the house is ALREADY HOLDING the same question, unanswered — which
 ;; is `not-a-twin`'s sentence one kind over (waymark-8gc), and why
-;; these were two beads rather than one: an outcome twins on the ROWS
-;; IT READ, a finding twins on the NEXT STEP IT OFFERS.
+;; these were two beads rather than one: a finding twins on the NEXT
+;; STEP IT OFFERS.
 ;;
 ;; Two findings citing one task are two findings. Two findings both
 ;; offering `complete` on that same task, built on the same reading,
-;; are one card written twice, and the rank cannot tell them apart —
-;; it places equals by hash(seed ‖ card_id), so the insights line's
-;; take of two would go to one question.
+;; are one question asked twice.
 ;;
 ;; THE KEY IS THE OFFER TRIPLE **AND** A SHARED EVIDENCE ROW, and the
 ;; second half was not in waymark-1ag's own sentence — it is what
-;; building the wall found. The triple alone DEADLOCKS THE DIAGNOSIS
-;; DUTY: `outcome/no-burial-without-a-diagnosis` makes a composer
-;; publish an insight citing the declined prior and offering the
-;; VALUE's `still_stands` before it may recompose, so two bundles on
-;; one value, declined a fortnight apart, owe two diagnoses with the
-;; identical offer triple — and the composer cannot clear the first
-;; one itself, because the four-eyes wall means the finder does not
-;; decide. A wall keyed on the triple alone would leave that composer
-;; unable to discharge a duty the house imposes on it, which is not a
-;; law, it is a trap. Two diagnoses about two different bundles cite
-;; different rows and are admitted; a finding re-asking the SAME
-;; question off the SAME reading is refused.
+;; building the wall found. Two findings about two different readings
+;; cite different rows and are admitted, even on one offer; a finding
+;; re-asking the SAME question off the SAME reading is refused.
 ;;
 ;; This is also the shape the house had already written down for this
 ;; arm before the door existed: waymark-8gc's own description
@@ -370,13 +346,9 @@
 ;; something else.
 ;;
 ;; LIVE MEANS `published`. A taken finding was answered yes, a
-;; dismissed one answered no; both are terminal and both leave the
-;; feed, so neither stands in the way of asking again. The rank
-;; already owns the answered ones — `feed/insight-record` counts
-;; DISMISSED priors on the same offer and holds a fresh finding DOWN
-;; rather than out (waymark-1uv.8) — and the two must not disagree:
-;; the rank's business is what the house answered, this wall's is the
-;; one question still open.
+;; dismissed one answered no; both are terminal, so neither stands in
+;; the way of asking again: this wall's business is the one question
+;; still open.
 
 (def ^:private live-state
   "The one state a finding STANDS in. `published` is this kind's open
@@ -385,8 +357,7 @@
   "published")
 
 (def ^:private live-page
-  "How deep the wall reads. `outcome/standing-page`'s number and its
-  reasoning: a household's feed holds tens of live findings, and a
+  "How deep the wall reads: a household holds tens of live findings, and a
   bounded read that missed the far tail of a pathological store lets a
   duplicate THROUGH rather than refusing a finding over a row it could
   not see — the right way for a wall reading a window to be wrong."
@@ -404,9 +375,8 @@
 
 (defn- read-rows
   "The set of row addresses a finding actually READ: its evidence,
-  trimmed and blank-free. `outcome/read-rows` without the value
-  subtraction, which has no meaning here — an insight serves no value,
-  so everything in its `evidence` is something it went and looked at."
+  trimmed and blank-free — an insight serves no value, so everything
+  in its `evidence` is something it went and looked at."
   [evidence]
   (into #{} (comp (map #(str/trim (str %))) (remove str/blank?)) evidence))
 
@@ -461,7 +431,7 @@
   [_row inp ctx]
   (let [find' (:find ctx)]
     ;; the storage-free probe advertises optimistically, exactly as
-    ;; `cites-what-it-claims` and `outcome/not-a-twin` do — the write
+    ;; `cites-what-it-claims` does — the write
     ;; path always carries the consult
     (if (nil? find')
       (t/allow)
@@ -564,8 +534,7 @@
 (defn- derive-the-offer-address
   "The offer's href, written from the pair the author already named
   (waymark-42m). `/api/<plural>/<id>` is the one address shape this
-  house speaks — `row-address` above reads it, `feed/screen-of`
-  prefixes it, and the registry is what turns a kind token into its
+  house speaks — `row-address` above reads it, and the registry is what turns a kind token into its
   plural — so asking a composer to spell it a second time was asking
   it to repeat the engine back to itself, through a field the create
   form declares hidden.
@@ -601,18 +570,16 @@
 ;; scenarios are check tier, judged with no database in the same
 ;; breath as the usability warnings.
 ;;
-;; AND NONE NAMES `one-live-finding-per-offer`, for the structural
-;; reason `outcome/not-a-twin` has none either (waymark-8gc, and the
-;; same paragraph one file over): the wall's whole question is what
+;; AND NONE NAMES `one-live-finding-per-offer`, for a structural
+;; reason (waymark-8gc): the wall's whole question is what
 ;; ANOTHER row already offers, and a scenario holds one literal
 ;; `:input` over an empty store — so every scenario reaching this door
 ;; would be an allow, and a green one would prove nothing. The claims
 ;; (a second live finding on the same offer refused by name, the first
 ;; still published; a DISMISSED prior admitting a fresh one; a
 ;; different `offer_action` on the same row admitted) are proved by
-;; `workqueue10.insight-rank-test` over the real ring handler, where a
-;; first finding can actually stand, and by `:feed/insights` in the
-;; conformance pack from the wire.
+;; `workqueue10.insight-test` over the real ring handler, where a
+;; first finding can actually stand.
 
 ;; ── the rows these scenarios cite ───────────────────────────────────
 ;;
@@ -624,19 +591,21 @@
 ;; `:given` row and names it by `:handle`; `{given/<handle>}` is the id
 ;; the walker minted.
 ;;
-;; A FRESH SUBJECT PER SCENARIO, deliberately: `tickler`'s own
-;; `one-live-marker-per-subject` refuses a second live note on one
-;; subject, and `one-live-finding-per-offer` refuses a second live
-;; finding on one offer. Distinct subjects keep each scenario's staging
-;; independent of the one that ran before it.
+;; A FRESH SUBJECT PER SCENARIO, deliberately: `one-live-finding-per-
+;; offer` refuses a second live finding on one offer. Distinct subjects
+;; keep each scenario's staging independent of the one that ran before
+;; it. The staged subject is a `value` and the offer its `still_stands`
+;; — the one-tap door `a-value-may-be-petitioned` already uses — since
+;; the tickler these scenarios once staged retired with the feed
+;; (2026-09).
 
 (def ^:private a-published-finding
   {:finding "The porch project has not moved since June, and the next physical step is one tap away"
-   :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
-   :offer_kind "tickler"
+   :evidence ["/api/values/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+   :offer_kind "value"
    :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
-   :offer_action "take_it_back"
-   :offer_href "/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+   :offer_action "still_stands"
+   :offer_href "/api/values/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
    :authored_by "compiler"})
 
 (defscenario no-citation-no-publish
@@ -649,10 +618,10 @@
    :at      "2026-08-24T09:00:00Z"
    :as      {:id "compiler" :type :agent}
    :input   {:finding "Three chores have been skipped two weeks running"
-             :offer_kind "tickler"
+             :offer_kind "value"
              :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
-             :offer_action "take_it_back"
-             :offer_href "/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"}
+             :offer_action "still_stands"
+             :offer_href "/api/values/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"}
    :expect  {:refused :cites-what-it-claims}})
 
 (defscenario no-offered-action-no-publish
@@ -663,12 +632,12 @@
    :attempt :create
    :at      "2026-08-24T09:00:00Z"
    :as      {:id "compiler" :type :agent}
-   :given   [{:kind :tickler :handle :porch :state :offered
-              :data {:what "Sand and repaint the porch railing"
-                     :subject_kind "task"
-                     :subject_id "scenario-no-offered-action"}}]
+   :given   [{:kind :value :handle :porch :state :declared
+              :data {:name "Sand and repaint the porch railing"
+                     :says "Sand and repaint the porch railing is ours to do."
+                     :scope "household"}}]
    :input   {:finding "The porch project has not moved since June"
-             :evidence ["/api/ticklers/{given/porch}"]}
+             :evidence ["/api/values/{given/porch}"]}
    :expect  {:refused :offers-something-light}})
 
 (defscenario the-finder-does-not-decide
@@ -684,10 +653,8 @@
 (defscenario a-dismissed-finding-does-not-come-back
   "Not useful is an answer, and it is kept. A dismissed finding is
    over — the compiler may find the same thing again tomorrow and
-   publish it, and the feed's rank reads this dismissal against the
-   new one: a finding on a next step the house already said no to
-   stands below a fresh one (waymark-1uv.8), and never in front of it
-   by being published again."
+   publish it as a fresh finding, but this one never comes back by
+   being answered again."
   {:kind    :insight
    :attempt :take
    :row     {:state :dismissed :data a-published-finding}
@@ -737,15 +704,15 @@
    :attempt :create
    :at      "2026-08-28T09:00:00Z"
    :as      {:id "compiler" :type :agent}
-   :given   [{:kind :tickler :handle :porch :state :offered
-              :data {:what "Sand and repaint the porch railing"
-                     :subject_kind "task"
-                     :subject_id "scenario-offer-needs-no-address"}}]
+   :given   [{:kind :value :handle :porch :state :declared
+              :data {:name "Sand and repaint the porch railing"
+                     :says "Sand and repaint the porch railing is ours to do."
+                     :scope "household"}}]
    :input   {:finding "The porch project has not moved since June, and the reminder is still standing"
-             :evidence ["/api/ticklers/{given/porch}"]
-             :offer_kind "tickler"
+             :evidence ["/api/values/{given/porch}"]
+             :offer_kind "value"
              :offer_id "{given/porch}"
-             :offer_action "take_it_back"}
+             :offer_action "still_stands"}
    :expect  {:allowed true}})
 
 (defscenario an-offer-points-at-its-own-row
@@ -758,15 +725,15 @@
    :attempt :create
    :at      "2026-08-28T09:00:00Z"
    :as      {:id "compiler" :type :agent}
-   :given   [{:kind :tickler :handle :porch :state :offered
-              :data {:what "Sand and repaint the porch railing"
-                     :subject_kind "task"
-                     :subject_id "scenario-offer-points-elsewhere"}}]
+   :given   [{:kind :value :handle :porch :state :declared
+              :data {:name "Sand and repaint the porch railing"
+                     :says "Sand and repaint the porch railing is ours to do."
+                     :scope "household"}}]
    :input   {:finding "The porch project has not moved since June"
-             :evidence ["/api/ticklers/{given/porch}"]
-             :offer_kind "tickler"
+             :evidence ["/api/values/{given/porch}"]
+             :offer_kind "value"
              :offer_id "{given/porch}"
-             :offer_action "take_it_back"
+             :offer_action "still_stands"
              :offer_href "/api/tasks/{given/porch}"}
    :expect  {:refused :offers-something-light
              :because "is not where that row lives"}})
@@ -775,9 +742,8 @@
   "`task.prioritize` reads like the obvious next step and is not one:
    it takes a rank, the rank renders `recall`, and a card that
    collects a number is a form. The refusal is the ≤-selection rule
-   doing its one door's worth of work — and it is why prepared input
-   lives in an outcome PIECE, where a composer may type on the
-   household's behalf, rather than in a finding's offer."
+   doing its one door's worth of work: a finding offers a tap, never
+   prepared input."
   {:kind    :insight
    :attempt :create
    :at      "2026-08-28T09:00:00Z"
@@ -805,22 +771,22 @@
    of the three that is an ALLOW, so it is the only one that reaches
    the third wall — and `one-live-finding-per-offer` refused it in the
    conformance pack, off the finding `an-offer-needs-no-address`
-   leaves standing on the shared tickler. Shape-first ordering hides
+   leaves standing on the shared value. Shape-first ordering hides
    that from the two refusals above (the typing wall answers them
    before the world is read); an allow has to walk the whole door."
   {:kind    :insight
    :attempt :create
    :at      "2026-08-30T09:00:00Z"
    :as      {:id "compiler" :type :agent}
-   :given   [{:kind :tickler :handle :gutters :state :offered
-              :data {:what "Call about the gutters"
-                     :subject_kind "task"
-                     :subject_id "scenario-untyped-fact"}}]
+   :given   [{:kind :value :handle :gutters :state :declared
+              :data {:name "Call about the gutters"
+                     :says "Call about the gutters is ours to do."
+                     :scope "household"}}]
    :input   {:finding "The gutters have gone another fortnight without a call"
-             :evidence ["/api/ticklers/{given/gutters}"]
-             :offer_kind "tickler"
+             :evidence ["/api/values/{given/gutters}"]
+             :offer_kind "value"
              :offer_id "{given/gutters}"
-             :offer_action "take_it_back"}
+             :offer_action "still_stands"}
    :expect  {:allowed true}})
 
 (defscenario nobody-asked-for-an-unprompted-mention
@@ -833,15 +799,15 @@
    :attempt :create
    :at      "2026-08-30T09:00:00Z"
    :as      {:id "compiler" :type :agent}
-   :given   [{:kind :tickler :handle :darkroom :state :offered
-              :data {:what "Clear the darkroom bench"
-                     :subject_kind "task"
-                     :subject_id "scenario-unprompted-mention"}}]
+   :given   [{:kind :value :handle :darkroom :state :declared
+              :data {:name "Clear the darkroom bench"
+                     :says "Clear the darkroom bench is ours to do."
+                     :scope "household"}}]
    :input   {:finding "Iris talked about the darkroom again"
-             :evidence ["/api/ticklers/{given/darkroom}"]
-             :offer_kind "tickler"
+             :evidence ["/api/values/{given/darkroom}"]
+             :offer_kind "value"
              :offer_id "{given/darkroom}"
-             :offer_action "take_it_back"
+             :offer_action "still_stands"
              :evidence_type "unprompted_mention"
              :solicited true
              :episode "thread/7fda11c6 2026-08-24"}
@@ -857,15 +823,15 @@
    :attempt :create
    :at      "2026-08-30T09:00:00Z"
    :as      {:id "compiler" :type :agent}
-   :given   [{:kind :tickler :handle :darkroom :state :offered
-              :data {:what "Clear the darkroom bench"
-                     :subject_kind "task"
-                     :subject_id "scenario-costly-action"}}]
+   :given   [{:kind :value :handle :darkroom :state :declared
+              :data {:name "Clear the darkroom bench"
+                     :says "Clear the darkroom bench is ours to do."
+                     :scope "household"}}]
    :input   {:finding "Iris put the darkroom weekend on the calendar"
-             :evidence ["/api/ticklers/{given/darkroom}"]
-             :offer_kind "tickler"
+             :evidence ["/api/values/{given/darkroom}"]
+             :offer_kind "value"
              :offer_id "{given/darkroom}"
-             :offer_action "take_it_back"
+             :offer_action "still_stands"
              :evidence_type "costly_action"
              :cost "none"
              :episode "thread/7fda11c6 2026-08-24"}
@@ -897,12 +863,12 @@
 ;; is this file's own precedent, not a concession —
 ;; `one-live-finding-per-offer` carries no scenario at all for the
 ;; matching structural reason, and its claims are proved by
-;; `workqueue10.insight-rank-test`.
+;; `workqueue10.insight-test`.
 ;;
 ;; What IS stageable is the tombstone, because `withdraw` is walled on
 ;; the hand that CREATED the row and the walker is that hand.
 ;;
-;; ITS OWN TICKLER, and the reason is the one `a-typed-fact-may-be-
+;; ITS OWN VALUE, and the reason is the one `a-typed-fact-may-be-
 ;; left-untyped` records: a scenario that STAGES a finding pays the
 ;; create door in full, and `one-live-finding-per-offer` refuses it off
 ;; the finding `an-offer-needs-no-address` leaves standing on the
@@ -920,24 +886,22 @@
   (-> a-published-finding
       (dissoc :authored_by)
       (assoc :finding "The gutter guards were never ordered, and the reminder has lapsed"
-             :evidence ["/api/ticklers/{given/guards}"]
+             :evidence ["/api/values/{given/guards}"]
              :offer_id "{given/guards}"
-             :offer_href "/api/ticklers/{given/guards}")))
+             :offer_href "/api/values/{given/guards}")))
 
 (defscenario a-withdrawn-finding-is-not-a-verdict
   "A tombstone is a tomb. `withdrawn` says the author took a finding
    back before anybody read it — which is neither yes nor no — and
    there is no door out of it: publishing again is publishing again.
    It is a separate state from `dismissed` precisely so a reading can
-   tell the household's no from an author's second thoughts, and the
-   feed's rank, which weighs a dismissed prior against a fresh finding
-   on the same next step, must never mistake one for the other."
+   tell the household's no from an author's second thoughts."
   {:kind    :insight
    :attempt :undo
-   :given   [{:kind :tickler :handle :guards :state :offered
-              :data {:what "Order the gutter guards"
-                     :subject_kind "task"
-                     :subject_id "scenario-withdrawn-finding"}}]
+   :given   [{:kind :value :handle :guards :state :declared
+              :data {:name "Order the gutter guards"
+                     :says "Order the gutter guards is ours to do."
+                     :scope "household"}}]
    :row     {:state :withdrawn :data a-withdrawable-finding}
    :as      {:id "iris" :type :person}
    :expect  {:refused :out-of-state}})
@@ -961,22 +925,17 @@
    ;; TOMBSTONE, not an answer, and deliberately not `dismissed`:
    ;; "not useful" is this household's verdict and "nobody ever read
    ;; this and I withdrew it" is not a verdict at all. Folding the two
-   ;; would corrupt three readers at once — the feed's rank (which
-   ;; holds a fresh finding DOWN under a dismissed prior on the same
-   ;; offer, waymark-1uv.8), `verdict_reason`'s four quick words, and
-   ;; any reading counting what this house turns down.
+   ;; would corrupt any reading counting what this house turns down.
    ;;
    ;; And it costs no edit anywhere, because every state predicate in
    ;; the tree is an ALLOW-LIST: `belief/live-atom-states` is
-   ;; #{:published :taken}, `live-state` above is "published", the
-   ;; feed reads `state=published`. A withdrawn finding falls out of
+   ;; #{:published :taken}, `live-state` above is "published". A withdrawn finding falls out of
    ;; all of them by construction rather than by a fourth edit.
    :states [:published :taken :dismissed :withdrawn]
    :initial :published
    ;; ALL THREE STAY TERMINAL, and that is the point of the waiver
    ;; below rather than a shortcut around it. A taken finding IS closed
-   ;; history — the feed's `open?`, the archive's gate, the seasons
-   ;; bar's "which action finishes something" and the envelope's own
+   ;; history — the seasons bar's "which action finishes something" and the envelope's own
    ;; `terminal: true` all read this set, and every one of them still
    ;; says the true thing. What `undo` claims is not that the story
    ;; goes on; it is that the last sentence was never spoken.
@@ -987,11 +946,10 @@
    :allow-undo #{:undo}
    ;; THE OFFER IS AN ADDRESS. The card sends whoever taps it to the
    ;; row's own screen, where the row's own doors are and where the
-   ;; reader's own grant gates them — the tickler's `subject` link
-   ;; exactly, and for the same reason it gave: a link is the honest
-   ;; way back to work that lives somewhere else. `/#` + the row's
-   ;; href is `feed/screen-of`'s spelling, written by hand because a
-   ;; declared link cannot ask the engine for a plural.
+   ;; reader's own grant gates them: a link is the honest way back to
+   ;; work that lives somewhere else. `/#` + the row's href is written
+   ;; by hand because a declared link cannot ask the engine for a
+   ;; plural.
    :links [{:rel "offer" :href "/#{data.offer_href}"
             :summary "The row this finding is about, on its own screen"}]
    :decision
@@ -1000,9 +958,8 @@
     ;; vocabulary and it is the true word here: an insight is not a
     ;; request waiting on somebody, it is a finding put where the
     ;; household will see it. (The epic also listed `seen` and
-    ;; `pinned`; both are dropped deliberately — per-card seen state
-    ;; is exactly what the feed's third law forbids, and the spec's
-    ;; own punt says so: 'No seen/unseen state, ever'. If pinning is
+    ;; `pinned`; both are dropped deliberately — the spec's own punt
+    ;; says so: 'No seen/unseen state, ever'. If pinning is
     ;; ever wanted it is a third VERDICT, not a read receipt.)
     :offered :published
     ;; the finding itself, in a sentence the household reads. Under
@@ -1060,8 +1017,7 @@
     ;; are ranked, not capped.
     :verdicts
     ;; BOTH ARE NOTE-FREE AND BOTH ARE ONE TAP. A :note would make the
-    ;; verdict a `recall` demand and `feed/split-verbs` would move it
-    ;; off the card into `heavier` (waymark-iqa.4's second finding).
+    ;; verdict a `recall` demand (waymark-iqa.4's second finding).
     [{:name :take :to :taken
       ;; THE WAY BACK, NAMED (docs/spec-undo.md). `:undo` is the
       ;; framework's own word for reversibility and it is checked
@@ -1094,8 +1050,8 @@
       ;; composer learns from what the house turned down. Why somebody
       ;; said yes is the work itself, on its own rows.
       :undo :undo
-      :display {:label "Not useful" :order 2 :reasons true
-                :description "The finding leaves the feed and stays on record. Nothing is deleted and nothing is hidden; the house has simply answered it — and for fifteen minutes the hand that answered may take the answer back."}
+      :display {:label "Not useful" :order 2
+                :description "The finding is answered and stays on record. Nothing is deleted and nothing is hidden; the house has simply answered it — and for fifteen minutes the hand that answered may take the answer back."}
       :safety {:idempotent true :reversible true :confirm false}}]}
    :schema
    [:map
@@ -1115,7 +1071,7 @@
     [:offer_kind {:optional true :filter #{:eq}
                   :x-display
                   {:label "The next step's kind"
-                   :help "Which sort of row the next step happens on — task, tickler, chore_run. It has to be something this house actually declares."}}
+                   :help "Which sort of row the next step happens on — task, value, chore_run. It has to be something this house actually declares."}}
      [:maybe [:string {:max 64}]]]
     [:offer_id {:optional true
                 :x-display
@@ -1125,7 +1081,7 @@
     [:offer_action {:optional true
                     :x-display
                     {:label "The next step"
-                     :help "The action's own name on that kind — the one thing you are proposing somebody do. It has to be light enough to tap: a decision, never a form. A door that asks for nothing (complete, take_it_back, still_stands) is offerable; one that takes input is not, so prioritize — which wants a rank — belongs in an outcome piece instead."}}
+                     :help "The action's own name on that kind — the one thing you are proposing somebody do. It has to be light enough to tap: a decision, never a form. A door that asks for nothing (complete, still_stands) is offerable; one that takes input is not, so prioritize — which wants a rank — is not an offer."}}
      [:maybe [:string {:max 64}]]]
     ;; HIDDEN BECAUSE IT IS DERIVED, not because it is secret
     ;; (waymark-42m): `derive-the-offer-address` writes it at birth
@@ -1152,12 +1108,10 @@
     ;; on the fly (`scripts/sitting-run.sh`'s WHAT MOVED THIS WEEK);
     ;; nothing is stored here but what was observed.
     ;;
-    ;; The numbers each word carries are DATA on the feed_recipe row —
-    ;; `feed/default-evidence-lr`, printed on every feed document
-    ;; beside `crown_rank` with a sentence quoting them back, tunable
-    ;; through `recipe_proposal`. Law 5's posture one surface over: a
-    ;; weight a household cannot read is the hidden model, whatever it
-    ;; is weighing.
+    ;; The numbers each word carries are DATA —
+    ;; `belief/default-evidence-lr`, tunable through the deployment's
+    ;; `:evidence-lr` engine opt. Law 5's posture: a weight a household
+    ;; cannot read is the hidden model, whatever it is weighing.
     ;;
     ;; ONE WALL STANDS OVER THE FOUR AND IT IS NOT ABOUT TYPING:
     ;; `the-typing-agrees-with-itself` refuses the two sentences that
@@ -1222,9 +1176,9 @@
                                          :restores :published})
               the-question-is-open-again]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This puts the finding back in the feed, unanswered, and the record keeps both your answer and the taking of it back — nothing is erased. There is no redo: if you meant the answer after all, give it again, at the door you just came back from."}
+              :one-way "This puts the finding back, unanswered, and the record keeps both your answer and the taking of it back — nothing is erased. There is no redo: if you meant the answer after all, give it again, at the door you just came back from."}
      :display {:label "Undo that" :order 3
-               :description "Wrong chip? For fifteen minutes the hand that answered may take the answer back. The finding returns to the feed unanswered, and both taps stay on the record."}}
+               :description "Wrong chip? For fifteen minutes the hand that answered may take the answer back. The finding returns unanswered, and both taps stay on the record."}}
     :withdraw
     {:from #{:published} :to :withdrawn
      ;; NO SECOND WALL. There is no question to re-face: a withdrawal
@@ -1232,18 +1186,17 @@
      ;; so `one-live-finding-per-offer` has nothing to say about it.
      :guards [(g/only-your-own-last-tap {:undoes #{:create}})]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The finding leaves the feed and stays on record as withdrawn — which is NOT the household saying no to it. Nobody answered this one; its author took it back. If you find the same thing again, publish it again."}
+              :one-way "The finding is taken back and stays on record as withdrawn — which is NOT the household saying no to it. Nobody answered this one; its author took it back. If you find the same thing again, publish it again."}
      :display {:label "Take it back" :style :danger :order 4
                :description "You published this and nobody has answered it yet. Withdraw it — it stops being a card, stays on the record as your own withdrawal, and never reads as a household verdict"}}}
    :on-create derive-the-offer-address
-   ;; SHAPE FIRST, WORLD NEXT — outcome's ordering and its reason. A
+   ;; SHAPE FIRST, WORLD NEXT. A
    ;; malformed finding hears what is wrong with it before it hears
    ;; anything about the house it is landing in, and only the third
    ;; wall reads another row at all. A well-formed finding on a next
    ;; step nobody is already asking about is published however many
-   ;; came before it today: the feed's rank, not a wall here, decides
-   ;; which a person reads (waymark-1uv.8), and the third wall counts
-   ;; questions rather than rows (waymark-1ag).
+   ;; came before it today, and the third wall counts questions rather
+   ;; than rows (waymark-1ag).
    :create-guards [cites-what-it-claims offers-something-light
                    ;; the typing wall is SHAPE, so it stands with the
                    ;; other two and above the one that reads the world

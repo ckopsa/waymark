@@ -86,8 +86,7 @@
   place. AN AGENT MAY WRITE WHAT IT OBSERVES; ONLY A PERSON AFFIRMS
   IT. Those are two facts about one row and the machine says both:
   a value an agent writes is born `observed` and SAYS SO wherever it
-  is cited — its own summary line, and the sentence on every outcome
-  card that spends a week on it. A value a person writes is born
+  is cited — its own summary line, wherever it is read. A value a person writes is born
   `declared`, because a person declaring one has already decided.
   What moves the row from the first to the second is a person's own
   hand: the `still_stands` tap, a `revise`, or a `restore`.
@@ -104,9 +103,7 @@
   summary and every transition record; `:filterable :state` already
   exists, so `what has been observed and not yet affirmed` is a query
   this house already owns; the affirmation becomes a TRANSITION,
-  which is how the row shows both hands; and `outcome/names-a-value`
-  and `feed/value-still-held?` already read state, so admitting an
-  observed value widens a check rather than adding a field read.
+  which is how the row shows both hands.
 
   ITS COST, PAID HERE IN THE OPEN: `:to` is a static keyword, so one
   door cannot land in two states. A single `revise` open to both
@@ -161,8 +158,9 @@
   transitions would.
 
   A one-tap ratification of an EXACT proposed wording wants waymark-0k4's
-  staged proposal generalized past `feed_recipe`; that is the other
-  half of waymark-xw3 and it is filed rather than built.
+  staged proposal generalized (that kind, `recipe_proposal`, was
+  retired with the feed, 2026-09); that is the other half of
+  waymark-xw3 and it is filed rather than built.
 
   LOVED ACTIVITIES ARE FREE WORDS, AND THAT SET IS THE VOCABULARY.
   Two alternatives were weighed and both lose. Linking to a
@@ -184,13 +182,13 @@
   construction — `declared` is where it lives, not where it waits, and
   `observed` is a standing rather than a queue either — so
   a :primary value would card in do-now forever and a retired one
-  would be congratulated as a deed. `feed_recipe` is :secondary for
-  exactly this reason. (Hand-written kinds inherit no :nav: the
-  :decision sugar is what hands tickler and insight :system for free,
+  would be congratulated as a deed. (Hand-written kinds inherit no
+  :nav: the :decision sugar is what hands insight :system for free,
   and the sugar cannot spell this kind — a value is long-lived law,
   not a one-shot verdict.)
 
-  SCOPE IS feed_recipe'S, VERBATIM. `household` or `mine`, with the
+  SCOPE IS feed_recipe'S, VERBATIM (that kind was retired with the
+  feed, 2026-09; the shape stands here). `household` or `mine`, with the
   owner STAMPED BY THE ENGINE and never trusted from the body. The
   wall that matters is the stamp rather than concealment:
   `this-is-yours-to-declare` refuses a `mine` value to anyone but its
@@ -226,9 +224,7 @@
   `amended`, because an amendment is a REVISION of a standing law and
   not a different state of it — the row's own transitions are the
   record of who changed what, when, and from which law revision.
-  Retiring is how a house stops hearing about an outcome for good, and
-  it is the only honest way: the outcomes that serve a retired value
-  stop being staged. A retired value comes back `declared` rather than
+  Retiring is how a house stops holding a value for good. A retired value comes back `declared` rather than
   `observed`, because a person reaching for `restore` has held it
   again with his own hand."
   (:require [waymark10.dsl :refer [defguardfn defhandler defresource
@@ -360,7 +356,7 @@
 (defn- stamp-the-writer
   "Whose hand wrote this row down — ANY principal, agent or person,
   written by the ENGINE and never trusted from the body (`insight`'s
-  `authored_by` and `outcome`'s `composed_by`, one kind over).
+  `authored_by`, one kind over).
 
   It is deliberately NOT `owner`, which answers a different question:
   `owner` is whose value it is (the \"mine\" scoping), `written_by` is
@@ -372,7 +368,7 @@
 
 (defn- stamp-owner
   "Whose law this is, written by the ENGINE and never trusted from the
-  body (feed_recipe's `stamp-owner`, one kind over). A \"mine\" value
+  body. A \"mine\" value
   is the writer's own — a person cannot put words in somebody else's
   mouth by naming them in a form — and a \"household\" value is nobody's
   in particular, so it carries no owner at all.
@@ -467,8 +463,7 @@
 
 (def revise-input
   "What :revise takes: the whole authored surface, overwritten
-  wholesale. Public for the reason `feed_recipe/recipe-input` is — the
-  door a staged amendment would one day be validated against has to be
+  wholesale. Public because the door a staged amendment would one day be validated against has to be
   the door itself rather than a copy of it that could drift."
   [:map
    (entry :name {} [:string {:min 1 :max 80}])
@@ -477,8 +472,7 @@
           [:maybe [:vector {:max 12} [:string {:min 1 :max 40}]]])])
 
 ;; ── the law, written down as scenarios ──────────────────────────────
-;; All eight are CHECK-TIER, and the reason is the same one feed_recipe
-;; gave: every wall here reads only what a declaration-time world can
+;; All eight are CHECK-TIER: every wall here reads only what a declaration-time world can
 ;; honestly supply — the principal, the presented grant (there is
 ;; none), the input, and the row the scenario hands them.
 ;; `make check-queue` judges them with no database at all, in the same
@@ -778,7 +772,7 @@
              :guards [(affirmation-wall :retire) this-is-yours-to-declare]
              :safety {:idempotent true :confirm false}
              :display {:label "Retire" :style :danger :order 8
-                       :description "This is not one of ours any more — the outcomes that serve it stop being offered, the row stays on record, and restore brings it back"}}
+                       :description "This is not one of ours any more — the row stays on record, and restore brings it back"}}
     ;; `dismiss` WENT WITH `observed` (waymark-bug). It left from
     ;; `observed` and landed in `retired`, and it existed for the
     ;; household's reason rather than the mechanical one: retiring a
