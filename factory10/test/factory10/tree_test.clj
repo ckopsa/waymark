@@ -325,14 +325,16 @@
 
 ;; ── acceptance 1 · the module assembles alone ───────────────────────
 
-(deftest the-module-is-three-kinds-in-one-domain
+(deftest the-module-is-four-kinds-in-one-domain
   (let [rs (main/resources)]
-    (is (= [:repo_policy :change :ci_run] (mapv :kind rs))
-        "the policy first, because the bench's doors read it; a change
-         before a ci_run, because a ci_run points at one")
+    (is (= [:repo_policy :ticket :change :ci_run] (mapv :kind rs))
+        "the policy first, because the bench's doors read it; the
+         ticket before a change, because a change is born from one; a
+         change before a ci_run, because a ci_run points at one")
     (is (every? #(= :factory (:domain %)) rs))
     (testing "and it assembles into a registry with nothing else beside it"
       (let [reg (engine/full-registry rs)]
+        (is (contains? (:kinds reg) :ticket))
         (is (contains? (:kinds reg) :change))
         (is (contains? (:kinds reg) :ci_run))
         (is (contains? (:kinds reg) :repo_policy))))))

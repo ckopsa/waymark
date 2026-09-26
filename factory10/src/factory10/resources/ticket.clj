@@ -459,9 +459,9 @@
      :input close-input
      :guards [children-are-finished]
      :handler close-the-ticket
-     ;; :edit-shape — a first sentence onto a blank row is not an edit
-     ;; of one (ci_run's classify doors).
-     :waives #{:edit-shape}
+     ;; the sentence is composed, so it is drafted (change's `stall`):
+     ;; a mis-click must not discard what was typed
+     :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Complete" :style :primary :order 6
                :description "The work is done — say what was done"}}
@@ -471,7 +471,7 @@
      :input close-input
      :guards [children-are-finished]
      :handler close-the-ticket
-     :waives #{:edit-shape}
+     :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Drop" :style :danger :order 7
                :description "Let this go — say why"}}
