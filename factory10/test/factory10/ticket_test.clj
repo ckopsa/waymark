@@ -74,17 +74,39 @@
 
 ;; ── the queue is the envelope's doing ───────────────────────────────
 
+(deftest a-draft-is-groomed-by-a-person-and-never-by-a-seat
+  (testing "a person at a draft meets groom, and the doors that shape it"
+    (is (= #{:restate :groom :block :complete :drop}
+           (offers (at :draft) (ctx the-person)))
+        "prioritize and defer are absent: a draft is not in the queue,
+         so it has no rank there and nothing to park"))
+  (testing "a seat at a draft meets everything but groom"
+    (is (= #{:restate :block :complete :drop}
+           (offers (at :draft) (ctx the-seat)))
+        "a seat that could groom could fill its own queue")
+    (let [shut (refusal (at :draft) (ctx the-seat) :groom)]
+      (is (= :unavailable (:status shut)))
+      (is (= :a-person-or-their-delegate-grooms (:name (:denier shut))))))
+  (testing "a delegate acting for a person is the person's hand"
+    (is (= :available
+           (:status (refusal (at :draft)
+                             (ctx (assoc the-seat :acts-for "colton"))
+                             :groom)))))
+  (testing "and the engine's own hand grooms too"
+    (is (= :available (:status (refusal (at :draft) (ctx the-engine) :groom))))))
+
 (deftest an-open-ticket-is-the-queue-and-offers-every-working-door
   (testing "a seat at an open ticket meets the doors that end or park it"
-    (is (= #{:restate :prioritize :block :defer :complete :drop}
+    (is (= #{:prioritize :block :defer :complete :drop}
            (offers (at :open) (ctx the-seat)))
-        "reopen is absent — the ticket is not ended — and unblock and
-         resume are absent — nothing holds it"))
-  (testing "and a person meets the same doors: the walk is unwalled"
-    (is (= #{:restate :prioritize :block :defer :complete :drop}
+        "restate is absent — a groomed statement is what the seat builds
+         — and reopen, unblock and resume are absent — nothing ended it
+         and nothing holds it"))
+  (testing "a person meets the same doors and the way back to draft"
+    (is (= #{:prioritize :block :defer :complete :drop :ungroom}
            (offers (at :open) (ctx the-person)))
         "what a seat may reach at all is the grant's question, not this
-         kind's")))
+         kind's; ungroom is the one door here that is a person's")))
 
 (deftest a-blocked-ticket-is-out-of-the-queue-and-waits
   (let [row (at :blocked {:blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]})]
@@ -94,9 +116,8 @@
     (let [shut (refusal row (ctx the-person) :complete)]
       (is (= :unavailable (:status shut)))
       (is (nil? (:denier shut))
-          "the MACHINE refuses it, with no guard behind the refusal: an
-           ending leaves from open alone, so reopen is an honest
-           reverse for both endings"))))
+          "the MACHINE refuses it, with no guard behind the refusal: a
+           blocked ticket is not finished, so it is unblocked first"))))
 
 (deftest a-deferred-ticket-waits-on-its-day
   (is (= #{:resume} (offers (at :deferred {:defer_until "2026-11-19"})
@@ -107,8 +128,10 @@
 (deftest the-two-endings-offer-reopen-to-a-person-and-nothing-to-a-seat
   (doseq [state [:done :dropped]]
     (let [row (at state {:close_reason "Merged: github:ckopsa/waymark#41."})]
-      (testing (str (name state) " is a person's to reverse")
+      (testing (str (name state) " is a person's to reverse, into draft")
         (is (= #{:reopen} (offers row (ctx the-person))))
+        (is (= :draft (:to (get (:actions ticket) :reopen)))
+            "an ending that was wrong is an ask to read again")
         (is (= #{:reopen} (offers row (ctx the-engine)))
             "the engine's own hand passes too — the merge completes a
              ticket with it, and a person's undo of that is the same
@@ -196,20 +219,22 @@
 ;; ── the shape the walker and the import both read ───────────────────
 
 (deftest the-declaration-says-what-the-walker-needs
-  (is (= [:open :blocked :deferred :done :dropped] (:states ticket)))
-  (is (= :open (:initial ticket)))
+  (is (= [:draft :open :blocked :deferred :done :dropped] (:states ticket)))
+  (is (= :draft (:initial ticket))
+      "born a draft: nothing walks it until a person grooms it")
   (is (= #{} (:terminal ticket)) "no tomb: reopen is a person's door")
   (is (= #{:done} (get-in ticket [:over :accomplished])))
   (is (= #{:dropped} (get-in ticket [:over :let-go])))
   (is (= {:state "open"} (:default-filters ticket))
-      "READY is the collection under its default filter — a blocked or
-       deferred ticket is out of it by construction, so the code seat
-       walks this kind and never reads a ticket it cannot work")
+      "READY is the collection under its default filter — a draft,
+       blocked or deferred ticket is out of it by construction, so the
+       code seat walks this kind and never reads a ticket it cannot
+       work")
   (is (= "priority" (get-in ticket [:sortable :default]))
       "lowest number first, which is the queue's own order")
   (let [form (into #{} (map first) (rest (:create-schema ticket)))]
     (is (not (contains? form :blocked_by))
-        "a ticket is born ready; the block door is how it stops being")
+        "a ticket is born a draft; block is a door, not a birth")
     (is (not (contains? form :close_reason)))
     (is (not (contains? form :defer_until)))
     (is (contains? form :bead_id)
