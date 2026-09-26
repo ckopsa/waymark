@@ -110,32 +110,20 @@
     ;; phase 9a: the identity-and-access kinds enroll on every engine.
     ;; phase 9b: so do the subscription (webhooks) and job kinds;
     ;; batch B: the negotiation machine's approval_request;
-    ;; waymark-4yn: the feed module's own feed_recipe — the engine opt
-    ;; authored at runtime, enrolled wherever the feed is served;
-    ;; waymark-0k4: its sibling recipe_proposal, the staged change an
-    ;; agent may prepare and only a person may apply;
-    ;; waymark-8um.1: and its view door's pair — feed_view_consent, the
-    ;; per-member switch, and feed_view, the record it lets exist;
-    ;; waymark-jfv.16: and verdict_reason, the four quick words a
-    ;; settled card offers after a decline lands;
-    ;; waymark-1uv.6: and ranking_note, an agent's score and sentence
-    ;; about a ranked row, the crown's sixth input;
-    ;; waymark-b4s: and remark, the thread's turn — words on any
-    ;; subject with no verdict attached
+    ;; (the :feed module's seven kinds enrolled here too until the
+    ;; feed was retired, 2026-09)
     ;; waymark-fp62.11: and the judge declared as data — judgment, one
     ;; row per judge, and verdict, the row about a row that answers it
     ;; spec-seat.md (waymark-fp62.1): and the four the seats and
     ;; schedules modules enrol everywhere — the office an agent sits
     ;; in, the price list its model is on, the record of one wake,
     ;; and the means by which a wake is scheduled
-    (is (= ["approval_request" "attachment" "definition" "feed_recipe"
-            "feed_view" "feed_view_consent"
+    (is (= ["approval_request" "attachment" "definition"
             "grant" "held_call" "job" "judgment" "mcp_server" "meal"
             "member" "model"
-            "plan" "ranking_note"
-            "recipe_proposal" "remark" "role" "schedule" "seat"
+            "plan" "role" "schedule" "seat"
             "sitting" "subscription" "task"
-            "verdict" "verdict_reason"]
+            "verdict"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))

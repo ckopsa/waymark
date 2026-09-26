@@ -412,20 +412,9 @@
           (is (= 404 (:status (req :get (str "/api/approval_requests/" foreign)
                                   nil own-scoped))))))
       (testing "well-known lists the own surface beside the granted —
-                the negotiation kinds, the jobs the principal asked for,
-                and (waymark-0k4) the recipe proposals it staged itself"
+                the negotiation kinds and the jobs the principal asked for"
         (let [b (json (req :get "/api/.well-known/waymark" nil own-scoped))]
           (is (= #{"approval_request" "grant" "job" "plan"
-                   "recipe_proposal" "feed_view" "feed_view_consent"
-                   ;; waymark-jfv.16: and the reasons it gave for its
-                   ;; own declines — own-surface by :said_by
-                   "verdict_reason"
-                   ;; waymark-1uv.6: and the judgments it wrote —
-                   ;; own-surface by :judged_by
-                   "ranking_note"
-                   ;; waymark-b4s: and the turns it said —
-                   ;; own-surface by :said_by
-                   "remark"
                    ;; spec-seat.md (waymark-fp62.1): and the sittings it
                    ;; opened — own-surface by :member
                    "sitting"

@@ -5,8 +5,7 @@
 
   The house already held the EVIDENCE layer and did not hold the
   BELIEF layer. A finding cites the rows it read; a sitting indexes
-  what a person said and a reading reads it back; an outcome is an
-  experiment the household taps or declines. What nothing held was a
+  what a person said and a reading reads it back. What nothing held was a
   graded, decaying, auditable claim about this household — a sentence
   with a number on it that moved because of atoms you can name.
 
@@ -14,8 +13,7 @@
   a hypothesis is a PROPOSAL FOR AN EXPERIMENT and never a verdict.
   Nothing routes on it, nothing is auto-composed or auto-hidden
   because a number crossed a line, and a person's declared word
-  outranks it always. `ranking_note`'s compression, one kind over: an
-  agent's number is a nudge, never a verdict.
+  outranks it always: an agent's number is a nudge, never a verdict.
 
   ── THE MACHINE IS `value`'S, WITH ARITHMETIC UNDER IT ───────────────
 
@@ -44,8 +42,8 @@
   NOTHING ABOUT THE POSTERIOR CHANGES WITH THE STATE. An affirmed
   hypothesis still folds its atoms; the affirmation says *this house
   agrees the claim is worth holding*, not *stop reading evidence*.
-  What the state buys is the crown's tier: a person's yes outranks a
-  number, always.
+  What the state buys is a person's yes, which outranks a number,
+  always.
 
   ── AND EVERY ANSWER IS TAKEABLE BACK FOR FIFTEEN MINUTES ────────────
 
@@ -158,17 +156,13 @@
   that mass cancels) are what tell them apart, and they are the two
   numbers the reading's EXPERIMENTS section picks candidates by: a
   claim the record argues with itself about is a claim one cheap trial
-  could settle. An outcome names the belief it is testing in its own
-  `tests` field — never in `evidence`, because a hypothesis a bundle
-  is TESTING is not a row it READ.
+  could settle.
 
   AND THE ASYMMETRY A BELIEF WITH NO ATOMS LIVES UNDER (the dl1
   ruling, docs/spec-hypotheses.md § 'Built — slice 3'): it may
   propose an experiment, because a claim with no evidence is the
-  purest question there is; it may never appear in a GAP and it may
-  never lift a crown card, because a posterior nobody has fed is a
-  prior somebody typed, and the crown reading it as evidence would be
-  the house arguing with its own guess.
+  purest question there is; it may never appear in a GAP, because a
+  posterior nobody has fed is a prior somebody typed.
 
   The arithmetic is `waymark10.belief` — three rules, forty lines, in
   Clojure rather than in a `:derived {:expr …}` tree because
@@ -256,7 +250,6 @@
                                    defscenario unless-granted]]
             [waymark10.guards :as g]
             [waymark10.resource :as resource]
-            [waymark10.server.feed :as feed]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -412,8 +405,7 @@
   #{"observed" "affirmed" :observed :affirmed})
 
 (def ^:private standing-page
-  "How deep `not-a-second-belief` reads. `outcome/standing-page`'s
-  number and its reasoning: a bounded read that missed the far tail
+  "How deep `not-a-second-belief` reads: a bounded read that missed the far tail
   lets a duplicate THROUGH rather than refusing a belief over a row it
   could not see, which is the right way for a wall reading a window to
   be wrong."
@@ -568,11 +560,11 @@
 
 (defn- fold-now
   "The belief's own arithmetic, run over whatever the house already
-  holds. Weighed by the DEPLOYMENT's table (`feed/default-evidence-lr`)
-  rather than the household's, and the difference is recorded rather
+  holds. Weighed by the DEFAULT table (`belief/default-evidence-lr`)
+  rather than the deployment's, and the difference is recorded rather
   than hidden: a create ctx holds the write's transaction and no
-  engine, so the recipe row is not reachable from here. The nightly
-  pass reweighs by the household's own numbers, which is where an
+  engine, so the engine opt is not reachable from here. The nightly
+  pass reweighs by the deployment's own numbers, which is where an
   edited table takes effect — within a night, on every row at once,
   which is how a table of numbers is supposed to move a house."
   [row ctx]
@@ -583,7 +575,7 @@
         now (or (:now ctx) (java.time.Instant/now))]
     (update row :data merge
             (belief/cached
-             (belief/fold-one feed/default-evidence-lr row atoms
+             (belief/fold-one belief/default-evidence-lr row atoms
                               (.toEpochMilli ^java.time.Instant now))))))
 
 (defn- born
@@ -776,7 +768,7 @@
 ;; holds, and a scenario holds one literal `:input` over an empty
 ;; store — so every scenario reaching that door would be an allow, and
 ;; a green one would prove nothing. Its claims are proved from the
-;; wire, by `:feed/hypotheses` in the conformance pack.
+;; wire, by `:belief/hypotheses` in the conformance pack.
 
 (def ^:private a-noticed-belief
   {:claim "Jack wants to build things with his hands, not watch them being built"

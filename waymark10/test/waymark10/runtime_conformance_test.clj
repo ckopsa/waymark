@@ -96,14 +96,6 @@
 (def ^:private tables
   ["rt_errands" "jobs" "subscriptions" "attachments" "definitions"
    "members" "roles" "grants" "approval_requests"
-   ;; the feed module's view door (waymark-8um.1): a leftover consent
-   ;; row would have this fixture's engine recording before its
-   ;; obligation says so
-   "feed_views" "feed_view_consents"
-   ;; …and the reason door's own rows (waymark-jfv.16): a leftover
-   ;; reason would make `one-reason-per-verdict` answer about a
-   ;; previous run's bundle
-   "verdict_reasons"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"
    "waymark10_job_leases" "waymark10_drafts" "waymark10_observations"])
 
@@ -183,10 +175,9 @@
         "no kind here declares a :mirror, so the mirror module's
          when-declared discovery starts nothing — the `:when` gate
          from waymark-db9.4, paying nothing for an unused module")
-    (is (nil? (runtime/surface *eng* :tickler-sweeper))
-        "no tickler kind here, so the feed module's sweep over the
-         dropped pile starts nothing either (waymark-1uv.9) — the same
-         `:when` gate, the second surface to wear it")))
+    (is (nil? (runtime/surface *eng* :belief-sweeper))
+        "no hypothesis kind here, so the belief module's nightly fold
+         starts nothing either — the same `:when` gate")))
 
 ;; ── the driver, over the started engine ─────────────────────────────
 
@@ -216,42 +207,4 @@
       (is (pos? (suite/coverage report :jobs/worker-progress))
           "and the worker was given one to drive")
       (is (pos? (suite/coverage report :webhooks/delivery-receipt))
-          "and the deliverer was given an endpoint and an event")
-      ;; waymark-0k4: the feed module enrols recipe_proposal :always,
-      ;; so this obligation is owed by every engine that serves the
-      ;; feed — and it is the only place the whole apply path is
-      ;; walked from the wire (an agent stages, a member taps, the
-      ;; RECIPE's transition names the member). A silent skip here
-      ;; would be a green run over the bead's own sentence.
-      (is (contains? ran :feed/staged-proposals)
-          (str ":feed/staged-proposals did not run; skipped for "
-               (pr-str (get skipped :feed/staged-proposals))))
-      (is (pos? (suite/coverage report :feed/staged-proposals))
-          "a member's tap landed the staged change")
-      ;; waymark-8um.1: the same argument one law over. The feed module
-      ;; enrols feed_view and feed_view_consent :always, so every
-      ;; engine that serves the feed owes this obligation — and it is
-      ;; the only place the whole view door is walked from the wire (a
-      ;; member turns their own recording on, one card leaves one row,
-      ;; a second person cannot file one under them, and a preview of a
-      ;; recording member hands the previewer nothing to record with).
-      (is (contains? ran :feed/view-events)
-          (str ":feed/view-events did not run; skipped for "
-               (pr-str (get skipped :feed/view-events))))
-      (is (pos? (suite/coverage report :feed/view-events))
-          "a card that was shown left exactly one row")
-      ;; waymark-8um.2: law 6, and the cheapest of the three to skip by
-      ;; accident — it needs no kind at all, only the route, so a silent
-      ;; skip here would mean the door itself had gone missing.
-      (is (contains? ran :feed/deal-again)
-          (str ":feed/deal-again did not run; skipped for "
-               (pr-str (get skipped :feed/deal-again))))
-      ;; waymark-8um.3: law 5, and the one whose silence would be
-      ;; hardest to notice — a contest that never ran looks exactly like
-      ;; a contest that is inert, which is what it is SUPPOSED to look
-      ;; like for a member who never turned the record on.
-      (is (contains? ran :feed/formula)
-          (str ":feed/formula did not run; skipped for "
-               (pr-str (get skipped :feed/formula))))
-      (is (pos? (suite/coverage report :feed/formula))
-          "a card in a contested section was actually cooled and said so"))))
+          "and the deliverer was given an endpoint and an event"))))

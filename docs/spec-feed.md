@@ -1,5 +1,15 @@
 # Spec — the feed: history for fuel, one tap to the next action
 
+> **Retired (2026-09).** The owner went a different direction and the whole
+> feed was removed: the `/api/-/feed` and `/api/-/diagnosis` doors, the feed
+> module and its recipe, the view record (`feed_view`, `feed_view_consent`),
+> `feed_recipe`, `recipe_proposal`, `verdict_reason`, `ranking_note`, `remark`,
+> the tickler and its sweep, the `feed.preview_as` capability, the feed and
+> day screens of the generic UI, and `waymark10/scripts/feed-smoke.sh`. The
+> `insight` kind stands on its own; the belief layer's nightly fold moved to a
+> `:belief` module and its evidence table to `waymark10.belief`. This document
+> is kept as the design record.
+
 **Thesis.** The household has 113 rows of work and a person who opens the app,
 reads a table, and closes it. The gap is not information — every fact is
 already a row — it is *motivation* and *friction*. A feed closes both: history

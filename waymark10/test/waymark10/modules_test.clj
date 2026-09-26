@@ -48,33 +48,13 @@
   (into #{} (map :kind) (modules/enrolled resources modules)))
 
 (deftest the-table-enrols-exactly-what-the-literal-did
-  ;; …plus the feed module's own pair. :feed_recipe (waymark-4yn) is
-  ;; the feed's engine opt authored at runtime; :recipe_proposal
-  ;; (waymark-0k4) is the exact change an agent may stage against it
-  ;; and only a person may apply. Both enroll :always, because both
-  ;; compose the FEED module's vocabulary rather than an
-  ;; application's, so there is nothing left for an app to opt into.
-  ;; …and its view door's pair (waymark-8um.1): :feed_view_consent is
-  ;; the per-member switch, :feed_view the record it lets exist. They
-  ;; enroll together or not at all — a record whose wall was in another
-  ;; jar would be a door with no switch on it.
-  ;; …and :verdict_reason (waymark-jfv.16): the four quick words a
-  ;; SETTLED card offers after a decline lands. :always for the view
-  ;; door's own reason — the chips are drawn by the feed's generic
-  ;; screen off a door the feed DOCUMENT names, so a house that serves
-  ;; the feed serves the way to say why.
-  ;; …and :ranking_note (waymark-1uv.6): an agent's score and sentence
-  ;; about a ranked row, the crown's sixth input. :always for the
-  ;; reason kind's reason — it names no application vocabulary and
-  ;; the rank that reads it is the feed module's own.
-  ;; …and :remark (waymark-b4s): the thread's turn — words on any
-  ;; subject with no verdict attached. :always for the reason kind's
-  ;; reason again — {subject_kind, subject_id}, no application
-  ;; vocabulary, and the conversation is about the cards this module
-  ;; minted.
+  ;; (The :feed module's seven — :feed_recipe, :recipe_proposal,
+  ;; :feed_view, :feed_view_consent, :verdict_reason, :ranking_note and
+  ;; :remark — enrolled here :always until the feed was retired,
+  ;; 2026-09.)
   ;; …and the seats module's three (spec-seat.md, waymark-fp62): the
-  ;; office, the price list and the record of one wake. :always for the
-  ;; feed module's reason once more — a seat's scope names whatever
+  ;; office, the price list and the record of one wake. :always — a
+  ;; seat's scope names whatever
   ;; kinds the house serves, a model is an identifier and four prices,
   ;; a sitting is four token counts, and none of it is any
   ;; application's vocabulary. What they are is the engine's own answer
@@ -87,9 +67,8 @@
   ;; kind TOKEN, which is what lets one pair serve every judge in the
   ;; house, the engine's own rows included.
   (is (= #{:definition :member :role :grant :approval_request
-           :attachment :subscription :job :feed_recipe :recipe_proposal
-           :feed_view :feed_view_consent :verdict_reason :ranking_note
-           :remark :judgment :verdict :seat :model :sitting
+           :attachment :subscription :job
+           :judgment :verdict :seat :model :sitting
            ;; …and the schedule (spec-seat.md §12), for the same
            ;; reason a seat is always here: a cron, a model and a
            ;; provider are nobody's application vocabulary, and the
@@ -223,10 +202,6 @@
                ;; 9728's root document and the path-inserted spelling
                "/.well-known/oauth-protected-resource"
                "/.well-known/oauth-protected-resource/api/-/mcp"
-               "/api/-/feed"
-               ;; the composer's diagnosis (waymark-8um.4): the feed's
-               ;; second door, the feed's own three-segment shape
-               "/api/-/diagnosis"
                ;; the Gate proxy's two doors (waymark-q95): the
                ;; affordance document and the grant-checked forward
                "/api/-/gate" "/api/-/gate/:tool"
@@ -267,14 +242,8 @@
       (doseq [p ["/api/-/seasons" "/api/-/presence" "/api/openapi.json"
                  "/api/attachments/:id/bytes"
                  ;; three segments under /api is /api/{plural}/{id}'s
-                 ;; own shape: mounted later, the feed would be read
-                 ;; as row "feed" of a collection named "-"
-                 "/api/-/feed"
-                 ;; …and the diagnosis beside it (waymark-8um.4), for
-                 ;; the same reason: three segments, mounted early
-                 "/api/-/diagnosis"
-                 ;; the gate door shares the feed's shape and the
-                 ;; same fate if mounted late (waymark-q95)
+                 ;; own shape: mounted later, the gate would be read
+                 ;; as row "gate" of a collection named "-" (waymark-q95)
                  "/api/-/gate"
                  ;; four segments, and still static: /api/:plural/:id
                  ;; would not match it, but /api/definitions/{id} is a
@@ -314,14 +283,10 @@
     (testing "assembled, the module doors answer"
       (is (= 200 (get! full "/api/-/seasons")))
       (is (= 200 (get! full "/api/openapi.json")))
-      (is (= 200 (get! full "/api/-/feed")))
-      (is (= 200 (get! full "/api/-/diagnosis")))
       (is (= 200 (get! full "/"))))
     (testing "left out, they are addresses nobody mounted — 404, not 405"
       (is (= 404 (get! core "/api/-/seasons")))
       (is (= 404 (get! core "/api/openapi.json")))
-      (is (= 404 (get! core "/api/-/feed")))
-      (is (= 404 (get! core "/api/-/diagnosis")))
       (is (= 404 (get! core "/"))))
     ;; the MCP door answers POST; its GET is the deliberate 405 that
     ;; says this server pushes nothing (the streaming punt, on the
@@ -374,14 +339,13 @@
             :schedules-mirror :schedules-drift :wakes :judgments
             :curtain :presence :intents
             :discovery
-            ;; the feed module's two surfaces. :tickler-sweeper
-            ;; (waymark-1uv.9) sweeps the dropped pile, gated on a
-            ;; tickler kind being served; :belief-sweeper (waymark-bug)
-            ;; refolds every hypothesis's posterior nightly, gated on a
-            ;; hypothesis kind being served. Both are :elected — one
-            ;; holder per storage — and both start LAST because they are
-            ;; the module's own and nothing waits on them.
-            :tickler-sweeper :belief-sweeper]
+            ;; the belief module's one surface: :belief-sweeper
+            ;; (waymark-bug) refolds every hypothesis's posterior
+            ;; nightly, gated on a hypothesis kind being served. It is
+            ;; :elected — one holder per storage — and starts LAST
+            ;; because nothing waits on it. (The :tickler-sweeper
+            ;; stood beside it until the feed was retired, 2026-09.)
+            :belief-sweeper]
            (hook-order nil))))
   (testing "and no runtime key twice — a key names one surface"
     (let [ks (hook-order nil)]
@@ -503,7 +467,7 @@
   (testing "every module that owes obligations offers a pack"
     (is (= [:core :attachments :webhooks :jobs :worksheet :capabilities
             :dashboard :seasons :realtime :mirror :openapi :ui :mcp
-            :law-sweep :feed]
+            :law-sweep :belief]
            (mapv :module (modules/packs nil)))))
   (testing "a named selection keeps core and nothing it did not name"
     (is (= [:core :jobs] (mapv :module (modules/packs [:jobs])))))

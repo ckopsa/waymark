@@ -79,7 +79,7 @@
 
   The provider's token is the engine's, never a grant's:
   `write-capability` is the registry row that NAMES it
-  (`schedule.write`), on `feed.preview_as`'s pattern, and a
+  (`schedule.write`) — a power this engine enforces itself — and a
   deployment's boot seed ensures it the way workqueue10's
   `ensure-capabilities!` ensures the Gate tokens. Nothing grants it —
   naming it is what makes the power auditable.
@@ -302,8 +302,7 @@
 
 (def write-capability-token
   "The dotted token the registry names for a schedule adapter's
-  credential. Spelled here rather than at three literals, on
-  `capabilities/feed-preview-as-token`'s precedent."
+  credential. Spelled here rather than at three literals."
   "schedule.write")
 
 (def write-capability

@@ -68,7 +68,7 @@
 
 ;; a kind with a FILTERABLE field, so a scope entry may be
 ;; filter-scoped — the shape the merge bug was found on
-;; (feed.preview_as, filtered to one member, appearing twice)
+;; (schedule.write, filtered to one member, appearing twice)
 (r/defresource pool
   {:kind :access_pool
    :initial :open
@@ -293,21 +293,21 @@
                                [{:kind "task" :actions ["claim"]}]))))
   (testing "a filtered capability stays SINGLE — a second entry is the
             refusal that started this bead"
-    (is (= [{:kind "feed.preview_as" :actions [] :filter {:member "colton"}}]
-           (grants/merge-scope [{:kind "feed.preview_as" :actions []
+    (is (= [{:kind "schedule.write" :actions [] :filter {:member "colton"}}]
+           (grants/merge-scope [{:kind "schedule.write" :actions []
                                  :filter {:member "colton"}}]
-                               [{:kind "feed.preview_as" :actions []
+                               [{:kind "schedule.write" :actions []
                                  :filter {:member "colton"}}]))))
   (testing "silence about a narrowing INHERITS it; an explicit null clears it"
     (is (= {:member "colton"}
            (:filter (first (grants/merge-scope
-                            [{:kind "feed.preview_as" :actions []
+                            [{:kind "schedule.write" :actions []
                               :filter {:member "colton"}}]
-                            [{:kind "feed.preview_as" :actions ["preview"]}])))))
+                            [{:kind "schedule.write" :actions ["preview"]}])))))
     (is (nil? (:filter (first (grants/merge-scope
-                               [{:kind "feed.preview_as" :actions []
+                               [{:kind "schedule.write" :actions []
                                  :filter {:member "colton"}}]
-                               [{:kind "feed.preview_as" :actions []
+                               [{:kind "schedule.write" :actions []
                                  :filter nil}]))))))
   (testing "hashing dominates: a tokenised field is never absorbed"
     (is (= ["email"]

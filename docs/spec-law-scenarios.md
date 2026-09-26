@@ -1,5 +1,10 @@
 # Spec — law scenarios: the policy proves itself
 
+> **Note (2026-09).** The feed was retired, and with it `feed_recipe`,
+> `recipe_proposal`, `feed_view`, `feed_view_consent`, `verdict_reason`,
+> `ranking_note`, `remark`, `tickler`, `outcome`, `outcome_piece` and
+> `composition_request`. Mentions of them below are the design record.
+
 **Thesis.** The conformance suite proves the *machinery* — that an advertised
 action is an enforced action, that a refusal is shaped like a refusal. Nothing
 proves the *policy*. "A kid asking to open the garage after 21:00 without a

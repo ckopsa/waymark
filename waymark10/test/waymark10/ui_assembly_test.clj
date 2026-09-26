@@ -78,118 +78,16 @@
         "every row waits on the one promise the field opened")
     (is (str/includes? page "function seatRefSelect"))))
 
-(deftest the-marks-panel-rides-the-card
-  ;; waymark-wxk: a verb whose declaration says `display.marks` opens a
-  ;; per-piece selection IN PLACE on the card before it collects its
-  ;; note. Three things are asserted and all three are the reason it is
-  ;; a generic affordance rather than one kind's feature: the dispatch
-  ;; reads the ADVERTISEMENT (never an action name), the part's own
-  ;; decline door is found by the `display.reasons` it already carries
-  ;; (never named), and the words come off the document's own `reasons`
-  ;; — so no application kind name reaches this page. The markup hooks
-  ;; are asserted too, because the panel is the one control on the card
-  ;; that a person taps five of.
+(deftest home-is-the-dashboard
+  ;; the feed document — and the day screen and card census that
+  ;; rendered it (135-feed-screen.js, 137-day.js) — was retired
+  ;; 2026-09. The empty hash lands on the dashboard, which keeps its own
+  ;; address too, and the page asks no feed door whether it is mounted.
   (let [page (sut/assemble)]
-    (is (str/includes? page "function marksPanel"))
-    (is (str/includes? page "(entry.display || {}).marks")
-        "the dispatch is the declaration's advertisement")
-    (is (str/includes? page "((entry.display || {}).reasons) && !entry.input")
-        "a part's decline door is found by what it advertises, not by its name")
-    (is (str/includes? page "\"data-marks\": \"\""))
-    (is (str/includes? page "\"data-mark\": \"\""))
-    (is (str/includes? page "\"data-mark-choice\": \"keep\""))
-    (is (str/includes? page "\"aria-pressed\": \"true\"")
-        "Keep is the state a piece is already in, and the row says which")
-    (is (str/includes? page "async function fireMark")
-        "a mark is the decline and then the word behind it")
-    (is (str/includes? page ".feed-marks {") "the panel's own CSS survives assembly")
-    (is (str/includes? page "html[data-ui=\"mobile\"] .feed-mark-chips button.chip.mark")
-        "…and a mark is fingertip-sized on a phone, like every other chip")
-    (doseq [word ["outcome_piece" "not_this" "iterate"]]
+    (is (str/includes? page "if (!href || href === \"dashboard\") { lawStamp(null); return renderHome(view, seq); }"))
+    (doseq [word ["renderFeedScreen" "renderLanding" "/api/-/feed"]]
       (is (not (str/includes? page word))
-          (str "the generic page never learns an application's kind or"
-               " door — found " word)))))
-
-(deftest the-quick-reasons-follow-the-subject
-  ;; waymark-hcr: a house says different things about what it was
-  ;; OFFERED and about what an agent TOLD it, so the settled card's
-  ;; four words come off the document's own `reasons.by_kind`, keyed by
-  ;; the kind of the row the card just settled — read, never named,
-  ;; exactly as `post_to` and `choices` already are. Eight chips on one
-  ;; card would be the form jfv.16's whole design refused.
-  (let [page (sut/assemble)]
-    (is (str/includes? page "function reasonWords"))
-    (is (str/includes? page "(door.by_kind || {})[String(kind || \"\")]")
-        "the words are looked up by the kind the card already carries")
-    (is (str/includes? page "(own && own.length) ? own : (door.choices || [])")
-        "…and a kind the door does not name gets the house's default four")))
-
-(deftest home-is-the-day
-  ;; waymark-i89n.8: the empty hash lands on the feed document when the
-  ;; feed's door answers and on the dashboard when it does not; the
-  ;; dashboard keeps #dashboard behind ⋯. The header above the census
-  ;; forks on the document's own day.mode, reads `day` in both its
-  ;; spellings (the bare date the document carried before this slice,
-  ;; the plan it carries now), and names no application kind, state or
-  ;; door: the one chip is whichever verb the declaration styled
-  ;; primary, and the shape toggle is the create form's own enum.
-  (let [page (sut/assemble)]
-    (is (str/includes? page "return renderLanding(view, seq);")
-        "the empty hash goes through the landing")
-    (is (str/includes? page "if (href === \"dashboard\")")
-        "…and the dashboard keeps an address")
-    (is (str/includes? page "href: \"#dashboard\""))
-    (is (str/includes? page "async function renderLanding"))
-    (is (str/includes? page "function dayHeader"))
-    (is (str/includes? page "typeof d === \"string\" ? d : ((d || {}).date || \"\")")
-        "the date is read in both spellings")
-    (is (str/includes? page "d && typeof d === \"object\" && d.mode ? d : null")
-        "a document without a day plan renders the feed as it was")
-    (is (str/includes? page "dayGoChip(d, primaryVerb(d.actions), row, ctx)")
-        "the one chip is the projected primary verb, never a named door")
-    ;; waymark-35eb: a passage launch is the link chip over the href the
-    ;; document projected (the subject's row at the place — the server
-    ;; computes it, the page knows no grammar), and the row reads the
-    ;; passage under the title in the person's own words
-    (is (str/includes? page "if ((launch.type === \"href\" || launch.type === \"passage\") && href) {")
-        "a passage opens like a link — the projected href, in a new tab, and the tap is the verdict")
-    (is (str/includes? page "\"data-launch\": launch.type,")
-        "…wearing its own launch type, not the link's")
-    (is (str/includes? page "if (launch.type === \"passage\" && launch.from)")
-        "the passage reads under the title")
-    (is (str/includes? page "launch.from + (launch.to ? \" – \" + launch.to : \"\")")
-        "…from and to exactly as typed")
-    (is (str/includes? page "+ (d.subject_title ? \" of \" + d.subject_title : \"\")")
-        "…then ' of ' and the subject's title the document projected")
-    (is (not (str/includes? page "passage-link"))
-        "the page never learns where the href comes from")
-    (is (str/includes? page "props.shape ? schemaProp(props.shape) : null")
-        "the shape toggle is the form's own enum")
-    (is (str/includes? page "const create = block.create || null;")
-        "an open block offers the create door the document put on it
-         (waymark-i89n.12) — and none when none was projected")
-    (is (str/includes? page "const tmpl = dp.template_create || null;")
-        "…and the plan panel the template's")
-    ;; waymark-i89n.14: the day stands alone on home, the census keeps
-    ;; #feed, every block is a row read without a tap
-    (is (str/includes? page "if (feedDayPlan(body)) return renderDayScreen(view, body);")
-        "home is the day alone when the document carries one")
-    (is (str/includes? page "if (href === \"feed\")")
-        "…and the feed keeps an address of its own")
-    (is (str/includes? page "href: \"#feed\""))
-    (is (str/includes? page "function dayList(dp, ctx"))
-    (is (not (str/includes? page "dayTimeline"))
-        "the tap-to-open timeline is gone")
-    (is (str/includes? page ".day-row {") "the list's CSS survives assembly")
-    (is (str/includes? page ".day-head {") "its CSS survives assembly")
-    (is (str/includes? page "html[data-ui=\"mobile\"] .day-head"))
-    (is (< (str/index-of page "async function renderFeedScreen")
-           (str/index-of page "async function renderLanding"))
-        "137 lands after 135 in the one flat script")
-    (doseq [word ["day_plan" "workday" "\"start\""]]
-      (is (not (str/includes? page word))
-          (str "the generic page never learns the module's words — found "
-               word)))))
+          (str "the retired feed screen left " word " behind")))))
 
 (deftest the-dashboard-renderer-rides-the-page
   ;; the dashboard screen (waymark-ggw): render() forks by kind to
@@ -454,23 +352,20 @@
     (is (str/includes? page "id=\"undostack\"") "and its slot in the shell")
     (is (str/includes? page "html[data-ui=\"mobile\"] #undostack")
         "a fixed panel clears the tab bar on a phone")
-    ;; the four call sites still funnel through the one function, so
-    ;; the card surface, the deck's swipe, the feed's chips and the
-    ;; day's Go (137-day.js, waymark-i89n.8) all get the stack without
-    ;; any of them knowing it exists
-    (is (= 5 (count (re-seq #"maybeUndoToast\(" page)))
-        "one definition and the four taps that reach it")
+    ;; the call sites still funnel through the one function, so the
+    ;; card surface and the deck's swipe get the stack without either
+    ;; knowing it exists (the feed's chips and the day's Go were two
+    ;; more until the feed screen was retired, 2026-09)
+    (is (= 3 (count (re-seq #"maybeUndoToast\(" page)))
+        "one definition and the two taps that reach it")
     ;; A REFUSAL IS NEWS AND AN EXPIRY IS NOT: an entry the person
     ;; never touched leaves when its door does; one they tapped and the
     ;; house refused keeps its place and shows the wall's own sentence
     (is (str/includes? page "item.problem = res.body || {};"))
     (is (str/includes? page "if (item.problem) node.append(problemBox(item.problem));"))
     ;; …and the page learns neither the kind this was built for nor the
-    ;; doors it declares nor the number the window is. ("insight" and
-    ;; "withdraw" are NOT on this list and could not be: the feed screen
-    ;; has read a finding's own numbers since waymark-1uv.8, and
-    ;; "withdraw" is an ordinary English word in one of its sentences.
-    ;; These three are the ones only an undo could have dragged in.)
+    ;; doors it declares nor the number the window is. (These three are
+    ;; the ones only an undo could have dragged in.)
     (doseq [word ["hypothes" "unretire" "fifteen"]]
       (is (not (str/includes? page word))
           (str "the generic page must not learn " word)))))
@@ -530,7 +425,7 @@
     (is (str/includes? page "if ((ev.metaKey || ev.ctrlKey) && !ev.altKey")
         "either modifier opens it; the hint names the reader's own")
     (is (str/includes? page "jumpIsOpen() ? jumpClose() : jumpOpen();\n  }\n}, true);")
-        "caught on the way DOWN: the deck and the feed hold keys of their own")
+        "caught on the way DOWN: the deck and the feed view hold keys of their own")
     (is (str/includes? page "function jumpFuzzy")
         "every letter in order, anywhere in the label")
     (is (str/includes? page "score += at === last + 1 ? 0 : (at === 0 ? 1 : 4 + Math.min(at - from, 9));")

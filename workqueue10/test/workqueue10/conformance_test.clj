@@ -50,36 +50,11 @@
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "members" "roles" "grants" "approval_requests"
-   ;; insights carried a DAILY CAP counted over rows until
-   ;; waymark-1uv.8 took it off (ranked, not capped); what is left of
-   ;; the reason is the second half — findings left behind by the last
-   ;; run are stale cards contending, by the rank, for the decide
-   ;; section's two insight slots. This is the house not carrying
-   ;; yesterday's findings.
-   "insights"
-   ;; and the feed module's own pair, for the same two reasons one
-   ;; turn on (waymark-4yn, waymark-0k4). A stored feed_recipe left
-   ;; ACTIVE is the order every feed obligation above would be read
-   ;; in; a recipe_proposal left OFFERED is a decide card holding a
-   ;; slot, and its own open cap (three a stager) counts rows the way
-   ;; the insight cap does. Both obligations end where they began, so
-   ;; this only matters after a run that did not finish — which is
-   ;; exactly the run whose residue is hardest to read.
-   "feed_recipes" "recipe_proposals"
-   ;; …and the view door's pair (waymark-8um.1), for a third reason of
-   ;; its own: a consent row left RECORDING would have every feed read
-   ;; in the run after it writing rows nobody asked for, and the whole
-   ;; claim of that obligation is that nothing is written until
-   ;; somebody says so.
-   "feed_views" "feed_view_consents"
-   ;; …and the crown's three (waymark-jfv.4), for the first two
-   ;; reasons at once. An outcome left OFFERED with its pieces still
-   ;; on offer is a card ABOVE do-now, and the section takes two — so
-   ;; a run's own bundle could be crowded off the page by a run that
-   ;; did not finish. The value beneath it is what keeps it there, and
-   ;; a value is never terminal, so it outlives everything.
-   "composition_requests" "outcome_pieces" "outcomes" "values" "people"
-   "hypotheses"
+   ;; findings, beliefs and the values and people they cite are
+   ;; never all terminal, so a run that did not finish would hand the
+   ;; next one rows its obligations did not stage. (The feed module's
+   ;; own tables stood here until the feed was retired, 2026-09.)
+   "insights" "values" "people" "hypotheses"
    ;; …and the doorstep (docs/spec-seat.md § 13.8): the inbox
    ;; queue and the tree over it. A leaf row left behind is a
    ;; message the next run's queue has already answered, and a
@@ -219,27 +194,10 @@
 
 (deftest conformance
   (let [report (suite/check! {:engine *eng* :handler *h* :kinds kinds})]
-    ;; …and the crown MEASURED itself (waymark-jfv.4). `:feed/outcomes`
-    ;; is the one obligation in this house whose whole claim is that a
-    ;; tap WROTE something — a piece materializing a real row under the
-    ;; member's own name — and an obligation that ran over zero taps is
-    ;; a green run that proved nothing. This engine holds all four
-    ;; kinds it needs, so a skip here is a regression rather than a
-    ;; posture.
-    (is (pos? (suite/coverage report :feed/outcomes))
-        "a member's tap made a piece of the week real")
-    ;; …and so did the reasons (waymark-jfv.16), for the same reason
-    ;; said one turn on: `:feed/verdict-reasons` is the obligation whose
-    ;; whole claim is that a SECOND tap wrote something — a decline that
-    ;; learned to speak — and a run over zero reasons would be a green
-    ;; run over the bead's own sentence. This engine holds every kind it
-    ;; needs, so a skip here is a regression rather than a posture.
-    (is (pos? (suite/coverage report :feed/verdict-reasons))
-        "a declined piece carried a reason, in one more optional tap")
-    ;; …and the diagnosis duty (waymark-8um.4), whose whole claim is
-    ;; that a WALL fired: a recomposition of a shown-and-declined bundle
-    ;; refused by name for want of a diagnosis. A run in which nothing
-    ;; was refused is a green run over law 4's own sentence. This
-    ;; engine holds every kind it needs, so a skip is a regression.
-    (is (pos? (suite/coverage report :feed/diagnosis))
-        "a recomposition with no diagnosis was refused by name")))
+    ;; the belief layer's obligation is owed by this engine — it holds
+    ;; both kinds it needs — so a silent skip here is a regression
+    ;; rather than a posture (it rode the feed's pack as
+    ;; :feed/hypotheses until the feed was retired, 2026-09)
+    (is (contains? (into #{} (map :name) (suite/ran report))
+                   :belief/hypotheses)
+        "the belief pack ran over this house's hypotheses and findings")))

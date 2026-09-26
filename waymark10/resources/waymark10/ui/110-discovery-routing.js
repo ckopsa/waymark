@@ -116,14 +116,9 @@ async function render() {
   const {href, viewName} = splitViewParam(raw);
   const view = $("#view");               // superseded render never blanks
   renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
-  /* home is the day (waymark-i89n.8): the feed document when its door
-     answers, the dashboard when it does not — 137-day.js decides. The
-     dashboard keeps an address of its own, behind ⋯. */
-  if (!href) { lawStamp(null); return renderLanding(view, seq); }
-  if (href === "dashboard") { lawStamp(null); return renderHome(view, seq); }
-  /* the census, behind its own address since the day stands alone on
-     home (waymark-i89n.14) */
-  if (href === "feed") { lawStamp(null); return renderFeedRoute(view, seq); }
+  /* home is the dashboard (the feed document that once stood here
+     was retired 2026-09); it keeps its own address too */
+  if (!href || href === "dashboard") { lawStamp(null); return renderHome(view, seq); }
   if (href === "access") {
     lawStamp(null);
     return renderAccess(view, seq);
@@ -137,10 +132,7 @@ async function render() {
   }
   const {ok, body} = await api(href);
   let hints = {};
-  /* "feed" names a DOCUMENT, not a resource kind (waymark-iqa.2), so
-     there is no published schema to read and the screen learns its
-     hints per CARD kind instead */
-  if (ok && body && body.kind && body.kind !== "feed")
+  if (ok && body && body.kind)
     hints = await kindSchema(String(body.kind).replace(/_collection$/, ""));
   if (seq !== renderSeq) return;
   clearLiveTimers();
@@ -158,11 +150,6 @@ async function render() {
     if (renderer) renderer(view, body, hints, decl);
     else renderCollection(view, body, hints);
   }
-  /* the feed fork (waymark-iqa.7), the same tradition one document
-     later: GET /api/-/feed answers a document that NAMES ITSELF, and
-     a card census has no collection to be a view of */
-  else if (body.kind === "feed" && Array.isArray(body.cards))
-    renderFeedScreen(view, body);
   /* the dashboard fork (waymark-ggw), the deploy-history tradition:
      kind picks the renderer — but only when the envelope carries the
      framework kind's render contract (the embedded :slots link), so

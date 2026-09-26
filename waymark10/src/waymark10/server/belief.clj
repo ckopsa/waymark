@@ -77,14 +77,12 @@
   ── THE CLOCK ────────────────────────────────────────────────────────
 
   A daemon on an interval, elected per storage, `:when`-gated on a
-  hypothesis kind being served — `feed/start-tickler-sweeper!`'s shape
-  exactly, and for its reasons. Nightly by default (24h) because
+  hypothesis kind being served — the orphan sweeper's shape
+  (`jobs/start-orphan-sweeper!`), and for its reasons. Nightly by default (24h) because
   decay is a per-day arithmetic and a house does not need to watch a
   half-life move. The pass is also a plain function a test and a REPL
   call by name; the loop is only the clock."
   (:require [waymark10.belief :as belief]
-            [waymark10.feed-recipe :as recipe]
-            [waymark10.server.feed :as feed]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
   (:import (java.util.concurrent CountDownLatch TimeUnit)))
@@ -93,9 +91,8 @@
 
 (def hypothesis-kind
   "The kind this pass folds, named here as a KEYWORD and nowhere else
-  — `feed`'s own posture with `:insight` and `:tickler`: the framework
-  reads a kind the application enrols without requiring the namespace
-  that declares it."
+  — the framework reads a kind the application enrols without
+  requiring the namespace that declares it."
   :hypothesis)
 
 (def atom-kind
@@ -121,9 +118,7 @@
 ;; ── the read ────────────────────────────────────────────────────────
 
 (defn- rows-of
-  "One kind's newest rows matching an equality map, capped —
-  `feed/rows-of`'s body, private there and small enough to say twice
-  rather than widen that namespace's surface for one caller. A kind in
+  "One kind's newest rows matching an equality map, capped. A kind in
   the registry whose table this engine never made answers nothing
   rather than failing the pass."
   [eng kind where ^long limit]
@@ -135,26 +130,26 @@
       (catch Exception _ []))))
 
 (defn serves-hypotheses?
-  "Does this engine hold a hypothesis kind at all? The feed module's
-  `:when` gate for this sweep, `feed/serves-ticklers?`'s sentence one
-  kind over: an engine that serves no hypothesis starts no sweeper and
-  pays nothing for it."
+  "Does this engine hold a hypothesis kind at all? The belief module's
+  `:when` gate for this sweep: an engine that serves no hypothesis
+  starts no sweeper and pays nothing for it."
   [eng]
   (some? (get (inv/resources eng) hypothesis-kind)))
 
 (defn evidence-table
-  "The numbers this pass weighs by: the HOUSEHOLD's own recipe row,
-  with the deployment's filled in for anything it did not state.
-  `for-reader` is asked with NO member, exactly as the diagnosis
-  document asks it and for the same reason — a belief about this house
-  is the house's, and a member's private feed order is not the place
-  its beliefs are priced from."
+  "The numbers this pass weighs by: the deployment's own table (the
+  engine opt `:evidence-lr`) with the defaults filled in for anything
+  it did not state. A table that will not do (`evidence-lr-problems`)
+  is not something a nightly fold gets to fail over: it weighs by the
+  defaults instead and says so on stderr."
   [eng]
-  (let [built-in (try (feed/check-recipe! (:feed eng feed/default-recipe))
-                      (catch Exception _ feed/default-recipe))
-        {:keys [recipe]} (try (recipe/for-reader eng built-in nil)
-                              (catch Exception _ {:recipe built-in}))]
-    (feed/evidence-lr-of recipe)))
+  (let [asked (:evidence-lr eng)]
+    (if-some [problems (when (some? asked) (belief/evidence-lr-problems asked))]
+      (do (binding [*out* *err*]
+            (println "waymark10 belief: the :evidence-lr opt will not do —"
+                     (pr-str problems) "— weighing by the defaults"))
+          belief/default-evidence-lr)
+      (belief/evidence-lr-of asked))))
 
 ;; ── the fold, over the store ────────────────────────────────────────
 
@@ -323,8 +318,8 @@
   "The pass's loop: every `:interval-ms` (default a day),
   `sweep-beliefs!` refolds the store. Returns the handle
   `stop-belief-sweeper!` takes. One process per storage runs it — the
-  feed module's lifecycle hook carries `:elected :belief-sweeper` —
-  and the first pass is one interval after the start, the tickler
+  belief module's lifecycle hook carries `:elected :belief-sweeper` —
+  and the first pass is one interval after the start, the orphan
   sweeper's own posture, so a boot writes nothing and no test finds a
   posterior it did not make.
 

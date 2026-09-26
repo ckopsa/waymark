@@ -1,5 +1,10 @@
 # Spec — `:process`: the workflow as a resource
 
+> **Note (2026-09).** The feed was retired, and with it `feed_recipe`,
+> `recipe_proposal`, `feed_view`, `feed_view_consent`, `verdict_reason`,
+> `ranking_note`, `remark`, `tickler`, `outcome`, `outcome_piece` and
+> `composition_request`. Mentions of them below are the design record.
+
 **Thesis.** The owner's question, 2026-09-14:
 
 > One thing I noticed we are missing is the idea of workflows. A process

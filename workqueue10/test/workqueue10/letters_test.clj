@@ -541,15 +541,12 @@
                                    :title "The dispatch"
                                    :body "Four things the preview found."}
                             :shape 1 :owner "quill-legacy-address"})))
-    (testing "the feed's decide section carries it, addressed the old way"
-      (let [doc (json (req :get "/api/-/feed" nil bound))
-            card (first (filter #(= "letter" (str (:kind %))) (:cards doc)))]
-        (is (some? card)
-            (str "the shelf swallowed it: " (pr-str (mapv :card_id (:cards doc)))))
-        (is (= "decide" (str (:section card))))
-        (is (= "The dispatch" (get-in card [:fields :title])))
-        (is (some? (get-in card [:actions :open :href]))
-            "and the card's Open is a door, not a decoration")))
+    (testing "the recipient reads it, addressed the old way, with its Open door"
+      (let [env (json (req :get (str "/api/letters/" lid) nil bound))]
+        (is (= "The dispatch" (get-in env [:data :title]))
+            (str "the shelf swallowed it: " (pr-str env)))
+        (is (some? (get-in env [:actions :open :href]))
+            "and its Open is a door, not a decoration")))
     (testing "and it really opens — the reading side and the guard agree"
       (is (= 200 (:status (open! lid bound)))))
     (testing "a stranger is still nobody's recipient"

@@ -1716,7 +1716,7 @@
          (assoc :capabilities
                 {:href "/api/capabilities"
                  :note (str "the external powers NO server of this "
-                            "house enforces (feed.preview_as …) — the "
+                            "house enforces (schedule.write …) — the "
                             "rest are the mcp_server rows' powers, and "
                             "doors.ask.powers lists both halves as one; "
                             "readable to every named principal, and a "

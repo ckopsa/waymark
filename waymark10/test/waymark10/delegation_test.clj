@@ -219,11 +219,10 @@
                :filter {:repo "bench"}}]
              (get-in row [:data :scope]))
           "the child holds ticket doors the mayor itself does not"))
-    (testing "and it waits in the person's feed"
-      (let [feed (json (req h :get "/api/-/feed" {:headers person}))]
-        (is (some #(= (str "decide/seat/" child) (str (:card_id %)))
-                  (:cards feed))
-            (pr-str (mapv :card_id (:cards feed))))))))
+    (testing "and it waits on the person: the unpark door is theirs to take"
+      (let [env (json (req h :get (str "/api/seats/" child) {:headers person}))]
+        (is (contains? (:actions env) :unpark)
+            (pr-str (keys (:actions env))))))))
 
 (deftest a-sitter-does-not-unpark-its-own-child-and-the-person-does
   (let [{:keys [h eng]} (world)

@@ -11,7 +11,6 @@
 15.213	waymark10.discovery-pass-test
 8.825	mealplan10.conformance-test
 6.928	waymark10.intents-test
-6.349	waymark10.feed-test
 5.494	waymark10.runtime-conformance-test
 5.194	workqueue10.conformance-test
 4.289	waymark10.events-test
@@ -26,7 +25,6 @@
 2.187	waymark10.batch-c-overlay-test
 2.181	waymark10.batch-c-sum-test
 2.094	waymark10.definitions-test
-1.999	waymark10.recipe-proposal-test
 1.934	waymark10.migrate-test
 1.917	workqueue10.person-test
 1.912	mealplan10.price-desk-test
@@ -35,7 +33,6 @@
 1.697	waymark10.phase9b-test
 1.573	choreplan10.conformance-test
 1.568	waymark10.phase8-test
-1.555	workqueue10.feed-shape-test
 1.547	waymark10.modules-test
 1.525	waymark10.batch-a-envelope-test
 1.463	mealplan10.anchor-flex-test
@@ -44,12 +41,9 @@
 1.428	waymark10.gate-proxy-test
 1.418	waymark10.batch-d-collab-test
 1.347	mealplan10.family-week-test
-1.320	workqueue10.outcome-test
-1.305	workqueue10.tickler-rank-test
 1.296	workqueue10.letters-test
 1.277	waymark10.router-test
 1.274	waymark10.conformance-http-test
-1.225	workqueue10.insight-rank-test
 1.192	waymark10.time-travel-test
 1.146	mealplan10.pantry-stock-test
 1.094	waymark10.maintainer-test
@@ -77,7 +71,6 @@
 0.582	waymark10.batch-f-attachments-test
 0.579	waymark10.dev-test
 0.571	workqueue10.dwelling-test
-0.562	workqueue10.rank-tuning-test
 0.549	waymark10.mirror-sync-trigger-test
 0.521	choreplan10.prep-task-mirror-test
 0.497	mealplan10.scraper-test
@@ -141,10 +134,8 @@
 0.026	waymark10.batch-g-declare-test
 0.024	waymark10.oidc-client-test
 0.023	waymark10.pick-test
-0.018	workqueue10.tickler-test
 0.015	waymark10.batch-h-defguard-test
 0.014	waymark10.decision-sugar-test
-0.012	waymark10.feed-view-test
 0.012	waymark10.dsl-test
 0.011	waymark10.batch-h-flow-test
 0.009	waymark10.deviations-test
