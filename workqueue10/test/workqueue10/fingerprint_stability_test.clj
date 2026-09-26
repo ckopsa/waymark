@@ -104,7 +104,10 @@
       ;; household's unanswered mail as rows, and the decision tree over
       ;; them. The census moves because the house gained a kind, which
       ;; is exactly the change this line is here to notice.
-      (is (= 41 (count before)) "the whole household is under the lens")
+      ;; …and 40 since the 2026-09 retirement of :permission_slip
+      ;; (waymark-442.6), which the owner did not use. The :decision
+      ;; key it first rode stays; only the kind goes.
+      (is (= 40 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)
