@@ -87,11 +87,14 @@ MAP="$WORK/map.tsv"          # bead_id <tab> row id
 
 # ── the engine, one call ─────────────────────────────────────────────
 
-call() { # method path [json] → body on stdout, status in $STATUS
+# The body comes back on stdout and the status lands in a file, because
+# a caller reads the body through $(…) and a variable set in that
+# subshell would never reach it.
+call() { # method path [json] → body on stdout, status via `status`
   local method="$1" path="$2" body="${3:-}"
   if [ -n "$DRY" ]; then
     echo "  $method $path ${body:0:120}" >&2
-    STATUS=201
+    echo 201 > "$WORK/status"
     echo '{"id":"dry-'"$RANDOM$RANDOM"'"}'
     return 0
   fi
@@ -99,9 +102,11 @@ call() { # method path [json] → body on stdout, status in $STATUS
   out=$(curl -sS --max-time 30 -X "$method" "$BASE$path" \
         -H "$AUTH" -H "Content-Type: application/json" -H "Accept: application/json" \
         ${body:+--data-binary "$body"} -w $'\n%{http_code}')
-  STATUS="${out##*$'\n'}"
+  echo "${out##*$'\n'}" > "$WORK/status"
   printf '%s' "${out%$'\n'*}"
 }
+
+status() { cat "$WORK/status"; }
 
 row_of() { awk -F'\t' -v b="$1" '$1==b {print $2; exit}' "$MAP"; }
 
@@ -115,7 +120,7 @@ if [ -z "$DRY" ]; then
   # imported ones. One page: a run cut short past the first page births
   # a duplicate, which is why the plan is read before it is run.
   page=$(call GET "/api/tickets?state=&bead_id_set=true")
-  if [ "$STATUS" = "200" ]; then
+  if [ "$(status)" = "200" ]; then
     jq -r '.items[]? // .rows[]? // empty
            | select(.data.bead_id != null)
            | [.data.bead_id, .id] | @tsv' <<<"$page" >> "$MAP" || true
@@ -178,8 +183,8 @@ while IFS= read -r line; do
     + (if $parent != "" then {parent: $parent} else {} end)
     + (if $found != "" then {found_in: $found} else {} end)' <<<"$line")
   out=$(call POST "/api/tickets" "$body")
-  if [ "$STATUS" != "201" ]; then
-    echo "  $bid: the create door answered $STATUS — $(jq -r '.detail // .title // .' <<<"$out" 2>/dev/null | head -c 200)" >&2
+  if [ "$(status)" != "201" ]; then
+    echo "  $bid: the create door answered $(status) — $(jq -r '.detail // .title // .' <<<"$out" 2>/dev/null | head -c 200)" >&2
     continue
   fi
   rid=$(jq -r '.id // empty' <<<"$out")
@@ -200,8 +205,8 @@ while IFS= read -r line; do
   [ -n "$blockers" ] || continue
   body=$(jq -c -n --arg ids "$blockers" '{blocked_by: ($ids | split("\n") | map(select(. != "")))}')
   call POST "/api/tickets/$rid/-/block" "$body" >/dev/null
-  if [ "$STATUS" = "200" ] || [ "$STATUS" = "201" ]; then blocked=$((blocked+1))
-  else echo "  $bid: the block door answered $STATUS" >&2; fi
+  if [ "$(status)" = "200" ] || [ "$(status)" = "201" ]; then blocked=$((blocked+1))
+  else echo "  $bid: the block door answered $(status)" >&2; fi
 done < <(jq -c 'select(.status != "closed" and (.blocks | length) > 0)' "$WORK/beads.jsonl")
 echo "pass 2 blockers: $blocked ticket(s) blocked" >&2
 
@@ -213,7 +218,7 @@ while IFS= read -r line; do
   rid=$(row_of "$bid"); [ -n "$rid" ] || continue
   reason=$(jq -r '.close_reason | if . == "" then "Closed in beads." else .[0:480] end' <<<"$line")
   out=$(call POST "/api/tickets/$rid/-/complete" "$(jq -c -n --arg r "$reason" '{close_reason: $r}')")
-  if [ "$STATUS" = "200" ] || [ "$STATUS" = "201" ]; then closed=$((closed+1))
+  if [ "$(status)" = "200" ] || [ "$(status)" = "201" ]; then closed=$((closed+1))
   else
     held=$((held+1))
     echo "  $bid stays open: $(jq -r '.detail // .title // .' <<<"$out" 2>/dev/null | head -c 200)" >&2
