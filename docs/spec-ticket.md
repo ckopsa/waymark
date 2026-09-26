@@ -158,6 +158,18 @@ walls).
 
 ## 5. Requirements: the import
 
+> **Landed 2026-09-26.** The import ran once against work.kopsa.info
+> as the `claude` agent under a one-kind grant (`ticket`: create,
+> block, complete; approval `c6e54b08`): 447 tickets, 310 done, 136
+> draft, 1 blocked, 243 parent links — every count equal to the
+> export's. The run corrected three faults the dry run could not see:
+> births ordered by the dots in the id orphaned a child whose flat-id
+> parent sorted after it (R-5.2 now reads the parent chain); a row's
+> id is the tail of its `self` href, not an `id` field; and `block`
+> and `complete` answer 412 without the row's `If-Match` etag. R-5.6
+> then retired beads, and the script with it; its last committed form
+> (4c02907) predates those three fixes.
+
 **R-5.1** `scripts/beads-import.sh` must read a beads JSONL export
 and make one ticket for each issue, through the doors and only the
 doors: the create door, then `block` and `complete`. Every ticket is
@@ -165,8 +177,9 @@ born a draft, so the import starts no seat on anything; a person
 grooms tickets into the queue afterwards. A deferred bead stays a
 draft with its date in `detail`.
 
-**R-5.2** Births go parents first, by the depth of the beads id, so a
-child's `parent` resolves at the door. Endings go children first, so
+**R-5.2** Births go parents first, by the length of the parent chain
+(not the dots in the id: a flat id can name a parent that sorts after
+it), so a child's `parent` resolves at the door. Endings go children first, so
 a parent's `complete` finds its children ended.
 
 **R-5.3** The import keeps: `title`; `detail` as the description with
