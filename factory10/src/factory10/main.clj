@@ -3,11 +3,13 @@
 
   WHAT THIS MODULE IS. The clerk's shape is a queue, a tree, a ledger
   and a floor. The factory has the same shape with a codebase in the
-  middle. This module holds the kinds that shape: a `change`, which
-  mirrors one pull request, and a `ci_run`, which is a red check run
-  and the tree that classifies it (bead waymark-fp62.6.2) — and a
-  `repo_policy`, which is what submit MEANS in one repository, as a
-  row a person restates (bead waymark-fp62.6.3.2).
+  middle. This module holds the kinds that shape: a `ticket`, which
+  is one ask of the factory and the queue a code seat walks
+  (docs/spec-ticket.md); a `change`, which mirrors one pull request;
+  a `ci_run`, which is a red check run and the tree that classifies
+  it (bead waymark-fp62.6.2); and a `repo_policy`, which is what
+  submit MEANS in one repository, as a row a person restates (bead
+  waymark-fp62.6.3.2).
 
   IT IS A MODULE, LIKE workqueue10. The household's queue does not
   carry the day job's kinds, and a company's engine boots without the
@@ -32,6 +34,7 @@
   (:require [factory10.resources.change :refer [change]]
             [factory10.resources.ci-run :refer [ci-run]]
             [factory10.resources.repo-policy :refer [repo-policy]]
+            [factory10.resources.ticket :refer [ticket]]
             [waymark10.dsl :refer [in-domain]]))
 
 (set! *warn-on-reflection* true)
@@ -39,9 +42,10 @@
 (defn resources
   "Every kind this module declares, stamped with the `:factory`
   domain. The `repo_policy` first, because it is the law the bench's
-  doors read; then a `change`, because a `ci_run` points at one."
+  doors read; then a `ticket`, the ask a seat walks and a `change` is
+  born from; then a `change`, because a `ci_run` points at one."
   []
-  (in-domain :factory [repo-policy change ci-run]))
+  (in-domain :factory [repo-policy ticket change ci-run]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter.

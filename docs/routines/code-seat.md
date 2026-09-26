@@ -1,8 +1,8 @@
 # Routine: code-seat
 
 The code seat's driver: a Claude Routine with the engine's connector
-attached. The seat walks `task` rows — the asks a person writes — and
-builds each one on the bench (docs/spec-seat.md R-12.28, R-12.29 and
+attached. The seat walks `ticket` rows — the asks a person or a seat
+writes (docs/spec-ticket.md) — and builds each one on the bench (docs/spec-seat.md R-12.28, R-12.29 and
 R-12.32, docs/spec-mcp-servers.md § 4). This file holds what is
 different from the inbox clerk. The key, the fire link, the seat's
 place, the environment and the Stop hook are the same, and
@@ -19,24 +19,25 @@ with no change to the Routine.
 |---|---|---|
 | name | `code-seat` | one spelling |
 | mode | `fired` | the Routine and the wake open the sittings |
-| walk | `task` | the queue: the open tasks of the seat's own list. The kind's default filter is `status=open`, so the collection a firing opens is the work that waits |
+| walk | `ticket` | the queue: the tickets that are READY. The kind's default filter is `state=open`, and a blocked or deferred ticket is out of that state by construction, so the collection a firing opens is the work that waits and nothing that cannot be worked |
 | rows_per_firing | 1 | one ask is one worktree, one branch and one round; a second ask in the same firing would share the bill and the context |
 | held_for | the model the Routine runs | the seat's place on the ladder |
-| cadence_seconds | 3600 | the wake on `task` create fires it sooner (R-12.22) |
+| cadence_seconds | 3600 | the wake on `ticket` create fires it sooner (R-12.22) |
 | sitting_budget_tokens | 400000 | a code round reads files; the clerk's ceiling is too small |
 | budget_usd_per_week | the person's number | the fuel |
 | charter | the text under "The charter" | the residual |
 | scope | the entries under "The scope" | the authority |
 
-The queue's own sort decides which ask the firing gets. The `task`
-kind sorts by `priority`, and the lowest number ranks first. A task
-with no priority rides behind the ranked ones. To move an ask to the
+The queue's own sort decides which ask the firing gets. The `ticket`
+kind sorts by `priority`, and the lowest number ranks first (0 is
+what the house wants next, 4 is what can wait). To move an ask to the
 front, prioritize it.
 
 ## The scope
 
-The `task` entry names the list the seat works and the one door it
-uses. The `change` entry names the three doors a round ends with.
+The `ticket` entry names the repository the seat works and the one
+door it uses. The `change` entry names the three doors a round ends
+with.
 Each bench power is one entry with an empty `actions` list and a
 `filter` that names the repository. The engine reads the seat's own
 repository from those filters (R-12.32), so every bench entry must
@@ -44,8 +45,8 @@ name the same one repository.
 
 ```json
 [
-  {"kind": "task",   "actions": ["complete"],
-   "filter": {"task_list": "<the task list row id>"}},
+  {"kind": "ticket", "actions": ["complete"],
+   "filter": {"repo": "ckopsa/waymark"}},
   {"kind": "change", "actions": ["submit", "stall", "discard"]},
   {"kind": "bench.find",     "actions": [], "filter": {"repo": "ckopsa/waymark"}},
   {"kind": "bench.read",     "actions": [], "filter": {"repo": "ckopsa/waymark"}},
@@ -66,21 +67,24 @@ directory's glob in `path` on its find, read and edit entries.
 The seat needs no `sitting` entry and no `seat` entry. The sit binds
 the session, and the Stop hook closes the sitting with the key.
 
-## The task list
+## The tickets
 
-A person makes one `task_list` row for this seat and puts the asks in
-it. One ask is one line: what to build, and the how in `detail`. The
-list keeps the seat's work apart from the family's queue, and the
-scope filter above is what makes that separation law.
+A person, or a seat that found work, writes one `ticket` row for each
+ask (docs/spec-ticket.md). One ask is one line, `title`: what to
+build; the how, and what done looks like, in `detail`. The ticket
+names its `repo`, and the scope filter above is what keeps a ticket
+for another repository from this seat's worktree. A ticket that waits
+on other tickets is `blocked`, one that waits on a day is `deferred`,
+and neither is in the queue this seat walks.
 
 The engine mints no `change` row until a firing opens. At the first
 firing the sit mints one change for the ask it walks: the id is
-`task:` and the ask's own id, the branch is the policy's pattern with
-the ask's id in place of the `*`, and there is no pull request number
-yet. A second firing on the same ask finds that same change. The
-change also keeps that same `task:` address in `born_from`, because
-the adoption writes GitHub's id over the change's own id and the
-merge must still know which ask it built.
+`ticket:` and the ask's own id, the branch is the policy's pattern
+with the ask's id in place of the `*`, and there is no pull request
+number yet. A second firing on the same ask finds that same change.
+The change also keeps that same `ticket:` address in `born_from`,
+because the adoption writes GitHub's id over the change's own id and
+the merge must still know which ask it built.
 
 ## The charter
 
@@ -89,20 +93,20 @@ procedure is in the sit's answer: the orientation document, the
 `submit_means` sentence, and the `feedback` block.
 
 ```
-You build what one task asks for. Read the task first: the title says
-what to build, and the detail says how. Read the orientation document
+You build what one ticket asks for. Read the ticket first: the title
+says what to build, and the detail says how. Read the orientation document
 next, then the feedback when the answer carries one: a red check, or a
 review that asks for a change. Build the smallest change that
-satisfies the task and nothing more. Do not change files the task does
-not ask about. Do not change a test to make it pass. Submit one time,
+satisfies the ticket and nothing more. Do not change files the ticket
+does not ask about. Do not change a test to make it pass. Submit one time,
 with one sentence that says what you built and why. When the feedback
 says a check is red, read the failed step's log, fix the cause, and
-submit again. When the task asks for something this repository cannot
-hold, when the change is larger than the ceiling, or when you cannot
-find what the task names, stall the change and say why in one
+submit again. When the ticket asks for something this repository
+cannot hold, when the change is larger than the ceiling, or when you
+cannot find what the ticket names, stall the change and say why in one
 sentence. A person reads every stall. When the repository already does
-what the task asks, complete the task, say so in the stall sentence,
-and stop.
+what the ticket asks, complete the ticket with a sentence that says
+so, and stop.
 ```
 
 ## One Routine for each model
@@ -159,19 +163,19 @@ Then, for each seat that model holds:
    text in it:
 
 ```
-You sit in the seat `code-seat`. The sit answers the charter, one task
-row with its doors, one change row with its doors, and the bench: the
+You sit in the seat `code-seat`. The sit answers the charter, one
+ticket row with its doors, one change row with its doors, and the bench: the
 worktree, the orientation path, what submit means here, and the
 feedback of the last round. Call the bench through waymark_power with
 the tool names the sit lists under bench.tools. Read the orientation
 document first, with the tool listed for bench.read.
 
-Build the task with those tools: the bench.find and bench.read tools to
-read, the bench.edit tool to change a file, the bench.pull tool when the
-bench says the branch is behind. Then invoke the door the charter
+Build the ticket with those tools: the bench.find and bench.read tools
+to read, the bench.edit tool to change a file, the bench.pull tool when
+the bench says the branch is behind. Then invoke the door the charter
 chooses on the CHANGE row: submit with your one sentence, or stall with
-your one sentence. Submit ends the round. After submit, invoke complete
-on the task row, then stop. After stall, stop.
+your one sentence. Submit ends the round. After submit, stop: the merge
+completes the ticket. After stall, stop.
 Do not call discover, schema, query or powers; a refusal names its own
 remedy. When the seat says halted or parked, say why and stop.
 
@@ -205,19 +209,19 @@ Your seat key is: <paste the key here>
 
 First, run `echo $CLAUDE_CODE_SESSION_ID` and call waymark_sit once with
 that key and that value as `session`. Then you sit in the seat
-`code-seat`. The sit answers the charter, one task row with its doors,
+`code-seat`. The sit answers the charter, one ticket row with its doors,
 one change row with its doors, and the bench: the worktree, the
 orientation path, what submit means here, and the feedback of the last
 round. Call the bench through waymark_power with the tool names the sit
 lists under bench.tools. Read the orientation document first, with the
 tool listed for bench.read.
 
-Build the task with those tools: the bench.find and bench.read tools to
-read, the bench.edit tool to change a file, the bench.pull tool when the
-bench says the branch is behind. Then invoke the door the charter
+Build the ticket with those tools: the bench.find and bench.read tools
+to read, the bench.edit tool to change a file, the bench.pull tool when
+the bench says the branch is behind. Then invoke the door the charter
 chooses on the CHANGE row: submit with your one sentence, or stall with
-your one sentence. Submit ends the round. After submit, invoke complete
-on the task row, then stop. After stall, stop.
+your one sentence. Submit ends the round. After submit, stop: the merge
+completes the ticket. After stall, stop.
 Do not call discover, schema, query or powers; a refusal names its own
 remedy. When the seat says halted or parked, say why and stop.
 
@@ -233,13 +237,13 @@ Nothing else goes in the instructions (R-12.10).
 
 1. The connector initializes, and the session calls `waymark_sit`
    with the key. The engine binds the session to the seat.
-2. The sit's answer carries the charter and one `task` row with its
-   doors (R-12.28). The row is the first open task of the seat's
-   list, in the queue's own order.
+2. The sit's answer carries the charter and one `ticket` row with
+   its doors (R-12.28). The row is the first ready ticket of the
+   seat's repository, in the queue's own order.
 3. The answer also carries one `change` row beside the walk
    (R-12.32). The engine read the repository from the bench filters
-   in the scope, and it found or minted that change for the task:
-   the branch is the policy's pattern with the task's id in it, the
+   in the scope, and it found or minted that change for the ticket:
+   the branch is the policy's pattern with the ticket's id in it, the
    base is the policy's base, and the author is the seat's name. The
    doors on that row are the seat's own three.
 4. The answer carries the bench (R-12.29): the engine made the
@@ -252,8 +256,8 @@ Nothing else goes in the instructions (R-12.10).
    When the change has a round behind it, the answer also carries
    `feedback` (R-12.31): the pull request's state, and one finding
    for each failed step, each red status and each review comment.
-5. The session reads the orientation, reads the task, and reads the
-   files the task names. It edits with `bench.edit`. Each call goes
+5. The session reads the orientation, reads the ticket, and reads
+   the files the ticket names. It edits with `bench.edit`. Each call goes
    through the seat's grant: a path the `repo_policy` denies is
    refused by the rig, and a repository outside the filter is refused
    by the engine before the rig sees it (R-12.30).
@@ -275,10 +279,11 @@ Nothing else goes in the instructions (R-12.10).
 9. A green check and a merge move the change to `merged`. A red check
    on the new head mints a `ci_run` row, and the next firing reads
    the finding in the sit's own `feedback`. The merge completes the
-   task: the change kept the task's address in `born_from` at the
-   mint, and the engine walks the task's `complete` door with its own
-   hand (R-12.32). A task the seat already completed stays done, and
-   a person completes nothing by hand.
+   ticket: the change kept the ticket's address in `born_from` at the
+   mint, and the engine walks the ticket's `complete` door with its
+   own hand and the pull request's address as the sentence (R-12.32).
+   A ticket the seat already completed stays done, and a person
+   completes nothing by hand.
 
 ## Before the first firing
 
@@ -291,8 +296,8 @@ Nothing else goes in the instructions (R-12.10).
    git holds `refs/heads/seat` and `refs/heads/seat/<id>` never at
    the same time, so `seat/*` refuses every worktree in a repository
    with a branch named `seat`.
-3. A `task_list` row exists for this seat, and its id is in the
-   scope's `task` filter.
+3. The scope's `ticket` entry names the repository, the same one the
+   bench entries name.
 4. The seat exists and is active, with the scope above and
    `held_for` naming the model the Routine runs.
 5. The seat carries its `instructions`. The engine then mints a key
@@ -304,13 +309,15 @@ Nothing else goes in the instructions (R-12.10).
    then stands `live`.
 7. The repository holds `docs/orientation.md`, or the person accepts
    the one-sentence default that says what submit means.
-8. One task is in the list, and it asks for something small. The
-   first firing is watched by a person, who reads the sitting row,
-   the task row, the change row and the pull request afterwards.
+8. One ticket is open for the repository, and it asks for something
+   small. The first firing is watched by a person, who reads the
+   sitting row, the ticket row, the change row and the pull request
+   afterwards.
 
 ## To pause
 
 Park the seat. Retire the `repo_policy` row to take the repository
 from every seat at once: the rig unenrolls it, and the mirror stops.
-An empty task list also pauses the seat: a firing with no open task
-answers no change and no bench, and it costs one sitting.
+An empty queue also pauses the seat: a firing with no ready ticket
+answers no change and no bench, and it costs one sitting. Blocking or
+deferring every open ticket empties the queue the same way.

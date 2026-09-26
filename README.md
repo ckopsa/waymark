@@ -48,12 +48,13 @@ plan (`dayplan10.*`). The calendar (`calendar10/`) stays its own
 module — a writable domain the queue and the meal plan both cite.
 
 **`factory10/`** is the software factory's module, beside the
-household rather than inside it (waymark-fp62.6.2). It holds two
-kinds today, both mirrors of GitHub that a source writes and a person
-reads:
+household rather than inside it (waymark-fp62.6.2). It holds the
+factory's ask, and two mirrors of GitHub that a source writes and a
+person reads:
 
 | kind | what it is | the walk |
 | --- | --- | --- |
+| `ticket` | one ask of the factory — title, the how in `detail`, type, priority, its parent, what it waits on, what it was found in ([`docs/spec-ticket.md`](docs/spec-ticket.md)). The tracker: a person or a seat files one, the code seat walks the ready ones | open → blocked (`block`, the whole set stated), blocked → open; open → deferred (`defer`, until a day), deferred → open; open → done (`complete`) or dropped (`drop`), each demanding one sentence, and a parent only after its children; done or dropped → open by `reopen`, a person's door and nobody else's |
 | `change` | one pull request — repository, number, branches, head sha, counts, labels, review state | open → merged, open → closed, closed → open; every door is the mirror's |
 | `ci_run` | one red check run, with the last 200 lines of the failed job — or, when the log could not be read, `log_note` saying why | red → classified, by `classify_infra`, `classify_base_red` or `classify_this_change`, each demanding the remedy in one sentence; classified → reclassified, a person's door and nobody else's; red → superseded, the mirror's `supersede` for a run whose commit is not the head any more |
 
@@ -82,7 +83,7 @@ make test-queue            # the household suite: queue + chores + meals + day p
 make test-calendar         # calendar transport tests
 
 make check-queue           # declaration-time checks + usability warnings (no database)
-make check-factory         # the same, for factory10's two kinds
+make check-factory         # the same, for factory10's kinds
 make test-factory          # the factory's suite (no database, no network)
 make check-localfire       # the local fire server's suite (no database, loopback only)
 

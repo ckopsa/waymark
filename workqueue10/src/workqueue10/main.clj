@@ -462,7 +462,7 @@
 ;; ── the day job, behind a switch (waymark-fp62.6.2, R-8) ────────────
 
 (defn factory-resources
-  "factory10's kinds — `change`, `ci_run` and `repo_policy` — when FACTORY10=1,
+  "factory10's kinds — `ticket`, `change`, `ci_run` and `repo_policy` — when FACTORY10=1,
   and nothing otherwise.
 
   WHY A SWITCH AND NOT A DEFAULT. factory10 is a MODULE, like
