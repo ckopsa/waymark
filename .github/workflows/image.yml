@@ -50,7 +50,7 @@ on:
   push:
     branches: [main]
     # Only the four modules the Dockerfile COPYs can change the image.
-    # A docs or .beads commit rebuilding and REDEPLOYING it would be
+    # A docs commit rebuilding and REDEPLOYING it would be
     # noise with a restart attached.
     paths:
       - 'waymark10/**'

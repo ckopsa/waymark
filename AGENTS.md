@@ -22,19 +22,14 @@ make check-queue   # declaration-time checks + usability warnings (no DB)
 
 ## Issue tracking
 
-This project uses **bd (beads)**. Run `bd prime` for the full workflow
-and the session-close protocol. Quick reference:
+Work is tracked as `ticket` rows in waymark itself
+(`https://work.kopsa.info/api/tickets`); the old beads ids ride on each
+ticket's `bead_id`. See "Issue Tracking" in `CLAUDE.md`, and
+`docs/agent-notes.md` for the standing notes that used to live in
+`bd remember`.
 
-```bash
-bd ready              # find available work
-bd show <id>          # view an issue
-bd update <id> --claim  # claim work
-bd close <id>         # complete work
-```
-
-Do not commit or push, or run Dolt remote sync, unless the active task
-or the user explicitly asks — see the Agent Context Profiles in
-`CLAUDE.md`.
+Do not commit or push unless the active task or the user explicitly
+asks — see "Pull Requests" in `CLAUDE.md`.
 
 ## Non-interactive shell hygiene
 
