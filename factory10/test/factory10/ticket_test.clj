@@ -119,6 +119,27 @@
           "the MACHINE refuses it, with no guard behind the refusal: a
            blocked ticket is not finished, so it is unblocked first"))))
 
+(deftest only-a-bug-in-draft-may-be-sent-to-repro
+  (is (not (contains? (offers (at :draft) (ctx the-person)) :send_to_repro))
+      "a feature meets no such door")
+  (let [row (at :draft {:type "bug"})]
+    (is (contains? (offers row (ctx the-seat)) :send_to_repro)
+        "a bug does, and a seat may act — this is not a grooming")
+    (is (= :reproducing (:to (get (:actions ticket) :send_to_repro)))))
+  (is (= :the-ticket-is-a-bug
+         (:name (:denier (refusal (at :draft) (ctx the-person) :send_to_repro))))
+      "the guard names the type it refused"))
+
+(deftest a-reproducing-ticket-comes-back-reproduced-or-not
+  (let [row (at :reproducing {:type "bug"})]
+    (is (= #{:block :cannot_reproduce :reproduced}
+           (offers row (ctx the-seat)))
+        "a repro seat may say what it saw, say it did not happen, or name what it waits on — nothing else, because a bug being reproduced is neither worked nor groomed"))
+  (is (= :open (:to (get (:actions ticket) :reproduced)))
+      "reproduced grooms the bug by what was seen — into the queue")
+  (is (= :draft (:to (get (:actions ticket) :cannot_reproduce)))
+      "cannot_reproduce sends it back to draft, for the groomers to read"))
+
 (deftest a-deferred-ticket-waits-on-its-day
   (is (= #{:resume} (offers (at :deferred {:defer_until "2026-11-19"})
                             (ctx the-person)))
@@ -219,7 +240,7 @@
 ;; ── the shape the walker and the import both read ───────────────────
 
 (deftest the-declaration-says-what-the-walker-needs
-  (is (= [:draft :open :blocked :deferred :done :dropped] (:states ticket)))
+  (is (= [:draft :reproducing :open :blocked :deferred :done :dropped] (:states ticket)))
   (is (= :draft (:initial ticket))
       "born a draft: nothing walks it until a person grooms it")
   (is (= #{} (:terminal ticket)) "no tomb: reopen is a person's door")

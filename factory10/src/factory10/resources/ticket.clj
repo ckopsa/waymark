@@ -11,15 +11,19 @@
   day job's structure, which `change` already refuses to do. So the
   factory keeps its own ask, beside its own `change` and `ci_run`.
 
-  THE MACHINE IS SIX STATES. A ticket is born `draft`, and `groom` —
+  THE MACHINE IS SEVEN STATES. A ticket is born `draft`, and `groom` —
   a person's door — moves it to `open`, which is the queue. `blocked`
   waits on other tickets, `deferred` waits on a date; neither is an
-  ending. `done` and `dropped` are the two endings, and both come back
-  through `reopen` to `draft`, so neither is a tomb and a ticket that
-  ended wrongly is groomed again before a seat sees it. THERE IS NO
-  `in_progress`: a ticket is in progress when a `change` born from it
-  is open, which is a fact the engine already holds and not a status a
-  model sets and forgets.
+  ending. `reproducing` is a third wait, for a bug alone: `send_to_repro`
+  takes it there from `draft`, and it comes back `reproduced` — into
+  `open`, groomed by what was seen — or `cannot_reproduce` — into
+  `draft`, for the groomers to read why it did not happen. `done` and
+  `dropped` are the two endings, and both come back through `reopen`
+  to `draft`, so neither is a tomb and a ticket that ended wrongly is
+  groomed again before a seat sees it. THERE IS NO `in_progress`: a
+  ticket is in progress when a `change` born from it is open, which is
+  a fact the engine already holds and not a status a model sets and
+  forgets.
 
   GROOMED IS A STATE, AND A SEAT CANNOT REACH IT. The owner's ruling,
   2026-09-26: a task is groomed before it is picked up. So the birth
@@ -32,8 +36,8 @@
   so changing it is ungrooming it.
 
   READY IS THE DEFAULT FILTER, NOT A STATE. The collection a walker
-  opens is `state=open`, and a draft, blocked or deferred ticket is
-  out of it by construction. So the code seat walks `ticket`, one row
+  opens is `state=open`, and a draft, reproducing, blocked or deferred
+  ticket is out of it by construction. So the code seat walks `ticket`, one row
   at a time, and never reads a ticket it cannot work (spec-seat.md
   R-12.9).
 
@@ -120,6 +124,12 @@
   ;; a reopened ticket reads as open work, not as work with a reason
   ;; it ended.
   (assoc-in row [:data :close_reason] nil))
+
+(defhandler record-the-repro [row inp _ctx]
+  (assoc-in row [:data :repro] (:repro inp)))
+
+(defhandler note-the-non-repro [row inp _ctx]
+  (assoc-in row [:data :repro_note] (:note inp)))
 
 ;; ── the walls ───────────────────────────────────────────────────────
 ;;
@@ -224,6 +234,18 @@
     (t/deny)
     (t/allow)))
 
+(defguardfn the-ticket-is-a-bug
+  ;; A repro seat exists to confirm a bug happened, not to read the
+  ;; other types. The row's own `:type` decides it; no other kind is
+  ;; read, so this stays check-tier with the rest of `send_to_repro`.
+  {:vars [:type]
+   :explain "`send_to_repro` is for a bug: this ticket's type is {type}, and a repro seat confirms something happened, not another kind of ask."}
+  [row _inp _ctx]
+  (let [ty (:type (:data row))]
+    (if (= "bug" ty)
+      (t/allow)
+      (t/deny {:vars {:type ty}}))))
+
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
 ;; Check-tier: no :given rows, and the one guard on the attempted door
@@ -291,6 +313,25 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :out-of-state
              :because "Done"}})
+
+(defscenario a-feature-ticket-is-not-sent-to-repro
+  "A repro seat exists to confirm a bug happened. The guard names the
+   type it refused, so the hand reading it knows why."
+  {:kind    :ticket
+   :attempt :send_to_repro
+   :row     {:state :draft :data a-draft-ticket}
+   :as      {:id "code-seat" :type :agent}
+   :expect  {:refused :the-ticket-is-a-bug
+             :because "is for a bug"}})
+
+(defscenario a-bug-ticket-is-sent-to-repro
+  "And a bug meets the door — an agent's hand included, since this is
+   not a grooming."
+  {:kind    :ticket
+   :attempt :send_to_repro
+   :row     {:state :draft :data (assoc a-draft-ticket :type "bug")}
+   :as      {:id "code-seat" :type :agent}
+   :expect  {:allowed true}})
 
 ;; ── the fields, spelled once and read by three doors ────────────────
 
@@ -378,7 +419,21 @@
                    {:widget "prose"
                     :label "How it ended"
                     :help "One sentence: what was done, or why it was let go. It is what the next reader has."}}
-    [:maybe [:string {:max 480}]]]])
+    [:maybe [:string {:max 480}]]]
+   [:repro {:optional true
+            :examples ["Steps: create a draft bug and call `groom`. Expected: refused, naming a person. Actual: it groomed. Seen on: waymark10_test, engine commit a1b2c3d."]
+            :x-display
+            {:widget "prose"
+             :label "What was seen"
+             :help "What `reproduced` writes: the steps, what happened, what should have happened, and where it was seen. Empty until the bug is confirmed."}}
+    [:maybe [:string {:max detail-chars}]]]
+   [:repro_note {:optional true
+                 :examples ["Ran the steps against three snapshots; groom always refused as written. No repro."]
+                 :x-display
+                 {:widget "prose"
+                  :label "Why it did not reproduce"
+                  :help "What `cannot_reproduce` writes: what was tried, and what happened instead. Empty unless the last attempt came back empty-handed."}}
+    [:maybe [:string {:max 2000}]]]])
 
 (def ^:private close-input
   [:map
@@ -390,6 +445,26 @@
       :help "One sentence for the next reader: what was done, or why this is let go. Say the outcome — merged, superseded by, no longer wanted because — and not the diagnosis."}}
     [:string {:min 1 :max 480}]]])
 
+(def ^:private repro-input
+  [:map
+   [:repro
+    {:examples ["Steps: create a draft bug and call `groom`. Expected: refused, naming a person. Actual: it groomed. Seen on: waymark10_test, engine commit a1b2c3d."]
+     :x-display
+     {:widget "prose"
+      :label "What was seen"
+      :help "The steps, what happened, what should have happened, and where it was seen: the clone's snapshot name and the engine commit."}}
+    [:string {:min 1 :max detail-chars}]]])
+
+(def ^:private cannot-reproduce-input
+  [:map
+   [:note
+    {:examples ["Ran the steps against three snapshots; groom always refused as written. No repro."]
+     :x-display
+     {:widget "prose"
+      :label "What happened instead"
+      :help "What was tried, and what happened instead of the bug."}}
+    [:string {:min 1 :max 2000}]]])
+
 ;; ── :ticket — one ask of the factory ────────────────────────────────
 
 (defresource ticket
@@ -397,7 +472,7 @@
    :plural "tickets"
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
-   :states [:draft :open :blocked :deferred :done :dropped]
+   :states [:draft :reproducing :open :blocked :deferred :done :dropped]
    :initial :draft
    ;; NO TOMB. Both endings come back through `reopen`, a person's
    ;; door, to `draft`: a ticket ended wrongly is groomed again.
@@ -457,6 +532,41 @@
      :display {:label "Back to draft" :order 9
                :description "Out of the queue — the statement needs work before a seat builds it"}}
 
+    ;; A REPRO IS A DETOUR BEFORE THE QUEUE, FOR A BUG ALONE.
+    ;; `send_to_repro` takes a stated bug out of `draft` so a repro seat
+    ;; can try it before anyone grooms it; `the-ticket-is-a-bug` refuses
+    ;; every other type. `reproduced` lands it in `open` with what was
+    ;; seen on the record — groomed by that, the way `groom` grooms it
+    ;; by a person's reading. `cannot_reproduce` sends it back to
+    ;; `draft` with what was tried, for the groomers to read.
+    :send_to_repro
+    {:from #{:draft} :to :reproducing
+     :guards [the-ticket-is-a-bug]
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Send to repro" :order 10
+               :description "Have a repro seat try this before it is groomed"}}
+
+    :reproduced
+    {:from #{:reproducing} :to :open
+     :input repro-input
+     :handler record-the-repro
+     ;; the report is composed, so it is drafted (`complete`'s reason,
+     ;; one door over): a mis-click must not discard what was typed
+     :edit {:draft {:shared true :live true}}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "This sends the bug into the queue as groomed work, with what was seen on the record. The way back is ungroom, then send_to_repro again, if it needs a second look."}
+     :display {:label "Reproduced" :style :primary :order 1
+               :description "It happened — say what was seen, and this joins the queue"}}
+
+    :cannot_reproduce
+    {:from #{:reproducing} :to :draft
+     :input cannot-reproduce-input
+     :handler note-the-non-repro
+     :edit {:draft {:shared true :live true}}
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Cannot reproduce" :order 9
+               :description "It did not happen — say what was tried, for the groomers to read"}}
+
     :prioritize
     {:from #{:open} :to :open
      :input [:map
@@ -472,14 +582,14 @@
      :display {:label "Prioritize" :order 3
                :description "Move this ask up or down the queue"}}
 
-    ;; THE BLOCKERS, STATED WHOLE. From `draft` or `open` the door
-    ;; blocks; from `blocked` it restates the set. One door, because
-    ;; all three land in `blocked`. Stating what a ticket waits on is
-    ;; part of grooming it, so `unblock` lands in `open` and never back
-    ;; in `draft` — which is why this door is one-way and not
-    ;; reversible.
+    ;; THE BLOCKERS, STATED WHOLE. From `draft`, `open` or `reproducing`
+    ;; the door blocks; from `blocked` it restates the set. One door,
+    ;; because all four land in `blocked`. Stating what a ticket waits
+    ;; on is part of grooming it, so `unblock` lands in `open` and
+    ;; never back in `draft` or `reproducing` — which is why this door
+    ;; is one-way and not reversible.
     :block
-    {:from #{:draft :open :blocked} :to :blocked
+    {:from #{:draft :open :blocked :reproducing} :to :blocked
      :input [:map
              [:blocked_by {:kind :ticket
                            :x-display
@@ -570,9 +680,12 @@
    :deviations
    ["`restate` serves `draft` alone and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
     "`complete`, `drop` and `block` are one-way, not reversible. Each leaves from more than one state and its reverse lands in one (`reopen` in `draft`, `unblock` in `open`), and checks/check-reversible asks a reversible door for a way back to each `:from`. The way back is real in every case, and the `:one-way` sentence names it."
-    "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."]
+    "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."
+    "`block` reaches from `reproducing` too, and `defer` does not. A repro seat that names what a bug waits on is doing the same grooming a blocked draft already does by naming its blockers (the deviation above): `unblock` still lands in `open`, so naming a blocker there is itself the confirmation, and the bug never goes back through `reproduced`. `defer` stays `:from #{:open}` alone — `reproducing` is not yet groomed, and parking an unconfirmed bug would put an unseen report where the queue's own default filter assumes one was seen."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket
                a-seat-does-not-reopen-a-ticket
                the-person-reopens-a-ticket
-               a-finished-ticket-is-not-put-back-by-a-side-door]})
+               a-finished-ticket-is-not-put-back-by-a-side-door
+               a-feature-ticket-is-not-sent-to-repro
+               a-bug-ticket-is-sent-to-repro]})
