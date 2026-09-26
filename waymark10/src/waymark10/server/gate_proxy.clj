@@ -52,9 +52,11 @@
   (:require [clojure.string :as str]
             [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.mcp-servers :as servers]
-            [waymark10.server.problems :as p]))
+            [waymark10.server.problems :as p]
+            [waymark10.server.store :as store]))
 
 (set! *warn-on-reflection* true)
 
@@ -421,6 +423,72 @@
                       "email.send, email.move — GET /api/capabilities for "
                       "the words) mint the grant this door reads.")}}))
 
+;; ── the bench's own guard: prepare is bench.edit's door ────────────
+;;
+;; bench.read's tools can be widened to admit bench__prepare (the
+;; mcp_server row's `powers` is data this file does not hold), and a
+;; reader that opens a worktree could land in a code seat's own or
+;; take the branch name it wants next. This door refuses that one
+;; call whatever token got a caller past the grant and filter checks
+;; above: bench.edit on the repository is the only way through a
+;; protected branch, the same as the rig already refuses submit on
+;; the default branch.
+
+(def ^:private default-base "main")
+
+(def ^:private default-branch-pattern "waymark/*")
+
+(defn- repo-policy-of
+  "The active `repo_policy` row for one repository, or nil — nil is
+  also the answer in an engine that declares no `repo_policy` kind at
+  all, which is every engine but the factory's. Duplicated from
+  waymark10.server.mcp's own read of the same row: the gate is the
+  enforcement point and must not require the layer built on top of it."
+  [eng repository]
+  (when-some [rdef (when-not (str/blank? (str repository))
+                     (get (inv/resources eng) :repo_policy))]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx]
+                 (first (store/query-rows (:storage eng) tx :repo_policy
+                                          {:repository (str repository)
+                                           :state :active}
+                                          {:limit 1}))))
+             (inv/decode-row rdef))))
+
+(defn- bench-edit-admits-repo?
+  "Does this visibility's bench.edit — if it holds any — admit this
+  repository? No entry, or one filtered away from this repository,
+  answers false."
+  [vis repo]
+  (let [gentry (grants/capability-entry vis "bench.edit")]
+    (boolean (and gentry (not (:miss (filter-verdict (:filters gentry) {:repo repo})))))))
+
+(defn- protected-branch?
+  "Is this branch the repository's base, or one its own branch_pattern
+  would mint? Both are bench.edit's to prepare."
+  [policy branch]
+  (let [base (or (some-> (get-in policy [:data :base]) str not-empty)
+                 default-base)
+        pattern (or (some-> (get-in policy [:data :branch_pattern]) str not-empty)
+                    default-branch-pattern)]
+    (or (= base branch) (path-glob-matches? pattern branch))))
+
+(defn- bench-prepare-block
+  "Why a bench__prepare call should be refused before the forward, as
+  {:repo :policy :branch}, or nil when it should not be: bench.edit on
+  the repository stands untouched, and so does a branch outside the
+  repository's own convention. A repository with no active repo_policy
+  row blocks every branch, because there is no convention to stand
+  outside of."
+  [eng vis tname args]
+  (when (= tname (bench-tool :prepare))
+    (let [repo (some-> (:repo args) str not-empty)
+          branch (some-> (:branch args) str not-empty)]
+      (when (and repo branch (not (bench-edit-admits-repo? vis repo)))
+        (let [policy (repo-policy-of eng repo)]
+          (when (or (nil? policy) (protected-branch? policy branch))
+            {:repo repo :policy policy :branch branch}))))))
+
 ;; ── invoke ──────────────────────────────────────────────────────────
 
 (defn- refuse-invoke
@@ -495,6 +563,30 @@
                                   " is nobody to hold the call for.")
                      :remedies ["Call again as a named principal: a session that sat in a seat, or a signed-in person."]})))
 
+(defn- refuse-bench-prepare
+  "The 403 for bench__prepare on a branch this repository's own
+  convention claims, from a grant that holds no bench.edit there: a
+  reader who opened that worktree would land in a code seat's own, or
+  take the branch name it wants next."
+  [tname {:keys [repo policy branch]}]
+  (throw (p/problem
+          :gate-not-granted 403 "Not granted"
+          {:detail
+           (str "Invoking " tname " on " repo " at `" branch "` is"
+                " bench.edit, and this grant holds only bench.read"
+                " there: "
+                (if policy
+                  (str "`" branch "` is " repo "'s base or a branch its"
+                       " branch_pattern would mint, and only bench.edit"
+                       " prepares one of those.")
+                  (str repo " has no active repo_policy row, so every"
+                       " branch on it is reserved.")))
+           :remedies
+           [(if policy
+              "Prepare a branch outside the branch_pattern instead — `read/<seat name>`, by convention."
+              (str "State a repo_policy for " repo ", or prepare in an"
+                   " enrolled repository."))]})))
+
 (defn- carries-why? [args]
   (or (not (str/blank? (str (:why args))))
       (not (str/blank? (str (:__why args))))))
@@ -565,7 +657,8 @@
      (when (or (nil? hit) (nil? entry))
        (refuse-unknown eng asked))
      (let [gentry (grants/capability-entry vis token)
-           verdict (when gentry (filter-verdict (:filters gentry) args))]
+           verdict (when gentry (filter-verdict (:filters gentry) args))
+           prepare-block (bench-prepare-block eng vis tname args)]
        (cond
          (nil? gentry)
          (refuse-invoke
@@ -577,6 +670,9 @@
 
          (:miss verdict)
          (refuse-filter tname token (:miss verdict))
+
+         prepare-block
+         (refuse-bench-prepare tname prepare-block)
 
          (and why (not (carries-why? args)))
          (refuse-why tname)
@@ -626,8 +722,9 @@
         (let [tname (str tool)
               {:keys [row entry token]} (servers/resolve-tool eng tname)
               gentry (when token (grants/capability-entry vis token))
-              verdict (when gentry (filter-verdict (:filters gentry) args))]
-          (when (and entry gentry (not (:miss verdict)))
+              verdict (when gentry (filter-verdict (:filters gentry) args))
+              prepare-block (bench-prepare-block eng vis tname args)]
+          (when (and entry gentry (not (:miss verdict)) (not prepare-block))
             (try
               (servers/call! eng tname
                              (forward-args row (with-allow args (:allow verdict))))
