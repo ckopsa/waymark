@@ -351,7 +351,7 @@
 (deftest every-guard-that-speaks-says-what-to-do-next
   (let [reg (engine/full-registry (main/resources))
         rdefs (vals (:kinds reg))
-        ours #{:change :ci_run :repo_policy}
+        ours #{:change :ci_run :repo_policy :ticket}
         cen (checks/census rdefs)]
     (is (empty? (filterv (comp ours :kind) (:dead-ends cen)))
         "a guard that refuses in words and names no way out spends a

@@ -119,36 +119,53 @@
 
 ;; ── the merge finishes the task the change was born from ────────────
 
-(def ^:private task-born-prefix
-  "What `born_from` reads when the change was minted for a TASK. The
-  merge opens one kind's door and no other: a kind this module does
-  not know is a door this module must not walk."
-  "task:")
+(def ^:private born-kinds
+  "What `born_from` may read as its kind, and how each one is
+  finished. The merge opens these doors and no other: a kind this
+  module does not know is a door this module must not walk.
 
-(defn- task-of
-  "The task this change was born from, or nil. nil is the ordinary
-  answer: a change GitHub gave us was born from nothing, and an engine
-  that serves no `task` kind reads no row (`:read` answers nil for a
-  kind it does not carry)."
+  A `task` (workqueue10) keeps its lifecycle in `status`, and its
+  `complete` takes nothing. A `ticket` (this module) keeps its
+  lifecycle in the machine, and its `complete` takes the sentence the
+  record keeps — so the merge writes the pull request's own address as
+  that sentence."
+  {"task" {:kind :task
+           :finished? (fn [row] (= "done" (str (get-in row [:data :status]))))
+           :input (fn [_change] nil)}
+   "ticket" {:kind :ticket
+             :finished? (fn [row] (not= :open (some-> (:state row) name keyword)))
+             :input (fn [change]
+                      {:close_reason (str "Merged: "
+                                          (get-in change [:data :change_id])
+                                          ".")})}})
+
+(defn- born-of
+  "The walk row this change was born from — [kind-entry id row] — or
+  nil. nil is the ordinary answer: a change GitHub gave us was born
+  from nothing, and an engine that serves no such kind reads no row
+  (`:read` answers nil for a kind it does not carry)."
   [row ctx]
-  (let [born (str (get-in row [:data :born_from]))]
-    (when (str/starts-with? born task-born-prefix)
-      (let [id (subs born (count task-born-prefix))]
-        (when-some [read (:read ctx)]
-          (when-some [task (read :task id)]
-            [id task]))))))
+  (let [born (str (get-in row [:data :born_from]))
+        colon (str/index-of born ":")]
+    (when colon
+      (let [entry (get born-kinds (subs born 0 colon))
+            id (not-empty (subs born (inc (long colon))))]
+        (when (and entry id)
+          (when-some [read (:read ctx)]
+            (when-some [walk-row (read (:kind entry) id)]
+              [entry id walk-row])))))))
 
 (defhandler complete-the-task-it-was-born-from [row _inp ctx]
-  ;; THE TASK IS DONE WHEN ITS PULL REQUEST MERGES (bead
+  ;; THE ASK IS DONE WHEN ITS PULL REQUEST MERGES (bead
   ;; waymark-fp62.6.3.14, spec-seat.md R-12.32). The seat is told to
-  ;; complete the task after its submit, and the seat that stopped at
-  ;; the submit left the task open for a person to close by hand. So
-  ;; the merge does it too, under the engine's own hand.
+  ;; complete the ask after its submit, and the seat that stopped at
+  ;; the submit left it open for a person to close by hand. So the
+  ;; merge does it too, under the engine's own hand.
   ;;
-  ;; BEST-EFFORT, AND THE MERGE NEVER FAILS FOR IT. A task already
-  ;; done is left alone, a task that is gone reads nil, and a door
-  ;; that refuses is caught and said in the log. GitHub merged the
-  ;; pull request; this row follows GitHub whatever the queue answers.
+  ;; BEST-EFFORT, AND THE MERGE NEVER FAILS FOR IT. An ask already
+  ;; done is left alone, one that is gone reads nil, and a door that
+  ;; refuses is caught and said in the log. GitHub merged the pull
+  ;; request; this row follows GitHub whatever the queue answers.
   ;;
   ;; NO `:touches`. factory10 boots ALONE (factory10.main) and its
   ;; registry carries no `task`, so an entry naming that kind would
@@ -157,15 +174,15 @@
   ;; cross-write no declaration can name is `worksheet`'s apply and
   ;; `insight`'s offer (workqueue10): the blast radius rides in prose,
   ;; here in the door's own `:one-way` sentence.
-  (let [[id task] (task-of row ctx)]
-    (when (and task
-               (not= "done" (str (get-in task [:data :status])))
+  (let [[entry id walk-row] (born-of row ctx)]
+    (when (and walk-row
+               (not ((:finished? entry) walk-row))
                (:invoke ctx))
       (try
-        ((:invoke ctx) :task id :complete nil)
+        ((:invoke ctx) (:kind entry) id :complete ((:input entry) row))
         (catch Exception e
           (binding [*out* *err*]
-            (println "factory10 change merge: the task" id
+            (println "factory10 change merge: the" (name (:kind entry)) id
                      "did not complete -" (ex-message e)))))))
   row)
 
@@ -793,7 +810,7 @@
      ;; — see `complete-the-task-it-was-born-from`.
      :handler complete-the-task-it-was-born-from
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "GitHub merged this pull request. The row follows GitHub, so there is no way back: a merged pull request is not reopened. The task this change was born from is completed with it."}
+              :one-way "GitHub merged this pull request. The row follows GitHub, so there is no way back: a merged pull request is not reopened. The ask this change was born from — a task or a ticket — is completed with it."}
      :display {:label "Merged" :order 2
                :description "GitHub merged the pull request"}}
 
