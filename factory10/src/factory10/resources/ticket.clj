@@ -479,8 +479,8 @@
    :terminal #{}
    ;; `:over` names the two endings apart: a done ticket is the deed
    ;; this kind is graded by, a dropped one is work the house let go.
-   ;; `draft`, `blocked` and `deferred` are in neither list — they are
-   ;; waiting, not over, and their doors stay open.
+   ;; `draft`, `reproducing`, `blocked` and `deferred` are in neither
+   ;; list — they are waiting, not over, and their doors stay open.
    :over {:accomplished #{:done} :let-go #{:dropped}}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
