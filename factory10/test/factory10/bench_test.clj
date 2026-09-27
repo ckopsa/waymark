@@ -1278,6 +1278,24 @@
       (bench/merge-green! (:eng w) seen)
       (is (= 3 (count (calls-of st "bench__merge")))))))
 
+(deftest a-seat-submits-again-from-failing
+  ;; ticket d1742908: the forge pass moves a red change to `failing`,
+  ;; and the seat's next round is how it leaves
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))]
+    (inv/invoke! (:eng w) :change id :fail {:failing_checks ["gate"]}
+                 {:principal mirror/source-principal})
+    (is (= "failing" (name (:state (change-row w)))))
+    (is (= ["gate"] (get-in (change-row w) [:data :failing_checks])))
+    (let [r (submit! w {:why "Fix what the gate said."})
+          row (change-row w)]
+      (is (false? (:isError r)) (text-of r))
+      (is (= "submitted" (name (:state row)))
+          "a submit from failing is the next round, and it lands")
+      (is (= 2 (get-in row [:data :rounds])))
+      (is (nil? (get-in row [:data :failing_checks]))
+          "the names of the last red are not the new head's"))))
+
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)
         eng (fresh-engine st)
