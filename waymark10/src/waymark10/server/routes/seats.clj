@@ -268,6 +268,43 @@
                    (.plus (Instant/parse oldest)
                           (long window-days) ChronoUnit/DAYS))}))
 
+(defn- instant-of ^Instant [v]
+  (cond (instance? Instant v) v
+        (some-> v str not-empty) (Instant/parse (str v))
+        :else nil))
+
+(defn lifts-at
+  "When the week's fuel wall lifts on its own: the moment enough of the
+  counted sittings have rolled out of the window that what is left is
+  under the limit. `budget-of`'s `resumes_at` is the first moment the
+  sum CAN drop; this is the moment it drops far enough, which is what a
+  halted sit tells its session. The rows are the wall's own (closed and
+  open, `spending-conds`), oldest first. nil when the seat has fuel
+  left, and nil when no roll frees enough — a budget of zero, which
+  only a person's restate lifts."
+  [eng seat ^Instant now]
+  (when-some [rdef (get (inv/resources eng) :sitting)]
+    (let [st (:storage eng)
+          limit (or (get-in seat [:data :budget_usd_per_week]) 0M)
+          rows (mapv #(inv/decode-row rdef %)
+                     (store/with-tx st
+                       (fn [tx]
+                         (store/search-rows st tx :sitting
+                                            (spending-conds (:id seat)
+                                                            (week-ago now))
+                                            {:order-by :started_at
+                                             :limit sitting-cap}))))
+          spent (sum-of rows :cost_usd)]
+      (when-not (neg? (compare spent limit))
+        (loop [left spent
+               [r & more] rows]
+          (when r
+            (let [left (- left (or (get-in r [:data :cost_usd]) 0M))]
+              (if (neg? (compare left limit))
+                (when-some [^Instant s (instant-of (get-in r [:data :started_at]))]
+                  (.plus s (long window-days) ChronoUnit/DAYS))
+                (recur left more)))))))))
+
 ;; ── corrections ─────────────────────────────────────────────────────
 
 (defn- model-id-of-claim

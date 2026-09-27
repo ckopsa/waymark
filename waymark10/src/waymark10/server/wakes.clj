@@ -110,6 +110,7 @@
   by anything."
   (:require [waymark10.server.collections :as collections]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
@@ -508,6 +509,43 @@
     (not (.isBefore at ^Instant due))
     true))
 
+;; ── the fuel wall ────────────────────────────────────────────────────
+;;
+;; A wake is fuel, and a seat whose week of fuel is spent has none to
+;; give. The router's own wall (R-5.2 step 3) would scope the run's
+;; grant to nothing, so a run fired past it spends tokens on a sit that
+;; can walk nothing. The wake asks the SAME wall before it fires, and a
+;; wake the wall holds waits as `wake_pending`, exactly as a damped
+;; match does, until the window rolls.
+
+(defn at-the-fuel-wall?
+  "Is this seat's week of fuel spent at `at`? The router's arithmetic,
+  said once: `grants/spent-this-week` against the seat's budget,
+  through `grants/under-budget?`, so the wake and the wall cannot
+  disagree about one number. No seat row is no wall."
+  [eng seat-row ^Instant at]
+  (boolean
+   (and seat-row
+        (not (grants/under-budget?
+              (grants/spent-this-week eng (:id seat-row) at)
+              (get-in seat-row [:data :budget_usd_per_week]))))))
+
+(defn- hold-at-the-wall!
+  "A match the fuel wall held: remembered as `wake_pending`, so the
+  first release after the window rolls fires it, and
+  `last_halted_wake` stamped beside it, so a person reading the
+  schedule row can see why the seat stayed quiet. One maintenance
+  write, for `write-pending!`'s reason."
+  [eng schedule-row ^Instant at]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                          (assoc (:data schedule-row)
+                                 :wake_pending true
+                                 :last_halted_wake (str at))
+                          (:next-flip-at schedule-row))))
+  nil)
+
 ;; ── the fire ────────────────────────────────────────────────────────
 
 (defn- fire!
@@ -565,6 +603,10 @@
         (or (some? (seats/open-sitting-for-seat eng (:id seat)))
             (fired-recently? row (:interval seat) at))
         (mark-pending! eng row)
+
+        ;; the fuel wall: the wake waits, and says it was held
+        (at-the-fuel-wall? eng (raw-row eng :seat (:id seat)) at)
+        (hold-at-the-wall! eng row at)
 
         :else
         (when (fire! eng (:id seat) text
@@ -627,11 +669,19 @@
              (settled? schedule-row at)
              (not (fired-recently? schedule-row (interval-of seat-row) at))
              (nil? (seats/open-sitting-for-seat eng (:id seat-row))))
-    (if (empty-walk? eng seat-row)
+    (cond
+      (empty-walk? eng seat-row)
       (do (write-pending! eng schedule-row false)
           (warn! "seat " (:id seat-row) " has an empty queue — its pending"
                  " wake is cleared without a fire")
           nil)
+
+      ;; the fuel wall still holds: the wake keeps waiting, and the
+      ;; next release after the window rolls fires it
+      (at-the-fuel-wall? eng seat-row at)
+      nil
+
+      :else
       (when (fire! eng (:id seat-row) nil key)
         (stamp-fired! eng schedule-row at true)
         true))))

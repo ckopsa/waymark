@@ -2268,6 +2268,33 @@
   is where it reads it."
   "Read the seat row with waymark_get and do what its charter says.")
 
+(def ^:private halted-note
+  "The seat against the week's fuel wall. Its grant scopes to nothing
+  until the window rolls, so the session is told that in words rather
+  than left to find a seat row it may not read and call it broken."
+  (str "The seat is halted: its week's fuel is spent, so it walks "
+       "nothing now. `halted` says why and when the wall lifts. Say why "
+       "and stop."))
+
+(defn- halted-of
+  "The sit's `halted` block when the seat is against the week's fuel
+  wall, or nil. The wall is the router's own arithmetic (R-5.2 step
+  3): `grants/spent-this-week` against the seat's budget, through
+  `grants/under-budget?`, so the sit and the wall cannot disagree
+  about one number. `detail` is the sentence the `fire` door's
+  `not-halted` says, and `lifts_at` is when the window has rolled far
+  enough (`seat-routes/lifts-at`), or null when no roll will."
+  [eng seat named now]
+  (let [spent (grants/spent-this-week eng (:id seat) now)
+        budget (or (get-in seat [:data :budget_usd_per_week]) 0M)]
+    (when-not (grants/under-budget? spent budget)
+      {"wall" "budget"
+       "detail" (str "The seat is against a wall. The week's fuel is spent: "
+                     spent " of " budget " over " named "'s sittings of"
+                     " the last seven days. The wall lifts on its own as"
+                     " the window rolls.")
+       "lifts_at" (some-> (seat-routes/lifts-at eng seat now) str)})))
+
 (def ^:private change-beside-the-walk-note
   "What a seat whose rows are ASKS does with the change beside them
   (R-12.32). The row it works is the ask; the door that ends the
@@ -3203,6 +3230,12 @@
             ;; the seat's from this moment, whatever the queue answers
             _ (bind-session! eng sid {:seat seat-id :sitter sitter
                                       :bound-at now :sitting (:id sitting)})
+            ;; h' · the fuel wall. A seat whose week is spent walks
+            ;; nothing (the router scopes its grant to nothing), so the
+            ;; sit says so in words and hands no walk, no change and no
+            ;; bench: a run already in flight, or one a person started
+            ;; by hand, then stops for the right reason
+            halted (halted-of eng seat named now)
             ;; i · the walk, read as the sitter under the seat's grant
             ;; and through the query path — the rows this firing works
             ;; through, with the doors each one affords
@@ -3210,8 +3243,9 @@
             ;; … past the rows another open sitting of this seat was
             ;; handed: a fire and a wake that land together are two
             ;; runs, and the second walks the next row, not the first's
-            walk (walk-of eng call sitter-sees seat
-                          (seats/claimed-rows eng seat-id (:id sitting)))
+            walk (when-not halted
+                   (walk-of eng call sitter-sees seat
+                            (seats/claimed-rows eng seat-id (:id sitting))))
             ;; … and the rows this sitting was handed are its own until
             ;; it closes
             _ (when sitting
@@ -3222,10 +3256,11 @@
             ;; engine finds or mints for a seat that walks a queue of
             ;; asks (R-12.32). The sentence is what the seat is told
             ;; when there is no change and therefore no bench.
-            [change change-note] (change-of-sitting eng seat walk)
+            [change change-note] (when-not halted
+                                   (change-of-sitting eng seat walk))
             ;; i'' · the bench, for a seat whose work is the code: the
             ;; worktree is made before this answer leaves (R-12.29)
-            bench (bench-of eng gate-rpc seat change)
+            bench (when-not halted (bench-of eng gate-rpc seat change))
             ;; … and the worktree it made, on the binding: every
             ;; bench call after this one carries its repository and
             ;; its branch without the seat copying them (`bench-stamped`)
@@ -3256,7 +3291,9 @@
                     :mode (or (some-> (get-in seat [:data :mode]) str not-empty)
                               seats/default-mode)
                     :note (str "You sit in `" named "`. "
-                               (if walk walk-note no-walk-note)
+                               (cond halted halted-note
+                                     walk walk-note
+                                     :else no-walk-note)
                                (when (get walk "judgment")
                                  judgment-walk-note)
                                (when said change-beside-the-walk-note)
@@ -3268,6 +3305,7 @@
                                (:origin session)
                                ""))
                     "key" transcript-key})
+            halted (assoc "halted" halted)
             walk (assoc "walk" walk)
             said (assoc "change" said)
             bench (merge bench)
