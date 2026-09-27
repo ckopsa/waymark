@@ -47,6 +47,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.schedules :as schedules]
@@ -54,7 +55,8 @@
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.security KeyPairGenerator)))
+  (:import (java.security KeyPairGenerator)
+           (java.time Instant)))
 
 ;; ── the fake rig, answering the contract (6.3.1) ────────────────────
 
@@ -1277,6 +1279,110 @@
       (answer! st "bench__merge" {:state "waiting"})
       (bench/merge-green! (:eng w) seen)
       (is (= 3 (count (calls-of st "bench__merge")))))))
+
+;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
+
+(def ^:private person-policy {:auto_merge false})
+
+(def ^:private approver
+  (t/principal {:id "colton" :display "Colton Kopsa" :roles #{"approver"}}))
+
+(def ^:private t0 (Instant/parse "2026-09-27T12:00:00Z"))
+
+(defn- minutes-after [m] (.plusSeconds ^Instant t0 (long (* 60 m))))
+
+(defn- observe!
+  "The mirror, writing what GitHub says about the submitted pull
+  request now."
+  [{:keys [eng change]} input]
+  (inv/invoke! eng :change (str (:id change)) :observe_submitted input
+               {:principal mirror/source-principal}))
+
+(defn- clean-world
+  "A submitted change GitHub calls clean: its checks green, no conflict."
+  [policy-extra]
+  (let [w (submitted-world policy-extra)]
+    (observe! w {:mergeable "clean"})
+    w))
+
+(defn- arg [m k] (str (or (get m k) (get m (name k)))))
+
+(deftest a-green-clean-change-waiting-on-a-person-asks-once-after-the-wait
+  (let [{:keys [eng state]} (clean-world person-policy)
+        waiting (atom {})]
+    (is (= 0 (bench/ask-for-merges! eng waiting t0))
+        "the first pass that sees it clean starts the clock")
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 59)))
+        "nothing is asked before the wait")
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120)))
+        "one ask, not one each pass")
+    (is (= 0 (bench/merge-green! eng (atom {})))
+        "the house pass merges nothing in a repository a person merges")
+    (let [[ask :as asks] (bench/merge-asks eng)
+          why (str (get-in ask [:data :why]))]
+      (is (= 1 (count asks)))
+      (is (= :held (:state ask)))
+      (is (= "bench__merge" (get-in ask [:data :tool])))
+      (is (str/includes? why "https://github.com/ckopsa/waymark/pull/31") why)
+      (is (str/includes? why "6.3 The bench") why)
+      (is (str/includes? why "1h 1m") why)
+      (testing "the person's Allow merges it exactly as the house would"
+        (answer! state "bench__merge" {:state "merged"})
+        (let [out (inv/invoke! eng :held_call (str (:id ask)) :allow {}
+                               {:principal approver})]
+          (held/after-allow! eng (get (inv/resources eng) :held_call)
+                             :allow out))
+        (let [calls (calls-of state "bench__merge")
+              args (:arguments (first calls))]
+          (is (= 1 (count calls)))
+          (is (= a-repository (arg args :repo)))
+          (is (= "31" (arg args :number)))
+          (is (= a-commit (arg args :head_sha))
+              "the head that was green when the house asked, and no other"))
+        (is (= :done (:state (first (bench/merge-asks eng)))))
+        (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 300)))
+            "an answered ask is not raised again for its head")))))
+
+(deftest a-house-merged-repository-raises-no-merge-ask
+  (let [{:keys [eng]} (clean-world house-policy)
+        waiting (atom {})]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 600))))
+    (is (empty? (bench/merge-asks eng))
+        "the house pass merges this repository, so nobody is asked")))
+
+(deftest a-change-that-is-not-clean-raises-no-merge-ask
+  (let [{:keys [eng] :as w} (submitted-world person-policy)
+        waiting (atom {})]
+    (observe! w {:mergeable "blocked"})
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 600))))
+    (is (empty? (bench/merge-asks eng)))))
+
+(deftest a-refused-merge-ask-is-not-raised-again-for-its-head
+  (let [{:keys [eng] :as w} (clean-world person-policy)
+        waiting (atom {})]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (testing "a new head that goes green while the ask is held raises no second"
+      (observe! w {:head_sha a-head :mergeable "clean"})
+      (bench/ask-for-merges! eng waiting (minutes-after 62))
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 200))))
+      (is (= 1 (count (bench/merge-asks eng)))))
+    (inv/invoke! eng :held_call (str (:id (first (bench/merge-asks eng))))
+                 :refuse {:reason "Not yet; I want to read it first."}
+                 {:principal approver})
+    (testing "once refused, that ask's head is never asked again"
+      (observe! w {:head_sha a-commit})
+      (bench/ask-for-merges! eng waiting (minutes-after 300))
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 500))))
+      (is (= 1 (count (bench/merge-asks eng)))))
+    (testing "a head nobody was asked about is asked once, after its wait"
+      (observe! w {:head_sha a-head})
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 501))))
+      (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 600))))
+      (is (= 2 (count (bench/merge-asks eng)))))))
 
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)
