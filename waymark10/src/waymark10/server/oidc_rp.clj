@@ -729,6 +729,16 @@
                          (:uri req))
               (handler req)
 
+              ;; the transcript door (docs/spec-transcript.md R-5.1):
+              ;; a hook in a cloud run holds no bearer and must hold
+              ;; none, and the key in its header is the whole
+              ;; credential — 128 random bits that answer for one
+              ;; transcript's lines and nothing else, compared in
+              ;; constant time behind the door. POST only: the door
+              ;; has no other method, and nothing else here opens.
+              (and post? (= (:uri req) "/api/-/sittings/transcript"))
+              (handler req)
+
               ;; OAuth discovery (routes/mcp.clj, RFC 9728): the
               ;; document that tells an anonymous client where to stop
               ;; being anonymous. Closing it behind the gate would make

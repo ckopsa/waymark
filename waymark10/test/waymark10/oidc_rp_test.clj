@@ -299,7 +299,18 @@
       (is (= 401 (:status (a (get-req "/api/payouts"
                                       {:headers {"authorization" "Basic dXNlcjpwdw=="}}))))))
     (testing "the /auth doors stay open to the anonymous"
-      (is (= 302 (:status (a (get-req "/auth/login"))))))))
+      (is (= 302 (:status (a (get-req "/auth/login"))))))
+    (testing "the transcript door is open to a keyed POST and to nothing
+              else (docs/spec-transcript.md R-5.1): its header key is
+              the whole credential, and the door judges it"
+      (is (= 200 (:status (a {:request-method :post
+                              :uri "/api/-/sittings/transcript"
+                              :headers {"waymark-transcript-key" "k"}}))))
+      (is (= 401 (:status (a (get-req "/api/-/sittings/transcript")))))
+      (is (= 401 (:status (a {:request-method :post
+                              :uri "/api/-/sittings/close"
+                              :headers {}})))
+          "the close stays behind the gate"))))
 
 (deftest no-rp-config-is-the-identity-wrap
   (let [a ((rp/wrap {:oidc (oidc/config {:issuer issuer :audience audience
