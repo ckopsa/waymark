@@ -706,6 +706,126 @@
       (is (= "2026-09-18T10:00:00Z" (gh/cursor source))
           "the cursor advances only when every repository answered"))))
 
+;; ── check runs refused (a private repository) ───────────────────────
+;;
+;; A fine-grained token cannot hold `Checks`, so on a PRIVATE repository
+;; the check-runs route answers 403. The source reads the same head
+;; through the Actions API instead, and no failure of the check read
+;; costs a repository its pass.
+
+(def ^:private private-repo "ckopsa/waymark-doors")
+
+(def ^:private a-private-pull
+  (assoc a-pull-request
+         :number 5
+         :html_url "https://github.com/ckopsa/waymark-doors/pull/5"))
+
+(def ^:private a-red-job
+  "The Actions job behind the red check, in the shape the jobs route
+  answers."
+  {:id 7001
+   :run_id 900
+   :name "test10 (shard 3)"
+   :status "completed"
+   :conclusion "failure"
+   :head_sha (get-in a-pull-request [:head :sha])
+   :started_at "2026-09-18T13:41:00Z"
+   :completed_at "2026-09-18T13:52:00Z"
+   :html_url "https://github.com/ckopsa/waymark-doors/actions/runs/900/job/7001"})
+
+(def ^:private a-green-job
+  {:id 7002 :run_id 900 :name "check-queue" :status "completed"
+   :conclusion "success"
+   :head_sha (get-in a-pull-request [:head :sha])
+   :html_url "https://github.com/ckopsa/waymark-doors/actions/runs/900/job/7002"})
+
+(defn- private-rig
+  "A private repository whose check-runs route answers `status`, with
+  one open pull request and one workflow run of one red and one green
+  job on its head."
+  [state status]
+  (let [sha (get-in a-pull-request [:head :sha])]
+    (gh/seed-pull! state private-repo a-private-pull {:files the-files})
+    (gh/checks-answer! state private-repo status)
+    (gh/seed-run! state private-repo sha {:id 900 :head_sha sha})
+    (gh/seed-job! state private-repo 900 a-red-job)
+    (gh/seed-job! state private-repo 900 a-green-job)
+    (gh/seed-log! state "7001" the-log)))
+
+(deftest a-refused-check-read-is-made-through-actions
+  (let [state (gh/fake-state)
+        _ (private-rig state 403)
+        ;; a second open head, so the pass shows it remembered the 403
+        _ (gh/seed-pull! state private-repo
+                         (-> a-private-pull
+                             (assoc :number 6)
+                             (assoc-in [:head :ref] "another")
+                             (assoc-in [:head :sha] "feedface")))
+        engine (boot)
+        source (gh/fake-source state {:repos private-repo})
+        census (forge/pass! {:source source :engine engine :log-fn quiet})
+        change (one-row engine :change
+                        {:change_id "github:ckopsa/waymark-doors#5"})
+        run (one-row engine :ci_run
+                     {:run_id "github:ckopsa/waymark-doors/check-run/7001"})]
+    (testing "the pull request is adopted with its number"
+      (is (some? change))
+      (is (= 5 (get-in change [:data :number])))
+      (is (= (get-in a-pull-request [:head :sha])
+             (get-in change [:data :head_sha])))
+      (is (some? (one-row engine :change
+                          {:change_id "github:ckopsa/waymark-doors#6"}))))
+
+    (testing "its red Actions job is a ci_run, as a red check run would be"
+      (is (= 1 (:runs-minted census)))
+      (is (= :red (:state run)))
+      (is (= "test10 (shard 3)" (get-in run [:data :check_name])))
+      (is (= "failure" (get-in run [:data :conclusion])))
+      (is (= (str (:id change)) (str (get-in run [:data :change]))))
+      (is (= "line 500"
+             (last (str/split-lines (get-in run [:data :log_excerpt]))))
+          "the job page names the job, so the log hop still finds it")
+      (is (nil? (one-row engine :ci_run
+                         {:run_id "github:ckopsa/waymark-doors/check-run/7002"}))
+          "the green job is nobody's work"))
+
+    (testing "the refusal is remembered for the rest of the pass"
+      (is (= 1 (count (filter #(str/ends-with? (str (:path %)) "/check-runs")
+                              (gh/requests state))))
+          "the second head went straight to Actions"))
+
+    (testing "the checks on one head read through Actions too"
+      (is (= [{:check_name "test10 (shard 3)" :status "completed"
+               :conclusion "failure"}
+              {:check_name "check-queue" :status "completed"
+               :conclusion "success"}]
+             (forge/forge-checks source private-repo
+                                 (get-in a-pull-request [:head :sha])))))))
+
+(deftest a-failed-check-read-costs-the-checks-and-not-the-pass
+  (let [state (gh/fake-state)
+        _ (private-rig state 500)
+        _ (gh/seed-pull! state repo a-pull-request {:files the-files})
+        _ (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
+                          a-red-check)
+        source (gh/fake-source state {:repos [private-repo repo]})
+        answer (forge/forge-poll source)]
+    (is (true? (:complete? answer))
+        "both repositories answered, so the cursor may move")
+    (is (= #{"github:ckopsa/waymark-doors#5" "github:ckopsa/waymark#31"}
+           (into #{} (map :change_id) (:changes answer)))
+        "the pull request is still adopted, checks or no checks")
+    (is (= 5 (:number (first (filter #(= private-repo (:repository %))
+                                     (:changes answer))))))
+    (is (= ["github:ckopsa/waymark/check-run/41752098311"]
+           (mapv :run_id (:checks answer)))
+        "the failing repository has no checks, and the other's pass is
+         untouched")
+    (is (not-any? #(str/includes? (str (:path %)) "/actions/runs")
+                  (filter #(str/includes? (str (:path %)) private-repo)
+                          (gh/requests state)))
+        "a 500 is not a refusal: Actions is read only on 401 and 403")))
+
 ;; ── the repositories are the rows (bead waymark-fp62.6.3.8) ─────────
 
 (def ^:private a-person (t/principal {:id "colton" :display "Colton"}))
@@ -753,6 +873,62 @@
                      {:principal a-person}))
       (is (= [repo] (:repositories (forge/forge-poll source)))
           "the house stops working a repository with one tap"))))
+
+;; ── a repository the token cannot read (ticket 116dfb0d) ───────────────
+
+(defn- source-note-of [engine repository]
+  (get-in (one-row engine :repo_policy {:repository repository})
+          [:data :source_note]))
+
+(deftest a-repository-the-source-cannot-read-says-so-on-its-policy-row
+  (let [state (gh/fake-state)
+        engine (boot)
+        source (gh/fake-source state {:repos-fn #(bench/active-repositories
+                                                  engine)})
+        doors "ckopsa/waymark-doors"]
+    (gh/seed-pull! state repo a-pull-request {:files the-files})
+    (gh/seed-pull! state doors
+                   (assoc a-pull-request :number 7
+                          :html_url "https://github.com/ckopsa/waymark-doors/pull/7")
+                   {})
+    (policy! engine repo)
+    (policy! engine doors)
+    (gh/refuse! state doors 403)
+
+    (testing "a 403 on one repository's pulls listing lands on its row"
+      (let [census (pass! {:source source :engine engine})
+            note (source-note-of engine doors)]
+        (is (= 1 (:noted census)))
+        (is (str/starts-with?
+             (str note)
+             "GitHub answered 403 for GET /repos/ckopsa/waymark-doors/pulls at ")
+            "the status, the route and the time")
+        (is (nil? (source-note-of engine repo))
+            "and the repository that answered carries no note")
+        (is (some? (the-change engine))
+            "the other repository's pass is not cost by the refusal")))
+
+    (testing "a second refusal of the same kind writes nothing again"
+      (let [before (source-note-of engine doors)]
+        (is (= 0 (:noted (pass! {:source source :engine engine}))))
+        (is (= before (source-note-of engine doors)))))
+
+    (testing "a good pass clears the note"
+      (gh/refuse! state doors nil)
+      (is (= 1 (:noted (pass! {:source source :engine engine}))))
+      (is (nil? (source-note-of engine doors))))
+
+    (testing "a pass with nothing to say writes nothing"
+      (is (= 0 (:noted (pass! {:source source :engine engine})))))))
+
+(deftest a-source-note-is-the-engines-hand-alone
+  (let [engine (boot)
+        row (policy! engine "ckopsa/waymark-doors")]
+    (is (thrown? Exception
+                 (inv/invoke! engine :repo_policy (str (:id row)) :note_source
+                              {:answered 403 :route "GET /repos/x/y/pulls"}
+                              {:principal a-person}))
+        "a person reads the note and never writes it")))
 
 ;; ── the wiring's own contract ───────────────────────────────────────
 

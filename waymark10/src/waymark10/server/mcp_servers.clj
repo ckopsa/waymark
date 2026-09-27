@@ -61,6 +61,20 @@
   the engine cannot invoke `mark_dark` on a row that does not exist
   yet.
 
+  AND DARK IS NOT FOREVER. A rig that restarts fails the calls made
+  while it is down, and a row the engine darkened for that must not
+  wait on a person to come back. `dark_by` says whose dark it is:
+  `engine` when a failure put it there (`mark_dark`, a birth that did
+  not answer, and a row written before the field, which only the
+  engine could darken), `person` when a person's `restore` did. The
+  engine re-probes every row it darkened on a backoff (`probe-dark!`,
+  30s, 1m, 2m, 4m, then every 5m), and when tools/list answers it
+  walks `mark_live` in its own hand; `revived_at` records that the
+  row came back on its own. A call to such a row makes one live probe
+  before it answers the 503 (`revive!`), so a seat right after a
+  restart is not refused for a server that is already back. A row a
+  person put dark stays dark until a person marks it live.
+
   A SECRET NEVER LANDS (R-9). `auth_env` names an environment
   variable; the http client reads it at call time. A value that looks
   like a secret (a space, a colon, more than 64 characters) refuses
@@ -550,9 +564,18 @@
           :tools tools
           :tools_hash hash
           :discovered_at now
-          :last_error nil))
+          :last_error nil
+          :dark_by nil))
 
 ;; ── calls past the grant ────────────────────────────────────────────
+
+(defn person-darkened?
+  "Did a person put this row dark on purpose? Only a person's
+  `restore` writes `dark_by person`; a failure writes `engine`, and a
+  row that names neither was darkened before the field existed, when
+  only the engine's own hand could darken a row."
+  [row]
+  (= "person" (str (get-in row [:data :dark_by]))))
 
 (defn dark-problem [row]
   (p/problem :mcp-server-dark 503 "Server dark"
@@ -560,8 +583,12 @@
                            " is dark"
                            (when-some [e (get-in row [:data :last_error])]
                              (str " (" e ")"))
-                           ". No power reaches it until a person marks"
-                           " it live.")
+                           (if (person-darkened? row)
+                             ". A person put it dark, and no power reaches it until a person marks it live."
+                             (str ". The engine probed it just now and it did"
+                                  " not answer; it probes again on a backoff"
+                                  " and opens the row when it does, or a"
+                                  " person may mark it live.")))
               :remedies [(str "POST /api/mcp_servers/" (:id row)
                               "/-/mark_live — the engine discovers the"
                               " server's tools first, and refuses when"
@@ -578,18 +605,52 @@
              (ex-message e) ")")))
   (drop-client! (:id row)))
 
+(defn revive!
+  "One live probe of a row the engine darkened: tools/list on a fresh
+  client, and when the server answers, the engine's own `mark_live`,
+  which discovers again and mirrors what it read. → the row, live, when
+  the server answered; nil when it did not, or when a person put the
+  row dark (`person-darkened?`), which no probe revives.
+
+  The probe reads before it walks the door, so a server that is still
+  down costs a closed client and no refused transition in the log.
+  Two probes that race both read an answer and one `mark_live` lands;
+  the other's refusal is caught, and the row read afterwards is live
+  either way."
+  [eng row]
+  (when (and (= :dark (:state row)) (not (person-darkened? row)))
+    (let [seam (seam-of eng)
+          answered? (try
+                      (fetch-tools! seam row)
+                      true
+                      (catch Exception _
+                        (drop-client! (:id row))
+                        false))]
+      (when answered?
+        (try
+          (inv/invoke! eng :mcp_server (str (:id row)) :mark_live nil
+                       {:principal engine-actor})
+          (catch Exception e
+            (warn! "mark_live for " (get-in row [:data :name])
+                   " did not land (" (ex-message e) ")")))
+        (let [now (row-by-name eng (get-in row [:data :name]))]
+          (when (= :live (:state now)) now))))))
+
 (defn call!
   "One tools/call by prefixed name, past the grant — the engine's own
   hand. → the CallToolResult. Refuses 404 when no row answers to the
-  name, 503 when the row is dark. A failure the client calls fatal
+  name. A dark row gets one live probe first (`revive!`): when the
+  server answers the row is live again and the call goes out, and
+  otherwise the call refuses 503. A failure the client calls fatal
   marks the row dark and rethrows."
   [eng tool args]
   (let [{:keys [row bare] :as hit} (resolve-tool eng tool)]
     (when (nil? hit)
       (throw (p/not-found "power" (str tool))))
-    (when (= :dark (:state row))
-      (throw (dark-problem row)))
-    (let [seam (seam-of eng)]
+    (let [row (if (= :dark (:state row))
+                (or (revive! eng row) (throw (dark-problem row)))
+                row)
+          seam (seam-of eng)]
       (try
         (wire! seam row "tools/call" {:name bare :arguments (or args {})})
         (catch Exception e
@@ -761,7 +822,16 @@
             (:now ctx))))
 
 (defhandler mark-dark-server [row inp _ctx]
-  (update row :data assoc :last_error (:error inp)))
+  (update row :data assoc :last_error (:error inp) :dark_by "engine"))
+
+(defhandler mark-live-server [row _inp ctx]
+  (-> (mirror row (fetch-tools! (get-in ctx [:services :mcp-servers]) row)
+              (:now ctx))
+      (assoc-in [:data :revived_at]
+                (when (= :system (:type (:principal ctx))) (:now ctx)))))
+
+(defhandler restore-server [row _inp _ctx]
+  (update row :data assoc :dark_by "person"))
 
 (defn- born
   "The create's discover (R-4). A server that does not answer makes a
@@ -772,7 +842,8 @@
     (catch Exception e
       (-> row
           (assoc :state :dark)
-          (update :data assoc :last_error (brief (ex-message e)))))))
+          (update :data assoc :last_error (brief (ex-message e))
+                  :dark_by "engine")))))
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 
@@ -1007,7 +1078,18 @@
    [:discovered_at {:optional true :x-display {:label "Discovered at"}}
     [:maybe :waymark/instant]]
    [:last_error {:optional true :x-display {:raw true :label "Last error"}}
-    [:maybe [:string {:max 500}]]]])
+    [:maybe [:string {:max 500}]]]
+   ;; whose dark it is: `engine` when a failure put the row dark, and
+   ;; the engine re-probes it; `person` when a person's restore did,
+   ;; and only a person's mark_live opens it again
+   [:dark_by {:optional true
+              :x-display {:label "Dark by"
+                          :help "engine: a failure put the row dark, and the engine probes it on a backoff until it answers. person: a person put it dark, and it stays dark until a person marks it live."}}
+    [:maybe [:enum "engine" "person"]]]
+   [:revived_at {:optional true
+                 :x-display {:label "Came back on its own at"
+                             :help "When the engine's own probe found the server answering and marked it live. Empty when a person marked it live."}}
+    [:maybe :waymark/instant]]])
 
 (def ^:private discover-input
   "What the CADENCE saw: the hash of the tool list the engine read
@@ -1104,7 +1186,7 @@
      :edit {:fence false
             :unfenced-reason "The engine's own health flip after a call failed on the wire — no read preceded it to fence against."}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "A person's mark_live is the way back, and it proves the server answers first."}
+              :one-way "The engine probes the server on a backoff and walks mark_live when it answers; a person's mark_live is the other way back, and it proves the server answers first."}
      :handler mark-dark-server
      :display {:label "Went dark"}}
     :mark_live
@@ -1112,7 +1194,7 @@
      :guards [a-person-or-the-engine]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The engine discovers the server first; a server that does not answer refuses the door and the row stays dark."}
-     :handler discover-server
+     :handler mark-live-server
      :display {:label "Mark live" :style :primary :order 1
                :description "Discover the server's tools and open it to powers again"}}
     :retire
@@ -1125,7 +1207,8 @@
     {:from #{:retired} :to :dark
      :guards [a-person-or-the-engine]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "A restored server comes back dark: mark_live discovers it before any power reaches it."}
+              :one-way "A restored server comes back dark, and dark by a person: the engine does not probe it, and a person's mark_live discovers it before any power reaches it."}
+     :handler restore-server
      :display {:label "Restore" :order 1}}}
    :scenarios [an-agent-does-not-retire-a-server
                the-person-retires-the-server
@@ -1164,12 +1247,77 @@
             (warn! "discover of " (get-in row [:data :name]) " failed ("
                    (ex-message e) ")")))))))
 
+(def probe-backoff-ms
+  "The waits before each probe of a row the engine darkened: the first
+  30 seconds after the probe pass first sees it dark, then doubling,
+  and never more than five minutes apart."
+  [30000 60000 120000 240000 300000])
+
+(def default-probe-tick-ms
+  "How often the probe pass looks for a dark row whose wait is over."
+  5000)
+
+(defonce ^:private probes
+  ;; row id → {:tries n :due epoch-ms}, for the dark rows the probe
+  ;; pass has seen; a row that is no longer dark leaves the map
+  (atom {}))
+
+(defn- probe-wait [tries]
+  (nth probe-backoff-ms (min (long tries) (dec (count probe-backoff-ms)))))
+
+(defn probe-dark!
+  "One pass of the re-probe: every row the engine darkened whose wait
+  is over gets one `revive!`. A row seen dark for the first time waits
+  the first step of `probe-backoff-ms`; a probe the server does not
+  answer waits the next step. A row a person put dark is never
+  probed. `now-ms` is the clock, the wall's unless a test gives one.
+  → the names of the rows that came back, sorted."
+  ([eng] (probe-dark! eng (System/currentTimeMillis)))
+  ([eng now-ms]
+   (let [now-ms (long now-ms)
+         dark (filterv #(and (= :dark (:state %)) (not (person-darkened? %)))
+                       (rows eng))
+         back (volatile! [])]
+     (swap! probes select-keys (map #(str (:id %)) dark))
+     (doseq [row dark
+             :let [id (str (:id row))
+                   seen (get @probes id)]]
+       (cond
+         (nil? seen)
+         (swap! probes assoc id {:tries 0 :due (+ now-ms (long (probe-wait 0)))})
+
+         (<= (long (:due seen)) now-ms)
+         (if (revive! eng row)
+           (do (swap! probes dissoc id)
+               (vswap! back conj (str (get-in row [:data :name]))))
+           (let [tries (inc (long (:tries seen)))]
+             (swap! probes assoc id
+                    {:tries tries :due (+ now-ms (long (probe-wait tries)))})))
+
+         :else nil))
+     (vec (sort @back)))))
+
 (defn start-discover-sweeper!
   "The cadence (R-4): every `:interval-ms`, `sweep-discover!`. The
   first pass is one interval after the start, so a boot writes
-  nothing. Returns the handle `stop-discover-sweeper!` takes."
-  [eng {:keys [interval-ms] :or {interval-ms default-discover-ms}}]
+  nothing. Beside it, every `:probe-tick-ms`, `probe-dark!`, so a row
+  a failure put dark comes back on its own once its server answers.
+  Returns the handle `stop-discover-sweeper!` takes."
+  [eng {:keys [interval-ms probe-tick-ms]
+        :or {interval-ms default-discover-ms
+             probe-tick-ms default-probe-tick-ms}}]
   (let [stop (CountDownLatch. 1)
+        probe (Thread. ^Runnable
+                       (fn []
+                         (loop []
+                           (when-not (.await stop (long probe-tick-ms)
+                                             TimeUnit/MILLISECONDS)
+                             (try (probe-dark! eng)
+                                  (catch Exception e
+                                    (warn! "the probe pass failed ("
+                                           (ex-message e) ")")))
+                             (recur))))
+                       "waymark10-mcp-probe")
         t (Thread. ^Runnable
                    (fn []
                      (loop []
@@ -1182,7 +1330,8 @@
                          (recur))))
                    "waymark10-mcp-discover")]
     (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+    (doto ^Thread probe (.setDaemon true) (.start))
+    {:thread t :probe probe :stop stop}))
 
 (defn stop-discover-sweeper! [{:keys [^CountDownLatch stop]}]
   (some-> stop .countDown)

@@ -22,9 +22,21 @@
       GET  /repos/{repo}/pulls/{n}/files            the paths
       GET  /repos/{repo}/pulls/{n}/reviews          the review state
       GET  /repos/{repo}/commits/{sha}/check-runs   the red runs
-      GET  /repos/{repo}/actions/runs/{id}/jobs     …and their jobs
+      GET  /repos/{repo}/actions/runs?head_sha=…    …or, when refused, the
+      GET  /repos/{repo}/actions/runs/{id}/jobs     runs and their jobs
       GET  /repos/{repo}/actions/jobs/{id}/logs     the log tail
       POST /repos/{repo}/issues/{n}/labels          THE ONE WRITE
+
+  CHECK RUNS REFUSED. A fine-grained token cannot hold `Checks` (GitHub
+  grants it to Apps only), so on a PRIVATE repository the check-runs
+  route answers 403. The same head is then read through the Actions
+  API, which `Actions: read` opens: each job of each workflow run on
+  the head becomes a check run in the shape the rest of this source
+  reads, its `details_url` the job's own page so the log hop still
+  finds the job. The refusal is remembered per repository for the
+  pass, so the next head goes straight to Actions. Any other failure
+  of the check read costs that head its checks, never the
+  repository's pass.
 
   THE CURSOR is GitHub's own `updated_at`, as gtasks's is Google's.
   The pulls listing is asked sorted by `updated` descending, and the
@@ -449,14 +461,70 @@
                 (ex-message e) ")")
          nil)))
 
+(defn job->check
+  "One Actions job → the check run shape this source reads. A job's
+  page names its run and itself, which is what `job-of` looks for in
+  `details_url`."
+  [sha job]
+  {:id (:id job)
+   :name (:name job)
+   :status (:status job)
+   :conclusion (:conclusion job)
+   :head_sha (or (word (:head_sha job)) sha)
+   :started_at (:started_at job)
+   :completed_at (:completed_at job)
+   :html_url (:html_url job)
+   :details_url (:html_url job)})
+
+(defn- actions-checks!
+  "Every job of every workflow run on the head, as check runs: the read
+  a token without `Checks` can still make."
+  [this repo sha]
+  (let [runs (:workflow_runs
+              (call! this "GET" (str "/repos/" repo "/actions/runs")
+                     {:params {:head_sha sha :per_page page-size}}))]
+    (into []
+          (mapcat
+           (fn [run]
+             (map #(job->check sha %)
+                  (:jobs (call! this "GET"
+                                (str "/repos/" repo "/actions/runs/"
+                                     (:id run) "/jobs")
+                                {:params {:per_page page-size}})))))
+          runs)))
+
+(defn- refused? [e]
+  (contains? #{401 403} (:status (ex-data e))))
+
 (defn- check-runs!
   "Every check run on the head, as one page. `filter=latest` is
-  GitHub's own: a check run that ran twice answers once."
-  [this repo sha]
-  (let [resp (call! this "GET"
-                    (str "/repos/" repo "/commits/" sha "/check-runs")
-                    {:params {:per_page page-size :filter "latest"}})]
-    (vec (:check_runs resp))))
+  GitHub's own: a check run that ran twice answers once. A repository
+  whose check-runs route refused the token is read through Actions,
+  and stays so for the rest of the pass."
+  [{:keys [actions-only] :as this} repo sha]
+  (if (contains? @actions-only repo)
+    (actions-checks! this repo sha)
+    (try
+      (let [resp (call! this "GET"
+                        (str "/repos/" repo "/commits/" sha "/check-runs")
+                        {:params {:per_page page-size :filter "latest"}})]
+        (vec (:check_runs resp)))
+      (catch clojure.lang.ExceptionInfo e
+        (if (refused? e)
+          (do (swap! actions-only conj repo)
+              (actions-checks! this repo sha))
+          (throw e))))))
+
+(defn- head-checks!
+  "The check runs of one open head for the pass. A read that fails
+  costs this pull request its checks, like `files!` and `reviews!`,
+  and never the repository's pass."
+  [this repo number sha]
+  (try (check-runs! this repo sha)
+       (catch Exception e
+         (warn! "the checks of " repo "#" number " did not answer ("
+                (ex-message e) ")")
+         [])))
 
 (defn- red?
   "A check run that finished and failed. `cancelled` is not red:
@@ -477,12 +545,29 @@
                  {:files (files! this repo number)
                   :reviews (reviews! this repo number)}))))
 
+(defn- pulls-route [repo]
+  (str "GET /repos/" repo "/pulls"))
+
+(def unreadable-statuses
+  "The answers to the pulls listing that mean the token cannot read the
+  repository (ticket 116dfb0d): not signed in, not allowed, or a
+  private repository GitHub will not admit exists."
+  #{401 403 404})
+
 (defn- repo-pass!
   "One repository's whole read: the window of pull requests, each one's
   document, and the red check runs of every open head. A throw here is
   one repository's failure, which the poll catches."
   [this repo floor]
-  (let [pulls (list-pulls! this repo floor)
+  (let [pulls (try (list-pulls! this repo floor)
+                   (catch clojure.lang.ExceptionInfo e
+                     ;; the listing is the one route that says whether
+                     ;; the token reads this repository at all, so its
+                     ;; refusal carries the route out to the poll
+                     (throw (ex-info (ex-message e)
+                                     (assoc (ex-data e)
+                                            :route (pulls-route repo))
+                                     e))))
         changes (mapv #(pull-pass! this repo %) pulls)
         checks (into []
                      (mapcat
@@ -493,7 +578,8 @@
                                 (comp (filter red?)
                                       (map #(check->doc repo (:change_id doc)
                                                         (:head_sha doc) %)))
-                                (check-runs! this repo (:head_sha doc))))))
+                                (head-checks! this repo (:number doc)
+                                              (:head_sha doc))))))
                      changes)]
     {:changes changes :checks checks
      :updates (mapv #(word (:updated_at %)) pulls)}))
@@ -569,10 +655,11 @@
             (warn! no-repositories-said))
           named))))
 
-(defrecord GitHubSource [call repos-fn cursor calls said]
+(defrecord GitHubSource [call repos-fn cursor calls said actions-only]
   forge/ForgeSource
   (forge-poll [this]
     (reset! calls 0)
+    (reset! actions-only #{})
     (let [floor (window-start @cursor)
           repos (repos-now this)
           answers (mapv (fn [repo]
@@ -582,7 +669,13 @@
                                  (warn! "the repository " repo
                                         " did not answer (" (ex-message e)
                                         "); its rows keep their stored truth")
-                                 {:repo repo :ok? false})))
+                                 (let [{:keys [status route]} (ex-data e)]
+                                   (cond-> {:repo repo :ok? false}
+                                     (and route
+                                          (contains? unreadable-statuses
+                                                     status))
+                                     (assoc :refusal {:status status
+                                                      :route route}))))))
                         repos)
           answered (filterv :ok? answers)
           complete? (= (count answered) (count answers))]
@@ -593,6 +686,9 @@
       {:changes (into [] (mapcat :changes) answered)
        :checks (into [] (mapcat :checks) answered)
        :repositories (mapv :repo answers)
+       :answered (mapv :repo answered)
+       :refusals (into {} (keep #(when-some [r (:refusal %)] [(:repo %) r]))
+                       answers)
        :complete? complete?}))
 
   (forge-log-tail [this check]
@@ -663,7 +759,8 @@
                   (repos-fn-of config)
                   (atom nil)
                   (atom 0)
-                  (atom false)))
+                  (atom false)
+                  (atom #{})))
 
 (defn from-env
   "The deployed boundary off FACTORY10_GITHUB_TOKEN. nil when the token
@@ -719,9 +816,23 @@
   (swap! state update-in [:repos repo :checks sha]
          (fn [cs] (conj (vec cs) check))))
 
+(defn seed-run!
+  "One workflow run on one head, for the Actions read the source makes
+  when the check-runs route refuses. Its jobs come from `seed-job!`."
+  [state repo sha run]
+  (swap! state update-in [:repos repo :runs sha]
+         (fn [rs] (conj (vec rs) run))))
+
+(defn checks-answer!
+  "Make the check-runs route of one repository answer this status
+  instead of its runs: 403 is a token without `Checks` on a private
+  repository, 500 is any other failure. nil restores the answer."
+  [state repo status]
+  (swap! state assoc-in [:repos repo :checks-status] status))
+
 (defn seed-job!
   "One job of one workflow run, for the log hop the source walks when
-  `details_url` names only the run."
+  `details_url` names only the run, and for the Actions read."
   [state repo run job]
   (swap! state update-in [:repos repo :jobs (str run)]
          (fn [js] (conj (vec js) job))))
@@ -740,6 +851,15 @@
   (swap! state assoc :log-mode mode))
 
 (defn down! [state down?] (swap! state assoc :down (boolean down?)))
+
+(defn refuse!
+  "Make every route of one repository answer this status, as GitHub
+  does for a token that cannot read it; nil lifts the refusal."
+  [state repo status]
+  (swap! state update :refused
+         (fn [m] (if status (assoc m repo status) (dissoc m repo)))))
+
+(def ^:private repo-path #"/repos/([^/]+/[^/]+)(?:/.*)?")
 
 (defn requests
   "Every request the source made, oldest first."
@@ -761,6 +881,7 @@
 (def ^:private files-path #"/repos/([^/]+/[^/]+)/pulls/(\d+)/files")
 (def ^:private reviews-path #"/repos/([^/]+/[^/]+)/pulls/(\d+)/reviews")
 (def ^:private checks-path #"/repos/([^/]+/[^/]+)/commits/([^/]+)/check-runs")
+(def ^:private runs-path #"/repos/([^/]+/[^/]+)/actions/runs")
 (def ^:private jobs-path #"/repos/([^/]+/[^/]+)/actions/runs/(\d+)/jobs")
 (def ^:private job-log-path #"/repos/([^/]+/[^/]+)/actions/jobs/(\d+)/logs")
 (def ^:private labels-path #"/repos/([^/]+/[^/]+)/issues/(\d+)/labels")
@@ -784,6 +905,10 @@
             :anonymous (boolean anonymous)})
     (when (:down @state)
       (throw (ex-info "github unreachable" {})))
+    (when-some [status (some->> path (re-matches repo-path) second
+                                (get (:refused @state)))]
+      (throw (ex-info (str "github answered " status " for " method " " path)
+                      {:status status})))
     (let [st @state
           repo-of (fn [m] (get-in st [:repos (second m)]))]
       (cond
@@ -810,7 +935,16 @@
 
         (re-matches checks-path path)
         (let [m (re-matches checks-path path)]
-          {:check_runs (vec (get-in (repo-of m) [:checks (nth m 2)]))})
+          (if-some [status (:checks-status (repo-of m))]
+            (throw (ex-info (str "github answered " status " for " method
+                                 " " path)
+                            {:status status}))
+            {:check_runs (vec (get-in (repo-of m) [:checks (nth m 2)]))}))
+
+        (re-matches runs-path path)
+        (let [m (re-matches runs-path path)]
+          {:workflow_runs (vec (get-in (repo-of m)
+                                       [:runs (str (:head_sha params))]))})
 
         (re-matches jobs-path path)
         (let [m (re-matches jobs-path path)]
@@ -854,4 +988,5 @@
                    (repos-fn-of opts)
                    (atom cursor)
                    (atom 0)
-                   (atom false))))
+                   (atom false)
+                   (atom #{}))))
