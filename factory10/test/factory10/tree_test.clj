@@ -289,10 +289,17 @@
         "GitHub reopens a closed pull request, so the row comes back"))
   (testing "a submitted change keeps working, and a stuck one waits"
     (is (= #{:submit :discard_submitted :stall :observe_submitted
-             :adopt_submitted :merge :close}
+             :adopt_submitted :merge :close :fail :stick}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")
+    (is (= #{:submit :stall :observe_failing :recover :merge :close}
+           (offers change (assoc a-pull-request :state :failing) the-source))
+        "a red change is still the seat's work: the next round, or a
+         green head, brings it back (ticket d1742908)")
+    (is (= #{:submit :stall}
+           (offers change (assoc a-pull-request :state :failing) the-classifier))
+        "and a seat sees its own two doors on it and never the verdict")
     (is (= #{:unstick}
            (offers change (assoc a-pull-request :state :stuck) the-person))
         "a stuck change is the house asking a person to look at it")
@@ -423,7 +430,7 @@
       (is (not (contains? fields :labelled_at)))))
 
   (testing "the change machine carries the bench"
-    (is (= [:open :submitted :stuck :merged :closed] (:states change)))
+    (is (= [:open :submitted :failing :stuck :merged :closed] (:states change)))
     (is (= #{:merged} (:terminal change))
         "closed is not a tomb: GitHub reopens a closed pull request.
          Neither is stuck: a person puts it back to work")
@@ -445,7 +452,7 @@
           form (into #{} (map first) (rest (:create-schema repo-policy)))]
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
-               :rounds_per_change :formatter :deny
+               :merge_wait_seconds :rounds_per_change :formatter :deny
                :orientation :enrolled_at :note}
              fields)
           "every number a submit obeys, where the bench clones it from,

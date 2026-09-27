@@ -771,3 +771,239 @@
          (gh/parse-repos "ckopsa/waymark, ckopsa/waymark-bench")))
   (is (= ["ckopsa/waymark"] (gh/parse-repos ""))
       "nothing named is the proving ground's own repository"))
+
+;; ── a red change is a state (ticket d1742908) ──────────────────────────
+
+(def ^:private a-new-head "9a8b7c6d5e4f30291827364554637281900aabbc")
+
+(defn- red-world
+  "The rig, a policy for its repository, and its one change minted and
+  then put at `submitted` with `rounds` spent. The head carries the
+  rig's red `test10 (shard 3)` and green `check-queue`."
+  [policy rounds]
+  (let [{:keys [engine] :as r} (rig)]
+    (inv/create! engine :repo_policy (merge {:repository repo} policy)
+                 {:principal a-person})
+    (pass! r)
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (assoc-in [:data :rounds] rounds))
+                             (:version row))))))
+    r))
+
+(deftest a-red-required-check-moves-a-submitted-change-to-failing
+  (let [{:keys [engine] :as r} (red-world {:required_checks ["test10 (shard 3)"
+                                                              "check-queue"]}
+                                          1)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :failing (:state row)))
+    (is (= ["test10 (shard 3)"] (get-in row [:data :failing_checks]))
+        "the red names ride on the row, and the green one does not")
+    (is (= 1 (:failing census)))
+    (testing "a second pass on the same red head moves nothing"
+      (let [census (pass! r)]
+        (is (= :failing (:state (the-change engine))))
+        (is (= 0 (:failing census)))))))
+
+(deftest a-pending-required-check-does-not-move-the-change
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)" "gate"]} 1)]
+    (testing "a required check that has not started is not finished"
+      (pass! r)
+      (is (= :submitted (:state (the-change engine)))))
+    (testing "nor is one still running, whatever is red beside it"
+      (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
+                      {:id 41752098400 :name "gate" :status "in_progress"})
+      (pass! r)
+      (is (= :submitted (:state (the-change engine)))))))
+
+(deftest a-green-later-head-moves-a-failing-change-back
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)"]} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (gh/seed-pull! state repo
+                   (assoc a-pull-request
+                          :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                          :updated_at "2026-09-18T14:00:00Z")
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo a-new-head
+                    {:id 41752098500 :name "test10 (shard 3)"
+                     :status "completed" :conclusion "success"
+                     :head_sha a-new-head})
+    (let [census (pass! r)
+          row (the-change engine)]
+      (is (= a-new-head (get-in row [:data :head_sha]))
+          "a failing row follows the head it is read against")
+      (is (= :submitted (:state row)))
+      (is (nil? (get-in row [:data :failing_checks])))
+      (is (= 1 (:recovered census))))))
+
+(deftest the-red-head-on-the-last-round-sticks-the-change
+  (let [{:keys [engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)"] :rounds_per_change 2}
+                   2)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :stuck (:state row))
+        "the seat's next submit would be refused at the ceiling, so the
+         house stops here and a person reads it")
+    (is (= ["test10 (shard 3)"] (get-in row [:data :failing_checks])))
+    (is (= 1 (:stuck census)))
+    (is (= 0 (:failing census)))))
+
+(deftest a-policy-with-no-required-check-requires-every-finished-check
+  (let [{:keys [engine] :as r} (red-world {} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (is (= ["test10 (shard 3)"]
+           (get-in (the-change engine) [:data :failing_checks])))))
+
+(deftest the-verdict-reads-the-required-checks
+  (let [done (fn [n c] {:check_name n :status "completed" :conclusion c})]
+    (is (= {:verdict :red :names ["a"]}
+           (forge/check-verdict ["a" "b"] [(done "a" "failure") (done "b" "success")])))
+    (is (= {:verdict :green}
+           (forge/check-verdict ["a"] [(done "a" "success") (done "x" "failure")]))
+        "a check the policy does not require does not make it red")
+    (is (nil? (forge/check-verdict ["a" "b"] [(done "a" "failure")]))
+        "a required check that has not run is not finished")
+    (is (nil? (forge/check-verdict ["a"] [(done "a" "cancelled")]))
+        "a cancel is neither red nor green")
+    (is (nil? (forge/check-verdict [] []))
+        "no check at all says nothing")))
+
+;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
+
+(def ^:private the-conflicts
+  ["clone-mcp/clone_mcp/nomad.py" "clone-mcp/clone_mcp/server.py"])
+
+(defn- conflict-world
+  "One change at `submitted` with `rounds` spent, whose pull request
+  GitHub reads with `mergeable-state` and whose one check is green. The
+  bench behind the engine answers `conflicts` with `paths`, and
+  `:asked` holds every tool it was called with."
+  [mergeable-state paths policy rounds]
+  (let [state (gh/fake-state)
+        asked (atom [])
+        rpc (fn [_method params]
+              (swap! asked conj params)
+              (when (and paths (= "bench__conflicts" (str (:name params))))
+                {:structuredContent {:result {:paths paths}}}))
+        engine (engine/engine {:storage (memory/storage)
+                               :resources (vec (main/resources))
+                               :services {:bench-rpc rpc}})
+        r {:state state :source (gh/fake-source state) :engine engine
+           :asked asked}]
+    (gh/seed-pull! state repo (assoc a-pull-request
+                                     :mergeable_state mergeable-state)
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
+                    a-green-check)
+    (inv/create! engine :repo_policy (merge {:repository repo} policy)
+                 {:principal a-person})
+    (pass! r)
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (assoc-in [:data :rounds] rounds))
+                             (:version row))))))
+    r))
+
+(defn- conflict-asks [{:keys [asked]}]
+  (filterv #(= "bench__conflicts" (str (:name %))) @asked))
+
+(deftest a-conflicted-submitted-change-goes-failing-with-its-paths
+  (let [{:keys [engine] :as r} (conflict-world "dirty" the-conflicts {} 1)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= "conflicted" (get-in row [:data :mergeable])))
+    (is (= :failing (:state row))
+        "a conflicted pull request runs no fresh checks, and still fails")
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks]))
+        "its checks are green, so the conflict is the one red name")
+    (is (= the-conflicts (get-in row [:data :conflicts]))
+        "the paths the bench's trial merge named ride on the row")
+    (is (= 1 (:failing census)))
+    (let [args (:arguments (first (conflict-asks r)))]
+      (is (= repo (:repo args)))
+      (is (= "waymark-fp62.6.4" (:branch args)))
+      (is (= "main" (:base args))))
+    (testing "a second pass on the same conflict moves nothing and asks nothing"
+      (let [census (pass! r)]
+        (is (= :failing (:state (the-change engine))))
+        (is (= 0 (:failing census)))
+        (is (= 1 (count (conflict-asks r))))))))
+
+(deftest a-conflict-with-no-bench-answer-still-goes-failing
+  (let [{:keys [engine] :as r} (conflict-world "dirty" nil {} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (is (= ["merge-conflict"] (get-in (the-change engine) [:data :failing_checks])))
+    (is (nil? (get-in (the-change engine) [:data :conflicts]))
+        "a bench that cannot name the paths costs the paths, never the move")))
+
+(deftest a-behind-change-is-not-failing
+  (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
+        census (pass! r)]
+    (is (= :submitted (:state (the-change engine)))
+        "behind is not a conflict: the merge brings the branch forward")
+    (is (= 0 (:failing census)))
+    (is (empty? (conflict-asks r)) "and the bench is not asked")))
+
+(deftest a-resolved-green-head-returns-the-change-to-submitted
+  (let [{:keys [state engine] :as r} (conflict-world "dirty" the-conflicts {} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (gh/seed-pull! state repo
+                   (assoc a-pull-request
+                          :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                          :mergeable_state "clean"
+                          :updated_at "2026-09-18T14:00:00Z")
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo a-new-head
+                    (assoc a-green-check :id 41752098600 :head_sha a-new-head))
+    (let [census (pass! r)
+          row (the-change engine)]
+      (is (= :submitted (:state row)))
+      (is (nil? (get-in row [:data :failing_checks])))
+      (is (nil? (get-in row [:data :conflicts])))
+      (is (= 1 (:recovered census))))))
+
+(deftest a-conflict-on-the-last-round-sticks-the-change
+  (let [{:keys [engine] :as r}
+        (conflict-world "dirty" the-conflicts {:rounds_per_change 2} 2)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :stuck (:state row))
+        "a conflict round counts against the ceiling like a red round")
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+    (is (= the-conflicts (get-in row [:data :conflicts])))
+    (is (= 1 (:stuck census)))))
+
+(deftest a-conflict-joins-the-red-names
+  (let [row {:data {:mergeable "conflicted"}}]
+    (is (= {:verdict :red :names ["a" "merge-conflict"]}
+           (forge/with-conflict {:verdict :red :names ["a"]} row)))
+    (is (= {:verdict :red :names ["merge-conflict"]}
+           (forge/with-conflict {:verdict :green} row)))
+    (is (= {:verdict :red :names ["merge-conflict"]}
+           (forge/with-conflict nil row))
+        "a conflict fails the change while its checks still run")
+    (is (= {:verdict :green}
+           (forge/with-conflict {:verdict :green}
+                                {:data {:mergeable "blocked"}})))))

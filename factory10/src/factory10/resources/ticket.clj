@@ -61,6 +61,7 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
+            [waymark10.server.invoke :as inv]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -100,12 +101,20 @@
   ;; The list is REPLACED, not appended. The door prefills the blockers
   ;; that stand, so a person states the whole set again — two spellings
   ;; of one list would be two lists.
-  (assoc-in row [:data :blocked_by] (vec (:blocked_by inp))))
+  ;;
+  ;; The state it was blocked FROM is kept, so the last blocker's ending
+  ;; returns a draft to `draft` and not to the queue. A restatement from
+  ;; `blocked` keeps what the first block wrote.
+  (let [from (state-of row)]
+    (cond-> (assoc-in row [:data :blocked_by] (vec (:blocked_by inp)))
+      (#{:draft :open} from) (assoc-in [:data :blocked_from] (name from)))))
 
 (defhandler clear-the-blockers [row _inp _ctx]
   ;; The transition log keeps who blocked what; the row says what
   ;; holds NOW, and an unblocked ticket is blocked by nothing.
-  (assoc-in row [:data :blocked_by] []))
+  (-> row
+      (assoc-in [:data :blocked_by] [])
+      (assoc-in [:data :blocked_from] nil)))
 
 (defhandler defer-the-ticket [row inp _ctx]
   (assoc-in row [:data :defer_until] (:defer_until inp)))
@@ -113,9 +122,63 @@
 (defhandler resume-the-ticket [row _inp _ctx]
   (assoc-in row [:data :defer_until] nil))
 
-(defhandler close-the-ticket [row inp _ctx]
+(defn- still-waits-on
+  "The blockers `waiter` still waits on once `ending` ends: the ending
+  ticket leaves the list, and so does any other blocker that has ended
+  or is gone — a list that named one would keep the ticket blocked by
+  nothing, and the `block` door refuses to restate it."
+  [waiter ending read']
+  (into []
+        (remove (fn [id]
+                  (or (= ending (str id))
+                      (let [b (read' :ticket (str id))]
+                        (or (nil? b) (contains? ended (state-of b)))))))
+        (get-in waiter [:data :blocked_by])))
+
+(defn- release-the-waiters!
+  "THE LAST BLOCKER'S ENDING UNBLOCKS (the loop that needs no person).
+  Every blocked ticket whose `blocked_by` names the ticket that is
+  ending is re-judged in the same transaction: with blockers left, the
+  `block` door restates the shorter list; with none, the ticket goes
+  back where it was blocked from — `unblock` into the queue, the same
+  transition a person's tap makes, so a seat's wake on `unblock` fires
+  as it always has, or `return_to_draft` for a draft nobody groomed.
+
+  BEST-EFFORT, as the change's merge is: a waiter that refuses is said
+  in the log, and the ending stands. A probe or a rehearsal carries no
+  pen, and releases nothing."
+  [row ctx]
+  (let [find' (:find ctx)
+        read' (:read ctx)
+        invoke' (:invoke ctx)
+        ending (str (:id row))]
+    (when (and find' read' invoke')
+      (doseq [waiter (find' :ticket {:state "blocked"} {:limit 500})
+              :when (some #(= ending (str %))
+                          (get-in waiter [:data :blocked_by]))
+              :let [left (still-waits-on waiter ending read')
+                    ;; `block` is fenced (its :edit implies it), so the
+                    ;; version read here is named as an honest client
+                    ;; would name it (worksheet/apply-invocations!)
+                    fence {:if-match (inv/etag :ticket (:id waiter)
+                                               (:version waiter))}]]
+        (try
+          (cond
+            (seq left)
+            (invoke' :ticket (:id waiter) :block {:blocked_by left} fence)
+            (= "draft" (get-in waiter [:data :blocked_from]))
+            (invoke' :ticket (:id waiter) :return_to_draft nil fence)
+            :else
+            (invoke' :ticket (:id waiter) :unblock nil fence))
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factory10 ticket ending: the ticket" (:id waiter)
+                       "was not released -" (ex-message e)))))))))
+
+(defhandler close-the-ticket [row inp ctx]
   ;; One handler for both endings. The machine says which ending; the
-  ;; handler writes the sentence.
+  ;; handler writes the sentence, and releases what waited on it.
+  (release-the-waiters! row ctx)
   (assoc-in row [:data :close_reason] (:close_reason inp)))
 
 (defhandler reopen-the-ticket [row _inp _ctx]
@@ -234,6 +297,19 @@
     (holds/approved-hold? ctx :ticket :reopen (:id row)) (t/allow)
     :else (t/deny)))
 
+(defguardfn only-an-ending-returns-a-ticket-to-draft
+  {:reads [:within]
+   :open "No door clears this one. A blocked draft goes back to draft when the last ticket it waits on ends, and the engine moves it then; a person who wants it sooner unblocks it into the queue, or states its blockers again."
+   :explain "A blocked ticket returns to draft only when the last ticket it waits on is completed or dropped: the ending moves it, in the same transaction, and no hand does."}
+  [_row _inp ctx]
+  ;; `:within`, vocabulary § 6: the door opens for this kind's own
+  ;; endings and for nobody's hand. The wire, the render probe and
+  ;; every rehearsal answer nil, so it renders refused, which is true.
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :ticket kind) (contains? #{:complete :drop} action))
+      (t/allow)
+      (t/deny))))
+
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
 ;; Check-tier: no :given rows, and the one guard on the attempted door
@@ -301,6 +377,20 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :out-of-state
              :because "Done"}})
+
+(defscenario a-person-does-not-return-a-blocked-ticket-to-draft
+  "The way back to draft from blocked is the last blocker's ending,
+   made by the engine inside that ending. A hand at the wire is
+   refused, and the refusal says what moves it instead."
+  {:kind    :ticket
+   :attempt :return_to_draft
+   :row     {:state :blocked
+             :data (assoc a-draft-ticket
+                          :blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]
+                          :blocked_from "draft")}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :only-an-ending-returns-a-ticket-to-draft
+             :because "last ticket it waits on"}})
 
 ;; ── the fields, spelled once and read by three doors ────────────────
 
@@ -376,6 +466,11 @@
                  {:label "Waits on"
                   :help "The tickets that must end before this one is worked. While any of them is open this ticket is blocked and out of the queue."}}
     [:vector :waymark/ref]]
+   [:blocked_from {:optional true
+                   :x-display
+                   {:label "Blocked while"
+                    :help "Where this ticket stood when it was blocked. When the last ticket it waits on ends it goes back there: a groomed ticket to the queue, a draft to draft."}}
+    [:maybe [:enum "draft" "open"]]]
    [:defer_until {:optional true
                   :examples ["2026-11-19"]
                   :x-display
@@ -484,10 +579,11 @@
 
     ;; THE BLOCKERS, STATED WHOLE. From `draft` or `open` the door
     ;; blocks; from `blocked` it restates the set. One door, because
-    ;; all three land in `blocked`. Stating what a ticket waits on is
-    ;; part of grooming it, so `unblock` lands in `open` and never back
-    ;; in `draft` — which is why this door is one-way and not
-    ;; reversible.
+    ;; all three land in `blocked`. A person's `unblock` lands in `open`;
+    ;; the last blocker's ENDING returns the ticket where it was blocked
+    ;; from (`blocked_from`), so a draft nobody groomed goes back to
+    ;; `draft`. Two ways back to two states is why this door is one-way
+    ;; and not reversible.
     :block
     {:from #{:draft :open :blocked} :to :blocked
      :input [:map
@@ -500,7 +596,7 @@
      :handler state-the-blockers
      :edit {:prefill [:blocked_by]}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This ticket leaves the queue until the tickets it waits on end. The way back is unblock, which lands it in the queue as groomed work: naming what it waits on was the grooming."}
+              :one-way "This ticket leaves the queue until the tickets it waits on end. When the last of them ends it goes back where it stood — the queue, or draft for a draft — and a person's unblock lands it in the queue sooner."}
      :display {:label "Blocked by" :order 4
                :description "Wait on other tickets — this one leaves the queue until they end"}}
 
@@ -510,6 +606,18 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Unblock" :style :primary :order 1
                :description "Back into the queue — nothing holds this one now"}}
+
+    ;; THE ENGINE'S WAY BACK FOR A DRAFT. The last blocker's ending
+    ;; opens it (release-the-waiters!), and no hand at the wire does:
+    ;; a draft was never groomed, so its blockers ending does not put
+    ;; it in the queue.
+    :return_to_draft
+    {:from #{:blocked} :to :draft
+     :guards [only-an-ending-returns-a-ticket-to-draft]
+     :handler clear-the-blockers
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Return to draft" :order 10
+               :description "The last ticket it waited on ended — back to draft, to be groomed"}}
 
     :defer
     {:from #{:open} :to :deferred
@@ -546,7 +654,7 @@
      ;; a mis-click must not discard what was typed
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This is the ending on the record, with its sentence. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
+              :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
      :display {:label "Complete" :style :primary :order 6
                :description "The work is done — say what was done"}}
 
@@ -557,7 +665,7 @@
      :handler close-the-ticket
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This is the ending on the record, with its sentence. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
+              :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
      :display {:label "Drop" :style :danger :order 7
                :description "Let this go — say why"}}
 
@@ -585,4 +693,5 @@
                the-person-grooms-a-ticket
                a-seat-does-not-reopen-a-ticket
                the-person-reopens-a-ticket
-               a-finished-ticket-is-not-put-back-by-a-side-door]})
+               a-finished-ticket-is-not-put-back-by-a-side-door
+               a-person-does-not-return-a-blocked-ticket-to-draft]})

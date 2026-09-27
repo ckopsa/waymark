@@ -1771,3 +1771,55 @@
         (drain-fires! fn')
         (is (= 1 (count (fires-of token))))
         (seat-do! seat :retire)))))
+
+;; ── the fuel wall holds the wake ─────────────────────────────────────
+;;
+;; Production, 2026-09-27: code-seat was past its week's fuel and a
+;; wake still fired it. The run's grant scoped to nothing, the sit
+;; handed it no walk, and the run told a person the seat was broken.
+;; A wake asks the router's wall before it fires; a wake the wall holds
+;; waits as `wake_pending`, and the first release after the window
+;; rolls fires it.
+
+(deftest a-seat-past-its-week-of-fuel-is-not-woken-until-the-window-rolls
+  (let [wn :wake-fuel-wall
+        fn' :wake-fuel-wall-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "fuelclerk"
+                      {:budget_usd_per_week 0.001M
+                       :wake_on [{:kind "wake_task" :actions ["complete"]}]}
+                      fn')
+        ;; one closed sitting spends more than the week holds
+        _ (close-sitting! (sitting! seat))
+        _ (drain-wakes! wn)
+        now (Instant/now)]
+
+    (testing "the seat is at the wall"
+      (is (true? (wakes/at-the-fuel-wall? *eng* (raw :seat seat) now))))
+
+    (testing "a matching transition fires nothing: the wake waits, and
+              the schedule says the budget held it"
+      (task-do! (task! "a thing past the budget") :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (is (some? (get-in (sched-of seat) [:data :last_halted_wake])))
+      (wakes/sweep-pending! *eng*)
+      (is (empty? (seat-fires seat)) "nor does the tick fire it while the wall holds")
+      (drain-fires! fn')
+      (is (empty? (fires-of token))))
+
+    (testing "once the window rolls past the sitting, the pending wake fires"
+      (let [later (.plusSeconds now (* 8 86400))
+            rolled (assoc *eng* :now-fn (constantly later))]
+        (is (false? (wakes/at-the-fuel-wall? rolled (raw :seat seat) later)))
+        (wakes/sweep-pending! rolled)
+        (let [ts (seat-fires seat)]
+          (is (= 1 (count ts)))
+          (is (nil? (get-in (first ts) [:inputs :text]))
+              "a release names no row, so the session walks the queue"))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+    (seat-do! seat :retire)))

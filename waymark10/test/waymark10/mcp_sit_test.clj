@@ -758,6 +758,39 @@
         "the queue still says how many are waiting; the cap says how many
          this wake takes")))
 
+(deftest two-runs-of-one-seat-walk-different-rows
+  ;; Production, 2026-09-27: a groom woke code-seat and a fire named a
+  ;; row 12 seconds later. Both sits answered the same first row, both
+  ;; runs worked one branch, and the second row waited. A row an open
+  ;; sitting of the seat was handed is that sitting's until it closes.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:rows_per_firing 1})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        note (post! eng "The school note" "house" "2026-09-18T08:00:00Z")
+        sit-as! (fn [run]
+                  (let [[sid _] (initialize! h)
+                        r (tool h (with-session sid) "waymark_sit"
+                                {:key walk-key :session run})]
+                    [r (doc-of r)]))
+        [r1 first-run] (sit-as! "run-wake")
+        [r2 second-run] (sit-as! "run-fire")]
+    (testing "both runs sit, each in its own sitting"
+      (is (false? (:isError r1)) (text-of r1))
+      (is (false? (:isError r2)) (text-of r2))
+      (is (not= (:sitting first-run) (:sitting second-run))))
+    (testing "the first run is handed the oldest row, the second the next"
+      (is (= [(str (:id gas))] (mapv :id (get-in first-run [:walk :rows]))))
+      (is (= [(str (:id note))] (mapv :id (get-in second-run [:walk :rows])))
+          "the row the open sitting holds is not handed a second time"))
+    (testing "the claim ends with the sitting"
+      (inv/invoke! eng :sitting (str (:sitting first-run)) :abandon nil
+                   {:principal seats/seats-actor})
+      (let [[r third] (sit-as! "run-later")]
+        (is (false? (:isError r)) (text-of r))
+        (is (= [(str (:id gas))] (mapv :id (get-in third [:walk :rows])))
+            "the closed sitting holds nothing, and the oldest row is back")))))
+
 (deftest a-seat-that-walks-nothing-answers-no-walk-and-a-parked-one-no-seat
   (let [eng (fresh-engine)
         h (engine/handler eng)
@@ -791,7 +824,20 @@
     (is (= "post-clerk" (:seat answer)))
     (is (empty? (get-in answer [:walk :rows]))
         "no rows, and no refusal either: the sit answers what the seat's own
-         grant admits, which behind a wall is nothing")))
+         grant admits, which behind a wall is nothing")
+    ;; Production, 2026-09-27: a run fired past the wall read a bare
+    ;; answer, found nothing, and reported the seat's grant as broken.
+    ;; The sit now says which wall, in the fire door's own words.
+    (testing "and it says the seat is halted, and why"
+      (is (not (contains? answer :walk)) "no walk at all behind the wall")
+      (is (= "budget" (get-in answer [:halted :wall])))
+      (is (str/includes? (str (get-in answer [:halted :detail]))
+                         "The week's fuel is spent"))
+      (is (nil? (get-in answer [:halted :lifts_at]))
+          "a budget of zero is lifted by no roll of the window, only by a person")
+      (is (str/includes? (str (:note answer)) "halted"))
+      (is (some? (:sitting answer))
+          "the sitting still opens, so the run's Stop hook can close it"))))
 
 
 ;; ── 6b. the walk under its scope entry's filter (waymark-fp62.12) ───
