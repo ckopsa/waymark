@@ -125,6 +125,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.wakes :as wakes]
             [waymark10.types :as t])
   (:import (java.util.concurrent CountDownLatch TimeUnit)))
 
@@ -1165,8 +1166,9 @@
 (defn sweep-clock!
   "The seat passes that act on TIME, not on the law: the sittings
   nobody ended (R-7.6, R-12.25), then the transcripts past their grace
-  or their `transcript_days` (docs/spec-transcript.md R-9.1, R-9.4).
-  → {:abandoned n :closed n :sealed n :purged n}.
+  or their `transcript_days` (docs/spec-transcript.md R-9.1, R-9.4),
+  then the fires nobody sat in (`wakes/sweep-missed!`).
+  → {:abandoned n :closed n :sealed n :purged n :missed n}.
 
   The boot runs it inside `sweep-seats!`, and the `:seat-clock` hook
   runs it on a cadence, because a clock that only moves at a deploy
@@ -1176,8 +1178,12 @@
         ;; AFTER the sittings, so a sitting this pass just ended starts
         ;; its transcript's grace now rather than on the next pass
         ;; (docs/spec-transcript.md R-9)
-        transcripts (transcripts/sweep! eng)]
-    {:abandoned (:abandoned sittings)
+        transcripts (transcripts/sweep! eng)
+        ;; a fired run that never sat: a closed `missed` sitting says
+        ;; so, and the count wake its fire spent is armed again
+        missed (wakes/sweep-missed! eng)]
+    {:missed missed
+     :abandoned (:abandoned sittings)
      ;; R-12.25's half of the same pass: an interactive sitting
      ;; somebody walked away from is CLOSED with its last tally, not
      ;; abandoned, because it did report what it spent

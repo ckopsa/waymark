@@ -1588,3 +1588,106 @@
           (is (= 1 (count (mentions-of chat)))))
 
         (seat-do! seat :retire)))))
+
+;; ── a fire nobody sat in ──────────────────────────────────────────────
+;;
+;; A run that dies before it sits spends no key, opens no sitting and
+;; leaves its count wake spent. The clock sweep writes it down as a
+;; closed `missed` sitting and arms the wake again, once.
+
+(deftest a-fire-nobody-sat-in-leaves-a-missed-sitting-and-its-wake-comes-back
+  (let [fn' :wake-missed-fires
+        _ (drain-fires! fn')
+        batch "missed-fire"
+        ;; whole seconds, so an instant reads back as it was written
+        ^Instant t0 (.truncatedTo (Instant/now) java.time.temporal.ChronoUnit/SECONDS)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat]}
+            (linked-seat! "missedclerk"
+                          {:scope count-scope
+                           :instructions "Read the fire text and do what it says."
+                           :wake_on [{:kind "wake_item"
+                                      :actions ["create"]
+                                      :filter {:batch batch}
+                                      :at_least 2}]}
+                          fn')
+            seat-row #(raw :seat seat)
+            hold! (fn [] (seats/hold-fire-key! *eng* (seat-row) @clock))
+            missed #(store/with-tx (:storage *eng*)
+                      (fn [tx]
+                        (store/query-rows (:storage *eng*) tx :sitting
+                                          {:seat (str seat) :missed true}
+                                          {:limit 50})))
+            held-hashes #(mapv (fn [e] (str (:hash e)))
+                               (get-in (seat-row) [:data :fire_keys]))
+            clear-pending! #(let [s (sched-of seat)]
+                              (store/with-tx (:storage *eng*)
+                                (fn [tx]
+                                  (store/update-data! (:storage *eng*) tx :schedule
+                                                      (str (:id s))
+                                                      (dissoc (:data s) :wake_pending)
+                                                      (:next-flip-at s)))))]
+        ;; the queue the count wake watches holds its size, so the wake
+        ;; the fire spent still has work to do
+        (item! batch)
+        (item! batch)
+
+        (testing "a fire whose key was spent makes no missed sitting"
+          (let [k (hold!)]
+            (is (string? k))
+            (is (seats/fire-key-held? *eng* (seat-row) k)
+                "the entry carries the fire's instant beside its expiry")
+            (is (= (str @clock)
+                   (str (:fired_at (first (get-in (seat-row) [:data :fire_keys]))))))
+            (is (true? (seats/spend-fire-key! *eng* (seat-row) k)))
+            (at 700)
+            (is (= 0 (wakes/sweep-missed! *eng*)))
+            (is (empty? (missed)))
+            (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+        (testing "a fire whose key is unspent after 600s makes one closed
+                  missed sitting, takes the entry off the seat, and arms
+                  the count wake again"
+          (let [^Instant fired (at 1000)
+                stale (hold!)
+                _ (at 1300)
+                fresh (hold!)]
+            (is (= 0 (wakes/sweep-missed! *eng*))
+                "five minutes on, the run may still be starting")
+            (at 1601)
+            (is (= 1 (wakes/sweep-missed! *eng*)))
+            (let [rows (missed)
+                  d (:data (first rows))]
+              (is (= 1 (count rows)))
+              (is (= :closed (:state (first rows))))
+              (is (= "fired" (str (:mode d))))
+              (is (= 0 (:input_tokens d) (:output_tokens d) (:turns d)))
+              (is (= fired (Instant/parse (str (:started_at d)))))
+              (is (= @clock (Instant/parse (str (:ended_at d)))))
+              (is (str/includes? (str (:note d))
+                                 (str "Fired at " fired
+                                      "; no session sat within 600s."))))
+            (is (= [(seats/key-hash fresh)] (held-hashes))
+                "the missed entry is gone, and the fresh one stays")
+            (is (nil? (seats/seat-for-key *eng* "missedclerk" stale))
+                "so a late sit with that key is refused as today")
+            (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+                "the count wake still holds, so the queue fires again")))
+
+        (testing "the sweep over the same state makes no second row"
+          (is (= 0 (wakes/sweep-missed! *eng*)))
+          (is (= 1 (count (missed)))))
+
+        (testing "a second missed fire in a row makes its sitting but
+                  does not arm the wake again"
+          (clear-pending!)
+          (at 2000)
+          (is (= 1 (wakes/sweep-missed! *eng*))
+              "the fresh key of the last round has now missed too")
+          (is (= 2 (count (missed))))
+          (is (empty? (held-hashes)))
+          (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+        (seat-do! seat :retire)))))
