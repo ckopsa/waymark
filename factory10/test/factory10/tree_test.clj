@@ -452,7 +452,7 @@
           form (into #{} (map first) (rest (:create-schema repo-policy)))]
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
-               :rounds_per_change :formatter :deny
+               :merge_wait_seconds :rounds_per_change :formatter :deny
                :orientation :enrolled_at :note}
              fields)
           "every number a submit obeys, where the bench clones it from,

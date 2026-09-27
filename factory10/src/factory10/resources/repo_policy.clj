@@ -288,6 +288,16 @@
                     :choices merge-method-choices
                     :help "The merge the rig asks GitHub for when the house merges a green change."}}
     (into [:enum] (sort (keys merge-method-choices)))]
+   ;; the person's merge (ticket 4d59b22d). OPTIONAL for the reason the
+   ;; three above are: a policy stated before it existed is restated
+   ;; whole without it, and the reader spells the default itself.
+   [:merge_wait_seconds {:optional true
+                         :default 3600
+                         :examples [3600]
+                         :x-display
+                         {:label "How long a green change waits on you"
+                          :help "When the house does not merge this repository, a change whose checks are green and that merges clean waits this many seconds for a person. Then the house asks for the merge once, as a held call: your Allow merges it."}}
+    [:int {:min 60 :max 604800}]]
    [:rounds_per_change {:default 3
                         :examples [3]
                         :x-display
@@ -383,7 +393,8 @@
      ;; the create form: a person does not state them.
      :edit {:prefill [:repository :clone_url :branch_pattern :base :max_lines
                       :opens_pr :auto_merge :merge_by :required_checks
-                      :merge_method :rounds_per_change :formatter
+                      :merge_method :merge_wait_seconds
+                      :rounds_per_change :formatter
                       :deny :orientation]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
