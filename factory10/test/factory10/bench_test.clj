@@ -42,6 +42,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
@@ -1093,21 +1094,61 @@
     (is (= "open" (name (:state (change-row w))))
         "the change stands; only the worktree moved")))
 
-(deftest a-model-may-not-drop-the-branch-and-a-person-may
+(deftest the-branch-drop-wall-is-a-registered-hold
+  (is (holds/hold? :only-a-person-drops-the-branch)
+      "the guard's `:hold true` registered it when the module loaded"))
+
+(deftest a-models-drop-is-held-for-its-person-and-the-allow-runs-it
   (let [w (world)
+        eng (:eng w)
         change-id (str (:id (:change w)))
         r (call! (:h w) (:sid w) "waymark_invoke"
                  {:kind "change" :id change-id :action "discard"
-                  :input {:drop_branch true}})]
-    (is (true? (:isError r)))
-    (is (str/includes? (text-of r) "person's act"))
-    (is (empty? (calls-of (:state w) "bench__discard")))
+                  :input {:drop_branch true}})
+        held-id (:held_call (doc-of r))
+        held-row (fn []
+                   (store/with-tx (:storage eng)
+                     (fn [tx] (store/load-row (:storage eng) tx :held_call
+                                              (str held-id) {}))))]
+    (testing "the model's drop is not served: it waits on the person"
+      (is (false? (:isError r)) (text-of r))
+      (is (true? (:held (doc-of r))) (text-of r))
+      (is (some? held-id))
+      (is (empty? (calls-of (:state w) "bench__discard"))
+          "nothing reached the rig while the call waits")
+      (is (= "colton" (str (get-in (held-row) [:data :owner])))
+          "owned by the person the seat acts for"))
+    (testing "a forged :within, naming a call nobody allowed, is refused"
+      (let [e (try (inv/invoke! eng :change change-id :discard
+                                {:drop_branch true}
+                                {:principal (t/principal {:id "bench-seat"
+                                                          :type :agent})
+                                 :within {:kind :held_call :action :allow
+                                          :id held-id}})
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (some? e) "the door did not open")
+        (is (= :only-a-person-drops-the-branch
+               (some-> (:guard (ex-data e)) name keyword))
+            (pr-str (ex-data e))))
+      (is (empty? (calls-of (:state w) "bench__discard"))))
+    (testing "the person's Allow runs the drop exactly as written"
+      (let [out (inv/invoke! eng :held_call (str held-id) :allow {}
+                             {:principal person})]
+        (held/after-allow! eng (get (inv/resources eng) :held_call)
+                           :allow out))
+      (let [calls (calls-of (:state w) "bench__discard")]
+        (is (= 1 (count calls)))
+        (is (true? (:drop_branch (:arguments (first calls))))))
+      (is (= "done" (name (:state (held-row))))))))
 
-    (testing "and a person's own hand drops it"
-      (inv/invoke! (:eng w) :change change-id :discard {:drop_branch true}
-                   {:principal person})
-      (is (true? (:drop_branch (:arguments (first (calls-of (:state w)
-                                                            "bench__discard")))))))))
+(deftest a-persons-own-drop-runs-directly
+  (let [w (world)
+        change-id (str (:id (:change w)))]
+    (inv/invoke! (:eng w) :change change-id :discard {:drop_branch true}
+                 {:principal person})
+    (is (true? (:drop_branch (:arguments (first (calls-of (:state w)
+                                                          "bench__discard"))))))))
 
 ;; ── acceptance 6 ────────────────────────────────────────────────────
 
@@ -1124,11 +1165,11 @@
       (submit! w {:why "Nothing changed, but I am trying anyway."})
       (is (= 1 (long (get-in (sitting-of w) [:data :refusals])))))
 
-    (testing "and a guard's refusal counts beside it"
+    (testing "and a held call is an answer, not a refusal, so it counts nothing"
       (call! (:h w) (:sid w) "waymark_invoke"
              {:kind "change" :id (str (:id (:change w))) :action "discard"
               :input {:drop_branch true}})
-      (is (= 2 (long (get-in (sitting-of w) [:data :refusals])))))
+      (is (= 1 (long (get-in (sitting-of w) [:data :refusals])))))
 
     (testing "…and the sitting is still open, so the seat may go on"
       (is (= :open (:state (sitting-of w)))))))
