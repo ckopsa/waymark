@@ -321,6 +321,65 @@
   [args allow]
   (cond-> (or args {}) (seq allow) (assoc :allow (vec allow))))
 
+;; ── the protected paths: the engine decides `allow_protected` ───────
+;;
+;; The rig refuses a write under .github/ or .claude/ unless the call
+;; carries `allow_protected: true`. A workflow reads the repository's
+;; secrets and a .claude/ hook runs in every session that opens the
+;; repository, so the flag is the ENGINE's to set and never the
+;; caller's: it is dropped from every bench call, and set on a
+;; bench.edit only when the admitting filter names the path (R-12.30).
+
+(def ^:private protected-prefixes [".github/" ".claude/"])
+
+(defn- protected-path? [p]
+  (boolean (some #(str/starts-with? (str p) %) protected-prefixes)))
+
+(defn- clean-path?
+  "A path with no empty, `.` or `..` part and no backslash: one whose
+  prefix says where it lands, so a glob matched against it means what
+  it says."
+  [p]
+  (let [p (str p)]
+    (and (not (str/includes? p "\\"))
+         (not-any? #{"" "." ".."} (str/split p #"/" -1)))))
+
+(defn- protected-globs
+  "The path globs of the filter maps that admit this call and that
+  themselves start with a protected prefix. A `*` or `**` glob matches
+  .github/ only by accident, and it never counts."
+  [filters args]
+  (into []
+        (comp (remove #(:miss (entry-verdict % args)))
+              (mapcat (fn [fm]
+                        (some (fn [[k v]]
+                                (when (= path-filter-field (name k))
+                                  (comma-values v)))
+                              fm)))
+              (filter protected-path?))
+        filters))
+
+(defn- bench-protected
+  "The arguments of a bench call with `allow_protected` decided by the
+  engine: any the caller sent is dropped, and a bench.edit whose
+  protected targets (`path`, and `move_to` for a move) are all clean
+  and all named by a protected glob of the admitting entry gets it set.
+  Every other call reaches the rig without it, and the rig refuses a
+  protected write as it always has."
+  [tname gentry args]
+  (if-not (bench-tool? tname)
+    args
+    (let [args (dissoc (or args {}) :allow_protected "allow_protected")
+          targets (keep #(some-> (get args %) str not-empty) [:path :move_to])
+          guarded (filter protected-path? targets)
+          globs (when (and gentry (seq guarded) (= tname (bench-tool :edit)))
+                  (protected-globs (:filters gentry) args))]
+      (cond-> args
+        (and (seq globs)
+             (every? clean-path? targets)
+             (every? (fn [t] (some #(path-glob-matches? % t) globs)) guarded))
+        (assoc :allow_protected true)))))
+
 ;; ── affordances ─────────────────────────────────────────────────────
 
 (defn- present-schema
@@ -657,6 +716,7 @@
      (when (or (nil? hit) (nil? entry))
        (refuse-unknown eng asked))
      (let [gentry (grants/capability-entry vis token)
+           args (bench-protected tname gentry args)
            verdict (when gentry (filter-verdict (:filters gentry) args))
            prepare-block (bench-prepare-block eng vis tname args)]
        (cond
@@ -722,6 +782,7 @@
         (let [tname (str tool)
               {:keys [row entry token]} (servers/resolve-tool eng tname)
               gentry (when token (grants/capability-entry vis token))
+              args (bench-protected tname gentry args)
               verdict (when gentry (filter-verdict (:filters gentry) args))
               prepare-block (bench-prepare-block eng vis tname args)]
           (when (and entry gentry (not (:miss verdict)) (not prepare-block))

@@ -622,3 +622,67 @@
                (get-in doc [:links :bench__read :constraints]))
             "the tool says what a narrower grant on it could name, in
              the row's own words rather than the sorted union")))))
+
+;; ── the protected paths: the engine decides allow_protected ─────────
+
+(deftest a-caller-never-sets-allow-protected-the-scope-does
+  (testing "a caller-sent allow_protected is dropped, so the rig refuses
+            the .github/ write as it always has"
+    (let [w (world [{:kind "bench.edit" :actions [] :filter {:repo a-repo}}])
+          r (power! w {:tool "bench__edit"
+                       :arguments {:repo a-repo
+                                   :path ".github/workflows/test.yml"
+                                   :allow_protected true}})]
+      (is (false? (:isError r)) (text-of r))
+      (is (not (contains? (last-arguments w) :allow_protected))
+          "the rig never hears the caller's flag")))
+
+  (testing "a bench.edit filter that names the path sets the flag for
+            that path and not for its neighbour"
+    (let [w (world [{:kind "bench.edit" :actions []
+                     :filter {:repo a-repo
+                              :path ".github/workflows/test.yml,src/**"}}])]
+      (power! w {:tool "bench__edit"
+                 :arguments {:repo a-repo :path ".github/workflows/test.yml"}})
+      (is (true? (:allow_protected (last-arguments w))))
+      (power! w {:tool "bench__edit"
+                 :arguments {:repo a-repo :path "src/a.clj"
+                             :move_to ".github/workflows/other.yml"}})
+      (is (not (contains? (last-arguments w) :allow_protected))
+          "a move into a protected path the filter does not name")))
+
+  (testing "a neighbour the filter does not admit refuses before the rig"
+    (let [w (world [{:kind "bench.edit" :actions []
+                     :filter {:repo a-repo :path ".github/workflows/test.yml"}}])
+          r (power! w {:tool "bench__edit"
+                       :arguments {:repo a-repo
+                                   :path ".github/workflows/other.yml"
+                                   :allow_protected true}})]
+      (is (true? (:isError r)) (text-of r))
+      (is (empty? (calls w)))))
+
+  (testing "a `*` path glob admits the write but never sets the flag"
+    (let [w (world [{:kind "bench.edit" :actions []
+                     :filter {:repo a-repo :path "*"}}])]
+      (power! w {:tool "bench__edit"
+                 :arguments {:repo a-repo :path ".github/workflows/test.yml"
+                             :allow_protected true}})
+      (is (= 1 (count (calls w))))
+      (is (not (contains? (last-arguments w) :allow_protected)))))
+
+  (testing "a path that climbs out through `..` never sets the flag"
+    (let [w (world [{:kind "bench.edit" :actions []
+                     :filter {:repo a-repo :path ".github/workflows/*"}}])]
+      (power! w {:tool "bench__edit"
+                 :arguments {:repo a-repo
+                             :path ".github/workflows/../../.claude/hooks/x.sh"}})
+      (is (= 1 (count (calls w))))
+      (is (not (contains? (last-arguments w) :allow_protected)))))
+
+  (testing "a write outside the protected prefixes is unchanged"
+    (let [w (world [{:kind "bench.edit" :actions []
+                     :filter {:repo a-repo :path ".github/**,docs/**"}}])]
+      (power! w {:tool "bench__edit"
+                 :arguments {:repo a-repo :path "docs/a.md"}})
+      (is (= {:repo a-repo :path "docs/a.md"}
+             (select-keys (last-arguments w) [:repo :path :allow_protected]))))))
