@@ -791,6 +791,50 @@
         (is (= [(str (:id gas))] (mapv :id (get-in third [:walk :rows])))
             "the closed sitting holds nothing, and the oldest row is back")))))
 
+(deftest a-re-sit-is-handed-back-the-row-its-sitting-walks
+  ;; Production, 2026-09-27 (sitting 003f87bc): a deploy dropped the
+  ;; connector, the seat re-sat with the same key, seat and session,
+  ;; and the reused sitting was handed the queue's NEW first row — a
+  ;; different ticket, change and branch. The row a sitting walks is
+  ;; its own until it leaves the queue.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:rows_per_firing 1})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        sit-as! (fn [run]
+                  (let [[sid _] (initialize! h)
+                        r (tool h (with-session sid) "waymark_sit"
+                                {:key walk-key :session run})]
+                    [r (doc-of r)]))
+        walked (fn [sitting-id]
+                 (get-in (store/with-tx (:storage eng)
+                           (fn [tx] (store/load-row (:storage eng) tx :sitting
+                                                    (str sitting-id) {})))
+                         [:data :walked_rows]))
+        [r1 first-sat] (sit-as! "run-dropped")
+        ;; a row that arrived EARLIER sorts ahead of the one being walked
+        early (post! eng "The early notice" "house" "2026-09-18T06:00:00Z")]
+    (testing "the first sit is handed the oldest row"
+      (is (false? (:isError r1)) (text-of r1))
+      (is (= [(str (:id gas))] (mapv :id (get-in first-sat [:walk :rows]))))
+      (is (= [(str (:id gas))] (walked (:sitting first-sat)))))
+    (testing "a re-sit with the same session keeps the sitting and its row"
+      (let [[r again] (sit-as! "run-dropped")]
+        (is (false? (:isError r)) (text-of r))
+        (is (= (:sitting first-sat) (:sitting again)))
+        (is (= [(str (:id gas))] (mapv :id (get-in again [:walk :rows])))
+            "the row it was walking, not the queue's new first row")
+        (is (= [(str (:id gas))] (walked (:sitting again)))
+            "and walked_rows names only the row the sit handed out")))
+    (testing "a re-sit after its row left the queue is handed the next"
+      (inv/invoke! eng :post (:id gas) :file {:where "bills"}
+                   {:principal person})
+      (let [[r later] (sit-as! "run-dropped")]
+        (is (false? (:isError r)) (text-of r))
+        (is (= (:sitting first-sat) (:sitting later)))
+        (is (= [(str (:id early))] (mapv :id (get-in later [:walk :rows]))))
+        (is (= [(str (:id early))] (walked (:sitting later))))))))
+
 (deftest a-seat-that-walks-nothing-answers-no-walk-and-a-parked-one-no-seat
   (let [eng (fresh-engine)
         h (engine/handler eng)
