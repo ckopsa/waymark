@@ -453,14 +453,19 @@
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
                :merge_wait_seconds :rounds_per_change :formatter :deny
-               :orientation :enrolled_at :note :source_note}
+               :orientation :enrolled_at :note :source_note
+               :base_state :base_head :base_checked_at :base_red_from
+               :base_ticket}
              fields)
           "every number a submit obeys, where the bench clones it from,
-           and the engine's own three: when the bench took it, why it
-           did not, and what the GitHub source could not read")
-      (is (= #{:enrolled_at :note :source_note}
+           and the engine's own: when the bench took it, why it did not,
+           what the GitHub source could not read, and the base branch's
+           state as the source last read it (ticket ade81ae9)")
+      (is (= #{:enrolled_at :note :source_note
+               :base_state :base_head :base_checked_at :base_red_from
+               :base_ticket}
              (into #{} (remove form) fields))
-          "…and the engine's three are on no form: a person states the
+          "…and the engine's are on no form: a person states the
            policy, and the engine says what the bench and the source did
            with it")
       (is (contains? (:actions repo-policy) :mark_enrolled)

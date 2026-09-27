@@ -335,14 +335,17 @@
     (t/deny)))
 
 (defguardfn only-the-base-pass-writes-this
-  {:reads [:principal]
+  {:reads [:principal :within]
    :hide true
    :explain "The GitHub source's base pass writes a red base's heads and ends its ticket when the base is green. A person and a model read it."}
   ;; repo_policy's `the-engine-notes-the-source`, one kind over (ticket
   ;; ade81ae9): the engine's system hand alone, and a hidden door
-  ;; answers 404 and says nothing.
+  ;; answers 404 and says nothing. It opens only `:within` the base
+  ;; pass (forge's `base-opts`), so the render probe, which carries no
+  ;; `:within`, offers the engine nothing on a ticket under review.
   [_row _inp ctx]
-  (if (= :system (:type (:principal ctx)))
+  (if (and (= :system (:type (:principal ctx)))
+           (= :repo_policy (:kind (:within ctx))))
     (t/allow)
     (t/deny)))
 

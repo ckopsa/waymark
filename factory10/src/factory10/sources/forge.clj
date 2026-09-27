@@ -234,6 +234,12 @@
 (defn- as-opts []
   {:principal mirror/source-principal})
 
+(defn- base-opts
+  "The engine's hand inside the base pass: the ticket's base doors open
+  only `:within` it (ticket `only-the-base-pass-writes-this`)."
+  []
+  (assoc (as-opts) :within {:kind :repo_policy :action :note_base}))
+
 (defn- warn! [& parts]
   (binding [*out* *err*]
     (println (apply str "factory10 forge: " parts))))
@@ -874,7 +880,7 @@
         id (str (:id row))]
     (inv/invoke! eng :ticket id :groom {} (as-opts))
     (inv/invoke! eng :ticket id :note_red
-                 {:red_head (red-head-line head names)} (as-opts))
+                 {:red_head (red-head-line head names)} (base-opts))
     id))
 
 (defn- blank->nil [v] (some-> v str not-empty))
@@ -916,7 +922,7 @@
                 (do (inv/invoke! eng :ticket (str (:id live)) :mend
                                  {:close_reason (str base " is green again at "
                                                      head ".")}
-                                 (as-opts))
+                                 (base-opts))
                     [(update census :base-closed inc) stored-ticket])
                 [census stored-ticket])
 
@@ -930,7 +936,7 @@
               (if-some [door (red-head-doors (state-of live))]
                 (do (inv/invoke! eng :ticket stored-ticket door
                                  {:red_head (red-head-line head names)}
-                                 (as-opts))
+                                 (base-opts))
                     [(update census :base-noted inc) stored-ticket])
                 [census stored-ticket])
 
