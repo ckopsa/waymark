@@ -472,15 +472,87 @@
    :required_checks (required-checks-of policy)
    :merge_method (merge-method-of policy)})
 
+;; A BRANCH BEHIND ITS BASE (ticket a95c3d63). Main's protection wants a
+;; branch up to date before it merges, so a green change whose branch
+;; fell behind is refused by GitHub and would wait forever. The pass
+;; asks the rig's `update_branch` to bring it forward instead: the new
+;; head re-runs CI, and a later pass merges it when green. One update
+;; per head, so a busy main cannot make the pass loop; a conflicted
+;; branch is left to the failing path (ticket 5f12e772).
+
+(def parked-refusals
+  "The merge refusals a new pass cannot fix: the head is remembered and
+  not offered again. Any other refusal — `head_moved` among them — is
+  asked again next pass, and a new head is a new offer anyway."
+  #{"draft" "no_required_checks" "not_mergeable"})
+
+(def ^:private behind-reason
+  "What GitHub says when it refuses a merge because the branch is not
+  up to date with its base, or a required status is still expected."
+  #"(?i)out of date|not up to date|up-to-date|status checks? .*(is|are) expected")
+
+(defn behind?
+  "Does the rig's merge answer say the branch is behind its base?"
+  [answer]
+  (or (= "behind" (some-> (:state answer) str))
+      (and (= "merge_refused" (refused answer))
+           (boolean (re-find behind-reason (str (:reason answer)))))))
+
+(defn- conflicted-change? [change]
+  (= "conflicted" (str (get-in change [:data :mergeable]))))
+
+(defn update-args
+  "What the rig's `update_branch` is told: the pull request and the head
+  it may bring forward."
+  [change]
+  {:repo (str (get-in change [:data :repository]))
+   :number (get-in change [:data :number])
+   :head_sha (str (get-in change [:data :head_sha]))})
+
+(defn- update-behind!
+  "Bring one behind change's branch up to date, once for this head.
+  `seen` remembers the head under `[:updated id]`; a missing power or
+  no answer is not remembered, so the next pass asks again."
+  [ctx seen change id head]
+  (cond
+    (conflicted-change? change)
+    (warn! id " is behind and conflicted; the failing path has it")
+
+    (true? (get-in change [:data :draft]))
+    (warn! id " is behind but a draft; it is not brought forward")
+
+    (= head (get @seen [:updated id]))
+    nil
+
+    :else
+    (let [answer (ask ctx :update_branch (update-args change))
+          why (refused answer)]
+      (cond
+        (nil? answer)
+        (warn! "the update of " id " had no answer; the next pass asks again")
+
+        (contains? missing-power-refusals why)
+        (warn! "the rig has no update_branch yet (" why
+               "); the next pass asks again")
+
+        :else
+        (do (swap! seen assoc [:updated id] head)
+            (when why
+              (warn! "the rig refused to update " id " at " head " ("
+                     (reason-of answer) ")")))))))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
   house`, gets ONE `merge` call with the engine's own hand. `seen` is
-  an atom of change id → the head the rig last refused: a refused head
-  is logged once and never offered again, and a new head is offered
-  afresh. `merged` needs nothing here, because the mirror moves the
-  row; `waiting` is asked again next pass; `red` is left, because the
-  seat's feedback already carries the red checks. Throws nothing.
+  an atom of change id → the head the rig refused for good (a
+  `parked-refusals` name): that head is never offered again, and a new
+  head is offered afresh. A branch the rig says is behind its base is
+  brought up to date with `update_branch`, once per head (`seen` keeps
+  that under `[:updated id]`). `merged` needs nothing here, because the
+  mirror moves the row; `waiting` and every other refusal are asked
+  again next pass; `red` is left, because the seat's feedback already
+  carries the red checks. Throws nothing.
   → the number of `merge` calls made."
   [eng seen]
   (let [ctx {:services (:services eng)}
@@ -505,10 +577,17 @@
             (contains? missing-power-refusals why)
             (warn! "the rig has no merge yet (" why "); the next pass asks again")
 
-            why
+            (behind? answer)
+            (update-behind! ctx seen change id head)
+
+            (contains? parked-refusals why)
             (do (swap! seen assoc id head)
                 (warn! "the rig refused to merge " id " at " head " ("
                        (reason-of answer) "); this head is not asked again"))
+
+            why
+            (warn! "the rig refused to merge " id " at " head " ("
+                   (reason-of answer) "); the next pass asks again")
 
             :else nil))
         (catch Exception e
