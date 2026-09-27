@@ -662,11 +662,18 @@
 (defn- natural-replay
   "The latest transition, when it is this same action with this same
   input digest and the row already sits at its outcome. Guards do NOT
-  re-run — the first execution's guards already passed."
-  [engine tx rdef row defn digest]
-  (let [[latest] (store/transitions (:storage engine) tx
-                                    {:kind (:kind rdef) :resource-id (:id row)}
-                                    {:newest-first true :limit 1})]
+  re-run — the first execution's guards already passed.
+
+  A write `:within` a held call is never answered this way: the
+  person's one yes is spent by its one replay (held-calls/forward!,
+  whose retry rides its idempotency key), and a second write naming
+  the same held call must meet the door's guards and its state, not
+  borrow the first write's outcome."
+  [engine tx rdef row defn digest within]
+  (let [[latest] (when-not (= :held_call (:kind within))
+                   (store/transitions (:storage engine) tx
+                                      {:kind (:kind rdef) :resource-id (:id row)}
+                                      {:newest-first true :limit 1}))]
     (when (and latest
                (= (:action latest) (:name defn))
                (= (:input-digest latest) digest)
@@ -1140,7 +1147,7 @@
             guard-ctx (dissoc ctx :invoke :create :inner-sink :power)]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
-          (or (natural-replay engine tx rdef row defn digest)
+          (or (natural-replay engine tx rdef row defn digest within)
               (when (probe-hidden-only? defn row guard-ctx)
                 (throw (p/not-found kind id)))
               (throw (p/wrong-state action-name (:state row) (:from defn)
@@ -1189,7 +1196,7 @@
                           nil))]
               ;; 8. natural replay before guards
               (or (when (and (not dry-run) (get-in defn [:safety :idempotent]))
-                    (natural-replay engine tx rdef row defn digest))
+                    (natural-replay engine tx rdef row defn digest within))
                   ;; 9. the guard loop — partial judges only the
                   ;; leaves whose every judged field arrived
                   (if partial?

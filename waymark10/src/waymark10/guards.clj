@@ -30,6 +30,8 @@
     :requires-token  capability token (\"role:manager\")
     :needs-input     probe override; defaults to (check ∧ judges)
     :severity        :refuse | :warning (acknowledgable, E1)
+    :hold            true: a refusal is held for the person's tap
+                     rather than answered 409 (waymark10.holds)
 
   Composites: {:all [g …]} via g/and — first deny wins, judges/reads
   union; {:any [g …]} via g/or — first allow wins, judges absent (an
@@ -37,6 +39,7 @@
   (:refer-clojure :exclude [and or require])
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
+            [waymark10.holds :as holds]
             [waymark10.machine :as machine]
             [waymark10.types :as t]))
 
@@ -65,6 +68,10 @@
       (throw (t/definition-error ":vars-fn must be accompanied by the :vars names it supplies")))
     (clojure.core/when (fn? vars)
       (throw (t/definition-error "a callable belongs in :vars-fn; :vars declares the names")))
+    ;; a hold is registered when its module loads, so the router's one
+    ;; question (holds/hold?) knows it without a list kept by hand
+    (clojure.core/when (true? (:hold g))
+      (holds/register! (clojure.core/or name :guard)))
     (merge g
            {:name (clojure.core/or name :guard)
             :judges (vec judges)
