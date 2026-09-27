@@ -377,6 +377,45 @@
       (is (= 2 (get-in tr [:data :engine_redactions])))
       (is (= 2 (get-in tr [:data :redactions :env])) "the hook's own counts are kept"))))
 
+;; ── the transcript key closes its sitting (spec-seat.md R-12.17) ────
+
+(defn- close-with! [h key]
+  (h {:request-method :post :uri "/api/-/sittings/close"
+      :headers {"waymark-transcript-key" key}
+      :body (wire/write-json {:input_tokens 1200 :output_tokens 40
+                              :cache_read_tokens 9000 :cache_write_tokens 300
+                              :turns 2})}))
+
+(deftest the-transcript-key-closes-its-own-sitting
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        seat (open-seat! eng (add-model! eng))
+        sat (sit! h)
+        key (get-in sat [:transcript :key])]
+    (testing "the key names the sitting, and the door closes that one"
+      (let [resp (close-with! h key)
+            doc (json resp)
+            sitting (row-of eng :sitting (:sitting sat))]
+        (is (= 200 (:status resp)) (pr-str doc))
+        (is (= (str (:sitting sat)) (:sitting doc)))
+        (is (= (str (:id seat)) (:seat doc)))
+        (is (= :closed (:state sitting)))
+        (is (= 1200 (get-in sitting [:data :input_tokens])))
+        (is (= 2 (get-in sitting [:data :turns])))))
+    (testing "a second close is told the bill is in"
+      (is (= 409 (:status (close-with! h key)))))
+    (testing "a key that answers nothing is the seat key's sentence"
+      (let [resp (close-with! h "bm9ib2R5LWhvbGRzLXRoaXM")]
+        (is (= 404 (:status resp)))
+        (is (= "No seat answers this key." (:detail (json resp))))))
+    (testing "a key dropped at the seal answers the same"
+      (later! at 900)
+      (is (= 1 (:sealed (defs/sweep-seats! eng))))
+      (let [resp (close-with! h key)]
+        (is (= 404 (:status resp)))
+        (is (= "No seat answers this key." (:detail (json resp))))))))
+
 ;; ── the seal and the purge (R-9) ────────────────────────────────────
 
 (deftest the-sweep-seals-after-the-grace-and-drops-the-key

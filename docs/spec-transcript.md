@@ -188,6 +188,14 @@ the engine holds.
 **R-4.4** The key stops answering at the seal (R-9.1). The seal
 drops `key_hash`.
 
+**R-4.5** The key also closes its sitting. The close door
+(spec-seat.md R-12.17) takes it in the header
+`Waymark-Transcript-Key` when no seat key is presented: the key names
+the transcript, the transcript names its sitting, and the door closes
+that sitting. A fired run's hook holds no other credential, so this
+is how it closes without a model turn. A key that answers no open
+transcript gets the close's uniform 404.
+
 ## 5. Requirements: the door
 
 **R-5.1** The engine must serve `POST /api/-/sittings/transcript`,

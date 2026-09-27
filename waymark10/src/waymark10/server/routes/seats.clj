@@ -431,6 +431,14 @@
   the request's resolved principal is ignored."
   "waymark-seat-key")
 
+(def ^:private transcript-key-header
+  "`Waymark-Transcript-Key`, read lowercased as ring hands it over. A
+  header and not a bearer, for `seat-key-header`'s reason. The
+  transcript door reads it, and so do the close and the tally when no
+  seat key is presented: the key names one transcript, the transcript
+  names its sitting, and a fired run's hook holds nothing else."
+  "waymark-transcript-key")
+
 (def ^:private no-seat
   "UNIFORM, and `sit-no-seat`'s sentence verbatim (server/mcp): a key
   that matches nothing, a key the seat has since revoked, a key that
@@ -579,16 +587,34 @@
   different rule than the close would tally one run and close
   another."
   [eng req]
-  (let [seat (seat-of-key eng req)
-        report (report-of req)
-        sitting (or (seats/open-sitting-for-seat eng (:id seat)
-                                                 (:harness_session report))
-                    (throw (p/problem
-                            :no-open-sitting 409 "No open sitting"
-                            {:detail (str "The seat `"
-                                          (get-in seat [:data :name])
-                                          "` has no open sitting.")})))]
-    [seat report sitting]))
+  (let [no-open #(throw (p/problem
+                         :no-open-sitting 409 "No open sitting"
+                         {:detail (str "The seat `"
+                                       (get-in % [:data :name])
+                                       "` has no open sitting.")}))
+        tkey (when-not (get-in req [:headers seat-key-header])
+               (some-> (get-in req [:headers transcript-key-header])
+                       str not-empty))]
+    (if tkey
+      ;; the transcript key: it names ONE sitting, so there is no
+      ;; pairing rule to run. A key that answers no open transcript
+      ;; (wrong, dropped at the seal, or none) is the same sentence
+      ;; a key no seat answers is.
+      (let [transcript (transcripts/transcript-by-key eng tkey)
+            seat (or (some->> (get-in transcript [:data :seat]) (seat-row eng))
+                     (throw (p/problem :not-found 404 "Not found"
+                                       {:detail no-seat})))
+            report (report-of req)
+            sitting (raw-row eng :sitting (get-in transcript [:data :sitting]))]
+        (when-not (= :open (:state sitting))
+          (no-open seat))
+        [seat report sitting])
+      (let [seat (seat-of-key eng req)
+            report (report-of req)
+            sitting (or (seats/open-sitting-for-seat eng (:id seat)
+                                                     (:harness_session report))
+                        (no-open seat))]
+        [seat report sitting]))))
 
 (defn- sitting-tally
   "POST /api/-/sittings/tally — what this sitting has spent so far
@@ -649,11 +675,6 @@
 (def ^:private transcript-path
   "The close's and the tally's sibling, one word over (R-5.1)."
   "/api/-/sittings/transcript")
-
-(def ^:private transcript-key-header
-  "`Waymark-Transcript-Key`, read lowercased as ring hands it over. A
-  header and not a bearer, for `seat-key-header`'s reason."
-  "waymark-transcript-key")
 
 (defn- transcript-body
   "The posted body, gunzipped when the hook says so (R-5.2), as JSON.
