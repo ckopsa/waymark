@@ -338,6 +338,9 @@
             ;; fourth hook, elected, waiting on nothing. Its fifth
             ;; sits beside it: the held calls' expiry (R-14, R-7)
             :mcp-discover :held-call-expiry
+            ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
+            ;; R-12.25; spec-transcript.md R-9)
+            :seat-clock
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
@@ -383,7 +386,7 @@
             ;; core's fourth and fifth (spec-mcp-servers R-4 and
             ;; R-14), so a selection that names :jobs still carries
             ;; both
-            :mcp-discover :held-call-expiry
+            :mcp-discover :held-call-expiry :seat-clock
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))
