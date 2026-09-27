@@ -141,6 +141,7 @@
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp-sessions :as sessions]
             [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
@@ -285,11 +286,15 @@
 ;; and leave the person's other chats alone. The id is what it welds
 ;; to.
 ;;
-;; The map is EPHEMERAL and never law: the collab tickets' posture
-;; (engine.clj), an atom on the engine, lost on restart, and a client
-;; whose id is gone is told to initialize again — which is exactly
-;; what the protocol's 404 means. Eviction is lazy and rides every
-;; swap, so a process nobody talks to holds nothing open.
+;; The sessions are never law, but they are no longer ephemeral. Over
+;; Postgres they live in a table both allocations of a deploy share
+;; (waymark10.server.mcp-sessions), so a session minted by the old
+;; process is known to the new one with its binding intact, and no
+;; deploy answers a live client 404. Over the in-memory twin they stay
+;; the atom on the engine they always were. Either way a client whose
+;; id is truly gone is told to initialize again — which is exactly what
+;; the protocol's 404 means — and eviction is lazy and rides the
+;; traffic, so a process nobody talks to holds nothing open.
 
 (def session-ttl-seconds
   "How long an MCP session lives past its last message: eight hours,
@@ -317,6 +322,26 @@
           (remove (fn [[_ e]] (neg? (compare (:touched e) cutoff))))
           m)))
 
+(defn- session-table?
+  "Does this engine keep its sessions in the shared table? Only an
+  engine that keeps sessions at all (the atom is its sign) and stores
+  in Postgres; every other engine keeps the atom."
+  [eng]
+  (and (some? (:mcp-sessions eng))
+       (sessions/postgres? (:storage eng))))
+
+(defn- ttl-cutoff ^Instant [^Instant now]
+  (.minusSeconds now session-ttl-seconds))
+
+(defn- binding-of
+  "The binding on this session, or nil. A plain read — no touch,
+  because the callers are not messages of their own."
+  [eng id]
+  (when-some [id (some-> id str not-empty)]
+    (if (session-table? eng)
+      (sessions/binding-of (:storage eng) id)
+      (some-> (:mcp-sessions eng) deref (get id) :bound))))
+
 (defn open-session!
   "Register a fresh session and answer its id, or nil on an engine
   that keeps none (a bare test handler built without the atom)."
@@ -324,9 +349,11 @@
   (when-some [a (:mcp-sessions eng)]
     (let [id (new-session-id)
           now ((:now-fn eng))]
-      (swap! a (fn [m]
-                 (assoc (evict m now) id
-                        {:created now :touched now :bound nil})))
+      (if (session-table? eng)
+        (sessions/open! (:storage eng) id now (ttl-cutoff now))
+        (swap! a (fn [m]
+                   (assoc (evict m now) id
+                          {:created now :touched now :bound nil}))))
       id)))
 
 (defn touch-session!
@@ -337,12 +364,14 @@
   [eng id]
   (when-some [a (:mcp-sessions eng)]
     (when-some [id (some-> id str not-empty)]
-      (let [now ((:now-fn eng))
-            m (swap! a (fn [m]
-                         (let [m (evict m now)]
-                           (cond-> m
-                             (contains? m id) (assoc-in [id :touched] now)))))]
-        (get m id)))))
+      (let [now ((:now-fn eng))]
+        (if (session-table? eng)
+          (sessions/touch! (:storage eng) id now (ttl-cutoff now))
+          (let [m (swap! a (fn [m]
+                             (let [m (evict m now)]
+                               (cond-> m
+                                 (contains? m id) (assoc-in [id :touched] now)))))]
+            (get m id)))))))
 
 (defn bind-session!
   "Weld a seat's sitter to this session (R-12.15). Idempotent by
@@ -352,19 +381,19 @@
   [eng id binding]
   (when-some [a (:mcp-sessions eng)]
     (when-some [id (some-> id str not-empty)]
-      (swap! a (fn [m]
-                 (cond-> m
-                   (contains? m id) (assoc-in [id :bound] binding))))
+      (if (session-table? eng)
+        (sessions/bind! (:storage eng) id binding)
+        (swap! a (fn [m]
+                   (cond-> m
+                     (contains? m id) (assoc-in [id :bound] binding)))))
       binding)))
 
 (defn- bound-sitting
   "The sitting this session is bound to, or nil. A plain read of the
-  map — no touch, because the counter that calls it is not a message
-  of its own."
+  binding — no touch, because the counter that calls it is not a
+  message of its own."
   [eng id]
-  (when-some [a (:mcp-sessions eng)]
-    (when-some [id (some-> id str not-empty)]
-      (some-> (get @a id) :bound :sitting))))
+  (some-> (binding-of eng id) :sitting))
 
 (defn- bound-seat
   "The seat this session is bound to, or nil. Read from the BINDING
@@ -373,9 +402,7 @@
   row load per bench call would be a read the office already knows the
   answer to."
   [eng id]
-  (when-some [a (:mcp-sessions eng)]
-    (when-some [id (some-> id str not-empty)]
-      (some-> (get @a id) :bound :seat))))
+  (some-> (binding-of eng id) :seat))
 
 (defn- bench-bound!
   "Put the worktree the sit prepared on this session's binding: the
@@ -390,17 +417,17 @@
   [eng id repo branch]
   (when-some [a (:mcp-sessions eng)]
     (when-some [id (some-> id str not-empty)]
-      (swap! a (fn [m]
-                 (cond-> m
-                   (some? (get-in m [id :bound]))
-                   (assoc-in [id :bound :bench] {:repo repo :branch branch})))))))
+      (if (session-table? eng)
+        (sessions/bench! (:storage eng) id repo branch)
+        (swap! a (fn [m]
+                   (cond-> m
+                     (some? (get-in m [id :bound]))
+                     (assoc-in [id :bound :bench] {:repo repo :branch branch}))))))))
 
 (defn- bound-bench
   "The worktree this session's sit prepared, {:repo :branch}, or nil."
   [eng id]
-  (when-some [a (:mcp-sessions eng)]
-    (when-some [id (some-> id str not-empty)]
-      (some-> (get @a id) :bound :bench))))
+  (some-> (binding-of eng id) :bench))
 
 ;; ── the in-process door ─────────────────────────────────────────────
 
