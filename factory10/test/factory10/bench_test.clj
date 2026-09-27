@@ -1696,6 +1696,117 @@
            (:branch (:arguments (last (calls-of (:state w) "bench__prepare")))))
         "and the next sitting opens the worktree where the work is")))
 
+;; ── a groom answers a stall ─────────────────────────────────────────
+;;
+;; A SEAT THAT CANNOT BUILD A TICKET STALLS ITS CHANGE AND UNGROOMS
+;; THE TICKET. When a person grooms the ticket again, the next sit finds
+;; the same change by its unique `change_id` — and a stuck change offers
+;; no submit. So the sit puts it back to work when the ticket's newest
+;; groom is later than the change's newest stall, and leaves it stuck
+;; when nobody has groomed since.
+
+(def ^:private ticket-scope
+  "The scope of a seat that builds tickets: the queue it walks, the
+  change doors it submits with, and the bench powers on one repository."
+  (into [{:kind "ticket" :actions ["complete" "ungroom"]}
+         {:kind "change" :actions ["submit" "stall" "discard"]}]
+        (map (fn [token] {:kind token :actions []
+                          :filter {:repo a-repository}}))
+        ["bench.find" "bench.read" "bench.edit" "bench.pull"]))
+
+(defn- ticket-world
+  "An engine with the policy, one groomed ticket, a seat that WALKS
+  tickets, and a session sat in it."
+  []
+  (let [st (state)
+        eng (fresh-engine st)
+        policy (a-policy! eng {})
+        ticket (:row (inv/create! eng :ticket
+                                  {:title "Put the size ceiling on the policy form"
+                                   :type "feature"
+                                   :repo a-repository}
+                                  {:principal person}))
+        _ (inv/invoke! eng :ticket (str (:id ticket)) :groom {}
+                       {:principal person})
+        seat (open-seat! eng {:scope ticket-scope :walk "ticket"})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})]
+    {:eng eng :state st :h h :sid sid :seat seat :ticket ticket
+     :policy policy :sat sat :answer (doc-of sat)}))
+
+(defn- seat-invokes!
+  "One door on the change beside the walk, taken by the seat."
+  [w action input]
+  (call! (:h w) (:sid w) "waymark_invoke"
+         {:kind "change" :id (get-in (:answer w) [:change :id])
+          :action action :input input}))
+
+(def ^:private a-stall-sentence
+  "The file the ticket names is not on main yet, so there is nothing to build on.")
+
+(defn- person-moves-ticket!
+  [w action]
+  (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) action {}
+               {:principal person}))
+
+(deftest a-ticket-groomed-again-after-a-stall-puts-its-change-back-to-work
+  (let [w (ticket-world)
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (person-moves-ticket! w :ungroom)
+        _ (person-moves-ticket! w :groom)
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (= (str "ticket:" (:id (:ticket w))) (get-in row [:data :born_from])))
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row)))
+        "the groom is later than the stall, so the sit unsticks the change")
+    (is (zero? (long (get-in row [:data :rounds])))
+        "the rounds start again, as a person's unstick starts them")
+    (is (= 1 (count (changes-of (:eng w))))
+        "the same change is put back to work, and no second one is born")
+    (is (= "open" (get-in answer [:change :state])))
+    (is (contains? (into #{} (map :action) (get-in answer [:change :doors]))
+                   "submit")
+        "and the seat is offered submit on the change beside its walk")
+    (is (nil? (:change_note answer)))))
+
+(deftest a-stall-with-no-groom-after-it-stays-stuck
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "stuck" (name (:state row)))
+        "the only groom came before the stall: nobody has read it yet")
+    (is (not (contains? (into #{} (map :action) (get-in answer [:change :doors]))
+                        "submit")))
+    (is (str/includes? (str (or (:change_note answer) (:bench_note answer)))
+                       "stuck")
+        "and the note says the change is stuck")))
+
+(deftest a-change-stuck-at-the-round-ceiling-stays-stuck
+  (let [w (ticket-world)
+        rounds (mapv (fn [_] (seat-invokes! w "submit" {:why a-long-sentence}))
+                     (range 3))
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (doseq [r rounds] (is (false? (:isError r)) (text-of r)))
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= 3 (long (get-in row [:data :rounds])))
+        "the policy's three rounds are spent")
+    (is (= "stuck" (name (:state row)))
+        "the ticket was groomed once, before the rounds: no groom answers
+         the stall, so the ceiling holds")))
+
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 
 (deftest the-branch-pattern-is-a-glob-with-one-star

@@ -299,6 +299,16 @@
     (is (empty? (offers change (assoc a-pull-request :state :stuck)
                         the-classifier))
         "and the model that stalled it may not put itself back to work"))
+  (testing "a delegate acting for a person unsticks, and a model alone does not"
+    (let [stuck (assoc a-pull-request :state :stuck)
+          shut (refusal change stuck the-classifier :unstick)]
+      (is (= :unavailable (:status shut)))
+      (is (= :a-person-or-their-delegate-unsticks (:name (:denier shut)))
+          "an agent with no `acts-for` is the model alone")
+      (is (= #{:unstick}
+             (offers change stuck (assoc the-classifier :acts-for "colton")))
+          "an agent that names whom it acts for is the person's hand, the
+           same way it grooms a ticket")))
   (testing "a merged pull request is where the story ended"
     (is (empty? (offers change (assoc a-pull-request :state :merged)
                         the-source)))))

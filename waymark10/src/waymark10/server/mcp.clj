@@ -2691,6 +2691,73 @@
                   nil))))))
       change))
 
+(def ^:private stuck-change-note
+  "What the sit says when the change this firing works is still
+  `stuck`: no door on it submits, so the seat can only say so."
+  (str "The change for this row is stuck, and a stuck change offers no "
+       "submit, stall or discard. A person, or a delegate acting for one, "
+       "puts it back to work: with its unstick door, or by grooming the "
+       "ticket again. Say that it is stuck, and stop."))
+
+(def ^:private groomed-walk-prefix
+  "What `born_from` starts with for a change built for a ticket. A
+  ticket's `groom` is the person's reading that the ask is ready."
+  "ticket:")
+
+(defn- latest-transition
+  "The newest transition of one row through `action`, or nil."
+  [eng kind id action]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (some (fn [tr] (when (= action (some-> (:action tr) name)) tr))
+              (store/transitions st tx {:kind kind :resource-id (str id)}
+                                 {:newest-first true}))))))
+
+(defn- regroomed-change
+  "The change this firing works, put back to work when a person groomed
+  its ticket again after the change was stalled — else the row as it
+  stands.
+
+  A STALL SENDS THE TICKET BACK TO DRAFT, AND A GROOM ANSWERS IT. The
+  seat that cannot build a ticket stalls its change and ungrooms the
+  ticket. Grooming it again is a person's (or a delegate's) reading
+  that the ask is ready, so the sit unsticks the change that stall left
+  behind: the rounds start from zero and the seat is offered submit.
+  The change's `change_id` is `ticket:<id>` and unique, so without this
+  the sit would hand the seat the same stuck change forever.
+
+  ONLY A GROOM AFTER THE STALL ANSWERS IT. When the ticket's newest
+  `groom` is not newer than the change's newest `stall` — or the change
+  was never stalled — nobody has read the stall yet, and the change
+  stays stuck. The write goes through `unstick` with the same system
+  hand the mint uses. A refusal costs the unstick and never the sit:
+  the row stands as it was."
+  [eng change]
+  (or (when (and change
+                 (= :stuck (some-> (:state change) name keyword))
+                 (str/starts-with? (str (get-in change [:data :born_from]))
+                                   groomed-walk-prefix)
+                 (some? (get (inv/resources eng) :ticket)))
+        (when-some [ticket-id (born-row-id change)]
+          (let [groom (latest-transition eng :ticket ticket-id "groom")
+                stall (latest-transition eng :change (:id change) "stall")]
+            (when (and groom stall (> (long (:id groom)) (long (:id stall))))
+              (try
+                (let [moved (:row (inv/invoke! eng :change (str (:id change))
+                                               :unstick {}
+                                               {:principal seat-change-principal}))]
+                  (println "waymark10 seat change unstuck -" (str (:id change))
+                           "- ticket" ticket-id "groomed by"
+                           (str (get-in groom [:actor :id])) "at" (str (:at groom)))
+                  moved)
+                (catch Exception e
+                  (binding [*out* *err*]
+                    (println "waymark10 seat change unstick failed -"
+                             (ex-message e)))
+                  nil))))))
+      change))
+
 (defn- change-of-sitting
   "The change this firing submits → [change sentence]. The walk's own
   first row when the seat walks the code (R-12.29), and the row the
@@ -2717,8 +2784,16 @@
     (not (bench-seat? seat)) [nil nil]
     (nil? (get (inv/resources eng) :change)) [nil nil]
     (str/blank? (str (get-in walk ["rows" 0 "id"]))) [nil nil]
-    :else (let [[change note] (minted-change eng seat walk)]
-            [(some->> change (rebranched-change eng)) note])))
+    ;; a change stalled before its ticket was groomed again goes back
+    ;; to work first, and the branch is minted again after that
+    :else (let [[change note] (minted-change eng seat walk)
+                change (some->> change
+                                (regroomed-change eng)
+                                (rebranched-change eng))]
+            [change
+             (or note
+                 (when (= :stuck (some-> (:state change) name keyword))
+                   stuck-change-note))])))
 
 (defn- change-said
   "The change row beside the walk, read AS THE SITTER: the row's own
@@ -3178,7 +3253,10 @@
             walk (assoc "walk" walk)
             said (assoc "change" said)
             bench (merge bench)
-            (and (nil? bench) change-note) (assoc "bench_note" change-note))
+            (and (nil? bench) change-note) (assoc "bench_note" change-note)
+            ;; a bench that opened on a change still stuck: the note
+            ;; says why no door on it submits
+            (and (some? bench) change-note) (assoc "change_note" change-note))
           verbatim-mapper))))))
 
 (def ^:private bodies
