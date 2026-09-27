@@ -1691,3 +1691,83 @@
           (is (not (get-in (sched-of seat) [:data :wake_pending]))))
 
         (seat-do! seat :retire)))))
+
+;; ── the release into an empty queue ──────────────────────────────────
+;;
+;; A wake that arrived during a sitting, often from that sitting's own
+;; `complete`, is released when the sitting closes. When that sitting
+;; took the last row, a release would fire a run into an empty queue.
+;; Each seat walks `wake_item` under a batch of its own, so a
+;; neighbour's rows do not move the count.
+
+(defn- walk-item-seat!
+  "A seat that walks `wake_item` under one batch, linked."
+  [nm batch fire-cursor]
+  (linked-seat! nm
+                {:walk "wake_item"
+                 :scope [{:kind "wake_item" :actions ["complete"]
+                          :filter {:batch batch}}]}
+                fire-cursor))
+
+(defn- complete-inside-a-sitting!
+  "Open a sitting, complete the row inside it, drain, close, drain.
+  → whether the match was pending while the sitting was open."
+  [wn seat item-id]
+  (let [open-one (sitting! seat)]
+    (item-do! item-id :complete)
+    (drain-wakes! wn)
+    (let [pending? (true? (get-in (sched-of seat) [:data :wake_pending]))]
+      (close-sitting! open-one)
+      (drain-wakes! wn)
+      pending?)))
+
+(deftest a-pending-wake-released-into-an-empty-queue-fires-nothing
+  (let [wn :wake-empty-release
+        fn' :wake-empty-release-fires
+        _ (drain-fires! fn')
+        emptied (item! "empty-release-last")
+        left-a (item! "empty-release-one-left")
+        _left-b (item! "empty-release-one-left")
+        counted (item! "empty-release-no-walk")
+        ;; seeded after the rows are born, so only what follows is heard
+        _ (drain-wakes! wn)]
+
+    (testing "the sitting that completed the last row leaves no fire
+              behind it, and the pending wake is cleared"
+      (let [{:keys [seat token]}
+            (walk-item-seat! "emptyclerk" "empty-release-last" fn')]
+        (is (true? (complete-inside-a-sitting! wn seat emptied))
+            "the completion was damped by the open sitting")
+        (is (empty? (seat-fires seat)))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (empty? (seat-fires seat)) "nor does the tick fire it later")
+        (is (empty? (fires-of token)))
+        (seat-do! seat :retire)))
+
+    (testing "the same seat with one row still open gets exactly one fire"
+      (let [{:keys [seat token]}
+            (walk-item-seat! "oneleftclerk" "empty-release-one-left" fn')]
+        (is (true? (complete-inside-a-sitting! wn seat left-a)))
+        (let [ts (seat-fires seat)]
+          (is (= 1 (count ts)))
+          (is (nil? (get-in (first ts) [:inputs :text]))))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))
+        (drain-fires! fn')
+        (is (= 1 (count (fires-of token))))
+        (seat-do! seat :retire)))
+
+    (testing "a seat with no walk fires as before, whatever is left"
+      (let [{:keys [seat token]}
+            (linked-seat! "nowalkclerk"
+                          {:scope count-scope
+                           :wake_on [{:kind "wake_item" :actions ["complete"]
+                                      :filter {:batch "empty-release-no-walk"}}]}
+                          fn')]
+        (is (true? (complete-inside-a-sitting! wn seat counted)))
+        (is (= 1 (count (seat-fires seat))))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))
+        (drain-fires! fn')
+        (is (= 1 (count (fires-of token))))
+        (seat-do! seat :retire)))))
