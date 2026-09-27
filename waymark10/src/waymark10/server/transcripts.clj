@@ -65,6 +65,7 @@
     written in within each file."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             [waymark10.resource :refer [defresource]]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
@@ -292,12 +293,21 @@
     (t/deny)))
 
 (g/defguard not-an-agent
-  {:reads [:principal]
-   :explain "A transcript's lines are deleted by a person or by the sweep. No grant can hold this door, so a seat cannot erase the record of its own sittings."}
-  [_row _inp ctx]
-  (if (= :agent (:type (:principal ctx)))
-    (t/deny)
-    (t/allow)))
+  {:reads [:principal :within]
+   :hold true
+   :explain "A transcript's lines are deleted by a person or by the sweep, so an agent's purge is held for the person's tap: the call, which already echoed the consequence sentence, is recorded as a held_call, and the person's Allow runs it exactly as written. No grant can hold this door, so a seat cannot erase the record of its own sittings alone."
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a grant that opened it would let a seat erase its own record."}
+  [row _inp ctx]
+  ;; ticket's `only-a-person-reopens`, one kind over: every hand but an
+  ;; agent's passes, the sweep's own actor included. An agent's purge
+  ;; is HELD (waymark10.holds), and the one agent call this admits is
+  ;; the engine's replay of the held call its person allowed. The
+  ;; confirm is the MCP door's and is judged before the call is held,
+  ;; so a held purge already carried the consequence sentence.
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :transcript :purge (:id row)) (t/allow)
+    :else (t/deny)))
 
 (def purge-consequence
   "R-9.5's sentence, which the confirm echoes."
@@ -982,7 +992,15 @@
   now, outside the transition's own transaction, because a purge of a
   long transcript is thousands of deletes. The sweep calls
   `purge-lines!` itself before its own purge. Every other write passes
-  through untouched, and a replay deletes nothing twice."
+  through untouched, and a replay deletes nothing twice.
+
+  A HELD PURGE LANDS HERE TOO. An agent's purge waits as a held call,
+  and the person's Allow replays it inside `held/after-allow!`, which
+  calls the door directly and never comes back through the router. So
+  the Allow's own write is read here as well: when it allowed a
+  transcript's purge and that transcript now stands `purged`, its lines
+  go. A forward that failed left the transcript sealed, and nothing is
+  deleted."
   [eng rdef action out]
   (when (and (= :transcript (:kind rdef))
              (= :purge action)
@@ -990,4 +1008,17 @@
              (:transition out)
              (nil? (:replayed? out)))
     (purge-lines! eng (:id (:row out))))
+  (when (and (= :held_call (:kind rdef))
+             (= :allow action)
+             (map? out)
+             (:transition out)
+             (nil? (:replayed? out))
+             (serves? eng))
+    (let [{:keys [kind action id]} (get-in out [:row :data :door])]
+      (when (and (= "transcript" (some-> kind name))
+                 (= "purge" (some-> action name))
+                 (some-> id str not-empty)
+                 (= :purged (some-> (:state (load-raw eng :transcript id))
+                                    name keyword)))
+        (purge-lines! eng id))))
   out)

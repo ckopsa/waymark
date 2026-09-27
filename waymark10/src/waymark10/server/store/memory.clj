@@ -324,9 +324,14 @@
              (group-by (juxt #(name (:kind %)) :resource-id))
              (mapcat (fn [[_ ts]] (partition 2 1 ts)))
              (keep (fn [[before after]]
-                     (when (and (= "human" (get-in after [:actor :type]))
+                     ;; a write a person ALLOWED (a held call's replay,
+                     ;; `allowed_by` on its actor) is that person's: it
+                     ;; counts as a correction, and is never one corrected
+                     (when (and (or (= "human" (get-in after [:actor :type]))
+                                    (some? (get-in after [:actor :allowed_by])))
                                 (not (excluded? (name (:kind after))))
                                 (not (.isBefore ^Instant (:at after) ^Instant since))
+                                (nil? (get-in before [:actor :allowed_by]))
                                 (contains? sat? (str (get-in before [:actor :id]))))
                        {:model (get-in before [:actor :model])})))
              frequencies

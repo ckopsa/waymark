@@ -17,8 +17,11 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.fixtures :as fx]
+            [waymark10.holds :as holds]
             [waymark10.server.definitions :as defs]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.engine :as engine]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store]
@@ -515,6 +518,59 @@
       (transcripts/after-purge! eng (get (inv/resources eng) :transcript) :purge out)
       (is (= :purged (:state (row-of eng :transcript (:id tr)))))
       (is (empty? (rows-of eng :transcript_entry {:transcript (str (:id tr))}))))))
+
+(deftest a-seats-purge-is-held-for-its-person
+  ;; The router's own steps, in its order: the refusal it turns into a
+  ;; held call, the row it mints, the person's Allow, and the two
+  ;; wire-boundary effects it chains after every committed invoke.
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng))
+        sat (sit! h)
+        _ (upload! h (get-in sat [:transcript :key]) (body-of run-lines))
+        _ (close! h)
+        _ (later! at 700)
+        _ (defs/sweep-seats! eng)
+        tr (first (rows-of eng :transcript {:sitting (:sitting sat)}))
+        tid (str (:id tr))
+        agent (assoc (t/principal {:id "seat:x" :type :agent :display "x (seat)"})
+                     :acts-for "colton")
+        lines #(rows-of eng :transcript_entry {:transcript tid})
+        held-rdef (get (inv/resources eng) :held_call)]
+    (testing "a bare agent's purge is a hold, not a 409"
+      (let [e (try (inv/invoke! eng :transcript tid :purge {} {:principal agent})
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (= :not-an-agent (some-> (:guard (ex-data e)) name keyword))
+            (pr-str (ex-data e)))
+        (is (holds/hold? :not-an-agent)
+            "the guard's `:hold true` registered it when the module loaded")
+        (is (delegation/hold-guard? (:guard (ex-data e)))
+            "so the router mints a held call in place of the refusal")
+        (is (= "colton" (delegation/hold-owner {:principal agent}))
+            "and the call waits on the person the seat acts for")))
+    (let [held (held/hold-door! eng {:kind :transcript :action :purge :id tid
+                                     :body {} :caller "seat:x" :owner "colton"
+                                     :why "not-an-agent"})
+          hid (str (:id held))]
+      (testing "a forged :within, naming a call nobody allowed, is refused"
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (inv/invoke! eng :transcript tid :purge {}
+                                  {:principal agent
+                                   :within {:kind :held_call :action :allow
+                                            :id hid}})))
+        (is (= :sealed (:state (row-of eng :transcript tid))))
+        (is (seq (lines)) "no line was deleted"))
+      (testing "the person's Allow runs the purge, and the lines go"
+        (let [out (inv/invoke! eng :held_call hid :allow {} {:principal person})]
+          (transcripts/after-purge! eng held-rdef :allow
+                                    (held/after-allow! eng held-rdef :allow out)))
+        (is (= :purged (:state (row-of eng :transcript tid))))
+        (is (= :done (:state (row-of eng :held_call hid))))
+        (is (empty? (lines)))
+        (is (= 4 (get-in (row-of eng :transcript tid) [:data :lines]))
+            "the counts stay")))))
 
 ;; ── the seat's two fields ───────────────────────────────────────────
 
