@@ -141,7 +141,7 @@
             "refused by the WALL, not by the machine — the door is in
              state, so the row must say why")
         (is (re-find #"person's correction" (str (:reason shut))))
-        (is (re-find #"let a person tap" (str (:reason shut))))))
+        (is (re-find #"held for the person's tap" (str (:reason shut))))))
     (testing "the engine's own actor is not the subject of this law"
       (is (= :available
              (:status (refusal ci-run classified the-source :reclassify)))))

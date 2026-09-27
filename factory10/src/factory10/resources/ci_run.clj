@@ -38,9 +38,12 @@
   the classifier got wrong, and the count per transition is what
   decides whether a cheaper model holds this seat. An agent that could
   correct its own verdict could answer its own question, and the count
-  would measure nothing. So `only-a-person-reclassifies` refuses every
+  would measure nothing. So `only-a-person-reclassifies` stops every
   agent hand. It is not grantable: a grant that opened this door would
-  let the house buy back its own correction count.
+  let the house buy back its own correction count. An agent's
+  reclassify is HELD for its person's tap (the guard declares `:hold
+  true`), and the person's Allow replays it; an agent with no person
+  behind it is refused.
 
   THE LABEL IS THE MIRROR'S JOB, NOT THE MODEL'S (R-5). A classified
   run earns one label on its pull request: ci:infra, ci:base-red or
@@ -70,6 +73,7 @@
   (:require [factory10.mirror :refer [the-mirror-writes-this-row]]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
+            [waymark10.holds :as holds]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -130,22 +134,28 @@
 ;; ── the one wall ────────────────────────────────────────────────────
 
 (defguardfn only-a-person-reclassifies
-  {:reads [:principal]
-   :explain "A reclassification is the person's correction, and a correction an agent could make on its own is a correction the house cannot count — the reclassifications after a verdict are exactly how this seat's judgment is measured. If you classified this run and now think you were wrong, say so where an agent may, and let a person tap."
-   :open "No door clears this one. The correction is a person's tap, and a grant that opened it would let the house buy back the number it grades itself on."}
-  [_row _inp ctx]
+  {:reads [:principal :within]
+   :hold true
+   :explain "A reclassification is the person's correction, so an agent's reclassify is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. A correction an agent could make on its own is a correction the house cannot count — the reclassifications after a verdict are exactly how this seat's judgment is measured."
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a grant that opened it would let the house buy back the number it grades itself on."}
+  [row _inp ctx]
   ;; The person-wall's own shape, spelled by hand and NOT made
   ;; grantable: every hand but an agent's passes, the engine's own
-  ;; actor included, and no scope opens it.
-  (if (= :agent (:type (:principal ctx)))
-    (t/deny)
-    (t/allow)))
+  ;; actor included, and no scope opens it. An agent's reclassify is
+  ;; HELD (waymark10.holds), ticket's `only-a-person-reopens` one kind
+  ;; over: the one agent call this admits is the engine's replay of the
+  ;; held call its person allowed. The held row is read only when
+  ;; `:within` names one, so the check tier's answer is the door's.
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :ci_run :reclassify (:id row)) (t/allow)
+    :else (t/deny)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
 ;; All three are check-tier: no :given rows, and every guard in the
-;; tree reads :principal and nothing else, so `make check-factory`
-;; judges them with no database.
+;; tree reads :principal, or :within beside it, both of which the check
+;; tier answers, so `make check-factory` judges them with no database.
 
 (def ^:private a-classified-run
   {:run_id "github:ckopsa/waymark/check-run/41752098311"
@@ -158,13 +168,14 @@
 (defscenario an-agent-may-not-correct-its-own-verdict
   "The reclassifications after a verdict are how this seat's judgment
    is measured, so the hand that classified may not take it back. An
-   agent that thinks it was wrong waits for a person."
+   agent that thinks it was wrong waits for a person: refused here,
+   and at the wire held for the person's tap."
   {:kind    :ci_run
    :attempt :reclassify
    :row     {:state :classified :data a-classified-run}
    :as      {:id "ci-classifier" :type :agent}
    :expect  {:refused :only-a-person-reclassifies
-             :because "person's correction"}})
+             :because "held for the person's tap"}})
 
 (defscenario the-person-corrects-the-classifier
   "And the door is really there for the person whose build it is —
