@@ -377,6 +377,31 @@
     (when-some [id (some-> id str not-empty)]
       (some-> (get @a id) :bound :seat))))
 
+(defn- bench-bound!
+  "Put the worktree the sit prepared on this session's binding: the
+  repository and the branch `bench-of` answered, so every bench call
+  after the sit may leave them out.
+
+  ON THE BINDING, NOT BESIDE IT. A lost bind (R-12.16) loses the bench
+  with it, and a second sit overwrites the whole binding, so a stale
+  worktree can never be filled into a call the new sitting makes. A
+  session with no binding is left untouched: there is no sitting for
+  the bench to belong to."
+  [eng id repo branch]
+  (when-some [a (:mcp-sessions eng)]
+    (when-some [id (some-> id str not-empty)]
+      (swap! a (fn [m]
+                 (cond-> m
+                   (some? (get-in m [id :bound]))
+                   (assoc-in [id :bound :bench] {:repo repo :branch branch})))))))
+
+(defn- bound-bench
+  "The worktree this session's sit prepared, {:repo :branch}, or nil."
+  [eng id]
+  (when-some [a (:mcp-sessions eng)]
+    (when-some [id (some-> id str not-empty)]
+      (some-> (get @a id) :bound :bench))))
+
 ;; ── the in-process door ─────────────────────────────────────────────
 
 (defn door
@@ -2238,6 +2263,14 @@
        "submits: work the row above, and take submit or stall on the "
        "change."))
 
+(def ^:private bench-filled-note
+  "What a seat whose bench opened is told about the two arguments every
+  bench tool's schema calls required: the engine fills them from the
+  worktree it prepared (`bench-stamped`), so the seat need not copy
+  them and is not refused for leaving them out."
+  (str " Your bench calls carry the bench's repo and branch; leave them "
+       "out."))
+
 
 ;; ── the bench, in the sit's answer (spec-seat.md R-12.29) ───────────
 ;;
@@ -3001,6 +3034,11 @@
             ;; i'' · the bench, for a seat whose work is the code: the
             ;; worktree is made before this answer leaves (R-12.29)
             bench (bench-of eng gate-rpc seat change)
+            ;; … and the worktree it made, on the binding: every
+            ;; bench call after this one carries its repository and
+            ;; its branch without the seat copying them (`bench-stamped`)
+            _ (when-some [made (get bench "bench")]
+                (bench-bound! eng sid (get made "repo") (get made "branch")))
             ;; i''' · and the change beside the walk, for a walk whose
             ;; rows are NOT changes: the row the submit door is on,
             ;; read as the sitter so its doors are the seat's own
@@ -3029,7 +3067,8 @@
                                (if walk walk-note no-walk-note)
                                (when (get walk "judgment")
                                  judgment-walk-note)
-                               (when said change-beside-the-walk-note))})
+                               (when said change-beside-the-walk-note)
+                               (when (get bench "bench") bench-filled-note))})
             transcript-key
             (assoc "transcript"
                    {"url" (transcripts/upload-url
@@ -3164,15 +3203,36 @@
 
   The rig holds no seat between calls (the owner's ruling: the engine
   is the enforcement point, the rig is the hand), so the office is on
-  every call or on none."
+  every call or on none.
+
+  THE WORKTREE RIDES TOO. The sit prepared one worktree and answered
+  its `repo` and `branch` (R-12.29); a call that leaves either out gets
+  the prepared one here, BEFORE `gate/invoke-for` judges the grant's
+  filter, so the seat is never refused for law the engine already
+  knew. A call that names its own `repo` or `branch` keeps it, and the
+  filter still judges it; the prepared branch is filled only into a
+  call on the prepared repository. A sitting with no prepared bench
+  gets nothing filled."
   [eng session tool args]
   (if-not (gate/bench-tool? tool)
     args
     (let [sid (:mcp-session-id session)]
       (if-some [sitting (some-> (bound-sitting eng sid) str not-empty)]
-        (cond-> (assoc args :sitting sitting)
-          (some-> (bound-seat eng sid) str not-empty)
-          (assoc :seat (str (bound-seat eng sid))))
+        (let [bench (bound-bench eng sid)
+              repo (some-> (:repo bench) str not-empty)
+              branch (some-> (:branch bench) str not-empty)
+              named-repo (some-> (:repo args) str not-empty)
+              named-branch (some-> (:branch args) str not-empty)]
+          (cond-> (assoc args :sitting sitting)
+            (some-> (bound-seat eng sid) str not-empty)
+            (assoc :seat (str (bound-seat eng sid)))
+
+            (and repo (nil? named-repo))
+            (assoc :repo repo)
+
+            (and branch (nil? named-branch)
+                 (or (nil? named-repo) (= named-repo repo)))
+            (assoc :branch branch)))
         args))))
 
 (defn- rig-dropped
