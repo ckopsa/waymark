@@ -59,7 +59,11 @@
      time on the policy row through the hidden `note_source` door, and
      clears that note the first pass the repository answers again
      (ticket 116dfb0d).
-  8. It prints one census line: the calls, the rows minted and the
+  8. For each active policy it reads the head of its base branch and
+     the checks on it (`forge-base`). A base red on two passes opens
+     one groomed fix ticket in that repository, a later red head is
+     noted on it, and a green base completes it (ticket ade81ae9).
+  9. It prints one census line: the calls, the rows minted and the
      rows moved.
 
   A HEAD THAT MOVES (bead waymark-fp62.6.9). A run ran on one commit.
@@ -89,6 +93,7 @@
             [factory10.bench :as bench]
             [factory10.mirror :as mirror]
             [factory10.resources.repo-policy :as policy]
+            [factory10.resources.ticket :as ticket]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
   (:import (java.util.concurrent CountDownLatch TimeUnit)))
@@ -110,9 +115,10 @@
 ;; ── the seam ────────────────────────────────────────────────────────
 
 (defprotocol ForgeSource
-  "One forge, already speaking the factory's own documents. Five
+  "One forge, already speaking the factory's own documents. Six
   verbs: what moved, one log tail, one label, the call count the
-  census prints, and the checks on one head."
+  census prints, the checks on one head, and the head of a base
+  branch with its checks."
   (forge-poll [s]
     "→ {:changes [change-doc …] :checks [check-doc …]
         :repositories [name …] :complete? bool}.
@@ -143,7 +149,13 @@
     one head, the latest of each (ticket d1742908). The poll reads
     checks only on pull requests that moved, and a check that finishes
     moves no pull request, so the failing pass asks head by head.
-    Throws when the forge does not answer."))
+    Throws when the forge does not answer.")
+  (forge-base [s repository branch]
+    "→ {:head_sha sha :checks [check-doc …]} for the head of one branch,
+    or nil when the branch has none (ticket ade81ae9). Each check
+    carries `:check_name`, `:status` and `:conclusion`, which
+    `check-verdict` reads, and whatever `forge-log-tail` needs to find
+    its log. Throws when the forge does not answer."))
 
 ;; ── what the two kinds take ─────────────────────────────────────────
 
@@ -221,6 +233,12 @@
 
 (defn- as-opts []
   {:principal mirror/source-principal})
+
+(defn- base-opts
+  "The engine's hand inside the base pass: the ticket's base doors open
+  only `:within` it (ticket `only-the-base-pass-writes-this`)."
+  []
+  (assoc (as-opts) :within {:kind :repo_policy :action :note_base}))
 
 (defn- warn! [& parts]
   (binding [*out* *err*]
@@ -770,6 +788,189 @@
      census
      (live-changes eng))))
 
+;; ── a red base opens one ticket (ticket ade81ae9) ────────────────────
+;;
+;; A base branch that goes red stops every pull request on it, and
+;; nothing else in the engine reads a base. So for each active policy
+;; the pass reads the head of the policy's `base` and its checks, and
+;; judges them with `check-verdict`, as a pull request's head is judged.
+;; The state lands on the policy row (`base_state`, `base_head`) through
+;; the hidden `note_base` door, only when it moved.
+;;
+;; RED TWICE OPENS ONE TICKET. A red read on one pass is remembered; a
+;; red read on the NEXT pass too mints one p0 `bug` ticket in that
+;; repository and grooms it with the engine's own hand, so the
+;; repository's code seat wakes on `groom`. A check that is mid-rerun
+;; reads `unknown` between, and that starts the count again. While that
+;; ticket has not ended, a later red head is written on it (`red_heads`)
+;; and no second ticket is minted. A green base ends it through the
+;; hidden `mend` door, whether or not its own change merged.
+
+(def ^:private base-log-tails
+  "How many red checks of a base carry their log tail into the ticket."
+  3)
+
+(def ^:private ended-ticket #{:done :dropped})
+
+(def ^:private red-head-doors
+  "The door that writes a red head on the ticket, read from its state.
+  A self-loop is spelled once for each state it serves; a draft, a
+  blocked or a deferred ticket is a person's, and is left alone."
+  {:open :note_red
+   :in_review :note_red_in_review})
+
+(defn- cut [s n]
+  (let [s (str s)] (subs s 0 (min (count s) (long n)))))
+
+(defn- red-head-line [sha names]
+  (cut (str sha ": " (str/join ", " names)) 400))
+
+(defn- seen-head? [ticket-row sha]
+  (boolean (some #(str/starts-with? (str %) (str sha))
+                 (get-in ticket-row [:data :red_heads]))))
+
+(defn- red-main-detail
+  "The body a code seat reads: what is red, where, the log, and what to
+  do about it."
+  [source repo base head red-from red-checks]
+  (let [tails (for [c (take base-log-tails red-checks)]
+                (let [{:keys [excerpt note]}
+                      (try (forge-log-tail source (assoc c :repository repo))
+                           (catch Exception e {:note (ex-message e)}))]
+                  (str "### " (:check_name c) "\n\n"
+                       (if (str/blank? (str excerpt))
+                         (str "No log tail: " (or note "the forge gave none") ".")
+                         (str "```\n" excerpt "\n```")))))]
+    (cut (str "## What is red\n\n"
+              "The head of `" base "` in " repo " is `" head "`, and these "
+              "checks on it finished red:\n\n"
+              (str/join "\n" (map #(str "- " (:check_name %)
+                                        (when-some [u (:url %)] (str " — " u)))
+                                  red-checks))
+              "\n\n"
+              (when red-from
+                (str "The first red head after a green one was `" red-from
+                     "`: that commit, or the merge that made it, is the "
+                     "likely cause.\n\n"))
+              "## The log\n\n" (str/join "\n\n" tails) "\n\n"
+              "## What to do\n\n"
+              "The engine opened this ticket because `" base "` stayed red "
+              "for two passes. The fix goes on a branch like any ticket's, "
+              "and merges through its pull request. Do not revert other "
+              "people's merges unless the log shows that is the only fix, "
+              "and if it is, say so in the submit. The engine completes "
+              "this ticket when the head of `" base "` is green again, "
+              "whether or not this ticket's change merged.")
+         ticket/detail-chars)))
+
+(defn- open-red-ticket!
+  "One groomed p0 bug in the policy's repository, with the red head
+  written on it. → its id."
+  [eng source repo base head red-from red-checks names]
+  (let [row (:row (inv/create! eng :ticket
+                               {:title (cut (str base " is red: "
+                                                 (str/join ", " names))
+                                            200)
+                                :detail (red-main-detail source repo base head
+                                                         red-from red-checks)
+                                :type "bug"
+                                :priority 0
+                                :repo repo}
+                               (as-opts)))
+        id (str (:id row))]
+    (inv/invoke! eng :ticket id :groom {} (as-opts))
+    (inv/invoke! eng :ticket id :note_red
+                 {:red_head (red-head-line head names)} (base-opts))
+    id))
+
+(defn- blank->nil [v] (some-> v str not-empty))
+
+(defn- base-move!
+  "One policy's base, read and judged, and at most one ticket move.
+  → the census."
+  [eng source policy census]
+  (let [repo (str (get-in policy [:data :repository]))
+        base (bench/base-of policy)
+        base-read (forge-base source repo base)
+        head (blank->nil (:head_sha base-read))]
+    (if (nil? head)
+      census
+      (let [data (:data policy)
+            verdict (check-verdict (bench/required-checks-of policy)
+                                   (:checks base-read))
+            now (case (:verdict verdict) :red "red" :green "green" "unknown")
+            was (str (:base_state data))
+            stored-ticket (blank->nil (:base_ticket data))
+            known (row-by-id eng :ticket stored-ticket)
+            live (when (and known (not (ended-ticket (state-of known))))
+                   known)
+            red-from (case now
+                       "red" (if (= "green" was)
+                               head
+                               (blank->nil (:base_red_from data)))
+                       "green" nil
+                       (blank->nil (:base_red_from data)))
+            names (:names verdict)
+            red-checks (filterv #(and (some #{(str (:check_name %))} names)
+                                      (contains? red-conclusions
+                                                 (str (:conclusion %))))
+                                (:checks base-read))
+            [census ticket-id]
+            (cond
+              (not (and (= "red" now) (= "red" was)))
+              (if (and (= "green" now) live)
+                (do (inv/invoke! eng :ticket (str (:id live)) :mend
+                                 {:close_reason (str base " is green again at "
+                                                     head ".")}
+                                 (base-opts))
+                    [(update census :base-closed inc) stored-ticket])
+                [census stored-ticket])
+
+              ;; red twice, on a head the known ticket already carries:
+              ;; nothing new, and a ticket a person ended on this very
+              ;; head is not minted again
+              (and known (seen-head? known head))
+              [census stored-ticket]
+
+              live
+              (if-some [door (red-head-doors (state-of live))]
+                (do (inv/invoke! eng :ticket stored-ticket door
+                                 {:red_head (red-head-line head names)}
+                                 (base-opts))
+                    [(update census :base-noted inc) stored-ticket])
+                [census stored-ticket])
+
+              :else
+              [(update census :base-opened inc)
+               (open-red-ticket! eng source repo base head red-from
+                                 red-checks names)])
+            input {:verdict now :head head :red_from red-from
+                   :ticket ticket-id}
+            stored {:verdict (blank->nil (:base_state data))
+                    :head (blank->nil (:base_head data))
+                    :red_from (blank->nil (:base_red_from data))
+                    :ticket stored-ticket}]
+        (when (not= input stored)
+          (inv/invoke! eng :repo_policy (str (:id policy)) :note_base input
+                       (as-opts)))
+        census))))
+
+(defn- base-pass!
+  "Every active policy → its base read, judged, and written. A base the
+  forge will not read costs that repository this pass and nothing
+  else, and writes nothing."
+  [eng source census log-fn]
+  (reduce
+   (fn [census policy]
+     (try
+       (base-move! eng source policy census)
+       (catch Exception e
+         (log-fn "the base of " (get-in policy [:data :repository])
+                 " was not read (" (ex-message e) ")")
+         census)))
+   census
+   (bench/policies eng :active)))
+
 ;; ── the one write ───────────────────────────────────────────────────
 
 (defn- unlabelled?
@@ -836,7 +1037,7 @@
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0
-   :refused 0})
+   :base-opened 0 :base-noted 0 :base-closed 0 :refused 0})
 
 ;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
 ;; whose pulls listing the token cannot read costs its rows a pass and
@@ -909,6 +1110,7 @@
           census (stale-pass! eng changes census log-fn)
           census (label-pass! eng source census log-fn)
           census (failing-pass! eng source census log-fn)
+          census (base-pass! eng source census log-fn)
           census (assoc census :calls (forge-calls source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
               (:minted census) " changes minted, " (:adopted census)
@@ -926,6 +1128,12 @@
                      (:stuck census) " stuck on red"))
               (when (pos? (long (:noted census)))
                 (str ", " (:noted census) " policy source notes written"))
+              (when (pos? (long (+ (long (:base-opened census))
+                                   (long (:base-noted census))
+                                   (long (:base-closed census)))))
+                (str ", " (:base-opened census) " red-base tickets opened, "
+                     (:base-noted census) " red heads noted, "
+                     (:base-closed census) " closed on green"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
               (when-not (:complete? census)
