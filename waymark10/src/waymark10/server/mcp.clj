@@ -2207,8 +2207,9 @@
 
   `held` is the rows THIS sitting was already handed (its
   `walked_rows`). A re-sit after a connector drop reuses the sitting,
-  and those rows, while still in the queue, lead the page, so the run
-  lands back on the row it was walking. A row that left the queue is
+  and those rows, while still in the queue, keep their place on the
+  page before the queue's next rows fill it, so the run lands back on
+  the row it was walking. The page keeps the queue's order. A row that left the queue is
   simply not on the page, and the queue's next row takes its place."
   [eng call session seat claimed held]
   (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
@@ -2241,13 +2242,20 @@
                 items (remove #(contains? skip (id-of %))
                               (get-in doc ["data" "items"]))
                 ;; the rows this sitting already walks, while they are
-                ;; still in the queue, come first: a re-sit is handed
-                ;; back its own row, not the queue's new first one
+                ;; still in the queue, are kept first and the queue's
+                ;; next rows fill what room is left: a re-sit is handed
+                ;; back its own row, not the queue's new first one. The
+                ;; page keeps the queue's order, so a walk of many rows
+                ;; reads oldest first as it always did
                 mine (into #{} (keep #(some-> % str not-empty)) held)
-                items (into []
-                            (take n)
-                            (concat (filter #(contains? mine (id-of %)) items)
-                                    (remove #(contains? mine (id-of %)) items)))]
+                mine? #(contains? mine (id-of %))
+                kept (take n (filter mine? items))
+                chosen (into #{}
+                             (map id-of)
+                             (concat kept
+                                     (take (- n (count kept))
+                                           (remove mine? items))))
+                items (into [] (filter #(contains? chosen (id-of %))) items)]
             (cond-> {"kind" walk
                      "charter" (str (get-in seat [:data :charter]))
                      "total" (get-in doc ["data" "total"])
@@ -3258,7 +3266,7 @@
             ;; … past the rows another open sitting of this seat was
             ;; handed: a fire and a wake that land together are two
             ;; runs, and the second walks the next row, not the first's.
-            ;; A reused sitting's own rows lead, so a re-sit after a
+            ;; A reused sitting's own rows are kept, so a re-sit after a
             ;; connector drop is handed back the row it was walking
             walk (when-not halted
                    (walk-of eng call sitter-sees seat
