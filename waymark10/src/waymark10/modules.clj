@@ -321,7 +321,21 @@
                        eng {:interval-ms
                             (get-in eng [:services :held-calls :sweep-ms]
                                     300000)}))
-             :stop held-calls/stop-expiry-sweeper!}]
+             :stop held-calls/stop-expiry-sweeper!}
+            ;; the seat's clock (spec-seat.md R-7.6, R-12.25;
+            ;; spec-transcript.md R-9): the sittings nobody ended and
+            ;; the transcripts past their grace, swept on a cadence
+            ;; and not only at boot. Elected for the expiry's reason:
+            ;; two engines closing the same sitting would walk the
+            ;; same door twice.
+            {:hook :seat-clock
+             :elected :seat-clock
+             :start (fn [eng _]
+                      (defs/start-clock-sweeper!
+                       eng {:interval-ms
+                            (get-in eng [:services :seats :clock-ms]
+                                    300000)}))
+             :stop defs/stop-clock-sweeper!}]
     :pack packs/core}
 
    {:module :attachments

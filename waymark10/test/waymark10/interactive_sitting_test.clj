@@ -554,6 +554,23 @@
       (is (= {:abandoned 0 :closed 0}
              (select-keys (defs/sweep-seats! eng) [:abandoned :closed]))))))
 
+(deftest the-clock-sweep-closes-an-idle-sitting-without-a-boot
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model {:name "chair"
+                                 :mode "interactive"
+                                 :sitting_idle_seconds 600})
+        walked (doc-of (tool h (with-session (initialize! h)) "waymark_sit"
+                             {:key a-key}))
+        _ (is (= 200 (:status (tally! h counts))))]
+    (reset! at (Instant/parse "2026-09-17T10:00:00Z"))
+    (is (= {:abandoned 0 :closed 1}
+           (select-keys (defs/sweep-clock! eng) [:abandoned :closed]))
+        "the :seat-clock pass alone, with no boot, closes it")
+    (is (= :closed (:state (row-of eng :sitting (str (:sitting walked))))))))
+
 (deftest a-sitting-that-never-tallied-is-abandoned-not-billed
   (let [at (clock)
         eng (fresh-engine at)

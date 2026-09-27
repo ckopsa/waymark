@@ -404,6 +404,22 @@
         (is (nil? (get-in tr [:data :gap])) "the last post came after the end"))
       (is (= 404 (:status (upload! h key (body-of run-lines))))))))
 
+(deftest the-clock-sweep-seals-without-a-boot
+  (testing "the :seat-clock pass alone seals a transcript past its grace"
+    (let [at (clock)
+          eng (fresh-engine at)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng))
+          sat (sit! h)
+          key (get-in sat [:transcript :key])
+          _ (upload! h key (body-of run-lines))
+          _ (close! h)]
+      (later! at 700)
+      (is (= 1 (:sealed (defs/sweep-clock! eng))))
+      (is (= :sealed (:state (first (rows-of eng :transcript
+                                             {:sitting (:sitting sat)})))))
+      (is (= 404 (:status (upload! h key (body-of run-lines))))))))
+
 (deftest a-sitting-that-sent-nothing-says-so-when-sealed
   (testing "10 · No transcript was received."
     (let [at (clock)

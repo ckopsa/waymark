@@ -125,7 +125,8 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
 
@@ -1161,6 +1162,31 @@
                    [{:target :data :field :drift :op :set? :value true}]
                    {:limit sweep-cap})))))))
 
+(defn sweep-clock!
+  "The seat passes that act on TIME, not on the law: the sittings
+  nobody ended (R-7.6, R-12.25), then the transcripts past their grace
+  or their `transcript_days` (docs/spec-transcript.md R-9.1, R-9.4).
+  → {:abandoned n :closed n :sealed n :purged n}.
+
+  The boot runs it inside `sweep-seats!`, and the `:seat-clock` hook
+  runs it on a cadence, because a clock that only moves at a deploy
+  leaves a transcript open for as long as the deploys are apart."
+  [eng]
+  (let [sittings (sweep-sittings! eng)
+        ;; AFTER the sittings, so a sitting this pass just ended starts
+        ;; its transcript's grace now rather than on the next pass
+        ;; (docs/spec-transcript.md R-9)
+        transcripts (transcripts/sweep! eng)]
+    {:abandoned (:abandoned sittings)
+     ;; R-12.25's half of the same pass: an interactive sitting
+     ;; somebody walked away from is CLOSED with its last tally, not
+     ;; abandoned, because it did report what it spent
+     :closed (:closed sittings)
+     ;; the transcripts: sealed after their sitting's grace, and their
+     ;; lines purged after the seat's `transcript_days` (R-9.1, R-9.4)
+     :sealed (:sealed transcripts)
+     :purged (:purged transcripts)}))
+
 (defn sweep-seats!
   "The boot's seat pass (§ 7, R-12.3), run after the kind fingerprints
   because it judges scopes against the registry those fingerprints
@@ -1172,22 +1198,35 @@
   nothing, which is what a module you left out should cost."
   [eng]
   (let [stale (sweep-scopes! eng)
-        sittings (sweep-sittings! eng)
-        ;; AFTER the sittings, so a sitting this pass just ended starts
-        ;; its transcript's grace now rather than on the next pass
-        ;; (docs/spec-transcript.md R-9)
-        transcripts (transcripts/sweep! eng)]
-    {:stale stale
-     :abandoned (:abandoned sittings)
-     ;; R-12.25's half of the same pass: an interactive sitting
-     ;; somebody walked away from is CLOSED with its last tally, not
-     ;; abandoned, because it did report what it spent
-     :closed (:closed sittings)
-     :drifting (report-drift! eng)
-     ;; the transcripts: sealed after their sitting's grace, and their
-     ;; lines purged after the seat's `transcript_days` (R-9.1, R-9.4)
-     :sealed (:sealed transcripts)
-     :purged (:purged transcripts)}))
+        clock (sweep-clock! eng)]
+    (assoc (select-keys clock [:abandoned :closed :sealed :purged])
+           :stale stale
+           ;; boot-only, with the scopes: drift moves only with the law
+           :drifting (report-drift! eng))))
+
+(defn start-clock-sweeper!
+  "The cadence of `sweep-clock!`: every `:interval-ms`, one pass. The
+  first pass is one interval after the start, so a boot writes nothing
+  beyond its own sweep. Returns the handle `stop-clock-sweeper!` takes."
+  [eng {:keys [interval-ms] :or {interval-ms 300000}}]
+  (let [stop (CountDownLatch. 1)
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop (long interval-ms)
+                                         TimeUnit/MILLISECONDS)
+                         (try (sweep-clock! eng)
+                              (catch Exception e
+                                (warn! "the clock pass failed ("
+                                       (ex-message e) ")")))
+                         (recur))))
+                   "waymark10-seat-clock")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn stop-clock-sweeper! [{:keys [^CountDownLatch stop]}]
+  (some-> stop .countDown)
+  nil)
 
 (defn boot-revise!
   "Fingerprint every resident application kind, revise where the hash
