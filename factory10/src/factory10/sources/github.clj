@@ -21,6 +21,7 @@
       GET  /repos/{repo}/pulls/{n}                  size and mergeable
       GET  /repos/{repo}/pulls/{n}/files            the paths
       GET  /repos/{repo}/pulls/{n}/reviews          the review state
+      GET  /repos/{repo}/branches/{base}            the base's head
       GET  /repos/{repo}/commits/{sha}/check-runs   the red runs
       GET  /repos/{repo}/actions/runs?head_sha=…    …or, when refused, the
       GET  /repos/{repo}/actions/runs/{id}/jobs     runs and their jobs
@@ -727,7 +728,22 @@
             {:check_name (clamp (:name check) 200)
              :status (word (:status check))
              :conclusion (word (:conclusion check))})
-          (check-runs! this repository head-sha))))
+          (check-runs! this repository head-sha)))
+
+  (forge-base [this repository branch]
+    ;; the base branch's head, and every check on it through the same
+    ;; read a pull request's head gets, the Actions fallback included
+    ;; (ticket ade81ae9). Each check keeps what the log hop needs.
+    (when-some [sha (word (get-in (call! this "GET"
+                                         (str "/repos/" repository
+                                              "/branches/" branch)
+                                         {})
+                                  [:commit :sha]))]
+      {:head_sha sha
+       :checks (mapv (fn [check]
+                       (assoc (check->doc repository nil sha check)
+                              :status (word (:status check))))
+                     (check-runs! this repository sha))})))
 
 (defn parse-repos
   "\"ckopsa/waymark, ckopsa/waymark-bench\" → the repositories to read,
@@ -816,6 +832,12 @@
   (swap! state update-in [:repos repo :checks sha]
          (fn [cs] (conj (vec cs) check))))
 
+(defn seed-branch!
+  "One branch at the fake, with its head. The base pass reads it
+  (ticket ade81ae9); a branch never seeded answers 404."
+  [state repo branch sha]
+  (swap! state assoc-in [:repos repo :branches branch] sha))
+
 (defn seed-run!
   "One workflow run on one head, for the Actions read the source makes
   when the check-runs route refuses. Its jobs come from `seed-job!`."
@@ -885,6 +907,7 @@
 (def ^:private jobs-path #"/repos/([^/]+/[^/]+)/actions/runs/(\d+)/jobs")
 (def ^:private job-log-path #"/repos/([^/]+/[^/]+)/actions/jobs/(\d+)/logs")
 (def ^:private labels-path #"/repos/([^/]+/[^/]+)/issues/(\d+)/labels")
+(def ^:private branch-path #"/repos/([^/]+/[^/]+)/branches/(.+)")
 
 (def blob-base
   "Where the fake's log redirect points. Another host, which is why
@@ -961,6 +984,12 @@
             :missing {:status 404 :body "not found"}
             {:status 200 :body (get (:logs st) job "")
              :content-type "text/plain"}))
+
+        (re-matches branch-path path)
+        (let [m (re-matches branch-path path)]
+          (if-some [sha (get-in (repo-of m) [:branches (nth m 2)])]
+            {:name (nth m 2) :commit {:sha sha}}
+            (throw (ex-info "no such branch" {:status 404}))))
 
         (re-matches labels-path path)
         (let [m (re-matches labels-path path)]
