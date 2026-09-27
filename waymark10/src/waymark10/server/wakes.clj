@@ -625,6 +625,161 @@
             0
             (rows-where eng :schedule {:wake_pending true} pending-page))))
 
+;; ── the fire nobody sat in ──────────────────────────────────────────
+;;
+;; A fire mints a key (`seats/hold-fire-key!`) and the run's sit spends
+;; it. A run that dies before it sits spends nothing, opens no sitting
+;; and gets no transcript key, so the run is invisible to an audit that
+;; reads the sittings. It also costs the queue its wake: a count wake
+;; was consumed by the fire, and nothing arms it again. The clock sweep
+;; asks this pass, and the pass writes both things down.
+
+(def default-sit-deadline-seconds
+  "How long a fired run has to sit before the sweep says it never did.
+  Ten minutes: a run that has not sat by then has died."
+  600)
+
+(def ^:private missed-seat-page
+  "The most seats one pass reads for unspent keys."
+  500)
+
+(def ^:private missed-note-cap
+  "The sitting's `note` is 240 characters wide."
+  240)
+
+(defn- missed-entries
+  "The fire-key entries of this seat row still unspent more than
+  `deadline` seconds after their `fired_at`, oldest first. An entry
+  with no `fired_at` was held before the field existed; it is left to
+  expire, since nobody can say when its run was due."
+  [seat-row ^Instant now deadline]
+  (let [cut (.minusSeconds now (long deadline))]
+    (->> (get-in seat-row [:data :fire_keys])
+         (keep (fn [e]
+                 (when-some [at (instant-of (:fired_at e))]
+                   (when (.isBefore ^Instant at cut) [at e]))))
+         (sort-by first)
+         (mapv second))))
+
+(defn- missed-note
+  "The sentence the missed sitting carries, with the provider's page for
+  the run when the schedule row has one."
+  [^Instant fired deadline schedule-row]
+  (let [url (some-> (get-in schedule-row [:data :last_run_url]) str not-empty)
+        s (str "Fired at " fired "; no session sat within " deadline "s."
+               (when url (str " Last run: " url)))]
+    (if (<= (count s) (long missed-note-cap))
+      s
+      (subs s 0 missed-note-cap))))
+
+(defn- count-wake-holds?
+  "Does one of the seat's COUNT wakes (`at_least`) still hold now? The
+  count is `count-under`'s, the one the consumer itself would take."
+  [eng seat-row]
+  (let [walk-rdef (some->> (get-in seat-row [:data :walk]) str not-empty
+                           keyword (get (inv/resources eng)))]
+    (boolean
+     (some (fn [e]
+             (when-some [at-least (:at_least e)]
+               (when-some [n (count-under eng (keyword (name (:kind e)))
+                                          (:filter e))]
+                 (>= (long n) (long at-least)))))
+           (seats/effective-wake-on seat-row walk-rdef)))))
+
+(defn- last-sitting-missed?
+  "Was the seat's newest sitting itself a missed one? Two missed runs
+  in a row stop the re-arm, so a Routine that is dark does not loop."
+  [st tx seat-id]
+  (true? (get-in (first (store/query-rows st tx :sitting {:seat (str seat-id)}
+                                          {:limit 1 :newest-first true}))
+                 [:data :missed])))
+
+(defn- record-missed!
+  "One unspent entry, written down in ONE transaction: the entry leaves
+  the seat row, so a late sit with its key is refused as it always
+  was; a closed sitting that says the run never sat is born by the
+  quiet door; and, when `rearm?` and the seat's last sitting was not
+  missed too, `wake_pending` goes onto the schedule row, as the
+  consumer marks a damped wake, so `release!` fires the queue again
+  under the usual damper. The seat row is read FOR UPDATE, so a sit
+  that spends the key at the same moment wins or loses whole.
+  → true when this call wrote the sitting."
+  [eng seat-row entry ^Instant now deadline rearm?]
+  (let [st (:storage eng)
+        seat-id (str (:id seat-row))
+        schedule (schedules/schedule-for-seat eng seat-id)
+        fired (instant-of (:fired_at entry))
+        model (or (seats/chair-of seat-row)
+                  (some-> (get-in schedule [:data :model]) str not-empty))
+        same? #(= (str (:hash %)) (str (:hash entry)))]
+    (boolean
+     (store/with-tx st
+       (fn [tx]
+         (when-some [row (store/load-row st tx :seat seat-id {:for-update true})]
+           (let [held (get-in row [:data :fire_keys])]
+             (when (some same? held)
+               (let [again? (last-sitting-missed? st tx seat-id)]
+                 (store/update-data! st tx :seat seat-id
+                                     (assoc (:data row) :fire_keys
+                                            (into [] (remove same?) held))
+                                     (:next-flip-at row))
+                 (inv/insert-quiet!
+                  eng tx :sitting
+                  (cond-> {:seat seat-id
+                           :member (seats/sitter-id seat-row)
+                           :mode seats/default-mode
+                           :started_at fired
+                           :ended_at now
+                           :input_tokens 0 :output_tokens 0
+                           :cache_read_tokens 0 :cache_write_tokens 0
+                           :turns 0 :transitions 0 :refusals 0
+                           :served {}
+                           :missed true
+                           :note (missed-note fired deadline schedule)}
+                    model (assoc :model model))
+                  {:principal seats/seats-actor :state :closed})
+                 (when (and rearm? (not again?) schedule)
+                   (store/update-data! st tx :schedule (str (:id schedule))
+                                       (assoc (:data schedule) :wake_pending true)
+                                       (:next-flip-at schedule)))
+                 true)))))))))
+
+(defn sweep-missed!
+  "Every fire whose key is still unspent more than `deadline` seconds
+  (default `default-sit-deadline-seconds`) after the fire, written down
+  as a closed `missed` sitting, and the count wake it spent armed
+  again where it still holds. The clock sweep's pass
+  (`definitions/sweep-clock!`). A second pass over the same state
+  writes nothing, because the first took the entry off the seat row.
+  → the number of missed sittings written."
+  ([eng] (sweep-missed! eng default-sit-deadline-seconds))
+  ([eng deadline]
+   (if-not (and (serves? eng :seat) (serves? eng :sitting))
+     0
+     (let [at (now eng)]
+       (reduce
+        (fn [n seat-row]
+          (let [found (missed-entries seat-row at deadline)]
+            (if (empty? found)
+              n
+              (let [rearm? (and (= :active (:state seat-row))
+                                (count-wake-holds? eng seat-row))]
+                (reduce (fn [n entry]
+                          (if (try (record-missed! eng seat-row entry at
+                                                   deadline rearm?)
+                                   (catch Exception e
+                                     (warn! "seat " (:id seat-row)
+                                            " missed fire not recorded — "
+                                            (ex-message e))
+                                     false))
+                            (inc n)
+                            n))
+                        n
+                        found)))))
+        0
+        (concat (rows-where eng :seat {:state :active} missed-seat-page)
+                (rows-where eng :seat {:state :parked} missed-seat-page)))))))
+
 ;; ── the consumer ────────────────────────────────────────────────────
 
 (defn handle-transition!

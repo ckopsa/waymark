@@ -1952,11 +1952,17 @@
 
   The data is the caller's, validated by the caller: this door runs
   no schema check, because its one caller builds every field itself
-  and a refusal here would lose a line the hook already sent."
-  [engine tx kind data {:keys [principal id]}]
+  and a refusal here would lose a line the hook already sent.
+
+  `:state` births the row in a state other than the kind's initial
+  one. Its second caller is the clock sweep's record of a fire nobody
+  sat in (`wakes/sweep-missed!`): a sitting born closed, because
+  nothing ever opened it and a transition would log a close no run
+  made."
+  [engine tx kind data {:keys [principal id state]}]
   (let [rdef (rdef-of engine kind)
         row {:id (or id (str (random-uuid)))
-             :state (:initial rdef)
+             :state (or state (:initial rdef))
              :version 1
              :data data
              :shape (:shape rdef 1)

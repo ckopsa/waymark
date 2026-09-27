@@ -1546,6 +1546,15 @@
     [:expires_at {:x-display
                   {:label "When it stops answering"
                    :help "One sitting_idle_seconds after the fire. A key no session spent stops answering at this moment."}}
+     :waymark/instant]
+    ;; the instant of the fire itself, so the clock sweep can tell a
+    ;; run that never sat from one that is still starting
+    ;; (`wakes/sweep-missed!`). Optional: an entry held before the
+    ;; field existed carries none, and the sweep leaves it to expire.
+    [:fired_at {:optional true
+                :x-display
+                {:label "When it was fired"
+                 :help "The instant of the fire that minted this key. A key still unspent some minutes after it is a run that never sat."}}
      :waymark/instant]]])
 
 (def delegates-schema
@@ -2896,7 +2905,17 @@
                      :x-display {:hidden true
                                  :label "The firing key's hash"
                                  :spelled-by-hand "The SHA-256 of the firing key that opened this sitting. The sit writes it; it answers only while the sitting is open; the engine never shows a key."}}
-     [:maybe [:string {:max 64}]]]]
+     [:maybe [:string {:max 64}]]]
+    ;; A FIRE NOBODY SAT IN. The clock sweep writes this row, already
+    ;; closed, when a firing's key is still unspent past the sit
+    ;; deadline (`wakes/sweep-missed!`), so an audit that reads the
+    ;; sittings sees the run that died before it sat. Plain :boolean
+    ;; and not :maybe, so the field promotes to a column and filters.
+    [:missed {:optional true
+              :x-display
+              {:label "Fired, and nobody sat"
+               :spelled-by-hand "Written by the engine's sweep when a firing's key went unspent past the sit deadline. The sitting is born closed, with every count at zero."}}
+     :boolean]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -2961,6 +2980,7 @@
                 :member #{:eq}
                 :model #{:eq}
                 :grant #{:eq}
+                :missed #{:eq}
                 :started_at #{:after :before :range}}
    :sortable {:fields [:started_at] :default "-started_at"}
    :links [{:rel "seat" :kind :seat
@@ -3505,7 +3525,8 @@
           ttl (long (or (get-in seat-row [:data :sitting_idle_seconds])
                         default-idle-seconds))
           entry {:hash (key-hash key)
-                 :expires_at (str (.plusSeconds at ttl))}]
+                 :expires_at (str (.plusSeconds at ttl))
+                 :fired_at (str at)}]
       (store/with-tx (:storage eng)
         (fn [tx]
           (when-some [row (store/load-row (:storage eng) tx :seat
