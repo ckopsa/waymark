@@ -10,7 +10,12 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.resource :as r]
+            [waymark10.server.consumers :as consumers]
+            [waymark10.server.held-calls :as held]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
+            [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
@@ -35,13 +40,54 @@
            {:one-way "Dropping records reality; nothing external changes."
             :display {:label "Drop"}}]]})
 
+(r/defhandler rename-gadget [row inp _ctx]
+  (assoc-in row [:data :name] (:name inp)))
+
+(r/defhandler poke-gadget [row _inp _ctx]
+  (update-in row [:data :pokes] (fnil inc 0)))
+
+(r/defresource gadget
+  ;; a FENCED door with no prefill list: the strict fence stays
+  {:kind :dl_gadget
+   :plural "dl_gadgets"
+   :states [:open :closed]
+   :initial :open
+   :terminal #{:closed}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name [:string {:min 1 :max 80}]]
+            [:pokes {:optional true} [:maybe :int]]]
+   :actions
+   {:rename {:from #{:open} :to :open
+             :input [:map [:name [:string {:min 1 :max 80}]]]
+             :safety {:idempotent true :reversible true :confirm false
+                      :fence true}
+             :handler rename-gadget}
+    :poke {:from #{:open} :to :open
+           :safety {:idempotent true :reversible true :confirm false}
+           :handler poke-gadget}
+    :close {:from #{:open} :to :closed
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A closed gadget is history."}}}})
+
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private t0 (Instant/parse "2026-09-23T08:00:00Z"))
 
 (defn- world []
   (let [clock (atom t0)
-        eng (dev/scratch! [ticket] {:now-fn (fn [] @clock)})]
+        eng (dev/scratch! [ticket gadget] {:now-fn (fn [] @clock)})]
+    {:clock clock :eng eng :h (dev/handler eng)}))
+
+(defn- fire-world
+  "The world with the fake scheduler and the fake fire endpoint at the
+  provider, so a seat can be linked and fired (halt-lift-test's
+  fixture)."
+  []
+  (let [clock (atom t0)
+        eng (assoc (dev/scratch! [ticket gadget] {:now-fn (fn [] @clock)})
+                   :schedule-adapters {:claude_routine (sch/fake-scheduler)}
+                   :fire-adapter (sch/fake-fire))]
     {:clock clock :eng eng :h (dev/handler eng)}))
 
 (defn- req
@@ -289,6 +335,84 @@
         (is (= 200 (:status (allow! h held))))
         (is (== 9 (budget-of h child)))
         (is (= "done" (:state (get-row h "held_calls" held person))))))))
+
+;; ── the held fence is about the edit, not the version alone ──────────
+
+(def ^:private colton
+  "The person, off the wire: the fire door is not idempotent, so a
+  fire carries a key, and `inv/invoke!` is where a test hands one over."
+  (t/principal {:id "colton" :type :human :display "Colton"}))
+
+(defn- link-fire!
+  "The seat's schedule, minted by the drain and linked by the person:
+  the fire door's own precondition (halt-lift-test's `link-fire!`)."
+  [eng h cname seat]
+  (consumers/drain-consumer! eng cname (sch/consumer-fn eng))
+  (let [sched (sch/schedule-for-seat eng seat)
+        _ (assert (some? sched) "the drain mints the seat's schedule")
+        linked (req h :post (str "/api/schedules/" (:id sched) "/-/link")
+                    {:headers person
+                     :body {:fire_url "https://api.anthropic.com/v1/claude_code/routines/trig_01FAKE/fire"
+                            :token "rk-test-0123456789abcdef"}})]
+    (assert (= 200 (:status linked)) (pr-str (json linked)))))
+
+(deftest a-held-restate-survives-a-fire-that-moved-none-of-its-fields
+  (let [{:keys [h eng]} (fire-world)
+        cn :delegation-held-fire
+        _ (consumers/drain-consumer! eng cn (sch/consumer-fn eng))
+        {:keys [as]} (open-mayor! h)
+        child (id-of (author! h as "bench-clerk" {}))
+        _ (req h :post (str "/api/seats/" child "/-/unpark") {:headers person})
+        _ (link-fire! eng h cn child)
+        asked (restate-as! h as child {:budget_usd_per_week 9})
+        held-id (:held_call (json asked))]
+    (is (= 202 (:status asked)) (pr-str (json asked)))
+    (inv/invoke! eng :seat (str child) :fire {:text "Look at the bench now."}
+                 {:principal colton
+                  :idempotency-key (str "held-fire:" (random-uuid))})
+    (is (= :fire (:action (last (log-of eng :seat child))))
+        "the fire moved the row between the hold and the tap")
+    (is (= 200 (:status (allow! h held-id))))
+    (is (= "done" (:state (get-row h "held_calls" held-id person)))
+        (pr-str (get-in (get-row h "held_calls" held-id person) [:data :reason])))
+    (is (== 9 (budget-of h child)) "the restate landed")))
+
+(deftest a-held-restate-fails-naming-the-field-the-person-moved
+  (let [{:keys [h]} (world)
+        {:keys [as]} (open-mayor! h)
+        child (id-of (author! h as "bench-clerk" {}))
+        _ (req h :post (str "/api/seats/" child "/-/unpark") {:headers person})
+        asked (restate-as! h as child {:budget_usd_per_week 9})
+        held-id (:held_call (json asked))
+        own (restate-as! h person child
+                         {:charter "Decide which bench ticket is ready this week."})]
+    (is (= 202 (:status asked)) (pr-str (json asked)))
+    (is (= 200 (:status own)) (pr-str (json own)))
+    (is (= 200 (:status (allow! h held-id))))
+    (let [call (get-row h "held_calls" held-id person)]
+      (is (= "failed" (:state call)))
+      (is (str/includes? (str (get-in call [:data :reason])) "charter")
+          (pr-str (get-in call [:data :reason]))))
+    (is (== 2 (budget-of h child)) "the stale restate did not land")))
+
+(deftest a-held-call-on-a-door-with-no-prefill-fails-on-any-version-move
+  (let [{:keys [h eng]} (world)
+        made (req h :post "/api/dl_gadgets" {:headers person :body {:name "sprocket"}})
+        gid (id-of made)
+        _ (assert (= 201 (:status made)) (pr-str (json made)))
+        call (held/hold-door! eng {:kind :dl_gadget :action :rename :id gid
+                                   :body {:name "cog"}
+                                   :caller "seat:gadget-author"
+                                   :owner "colton"
+                                   :if-match (etag-of h (str "/api/dl_gadgets/" gid) person)
+                                   :why "Rename it."})]
+    (is (nil? (get-in call [:data :door :prefill_digests]))
+        "a door with no prefill list keeps no digests")
+    (is (= 200 (:status (req h :post (str "/api/dl_gadgets/" gid "/-/poke")
+                             {:headers person}))))
+    (is (= 200 (:status (allow! h (:id call)))))
+    (is (= "failed" (:state (get-row h "held_calls" (:id call) person))))
+    (is (= "sprocket" (get-in (get-row h "dl_gadgets" gid person) [:data :name])))))
 
 (deftest an-author-does-not-restate-a-seat-it-did-not-author
   (let [{:keys [h eng]} (world)

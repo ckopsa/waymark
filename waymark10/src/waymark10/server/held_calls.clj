@@ -414,7 +414,12 @@
               ;; replay presents it, so a row that moved between the ask
               ;; and the tap refuses rather than being written over
               [:if_match {:optional true :x-display {:raw true :label "Read at"}}
-               [:maybe [:string {:min 1 :max 256}]]]]]]
+               [:maybe [:string {:min 1 :max 256}]]]
+              ;; what the edit is ABOUT, beside the version: one digest
+              ;; per prefill field of the door, read at the hold. A row
+              ;; that moved in none of them is replayed at its new etag
+              [:prefill_digests {:optional true :x-display {:hidden true}}
+               [:maybe [:map-of :keyword :string]]]]]]
     [:owner {:optional true
              :x-display {:raw true
                          :label "Waits on"
@@ -496,7 +501,9 @@
               ;; replay presents it, so a row that moved between the ask
               ;; and the tap refuses rather than being written over
               [:if_match {:optional true :x-display {:raw true :label "Read at"}}
-               [:maybe [:string {:min 1 :max 256}]]]]]]
+               [:maybe [:string {:min 1 :max 256}]]]
+              [:prefill_digests {:optional true :x-display {:hidden true}}
+               [:maybe [:map-of :keyword :string]]]]]]
     [:owner {:optional true
              :x-display {:raw true
                          :label "Waits on"
@@ -619,6 +626,44 @@
                    {:principal engine-actor}))]
     {:row row :answer (held-answer (:id row))}))
 
+(defn- digest-value
+  "A stored value as canonical bytes will take it: keys as names, and
+  any scalar the canonical writer refuses (a float, a decimal, an
+  instant) as its string. Both digests of one field read the same
+  store, so the spelling only has to be stable, not pretty."
+  [v]
+  (cond
+    (or (nil? v) (boolean? v) (string? v) (int? v) (keyword? v)) v
+    (map? v) (into {} (map (fn [[k x]] [(if (keyword? k) (name k) (str k))
+                                        (digest-value x)]))
+                   v)
+    (sequential? v) (mapv digest-value v)
+    (set? v) (mapv digest-value (sort-by str v))
+    :else (str v)))
+
+(defn- prefill-now
+  "The row as it stands, read for its fence: its version and one
+  SHA-256 per named field, over that field's canonical JSON. → nil
+  when there is no such row."
+  [eng kind id fields]
+  (let [st (:storage eng)]
+    (when-some [raw (store/with-tx st
+                      (fn [tx] (store/load-row st tx (keyword kind) (str id) {})))]
+      {:version (:version raw)
+       :digests (into {}
+                      (map (fn [f]
+                             (let [f (keyword f)]
+                               [f (wire/digest
+                                   [(digest-value (get (:data raw) f))])])))
+                      fields)})))
+
+(defn- prefill-of
+  "The fields a door's edit is about: its `:edit :prefill` list, or nil
+  for a door that declares none."
+  [eng kind action]
+  (seq (get-in (inv/resources eng)
+               [(keyword kind) :actions (keyword action) :edit :prefill])))
+
 (defn hold-door!
   "Mint the held call a delegating seat's write became
   (server/delegation): the router refused to serve it because one of
@@ -628,12 +673,22 @@
   `forward` is the body exactly as the author sent it, and `door`
   names where the allow replays it. The engine writes the row
   (`the-power-door-mints-it`), `caller` names the author's sitter and
-  `owner` the one person who may answer it."
+  `owner` the one person who may answer it.
+
+  A FENCED door keeps what its edit is about beside `if_match`: for a
+  door whose edit declares a prefill list, one digest per field as the
+  row stands now. The allow's replay reads them again when the version
+  moved, so a transition that touched none of them (a seat's `fire`)
+  does not spend the person's tap."
   [eng {:keys [kind action id body caller owner author why if-match]}]
   (let [kind (name kind)
         action (name action)
         what (or (some-> (:name body) str not-empty) (some-> id str))
-        shown (str action " " kind (when what (str " " what)))]
+        shown (str action " " kind (when what (str " " what)))
+        digests (when (and (some-> if-match str not-empty)
+                           (some-> id str not-empty))
+                  (when-some [fields (prefill-of eng kind action)]
+                    (not-empty (:digests (prefill-now eng kind id fields)))))]
     (:row (inv/create!
            eng :held_call
            (cond-> {:tool (str kind "." action)
@@ -647,7 +702,8 @@
                     :door (cond-> {:kind kind :action action}
                             (some-> id str not-empty) (assoc :id (str id))
                             (some-> author str not-empty) (assoc :author (str author))
-                            (some-> if-match str not-empty) (assoc :if_match (str if-match)))}
+                            (some-> if-match str not-empty) (assoc :if_match (str if-match))
+                            digests (assoc :prefill_digests digests))}
              (some-> owner str not-empty) (assoc :owner (str owner)))
            {:principal engine-actor}))))
 
@@ -683,9 +739,15 @@
   this row, which is the one thing the delegation guards read as the
   person's yes. Keyed by this row, so a replayed forward answers the
   first one's result. A refusal lands `failed` with the door's own
-  sentence: the world may have moved between the ask and the tap."
+  sentence: the world may have moved between the ask and the tap.
+
+  THE FENCE IS ABOUT THE EDIT. When the version moved and the row
+  keeps `prefill_digests`, the row is read again: if none of those
+  fields moved, the replay runs once more at the row's current etag;
+  if some did, it fails naming them. A door with no digests keeps the
+  strict version fence."
   [eng row]
-  (let [{:keys [kind action id if_match]} (get-in row [:data :door])
+  (let [{:keys [kind action id if_match prefill_digests]} (get-in row [:data :door])
         kind (keyword (str kind))
         action (keyword (str action))
         id (some-> id str not-empty)
@@ -693,11 +755,32 @@
         opts {:principal (door-principal row)
               :within {:kind :held_call :action :allow :id (str (:id row))}
               :idempotency-key (str "held_call:" (:id row))
-              :if-match (some-> if_match str not-empty)}]
+              :if-match (some-> if_match str not-empty)}
+        attempt (fn [opts]
+                  (if id
+                    (inv/invoke! eng kind id action body opts)
+                    (inv/create! eng kind body opts)))
+        refence (fn [e]
+                  (let [now (prefill-now eng kind id (keys prefill_digests))
+                        moved (sort (keep (fn [[f d]]
+                                            (when (not= d (get-in now [:digests (keyword f)]))
+                                              (name f)))
+                                          prefill_digests))]
+                    (cond
+                      (nil? now) (throw e)
+                      (seq moved)
+                      (let [s (str "The row changed in " (str/join ", " moved)
+                                   " since the author read it.")]
+                        (throw (ex-info s {:detail s :moved (vec moved)})))
+                      :else (inv/etag kind id (:version now)))))]
     (try
-      (let [res (if id
-                  (inv/invoke! eng kind id action body opts)
-                  (inv/create! eng kind body opts))
+      (let [res (try
+                  (attempt opts)
+                  (catch clojure.lang.ExceptionInfo e
+                    (if (and id (seq prefill_digests)
+                             (= :version-conflict (:waymark10/problem (ex-data e))))
+                      (attempt (assoc opts :if-match (refence e)))
+                      (throw e))))
             written (:row res)]
         (finish! eng (:id row) :land
                  {:answer (wire/write-json
