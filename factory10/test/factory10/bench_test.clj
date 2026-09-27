@@ -1882,6 +1882,46 @@
         "the ticket was groomed once, before the rounds: no groom answers
          the stall, so the ceiling holds")))
 
+;; ── a reopen finds the submitted change ────────────────────────────────────
+;;
+;; A SEAT COMPLETES ITS TICKET AT SUBMIT, and the source adopts the
+;; change, which writes GitHub's id over `change_id`. When the pull
+;; request goes red a person reopens the ticket and grooms it again. The
+;; next sit must hand the seat THAT change, with what its submit caused
+;; — not a new open change on the same branch (ticket b35ab5b5).
+
+(deftest a-reopened-ticket-sits-with-its-submitted-change-and-its-feedback
+  (let [w (ticket-world)
+        change-id (get-in (:answer w) [:change :id])
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (inv/invoke! (:eng w) :change (str change-id) :adopt_submitted
+                       {:change_id (str "github:" a-repository "#224")
+                        :number 224}
+                       {:principal mirror/source-principal})
+        _ (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :complete
+                       {:close_reason "Submitted: the size ceiling is on the form."}
+                       {:principal person})
+        _ (person-moves-ticket! w :reopen)
+        _ (person-moves-ticket! w :groom)
+        answer (sit-again! w)
+        rows (changes-of (:eng w))]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= 1 (count rows))
+        "the sit finds the change by `born_from`, and no second one is born")
+    (is (= (str change-id) (str (get-in answer [:change :id])))
+        "the change beside the walk is the one that was submitted")
+    (is (= "submitted" (get-in answer [:change :state])))
+    (is (= (str "github:" a-repository "#224")
+           (get-in (first rows) [:data :change_id]))
+        "the adoption's id stands")
+    (is (seq (calls-of (:state w) "bench__feedback"))
+        "a change with a round behind it is asked what that round caused")
+    (is (= 31 (get-in answer [:feedback :pull_request :number]))
+        "and the seat reads it in the sit's answer")
+    (is (contains? (into #{} (map :action) (get-in answer [:change :doors]))
+                   "submit")
+        "and submit on it is the next round")))
+
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 
 (deftest the-branch-pattern-is-a-glob-with-one-star
