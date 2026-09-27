@@ -1171,6 +1171,141 @@
     (is (= the-conflicts (get-in row [:data :conflicts])))
     (is (= 1 (:stuck census)))))
 
+;; ── a landing that failed (ticket 92871afb) ─────────────────────────────
+
+(def ^:private a-rejected-push
+  (str "To github.com:ckopsa/waymark-doors.git\n"
+       " ! [remote rejected] waymark/1bae3a0a -> waymark/1bae3a0a "
+       "(refusing to allow a Personal Access Token to create or update "
+       "workflow `.github/workflows/test.yml` without `workflow` scope)\n"
+       "error: failed to push some refs"))
+
+(defn- a-failed-landing []
+  {:state "failed"
+   :steps [{:name "commit" :state "done" :output "[waymark/one 1bae3a0] Fix"}
+           {:name "push" :state "failed" :output a-rejected-push}]})
+
+(defn- landing-world
+  "One change at `submitted` with `rounds` spent, whose one check is
+  `check`. The bench behind the engine answers `feedback` with whatever
+  the `landing` atom holds."
+  [landing check policy rounds]
+  (let [state (gh/fake-state)
+        rpc (fn [_method params]
+              (when (= "bench__feedback" (str (:name params)))
+                {:structuredContent
+                 {:result {:repo repo :landing @landing :pull_request nil
+                           :pipelines [] :statuses [] :comments []}}}))
+        engine (engine/engine {:storage (memory/storage)
+                               :resources (vec (main/resources))
+                               :services {:bench-rpc rpc}})
+        r {:state state :source (gh/fake-source state) :engine engine}]
+    (gh/seed-pull! state repo (assoc a-pull-request :mergeable_state "clean")
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo (get-in a-pull-request [:head :sha]) check)
+    (inv/create! engine :repo_policy (merge {:repository repo} policy)
+                 {:principal a-person})
+    (pass! r)
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (assoc-in [:data :rounds] rounds))
+                             (:version row))))))
+    r))
+
+(deftest a-failed-landing-moves-a-submitted-change-to-failing
+  (let [landing (atom (a-failed-landing))
+        {:keys [engine] :as r} (landing-world landing a-green-check {} 1)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :failing (:state row))
+        "a push that never landed will never run a check, so it fails now")
+    (is (= ["landing:push"] (get-in row [:data :failing_checks]))
+        "the failed step is the red name")
+    (is (= a-rejected-push (get-in row [:data :landing_error]))
+        "and the step's own output rides beside it")
+    (is (= 1 (:failing census)))
+    (testing "a second pass on the same landing moves nothing"
+      (let [census (pass! r)]
+        (is (= :failing (:state (the-change engine))))
+        (is (= 0 (:failing census)))))))
+
+(deftest a-failed-landing-on-the-last-round-sticks-the-change
+  (let [landing (atom (a-failed-landing))
+        {:keys [engine] :as r}
+        (landing-world landing a-green-check {:rounds_per_change 2} 2)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :stuck (:state row))
+        "a failed landing counts against the ceiling like a red check")
+    (is (= ["landing:push"] (get-in row [:data :failing_checks])))
+    (is (= a-rejected-push (get-in row [:data :landing_error])))
+    (is (= 1 (:stuck census)))))
+
+(deftest a-running-landing-does-not-move-the-change
+  (let [landing (atom {:state "running"
+                       :steps [{:name "push" :state "running"}]})
+        {:keys [engine] :as r}
+        (landing-world landing
+                       {:id 41752098700 :name "test10 (shard 3)"
+                        :status "completed" :conclusion "failure"
+                        :head_sha (get-in a-pull-request [:head :sha])}
+                       {} 1)
+        census (pass! r)]
+    (is (= :submitted (:state (the-change engine)))
+        "a landing still running is left alone, whatever the old head said")
+    (is (= 0 (:failing census)))))
+
+(deftest a-resubmit-that-lands-stays-submitted
+  (let [landing (atom (a-failed-landing))
+        {:keys [engine] :as r} (landing-world landing a-green-check {} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    ;; the seat's next submit: the door clears the red names and the
+    ;; landing's error (factory10.bench-test's own a-seat-submits-
+    ;; again-from-failing walks the door itself), and the rig lands it
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (update :data assoc :failing_checks nil
+                                         :landing_error nil))
+                             (:version row))))))
+    (reset! landing {:state "succeeded"
+                     :steps [{:name "commit" :state "done"}
+                             {:name "push" :state "done"}]})
+    (let [census (pass! r)
+          row (the-change engine)]
+      (is (= :submitted (:state row))
+          "a landing that finished well hands the change back to its checks")
+      (is (nil? (get-in row [:data :landing_error])))
+      (is (= 0 (:failing census))))))
+
+(deftest the-landing-verdict-names-the-failed-step
+  (is (= {:verdict :red :names ["landing:push"] :error a-rejected-push}
+         (forge/landing-verdict (a-failed-landing))))
+  (is (= {:verdict :red :names ["landing:push"] :error "rejected"}
+         (forge/landing-verdict {:state "failed" :failed_step "push"
+                                 :error "rejected"}))
+      "a landing that names its failed step and no steps still says which")
+  (is (= {:verdict :red :names ["landing:unknown"]}
+         (forge/landing-verdict {:state "failed"}))
+      "a failed landing that names nothing is still red")
+  (is (= {:verdict :running} (forge/landing-verdict {:state "running"})))
+  (is (nil? (forge/landing-verdict {:state "succeeded"})))
+  (is (nil? (forge/landing-verdict nil))))
+
 (deftest a-conflict-joins-the-red-names
   (let [row {:data {:mergeable "conflicted"}}]
     (is (= {:verdict :red :names ["a" "merge-conflict"]}
