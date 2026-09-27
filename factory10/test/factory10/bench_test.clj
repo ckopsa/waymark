@@ -893,6 +893,39 @@
     (is (= "open" (name (:state (change-row w))))
         "the row did not move")))
 
+(deftest a-clean-worktree-whose-landing-failed-passes-the-door
+  ;; ticket 4792cd3b: a push the forge refused (a token without the
+  ;; workflow scope) left the commit built and the branch unpushed.
+  ;; The worktree is clean, but the bench still owes the landing, so
+  ;; the rig is asked to submit and the retry counts as a round.
+  (let [w (world)
+        _ (answer! (:state w) "bench__status"
+                   {:repo a-repository :branch "waymark/one" :head a-commit
+                    :base "main" :base_head a-head :dirty 0 :paths []
+                    :ahead 2 :behind 0
+                    :landing {:state "failed" :head a-commit}})
+        r (submit! w {:why "Retry the landing the forge refused."})]
+    (is (false? (:isError r)) (text-of r))
+    (is (= 1 (count (calls-of (:state w) "bench__submit")))
+        "the rig was asked to submit, and it decides")
+    (is (= "submitted" (name (:state (change-row w)))))
+    (is (= 1 (get-in (change-row w) [:data :rounds]))
+        "a retried landing counts as a round like any submit")))
+
+(deftest a-clean-worktree-with-a-landed-head-is-still-refused
+  (let [w (world)
+        _ (answer! (:state w) "bench__status"
+                   {:repo a-repository :branch "waymark/one" :head a-commit
+                    :base "main" :base_head a-head :dirty 0 :paths []
+                    :ahead 2 :behind 0
+                    :landing {:state "landed" :head a-commit}})
+        r (submit! w {:why "Nothing changed, but I am trying anyway."})]
+    (is (true? (:isError r)))
+    (is (str/includes? (text-of r) "nothing to submit"))
+    (is (empty? (calls-of (:state w) "bench__submit"))
+        "nothing is owed, so the rig is never asked")
+    (is (= "open" (name (:state (change-row w)))))))
+
 (deftest a-submit-commits-with-the-seat-and-the-sitting-on-it
   (let [w (world)
         before (sitting-of w)

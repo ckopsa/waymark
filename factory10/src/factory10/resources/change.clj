@@ -222,11 +222,31 @@
 (def ^:private clean-remedy
   (str "There is nothing to submit. Edit a file with the power "
        "bench__edit first; if the work is done, say so with the stall "
-       "door and let a person look at it."))
+       "door and let a person look at it. A landing that failed (a "
+       "push the forge refused, a credential, a rig restart) is not "
+       "this case: submit again and the bench retries it."))
 
 (def ^:private nothing-detail
   "The worktree is clean: no file in it is different from the branch
   head, so there is nothing to commit and nothing to push.")
+
+(defn- landing-owed?
+  "True when the bench still owes a landing on a clean worktree
+  (ticket 4792cd3b): the last landing did not land, or the branch is
+  ahead of the base with no landing that pushed this head. The rig's
+  own submit takes that path and refuses `nothing_to_commit` itself
+  when nothing is owed, so the door lets it through rather than
+  refusing on the rig's behalf."
+  [status]
+  (let [landing (:landing status)
+        state (some-> (:state landing) name)
+        landed-head (some-> (or (:head landing) (:commit landing)) str)
+        head (some-> (:head status) str)]
+    (boolean
+     (or (and (map? landing) (not= "landed" state))
+         (and (pos? (long (or (:ahead status) 0)))
+              (or (not (map? landing))
+                  (and landed-head head (not= landed-head head))))))))
 
 (defn- rig-refusal!
   "The rig's own refusal, said again as this door's.
@@ -319,7 +339,11 @@
     (cond
       (nil? status) (bench/refuse! bench/dark-detail [bench/dark-remedy])
       (bench/refused status) (rig-refusal! "read the worktree" status)
-      (zero? (long (or (:dirty status) 0)))
+      ;; A clean worktree is refused only when nothing is owed: a
+      ;; landing that failed outside the worktree is retried by the
+      ;; rig's submit, and the retry counts as a round like any other.
+      (and (zero? (long (or (:dirty status) 0)))
+           (not (landing-owed? status)))
       (bench/refuse! nothing-detail [clean-remedy])
       :else
       (let [answer (bench/ask ctx :submit
