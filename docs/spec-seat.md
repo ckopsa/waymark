@@ -626,6 +626,7 @@ loop script.
 | `wake_pending` | boolean, optional | a match waits for the damper to lift (R-12.22). Engine-written. |
 | `wake_fired_at` | instant, optional | when the engine last fired the seat for a matching transition (R-12.22). Engine-written. |
 | `wake_due_at` | instant, optional | when a waiting wake may go out, for an entry that settles (R-12.22). Engine-written. |
+| `last_halted_wake` | instant, optional | when a matching transition last found the seat's week of fuel spent; that wake waits as `wake_pending` until the window rolls. Engine-written. |
 
 States: `pending` (no copy yet), `live`, `paused`, `broken` (the
 adapter could not reach the provider; the note says why). The seat
