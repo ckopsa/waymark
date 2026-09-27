@@ -47,12 +47,14 @@
   sentence that says the bench is dark."
   (:require [clojure.string :as str]
             [waymark10.server.gate-proxy :as gate]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Duration Instant)
+           (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
 
@@ -440,6 +442,26 @@
                                          {:limit 1000})))))
     []))
 
+(defn- policies-by-repo
+  "The active policies, by the repository each one names."
+  [eng]
+  (into {}
+        (keep (fn [p]
+                (when-some [repo (some-> (get-in p [:data :repository])
+                                         str not-empty)]
+                  [repo p])))
+        (policies eng :active)))
+
+(defn house-pass-merges?
+  "Does the house's merge pass merge this repository's green changes?
+  Only when the policy says `auto_merge`, `merge_by: house` and names
+  at least one required check. Every other policy leaves the merge to
+  somebody else, and a green change there waits on its person."
+  [policy]
+  (boolean (and (not (false? (get-in policy [:data :auto_merge])))
+                (house-merges? policy)
+                (seq (required-checks-of policy)))))
+
 (defn merge-args
   "What the rig's `merge` is told: the pull request, the head it may
   merge and nothing else, and the policy's checks and method."
@@ -462,12 +484,7 @@
   → the number of `merge` calls made."
   [eng seen]
   (let [ctx {:services (:services eng)}
-        by-repo (into {}
-                      (keep (fn [p]
-                              (when-some [repo (some-> (get-in p [:data :repository])
-                                                       str not-empty)]
-                                [repo p])))
-                      (policies eng :active))
+        by-repo (policies-by-repo eng)
         asked (volatile! 0)]
     (doseq [change (submitted-changes eng)
             :let [id (str (:id change))
@@ -475,9 +492,7 @@
                   head (some-> (get-in change [:data :head_sha]) str not-empty)
                   policy (get by-repo (str (get-in change [:data :repository])))]
             :when (and number head policy
-                       (not (false? (get-in policy [:data :auto_merge])))
-                       (house-merges? policy)
-                       (seq (required-checks-of policy))
+                       (house-pass-merges? policy)
                        (not= head (get @seen id)))]
       (try
         (vswap! asked inc)
@@ -501,6 +516,169 @@
                  "); the next pass asks again"))))
     @asked))
 
+;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
+;;
+;; A repository the house pass does not merge leaves a green change to
+;; its person, and nothing said so but somebody polling. So a submitted
+;; change GitHub calls `clean` (no conflict, the required checks green)
+;; that has stood clean at one head for the policy's
+;; `merge_wait_seconds` raises ONE held call for a person's tap: the
+;; rig's `merge`, with the very arguments the house pass would send. The
+;; person's Allow forwards it (held-calls/forward!), so the tap merges
+;; the change exactly as the house would have.
+;;
+;; ONE ASK PER HEAD, AND THE ROWS REMEMBER IT. The held_call rows are
+;; the record: while an ask for the pull request is still held, no
+;; second one is raised, whatever head it stands at now; and an ask
+;; that was answered — refused, expired or merged — is never raised
+;; again for the same head. Only the moment a change turned clean lives
+;; in memory, so a restart makes the wait start again, which errs on the
+;; side of asking later rather than twice.
+
+(def default-merge-wait-seconds
+  "How long a green, clean change waits on its person before the house
+  asks for the merge, when the policy names no `merge_wait_seconds`."
+  3600)
+
+(defn merge-wait-of [policy]
+  (long (or (get-in policy [:data :merge_wait_seconds])
+            default-merge-wait-seconds)))
+
+(def merge-asker
+  "The caller a merge ask names: the house's own pass. It is never the
+  person who answers, so the held call's first wall stands."
+  "factory10-merge-ask")
+
+(defn- field-of
+  "One field of a held call's stored input, however its keys decoded."
+  [m k]
+  (or (get m k) (get m (name k))))
+
+(defn merge-asks
+  "Every merge ask the house has raised, decoded — empty in an engine
+  that declares no held_call kind."
+  [eng]
+  (if-some [rd (rdef-of-kind eng :held_call)]
+    (let [st (:storage eng)]
+      (mapv #(inv/decode-row rd %)
+            (store/with-tx st
+              (fn [tx] (store/query-rows st tx :held_call
+                                         {:tool (gate/bench-tool :merge)
+                                          :caller merge-asker}
+                                         {:limit 1000})))))
+    []))
+
+(defn- asked-already?
+  "Is there an ask for this pull request still waiting, or one for this
+  head at all?"
+  [asks change head]
+  (some (fn [a]
+          (let [in (get-in a [:data :input])]
+            (and (= (str (field-of in :repo))
+                    (str (get-in change [:data :repository])))
+                 (= (str (field-of in :number))
+                    (str (get-in change [:data :number])))
+                 (or (contains? #{:held :allowed}
+                                (some-> (:state a) name keyword))
+                     (= head (str (field-of in :head_sha)))))))
+        asks))
+
+(defn pull-url [change]
+  (or (some-> (get-in change [:data :url]) str not-empty)
+      (str "https://github.com/" (get-in change [:data :repository])
+           "/pull/" (get-in change [:data :number]))))
+
+(defn waited-text
+  "A wait in seconds, as a person reads it: 1h 5m, or 45m."
+  [seconds]
+  (let [m (quot (long seconds) 60)
+        h (quot m 60)]
+    (if (pos? h)
+      (str h "h " (rem m 60) "m")
+      (str m "m"))))
+
+(defn merge-ask-why
+  "The one sentence the person reads: the pull request, the title and
+  how long it has waited."
+  [change seconds]
+  (str "Merge " (pull-url change) " ("
+       (or (some-> (get-in change [:data :title]) str not-empty) "untitled")
+       "): its checks are green, it merges clean, and it has waited "
+       (waited-text seconds) " for a person."))
+
+(defn- owner-of
+  "The person the change's seat belongs to: the `owner` of the seat the
+  change's `author` names, or nil when the seat names none. A merge ask
+  is a tool call, answered by a person who holds the approver role; the
+  owner is who it is written for."
+  [eng change]
+  (when-some [author (some-> (get-in change [:data :author]) str not-empty)]
+    (when-some [rd (rdef-of-kind eng :seat)]
+      (let [st (:storage eng)
+            raw (store/with-tx st
+                  (fn [tx] (first (store/query-rows st tx :seat {:name author}
+                                                    {:limit 1}))))]
+        (some-> raw (->> (inv/decode-row rd)) (get-in [:data :owner])
+                str not-empty)))))
+
+(defn- raise-merge-ask!
+  "Mint the one held call a person's tap turns into the rig's merge."
+  [eng change policy seconds]
+  (let [args (merge-args change policy)
+        owner (owner-of eng change)]
+    (inv/create! eng :held_call
+                 (cond-> {:tool (gate/bench-tool :merge)
+                          :why (:text (held/capped (merge-ask-why change seconds)
+                                                   240))
+                          :caller merge-asker
+                          :input args
+                          :forward args
+                          :shown (:text (held/capped
+                                         (str "merge " (:repo args) "#"
+                                              (:number args))
+                                         140))}
+                   owner (assoc :owner owner))
+                 {:principal held/engine-actor})))
+
+(defn ask-for-merges!
+  "One ask pass. Every submitted change with a number and a head, whose
+  repository's active policy leaves the merge to a person
+  (`house-pass-merges?` is false), that GitHub calls `clean` and is not
+  a draft, is timed from the first pass that saw it clean at this head.
+  Once it has waited the policy's `merge_wait_seconds`, it raises one
+  merge ask unless `asked-already?`. `waiting` is an atom of change id
+  → {:head :since}. Throws nothing. → the number of asks raised."
+  [eng waiting ^Instant now]
+  (let [by-repo (policies-by-repo eng)
+        asks (merge-asks eng)
+        raised (volatile! 0)
+        clean (volatile! {})]
+    (doseq [change (submitted-changes eng)
+            :let [id (str (:id change))
+                  number (get-in change [:data :number])
+                  head (some-> (get-in change [:data :head_sha]) str not-empty)
+                  policy (get by-repo (str (get-in change [:data :repository])))]
+            :when (and number head policy
+                       (not (house-pass-merges? policy))
+                       (= "clean" (str (get-in change [:data :mergeable])))
+                       (not (true? (get-in change [:data :draft]))))]
+      (let [prior (get @waiting id)
+            ^Instant since (if (= head (:head prior)) (:since prior) now)
+            seconds (.getSeconds (Duration/between since now))]
+        (vswap! clean assoc id {:head head :since since})
+        (when (and (<= (merge-wait-of policy) seconds)
+                   (not (asked-already? asks change head)))
+          (try
+            (raise-merge-ask! eng change policy seconds)
+            (vswap! raised inc)
+            (catch Exception e
+              (warn! "the merge ask for " id " did not land ("
+                     (ex-message e) "); the next pass asks again"))))))
+    ;; a change that is no longer clean, or no longer submitted, starts
+    ;; its wait again the next time it is
+    (reset! waiting @clean)
+    @raised))
+
 (def default-enrol-seconds
   "How often the retry pass runs. The discover sweep's own cadence, in
   seconds: a repository the bench did not take is a repository nobody
@@ -516,10 +694,13 @@
 
   The house's merge pass (`merge-green!`) rides the same beat and the
   same election, so one process per database asks the rig to merge,
-  and its memory of refused heads lives as long as that holder."
+  and its memory of refused heads lives as long as that holder. So does
+  the person's merge ask (`ask-for-merges!`), and its memory of when a
+  change turned clean."
   [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}}]
   (let [stop (CountDownLatch. 1)
         seen (atom {})
+        waiting (atom {})
         t (Thread. ^Runnable
                    (fn []
                      (loop []
@@ -532,6 +713,10 @@
                          (try (merge-green! eng seen)
                               (catch Exception e
                                 (warn! "the merge pass failed ("
+                                       (ex-message e) ")")))
+                         (try (ask-for-merges! eng waiting (Instant/now))
+                              (catch Exception e
+                                (warn! "the merge ask pass failed ("
                                        (ex-message e) ")")))
                          (recur))))
                    "factory10-bench-enrol")]
