@@ -1496,10 +1496,18 @@ row (R-12.34). A person mints no key for a Routine, and invokes no
 `offer_key` for it.
 
 One consequence is named here, because it is a trade and not an
-oversight. A session that loses its bind (R-12.16) cannot sit again
-with the key of its firing, because that key is spent. The session
-stops, and the seat's next wake fires a new key. A seat that must
-survive a lost bind keeps a standing key of its own.
+oversight. The key of a firing opens one sitting and no other. A
+session that loses its bind (R-12.16) may sit again with the key of its
+firing, but only in the sitting that key opened, only while that
+sitting is open, and only when the call names the same harness session
+that sitting was stamped with at birth. The sit that spends the key
+keeps its hash on the sitting it opened, in a secret field
+`fire_key_hash`, as a maintenance write; the seat's `fire_keys` entry
+still goes. The re-sit binds the new MCP session to that sitting and
+its grant, and answers the same shape with a fresh transcript key. A
+re-sit that names no session, or another session, is refused with the
+uniform sentence. Once the sitting is closed, tallied closed, abandoned
+or swept, the key answers nothing.
 
 Two firings of one seat in one hour each carry a key of their own.
 Each key opens the run that reads it. The pairing of a run with its

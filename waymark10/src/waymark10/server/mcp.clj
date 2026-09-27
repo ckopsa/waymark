@@ -2945,10 +2945,17 @@
         ;; an INTERACTIVE seat can answer with its own sentence
         ;; (R-10.8) rather than with the general one about delegates.
         named (some-> (:seat args) str str/trim not-empty)
-        seat (when sid
-               (if named
-                 (seats/seat-for-key eng named (:key args))
-                 (seats/seat-by-key eng (:key args))))
+        keyed (when sid
+                (if named
+                  (seats/seat-for-key eng named (:key args))
+                  (seats/seat-by-key eng (:key args))))
+        ;; A FIRING'S SPENT KEY RE-SITS ITS OWN OPEN SITTING (R-12.16,
+        ;; R-12.37): a run whose bind died with the engine presents it
+        ;; again, with the harness session stamped on that sitting at
+        ;; birth, and lands where it was. It opens nothing else.
+        resit (when (and sid named (nil? keyed))
+                (seats/resit-sitting eng named (:key args) (:session args)))
+        seat (or keyed (first resit))
         now ((:now-fn eng))
         ;; THE FIRING'S OWN KEY IS SPENT HERE, and one time (R-12.37).
         ;; A standing key (the seat's own, or its chair's) is spent by
@@ -2963,9 +2970,11 @@
         ;; terms, so neither can burn a key it may not use. The cond
         ;; below then reads this as its last wall, after the walls
         ;; that cost nothing.
-        spent? (and seat person
-                    (or (seats/standing-key? eng seat (:key args))
-                        (true? (seats/spend-fire-key! eng seat (:key args)))))]
+        standing? (boolean (and keyed person
+                                (seats/standing-key? eng keyed (:key args))))
+        fired? (and keyed person (not standing?)
+                    (true? (seats/spend-fire-key! eng keyed (:key args))))
+        spent? (and seat person (or standing? fired? (some? resit)))]
     (cond
       ;; a · a session to bind to
       (nil? sid) (result sit-no-session true)
@@ -2994,7 +3003,10 @@
             ;; d · the sitter row, minted once per seat and found ever after
             _ (members/ensure-sitter! eng sitter-id display person)
             ;; e · the leash
-            grant (or (standing-seat-grant eng sitter-id seat-id)
+            ;; a re-sit wears the grant its sitting was opened under
+            grant (or (when resit
+                        (row-of eng :grant (get-in (second resit) [:data :grant])))
+                      (standing-seat-grant eng sitter-id seat-id)
                       (mint-seat-grant! eng sitter-id seat now))
             ;; f · the model claim, when the schedule makes one
             model-row (seat-model eng seat)
@@ -3008,7 +3020,12 @@
                           :acts-for person)
             ;; g' · the sitting the router counts against, opened here
             ;; because nobody else opens one for a keyed session
-            sitting (open-sitting! eng sitter grant seat model-row harness)
+            sitting (or (second resit)
+                        (open-sitting! eng sitter grant seat model-row harness))
+            ;; … and the spent firing's key leaves its trace on the
+            ;; sitting it opened, so a lost bind can find its way back
+            _ (when (and fired? sitting)
+                (seats/keep-fire-key! eng (:id sitting) (:key args)))
             ;; g'' · the transcript's key (docs/spec-transcript.md R-4):
             ;; born with the first sit, a fresh key at each sit after,
             ;; and nil when the seat keeps no transcript of this
