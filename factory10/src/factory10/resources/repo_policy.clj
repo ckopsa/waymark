@@ -77,6 +77,24 @@
       (t/deny)
       (t/allow))))
 
+(defguardfn the-house-merges-only-what-a-check-tested
+  {:reads []
+   :open "No other door changes this verdict. Restate the policy with at least one required check, or let GitHub merge (merge_by github), or leave the merge to a person (auto_merge false)."
+   :explain "A policy that says the house merges a green change must name the checks that make it green. With no required check, the house would merge what nothing tested."}
+  ;; THE ONE THING merge_by: house MUST NOT MEAN (ticket 4dfb00f6).
+  ;; GitHub's auto-merge waits for the branch rules' own required
+  ;; checks; the house's merge waits for the list this row names, and
+  ;; an empty list is a merge on nothing. The fields are read off the
+  ;; input with the schema's own defaults, because the create door may
+  ;; omit what the form offered.
+  [_row inp _ctx]
+  (let [house? (= "house" (str (get inp :merge_by "github")))
+        auto? (not (false? (get inp :auto_merge true)))
+        checks (remove str/blank? (map str (get inp :required_checks [])))]
+    (if (and house? auto? (empty? checks))
+      (t/deny)
+      (t/allow))))
+
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
    :hide true
@@ -163,11 +181,40 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
+(defscenario the-house-never-merges-what-nothing-tested
+  "A policy that says the house merges a green change names the checks
+   that make it green. An empty list is refused, even from the person."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :merge_by "house" :required_checks [])
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-house-merges-only-what-a-check-tested}})
+
+(defscenario the-house-merges-behind-a-named-check
+  "…and with one check named, the house may merge."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :merge_by "house" :required_checks ["gate"]
+                   :merge_method "squash")
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 ;; ── the fields, spelled once and read by two doors ──────────────────
 
 (def ^:private formatter-choices
   {"runner" "The runner pushes a fixup commit when the format is wrong"
    "none" "Nothing formats: the push stands as the seat wrote it"})
+
+(def ^:private merge-by-choices
+  {"github" "GitHub's own auto-merge merges it"
+   "house" "The engine asks the bench rig to merge it"})
+
+(def ^:private merge-method-choices
+  {"merge" "A merge commit"
+   "squash" "One squashed commit"
+   "rebase" "The commits, rebased onto the base"})
 
 (def ^:private policy-fields
   "The whole policy, as schema entries. The create door and the
@@ -216,6 +263,31 @@
                  {:label "A green gate merges it"
                   :help "True when auto-merge merges the pull request as soon as the checks are green. False when a person merges it."}}
     :boolean]
+   ;; the house's merge (ticket 4dfb00f6). OPTIONAL, because a policy
+   ;; stated before these three existed is restated whole without them,
+   ;; and every reader spells the default itself.
+   [:merge_by {:optional true
+               :default "github"
+               :x-display
+               {:label "Who merges a green change"
+                :choices merge-by-choices
+                :help "github turns on GitHub's own auto-merge. house is for a repository where GitHub cannot: its auto-merge needs a public repository or a paid plan. With house, the engine asks the bench rig to merge each green change every five minutes. Read only when auto-merge is true."}}
+    (into [:enum] (sort (keys merge-by-choices)))]
+   [:required_checks {:optional true
+                      :default []
+                      :examples [["gate"]]
+                      :x-display
+                      {:raw true
+                       :label "The checks that must be green"
+                       :help "The check names the house waits for before it merges, one for each row. The house merges nothing when this list is empty."}}
+    [:vector [:string {:min 1 :max 200}]]]
+   [:merge_method {:optional true
+                   :default "merge"
+                   :x-display
+                   {:label "How the house merges"
+                    :choices merge-method-choices
+                    :help "The merge the rig asks GitHub for when the house merges a green change."}}
+    (into [:enum] (sort (keys merge-method-choices)))]
    [:rounds_per_change {:default 3
                         :examples [3]
                         :x-display
@@ -292,7 +364,8 @@
    ;; what the form offers; the two engine fields are on the schema so
    ;; a reader sees them and on no form so a person never writes them.
    :create-schema (into [:map] policy-fields)
-   :create-guards [a-person-or-their-delegate-states-the-policy]
+   :create-guards [a-person-or-their-delegate-states-the-policy
+                   the-house-merges-only-what-a-check-tested]
    ;; …and the rig is told at the birth (R-2): a create cannot walk a
    ;; door on a row that does not exist yet
    :on-create enrol-at-birth
@@ -300,7 +373,8 @@
    {:restate
     {:from #{:active} :to :active
      :input (into [:map] policy-fields)
-     :guards [a-person-or-their-delegate-states-the-policy]
+     :guards [a-person-or-their-delegate-states-the-policy
+              the-house-merges-only-what-a-check-tested]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes
@@ -308,7 +382,8 @@
      ;; two fields are absent here for the reason they are absent from
      ;; the create form: a person does not state them.
      :edit {:prefill [:repository :clone_url :branch_pattern :base :max_lines
-                      :opens_pr :auto_merge :rounds_per_change :formatter
+                      :opens_pr :auto_merge :merge_by :required_checks
+                      :merge_method :rounds_per_change :formatter
                       :deny :orientation]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
@@ -356,4 +431,6 @@
    ;; acts for — is the suite's to prove (bench_test): a check-tier
    ;; scenario's actor carries id, roles and type, and no acts-for.
    :scenarios [a-model-does-not-restate-the-policy
-               the-person-states-what-submit-means]})
+               the-person-states-what-submit-means
+               the-house-never-merges-what-nothing-tested
+               the-house-merges-behind-a-named-check]})
