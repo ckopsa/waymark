@@ -824,7 +824,20 @@
     (is (= "post-clerk" (:seat answer)))
     (is (empty? (get-in answer [:walk :rows]))
         "no rows, and no refusal either: the sit answers what the seat's own
-         grant admits, which behind a wall is nothing")))
+         grant admits, which behind a wall is nothing")
+    ;; Production, 2026-09-27: a run fired past the wall read a bare
+    ;; answer, found nothing, and reported the seat's grant as broken.
+    ;; The sit now says which wall, in the fire door's own words.
+    (testing "and it says the seat is halted, and why"
+      (is (not (contains? answer :walk)) "no walk at all behind the wall")
+      (is (= "budget" (get-in answer [:halted :wall])))
+      (is (str/includes? (str (get-in answer [:halted :detail]))
+                         "The week's fuel is spent"))
+      (is (nil? (get-in answer [:halted :lifts_at]))
+          "a budget of zero is lifted by no roll of the window, only by a person")
+      (is (str/includes? (str (:note answer)) "halted"))
+      (is (some? (:sitting answer))
+          "the sitting still opens, so the run's Stop hook can close it"))))
 
 
 ;; ── 6b. the walk under its scope entry's filter (waymark-fp62.12) ───

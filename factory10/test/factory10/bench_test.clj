@@ -47,14 +47,17 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.schedules :as schedules]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.security KeyPairGenerator)))
+  (:import (java.security KeyPairGenerator)
+           (java.time Instant)))
 
 ;; ── the fake rig, answering the contract (6.3.1) ────────────────────
 
@@ -891,6 +894,39 @@
     (is (= "open" (name (:state (change-row w))))
         "the row did not move")))
 
+(deftest a-clean-worktree-whose-landing-failed-passes-the-door
+  ;; ticket 4792cd3b: a push the forge refused (a token without the
+  ;; workflow scope) left the commit built and the branch unpushed.
+  ;; The worktree is clean, but the bench still owes the landing, so
+  ;; the rig is asked to submit and the retry counts as a round.
+  (let [w (world)
+        _ (answer! (:state w) "bench__status"
+                   {:repo a-repository :branch "waymark/one" :head a-commit
+                    :base "main" :base_head a-head :dirty 0 :paths []
+                    :ahead 2 :behind 0
+                    :landing {:state "failed" :head a-commit}})
+        r (submit! w {:why "Retry the landing the forge refused."})]
+    (is (false? (:isError r)) (text-of r))
+    (is (= 1 (count (calls-of (:state w) "bench__submit")))
+        "the rig was asked to submit, and it decides")
+    (is (= "submitted" (name (:state (change-row w)))))
+    (is (= 1 (get-in (change-row w) [:data :rounds]))
+        "a retried landing counts as a round like any submit")))
+
+(deftest a-clean-worktree-with-a-landed-head-is-still-refused
+  (let [w (world)
+        _ (answer! (:state w) "bench__status"
+                   {:repo a-repository :branch "waymark/one" :head a-commit
+                    :base "main" :base_head a-head :dirty 0 :paths []
+                    :ahead 2 :behind 0
+                    :landing {:state "landed" :head a-commit}})
+        r (submit! w {:why "Nothing changed, but I am trying anyway."})]
+    (is (true? (:isError r)))
+    (is (str/includes? (text-of r) "nothing to submit"))
+    (is (empty? (calls-of (:state w) "bench__submit"))
+        "nothing is owed, so the rig is never asked")
+    (is (= "open" (name (:state (change-row w)))))))
+
 (deftest a-submit-commits-with-the-seat-and-the-sitting-on-it
   (let [w (world)
         before (sitting-of w)
@@ -1258,12 +1294,101 @@
   (let [w (submitted-world house-policy)
         st (:state w)
         seen (atom {})]
-    (answer! st "bench__merge" {:refused "head_moved"
-                                :reason "the head is not the one named"})
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
     (bench/merge-green! (:eng w) seen)
     (bench/merge-green! (:eng w) seen)
     (is (= 1 (count (calls-of st "bench__merge")))
         "the rig refused this head once, and the pass remembers it")))
+
+(deftest a-moved-head-is-not-parked
+  ;; ticket a95c3d63: only a refusal a new pass cannot fix parks a head
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:refused "head_moved"
+                                :reason "the head is not the one named"})
+    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w) seen)
+    (is (= 2 (count (calls-of st "bench__merge")))
+        "a moved head is asked again next pass")))
+
+;; ── a branch behind its base (ticket a95c3d63) ──────────────────────────────
+
+(defn- mirror-says!
+  "The mirror, writing what GitHub says about the submitted change now."
+  [w input]
+  (inv/invoke! (:eng w) :change (str (:id (change-row w))) :observe_submitted
+               input {:principal mirror/source-principal}))
+
+(deftest a-behind-green-change-is-brought-up-to-date-once-per-head
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! (:eng w) seen)
+    (let [calls (calls-of st "bench__update_branch")]
+      (is (= 1 (count calls)))
+      (is (= {:repo a-repository :number 31 :head_sha a-commit}
+             (:arguments (first calls)))
+          "the pull request and the head it may bring forward"))
+    (bench/merge-green! (:eng w) seen)
+    (is (= 1 (count (calls-of st "bench__update_branch")))
+        "no second update at the same head, however busy main is")
+    (testing "the new head goes green and a later pass merges it"
+      (mirror-says! w {:head_sha "b-commit" :mergeable "clean"})
+      (answer! st "bench__merge" {:state "merged"})
+      (bench/merge-green! (:eng w) seen)
+      (is (= "b-commit"
+             (:head_sha (:arguments (last (calls-of st "bench__merge"))))))
+      (is (= 1 (count (calls-of st "bench__update_branch")))))))
+
+(deftest a-merge-refused-as-out-of-date-is-brought-up-to-date
+  (let [w (submitted-world house-policy)
+        st (:state w)]
+    (answer! st "bench__merge"
+             {:refused "merge_refused"
+              :reason "Required status check \"gate\" is expected."})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! (:eng w) (atom {}))
+    (is (= 1 (count (calls-of st "bench__update_branch"))))))
+
+(deftest a-draft-or-conflicted-behind-change-is-not-updated
+  (testing "a conflicted branch is left to the failing path"
+    (let [w (submitted-world house-policy)
+          st (:state w)]
+      (mirror-says! w {:mergeable "conflicted"})
+      (answer! st "bench__merge" {:state "behind"})
+      (bench/merge-green! (:eng w) (atom {}))
+      (is (empty? (calls-of st "bench__update_branch")))))
+  (testing "a draft is not brought forward"
+    (let [w (submitted-world house-policy)
+          st (:state w)]
+      (mirror-says! w {:draft true})
+      (answer! st "bench__merge" {:state "behind"})
+      (bench/merge-green! (:eng w) (atom {}))
+      (is (empty? (calls-of st "bench__update_branch")))))
+  (testing "a draft the rig refuses is parked and never updated"
+    (let [w (submitted-world house-policy)
+          st (:state w)
+          seen (atom {})]
+      (answer! st "bench__merge" {:refused "draft"})
+      (bench/merge-green! (:eng w) seen)
+      (bench/merge-green! (:eng w) seen)
+      (is (= 1 (count (calls-of st "bench__merge"))))
+      (is (empty? (calls-of st "bench__update_branch"))))))
+
+(deftest an-update-branch-the-rig-lacks-is-asked-again
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "behind"})
+    ;; no answer scripted: the fake rig says unknown_tool
+    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w) seen)
+    (is (= 2 (count (calls-of st "bench__update_branch")))
+        "a missing power is not remembered, so the next pass asks again")))
 
 (deftest a-waiting-change-and-a-missing-power-are-asked-again
   (let [w (submitted-world house-policy)
@@ -1277,6 +1402,128 @@
       (answer! st "bench__merge" {:state "waiting"})
       (bench/merge-green! (:eng w) seen)
       (is (= 3 (count (calls-of st "bench__merge")))))))
+
+(deftest a-seat-submits-again-from-failing
+  ;; ticket d1742908: the forge pass moves a red change to `failing`,
+  ;; and the seat's next round is how it leaves
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))]
+    (inv/invoke! (:eng w) :change id :fail {:failing_checks ["gate"]}
+                 {:principal mirror/source-principal})
+    (is (= "failing" (name (:state (change-row w)))))
+    (is (= ["gate"] (get-in (change-row w) [:data :failing_checks])))
+    (let [r (submit! w {:why "Fix what the gate said."})
+          row (change-row w)]
+      (is (false? (:isError r)) (text-of r))
+      (is (= "submitted" (name (:state row)))
+          "a submit from failing is the next round, and it lands")
+      (is (= 2 (get-in row [:data :rounds])))
+      (is (nil? (get-in row [:data :failing_checks]))
+          "the names of the last red are not the new head's"))))
+
+;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
+
+(def ^:private person-policy {:auto_merge false})
+
+(def ^:private approver
+  (t/principal {:id "colton" :display "Colton Kopsa" :roles #{"approver"}}))
+
+(def ^:private t0 (Instant/parse "2026-09-27T12:00:00Z"))
+
+(defn- minutes-after [m] (.plusSeconds ^Instant t0 (long (* 60 m))))
+
+(defn- observe!
+  "The mirror, writing what GitHub says about the submitted pull
+  request now."
+  [{:keys [eng change]} input]
+  (inv/invoke! eng :change (str (:id change)) :observe_submitted input
+               {:principal mirror/source-principal}))
+
+(defn- clean-world
+  "A submitted change GitHub calls clean: its checks green, no conflict."
+  [policy-extra]
+  (let [w (submitted-world policy-extra)]
+    (observe! w {:mergeable "clean"})
+    w))
+
+(defn- arg [m k] (str (or (get m k) (get m (name k)))))
+
+(deftest a-green-clean-change-waiting-on-a-person-asks-once-after-the-wait
+  (let [{:keys [eng state]} (clean-world person-policy)
+        waiting (atom {})]
+    (is (= 0 (bench/ask-for-merges! eng waiting t0))
+        "the first pass that sees it clean starts the clock")
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 59)))
+        "nothing is asked before the wait")
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120)))
+        "one ask, not one each pass")
+    (is (= 0 (bench/merge-green! eng (atom {})))
+        "the house pass merges nothing in a repository a person merges")
+    (let [[ask :as asks] (bench/merge-asks eng)
+          why (str (get-in ask [:data :why]))]
+      (is (= 1 (count asks)))
+      (is (= :held (:state ask)))
+      (is (= "bench__merge" (get-in ask [:data :tool])))
+      (is (str/includes? why "https://github.com/ckopsa/waymark/pull/31") why)
+      (is (str/includes? why "6.3 The bench") why)
+      (is (str/includes? why "1h 1m") why)
+      (testing "the person's Allow merges it exactly as the house would"
+        (answer! state "bench__merge" {:state "merged"})
+        (let [out (inv/invoke! eng :held_call (str (:id ask)) :allow {}
+                               {:principal approver})]
+          (held/after-allow! eng (get (inv/resources eng) :held_call)
+                             :allow out))
+        (let [calls (calls-of state "bench__merge")
+              args (:arguments (first calls))]
+          (is (= 1 (count calls)))
+          (is (= a-repository (arg args :repo)))
+          (is (= "31" (arg args :number)))
+          (is (= a-commit (arg args :head_sha))
+              "the head that was green when the house asked, and no other"))
+        (is (= :done (:state (first (bench/merge-asks eng)))))
+        (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 300)))
+            "an answered ask is not raised again for its head")))))
+
+(deftest a-house-merged-repository-raises-no-merge-ask
+  (let [{:keys [eng]} (clean-world house-policy)
+        waiting (atom {})]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 600))))
+    (is (empty? (bench/merge-asks eng))
+        "the house pass merges this repository, so nobody is asked")))
+
+(deftest a-change-that-is-not-clean-raises-no-merge-ask
+  (let [{:keys [eng] :as w} (submitted-world person-policy)
+        waiting (atom {})]
+    (observe! w {:mergeable "blocked"})
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 600))))
+    (is (empty? (bench/merge-asks eng)))))
+
+(deftest a-refused-merge-ask-is-not-raised-again-for-its-head
+  (let [{:keys [eng] :as w} (clean-world person-policy)
+        waiting (atom {})]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (testing "a new head that goes green while the ask is held raises no second"
+      (observe! w {:head_sha a-head :mergeable "clean"})
+      (bench/ask-for-merges! eng waiting (minutes-after 62))
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 200))))
+      (is (= 1 (count (bench/merge-asks eng)))))
+    (inv/invoke! eng :held_call (str (:id (first (bench/merge-asks eng))))
+                 :refuse {:reason "Not yet; I want to read it first."}
+                 {:principal approver})
+    (testing "once refused, that ask's head is never asked again"
+      (observe! w {:head_sha a-commit})
+      (bench/ask-for-merges! eng waiting (minutes-after 300))
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 500))))
+      (is (= 1 (count (bench/merge-asks eng)))))
+    (testing "a head nobody was asked about is asked once, after its wait"
+      (observe! w {:head_sha a-head})
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 501))))
+      (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 600))))
+      (is (= 2 (count (bench/merge-asks eng)))))))
 
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)
@@ -1881,6 +2128,121 @@
     (is (= "stuck" (name (:state row)))
         "the ticket was groomed once, before the rounds: no groom answers
          the stall, so the ceiling holds")))
+
+;; ── the ticket follows its change's review (ticket 2e869934) ─────────
+;;
+;; A SUBMIT IS NOT DONE. The seat's submit sends the ticket out for
+;; review and out of the walk; the change's red head, or a close with
+;; no merge, sends it back to the queue through `return`; the merge ends
+;; it through `land` with the pull request as its sentence. Every one
+;; of those moves is the change's, inside its own door, and no person
+;; taps for any of them.
+
+(defn- ticket-row [w]
+  (store/with-tx (:storage (:eng w))
+    (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket
+                             (str (:id (:ticket w))) {}))))
+
+(defn- ticket-state [w] (name (:state (ticket-row w))))
+
+(defn- last-ticket-move [w]
+  (let [st (:storage (:eng w))]
+    (last (store/with-tx st
+            (fn [tx] (store/transitions st tx {:kind :ticket
+                                               :resource-id (str (:id (:ticket w)))}
+                                        {}))))))
+
+(defn- mirror-moves-change!
+  "The forge pass takes one of its hidden doors on the change beside
+  the walk, with the mirror's own hand."
+  [w action input]
+  (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id]) action input
+               {:principal mirror/source-principal}))
+
+(deftest a-submit-sends-the-ticket-out-for-review-and-out-of-the-walk
+  (let [w (ticket-world)
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "in_review" (ticket-state w))
+        "the submit moved the ticket, in the same transaction")
+    (is (= :review (:action (last-ticket-move w))))
+    (is (empty? (get-in (sit-again! w) [:walk :rows]))
+        "a ticket under review is in no seat's walk")
+    (testing "the seat's complete finds no door: the merge ends it"
+      (is (thrown? Exception
+                   (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :complete
+                                {:close_reason "Done."} {:principal person}))))
+    (testing "and no hand at the wire takes the change's doors"
+      (is (thrown? Exception
+                   (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :return
+                                nil {:principal person}))))))
+
+(deftest a-red-change-sends-its-ticket-back-to-the-seat-that-wrote-it
+  (let [w (ticket-world)
+        _ (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+        m (last-ticket-move w)]
+    (is (= "open" (ticket-state w)) "back in the queue with no person's tap")
+    (is (= :return (:action m)))
+    (is (= "in_review" (name (:from-state m))))
+    (is (= (:id mirror/source-principal) (str (get-in m [:actor :id])))
+        "the move is the engine's, made inside the change's own door")
+    (testing "the seat that wrote the change wakes on it"
+      (let [seat-row {:data {:walk "ticket"
+                             :scope [{:kind "ticket" :actions ["complete" "ungroom"]
+                                      :filter {:repo a-repository}}]}}
+            heard (into #{} (mapcat :actions)
+                        (seats/effective-wake-on
+                         seat-row (get (inv/resources (:eng w)) :ticket)))]
+        (is (contains? heard "return")
+            "a code seat's default wake_on names every ticket action under
+             its filter, `return` among them")))
+    (testing "and the next sit hands it the same ticket with its red change"
+      (let [answer (sit-again! w)]
+        (is (= [(str (:id (:ticket w)))] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= "failing" (get-in answer [:change :state])))))
+    (testing "the seat's next round sends it out for review again"
+      (seat-invokes! w "submit" {:why a-long-sentence})
+      (is (= "in_review" (ticket-state w))))))
+
+(deftest a-green-head-sends-a-returned-ticket-out-for-review-again
+  (let [w (ticket-world)]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+    (mirror-moves-change! w :recover nil)
+    (is (= "in_review" (ticket-state w))
+        "a person pushed the fix; the ticket is out for review with it")))
+
+(deftest the-merge-completes-the-ticket-with-the-pull-requests-url
+  (let [w (ticket-world)
+        url "https://github.com/ckopsa/waymark/pull/77"]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (mirror-moves-change! w :adopt_submitted {:change_id "github:ckopsa/waymark#77"
+                                              :number 77 :url url})
+    (mirror-moves-change! w :merge nil)
+    (let [row (ticket-row w)]
+      (is (= "done" (name (:state row))))
+      (is (= (str "Merged: " url ".") (get-in row [:data :close_reason]))))
+    (is (= :land (:action (last-ticket-move w))))))
+
+(deftest a-change-closed-unmerged-reopens-its-ticket
+  (let [w (ticket-world)]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (mirror-moves-change! w :close nil)
+    (is (= "open" (ticket-state w)))
+    (is (= :return (:action (last-ticket-move w))))))
+
+(deftest the-round-ceiling-leaves-the-ticket-in-review-until-a-person-unsticks
+  (let [w (ticket-world)]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (mirror-moves-change! w :stick {:why "gate went red on the last round"
+                                    :failing_checks ["gate"]})
+    (is (= "in_review" (ticket-state w))
+        "the stuck change is what a person reads")
+    (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id]) :unstick {}
+                 {:principal person})
+    (is (= "open" (ticket-state w))
+        "the person's unstick releases the ticket to the queue")))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 

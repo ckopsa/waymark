@@ -10,8 +10,9 @@
   implements `ForgeSource`, declared below, for `ThreadSource`'s own
   argument: a source must not answer a question its authority never
   asks. A forge has no `push`, no `create` and no `list`; it has pull
-  requests, check runs, job logs and exactly one write. Four verbs say
-  that, and a fifth would be a lie about GitHub.
+  requests, check runs, job logs and exactly one write. Five verbs say
+  that (the fifth, the checks on one head, is ticket d1742908's), and
+  a verb that wrote anything else would be a lie about GitHub.
 
   WHERE THE ENGINE IS. workqueue10's confluence hands its documents to
   the sync machine, which owns the writes. Nothing owns the writes
@@ -44,7 +45,18 @@
   5. For each `classified` ci_run with no label on it, it pushes one
      label (`forge-label!`) and walks `stamp_label`. That push is the
      only write the source makes at the forge.
-  6. It prints one census line: the calls, the rows minted and the
+  6. For each `submitted` or `failing` change of a repository with an
+     active policy, it reads the checks on the head (`forge-checks`)
+     against the policy's required checks and walks `fail`, `recover`
+     or, on the last round, `stick` (ticket d1742908). A change the
+     forge reads as `conflicted` is red too, as `merge-conflict`, with
+     the paths the bench's trial merge names (ticket 5f12e772).
+  7. For each active policy whose repository the forge refused to
+     list (401, 403 or 404), it writes the status, the route and the
+     time on the policy row through the hidden `note_source` door, and
+     clears that note the first pass the repository answers again
+     (ticket 116dfb0d).
+  8. It prints one census line: the calls, the rows minted and the
      rows moved.
 
   A HEAD THAT MOVES (bead waymark-fp62.6.9). A run ran on one commit.
@@ -71,7 +83,9 @@
   asks for the label within one cadence, which the pass gives. The
   consumer is recorded as the cheaper beat, not as a punt."
   (:require [clojure.string :as str]
+            [factory10.bench :as bench]
             [factory10.mirror :as mirror]
+            [factory10.resources.repo-policy :as policy]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
   (:import (java.util.concurrent CountDownLatch TimeUnit)))
@@ -93,9 +107,9 @@
 ;; ── the seam ────────────────────────────────────────────────────────
 
 (defprotocol ForgeSource
-  "One forge, already speaking the factory's own documents. Four
-  verbs: what moved, one log tail, one label, and the call count the
-  census prints."
+  "One forge, already speaking the factory's own documents. Five
+  verbs: what moved, one log tail, one label, the call count the
+  census prints, and the checks on one head."
   (forge-poll [s]
     "→ {:changes [change-doc …] :checks [check-doc …]
         :repositories [name …] :complete? bool}.
@@ -105,7 +119,11 @@
     document carries the `ci_run` kind's own fields plus
     `:change_id` (the change it ran on) and whatever the forge needs
     to find the log later. `:complete?` is false when a repository
-    did not answer; the source holds its cursor where it was.")
+    did not answer; the source holds its cursor where it was. A source
+    may also answer `:answered` (the repositories that did answer) and
+    `:refusals` ({repository {:status :route}} for each whose pulls
+    listing refused the token), which the pass writes on the policy
+    rows (ticket 116dfb0d).")
   (forge-log-tail [s check]
     "→ {:excerpt \"…\" :note \"…\" } for one check document: the tail
     of the failed job's log. A log the forge will not hand over in
@@ -116,7 +134,13 @@
     The only write this source makes. Throws when the forge refuses.")
   (forge-calls [s]
     "→ how many calls this source made since the last `forge-poll`
-    started. The census line's first number."))
+    started. The census line's first number.")
+  (forge-checks [s repository head-sha]
+    "→ [{:check_name :status :conclusion} …] for every check run on
+    one head, the latest of each (ticket d1742908). The poll reads
+    checks only on pull requests that moved, and a check that finishes
+    moves no pull request, so the failing pass asks head by head.
+    Throws when the forge does not answer."))
 
 ;; ── what the two kinds take ─────────────────────────────────────────
 
@@ -141,7 +165,8 @@
   no observe door at all, and the pass does not argue with the
   machine."
   {:open :observe
-   :submitted :observe_submitted})
+   :submitted :observe_submitted
+   :failing :observe_failing})
 
 (def forge-id-prefix
   "What a `change_id` the FORGE owns starts with. A row the engine
@@ -255,9 +280,11 @@
   (case [row-state (str forge-state)]
     [:open "merged"] :merge
     [:submitted "merged"] :merge
+    [:failing "merged"] :merge
     [:stuck "merged"] :merge
     [:open "closed"] :close
     [:submitted "closed"] :close
+    [:failing "closed"] :close
     [:stuck "closed"] :close
     [:closed "open"] :reopen
     nil))
@@ -472,6 +499,178 @@
    census
    changes))
 
+;; ── the checks' verdict on a submitted change (ticket d1742908) ───────
+
+(def green-conclusions
+  "The conclusions a required check may finish with and still let the
+  change merge. `neutral` and `skipped` are GitHub's own passes."
+  #{"success" "neutral" "skipped"})
+
+(defn check-verdict
+  "What the checks on one head say, read against the policy's required
+  checks: {:verdict :red :names […]} when every required check
+  finished and at least one went red, {:verdict :green} when every one
+  finished green, and nil while one is still running, has not started,
+  or ended some other way (a cancel). A policy that names no required
+  check requires every check on the head."
+  [required checks]
+  (let [by-name (group-by #(str (:check_name %)) checks)
+        names (if (seq required)
+                (vec (distinct required))
+                (vec (sort (remove str/blank? (keys by-name)))))
+        runs (mapv #(get by-name %) names)
+        all? (fn [pred] (every? (fn [rs] (and (seq rs) (every? pred rs))) runs))]
+    (when (and (seq names) (all? #(= "completed" (str (:status %)))))
+      (let [red (filterv (fn [n] (some #(contains? red-conclusions
+                                                   (str (:conclusion %)))
+                                       (get by-name n)))
+                         names)]
+        (cond
+          (seq red) {:verdict :red :names red}
+          (all? #(contains? green-conclusions (str (:conclusion %))))
+          {:verdict :green}
+          :else nil)))))
+
+(def failing-scan-limit
+  "How many rows of each of the two live states one pass reads."
+  200)
+
+(def ^:private why-chars 480)
+
+(defn- live-changes
+  "Every change a seat has pushed and nobody has merged: `submitted`
+  and `failing`, read from the store and not from the poll — a check
+  that finishes moves no pull request, so the window would miss it."
+  [eng]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (into []
+              (mapcat #(store/query-rows st tx :change {:state %}
+                                         {:limit failing-scan-limit}))
+              ["submitted" "failing"])))))
+
+;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
+;;
+;; A conflicted pull request runs no fresh checks, so it never goes
+;; red: it just sits. The row's `mergeable` already reads `conflicted`
+;; from the forge (`behind` is `blocked` there, and a branch that is
+;; only behind is not failing — the merge brings it forward). So the
+;; verdict counts a conflict as one more red name, `merge-conflict`,
+;; and the move below is the red move: `failing` under the round
+;; ceiling, `stuck` on the last round. The way back is a head with no
+;; conflict and green checks, exactly as for a red check.
+
+(def merge-conflict
+  "The name a conflict rides in `failing_checks`."
+  "merge-conflict")
+
+(defn conflicted?
+  "Does the forge say this change conflicts with its base?"
+  [row]
+  (= "conflicted" (str (get-in row [:data :mergeable]))))
+
+(defn with-conflict
+  "The checks' verdict, read together with the row's merge state. A
+  conflicted row is red whatever its checks say — still running, green
+  or red — and `merge-conflict` joins the red names."
+  [verdict row]
+  (if (conflicted? row)
+    {:verdict :red
+     :names (vec (distinct (conj (vec (when (= :red (:verdict verdict))
+                                         (:names verdict)))
+                                 merge-conflict)))}
+    verdict))
+
+(def ^:private conflict-path-limit 50)
+
+(defn conflict-paths
+  "The paths a trial merge of the base into the change's branch leaves
+  unmerged, asked of the bench with the engine's own hand, or nil. The
+  forge does not name them; the rig can, in its worktree, and aborts
+  the merge after. A rig with no such tool, or no rig at all, answers
+  nil — the change still goes failing, only without its paths."
+  [eng row]
+  (let [answer (bench/ask {:services (:services eng)} :conflicts
+                          {:repo (str (get-in row [:data :repository]))
+                           :branch (str (get-in row [:data :head_branch]))
+                           :base (str (get-in row [:data :base_branch]))})
+        paths (when (and (map? answer) (not (bench/refused answer)))
+                (:paths answer))]
+    (when (sequential? paths)
+      (not-empty (into [] (comp (map str) (remove str/blank?)
+                                (map #(subs % 0 (min (count %) 400)))
+                                (take conflict-path-limit))
+                       paths)))))
+
+(defn- failing-move
+  "The one door the verdict opens on this row, as [door input], or nil.
+  A red head under the round ceiling goes to `failing`; a red head on
+  the last round goes to `stuck` with the names as its why; a green
+  head brings a failing change back to `submitted`. `conflicts` is the
+  list of conflicting paths, written beside the names when there is one."
+  [row verdict policy conflicts]
+  (let [names (:names verdict)]
+    (case [(state-of row) (:verdict verdict)]
+      [:submitted :red]
+      (if (>= (long (or (get-in row [:data :rounds]) 0))
+              (bench/rounds-of policy))
+        (let [why (str "The checks went red on the last round the policy "
+                       "gives: " (str/join ", " names) ".")]
+          [:stick (cond-> {:why (subs why 0 (min (count why) why-chars))
+                           :failing_checks names}
+                    (seq conflicts) (assoc :conflicts conflicts))])
+        [:fail (cond-> {:failing_checks names}
+                 (seq conflicts) (assoc :conflicts conflicts))])
+      [:failing :green] [:recover {}]
+      nil)))
+
+(def ^:private moved-counts
+  {:fail :failing :recover :recovered :stick :stuck})
+
+(defn- failing-pass!
+  "Every submitted or failing change of a repository with an active
+  policy → its head's checks, read against the policy, and at most one
+  door. A change with no head, or of a repository with no policy, is
+  left where it is. A forge that does not answer, or a door the engine
+  refuses, costs that change one pass and nothing else."
+  [eng source census log-fn]
+  (let [by-repo (into {}
+                      (keep (fn [p]
+                              (when-some [r (some-> (get-in p [:data :repository])
+                                                    str not-empty)]
+                                [r p])))
+                      (bench/policies eng :active))]
+    (reduce
+     (fn [census row]
+       (let [repo (str (get-in row [:data :repository]))
+             head (some-> (get-in row [:data :head_sha]) str not-empty)
+             policy (get by-repo repo)]
+         (if-not (and head policy)
+           census
+           (try
+             (let [verdict (with-conflict
+                            (check-verdict (bench/required-checks-of policy)
+                                           (forge-checks source repo head))
+                            row)
+                   ;; the rig is asked only when a conflict will move
+                   ;; the row, never for a row that stays where it is
+                   conflicts (when (and (conflicted? row)
+                                        (= :submitted (state-of row)))
+                               (conflict-paths eng row))]
+               (if-some [[door input] (failing-move row verdict policy
+                                                    conflicts)]
+                 (do (inv/invoke! eng :change (str (:id row)) door input
+                                  (as-opts))
+                     (update census (moved-counts door) inc))
+                 census))
+             (catch Exception e
+               (log-fn "the checks of " (get-in row [:data :change_id])
+                       " did not move the change (" (ex-message e) ")")
+               (update census :refused inc))))))
+     census
+     (live-changes eng))))
+
 ;; ── the one write ───────────────────────────────────────────────────
 
 (defn- unlabelled?
@@ -537,7 +736,50 @@
 (def ^:private fresh-census
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
-   :runs-orphan 0 :labelled 0 :refused 0})
+   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0
+   :refused 0})
+
+;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
+;; whose pulls listing the token cannot read costs its rows a pass and
+;; a log line, every pass, and nothing in the engine says so: its
+;; changes are never adopted, have no number, and so the house's merge
+;; and the person's merge ask both skip them silently. The pass writes
+;; the refusal on the repository's own policy row, where a person reads
+;; it, and clears it the first pass that reads the repository again. A
+;; note that already says the same status for the same route is left
+;; alone, so the log carries one transition when a repository goes dark
+;; and one when it comes back.
+
+(defn- source-note-pass!
+  [eng refusals answered census log-fn]
+  (let [answered (set answered)]
+    (reduce
+     (fn [census row]
+       (let [repo (str (get-in row [:data :repository]))
+             stored (str (get-in row [:data :source_note]))
+             refusal (get refusals repo)
+             input (cond
+                     refusal
+                     (when-not (str/starts-with?
+                                stored
+                                (policy/source-note-head (:status refusal)
+                                                         (:route refusal)))
+                       {:answered (:status refusal) :route (:route refusal)})
+
+                     (and (contains? answered repo) (not (str/blank? stored)))
+                     {})]
+         (if (nil? input)
+           census
+           (try
+             (inv/invoke! eng :repo_policy (str (:id row)) :note_source
+                          input (as-opts))
+             (update census :noted inc)
+             (catch Exception e
+               (log-fn "the policy of " repo " was refused its source note ("
+                       (ex-message e) ")")
+               (update census :refused inc))))))
+     census
+     (bench/policies eng :active))))
 
 (defn pass!
   "One pass of the factory mirror.
@@ -557,14 +799,17 @@
         log-fn (or log-fn warn!)]
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
-    (let [{:keys [changes checks repositories complete?]} (forge-poll source)
+    (let [{:keys [changes checks repositories complete? answered refusals]}
+          (forge-poll source)
           census (assoc fresh-census
                         :repositories (count repositories)
                         :complete? (boolean complete?))
+          census (source-note-pass! eng refusals answered census log-fn)
           census (change-pass! eng changes census log-fn)
           census (run-pass! eng source checks census log-fn)
           census (stale-pass! eng changes census log-fn)
           census (label-pass! eng source census log-fn)
+          census (failing-pass! eng source census log-fn)
           census (assoc census :calls (forge-calls source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
               (:minted census) " changes minted, " (:adopted census)
@@ -574,6 +819,14 @@
               (when (pos? (long (:runs-superseded census)))
                 (str ", " (:runs-superseded census) " red runs superseded "
                      "on a head that moved"))
+              (when (pos? (long (+ (long (:failing census))
+                                   (long (:recovered census))
+                                   (long (:stuck census)))))
+                (str ", " (:failing census) " changes failing, "
+                     (:recovered census) " green again, "
+                     (:stuck census) " stuck on red"))
+              (when (pos? (long (:noted census)))
+                (str ", " (:noted census) " policy source notes written"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
               (when-not (:complete? census)
