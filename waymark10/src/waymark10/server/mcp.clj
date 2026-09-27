@@ -2391,8 +2391,9 @@
 ;;
 ;; THE REPOSITORY IS THE SCOPE'S. A code seat already names its
 ;; repository five times: each bench power entry carries a filter with
-;; the repo it may touch (R-12.30). When every one of those entries
-;; names the same single repository, that is the seat's repository.
+;; the repo it may touch (R-12.30). When every entry that WRITES names
+;; the same single repository, that is the seat's repository, and the
+;; reading entries may name it and others beside it for reference.
 ;; When they name none, or two, the sit gives no bench and one
 ;; sentence that says what to write in the scope. Nothing new is
 ;; declared for this: the authority the seat already holds is the
@@ -2429,8 +2430,11 @@
   (str "The bench did not open, because this seat's scope does not "
        "name one repository. A seat that walks something other than a "
        "change reads its repository from its own bench powers: every "
-       "bench entry of the scope must carry a filter with the same "
-       "one repo. Work from the rows, and say what you could not do."))
+       "bench entry that writes (bench.edit, bench.pull, bench.feedback) "
+       "must carry a filter with the same one repo, and every bench.find "
+       "and bench.read entry must name that repo too, alone or with "
+       "others after a comma. Work from the rows, and say what you "
+       "could not do."))
 
 (def ^:private no-change-note
   "What the sit says when the change for this firing could neither be
@@ -2440,23 +2444,59 @@
   (str "The bench did not open, because this firing has no change row "
        "to submit. Work from the rows, and say what you could not do."))
 
-(defn- seat-repository
-  "The one repository this seat works, read from its own scope
-  (R-12.32), or nil.
+(def ^:private bench-write-tokens
+  "The bench powers that CHOOSE the seat's repository: the ones that
+  write its worktree, and the one that reads what a push of it caused.
+  The reading powers (`bench.find`, `bench.read`) only have to include
+  it, and may name other repositories beside it (R-12.32)."
+  #{"bench.edit" "bench.pull" "bench.feedback"})
 
-  Every bench power entry must carry a `filter` with a `repo`, and
-  every one of them must name the same value. A comma in that value
-  means \"any of these repositories\" (R-12.30), which is not ONE
-  repository, so it answers nil as two entries with two values do."
+(defn- entry-repos
+  "The repositories one bench entry's filter names, trimmed and in
+  order — a comma means \"any of these\" (R-12.30) — or nil when the
+  entry names none."
+  [entry]
+  (when-some [v (get-in entry [:filter :repo])]
+    (not-empty (into [] (comp (map str/trim) (remove str/blank?))
+                     (str/split (str v) #",")))))
+
+(defn- seat-repositories
+  "The repository this seat works and the ones it may only read, read
+  from its own scope (R-12.32) → {:repo r :reference [r …]}, or nil.
+
+  The entries that WRITE choose: every one of them must carry a
+  `filter` with a `repo`, every one must name the same value, and a
+  comma in it — \"any of these repositories\" (R-12.30) — is not ONE
+  repository. A scope with no writing entry chooses from its reading
+  entries by the same rule. Every reading entry must then include the
+  chosen repository, so a seat always reads what it edits; the other
+  repositories it names are the seat's references."
   [seat]
   (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
                          (get-in seat [:data :scope]))
-        named (mapv #(some-> (get-in % [:filter :repo]) str str/trim) entries)]
-    (when (and (seq named)
-               (every? #(not (str/blank? (str %))) named)
-               (apply = named)
-               (not (str/includes? (first named) ",")))
-      (first named))))
+        writes? #(contains? bench-write-tokens (str (:kind %)))
+        reads (filterv (complement writes?) entries)
+        choosers (or (not-empty (filterv writes? entries)) reads)
+        named (mapv #(some-> (get-in % [:filter :repo]) str str/trim) choosers)
+        repo (when (and (seq named)
+                        (every? #(not (str/blank? (str %))) named)
+                        (apply = named)
+                        (not (str/includes? (first named) ",")))
+               (first named))
+        read-lists (mapv entry-repos reads)]
+    (when (and repo (every? #(some #{repo} %) read-lists))
+      {:repo repo
+       :reference (->> (apply concat read-lists)
+                       (remove #{repo})
+                       distinct
+                       sort
+                       vec)})))
+
+(defn- seat-repository
+  "The one repository this seat works, read from its own scope
+  (R-12.32), or nil. `seat-repositories` says how."
+  [seat]
+  (:repo (seat-repositories seat)))
 
 (defn- bench-seat?
   "Is this a CODE seat? A seat whose scope names no bench power at all
@@ -2830,6 +2870,40 @@
          (when-not (str/ends-with? reason ".") ".")
          " Work from the rows, and stall the change with this reason.")))
 
+(defn- reference-of
+  "The repositories this seat may only READ, beside the bench it edits
+  (R-12.32) → {\"reference_repos\" […] \"reference_note\" sentence}, or
+  nil when its reading entries name none but its own. They are the
+  seat's references only when the bench opened on the seat's own
+  repository. A reference with no active `repo_policy` has no base
+  branch to name, so it is left out of the list and the note says so."
+  [eng seat repo]
+  (let [named (when-some [rs (seat-repositories seat)]
+                (when (= repo (:repo rs)) (:reference rs)))
+        based (keep (fn [r]
+                      (when-some [p (repo-policy-of eng r)]
+                        [r (or (some-> (get-in p [:data :base]) str not-empty)
+                               default-base)]))
+                    named)
+        kept (mapv first based)
+        left (vec (remove (set kept) named))]
+    (when (seq named)
+      {"reference_repos" kept
+       "reference_note"
+       (str (if (seq kept)
+              (str "The repositories in reference_repos are for reading "
+                   "only: a bench.find or bench.read call reaches one when "
+                   "it names it with `repo` and `branch` ("
+                   (str/join ", " (map (fn [[r b]] (str r " on " b)) based))
+                   "). Nothing you edit or submit goes there.")
+              "This seat names no reference repository you can read.")
+            (when (seq left)
+              (str " " (str/join ", " left)
+                   (if (= 1 (count left)) " has" " have")
+                   " no active repo_policy, so "
+                   (if (= 1 (count left)) "it is" "they are")
+                   " left out.")))})))
+
 (defn- bench-of
   "The bench section of the sit's answer (R-12.29), or nil when this
   firing has no change to work.
@@ -2923,6 +2997,9 @@
                              "head" (some-> (:head made) str)
                              "dirty" (long (or (:dirty made) 0))
                              "tools" (bench-tools-of eng seat)})
+        ;; the repositories the seat may only read, beside the one
+        ;; it edits (R-12.32)
+        made (merge (reference-of eng seat (str (or (:repo made) repo))))
         feedback (assoc "feedback" feedback)
         (and (nil? made) refusal) (assoc "bench_note"
                                          (bench-refused-note refusal))
