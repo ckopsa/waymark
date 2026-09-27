@@ -754,6 +754,62 @@
       (is (= [repo] (:repositories (forge/forge-poll source)))
           "the house stops working a repository with one tap"))))
 
+;; ── a repository the token cannot read (ticket 116dfb0d) ───────────────
+
+(defn- source-note-of [engine repository]
+  (get-in (one-row engine :repo_policy {:repository repository})
+          [:data :source_note]))
+
+(deftest a-repository-the-source-cannot-read-says-so-on-its-policy-row
+  (let [state (gh/fake-state)
+        engine (boot)
+        source (gh/fake-source state {:repos-fn #(bench/active-repositories
+                                                  engine)})
+        doors "ckopsa/waymark-doors"]
+    (gh/seed-pull! state repo a-pull-request {:files the-files})
+    (gh/seed-pull! state doors
+                   (assoc a-pull-request :number 7
+                          :html_url "https://github.com/ckopsa/waymark-doors/pull/7")
+                   {})
+    (policy! engine repo)
+    (policy! engine doors)
+    (gh/refuse! state doors 403)
+
+    (testing "a 403 on one repository's pulls listing lands on its row"
+      (let [census (pass! {:source source :engine engine})
+            note (source-note-of engine doors)]
+        (is (= 1 (:noted census)))
+        (is (str/starts-with?
+             (str note)
+             "GitHub answered 403 for GET /repos/ckopsa/waymark-doors/pulls at ")
+            "the status, the route and the time")
+        (is (nil? (source-note-of engine repo))
+            "and the repository that answered carries no note")
+        (is (some? (the-change engine))
+            "the other repository's pass is not cost by the refusal")))
+
+    (testing "a second refusal of the same kind writes nothing again"
+      (let [before (source-note-of engine doors)]
+        (is (= 0 (:noted (pass! {:source source :engine engine}))))
+        (is (= before (source-note-of engine doors)))))
+
+    (testing "a good pass clears the note"
+      (gh/refuse! state doors nil)
+      (is (= 1 (:noted (pass! {:source source :engine engine}))))
+      (is (nil? (source-note-of engine doors))))
+
+    (testing "a pass with nothing to say writes nothing"
+      (is (= 0 (:noted (pass! {:source source :engine engine})))))))
+
+(deftest a-source-note-is-the-engines-hand-alone
+  (let [engine (boot)
+        row (policy! engine "ckopsa/waymark-doors")]
+    (is (thrown? Exception
+                 (inv/invoke! engine :repo_policy (str (:id row)) :note_source
+                              {:answered 403 :route "GET /repos/x/y/pulls"}
+                              {:principal a-person}))
+        "a person reads the note and never writes it")))
+
 ;; ── the wiring's own contract ───────────────────────────────────────
 
 (deftest no-token-means-no-source
