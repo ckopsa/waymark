@@ -27,8 +27,17 @@
 # the branch is what it does NOT carry; a check is the only thing that
 # keeps it that way.
 #
-# NO SECRET. The branch is a ref of this repository, so the workflow's
-# own GITHUB_TOKEN writes it.
+# ONE SECRET, FOR ONE DOOR. The branch is a ref of this repository, so
+# the workflow's own GITHUB_TOKEN writes it. But fired runs clone
+# ckopsa/waymark-seat, which copies the branch only through its own
+# sync.yml on an hourly cron, and GitHub ran that schedule only every 3
+# to 5 hours (2026-09-26/27: 17:08, 19:50, 22:48, 01:25). #217 merged
+# at 04:13 and code-seat's run at 04:34 still used the old hook. So the
+# last step dispatches that sync.yml at once, with SEAT_SYNC_TOKEN: a
+# fine-grained token on ckopsa/waymark-seat alone, with Actions read and
+# write, which reaches that one repository's workflow dispatch and
+# nothing else. Without the secret, or when the dispatch fails, the run
+# still succeeds and the hourly schedule stays the fallback.
 
 name: seat-place
 
@@ -116,3 +125,26 @@ jobs:
           git ls-files -s
 
           git push --force origin seat
+
+      # The branch is published; this only hurries the mirror. It never
+      # fails the run: the mirror's hourly schedule is the fallback.
+      - name: Dispatch the mirror's sync
+        env:
+          SEAT_SYNC_TOKEN: ${{ secrets.SEAT_SYNC_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${SEAT_SYNC_TOKEN}" ]; then
+            echo "::notice::SEAT_SYNC_TOKEN is not set; ckopsa/waymark-seat waits for its hourly schedule."
+            exit 0
+          fi
+          status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${SEAT_SYNC_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/ckopsa/waymark-seat/actions/workflows/sync.yml/dispatches \
+            -d '{"ref":"main"}')" || status="curl-failed"
+          if [ "$status" != "204" ]; then
+            echo "::warning::dispatching ckopsa/waymark-seat sync.yml answered ${status}; the hourly schedule stays the fallback."
+            exit 0
+          fi
+          echo "dispatched ckopsa/waymark-seat sync.yml on main."
