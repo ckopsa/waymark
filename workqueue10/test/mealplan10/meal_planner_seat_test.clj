@@ -332,7 +332,7 @@
   door takes the session the transport would have resolved, so a test
   that hands it the delegate's would run unleashed."
   []
-  (let [bound (get-in @(:mcp-sessions *eng*) [*sid* :bound])
+  (let [bound (:bound (mcp/touch-session! *eng* *sid*))
         sitter (:sitter bound)]
     (is (some? sitter) "waymark_sit bound this session to the seat's sitter")
     {:principal sitter
