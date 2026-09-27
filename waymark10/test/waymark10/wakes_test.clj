@@ -1735,7 +1735,7 @@
     (testing "the sitting that completed the last row leaves no fire
               behind it, and the pending wake is cleared"
       (let [{:keys [seat token]}
-            (walk-item-seat! "emptyclerk" "empty-release-last" fn')]
+            (walk-item-seat! "emptyreleaseclerk" "empty-release-last" fn')]
         (is (true? (complete-inside-a-sitting! wn seat emptied))
             "the completion was damped by the open sitting")
         (is (empty? (seat-fires seat)))

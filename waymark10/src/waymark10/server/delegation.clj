@@ -40,10 +40,12 @@
   ── how a hold is spoken ───────────────────────────────────────────
 
   A guard can only allow or refuse, so a hold is a refusal whose guard
-  is one of `hold-guards`. The router catches exactly those refusals
+  declared `:hold true` (waymark10.holds keeps the registry, and any
+  module may add to it). The router catches exactly those refusals
   and mints the held call in their place (router/held-instead). Every
   other guard on the door runs FIRST, so a held call is one the engine
-  would have served, except that it needs the person.
+  would have served, except that it needs the person. The call waits
+  on `hold-owner`; with no person to ask, the refusal stands as a 409.
 
   THE REPLAY IS RECOGNISED BY `:within`. The engine's own replay
   (held-calls/forward!) invokes the door as the author, with `:within`
@@ -53,6 +55,7 @@
   cannot set `:within`, so it cannot forge the person's yes."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -106,24 +109,15 @@
   one the person allowed, or nil. `:within` names the held row, and
   the row is read back through the write's own transaction: it must be
   `allowed`, name this kind and this row, and name this caller.
-  `target` is the row id, nil at a create door."
+  `target` is the row id, nil at a create door. The modules' own
+  holds share the check (holds/allowed-hold)."
   [ctx kind target]
-  (let [{wkind :kind waction :action hid :id} (:within ctx)
-        read' (:read ctx)]
-    (when (and (= :held_call wkind) (= :allow waction) hid read')
-      (when-some [h (read' :held_call (str hid))]
-        (let [door (get-in h [:data :door])]
-          (when (and (= :allowed (:state h))
-                     (= (name kind) (str (:kind door)))
-                     (= (some-> target str) (nonblank (:id door)))
-                     (= (str (get-in ctx [:principal :id]))
-                        (str (get-in h [:data :caller]))))
-            h))))))
+  (holds/allowed-hold ctx kind target))
 
 (defn approved-hold?
   "`allowed-hold`, as the yes-or-no a guard asks."
   [ctx kind target]
-  (some? (allowed-hold ctx kind target)))
+  (holds/approved-hold? ctx kind target))
 
 (defn authoring-seat
   "The seat that authors THIS write, or nil: the author the held call
@@ -141,6 +135,34 @@
   (or the sit) put on the principal."
   [ctx]
   (nonblank (get-in ctx [:principal :acts-for])))
+
+(defn- grant-person
+  "The person an agent's live grant belongs to: the one who approved
+  the ask that minted or widened it. nil for a ctx with no :find hook,
+  and for an agent no person stands behind."
+  [ctx]
+  (when-some [find' (:find ctx)]
+    (let [p (:principal ctx)]
+      (some (fn [gr]
+              (when (live-grant? (:now ctx) gr)
+                (some #(nonblank (get-in % [:data :approved_by]))
+                      (find' :approval_request {:grant_id (str (:id gr))}
+                             {:limit 10}))))
+            (find' :grant {:audience (str (:id p))} {:limit 100})))))
+
+(defn hold-owner
+  "The one person a held call waits on, or nil. A person's own call is
+  never held. An agent's is its person's: the person the acting seat's
+  sitter acts for (the mark the sit or the identity gate put on the
+  principal), and for an agent that sits in no seat, the person its
+  grant belongs to."
+  [ctx]
+  (when (= :agent (get-in ctx [:principal :type]))
+    (or (owner-of ctx) (grant-person ctx))))
+
+(def no-person
+  "The sentence a hold's refusal gains when nobody can be asked."
+  "No person stands behind this caller, so there is nobody to hold the call for, and the refusal stands.")
 
 ;; ── the ceiling (invariant 2) ───────────────────────────────────────
 
@@ -285,7 +307,8 @@
 ;; ── the guards ──────────────────────────────────────────────────────
 
 (g/defguard authors-within-the-ceiling
-  {:judges [:scope]
+  {:hold true
+   :judges [:scope]
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :open "The ceiling is the delegates field of the author's own seat row, one GET away; it names kinds this form cannot enumerate."
@@ -323,7 +346,8 @@
         (t/allow)))))
 
 (g/defguard the-persons-lever
-  {:reads [:principal :now :grant :seat :held_call :within]
+  {:hold true
+   :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
   [row _inp ctx]
@@ -339,7 +363,8 @@
                                  (seat-name author))))))
 
 (g/defguard promotes-under-a-parked-child
-  {:reads [:principal :now :grant :seat :held_call :within]
+  {:hold true
+   :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
   [row _inp ctx]
@@ -361,7 +386,8 @@
                  ", so promoting it could change work the person has not seen")))))
 
 (g/defguard the-persons-judgment
-  {:reads [:principal :now :grant :seat :held_call :within]
+  {:hold true
+   :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
   [row _inp ctx]
@@ -376,18 +402,17 @@
                   (str "superseding a judgment changes every seat that says it,"
                        " and that is the person's call, not " (seat-name author) "'s")))))
 
-(def hold-guards
-  "The guards whose refusal is a HOLD. The router mints a held call in
-  place of exactly these refusals, and passes every other one through
-  as the 409 it always was."
-  #{(:name authors-within-the-ceiling)
-    (:name the-persons-lever)
-    (:name promotes-under-a-parked-child)
-    (:name the-persons-judgment)})
+(defn hold-guards
+  "The guards whose refusal is a HOLD: the four above, and every guard
+  a loaded module declared `:hold true`. The router mints a held call
+  in place of exactly these refusals, and passes every other one
+  through as the 409 it always was."
+  []
+  (holds/registered))
 
 (defn hold-guard?
   "Is this refusal's guard one of `hold-guards`? The problem document
   carries the guard's name as a keyword or its string, depending on
   which side of the wire read it."
   [guard]
-  (contains? hold-guards (some-> guard name keyword)))
+  (holds/hold? guard))

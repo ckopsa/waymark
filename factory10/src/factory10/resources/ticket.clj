@@ -49,15 +49,18 @@
 
   REOPEN IS A PERSON'S DOOR. A reopen is a correction of an ending,
   and a seat that could reopen tickets could refill its own queue.
-  `only-a-person-reopens` refuses every agent hand; it is not
-  grantable. The engine's own hand passes, for the same reason a
-  merge completes a ticket with it.
+  `only-a-person-reopens` stops every agent hand; it is not
+  grantable. An agent's reopen is HELD for its person's tap (the
+  guard declares `:hold true`), and the person's Allow replays it; an
+  agent with no person behind it is refused. The engine's own hand
+  passes, for the same reason a merge completes a ticket with it.
 
   :nav :secondary, for change's reason: an ask of the software
   factory is the day job's work, not the family's."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
+            [waymark10.holds :as holds]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -130,8 +133,8 @@
 ;; framework's own posture (change's bench walls, one kind over): the
 ;; envelope advertises optimistically and the door judges again with a
 ;; real hook behind it. Their law is proved in factory10.ticket-test
-;; over a fake hook. The fourth reads :principal and nothing else, and
-;; its scenarios below are check-tier.
+;; over a fake hook. The fourth reads :principal and :within, both of
+;; which the check tier answers, and its scenarios below are check-tier.
 
 (defguardfn the-parent-is-open-at-birth
   {:judges [:parent]
@@ -214,15 +217,22 @@
       (t/allow))))
 
 (defguardfn only-a-person-reopens
-  {:reads [:principal]
-   :explain "A reopen is the person's correction of an ending, and a seat that could reopen tickets could refill its own queue. If you think this ticket ended wrongly, say so where an agent may — a new ticket that names this one in found_in — and let a person tap."
-   :open "No door clears this one. The correction is a person's tap, and a grant that opened it would let a seat write its own queue."}
-  [_row _inp ctx]
+  {:reads [:principal :within]
+   :hold true
+   :explain "A reopen is the person's correction of an ending, so an agent's reopen is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. A seat that could reopen tickets alone could refill its own queue."
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a grant that opened it would let a seat write its own queue."}
+  [row _inp ctx]
   ;; ci_run's `only-a-person-reclassifies`, one kind over: every hand
-  ;; but an agent's passes, the engine's own actor included.
-  (if (= :agent (:type (:principal ctx)))
-    (t/deny)
-    (t/allow)))
+  ;; but an agent's passes, the engine's own actor included. An
+  ;; agent's reopen is HELD (waymark10.holds): the router records it
+  ;; for its person, and the one agent call this admits is the
+  ;; engine's replay of the held call that person allowed. The held
+  ;; row is read only when `:within` names one, which no scenario and
+  ;; no wire request does, so the check tier's answer is the door's.
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :ticket :reopen (:id row)) (t/allow)
+    :else (t/deny)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
