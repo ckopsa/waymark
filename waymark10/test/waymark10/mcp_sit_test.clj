@@ -1098,6 +1098,83 @@
              (:seat (doc-of (sit! {:key chair-key :seat "fired-clerk"}))))
           "a standing key is spent by nothing, and it sits again"))))
 
+(deftest a-fired-run-that-loses-its-bind-sits-again-in-its-own-sitting
+  ;; R-12.16 and R-12.37: the bind lives in engine memory and dies with
+  ;; a restart. The firing's key is spent at the first sit, but the
+  ;; sitting it opened keeps the key's hash, so the same run — the same
+  ;; harness session — re-sits THAT sitting while it is open, and the
+  ;; key opens nothing else.
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [model]} (open-seat! eng)
+        seat (seat-of eng "fired-clerk" {:held_for [(:id model)]
+                                         :instructions fired-instructions})
+        key (seats/hold-fire-key! eng seat ((:now-fn eng)))
+        run "session_01TheRunADeployCut"
+        sit! (fn [args]
+               (let [[sid _] (initialize! h)]
+                 [sid (tool h (with-session sid) "waymark_sit" args)]))
+        restart! #(reset! (:mcp-sessions eng) {})
+        [_ first-r] (sit! {:key key :seat "fired-clerk" :session run})
+        first-sat (doc-of first-r)
+        sitting-id (str (:sitting first-sat))
+        sitting-row (fn []
+                      (store/with-tx (:storage eng)
+                        (fn [tx] (store/load-row (:storage eng) tx :sitting
+                                                 sitting-id {}))))]
+
+    (testing "the first sit opens a sitting that keeps the key's hash alone"
+      (is (false? (:isError first-r)) (text-of first-r))
+      (is (= (seats/key-hash key)
+             (get-in (sitting-row) [:data :fire_key_hash])))
+      (is (not (str/includes? (pr-str (sitting-row)) key))))
+
+    (restart!)
+
+    (testing "a different harness session is refused in the uniform sentence"
+      (let [[_ r] (sit! {:key key :seat "fired-clerk" :session "session_other"})]
+        (is (true? (:isError r)))
+        (is (= "No seat answers this key." (text-of r)))))
+
+    (testing "a re-sit that names no session is refused"
+      (let [[_ r] (sit! {:key key :seat "fired-clerk"})]
+        (is (true? (:isError r)))
+        (is (= "No seat answers this key." (text-of r)))))
+
+    (let [[sid r] (sit! {:key key :seat "fired-clerk" :session run})
+          again (doc-of r)]
+      (testing "the same key and session land on the SAME sitting and grant"
+        (is (false? (:isError r)) (text-of r))
+        (is (= sitting-id (str (:sitting again))))
+        (is (= (:grant first-sat) (:grant again)))
+        (when-some [k (get-in first-sat [:transcript :key])]
+          (is (string? (get-in again [:transcript :key])))
+          (is (not= k (get-in again [:transcript :key]))
+              "with a fresh transcript key")))
+
+      (testing "the key still opens no second sitting"
+        (let [open (store/with-tx (:storage eng)
+                     (fn [tx] (store/query-rows (:storage eng) tx :sitting
+                                                {:seat (str (:id seat)) :state :open}
+                                                {:limit 10})))]
+          (is (= 1 (count open)))))
+
+      (testing "the re-bound session closes its own sitting"
+        (let [c (tool h (with-session sid) "waymark_invoke"
+                      {:kind "sitting" :id sitting-id :action "close"
+                       :input {:input_tokens 10 :output_tokens 5
+                               :cache_read_tokens 0 :cache_write_tokens 0
+                               :turns 1 :harness_session run}})]
+          (is (false? (:isError c)) (text-of c))
+          (is (= :closed (:state (sitting-row)))))))
+
+    (restart!)
+
+    (testing "after the sitting closed, the key answers nothing"
+      (let [[_ r] (sit! {:key key :seat "fired-clerk" :session run})]
+        (is (true? (:isError r)))
+        (is (= "No seat answers this key." (text-of r)))))))
+
 (deftest the-sit-tool-says-the-key-may-come-from-the-fire-text
   (let [sit (first (filter #(= "waymark_sit" (:name %)) (mcp/listing)))]
     (is (str/includes? (str (get-in sit [:inputSchema :properties :key

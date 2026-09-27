@@ -2887,7 +2887,16 @@
                   :x-display
                   {:label "Last tallied"
                    :spelled-by-hand "Stamped by each tally of an open sitting; absent on a sitting nobody has tallied."}}
-     [:maybe :waymark/instant]]]
+     [:maybe :waymark/instant]]
+    ;; THE TRACE OF THE FIRING'S KEY (R-12.37). The sit that spends a
+    ;; firing's key keeps its hash here, on the sitting it opened and
+    ;; not on the seat, so a run that loses its bind to a restart may
+    ;; sit again in THIS sitting, while it is open, and nowhere else.
+    [:fire_key_hash {:optional true :secret true
+                     :x-display {:hidden true
+                                 :label "The firing key's hash"
+                                 :spelled-by-hand "The SHA-256 of the firing key that opened this sitting. The sit writes it; it answers only while the sitting is open; the engine never shows a key."}}
+     [:maybe [:string {:max 64}]]]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -3551,6 +3560,58 @@
                                     (assoc (:data row) :fire_keys kept)
                                     (:next-flip-at row))
                 true))))))))
+
+(defn keep-fire-key!
+  "Keep the trace of a spent firing's key on the sitting it opened: its
+  hash, never the key (R-12.37). A MAINTENANCE write, `spend-fire-key!`'s
+  own spelling and its reason. Only an OPEN sitting takes the trace, and
+  it answers only while the sitting stays open, so the close, the
+  tally-driven close, the abandon and the sweep all leave a key that
+  answers nothing. → true when the trace was written."
+  [eng sitting-id key]
+  (when-some [h (key-hash key)]
+    (when (and sitting-id (get (inv/resources eng) :sitting))
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (when-some [row (store/load-row (:storage eng) tx :sitting
+                                          (str sitting-id) {:for-update true})]
+            (when (= :open (:state row))
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  (assoc (:data row) :fire_key_hash h) nil)
+              true)))))))
+
+(defn resit-sitting
+  "The OPEN sitting of the seat `named` names that this spent firing's
+  key opened, for THIS harness session, or nil (R-12.16, R-12.37).
+
+  A run whose bind died with the engine presents its firing's key a
+  second time. The key opens no new sitting; it re-sits only the one it
+  opened, while that sitting is open, and only for the harness session
+  stamped on it at birth. A call that names no session matches nothing.
+  → [seat sitting], or nil."
+  [eng named key harness-session]
+  (let [harness (some-> harness-session str str/trim not-empty)]
+    (when-some [wanted (key-hash key)]
+      (when (and harness (get (inv/resources eng) :sitting))
+        (when-some [seat (seat-named eng named)]
+          (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)
+                rows (store/with-tx (:storage eng)
+                       (fn [tx]
+                         (store/query-rows (:storage eng) tx :sitting
+                                           {:seat (str (:id seat)) :state :open}
+                                           {:limit open-sitting-page
+                                            :newest-first true})))
+                hit (first
+                     (filter (fn [r]
+                               (and (= harness (some-> (get-in r [:data :harness_session])
+                                                       str not-empty))
+                                    (when-some [held (some-> (get-in r [:data :fire_key_hash])
+                                                             str not-empty)]
+                                      (MessageDigest/isEqual
+                                       wanted
+                                       (.getBytes ^String held StandardCharsets/UTF_8)))))
+                             rows))]
+            (when hit [seat hit])))))))
 
 (defn seat-for-key
   "The seat `named` names, when this key may sit in it. Nil for
