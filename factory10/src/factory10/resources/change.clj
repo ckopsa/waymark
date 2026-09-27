@@ -348,6 +348,13 @@
                            ;; a new round is a new head: the last
                            ;; red names are not its (ticket d1742908)
                            :failing_checks nil
+                           :conflicts nil
+                           ;; nor is the last merge state: the forge
+                           ;; computes it again for the new head, and
+                           ;; a stale `conflicted` would fail the
+                           ;; round before the forge was re-read
+                           ;; (ticket 5f12e772)
+                           :mergeable "unknown"
                            :rounds (inc (long (or (get-in row [:data :rounds])
                                                   0)))}
                     (:commit answer) (assoc :head_sha
@@ -380,12 +387,16 @@
 (defhandler write-the-failing-checks [row inp _ctx]
   ;; The names ride on the row, so the seat and the person read which
   ;; checks went red without opening GitHub. The machine moves the row.
-  (assoc-in row [:data :failing_checks] (vec (:failing_checks inp))))
+  ;; A conflict rides as `merge-conflict` among the names, and its
+  ;; paths, when the bench could name them, beside (ticket 5f12e772).
+  (update row :data assoc
+          :failing_checks (vec (:failing_checks inp))
+          :conflicts (some-> (:conflicts inp) seq vec)))
 
 (defhandler clear-the-failing-checks [row _inp _ctx]
   ;; A green head, or a new round: the names of the last red are not
   ;; this head's, and a stale list would read as a live one.
-  (assoc-in row [:data :failing_checks] nil))
+  (update row :data assoc :failing_checks nil :conflicts nil))
 
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
@@ -746,6 +757,13 @@
                       {:label "The checks that went red"
                        :help "The required checks that finished red on the head the seat last pushed. The house writes them when it moves the change to failing, and clears them when the head goes green or the seat submits again."}}
      [:maybe [:vector [:string {:max 200}]]]]
+    ;; written beside `merge-conflict` in `failing_checks` when the
+    ;; bench can name the paths; cleared with it (ticket 5f12e772)
+    [:conflicts {:optional true
+                 :x-display
+                 {:label "The paths that conflict"
+                  :help "The paths a trial merge of the base branch into this change's branch left unmerged. The house writes them when a conflict moves the change to failing, and clears them when the head merges clean and goes green, or the seat submits again."}}
+     [:maybe [:vector [:string {:max 400}]]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     [:url {:optional true :x-display {:hidden true}}
@@ -1010,7 +1028,9 @@
      :guards [the-mirror-writes-this-row]
      :handler write-the-failing-checks
      :input [:map
-             [:failing_checks [:vector {:min 1} [:string {:max 200}]]]]
+             [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
+             [:conflicts {:optional true}
+              [:maybe [:vector [:string {:max 400}]]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The required checks finished red on this head. The way back is a green head, which the house reads on its next pass, or the seat's next submit."}
@@ -1039,7 +1059,9 @@
                                 :label "What went red"
                                 :help "The checks that finished red on the last round the policy gives."}}
               [:string {:min 1 :max 480}]]
-             [:failing_checks [:vector {:min 1} [:string {:max 200}]]]]
+             [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
+             [:conflicts {:optional true}
+              [:maybe [:vector [:string {:max 400}]]]]]
      ;; :large-effort — NO draft here, unlike `stall`. Only the engine
      ;; walks this door and nobody composes the why in a box; and an
      ;; `:edit` implies the version fence (waymark10.resource), which
