@@ -48,7 +48,9 @@
   6. For each `submitted` or `failing` change of a repository with an
      active policy, it reads the checks on the head (`forge-checks`)
      against the policy's required checks and walks `fail`, `recover`
-     or, on the last round, `stick` (ticket d1742908).
+     or, on the last round, `stick` (ticket d1742908). A change the
+     forge reads as `conflicted` is red too, as `merge-conflict`, with
+     the paths the bench's trial merge names (ticket 5f12e772).
   7. It prints one census line: the calls, the rows minted and the
      rows moved.
 
@@ -538,12 +540,66 @@
                                          {:limit failing-scan-limit}))
               ["submitted" "failing"])))))
 
+;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
+;;
+;; A conflicted pull request runs no fresh checks, so it never goes
+;; red: it just sits. The row's `mergeable` already reads `conflicted`
+;; from the forge (`behind` is `blocked` there, and a branch that is
+;; only behind is not failing — the merge brings it forward). So the
+;; verdict counts a conflict as one more red name, `merge-conflict`,
+;; and the move below is the red move: `failing` under the round
+;; ceiling, `stuck` on the last round. The way back is a head with no
+;; conflict and green checks, exactly as for a red check.
+
+(def merge-conflict
+  "The name a conflict rides in `failing_checks`."
+  "merge-conflict")
+
+(defn conflicted?
+  "Does the forge say this change conflicts with its base?"
+  [row]
+  (= "conflicted" (str (get-in row [:data :mergeable]))))
+
+(defn with-conflict
+  "The checks' verdict, read together with the row's merge state. A
+  conflicted row is red whatever its checks say — still running, green
+  or red — and `merge-conflict` joins the red names."
+  [verdict row]
+  (if (conflicted? row)
+    {:verdict :red
+     :names (vec (distinct (conj (vec (when (= :red (:verdict verdict))
+                                         (:names verdict)))
+                                 merge-conflict)))}
+    verdict))
+
+(def ^:private conflict-path-limit 50)
+
+(defn conflict-paths
+  "The paths a trial merge of the base into the change's branch leaves
+  unmerged, asked of the bench with the engine's own hand, or nil. The
+  forge does not name them; the rig can, in its worktree, and aborts
+  the merge after. A rig with no such tool, or no rig at all, answers
+  nil — the change still goes failing, only without its paths."
+  [eng row]
+  (let [answer (bench/ask {:services (:services eng)} :conflicts
+                          {:repo (str (get-in row [:data :repository]))
+                           :branch (str (get-in row [:data :head_branch]))
+                           :base (str (get-in row [:data :base_branch]))})
+        paths (when (and (map? answer) (not (bench/refused answer)))
+                (:paths answer))]
+    (when (sequential? paths)
+      (not-empty (into [] (comp (map str) (remove str/blank?)
+                                (map #(subs % 0 (min (count %) 400)))
+                                (take conflict-path-limit))
+                       paths)))))
+
 (defn- failing-move
   "The one door the verdict opens on this row, as [door input], or nil.
   A red head under the round ceiling goes to `failing`; a red head on
   the last round goes to `stuck` with the names as its why; a green
-  head brings a failing change back to `submitted`."
-  [row verdict policy]
+  head brings a failing change back to `submitted`. `conflicts` is the
+  list of conflicting paths, written beside the names when there is one."
+  [row verdict policy conflicts]
   (let [names (:names verdict)]
     (case [(state-of row) (:verdict verdict)]
       [:submitted :red]
@@ -551,9 +607,11 @@
               (bench/rounds-of policy))
         (let [why (str "The checks went red on the last round the policy "
                        "gives: " (str/join ", " names) ".")]
-          [:stick {:why (subs why 0 (min (count why) why-chars))
-                   :failing_checks names}])
-        [:fail {:failing_checks names}])
+          [:stick (cond-> {:why (subs why 0 (min (count why) why-chars))
+                           :failing_checks names}
+                    (seq conflicts) (assoc :conflicts conflicts))])
+        [:fail (cond-> {:failing_checks names}
+                 (seq conflicts) (assoc :conflicts conflicts))])
       [:failing :green] [:recover {}]
       nil)))
 
@@ -581,9 +639,17 @@
          (if-not (and head policy)
            census
            (try
-             (let [verdict (check-verdict (bench/required-checks-of policy)
-                                          (forge-checks source repo head))]
-               (if-some [[door input] (failing-move row verdict policy)]
+             (let [verdict (with-conflict
+                            (check-verdict (bench/required-checks-of policy)
+                                           (forge-checks source repo head))
+                            row)
+                   ;; the rig is asked only when a conflict will move
+                   ;; the row, never for a row that stays where it is
+                   conflicts (when (and (conflicted? row)
+                                        (= :submitted (state-of row)))
+                               (conflict-paths eng row))]
+               (if-some [[door input] (failing-move row verdict policy
+                                                    conflicts)]
                  (do (inv/invoke! eng :change (str (:id row)) door input
                                   (as-opts))
                      (update census (moved-counts door) inc))
