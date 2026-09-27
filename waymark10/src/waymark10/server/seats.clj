@@ -1428,13 +1428,25 @@
   the engine holds the inbox and the sitting pulls it; the sit answers
   the address and a key for it (`issue-inbox-key!`). Absent is no
   inbox. Each kind and each action is judged by `inbox-names-real-kinds`
-  and `inbox-names-real-actions`."
+  and `inbox-names-real-actions`.
+
+  The field says where its tokens come from the way a `wake_on`
+  entry's `kind` does (`:x-options {:from :kinds}`): the kinds are
+  the keys of `only`, and the chips beside the box offer them. `only`
+  itself is a map-of, whose keys no form can list, so it wears the
+  reason it is typed (`:spelled-by-hand`), as the scope's `filter`
+  does."
   [:inbox {:optional true
            :examples [{:only {:seat ["restate" "park"]}}]
+           :x-options {:from :kinds}
            :x-display {:label "Its inbox"
                        :help inbox-help}}
    [:maybe [:map
-            [:only [:map-of :keyword [:vector [:string {:min 1 :max 64}]]]]]]])
+            [:only {:x-options {:from :kinds}
+                    :x-display {:label "Kinds and their actions"
+                                :spelled-by-hand "A kind → actions map, the shape of a subscriber's `only`, and a form cannot list its keys, so each pair is typed: a kind name, then the list of its actions that count, or an empty list for every action. The chips beside the box offer every kind name."
+                                :help "Which transitions the engine holds for this seat's sittings: each kind by name, and the actions on it that count. An empty list counts every action of that kind."}}
+             [:map-of :keyword [:vector [:string {:min 1 :max 64}]]]]]]])
 
 (def ^:private idle-help
   "R-12.25's safety net under the wait, said where a person sets it."
