@@ -21,6 +21,17 @@
   is open, which is a fact the engine already holds and not a status a
   model sets and forgets.
 
+  IN REVIEW IS THE SEVENTH, AND ONLY ITS CHANGE MOVES IT (ticket
+  2e869934). A code seat's submit moves the ticket its change was born
+  from `open -> in_review`: the work is out for review and the ticket
+  is out of every walk. It is not done. The change's red or conflicted
+  head, a close without a merge, a stall and a person's unstick send it
+  back through `return` to `open`, so the seat that wrote the change
+  wakes and walks it again with its change and feedback; the merge ends
+  it through `land` with the pull request as its sentence. All three
+  doors are the change's, inside its own transaction
+  (`only-its-change-moves-it`), and no hand at the wire takes them.
+
   GROOMED IS A STATE, AND A SEAT CANNOT REACH IT. The owner's ruling,
   2026-09-26: a task is groomed before it is picked up. So the birth
   lands in `draft`, where nothing walks, and `groom` is walled for a
@@ -77,7 +88,7 @@
 
 (def ^:private unfinished
   "The states a child may NOT be in when its parent ends."
-  #{:open :blocked :deferred})
+  #{:open :in_review :blocked :deferred})
 
 (def ^:private ended
   "The states a blocker or a parent may NOT be in when it is named."
@@ -306,9 +317,22 @@
   ;; endings and for nobody's hand. The wire, the render probe and
   ;; every rehearsal answer nil, so it renders refused, which is true.
   (let [{:keys [kind action]} (:within ctx)]
-    (if (and (= :ticket kind) (contains? #{:complete :drop} action))
+    (if (and (= :ticket kind) (contains? #{:complete :drop :land} action))
       (t/allow)
       (t/deny))))
+
+(defguardfn only-its-change-moves-it
+  {:reads [:within]
+   :open "No door clears this one. A ticket goes out for review when its change is submitted, and comes back when that change goes red, closes, stalls or is unstuck; the change moves it then, and a person who wants it sooner works the change."
+   :explain "A ticket under review is moved by the change it was built in and by no hand: the change's submit sends it out, its red head, close, stall or unstick sends it back, and its merge ends it."}
+  [_row _inp ctx]
+  ;; `only-an-ending-returns-a-ticket-to-draft`'s shape, one kind over:
+  ;; the door opens inside a `change` door's own transaction and for
+  ;; nobody's hand. The wire, the render probe and every rehearsal
+  ;; answer nil, so it renders refused, which is true.
+  (if (= :change (:kind (:within ctx)))
+    (t/allow)
+    (t/deny)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
@@ -391,6 +415,17 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :only-an-ending-returns-a-ticket-to-draft
              :because "last ticket it waits on"}})
+
+(defscenario a-person-does-not-take-a-ticket-out-of-review
+  "A ticket under review comes back when its change says so — red,
+   closed, stalled or unstuck — and no hand at the wire moves it. The
+   refusal says what moves it instead."
+  {:kind    :ticket
+   :attempt :return
+   :row     {:state :in_review :data a-draft-ticket}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :only-its-change-moves-it
+             :because "moved by the change"}})
 
 ;; ── the fields, spelled once and read by three doors ────────────────
 
@@ -502,7 +537,7 @@
    :plural "tickets"
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
-   :states [:draft :open :blocked :deferred :done :dropped]
+   :states [:draft :open :in_review :blocked :deferred :done :dropped]
    :initial :draft
    ;; NO TOMB. Both endings come back through `reopen`, a person's
    ;; door, to `draft`: a ticket ended wrongly is groomed again.
@@ -669,6 +704,47 @@
      :display {:label "Drop" :style :danger :order 7
                :description "Let this go — say why"}}
 
+    ;; ── THE CHANGE'S THREE DOORS (ticket 2e869934) ───────────────────
+    ;; Walked by the change born from this ticket, inside its own
+    ;; door, and by no hand: see `only-its-change-moves-it`. None is
+    ;; fenced, because the change names no version it read.
+    :review
+    {:from #{:open} :to :in_review
+     :guards [only-its-change-moves-it]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The change built for this ticket was submitted, so the ticket leaves the queue while its pull request is reviewed. Its change sends it back if the checks go red, and its merge ends it."}
+     :display {:label "Out for review" :order 11
+               :description "Its change was submitted — out of the queue while the pull request is reviewed"}}
+
+    ;; one door back for every way a review ends without a merge, so a
+    ;; seat's wake_on hears one action: `return`, not `resume` —
+    ;; `resume` is a person's door out of `deferred`, and a wake on it
+    ;; would read a person's not-now as the checks' red
+    :return
+    {:from #{:in_review} :to :open
+     :guards [only-its-change-moves-it]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Its change went red, closed without a merge, stalled or was put back to work, so the ticket is in the queue again and the seat that wrote the change walks it next. The change's next submit sends it out for review again."}
+     :display {:label "Back from review" :order 12
+               :description "Its change went red, closed, stalled or was put back to work — into the queue again"}}
+
+    ;; the merge's ending, from `in_review` or from `open` (a change a
+    ;; person merged while it was red). Not `complete`: that door is a
+    ;; hand's, and fenced by its draft.
+    :land
+    {:from #{:open :in_review} :to :done
+     :input close-input
+     :guards [only-its-change-moves-it children-are-finished]
+     :handler close-the-ticket
+     ;; change's `stick`, one kind over: only the engine walks this
+     ;; door and nobody composes the sentence in a box, and an `:edit`
+     ;; would fence a door the change reaches with no version in hand
+     :waives #{:edit-shape :large-effort}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Its pull request merged, and that is the ending on the record, with the pull request as its sentence. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
+     :display {:label "Merged" :order 13
+               :description "Its pull request merged — the work is done"}}
+
     :reopen
     {:from #{:done :dropped} :to :draft
      :guards [only-a-person-reopens]
@@ -694,4 +770,5 @@
                a-seat-does-not-reopen-a-ticket
                the-person-reopens-a-ticket
                a-finished-ticket-is-not-put-back-by-a-side-door
-               a-person-does-not-return-a-blocked-ticket-to-draft]})
+               a-person-does-not-return-a-blocked-ticket-to-draft
+               a-person-does-not-take-a-ticket-out-of-review]})
