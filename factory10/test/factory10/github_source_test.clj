@@ -771,3 +771,112 @@
          (gh/parse-repos "ckopsa/waymark, ckopsa/waymark-bench")))
   (is (= ["ckopsa/waymark"] (gh/parse-repos ""))
       "nothing named is the proving ground's own repository"))
+
+;; ── a red change is a state (ticket d1742908) ──────────────────────────
+
+(def ^:private a-new-head "9a8b7c6d5e4f30291827364554637281900aabbc")
+
+(defn- red-world
+  "The rig, a policy for its repository, and its one change minted and
+  then put at `submitted` with `rounds` spent. The head carries the
+  rig's red `test10 (shard 3)` and green `check-queue`."
+  [policy rounds]
+  (let [{:keys [engine] :as r} (rig)]
+    (inv/create! engine :repo_policy (merge {:repository repo} policy)
+                 {:principal a-person})
+    (pass! r)
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (assoc-in [:data :rounds] rounds))
+                             (:version row))))))
+    r))
+
+(deftest a-red-required-check-moves-a-submitted-change-to-failing
+  (let [{:keys [engine] :as r} (red-world {:required_checks ["test10 (shard 3)"
+                                                              "check-queue"]}
+                                          1)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :failing (:state row)))
+    (is (= ["test10 (shard 3)"] (get-in row [:data :failing_checks]))
+        "the red names ride on the row, and the green one does not")
+    (is (= 1 (:failing census)))
+    (testing "a second pass on the same red head moves nothing"
+      (let [census (pass! r)]
+        (is (= :failing (:state (the-change engine))))
+        (is (= 0 (:failing census)))))))
+
+(deftest a-pending-required-check-does-not-move-the-change
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)" "gate"]} 1)]
+    (testing "a required check that has not started is not finished"
+      (pass! r)
+      (is (= :submitted (:state (the-change engine)))))
+    (testing "nor is one still running, whatever is red beside it"
+      (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
+                      {:id 41752098400 :name "gate" :status "in_progress"})
+      (pass! r)
+      (is (= :submitted (:state (the-change engine)))))))
+
+(deftest a-green-later-head-moves-a-failing-change-back
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)"]} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (gh/seed-pull! state repo
+                   (assoc a-pull-request
+                          :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                          :updated_at "2026-09-18T14:00:00Z")
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo a-new-head
+                    {:id 41752098500 :name "test10 (shard 3)"
+                     :status "completed" :conclusion "success"
+                     :head_sha a-new-head})
+    (let [census (pass! r)
+          row (the-change engine)]
+      (is (= a-new-head (get-in row [:data :head_sha]))
+          "a failing row follows the head it is read against")
+      (is (= :submitted (:state row)))
+      (is (nil? (get-in row [:data :failing_checks])))
+      (is (= 1 (:recovered census))))))
+
+(deftest the-red-head-on-the-last-round-sticks-the-change
+  (let [{:keys [engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)"] :rounds_per_change 2}
+                   2)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :stuck (:state row))
+        "the seat's next submit would be refused at the ceiling, so the
+         house stops here and a person reads it")
+    (is (= ["test10 (shard 3)"] (get-in row [:data :failing_checks])))
+    (is (= 1 (:stuck census)))
+    (is (= 0 (:failing census)))))
+
+(deftest a-policy-with-no-required-check-requires-every-finished-check
+  (let [{:keys [engine] :as r} (red-world {} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (is (= ["test10 (shard 3)"]
+           (get-in (the-change engine) [:data :failing_checks])))))
+
+(deftest the-verdict-reads-the-required-checks
+  (let [done (fn [n c] {:check_name n :status "completed" :conclusion c})]
+    (is (= {:verdict :red :names ["a"]}
+           (forge/check-verdict ["a" "b"] [(done "a" "failure") (done "b" "success")])))
+    (is (= {:verdict :green}
+           (forge/check-verdict ["a"] [(done "a" "success") (done "x" "failure")]))
+        "a check the policy does not require does not make it red")
+    (is (nil? (forge/check-verdict ["a" "b"] [(done "a" "failure")]))
+        "a required check that has not run is not finished")
+    (is (nil? (forge/check-verdict ["a"] [(done "a" "cancelled")]))
+        "a cancel is neither red nor green")
+    (is (nil? (forge/check-verdict [] []))
+        "no check at all says nothing")))

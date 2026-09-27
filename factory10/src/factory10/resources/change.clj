@@ -24,6 +24,13 @@
   worktree: `submit`, `discard`, `stall` and `unstick`. `merged` is
   still the only tomb.
 
+  A RED CHANGE IS A STATE (ticket d1742908). `failing` is a submitted
+  change whose required checks all finished on its head and at least
+  one went red; `failing_checks` names them. The forge pass moves it
+  there and back — `fail`, `recover`, and `stick` at the round
+  ceiling — and nobody else does: all three are the mirror's, hidden
+  like the rest. A submit from `failing` is the seat's next round.
+
   `stuck` IS NOT AN ENDING, and `:over` below does not name it. An
   ending is a row whose work is over, and the engine shuts the
   household's doors on one. A stuck change is the opposite: it is work
@@ -338,6 +345,9 @@
           (update row :data merge
                   (cond-> {:branch branch
                            :worktree_dirty 0
+                           ;; a new round is a new head: the last
+                           ;; red names are not its (ticket d1742908)
+                           :failing_checks nil
                            :rounds (inc (long (or (get-in row [:data :rounds])
                                                   0)))}
                     (:commit answer) (assoc :head_sha
@@ -364,6 +374,18 @@
   ;; ceiling counts the rounds nobody has read yet; a change a person
   ;; has read and put back to work starts its count again.
   (assoc-in row [:data :rounds] 0))
+
+;; ── the checks went red, or green again (ticket d1742908) ───────────
+
+(defhandler write-the-failing-checks [row inp _ctx]
+  ;; The names ride on the row, so the seat and the person read which
+  ;; checks went red without opening GitHub. The machine moves the row.
+  (assoc-in row [:data :failing_checks] (vec (:failing_checks inp))))
+
+(defhandler clear-the-failing-checks [row _inp _ctx]
+  ;; A green head, or a new round: the names of the last red are not
+  ;; this head's, and a stale list would read as a live one.
+  (assoc-in row [:data :failing_checks] nil))
 
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
@@ -536,6 +558,17 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
+(defscenario a-seat-does-not-say-its-own-change-is-red
+  "`failing` is what the checks said, read by the engine. A seat that
+   could move its change there, or back to `submitted`, would be
+   writing the verdict of the checks itself."
+  {:kind    :change
+   :attempt :recover
+   :row     {:state :failing
+             :data (assoc a-pull-request :failing_checks ["gate"])}
+   :as      {:id "bench-seat" :type :agent}
+   :expect  {:refused :the-mirror-writes-this-row}})
+
 ;; ── :change — one pull request, mirrored ────────────────────────────
 
 (defresource change
@@ -545,8 +578,9 @@
    :nav :secondary
    ;; GitHub's own three, and the bench's two (waymark-fp62.6.3.2):
    ;; `submitted` is a change a seat has pushed at least one round of,
-   ;; and `stuck` is one the house stopped working.
-   :states [:open :submitted :stuck :merged :closed]
+   ;; and `stuck` is one the house stopped working. `failing` is a
+   ;; submitted change whose required checks went red (d1742908).
+   :states [:open :submitted :failing :stuck :merged :closed]
    :initial :open
    ;; ONE TOMB. A merged pull request is finished. A closed one is
    ;; not: GitHub reopens it, so `reopen` is a real door.
@@ -705,6 +739,13 @@
               {:label "Rounds spent"
                :help "How many times a seat has submitted this change. At the repository policy's ceiling the change stops and waits for a person."}}
      [:int {:min 0}]]
+    ;; written by the engine's `fail` and `stick`, cleared by
+    ;; `recover` and by the next submit (ticket d1742908)
+    [:failing_checks {:optional true
+                      :x-display
+                      {:label "The checks that went red"
+                       :help "The required checks that finished red on the head the seat last pushed. The house writes them when it moves the change to failing, and clears them when the head goes green or the seat submits again."}}
+     [:maybe [:vector [:string {:max 200}]]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     [:url {:optional true :x-display {:hidden true}}
@@ -816,8 +857,36 @@
      :display {:label "Observe" :order 10
                :description "The mirror writes what GitHub says about this pull request now"}}
 
+    ;; and once more for `failing` (ticket d1742908): a red change's
+    ;; head moves when a person pushes to it, and the next green head
+    ;; is read against the head the row names.
+    :observe_failing
+    {:from #{:failing} :to :failing
+     :guards [the-mirror-writes-this-row]
+     :handler observe-the-pull-request
+     :input [:map
+             [:title {:optional true :x-display {:raw true}}
+              [:maybe [:string {:max 400}]]]
+             [:head_sha {:optional true} [:maybe [:string {:max 64}]]]
+             [:draft {:optional true} [:maybe :boolean]]
+             [:mergeable {:optional true}
+              [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]
+             [:files_changed {:optional true} [:maybe [:int {:min 0}]]]
+             [:lines_added {:optional true} [:maybe [:int {:min 0}]]]
+             [:lines_removed {:optional true} [:maybe [:int {:min 0}]]]
+             [:touched_paths {:optional true}
+              [:maybe [:vector [:string {:max 400}]]]]
+             [:labels {:optional true} [:maybe [:vector [:string {:max 100}]]]]
+             [:review_state {:optional true}
+              [:maybe [:enum "pending" "approved" "changes_requested"
+                       "commented"]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Observe" :order 14
+               :description "The mirror writes what GitHub says about this pull request now"}}
+
     :merge
-    {:from #{:open :submitted :stuck} :to :merged
+    {:from #{:open :submitted :failing :stuck} :to :merged
      :guards [the-mirror-writes-this-row]
      ;; the merge COMPLETES the task this change was born from
      ;; (waymark-fp62.6.3.14). The handler carries the blast radius,
@@ -830,7 +899,7 @@
                :description "GitHub merged the pull request"}}
 
     :close
-    {:from #{:open :submitted :stuck} :to :closed
+    {:from #{:open :submitted :failing :stuck} :to :closed
      :guards [the-mirror-writes-this-row]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "GitHub closed this pull request without merging it. The way back is GitHub's own reopen, which the mirror follows with its reopen door."}
@@ -930,14 +999,67 @@
      :display {:label "Rebranch" :order 13
                :description "The house mints this change's branch again from the repository policy's pattern"}}
 
+    ;; ── THE CHECKS' VERDICT (ticket d1742908) ──────────────────────────
+    ;; The forge pass reads the checks on a submitted change's head
+    ;; against the repository policy and walks one of these three.
+    ;; They are the mirror's and hidden: no seat and no person says a
+    ;; change is red. A seat's way out of `failing` is its next
+    ;; `submit`, or `stall`.
+    :fail
+    {:from #{:submitted} :to :failing
+     :guards [the-mirror-writes-this-row]
+     :handler write-the-failing-checks
+     :input [:map
+             [:failing_checks [:vector {:min 1} [:string {:max 200}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The required checks finished red on this head. The way back is a green head, which the house reads on its next pass, or the seat's next submit."}
+     :display {:label "Failing" :order 15
+               :description "The required checks went red on the head the seat pushed"}}
+
+    :recover
+    {:from #{:failing} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler clear-the-failing-checks
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The required checks are green on the head the row names now, so the change is submitted again and the house merges it as it would any other."}
+     :display {:label "Green again" :order 16
+               :description "The required checks went green on a later head"}}
+
+    ;; the ROUND CEILING, read by the engine. A red head on the last
+    ;; round the policy gives is not sent back to the seat, whose next
+    ;; submit `under-the-round-ceiling` would refuse: it stops here,
+    ;; and the red names ride the log as the why a person reads.
+    :stick
+    {:from #{:submitted} :to :stuck
+     :guards [the-mirror-writes-this-row]
+     :handler write-the-failing-checks
+     :input [:map
+             [:why {:x-display {:widget "prose"
+                                :label "What went red"
+                                :help "The checks that finished red on the last round the policy gives."}}
+              [:string {:min 1 :max 480}]]
+             [:failing_checks [:vector {:min 1} [:string {:max 200}]]]]
+     ;; :large-effort — NO draft here, unlike `stall`. Only the engine
+     ;; walks this door and nobody composes the why in a box; and an
+     ;; `:edit` implies the version fence (waymark10.resource), which
+     ;; refuses the forge pass's own unfenced call.
+     :waives #{:edit-shape :large-effort}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it. The way back is a person's unstick, or grooming the ticket again."}
+     :display {:label "Stuck on red" :order 17
+               :description "The checks went red on the last round, and a person reads it next"}}
+
     ;; ── THE BENCH'S OWN DOORS (waymark-fp62.6.3.2) ─────────────────
     ;; These four are NOT the mirror's: a seat under a grant walks
     ;; them, and so does a person. Each one reaches the rig with the
     ;; engine's hand; the model holds the four reading and editing
     ;; powers and never these.
 
+    ;; from `failing` too (ticket d1742908): the seat's next round on a
+    ;; red change is the way back to `submitted`
     :submit
-    {:from #{:open :submitted} :to :submitted
+    {:from #{:open :submitted :failing} :to :submitted
      :input [:map
              [:why {:examples ["Fix the fixture's table list: the shard made no waymark10_test database, so every test10 case failed on connect."]
                     :x-display
@@ -995,7 +1117,7 @@
                :description "Put the worktree back to the branch head and lose every edit in it"}}
 
     :stall
-    {:from #{:open :submitted} :to :stuck
+    {:from #{:open :submitted :failing} :to :stuck
      :input [:map
              [:why {:examples ["The same test fails on the base commit, so this change is not the cause and I cannot fix it here."]
                     :x-display
@@ -1024,12 +1146,14 @@
    :links [{:rel "origin" :href "{data.url}" :external true
             :summary "The pull request, at GitHub"}]
    :deviations
-   ["A self-loop that serves two states is spelled twice: `observe` with `observe_submitted`, `discard` with `discard_submitted`, and `adopt` with `adopt_submitted`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
+   ["A self-loop that serves several states is spelled once for each: `observe` with `observe_submitted` and `observe_failing`, `discard` with `discard_submitted`, and `adopt` with `adopt_submitted`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
     "The round ceiling REFUSES and names the way to `stuck`; it does not move the row itself. Bead waymark-fp62.6.3.2's R-5 reads \"the row moves to stuck and the door names it\", and one transition cannot do both: a handler's refusal rolls back its own transaction, and an action's `:to` is one state. So `under-the-round-ceiling` refuses with `:remedies [:change/stall]`, and `stall` — a real door, with the seat's own sentence on it — makes the move."
-    "The clean-worktree check is the HANDLER's, not a guard's. The only honest reading of \"is there anything to submit\" is the rig's own `status`, and a guard that reached a wire would judge differently on a day Gate was dark. The handler asks, and refuses with a 409 that carries its remedy, so the refusal counts on the sitting exactly as a guard's does."]
+    "The clean-worktree check is the HANDLER's, not a guard's. The only honest reading of \"is there anything to submit\" is the rig's own `status`, and a guard that reached a wire would judge differently on a day Gate was dark. The handler asks, and refuses with a 409 that carries its remedy, so the refusal counts on the sitting exactly as a guard's does."
+    "A move into `failing` is counted against the round ceiling and does not add a round of its own (ticket d1742908). `submit` already adds one for each head a seat pushes, and each red head is one of those rounds; adding a second for the red would spend the ceiling twice as fast. So the forge pass reads `rounds` against the policy's ceiling at the red: under it the change goes to `failing`, at it the change goes to `stuck` through `stick`, with the red check names as its why."]
    :scenarios [a-model-does-not-move-a-pull-request
                the-source-moves-the-pull-request
                a-model-does-not-drop-the-branch
                a-model-discards-its-own-edits
                a-model-does-not-unstick-itself
-               the-person-puts-a-stuck-change-back-to-work]})
+               the-person-puts-a-stuck-change-back-to-work
+               a-seat-does-not-say-its-own-change-is-red]})

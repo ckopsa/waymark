@@ -10,8 +10,8 @@
   machine of its own — so the engine's Mirror has no part in this, and
   a protocol built for a sync machine would make this source answer
   questions GitHub is never asked: there is no push, no create and no
-  list here. `ForgeSource` has four verbs (what moved, one log tail,
-  one label, the call count), which is ThreadSource's own argument
+  list here. `ForgeSource` has five verbs (what moved, one log tail,
+  one label, the call count, the checks on one head), which is ThreadSource's own argument
   applied a fourth time. `forge/pass!` writes the rows.
 
   THE WIRE is the REST API v3, with the version header pinned. Five
@@ -621,7 +621,17 @@
            {:body {:labels [label]}})
     label)
 
-  (forge-calls [_] @calls))
+  (forge-calls [_] @calls)
+
+  (forge-checks [this repository head-sha]
+    ;; the same route the poll reads the red runs from, with nothing
+    ;; filtered: a pending and a green check are what the failing pass
+    ;; needs to tell "not yet" from "red" (ticket d1742908)
+    (mapv (fn [check]
+            {:check_name (clamp (:name check) 200)
+             :status (word (:status check))
+             :conclusion (word (:conclusion check))})
+          (check-runs! this repository head-sha))))
 
 (defn parse-repos
   "\"ckopsa/waymark, ckopsa/waymark-bench\" → the repositories to read,
