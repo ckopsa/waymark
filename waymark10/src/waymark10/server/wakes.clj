@@ -458,7 +458,7 @@
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
                           (if pending?
                             (assoc (:data schedule-row) :wake_pending true)
-                            (dissoc (:data schedule-row) :wake_pending))
+                            (dissoc (:data schedule-row) :wake_pending :wake_due_at))
                           (:next-flip-at schedule-row))))
   nil)
 
@@ -572,6 +572,37 @@
           (stamp-fired! eng row at false)
           true)))))
 
+(defn- walk-count
+  "How many rows the seat's sit would hand it, or nil when the seat
+  walks nothing or the count cannot be taken. The sit's own filter
+  (`mcp/walk-of`): the judgment's `queue` for a seat that says one,
+  and the walk's scope entry filter otherwise, both under the kind's
+  defaults through `count-under`. A judgment seat's count does not
+  subtract the subjects already judged, so it can only read high: a
+  zero here is a zero on the sit's page too."
+  [eng seat-row]
+  (when-some [walk (some->> (get-in seat-row [:data :walk]) str not-empty
+                            keyword)]
+    (when (serves? eng walk)
+      (if-some [judgment (raw-row eng :judgment
+                                  (some-> (get-in seat-row [:data :judgment])
+                                          str not-empty))]
+        (count-under eng walk (get-in judgment [:data :queue]))
+        (count-under eng walk (seats/walk-filter seat-row))))))
+
+(defn- empty-walk?
+  "Would a release put this seat's session in front of an empty queue?
+  Only a seat with a walk is asked, and not one that wakes when its
+  queue comes DOWN (`at_most`): its work begins on the empty queue. A
+  count that could not be taken is not zero, so that seat fires."
+  [eng seat-row]
+  (let [walk-rdef (some->> (get-in seat-row [:data :walk]) str not-empty
+                           keyword (get (inv/resources eng)))]
+    (and (some? walk-rdef)
+         (not (some #(some? (:at_most %))
+                    (seats/effective-wake-on seat-row walk-rdef)))
+         (= 0 (some-> (walk-count eng seat-row) long)))))
+
 (defn release!
   "The pending wake of one seat, released now that the damper has
   lifted: a fire with NO TEXT, so the session walks the queue rather
@@ -582,7 +613,12 @@
   settle has not passed (`settled?`, waymark-fp62.17), or when nobody
   linked the row or its chair. The flag is cleared only after a fire
   went out, so a seat behind a wall keeps its pending wake until the
-  wall lifts. → true when a fire went out."
+  wall lifts.
+
+  A seat whose walk has NO ROW left (`empty-walk?`) is not fired: the
+  wake is often the last sitting's own `complete`, and that sitting
+  took the row. Its flag is cleared without a fire, and one line says
+  so. → true when a fire went out."
   [eng seat-row schedule-row key ^Instant at]
   (when (and seat-row schedule-row
              (get-in schedule-row [:data :wake_pending])
@@ -591,9 +627,14 @@
              (settled? schedule-row at)
              (not (fired-recently? schedule-row (interval-of seat-row) at))
              (nil? (seats/open-sitting-for-seat eng (:id seat-row))))
-    (when (fire! eng (:id seat-row) nil key)
-      (stamp-fired! eng schedule-row at true)
-      true)))
+    (if (empty-walk? eng seat-row)
+      (do (write-pending! eng schedule-row false)
+          (warn! "seat " (:id seat-row) " has an empty queue — its pending"
+                 " wake is cleared without a fire")
+          nil)
+      (when (fire! eng (:id seat-row) nil key)
+        (stamp-fired! eng schedule-row at true)
+        true))))
 
 (defn- release-for-sitting!
   "A sitting closed or abandoned: the seat it belonged to may have a
