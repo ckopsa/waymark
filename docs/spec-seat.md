@@ -1056,12 +1056,30 @@ the highest rank first.
 
 First, the engine reads the repository from the seat. A seat's scope
 carries one entry for each bench power, and each entry carries a
-filter with a `repo` (R-12.30). When every bench entry names the same
-one repository, that repository is the seat's. The seat has no
-repository when an entry carries no filter, when two entries name two
-repositories, or when one value names more than one repository. The
-sit then gives no `bench`. It gives a `bench_note` that tells the
-person to name one repository in the scope, and the rows still ride.
+filter with a `repo` (R-12.30). The entries that WRITE — `bench.edit`,
+and `bench.pull` and `bench.feedback` where the scope names them —
+choose the repository: when every one of them names the same one
+repository, that repository is the seat's. A scope that names no
+writing entry chooses it from its reading entries by the same rule.
+The `bench.find` and `bench.read` entries may name that repository
+and others after a comma. They take no part in choosing, but each one
+must include the seat's repository, so a seat always reads what it
+edits. The seat has no repository when an entry carries no filter,
+when two writing entries name two repositories, when a writing entry's
+value names more than one repository, or when a reading entry leaves
+the seat's repository out. The sit then gives no `bench`. It gives a
+`bench_note` that says which entries must agree, and the rows still
+ride.
+
+The other repositories the reading entries name are the seat's
+reference repositories. The sit lists them beside the bench as
+`reference_repos`, with a `reference_note`: they are for reading only,
+and a call names one with `repo` and `branch`, the branch being the
+base of that repository's `repo_policy`. A reference repository with
+no active `repo_policy` is left out of the list, and the note says
+so. The bench still fills `repo` and `branch` only into a call that
+leaves them out, so a call that names a reference repository keeps
+its own values, and the grant's filter judges them.
 A seat whose scope names no bench power at all is not a code seat.
 Its sit answers no `change`, no `bench` and no `bench_note`. This
 holds whatever the seat walks, the `ci_run` walk of R-12.29
@@ -2348,7 +2366,12 @@ above. The cases:
     bench on the branch the policy's pattern made from the ask's own
     id, and the orientation. A second sitting on the same ask finds
     the first sitting's change and mints no other. A scope that does
-    not name one repository answers no bench and a `bench_note`. The
+    not name one repository answers no bench and a `bench_note`: a
+    `bench.edit` with a comma, and a `bench.read` that leaves out the
+    edit repository, each open none. A `bench.read` that names the
+    edit repository and another opens the bench on the edit
+    repository and lists the other in `reference_repos`; a read that
+    names it passes the grant, and an edit that names it does not. The
     next source pass adopts the row the seat built, and mints no
     second one. (R-12.32)
 50. The change the sit mints carries `born_from`: the walk kind, a

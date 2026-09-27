@@ -1338,10 +1338,12 @@
   session sat in it. `scope` is the seat's, so a test can give it two
   repositories or none."
   ([] (ask-world ask-scope))
-  ([scope]
+  ([scope] (ask-world scope (fn [_eng])))
+  ([scope prepare!]
    (let [st (state)
          eng (fresh-engine st)
          policy (a-policy! eng {})
+         _ (prepare! eng)
          asked (an-ask! eng "Put the size ceiling on the policy form")
          seat (open-seat! eng {:scope scope :walk "ask"})
          h (engine/handler eng)
@@ -1498,6 +1500,105 @@
           answer (:answer w)]
       (is (nil? (:bench answer)))
       (is (str/includes? (str (:bench_note answer)) "one repository")))))
+
+;; ── the repositories a seat only reads (R-12.32) ────────────────────
+;;
+;; A CODE SEAT MAY READ WHAT IT DOES NOT EDIT. The entries that write
+;; choose the seat's repository; `bench.find` and `bench.read` may name
+;; it and others beside it, and the others ride in the sit's answer as
+;; references the seat reads and never edits.
+
+(def ^:private a-reference "ckopsa/colton-tools")
+(def ^:private a-reference-without-policy "ckopsa/no-policy")
+
+(defn- reference-scope
+  "A scope whose writing entries name `edit` and whose reading entries
+  name `reads`."
+  [edit reads]
+  (into [{:kind "ask" :actions ["complete"]}
+         {:kind "change" :actions ["submit" "stall" "discard"]}]
+        (concat
+         (map (fn [token] {:kind token :actions [] :filter {:repo edit}})
+              ["bench.edit" "bench.pull"])
+         (map (fn [token] {:kind token :actions [] :filter {:repo reads}})
+              ["bench.find" "bench.read"]))))
+
+(defn- reference-world []
+  (ask-world (reference-scope a-repository
+                              (str a-repository "," a-reference ","
+                                   a-reference-without-policy))
+             (fn [eng]
+               (a-policy! eng {:repository a-reference
+                               :branch_pattern "colton/*"
+                               :base "trunk"}))))
+
+(deftest a-seat-that-reads-a-second-repository-opens-its-bench-on-the-one-it-edits
+  (let [w (reference-world)
+        answer (:answer w)]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (some? (:bench answer)) (str (:bench_note answer)))
+    (is (= a-repository (:repository (:data (first (changes-of (:eng w))))))
+        "the change is minted on the repository the writing entries name")
+    (is (= a-repository (:repo (:arguments (first (calls-of (:state w)
+                                                            "bench__prepare"))))))
+    (testing "and the sit lists the other one as a reference"
+      (is (= [a-reference] (:reference_repos answer))
+          "a reference with no active repo_policy is left out")
+      (is (str/includes? (str (:reference_note answer))
+                         (str a-reference " on trunk"))
+          "the note names the base branch a call must name")
+      (is (str/includes? (str (:reference_note answer)) "reading"))
+      (is (str/includes? (str (:reference_note answer))
+                         (str a-reference-without-policy " has no active repo_policy"))
+          "and it says which reference was left out"))))
+
+(deftest a-read-of-a-reference-passes-the-grant-and-an-edit-of-it-does-not
+  (let [w (reference-world)
+        power! (fn [tool args]
+                 (call! (:h w) (:sid w) "waymark_power"
+                        {:tool tool :arguments args}))]
+    (testing "a read naming the reference passes, and keeps its own values"
+      (let [r (power! "bench__read" {:repo a-reference :branch "trunk"
+                                     :path "deploy-mcp/README.md"})
+            sent (:arguments (last (calls-of (:state w) "bench__read")))]
+        (is (false? (:isError r)) (text-of r))
+        (is (= a-reference (:repo sent))
+            "the bench fills its own repo only into a call that leaves
+             it out")
+        (is (= "trunk" (:branch sent))
+            "and never puts its own branch on another repository")))
+    (testing "a read naming a repository the scope does not is refused"
+      (let [before (count (calls-of (:state w) "bench__read"))
+            r (power! "bench__read" {:repo "ckopsa/elsewhere" :branch "main"
+                                     :path "README.md"})]
+        (is (true? (:isError r)))
+        (is (= before (count (calls-of (:state w) "bench__read")))
+            "refused before any wire")))
+    (testing "an edit naming the reference is refused"
+      (let [r (power! "bench__edit" {:repo a-reference :branch "trunk"
+                                     :path "deploy-mcp/README.md"
+                                     :old "a" :new "b"})]
+        (is (true? (:isError r)))
+        (is (empty? (calls-of (:state w) "bench__edit"))
+            "a reference is for reading only")))))
+
+(deftest a-reference-scope-the-engine-cannot-read-one-repository-from-opens-no-bench
+  (testing "a bench.edit with a comma still opens no bench"
+    (let [w (ask-world (reference-scope (str a-repository "," a-reference)
+                                        (str a-repository "," a-reference)))
+          answer (:answer w)]
+      (is (false? (:isError (:sat w))) (text-of (:sat w)))
+      (is (nil? (:bench answer)))
+      (is (str/includes? (str (:bench_note answer)) "one repository"))
+      (is (empty? (changes-of (:eng w))))))
+  (testing "a bench.read that leaves out the edit repository opens no bench"
+    (let [w (ask-world (reference-scope a-repository a-reference))
+          answer (:answer w)]
+      (is (false? (:isError (:sat w))) (text-of (:sat w)))
+      (is (nil? (:bench answer)))
+      (is (str/includes? (str (:bench_note answer)) "bench.read")
+          "the note says which entries must agree")
+      (is (empty? (calls-of (:state w) "bench__prepare"))))))
 
 ;; ── the branch, minted again (bead waymark-fp62.6.3.11) ─────────
 ;;
