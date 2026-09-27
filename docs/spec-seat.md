@@ -1037,6 +1037,24 @@ the change when the checks are green. No person taps merge. A forge
 that refuses auto-merge gives a finding in `feedback`. The pull
 request stands.
 
+The policy's `merge_by` says who merges a green change. `github`, the
+default, is the paragraph above: the forge's own auto-merge. `house`
+is for a repository where the forge cannot: GitHub's auto-merge needs
+a public repository or a paid plan, so a private repository on a free
+plan never arms it, and every change would wait for a person. With
+`merge_by: house` the pull request block carries `merge_by`, and the
+rig arms no auto-merge. The engine asks instead. Every five minutes
+it calls the rig's `merge` for each `submitted` change with a number
+and a head, in a repository whose policy says `auto_merge: true` and
+`merge_by: house`, with the policy's `required_checks` and
+`merge_method`. A `merged` answer needs nothing more: the mirror moves
+the change to `merged`. `waiting` is asked again at the next pass.
+`red` is left alone, because the seat's feedback already carries the
+red checks. A refusal (a moved head, a conflict, a draft) is logged
+once for that head and not asked again until the head moves. A policy
+that says `merge_by: house` and `auto_merge: true` must name at least
+one required check: the house never merges what nothing tested.
+
 **R-12.32** The sit must give a bench to a seat that walks a queue of
 asks. This rule is for a code seat, as R-12.29 and R-12.31 are. A
 person says what the house must build in a row of a queue: a `task` in
