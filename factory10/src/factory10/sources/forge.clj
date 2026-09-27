@@ -50,7 +50,10 @@
      against the policy's required checks and walks `fail`, `recover`
      or, on the last round, `stick` (ticket d1742908). A change the
      forge reads as `conflicted` is red too, as `merge-conflict`, with
-     the paths the bench's trial merge names (ticket 5f12e772).
+     the paths the bench's trial merge names (ticket 5f12e772). A
+     submitted change whose bench landing failed is red before any
+     check is read, as `landing:<step>`, with the step's output in
+     `landing_error` (ticket 92871afb).
   7. It prints one census line: the calls, the rows minted and the
      rows moved.
 
@@ -593,14 +596,95 @@
                                 (take conflict-path-limit))
                        paths)))))
 
+;; ── a landing that failed (ticket 92871afb) ─────────────────────────
+;;
+;; The rig lands a submit in steps: it commits, pushes, and opens the
+;; pull request. When a step fails, nothing reached GitHub, so no check
+;; will ever run on the head and the change would sit at `submitted`
+;; for good. The bench's `feedback` names the landing. A failed one is
+;; one more red name, `landing:<step>`, and the step's output rides
+;; beside it in `landing_error`; the move is the red move, so it counts
+;; against the round ceiling and wakes the seat as a red check does. A
+;; landing still running leaves the row alone, and the seat's next
+;; submit is a landing of its own and brings the row back to
+;; `submitted`.
+
+(def ^:private landing-error-chars 4000)
+
+(def ^:private failed-landing-states #{"failed" "failure" "error"})
+
+(def ^:private running-landing-states
+  #{"running" "pending" "queued" "in_progress" "started"})
+
+(defn- text-of [v]
+  (some-> v str str/trim not-empty))
+
+(defn- state-text [m]
+  (let [v (or (:state m) (:status m))]
+    (str/lower-case (if (keyword? v) (name v) (str v)))))
+
+(defn- step-name [step]
+  (text-of (or (:name step) (:step step) (:id step))))
+
+(defn- output-of [m]
+  (some #(text-of (get m %)) [:output :error :stderr :log :tail :message]))
+
+(defn- tail-of [s n]
+  (if (> (count s) n) (subs s (- (count s) n)) s))
+
+(defn landing-verdict
+  "What the bench's landing of the last submit says: {:verdict :red
+  :names [\"landing:<step>\"] :error \"…\"} when a step failed, with the
+  tail of that step's output; {:verdict :running} while it still runs;
+  nil for a landing that finished well, or no landing at all."
+  [landing]
+  (when (map? landing)
+    (let [st (state-text landing)]
+      (cond
+        (contains? failed-landing-states st)
+        (let [steps (filter map? (when (sequential? (:steps landing))
+                                   (:steps landing)))
+              named (text-of (:failed_step landing))
+              failed (or (when named
+                           (some #(when (= named (step-name %)) %) steps))
+                         (some #(when (contains? failed-landing-states
+                                                 (state-text %))
+                                  %)
+                               steps))
+              step (or named (step-name failed) (text-of (:step landing))
+                       "unknown")
+              name' (str "landing:" step)
+              out (or (output-of failed) (output-of landing))]
+          (cond-> {:verdict :red
+                   :names [(subs name' 0 (min (count name') 200))]}
+            out (assoc :error (tail-of out landing-error-chars))))
+
+        (contains? running-landing-states st)
+        {:verdict :running}
+
+        :else nil))))
+
+(defn landing-of
+  "The landing the bench's feedback names for this change's branch,
+  asked with the engine's own hand, or nil. A rig that does not answer,
+  or refuses, says nothing about the landing, and the checks decide."
+  [eng row policy]
+  (let [answer (bench/ask {:services (:services eng)} :feedback
+                          {:repo (str (get-in row [:data :repository]))
+                           :branch (bench/branch-of row policy)})]
+    (when (and (map? answer) (not (bench/refused answer)))
+      (:landing answer))))
+
 (defn- failing-move
   "The one door the verdict opens on this row, as [door input], or nil.
   A red head under the round ceiling goes to `failing`; a red head on
   the last round goes to `stuck` with the names as its why; a green
   head brings a failing change back to `submitted`. `conflicts` is the
-  list of conflicting paths, written beside the names when there is one."
+  list of conflicting paths, written beside the names when there is one;
+  a failed landing's output rides as the verdict's `:error`."
   [row verdict policy conflicts]
-  (let [names (:names verdict)]
+  (let [names (:names verdict)
+        error (:error verdict)]
     (case [(state-of row) (:verdict verdict)]
       [:submitted :red]
       (if (>= (long (or (get-in row [:data :rounds]) 0))
@@ -609,9 +693,11 @@
                        "gives: " (str/join ", " names) ".")]
           [:stick (cond-> {:why (subs why 0 (min (count why) why-chars))
                            :failing_checks names}
-                    (seq conflicts) (assoc :conflicts conflicts))])
+                    (seq conflicts) (assoc :conflicts conflicts)
+                    error (assoc :landing_error error))])
         [:fail (cond-> {:failing_checks names}
-                 (seq conflicts) (assoc :conflicts conflicts))])
+                 (seq conflicts) (assoc :conflicts conflicts)
+                 error (assoc :landing_error error))])
       [:failing :green] [:recover {}]
       nil)))
 
@@ -639,17 +725,27 @@
          (if-not (and head policy)
            census
            (try
-             (let [verdict (with-conflict
-                            (check-verdict (bench/required-checks-of policy)
-                                           (forge-checks source repo head))
-                            row)
+             (let [;; a submitted change's landing first (ticket
+                   ;; 92871afb): a push that failed has no checks to
+                   ;; wait on, and one still landing has none yet
+                   landing (when (= :submitted (state-of row))
+                             (landing-verdict (landing-of eng row policy)))
+                   verdict (case (:verdict landing)
+                             :red landing
+                             :running nil
+                             (with-conflict
+                               (check-verdict (bench/required-checks-of policy)
+                                              (forge-checks source repo head))
+                               row))
                    ;; the rig is asked only when a conflict will move
                    ;; the row, never for a row that stays where it is
-                   conflicts (when (and (conflicted? row)
+                   conflicts (when (and (nil? landing)
+                                        (conflicted? row)
                                         (= :submitted (state-of row)))
                                (conflict-paths eng row))]
-               (if-some [[door input] (failing-move row verdict policy
-                                                    conflicts)]
+               (if-some [[door input] (when verdict
+                                        (failing-move row verdict policy
+                                                      conflicts))]
                  (do (inv/invoke! eng :change (str (:id row)) door input
                                   (as-opts))
                      (update census (moved-counts door) inc))

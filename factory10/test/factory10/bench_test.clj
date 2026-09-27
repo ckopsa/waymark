@@ -1298,6 +1298,28 @@
       (is (nil? (get-in row [:data :failing_checks]))
           "the names of the last red are not the new head's"))))
 
+(deftest a-seat-submits-again-after-a-failed-landing
+  ;; ticket 92871afb: a push the rig could not land moves the change
+  ;; to `failing` with the step's output, and the next submit is a
+  ;; landing of its own
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))]
+    (inv/invoke! (:eng w) :change id :fail
+                 {:failing_checks ["landing:push"]
+                  :landing_error "! [remote rejected] without `workflow` scope"}
+                 {:principal mirror/source-principal})
+    (is (= "failing" (name (:state (change-row w)))))
+    (is (= "! [remote rejected] without `workflow` scope"
+           (get-in (change-row w) [:data :landing_error]))
+        "the step's output rides on the row for the seat to read")
+    (let [r (submit! w {:why "Drop the workflow edit the token cannot push."})
+          row (change-row w)]
+      (is (false? (:isError r)) (text-of r))
+      (is (= "submitted" (name (:state row))))
+      (is (nil? (get-in row [:data :failing_checks])))
+      (is (nil? (get-in row [:data :landing_error]))
+          "the last landing's error is not the new round's"))))
+
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
 (def ^:private person-policy {:auto_merge false})
