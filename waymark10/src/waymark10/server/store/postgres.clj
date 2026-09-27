@@ -717,6 +717,23 @@
         id])
       nil))
 
+  (delete-rows! [_ tx kind ids]
+    (let [table (get @tables kind)]
+      ;; chunked, so a long purge never builds one statement with more
+      ;; parameters than the wire takes
+      (reduce (fn [n chunk]
+                (+ (long n)
+                   (long (or (:next.jdbc/update-count
+                              (jdbc/execute-one!
+                               tx
+                               (into [(str "DELETE FROM " table " WHERE id IN ("
+                                           (str/join ", " (repeat (count chunk) "?"))
+                                           ")")]
+                                     chunk)))
+                             0))))
+              0
+              (partition-all 1000 (map str ids)))))
+
   (due-flips [_ tx kind now limit]
     (let [table (get @tables kind)]
       (mapv row->map

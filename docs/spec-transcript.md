@@ -461,6 +461,26 @@ The proxy header is recorded as a punt.
 - Transcripts of sessions that sit in no seat. The key comes from the
   sit, so a session with no sit has no transcript.
 
+## 13a. Deviations in the build
+
+- The two kinds live in `server/transcripts.clj`, not `seats.clj`
+  (R-3.1). held_calls.clj is the precedent for a core kind with its
+  own door and its own sweep.
+- The transcript is born at the sit, not in the sitting's commit
+  (R-3.6). A key is the only way a line arrives, and the sit is where
+  the key is answered. A sitting born by the leash keeper or by hand
+  has no hook that could send a line.
+- The hook redacts by plain replacement inside each raw line (R-7.2).
+  A line with nothing to redact keeps its exact bytes, so its chain is
+  the same on every Stop, and a replaced secret keeps the line valid
+  JSON because the replacement is placed where the secret's own JSON
+  text stood.
+- The engine adds the hook's redaction counts only from a post that
+  starts at the held line. A resend that overlaps held lines carries
+  counts for lines already counted.
+- `transcript_entry` carries `n`, the line's place among all the
+  transcript's lines, as its default sort (R-3.5 names two keys).
+
 ## 14. The owner's decisions, 2026-09-27
 
 1. The trade in section 10 is accepted: detection now, and the proxy

@@ -134,6 +134,13 @@
     "The maintenance write: the document and the clock index only —
     version untouched, updated_at stamped, NO transition logged.
     Derivation maintenance is not a write (phase 6).")
+  (delete-rows! [st tx kind ids]
+    "Delete these rows of the kind outright — no transition, no
+    tombstone. The one caller is a record kind's retention purge
+    (server/transcripts): a transcript's lines past their seat's
+    `transcript_days` go, and the transcript row keeps each file's
+    count and chain as the proof of what existed. → the number
+    deleted.")
   (due-flips [st tx kind now limit]
     "Rows whose next_flip_at <= now, oldest flip first, FOR UPDATE —
     the clock sweep's page.")

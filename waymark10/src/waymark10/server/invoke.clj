@@ -1935,6 +1935,36 @@
 
 (declare create-in-tx!)
 
+(defn insert-quiet!
+  "The engine's QUIET birth door: insert one row of `kind` inside an
+  existing transaction, with NO transition and no guard pass. → the
+  row as stored (decoded shape, no :summary).
+
+  One caller, and it is the reason the door exists: a transcript's
+  lines (server/transcripts, docs/spec-transcript.md R-5.7). A run of
+  a few thousand lines arrives in one post, and the post is the write
+  worth recording; a transition per line would put the transcript in
+  the log a second time, and the log is the record of decisions, not
+  of bytes. The row is stamped exactly as `create-in-tx!` stamps one
+  (its id, the initial state, version 1, the kind's shape, the owner
+  and the kind's current law) so it reads, renders and filters like
+  any other row of its kind.
+
+  The data is the caller's, validated by the caller: this door runs
+  no schema check, because its one caller builds every field itself
+  and a refusal here would lose a line the hook already sent."
+  [engine tx kind data {:keys [principal id]}]
+  (let [rdef (rdef-of engine kind)
+        row {:id (or id (str (random-uuid)))
+             :state (:initial rdef)
+             :version 1
+             :data data
+             :shape (:shape rdef 1)
+             :owner (:id principal)
+             :law-revision (create-law-revision engine rdef kind)}]
+    (store/insert-row! (:storage engine) tx kind (encode-row rdef row))
+    row))
+
 (defn create-mints!
   "The engine's BULK birth door — create! with :mint? true over MANY
   bodies, chunk-transacted: one commit per chunk of 200 instead of
