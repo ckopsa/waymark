@@ -461,6 +461,68 @@
         (is (nil? (:seat sent)))
         (is (nil? (:sitting sent)))))))
 
+;; ── the worktree the sit prepared rides every bench call ─────────────
+
+(def ^:private a-branch "bench/one")
+
+(defn- bound-world
+  "The world with a sitting bound to a fresh session, the binding
+  carrying `bench` as the sit puts it there — nil for a sitting whose
+  sit prepared no worktree."
+  [bench]
+  (let [w (world [{:kind "bench.read" :actions [] :filter {:repo a-repo}}
+                  {:kind "bench.find" :actions [] :filter {:repo a-repo}}])
+        eng (:eng w)
+        seat (a-seat! eng)
+        model (a-model! eng)
+        sitting (:row (inv/create! eng :sitting
+                                   {:seat (:id seat) :model (:id model)
+                                    :grant (:grant w)}
+                                   {:principal clerk}))
+        sid (mcp/open-session! eng)
+        _ (mcp/bind-session! eng sid (cond-> {:seat (:id seat) :sitter clerk
+                                              :sitting (:id sitting)}
+                                       bench (assoc :bench bench)))]
+    (assoc w :session (assoc (:session w) :mcp-session-id sid))))
+
+(deftest a-bench-call-in-a-bound-sitting-carries-the-prepared-repo-and-branch
+  (let [w (bound-world {:repo a-repo :branch a-branch})]
+    (testing "find and read name neither, and reach the rig on the
+              prepared worktree with no refusal"
+      (doseq [[tool args] [["bench__find" {:mode "tree"}]
+                           ["bench__read" {:path "src/a.clj"}]]]
+        (let [r (power! w {:tool tool :arguments args})
+              sent (last-arguments w)]
+          (is (false? (:isError r)) (text-of r))
+          (is (= tool (:tool (last (calls w)))))
+          (is (= a-repo (:repo sent)) "the repository the sit prepared")
+          (is (= a-branch (:branch sent)) "and its branch")))
+      (is (= 2 (count (calls w)))))
+
+    (testing "a call that names its own branch keeps it"
+      (let [r (power! w {:tool "bench__read"
+                         :arguments {:branch "bench/two" :path "src/a.clj"}})]
+        (is (false? (:isError r)) (text-of r))
+        (is (= "bench/two" (:branch (last-arguments w))))
+        (is (= a-repo (:repo (last-arguments w))))))
+
+    (testing "an explicit repository outside the filter is still refused"
+      (let [before (count (calls w))
+            r (power! w {:tool "bench__read"
+                         :arguments {:repo another-repo :path "src/a.clj"}})]
+        (is (true? (:isError r)) (text-of r))
+        (is (str/includes? (text-of r) "bench.read"))
+        (is (= before (count (calls w)))
+            "nothing new reached the rig")))))
+
+(deftest a-sitting-with-no-prepared-bench-gets-nothing-filled
+  (let [w (bound-world nil)
+        r (power! w {:tool "bench__read"
+                     :arguments {:repo a-repo :path "src/a.clj"}})]
+    (is (false? (:isError r)) (text-of r))
+    (is (nil? (:branch (last-arguments w)))
+        "today's behavior: the call carries what it named and no more")))
+
 ;; ── the token is a tool name too (bead waymark-fp62.6.3.12) ─────
 ;;
 ;; A SEAT READS TOKENS. The sit, the grant and the ask all name

@@ -261,7 +261,10 @@ Nothing else goes in the instructions (R-12.10).
    `feedback` (R-12.31): the pull request's state, and one finding
    for each failed step, each red status and each review comment.
 5. The session reads the orientation, reads the ticket, and reads
-   the files the ticket names. It edits with `bench.edit`. Each call goes
+   the files the ticket names. It edits with `bench.edit`. The session
+   names neither `repo` nor `branch`: the engine fills both from the
+   worktree the sit prepared, before the grant judges the call, and a
+   call that names its own keeps what it named. Each call goes
    through the seat's grant: a path the `repo_policy` denies is
    refused by the rig, and a repository outside the filter is refused
    by the engine before the rig sees it (R-12.30).
