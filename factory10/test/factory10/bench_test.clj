@@ -1294,12 +1294,101 @@
   (let [w (submitted-world house-policy)
         st (:state w)
         seen (atom {})]
-    (answer! st "bench__merge" {:refused "head_moved"
-                                :reason "the head is not the one named"})
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
     (bench/merge-green! (:eng w) seen)
     (bench/merge-green! (:eng w) seen)
     (is (= 1 (count (calls-of st "bench__merge")))
         "the rig refused this head once, and the pass remembers it")))
+
+(deftest a-moved-head-is-not-parked
+  ;; ticket a95c3d63: only a refusal a new pass cannot fix parks a head
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:refused "head_moved"
+                                :reason "the head is not the one named"})
+    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w) seen)
+    (is (= 2 (count (calls-of st "bench__merge")))
+        "a moved head is asked again next pass")))
+
+;; ── a branch behind its base (ticket a95c3d63) ──────────────────────────────
+
+(defn- mirror-says!
+  "The mirror, writing what GitHub says about the submitted change now."
+  [w input]
+  (inv/invoke! (:eng w) :change (str (:id (change-row w))) :observe_submitted
+               input {:principal mirror/source-principal}))
+
+(deftest a-behind-green-change-is-brought-up-to-date-once-per-head
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! (:eng w) seen)
+    (let [calls (calls-of st "bench__update_branch")]
+      (is (= 1 (count calls)))
+      (is (= {:repo a-repository :number 31 :head_sha a-commit}
+             (:arguments (first calls)))
+          "the pull request and the head it may bring forward"))
+    (bench/merge-green! (:eng w) seen)
+    (is (= 1 (count (calls-of st "bench__update_branch")))
+        "no second update at the same head, however busy main is")
+    (testing "the new head goes green and a later pass merges it"
+      (mirror-says! w {:head_sha "b-commit" :mergeable "clean"})
+      (answer! st "bench__merge" {:state "merged"})
+      (bench/merge-green! (:eng w) seen)
+      (is (= "b-commit"
+             (:head_sha (:arguments (last (calls-of st "bench__merge"))))))
+      (is (= 1 (count (calls-of st "bench__update_branch")))))))
+
+(deftest a-merge-refused-as-out-of-date-is-brought-up-to-date
+  (let [w (submitted-world house-policy)
+        st (:state w)]
+    (answer! st "bench__merge"
+             {:refused "merge_refused"
+              :reason "Required status check \"gate\" is expected."})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! (:eng w) (atom {}))
+    (is (= 1 (count (calls-of st "bench__update_branch"))))))
+
+(deftest a-draft-or-conflicted-behind-change-is-not-updated
+  (testing "a conflicted branch is left to the failing path"
+    (let [w (submitted-world house-policy)
+          st (:state w)]
+      (mirror-says! w {:mergeable "conflicted"})
+      (answer! st "bench__merge" {:state "behind"})
+      (bench/merge-green! (:eng w) (atom {}))
+      (is (empty? (calls-of st "bench__update_branch")))))
+  (testing "a draft is not brought forward"
+    (let [w (submitted-world house-policy)
+          st (:state w)]
+      (mirror-says! w {:draft true})
+      (answer! st "bench__merge" {:state "behind"})
+      (bench/merge-green! (:eng w) (atom {}))
+      (is (empty? (calls-of st "bench__update_branch")))))
+  (testing "a draft the rig refuses is parked and never updated"
+    (let [w (submitted-world house-policy)
+          st (:state w)
+          seen (atom {})]
+      (answer! st "bench__merge" {:refused "draft"})
+      (bench/merge-green! (:eng w) seen)
+      (bench/merge-green! (:eng w) seen)
+      (is (= 1 (count (calls-of st "bench__merge"))))
+      (is (empty? (calls-of st "bench__update_branch"))))))
+
+(deftest an-update-branch-the-rig-lacks-is-asked-again
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "behind"})
+    ;; no answer scripted: the fake rig says unknown_tool
+    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w) seen)
+    (is (= 2 (count (calls-of st "bench__update_branch")))
+        "a missing power is not remembered, so the next pass asks again")))
 
 (deftest a-waiting-change-and-a-missing-power-are-asked-again
   (let [w (submitted-world house-policy)
