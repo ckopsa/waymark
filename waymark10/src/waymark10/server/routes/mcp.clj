@@ -152,6 +152,19 @@
     (router/mind-the-wall! eng (:seat vis))
     {:principal sitter :visibility vis}))
 
+(defn- origin-of
+  "The scheme and host this request arrived under, the router's
+  agent-invite reading one door over: a forwarded scheme first, then
+  the request's own. An engine that knows its public address better
+  says so with [:services :transcripts :public-origin], which the sit
+  reads first."
+  [req]
+  (let [proto (or (get-in req [:headers "x-forwarded-proto"])
+                  (some-> (:scheme req) name)
+                  "https")
+        host (get-in req [:headers "host"] "")]
+    (str proto "://" host)))
+
 (defn- rpc-post [eng call gate-rpc]
   (fn [req]
     (let [principal (named-principal! eng req)
@@ -171,7 +184,12 @@
                              :visibility (router/visibility-of req)})
                     ;; waymark_sit binds THIS session, so it has to know
                     ;; which one it is
-                    sid (assoc :mcp-session-id sid))
+                    sid (assoc :mcp-session-id sid)
+                    ;; …and where it arrived: the sit answers the
+                    ;; transcript door as an absolute address, because
+                    ;; the hook that posts to it has no other way to
+                    ;; learn one (docs/spec-transcript.md R-4.2)
+                    true (assoc :origin (origin-of req)))
           with-session (fn [resp]
                          (cond-> resp
                            minted (assoc-in [:headers session-header] minted)))]

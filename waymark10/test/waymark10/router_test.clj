@@ -123,6 +123,10 @@
             "member" "model"
             "plan" "role" "schedule" "seat"
             "sitting" "subscription" "task"
+            ;; docs/spec-transcript.md: and what a sitting said, one
+            ;; row per sitting and one per line, core's beside the
+            ;; sitting
+            "transcript" "transcript_entry"
             "verdict"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))

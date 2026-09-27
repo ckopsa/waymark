@@ -148,6 +148,7 @@
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.server.transcripts :as transcripts]
             [waymark10.text :as text]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -2975,6 +2976,13 @@
             ;; g' · the sitting the router counts against, opened here
             ;; because nobody else opens one for a keyed session
             sitting (open-sitting! eng sitter grant seat model-row harness)
+            ;; g'' · the transcript's key (docs/spec-transcript.md R-4):
+            ;; born with the first sit, a fresh key at each sit after,
+            ;; and nil when the seat keeps no transcript of this
+            ;; sitting. The hook reads it out of THIS answer, as it
+            ;; reads the sitting's id.
+            transcript-key (when sitting
+                             (transcripts/issue-key! eng seat sitting))
             ;; h · the bind, BEFORE the walk is read: the session is
             ;; the seat's from this moment, whatever the queue answers
             _ (bind-session! eng sid {:seat seat-id :sitter sitter
@@ -3022,6 +3030,13 @@
                                (when (get walk "judgment")
                                  judgment-walk-note)
                                (when said change-beside-the-walk-note))})
+            transcript-key
+            (assoc "transcript"
+                   {"url" (transcripts/upload-url
+                           (or (get-in eng [:services :transcripts :public-origin])
+                               (:origin session)
+                               ""))
+                    "key" transcript-key})
             walk (assoc "walk" walk)
             said (assoc "change" said)
             bench (merge bench)

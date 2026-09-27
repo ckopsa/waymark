@@ -81,7 +81,11 @@
            ;; core's for the same reason: a `powers` entry that says
            ;; `approval person` is policy on a core kind, and the row
            ;; it waits in cannot be a module an engine leaves out.
-           :mcp_server :held_call}
+           :mcp_server :held_call
+           ;; …and the transcript of a sitting and its lines
+           ;; (docs/spec-transcript.md): the sit answers the key the
+           ;; hook uploads with, and the seat carries the policy
+           :transcript :transcript_entry}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -107,6 +111,7 @@
     ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call
+             :transcript :transcript_entry
              :judgment :verdict}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
@@ -219,6 +224,10 @@
                ;; hook posts to every turn (R-12.25): the same body and
                ;; the same credential, onto a sitting that stays open
                "/api/-/sittings/tally"
+               ;; …and the third, which takes a sitting's transcript
+               ;; (docs/spec-transcript.md R-5.1): its own key, one
+               ;; transcript's lines
+               "/api/-/sittings/transcript"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
@@ -261,6 +270,8 @@
                  "/api/-/sittings/close"
                  ;; and the tally, its sibling (R-12.25)
                  "/api/-/sittings/tally"
+                 ;; and the transcript door (spec-transcript R-5.1)
+                 "/api/-/sittings/transcript"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))

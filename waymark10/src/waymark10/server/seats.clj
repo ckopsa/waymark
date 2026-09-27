@@ -979,6 +979,7 @@
   [:charter :instructions :mode :scope :substitute_drop :held_for
    :substitute_for
    :standing_ttl_seconds :cadence_seconds :sitting_idle_seconds
+   :keep_transcripts :transcript_days
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :delegates])
@@ -1349,6 +1350,39 @@
   seat rather than on the principal."
   "Who sits here. A fired seat is the seat's work day: it wakes on its cadence, on a wake or on your fire, and a Routine's run does the work. An interactive seat is its training day: you sit in it yourself, the corrections you make are the record a step down the ladder reads, and nothing fires it — a Routine's run that tries is refused.")
 
+(def keep-transcripts-values
+  "What a seat keeps of what its sittings said (docs/spec-transcript.md
+  R-3.7). `fired` is the default: a Routine's run is the office's own
+  work, and an interactive sitting holds a person's own words, so it
+  is kept only when the person says so on the seat."
+  ["none" "fired" "all"])
+
+(def ^:private keep-transcripts-choices
+  {"none" "Keep no transcript: the sit answers no upload key"
+   "fired" "Keep the transcripts of fired runs, not of a person's own sittings"
+   "all" "Keep every sitting's transcript, a person's own included"})
+
+(def ^:private keep-transcripts-help
+  "Whether this seat's sittings keep what they said. A kept transcript is readable only by a grant that names it, and the sweep deletes its lines after the days below.")
+
+(def ^:private transcript-days-help
+  "How long the lines of a sealed transcript are kept. After that the sweep deletes them; the transcript row keeps each file's line count and chain, so the record still says what existed.")
+
+(def keep-transcripts-field
+  [:keep_transcripts {:default "fired"
+                      :examples ["fired"]
+                      :x-display {:label "Keep what its sittings said"
+                                  :choices keep-transcripts-choices
+                                  :help keep-transcripts-help}}
+   (into [:enum] keep-transcripts-values)])
+
+(def transcript-days-field
+  [:transcript_days {:default 30
+                     :examples [30]
+                     :x-display {:label "Days a transcript is kept"
+                                 :help transcript-days-help}}
+   [:int {:min 1 :max 3650}]])
+
 (def ^:private idle-help
   "R-12.25's safety net under the wait, said where a person sets it."
   "How long an interactive sitting may go untallied before the engine closes it. The Stop hook tallies after every turn, so this is the gap that says somebody shut the laptop — the sweep then closes the sitting with the last tally's counts rather than leaving it open forever. It means nothing to a fired seat.")
@@ -1652,6 +1686,8 @@
                             {:label "How long a sitting may idle, in seconds"
                              :help idle-help}}
      [:int {:min 60 :max 86400}]]
+    keep-transcripts-field
+    transcript-days-field
     [:budget_usd_per_week {:examples [5M]
                            :x-display
                            {:label "Fuel for seven days, in dollars"
@@ -1892,6 +1928,8 @@
                             {:label "How long a sitting may idle, in seconds"
                              :help idle-help}}
      [:int {:min 60 :max 86400}]]
+    keep-transcripts-field
+    transcript-days-field
     [:budget_usd_per_week {:examples [5M]
                            :x-display
                            {:label "Fuel for seven days, in dollars"
@@ -2051,6 +2089,8 @@
                                      {:label "How long a sitting may idle, in seconds"
                                       :help idle-help}}
               [:int {:min 60 :max 86400}]]
+             keep-transcripts-field
+             transcript-days-field
              [:budget_usd_per_week {:examples [5M]
                                     :x-display
                                     {:label "Fuel for seven days, in dollars"
@@ -2129,6 +2169,7 @@
                       :held_for
                       :substitute_for :standing_ttl_seconds :cadence_seconds
                       :sitting_idle_seconds
+                      :keep_transcripts :transcript_days
                       :budget_usd_per_week :sitting_budget_tokens
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on

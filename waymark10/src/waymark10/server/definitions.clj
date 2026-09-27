@@ -124,6 +124,7 @@
             [waymark10.server.problems :as p]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.server.transcripts :as transcripts]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -1163,21 +1164,30 @@
 (defn sweep-seats!
   "The boot's seat pass (§ 7, R-12.3), run after the kind fingerprints
   because it judges scopes against the registry those fingerprints
-  just settled. → {:stale n :abandoned n :closed n :drifting n}.
+  just settled. → {:stale n :abandoned n :closed n :drifting n
+  :sealed n :purged n}.
 
   Every step is guarded against a kind this engine does not serve: an
   engine assembled without the seats module sweeps nothing and says
   nothing, which is what a module you left out should cost."
   [eng]
   (let [stale (sweep-scopes! eng)
-        sittings (sweep-sittings! eng)]
+        sittings (sweep-sittings! eng)
+        ;; AFTER the sittings, so a sitting this pass just ended starts
+        ;; its transcript's grace now rather than on the next pass
+        ;; (docs/spec-transcript.md R-9)
+        transcripts (transcripts/sweep! eng)]
     {:stale stale
      :abandoned (:abandoned sittings)
      ;; R-12.25's half of the same pass: an interactive sitting
      ;; somebody walked away from is CLOSED with its last tally, not
      ;; abandoned, because it did report what it spent
      :closed (:closed sittings)
-     :drifting (report-drift! eng)}))
+     :drifting (report-drift! eng)
+     ;; the transcripts: sealed after their sitting's grace, and their
+     ;; lines purged after the seat's `transcript_days` (R-9.1, R-9.4)
+     :sealed (:sealed transcripts)
+     :purged (:purged transcripts)}))
 
 (defn boot-revise!
   "Fingerprint every resident application kind, revise where the hash

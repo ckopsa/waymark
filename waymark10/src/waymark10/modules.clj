@@ -157,6 +157,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
+            [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.routes.gate :as gate-routes]
             [waymark10.server.routes.law-sweep :as law-sweep-routes]
@@ -243,6 +244,17 @@
              ;; which is core's already.
              {:kind :held_call :enroll :always
               :kinds (fn [_] [held-calls/held-call])}
+             ;; the transcript of a sitting and its lines
+             ;; (docs/spec-transcript.md): core's beside the sitting
+             ;; for the sitting's own reason. The sit answers the key
+             ;; the hook uploads with, and the seat carries the policy
+             ;; that says whether a transcript is kept at all, so an
+             ;; engine that serves seats cannot leave out the kind that
+             ;; records what they said.
+             {:kind :transcript :enroll :always
+              :kinds (fn [_] [transcripts/transcript])}
+             {:kind :transcript_entry :enroll :always
+              :kinds (fn [_] [transcripts/transcript-entry])}
              ;; the judgment and the verdict (waymark-fp62.11) are
              ;; core's for the seat's own reason: the seat — core's —
              ;; carries a typed ref to the judgment it walks, so an

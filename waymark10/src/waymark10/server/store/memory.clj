@@ -395,6 +395,12 @@
                            :updated-at (Instant/now))))
     nil)
 
+  (delete-rows! [_ _tx kind ids]
+    (let [ids (set (map str ids))
+          held (count (filter ids (keys (get-in @state [:tables kind]))))]
+      (swap! state update-in [:tables kind] #(apply dissoc % ids))
+      held))
+
   (due-flips [_ _tx kind now limit]
     (into []
           (take limit)

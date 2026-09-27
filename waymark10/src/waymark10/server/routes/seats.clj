@@ -76,6 +76,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
+            [waymark10.server.transcripts :as transcripts]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -643,11 +644,66 @@
                                     report {:principal (sitter-of seat)}))]
       (router/json-response 200 (close-doc seat closed)))))
 
+;; ── the transcript door (docs/spec-transcript.md § 5) ──────────────
+
+(def ^:private transcript-path
+  "The close's and the tally's sibling, one word over (R-5.1)."
+  "/api/-/sittings/transcript")
+
+(def ^:private transcript-key-header
+  "`Waymark-Transcript-Key`, read lowercased as ring hands it over. A
+  header and not a bearer, for `seat-key-header`'s reason."
+  "waymark-transcript-key")
+
+(defn- transcript-body
+  "The posted body, gunzipped when the hook says so (R-5.2), as JSON.
+  Broken JSON is 422 here, `report-of`'s reason: to a hook there is
+  one kind of mistake at this door, its own body."
+  [req]
+  (let [gzip? (some-> (get-in req [:headers "content-encoding"]) str/lower-case
+                      (str/includes? "gzip"))
+        b (:body req)
+        text (try
+               (cond
+                 (nil? b) nil
+                 (and gzip? (bytes? b))
+                 (slurp (java.util.zip.GZIPInputStream.
+                         (java.io.ByteArrayInputStream. ^bytes b)) :encoding "UTF-8")
+                 (and gzip? (instance? java.io.InputStream b))
+                 (slurp (java.util.zip.GZIPInputStream. ^java.io.InputStream b)
+                        :encoding "UTF-8")
+                 (string? b) b
+                 :else (slurp b :encoding "UTF-8"))
+               (catch Exception _
+                 (invalid! :body "did not decompress; send gzip or plain JSON.")))]
+    (try (router/read-body (assoc req :body text))
+         (catch Exception _
+           (invalid! :body "must be JSON; it did not parse.")))))
+
+(defn- sitting-transcript
+  "POST /api/-/sittings/transcript — lines of a sitting's transcript,
+  appended (docs/spec-transcript.md R-5).
+
+  ANONYMOUS ON PURPOSE, `sitting-close`'s reasoning verbatim: the key
+  in the header is the whole credential, and it answers for one
+  transcript and nothing else. The order of the refusals is the order
+  of what they cost: the key, the body, then the row
+  (`transcripts/upload!`)."
+  [eng]
+  (fn [req]
+    (let [key (get-in req [:headers transcript-key-header])
+          _ (when-not (transcripts/transcript-by-key eng key)
+              (throw (p/problem :not-found 404 "Not found"
+                                {:detail transcripts/no-transcript})))
+          body (transcript-body req)]
+      (router/json-response 200 (transcripts/upload! eng key body)))))
+
 (defn routes [eng]
   {:module :seats
    :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
             [close-path {:post (sitting-close eng)}]
-            [tally-path {:post (sitting-tally eng)}]]})
+            [tally-path {:post (sitting-tally eng)}]
+            [transcript-path {:post (sitting-transcript eng)}]]})
 
 ;; ── what discover shows a sitter (R-7.4, R-12.3) ────────────────────
 
