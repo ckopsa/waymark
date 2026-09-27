@@ -51,7 +51,12 @@
      or, on the last round, `stick` (ticket d1742908). A change the
      forge reads as `conflicted` is red too, as `merge-conflict`, with
      the paths the bench's trial merge names (ticket 5f12e772).
-  7. It prints one census line: the calls, the rows minted and the
+  7. For each active policy whose repository the forge refused to
+     list (401, 403 or 404), it writes the status, the route and the
+     time on the policy row through the hidden `note_source` door, and
+     clears that note the first pass the repository answers again
+     (ticket 116dfb0d).
+  8. It prints one census line: the calls, the rows minted and the
      rows moved.
 
   A HEAD THAT MOVES (bead waymark-fp62.6.9). A run ran on one commit.
@@ -80,6 +85,7 @@
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
             [factory10.mirror :as mirror]
+            [factory10.resources.repo-policy :as policy]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
   (:import (java.util.concurrent CountDownLatch TimeUnit)))
@@ -113,7 +119,11 @@
     document carries the `ci_run` kind's own fields plus
     `:change_id` (the change it ran on) and whatever the forge needs
     to find the log later. `:complete?` is false when a repository
-    did not answer; the source holds its cursor where it was.")
+    did not answer; the source holds its cursor where it was. A source
+    may also answer `:answered` (the repositories that did answer) and
+    `:refusals` ({repository {:status :route}} for each whose pulls
+    listing refused the token), which the pass writes on the policy
+    rows (ticket 116dfb0d).")
   (forge-log-tail [s check]
     "→ {:excerpt \"…\" :note \"…\" } for one check document: the tail
     of the failed job's log. A log the forge will not hand over in
@@ -726,7 +736,50 @@
 (def ^:private fresh-census
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
-   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :refused 0})
+   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0
+   :refused 0})
+
+;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
+;; whose pulls listing the token cannot read costs its rows a pass and
+;; a log line, every pass, and nothing in the engine says so: its
+;; changes are never adopted, have no number, and so the house's merge
+;; and the person's merge ask both skip them silently. The pass writes
+;; the refusal on the repository's own policy row, where a person reads
+;; it, and clears it the first pass that reads the repository again. A
+;; note that already says the same status for the same route is left
+;; alone, so the log carries one transition when a repository goes dark
+;; and one when it comes back.
+
+(defn- source-note-pass!
+  [eng refusals answered census log-fn]
+  (let [answered (set answered)]
+    (reduce
+     (fn [census row]
+       (let [repo (str (get-in row [:data :repository]))
+             stored (str (get-in row [:data :source_note]))
+             refusal (get refusals repo)
+             input (cond
+                     refusal
+                     (when-not (str/starts-with?
+                                stored
+                                (policy/source-note-head (:status refusal)
+                                                         (:route refusal)))
+                       {:answered (:status refusal) :route (:route refusal)})
+
+                     (and (contains? answered repo) (not (str/blank? stored)))
+                     {})]
+         (if (nil? input)
+           census
+           (try
+             (inv/invoke! eng :repo_policy (str (:id row)) :note_source
+                          input (as-opts))
+             (update census :noted inc)
+             (catch Exception e
+               (log-fn "the policy of " repo " was refused its source note ("
+                       (ex-message e) ")")
+               (update census :refused inc))))))
+     census
+     (bench/policies eng :active))))
 
 (defn pass!
   "One pass of the factory mirror.
@@ -746,10 +799,12 @@
         log-fn (or log-fn warn!)]
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
-    (let [{:keys [changes checks repositories complete?]} (forge-poll source)
+    (let [{:keys [changes checks repositories complete? answered refusals]}
+          (forge-poll source)
           census (assoc fresh-census
                         :repositories (count repositories)
                         :complete? (boolean complete?))
+          census (source-note-pass! eng refusals answered census log-fn)
           census (change-pass! eng changes census log-fn)
           census (run-pass! eng source checks census log-fn)
           census (stale-pass! eng changes census log-fn)
@@ -770,6 +825,8 @@
                 (str ", " (:failing census) " changes failing, "
                      (:recovered census) " green again, "
                      (:stuck census) " stuck on red"))
+              (when (pos? (long (:noted census)))
+                (str ", " (:noted census) " policy source notes written"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
               (when-not (:complete? census)

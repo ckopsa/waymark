@@ -477,12 +477,29 @@
                  {:files (files! this repo number)
                   :reviews (reviews! this repo number)}))))
 
+(defn- pulls-route [repo]
+  (str "GET /repos/" repo "/pulls"))
+
+(def unreadable-statuses
+  "The answers to the pulls listing that mean the token cannot read the
+  repository (ticket 116dfb0d): not signed in, not allowed, or a
+  private repository GitHub will not admit exists."
+  #{401 403 404})
+
 (defn- repo-pass!
   "One repository's whole read: the window of pull requests, each one's
   document, and the red check runs of every open head. A throw here is
   one repository's failure, which the poll catches."
   [this repo floor]
-  (let [pulls (list-pulls! this repo floor)
+  (let [pulls (try (list-pulls! this repo floor)
+                   (catch clojure.lang.ExceptionInfo e
+                     ;; the listing is the one route that says whether
+                     ;; the token reads this repository at all, so its
+                     ;; refusal carries the route out to the poll
+                     (throw (ex-info (ex-message e)
+                                     (assoc (ex-data e)
+                                            :route (pulls-route repo))
+                                     e))))
         changes (mapv #(pull-pass! this repo %) pulls)
         checks (into []
                      (mapcat
@@ -582,7 +599,13 @@
                                  (warn! "the repository " repo
                                         " did not answer (" (ex-message e)
                                         "); its rows keep their stored truth")
-                                 {:repo repo :ok? false})))
+                                 (let [{:keys [status route]} (ex-data e)]
+                                   (cond-> {:repo repo :ok? false}
+                                     (and route
+                                          (contains? unreadable-statuses
+                                                     status))
+                                     (assoc :refusal {:status status
+                                                      :route route}))))))
                         repos)
           answered (filterv :ok? answers)
           complete? (= (count answered) (count answers))]
@@ -593,6 +616,9 @@
       {:changes (into [] (mapcat :changes) answered)
        :checks (into [] (mapcat :checks) answered)
        :repositories (mapv :repo answers)
+       :answered (mapv :repo answered)
+       :refusals (into {} (keep #(when-some [r (:refusal %)] [(:repo %) r]))
+                       answers)
        :complete? complete?}))
 
   (forge-log-tail [this check]
@@ -741,6 +767,15 @@
 
 (defn down! [state down?] (swap! state assoc :down (boolean down?)))
 
+(defn refuse!
+  "Make every route of one repository answer this status, as GitHub
+  does for a token that cannot read it; nil lifts the refusal."
+  [state repo status]
+  (swap! state update :refused
+         (fn [m] (if status (assoc m repo status) (dissoc m repo)))))
+
+(def ^:private repo-path #"/repos/([^/]+/[^/]+)(?:/.*)?")
+
 (defn requests
   "Every request the source made, oldest first."
   [state]
@@ -784,6 +819,10 @@
             :anonymous (boolean anonymous)})
     (when (:down @state)
       (throw (ex-info "github unreachable" {})))
+    (when-some [status (some->> path (re-matches repo-path) second
+                                (get (:refused @state)))]
+      (throw (ex-info (str "github answered " status " for " method " " path)
+                      {:status status})))
     (let [st @state
           repo-of (fn [m] (get-in st [:repos (second m)]))]
       (cond
