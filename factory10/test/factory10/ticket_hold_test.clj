@@ -68,8 +68,10 @@
                           :repo "ckopsa/waymark"}})
         _ (assert (= 201 (:status made)) (pr-str (json made)))
         id (id-of made)
+        ;; complete is one-way, so it is fenced: it names the version
+        etag (get-in (get-row h "tickets" id) [:meta :etag])
         done (req h :post (str "/api/tickets/" id "/-/complete")
-                  {:headers person
+                  {:headers (assoc person "if-match" etag)
                    :body {:close_reason "Merged: github:ckopsa/waymark#41."}})]
     (assert (= 200 (:status done)) (pr-str (json done)))
     id))
