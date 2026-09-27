@@ -1040,10 +1040,11 @@
                                 :help "The checks that finished red on the last round the policy gives."}}
               [:string {:min 1 :max 480}]]
              [:failing_checks [:vector {:min 1} [:string {:max 200}]]]]
-     ;; the why is composed prose, so it keeps a draft as `stall` does
-     ;; (the usability battery's :large-effort check)
-     :edit {:draft {:shared true :live true}}
-     :waives #{:edit-shape}
+     ;; :large-effort — NO draft here, unlike `stall`. Only the engine
+     ;; walks this door and nobody composes the why in a box; and an
+     ;; `:edit` implies the version fence (waymark10.resource), which
+     ;; refuses the forge pass's own unfenced call.
+     :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it. The way back is a person's unstick, or grooming the ticket again."}
      :display {:label "Stuck on red" :order 17
