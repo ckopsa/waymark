@@ -1203,6 +1203,81 @@
         "the policy leaves the merge to a person, so the rig opens the
          pull request and turns nothing on")))
 
+;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
+
+(def ^:private house-policy
+  {:merge_by "house" :required_checks ["gate"] :merge_method "squash"})
+
+(deftest a-policy-that-merges-by-the-house-tells-the-rig-to-arm-nothing
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng house-policy)
+        land (:land (:arguments (first (calls-of st "bench__enroll"))))]
+    (is (= {:auto_merge true :merge_by "house"} (:pull_request land))
+        "the rig reads merge_by and arms no GitHub auto-merge: the
+         engine merges this repository's green changes itself")))
+
+(deftest the-house-never-merges-what-nothing-tested
+  (let [eng (fresh-engine (state))]
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (a-policy! eng {:merge_by "house" :required_checks []}))
+        "a house merge with no required check is refused at the create")
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (a-policy! eng {:merge_by "house"}))
+        "…and so is one that names no list at all")))
+
+(defn- submitted-world
+  "A world whose one change the seat has submitted: state submitted,
+  number 31, head a-commit."
+  [policy-extra]
+  (let [w (world policy-extra {})]
+    (submit! w {:why "Fix the fixture's table list."})
+    (is (= "submitted" (name (:state (change-row w)))))
+    w))
+
+(deftest a-green-change-in-a-house-merged-repository-gets-one-merge-call
+  (let [w (submitted-world house-policy)
+        st (:state w)]
+    (answer! st "bench__merge" {:state "merged"})
+    (is (= 1 (bench/merge-green! (:eng w) (atom {}))))
+    (let [calls (calls-of st "bench__merge")]
+      (is (= 1 (count calls)) "one attempt for the change in one pass")
+      (is (= {:repo a-repository :number 31 :head_sha a-commit
+              :required_checks ["gate"] :merge_method "squash"}
+             (:arguments (first calls)))
+          "the pull request, the head it may merge, and the policy's
+           own checks and method — never a model's"))))
+
+(deftest a-github-merged-repository-gets-no-merge-call
+  (let [w (submitted-world {})]
+    (is (= 0 (bench/merge-green! (:eng w) (atom {}))))
+    (is (empty? (calls-of (:state w) "bench__merge"))
+        "GitHub's own auto-merge does this repository's merging")))
+
+(deftest a-refused-head-is-not-asked-again
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:refused "head_moved"
+                                :reason "the head is not the one named"})
+    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w) seen)
+    (is (= 1 (count (calls-of st "bench__merge")))
+        "the rig refused this head once, and the pass remembers it")))
+
+(deftest a-waiting-change-and-a-missing-power-are-asked-again
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (testing "the rig has no merge yet: the pass logs it and retries"
+      (bench/merge-green! (:eng w) seen)
+      (bench/merge-green! (:eng w) seen)
+      (is (= 2 (count (calls-of st "bench__merge")))))
+    (testing "the checks are still running: asked again next pass"
+      (answer! st "bench__merge" {:state "waiting"})
+      (bench/merge-green! (:eng w) seen)
+      (is (= 3 (count (calls-of st "bench__merge")))))))
+
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)
         eng (fresh-engine st)

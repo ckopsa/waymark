@@ -172,6 +172,19 @@
 (defn rounds-of [policy]
   (long (or (get-in policy [:data :rounds_per_change]) default-rounds)))
 
+(defn house-merges?
+  "Does this policy say the house merges a green change (ticket
+  4dfb00f6)? Only `merge_by: house`; an absent field is GitHub's."
+  [policy]
+  (= "house" (some-> (get-in policy [:data :merge_by]) str)))
+
+(defn required-checks-of [policy]
+  (into [] (comp (map str) (remove str/blank?))
+        (get-in policy [:data :required_checks])))
+
+(defn merge-method-of [policy]
+  (or (some-> (get-in policy [:data :merge_method]) str not-empty) "merge"))
+
 (defn branch-of
   "The branch this change is worked on: the one the row names, else
   the policy's pattern with the change's own id in place of the `*`.
@@ -262,13 +275,19 @@
   pull request it opened, so the gate merges the change when the
   checks are green and no person taps. A repository whose branch rules
   refuse auto-merge is a finding in `feedback`, and the pull request
-  stands."
+  stands.
+
+  `merge_by` rides the block only when the policy says `house` (ticket
+  4dfb00f6): the rig then arms no GitHub auto-merge, and the engine's
+  merge pass below asks the rig to merge each green change instead."
   [row]
   (cond-> {:target (base-of row)
            :rebase false
            :stages []}
     (not (false? (get-in row [:data :opens_pr])))
-    (assoc :pull_request {:auto_merge (boolean (get-in row [:data :auto_merge]))})))
+    (assoc :pull_request
+           (cond-> {:auto_merge (boolean (get-in row [:data :auto_merge]))}
+             (house-merges? row) (assoc :merge_by "house")))))
 
 (defn enrol-args
   "What the rig's `enroll` is told about this repository: the name it
@@ -390,6 +409,98 @@
                  " did not land (" (ex-message e) "); the next pass tries "
                  "again"))))))
 
+;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
+;;
+;; GitHub's auto-merge needs a public repository or a paid plan, so a
+;; private repository on a free plan never arms it and every green
+;; change waits for a person. A policy that says `merge_by: house`
+;; hands that merge to the engine: at every pass, each submitted change
+;; with a number and a head is offered to the rig's `merge`, which
+;; merges only when the policy's required checks are green on that
+;; head. The mirror then moves the change to `merged`, as it does for
+;; any merge, and that completes the ticket.
+
+(def missing-power-refusals
+  "The refusals that say the rig has no `merge` yet (ticket d7cf3f9c in
+  ckopsa/waymark-bench). The pass logs them and asks again next time,
+  rather than remembering the head as refused."
+  #{"unknown_tool" "no_such_tool" "not_found"})
+
+(defn- rdef-of-kind [eng kind] (get (inv/resources eng) kind))
+
+(defn- submitted-changes
+  "Every `change` row in `submitted`, decoded — empty in an engine that
+  declares no change kind."
+  [eng]
+  (if-some [rd (rdef-of-kind eng :change)]
+    (let [st (:storage eng)]
+      (mapv #(inv/decode-row rd %)
+            (store/with-tx st
+              (fn [tx] (store/query-rows st tx :change {:state :submitted}
+                                         {:limit 1000})))))
+    []))
+
+(defn merge-args
+  "What the rig's `merge` is told: the pull request, the head it may
+  merge and nothing else, and the policy's checks and method."
+  [change policy]
+  {:repo (str (get-in change [:data :repository]))
+   :number (get-in change [:data :number])
+   :head_sha (str (get-in change [:data :head_sha]))
+   :required_checks (required-checks-of policy)
+   :merge_method (merge-method-of policy)})
+
+(defn merge-green!
+  "One merge pass. Every submitted change with a number and a head,
+  whose repository's active policy says `auto_merge` and `merge_by:
+  house`, gets ONE `merge` call with the engine's own hand. `seen` is
+  an atom of change id → the head the rig last refused: a refused head
+  is logged once and never offered again, and a new head is offered
+  afresh. `merged` needs nothing here, because the mirror moves the
+  row; `waiting` is asked again next pass; `red` is left, because the
+  seat's feedback already carries the red checks. Throws nothing.
+  → the number of `merge` calls made."
+  [eng seen]
+  (let [ctx {:services (:services eng)}
+        by-repo (into {}
+                      (keep (fn [p]
+                              (when-some [repo (some-> (get-in p [:data :repository])
+                                                       str not-empty)]
+                                [repo p])))
+                      (policies eng :active))
+        asked (volatile! 0)]
+    (doseq [change (submitted-changes eng)
+            :let [id (str (:id change))
+                  number (get-in change [:data :number])
+                  head (some-> (get-in change [:data :head_sha]) str not-empty)
+                  policy (get by-repo (str (get-in change [:data :repository])))]
+            :when (and number head policy
+                       (not (false? (get-in policy [:data :auto_merge])))
+                       (house-merges? policy)
+                       (seq (required-checks-of policy))
+                       (not= head (get @seen id)))]
+      (try
+        (vswap! asked inc)
+        (let [answer (ask ctx :merge (merge-args change policy))
+              why (refused answer)]
+          (cond
+            (nil? answer)
+            (warn! "the merge of " id " had no answer; the next pass asks again")
+
+            (contains? missing-power-refusals why)
+            (warn! "the rig has no merge yet (" why "); the next pass asks again")
+
+            why
+            (do (swap! seen assoc id head)
+                (warn! "the rig refused to merge " id " at " head " ("
+                       (reason-of answer) "); this head is not asked again"))
+
+            :else nil))
+        (catch Exception e
+          (warn! "the merge of " id " failed (" (ex-message e)
+                 "); the next pass asks again"))))
+    @asked))
+
 (def default-enrol-seconds
   "How often the retry pass runs. The discover sweep's own cadence, in
   seconds: a repository the bench did not take is a repository nobody
@@ -401,9 +512,14 @@
   on a daemon thread (the forge pass's own shape). The first pass is
   one interval after the start, so a boot writes nothing. The wiring
   owns the lifecycle and elects the one holder per database; a suite
-  calls `enroll-unenrolled!` directly."
+  calls `enroll-unenrolled!` directly.
+
+  The house's merge pass (`merge-green!`) rides the same beat and the
+  same election, so one process per database asks the rig to merge,
+  and its memory of refused heads lives as long as that holder."
   [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}}]
   (let [stop (CountDownLatch. 1)
+        seen (atom {})
         t (Thread. ^Runnable
                    (fn []
                      (loop []
@@ -412,6 +528,10 @@
                          (try (enroll-unenrolled! eng)
                               (catch Exception e
                                 (warn! "the enrolment pass failed ("
+                                       (ex-message e) ")")))
+                         (try (merge-green! eng seen)
+                              (catch Exception e
+                                (warn! "the merge pass failed ("
                                        (ex-message e) ")")))
                          (recur))))
                    "factory10-bench-enrol")]
