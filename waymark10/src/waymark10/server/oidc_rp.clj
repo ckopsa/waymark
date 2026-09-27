@@ -739,6 +739,14 @@
               (and post? (= (:uri req) "/api/-/sittings/transcript"))
               (handler req)
 
+              ;; the close, the transcript door's sibling (spec-seat.md
+              ;; R-12.17): the same hook closes its own sitting with
+              ;; the same transcript key, or a standing seat key, and
+              ;; the door refuses anything else with one sentence.
+              ;; POST only, as above; the tally stays behind the gate.
+              (and post? (= (:uri req) "/api/-/sittings/close"))
+              (handler req)
+
               ;; OAuth discovery (routes/mcp.clj, RFC 9728): the
               ;; document that tells an anonymous client where to stop
               ;; being anonymous. Closing it behind the gate would make

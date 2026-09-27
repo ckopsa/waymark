@@ -306,11 +306,18 @@
       (is (= 200 (:status (a {:request-method :post
                               :uri "/api/-/sittings/transcript"
                               :headers {"waymark-transcript-key" "k"}}))))
-      (is (= 401 (:status (a (get-req "/api/-/sittings/transcript")))))
-      (is (= 401 (:status (a {:request-method :post
+      (is (= 401 (:status (a (get-req "/api/-/sittings/transcript"))))))
+    (testing "the close is open to a POST and to nothing else (spec-seat.md
+              R-12.17): the transcript key or the seat key in its header
+              is the whole credential, and the door judges it"
+      (is (= 200 (:status (a {:request-method :post
                               :uri "/api/-/sittings/close"
+                              :headers {"waymark-transcript-key" "k"}}))))
+      (is (= 401 (:status (a (get-req "/api/-/sittings/close")))))
+      (is (= 401 (:status (a {:request-method :post
+                              :uri "/api/-/sittings/tally"
                               :headers {}})))
-          "the close stays behind the gate"))))
+          "the tally stays behind the gate"))))
 
 (deftest no-rp-config-is-the-identity-wrap
   (let [a ((rp/wrap {:oidc (oidc/config {:issuer issuer :audience audience

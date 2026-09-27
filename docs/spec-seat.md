@@ -823,10 +823,21 @@ carries an id has a report of its own coming, so a report that
 names a different run does not close it. When every open sitting
 carries an id, the engine closes the newest.
 
+The door also takes the transcript key (spec-transcript.md R-4.5) in
+the header `Waymark-Transcript-Key`, when no seat key is presented.
+That key names one sitting, so no pairing rule runs: the engine
+closes that sitting through the same `close` door, as its seat's
+sitter. A fired run holds no seat key, because its firing's key is
+spent at the sit, so its hook closes this way, after the transcript
+upload. When that close answers 2xx the hook does not hold the stop;
+any other answer falls back to the hold of the second path, once.
+The door is outside the require-auth gate for a POST, as the
+transcript door is.
+
 The door gives four answers. It answers 200 with the closed sitting
 and its `cost_usd`. It answers 404 with `No seat answers this key.`
-when the key is wrong or absent; the refusal is uniform, as R-12.14
-makes it. It answers 409 with ``The seat `name` has no open
+when the key is wrong or absent, a seat key or a transcript key
+alike; the refusal is uniform, as R-12.14 makes it. It answers 409 with ``The seat `name` has no open
 sitting.`` when a second report comes in, or when nothing sat. It
 answers 422 when the body is malformed.
 
