@@ -667,7 +667,8 @@
 
 (defn- held-instead
   "The 202 a hold becomes, or nil when `e` is not a hold. `id` is nil
-  at a create door."
+  at a create door. A hold with nobody to wait on is no hold: it
+  throws the refusal again, with the sentence that says so."
   [eng opts kind action id body e]
   (let [d (ex-data e)]
     (when (and (= :guard-refused (:waymark10/problem d))
@@ -678,11 +679,19 @@
             hooks (inv/render-hooks eng)
             ctx {:principal p :now ((:now-fn eng))
                  :read (:read hooks) :find (:find hooks)}
+            owner (delegation/hold-owner ctx)
+            _ (when (nil? owner)
+                (let [detail (str/join " " (remove str/blank?
+                                                  [(str (:detail d))
+                                                   delegation/no-person]))]
+                  (throw (ex-info (str (:title d) ": " detail)
+                                  (assoc d :detail detail)
+                                  e))))
             author (delegation/author-seat ctx)
             row (held/hold-door! eng {:kind kind :action action :id id
                                       :body body
                                       :caller (:id p)
-                                      :owner (delegation/owner-of ctx)
+                                      :owner owner
                                       :author (some-> author :id str)
                                       :if-match (:if-match opts)
                                       :why (:detail d)})

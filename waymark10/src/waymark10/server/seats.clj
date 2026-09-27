@@ -2906,6 +2906,16 @@
                                  :label "The firing key's hash"
                                  :spelled-by-hand "The SHA-256 of the firing key that opened this sitting. The sit writes it; it answers only while the sitting is open; the engine never shows a key."}}
      [:maybe [:string {:max 64}]]]
+    ;; THE ROWS THIS SITTING WAS HANDED. The sit writes the ids of its
+    ;; walk here, and a second sitting of the same seat opened while
+    ;; this one is open walks past them to the next rows. The claim
+    ;; ends with the sitting: only an OPEN sitting's rows are read.
+    [:walked_rows {:optional true
+                   :x-display
+                   {:raw true
+                    :label "The rows it was handed"
+                    :spelled-by-hand "The ids of the walk rows the sit handed this sitting. The sit writes it, and a second open sitting of the same seat is not handed them."}}
+     [:maybe [:vector [:string {:max 128}]]]]
     ;; A FIRE NOBODY SAT IN. The clock sweep writes this row, already
     ;; closed, when a firing's key is still unspent past the sit
     ;; deadline (`wakes/sweep-missed!`), so an audit that reads the
@@ -3599,6 +3609,45 @@
             (when (= :open (:state row))
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   (assoc (:data row) :fire_key_hash h) nil)
+              true)))))))
+
+(defn claimed-rows
+  "The walk row ids the OTHER open sittings of this seat were handed:
+  the rows a second run of the seat must not walk again. A fire and a
+  wake that land together start two runs, and without this both sits
+  answer the same first row, so both work one branch and the next row
+  waits. The claim ends with the sitting — a closed, abandoned or swept
+  sitting holds nothing — and the sitting `sitting-id` names is left
+  out, so a re-sit is handed its own rows again. → a set of ids."
+  [eng seat-id sitting-id]
+  (if (and seat-id (get (inv/resources eng) :sitting))
+    (into #{}
+          (comp (remove #(= (str sitting-id) (str (:id %))))
+                (mapcat #(get-in % [:data :walked_rows]))
+                (keep #(some-> % str not-empty)))
+          (store/with-tx (:storage eng)
+            (fn [tx]
+              (store/query-rows (:storage eng) tx :sitting
+                                {:seat (str seat-id) :state :open}
+                                {:limit open-sitting-page
+                                 :newest-first true}))))
+    #{}))
+
+(defn claim-rows!
+  "Write the walk row ids this sit handed on the sitting it opened, so
+  `claimed-rows` keeps them from a second open sitting of the seat. A
+  MAINTENANCE write, `keep-fire-key!`'s spelling: only an OPEN sitting
+  takes the claim. → true when it was written."
+  [eng sitting-id row-ids]
+  (let [ids (into [] (keep #(some-> % str not-empty)) row-ids)]
+    (when (and sitting-id (seq ids) (get (inv/resources eng) :sitting))
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (when-some [row (store/load-row (:storage eng) tx :sitting
+                                          (str sitting-id) {:for-update true})]
+            (when (= :open (:state row))
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  (assoc (:data row) :walked_rows ids) nil)
               true)))))))
 
 (defn resit-sitting

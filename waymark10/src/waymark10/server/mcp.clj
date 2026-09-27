@@ -2197,8 +2197,14 @@
   on the page it answers and cannot be in what this shapes. `total`
   stays the collection's own count under that filter — the queue as
   the list page would show it — and the rows are what this firing
-  works."
-  [eng call session seat]
+  works.
+
+  `claimed` is the rows another open sitting of this seat was already
+  handed (`seats/claimed-rows`). They are subtracted as the judged
+  subjects are, and the read asks for a whole page for the same
+  reason, so a second run of the seat walks the next rows and not the
+  first run's."
+  [eng call session seat claimed]
   (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
     (when-some [rdef (get (inv/resources eng) (keyword walk))]
       (let [judgment (row-of eng :judgment (get-in seat [:data :judgment]))
@@ -2208,7 +2214,8 @@
             walk-filter (when-not judgment (seats/walk-filter seat))
             n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
                    coll/page-size-max)
-            asked (if judgment coll/page-size-max n)
+            subtract? (or judgment (seq claimed))
+            asked (if subtract? coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))
                                 {:query (query-string
                                          (cond-> {"page[size]" (str asked)}
@@ -2220,11 +2227,13 @@
             doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
         (when (collection-doc? doc)
           (let [items (get-in doc ["data" "items"])
-                items (if judgment
-                        (let [judged (judged-subjects eng (:id judgment))]
+                items (if subtract?
+                        (let [skip (into (set claimed)
+                                         (when judgment
+                                           (judged-subjects eng (:id judgment))))]
                           (into []
                                 (comp (remove #(contains?
-                                                judged
+                                                skip
                                                 (id-of-self (get % "self"))))
                                       (take n))
                                 items))
@@ -3198,7 +3207,16 @@
             ;; and through the query path — the rows this firing works
             ;; through, with the doors each one affords
             sitter-sees (sitter-session eng sitter)
-            walk (walk-of eng call sitter-sees seat)
+            ;; … past the rows another open sitting of this seat was
+            ;; handed: a fire and a wake that land together are two
+            ;; runs, and the second walks the next row, not the first's
+            walk (walk-of eng call sitter-sees seat
+                          (seats/claimed-rows eng seat-id (:id sitting)))
+            ;; … and the rows this sitting was handed are its own until
+            ;; it closes
+            _ (when sitting
+                (seats/claim-rows! eng (:id sitting)
+                                   (map #(get % "id") (get walk "rows"))))
             ;; i' · the change this firing submits: the walk's own
             ;; first row for a code seat (R-12.29), and the row the
             ;; engine finds or mints for a seat that walks a queue of

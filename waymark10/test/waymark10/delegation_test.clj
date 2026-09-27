@@ -11,6 +11,7 @@
             [waymark10.dev :as dev]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as sch]
@@ -197,6 +198,16 @@
 
 (defn- allow! [h held-id]
   (req h :post (str "/api/held_calls/" held-id "/-/allow") {:headers person}))
+
+;; ── the holds are declared, not listed ──────────────────────────────
+
+(deftest the-four-delegation-walls-are-registered-holds
+  (doseq [g [:authors-within-the-ceiling :the-persons-lever
+             :promotes-under-a-parked-child :the-persons-judgment]]
+    (is (delegation/hold-guard? g) (str (name g) " holds"))
+    (is (contains? (delegation/hold-guards) g)))
+  (is (not (delegation/hold-guard? :not-a-sitter))
+      "every other refusal stays the 409 it always was"))
 
 ;; ── invariant 1 · a seat never restates itself ──────────────────────
 
