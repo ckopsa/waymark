@@ -487,6 +487,68 @@
         (is (true? (get-in send [:why :required]))
             "an approval that holds a call demands the sentence too")))))
 
+;; ── R-10.6 · a power door's refusal counts, a wire failure does not ─
+
+(deftest a-power-refusal-counts-one-and-a-dark-wire-counts-none
+  (let [{:keys [eng down?] :as w} (world)
+        ;; the clerk wearing email.read alone: email.send is a 403
+        {:keys [session grant-id]} (wear! eng clerk
+                                          [{:kind "email.read" :actions []}])
+        narrow (assoc w :session session)
+        seat (:row (inv/create! eng :seat
+                                {:name "read-desk"
+                                 :charter "Read the household's mail."
+                                 :scope [{:kind "capability" :actions []}]
+                                 :standing_ttl_seconds 604800
+                                 :cadence_seconds 3600
+                                 :budget_usd_per_week 5M
+                                 :sitting_budget_tokens 1000000}
+                                {:principal colton}))
+        model (:row (inv/create! eng :model
+                                 {:name "held-call-test-model"
+                                  :display "Held 1"
+                                  :vendor "anthropic" :tier "economy"
+                                  :price_input_per_mtok 1M
+                                  :price_output_per_mtok 5M
+                                  :price_cache_read_per_mtok 0.1M
+                                  :price_cache_write_per_mtok 1.25M}
+                                 {:principal colton}))
+        sitting (:row (inv/create! eng :sitting
+                                   {:seat (:id seat) :model (:id model)
+                                    :grant grant-id}
+                                   {:principal clerk}))
+        refusals (fn []
+                   (long (or (get-in (store/with-tx (:storage eng)
+                                       (fn [tx] (store/load-row
+                                                 (:storage eng) tx :sitting
+                                                 (str (:id sitting)) {})))
+                                     [:data :refusals])
+                             0)))]
+
+    (testing "an ungranted power is a 403, and the sitting counts one"
+      (let [out (tool! narrow "waymark_power"
+                       {:tool "emila__send"
+                        :arguments {:to "otto@example.test" :text "Hi."
+                                    :why "The household asked."}})]
+        (is (true? (:isError out)))
+        (is (= 403 (:status (doc-of out))))
+        (is (= 1 (refusals)))
+        (is (empty? (calls w)) "a refusal never touches the wire")))
+
+    (testing "a granted call answered adds nothing"
+      (let [out (tool! narrow "waymark_power"
+                       {:tool "emila__read" :arguments {:uid "7"}})]
+        (is (false? (:isError out)))
+        (is (= 1 (refusals)))))
+
+    (testing "a dark wire is not the model's refusal, and adds nothing"
+      (reset! down? true)
+      (let [out (tool! narrow "waymark_power"
+                       {:tool "emila__read" :arguments {:uid "8"}})]
+        (is (true? (:isError out)))
+        (is (= 502 (:status (doc-of out))))
+        (is (= 1 (refusals)))))))
+
 ;; ── the entry's two spellings ───────────────────────────────────────
 
 (deftest why-true-is-the-older-spelling-of-approval-why

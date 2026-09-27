@@ -493,14 +493,19 @@
   character-for-character the refusal it would have read over HTTP.
   A 404 carries `not-found-hint` as a SECOND block, after the
   untouched problem document: the remedy the concealed door cannot
-  name, said the same way for every not-found there is."
+  name, said the same way for every not-found there is.
+
+  The status rides out as METADATA under `::status` when there is
+  one, never on the wire: the refusal counter reads it to tell the
+  engine's refusal from a wire failure (`count-refused!`)."
   ([text] (result text false))
   ([text error?] (result text error? nil))
   ([text error? status]
-   {:content (cond-> [{:type "text" :text text}]
-               (and error? (= 404 status))
-               (conj {:type "text" :text not-found-hint}))
-    :isError error?}))
+   (cond-> {:content (cond-> [{:type "text" :text text}]
+                       (and error? (= 404 status))
+                       (conj {:type "text" :text not-found-hint}))
+            :isError error?}
+     status (with-meta {::status status}))))
 
 (defn- value-result
   ([v] (value-result v false))
@@ -3121,10 +3126,11 @@
         (refusal e)
         (do (binding [*out* *err*]
               (println "waymark10 mcp tool" tool-name "failed -" (ex-message e)))
-            (value-result {:type (str p/base-uri "internal-error")
-                           :title "Internal error"
-                           :status 500}
-                          true))))))
+            (with-meta (value-result {:type (str p/base-uri "internal-error")
+                                      :title "Internal error"
+                                      :status 500}
+                                     true)
+              {::status 500}))))))
 
 (defn- result-bytes
   "How many bytes of text this tool result carries: the UTF-8 length
@@ -3490,6 +3496,46 @@
                  (ex-message e)))
       nil)))
 
+(defn- power-refusal?
+  "Is this `waymark_power` answer a refusal the model should have
+  known ahead of time? An `isError` answer is — the power door's 403
+  (ungranted, or outside the grant's filter), its 404 and 422, and a
+  rig's own input refusal, which comes back as Gate's isError payload
+  with no status on it. A held call is NOT: it answers `isError`
+  false, because it is an answer and never a refusal (held_calls.clj,
+  R-2). Nor is a 5xx: a Gate or rig that is dark or unreachable (502,
+  503), or this door's own anonymous 500, is the wire failing, not law
+  the model did not know."
+  [tool-name out]
+  (boolean
+   (and (= "waymark_power" tool-name)
+        (map? out)
+        (true? (:isError out))
+        (let [status (::status (meta out))]
+          (not (and (number? status) (<= 500 (long status))))))))
+
+(defn- count-refused!
+  "R-10.6 at the power door: one refusal on the open sitting of the
+  session's grant, for each `waymark_power` answer `power-refusal?`
+  names. Every OTHER tool's refusal is counted where it is thrown: a
+  `waymark_invoke` 409 leaves through the door's own
+  `router/wrap-refusals-counted`, so counting it here too would count
+  it twice. The power tool never goes through that door, which is why
+  this line exists.
+
+  It never throws, for `count-served!`'s reason."
+  [eng session tool-name out]
+  (try
+    (when (power-refusal? tool-name out)
+      (when-some [gid (get-in session [:visibility :grant :id])]
+        (when-some [sitting (seats/open-sitting-for-grant eng gid)]
+          (seats/bump-counter! eng (:id sitting) :refusals))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 mcp refusal counter" tool-name "failed -"
+                 (ex-message e)))
+      nil)))
+
 (defn message
   "One JSON-RPC message → the response to send, or nil when there is
   nothing to send (a notification). `session` carries the resolved
@@ -3528,6 +3574,7 @@
                            "; external powers go through waymark_power."))
            (do (count-served! eng session
                                (served-name eng (:name params) params) out)
+               (count-refused! eng session (:name params) out)
                (rpc-result id out))))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))
