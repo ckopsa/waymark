@@ -36,7 +36,11 @@
   seat's own sentence and pushes the branch; the rig does the git and
   holds the credential. `discard` throws the worktree's edits away.
   `stall` is the seat saying it cannot finish, which is also where the
-  round ceiling sends it. `unstick` is the person's answer to that.
+  round ceiling sends it. `unstick` is the person's answer to that —
+  a person's, or a delegate's acting for one, and never a model's
+  alone. Grooming the ticket a change was born from again answers a
+  stall too: the next sit unsticks that change with the engine's own
+  hand (waymark10.server.mcp's `regroomed-change`).
   Each one reaches the rig with the ENGINE's hand, past the leash
   (factory10.bench) — the model holds the four reading and editing
   powers and never the four the engine calls.
@@ -438,14 +442,18 @@
     (t/deny)
     (t/allow)))
 
-(defguardfn only-a-person-unsticks-a-change
+(defguardfn a-person-or-their-delegate-unsticks
   {:reads [:principal]
-   :open "No door here changes this verdict. A stuck change is the house asking a person to look at it, and a model that could put itself back to work would be answering its own question."
-   :explain "This change is stuck: it reached the round ceiling, or a seat said it could not finish. A person reads it and puts it back to work."}
+   :open "No door here changes this verdict. A stuck change is the house asking a person to look at it, and a model alone that could put itself back to work would be answering its own question. A person taps, or a delegate acting for one does — and grooming the ticket again puts a ticket's change back to work at the next sit."
+   :explain "This change is stuck: it reached the round ceiling, or a seat said it could not finish. A person, or a delegate acting for one under a grant the person approved, reads it and puts it back to work."}
   [_row _inp ctx]
-  (if (= :agent (:type (:principal ctx)))
-    (t/deny)
-    (t/allow)))
+  ;; ticket's `a-person-or-their-delegate-grooms`, one kind over: the
+  ;; wall is against a model ALONE, and a delegate that names whom it
+  ;; acts for is the person's hand.
+  (let [{:keys [type acts-for]} (:principal ctx)]
+    (if (and (= :agent type) (str/blank? (str acts-for)))
+      (t/deny)
+      (t/allow))))
 
 ;; ── the law, written down as a scenario ─────────────────────────────
 ;;
@@ -504,13 +512,20 @@
 
 (defscenario a-model-does-not-unstick-itself
   "A stuck change is the house asking a person to look at it. A model
-   that could put itself back to work would be answering its own
-   question, and the round ceiling would stop nothing."
+   ALONE — the seat that stalled it, acting for nobody — that could put
+   itself back to work would be answering its own question, and the
+   round ceiling would stop nothing."
   {:kind    :change
    :attempt :unstick
    :row     {:state :stuck :data (assoc a-pull-request :rounds 3)}
    :as      {:id "bench-seat" :type :agent}
-   :expect  {:refused :only-a-person-unsticks-a-change}})
+   :expect  {:refused :a-person-or-their-delegate-unsticks
+             :because "delegate acting for one"}})
+
+;; A delegate that unsticks — an agent whose `acts-for` names its
+;; person — cannot be spelled here, because a scenario's principal
+;; carries :id, :type and :roles and nothing else. It is judged in
+;; factory10.tree-test, with the envelope's own probe.
 
 (defscenario the-person-puts-a-stuck-change-back-to-work
   "And the door is really there for the person who read it — one tap,
@@ -993,15 +1008,15 @@
      ;; `open` and to no other state, so a stall from `submitted` has
      ;; no transition back to where it started (checks/check-reversible
      ;; asks for one for each :from). The way back is real and it is a
-     ;; PERSON'S, which is what the sentence says.
+     ;; PERSON'S (or their delegate's), which is what the sentence says.
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The house stops working this change and waits. The way back is a person's own door, which puts the change in the queue again and starts the rounds from zero."}
+              :one-way "The house stops working this change and waits. The way back is a person's own door, or their delegate's — unstick, or grooming the ticket again — which puts the change in the queue again and starts the rounds from zero."}
      :display {:label "Stuck" :order 8
                :description "Say what stopped you and stop working this change — a person reads it next"}}
 
     :unstick
     {:from #{:stuck} :to :open
-     :guards [only-a-person-unsticks-a-change]
+     :guards [a-person-or-their-delegate-unsticks]
      :handler unstick-the-change
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Back to work" :style :primary :order 1

@@ -58,7 +58,9 @@ name the same one repository.
 
 Each other door on a change is the mirror's or a person's (`merge`,
 `close`, `reopen`, `observe`, `unstick`), and the seat does not get
-it. A `path` in a bench filter narrows the seat further (R-12.30). A
+it. A delegate acting for the person may `unstick` too, and grooming
+the ticket again unsticks a stalled change at the next sit (R-12.32).
+A `path` in a bench filter narrows the seat further (R-12.30). A
 seat that must not touch the workflows adds `"path": "!.github/*"` to
 no entry: the deny list on the `repo_policy` row already keeps those
 paths from every seat. A seat that works one directory only puts that

@@ -1123,6 +1123,24 @@ change stands at `open`. A change that has spent a round keeps its
 branch, because the forge holds it. The sit does this before it opens
 the bench, so the worktree of R-12.29 is made on the new branch.
 
+A groom answers a stall. A seat that cannot build a ticket stalls the
+ticket's change, which moves it to `stuck`, and ungrooms the ticket.
+A stuck change offers no `submit`, `stall` or `discard`. The door
+`unstick` puts it back to `open` with its rounds at zero. A person
+takes that door, or a delegate that acts for a person (an agent whose
+`acts-for` is set), the same way a delegate grooms a ticket. A model
+alone, with no `acts-for`, must not unstick a change. When a person
+or a delegate grooms the ticket again, the next sit must unstick the
+change. It does this for a `stuck` change whose `born_from` is
+`ticket:<id>`, when that ticket's newest `groom` transition is later
+than the change's newest `stall` transition. The sit takes `unstick`
+with the engine's own hand, and logs who groomed the ticket and when.
+It does this before it mints the branch again. A change with no stall
+after the last groom stays `stuck`, the change at the round ceiling
+included. When the change is still `stuck`, or the unstick refuses,
+the sit answers as it did before, with a note that says the change is
+stuck.
+
 The branch pattern must not shadow a branch. Git holds
 `refs/heads/seat` and `refs/heads/seat/<id>` never at the same time.
 So the text before the `*` must not be the name of a branch the
@@ -2388,7 +2406,12 @@ above. The cases:
     or at `stuck`, whose branch is not the policy's pattern with its
     walk row's id, gets the new branch through `rebranch` at the next
     sit and stands at `open`. A change that has spent a round keeps
-    its branch. (R-12.29, R-12.32)
+    its branch. A delegate agent with `acts-for` unsticks a change,
+    and a bare agent is refused. A ticket's change that was stalled,
+    then ungroomed and groomed again, is `open` at the next sit with
+    its rounds at zero, and the sit offers `submit`; a stall with no
+    groom after it, the round ceiling's included, stays `stuck`.
+    (R-12.29, R-12.32)
 
 52. A fire on a seat with `instructions` sends the composed text: the
     instructions, then the `Seat:` line with the seat's id and name,
