@@ -21,6 +21,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.transcripts :as transcripts]
@@ -527,3 +528,100 @@
     (is (= 30 (get-in row [:data :transcript_days])))
     (is (contains? (set (get-in restate [:edit :prefill])) :keep_transcripts))
     (is (contains? (set (get-in restate [:edit :prefill])) :transcript_days))))
+
+;; ── the seat's inbox, and the sit's key for it ──────────────────────
+
+(def ^:private an-inbox {:only {:meal ["accept"]}})
+
+(defn- restate-seat! [eng seat model extra]
+  (let [row (row-of eng :seat (:id seat))]
+    (inv/invoke! eng :seat (str (:id seat)) :restate
+                 (merge {:charter "Decide whether a meal belongs on the list."
+                         :scope [{:kind "meal" :actions ["accept"]}]
+                         :held_for [(:id model)]
+                         :standing_ttl_seconds 604800
+                         :cadence_seconds 3600
+                         :budget_usd_per_week 5M
+                         :sitting_budget_tokens 60000}
+                        extra)
+                 {:principal person
+                  :if-match (inv/etag :seat (str (:id seat)) (:version row))})))
+
+(defn- refusal
+  "The problem ex-data of a refused write, or nil when it was served."
+  [thunk]
+  (try (thunk) nil
+       (catch clojure.lang.ExceptionInfo e
+         (let [d (ex-data e)]
+           (if (:waymark10/problem d) d (throw e))))))
+
+(deftest a-seat-states-its-inbox-and-keeps-it
+  (let [eng (fresh-engine)
+        model (add-model! eng)
+        seat (open-seat! eng model)]
+    (is (nil? (get-in (row-of eng :seat (:id seat)) [:data :inbox]))
+        "absent is no inbox")
+    (restate-seat! eng seat model {:inbox an-inbox})
+    (is (= an-inbox (get-in (row-of eng :seat (:id seat)) [:data :inbox])))
+    (is (contains? (set (get-in (inv/resources eng)
+                                [:seat :actions :restate :edit :prefill]))
+                   :inbox))))
+
+(deftest an-inbox-naming-what-is-not-served-is-refused
+  (testing "a kind this engine does not serve, at create"
+    (let [eng (fresh-engine)
+          p (refusal #(open-seat! eng (add-model! eng)
+                                  {:inbox {:only {:nosuchkind []}}}))]
+      (is (= :inbox-names-real-kinds (:guard p)))
+      (is (str/includes? (str (:detail p)) "nosuchkind"))))
+  (testing "an action its kind does not have, at restate"
+    (let [eng (fresh-engine)
+          model (add-model! eng)
+          seat (open-seat! eng model {:inbox an-inbox})
+          p (refusal #(restate-seat! eng seat model
+                                     {:inbox {:only {:meal ["explode"]}}}))]
+      (is (= :inbox-names-real-actions (:guard p)))
+      (is (str/includes? (str (:detail p)) "explode"))
+      (is (= an-inbox (get-in (row-of eng :seat (:id seat)) [:data :inbox]))
+          "the refused restate leaves the inbox as it was"))))
+
+(deftest the-sit-answers-an-inbox-key-for-a-seat-with-an-inbox
+  (testing "a seat with an inbox"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng) {:inbox an-inbox})
+          sat (sit! h)
+          key (get-in sat [:inbox :key])]
+      (is (= "https://work.test/api/-/sittings/inbox" (get-in sat [:inbox :url])))
+      (is (re-matches #"[A-Za-z0-9_-]{22}" (str key)))
+      (is (not (str/includes? (wire/write-json (:data (row-of eng :sitting (:sitting sat))))
+                              (str key)))
+          "the sitting keeps the hash, never the key")))
+  (testing "a seat with none answers none"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng))
+          sat (sit! h)]
+      (is (nil? (:inbox sat))))))
+
+(deftest the-inbox-key-finds-its-open-sitting-and-nothing-else
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:inbox an-inbox})
+        first-sat (sit! h)
+        first-key (get-in first-sat [:inbox :key])
+        second-sat (sit! h)
+        second-key (get-in second-sat [:inbox :key])]
+    (testing "a re-sit mints a different key"
+      (is (string? first-key))
+      (is (not= first-key second-key)))
+    (testing "the live key finds the sitting"
+      (is (= (str (:sitting second-sat))
+             (str (:id (seats/inbox-sitting-by-key eng second-key))))))
+    (testing "an old key, a wrong key and no key find nothing"
+      (is (nil? (seats/inbox-sitting-by-key eng first-key)))
+      (is (nil? (seats/inbox-sitting-by-key eng "bm9ib2R5LWhvbGRzLXRoaXM")))
+      (is (nil? (seats/inbox-sitting-by-key eng nil))))
+    (testing "the key dies when the sitting ends"
+      (is (= 200 (:status (close! h))))
+      (is (nil? (seats/inbox-sitting-by-key eng second-key))))))
