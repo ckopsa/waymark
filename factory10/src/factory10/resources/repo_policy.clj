@@ -107,6 +107,18 @@
     (t/allow)
     (t/deny)))
 
+(defguardfn the-engine-notes-the-source
+  {:reads [:principal]
+   :hide true
+   :explain "The GitHub source writes what it could not read. A person and a model read it."}
+  ;; The shape of `the-engine-marks-the-enrolment`, for the source's
+  ;; own note (ticket 116dfb0d): the forge pass is the only hand that
+  ;; walks this door, and a hidden door answers 404 and says nothing.
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx)))
+    (t/allow)
+    (t/deny)))
+
 ;; ── the restatement, and the rig it tells ───────────────────────────
 
 (defhandler restate-the-policy [row inp ctx]
@@ -141,6 +153,26 @@
   (-> row
       (assoc-in [:data :enrolled_at] (:now ctx))
       (assoc-in [:data :note] nil)))
+
+(defn source-note-head
+  "The words a source note opens with: the status and the route, and
+  not the time. The forge pass compares a stored note by this head, so
+  a repository that keeps refusing is noted once and not once a beat."
+  [answered route]
+  (str "GitHub answered " answered " for " route))
+
+(defhandler note-the-source [row inp ctx]
+  ;; THE SOURCE'S OWN RECORD (ticket 116dfb0d). A pass that could not
+  ;; read this repository says so with the status, the route and the
+  ;; time; a pass that read it clears the note. The input names neither
+  ;; field of the row, so the door is not edit-shaped.
+  (assoc-in row [:data :source_note]
+            (when (and (some? (:answered inp))
+                       (not (str/blank? (str (:route inp)))))
+              (str (source-note-head (:answered inp) (:route inp))
+                   " at " (:now ctx)
+                   ": the token cannot read this repository, so the house"
+                   " sees none of its pull requests and merges none."))))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
@@ -343,6 +375,16 @@
            {:widget "prose"
             :label "Note"
             :help "What the engine has to say about this row — the reason the bench did not enrol the repository, and nothing when it did."}}
+    [:maybe [:string {:max 500}]]]
+   ;; the GitHub source's own note (ticket 116dfb0d): a repository the
+   ;; token cannot read otherwise costs only a log line, and a green
+   ;; pull request there never merges while nobody is told
+   [:source_note {:optional true
+                  :examples ["GitHub answered 403 for GET /repos/ckopsa/waymark-doors/pulls at 2026-09-27T14:00:00Z: the token cannot read this repository, so the house sees none of its pull requests and merges none."]
+                  :x-display
+                  {:widget "prose"
+                   :label "What the GitHub source could not read"
+                   :help "The status and the route of the last pass that could not read this repository's pull requests, and when. Empty when the last pass read them."}}
     [:maybe [:string {:max 500}]]]])
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
@@ -437,7 +479,29 @@
               [:maybe [:string {:max 300}]]]]
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Enrolled" :order 4
-               :description "The bench took this repository and the engine says when"}}}
+               :description "The bench took this repository and the engine says when"}}
+
+    ;; THE SOURCE'S OWN DOOR (ticket 116dfb0d). Hidden, and the engine's
+    ;; hand alone, for mark_enrolled's reasons. A status and a route
+    ;; write the note; an input with neither clears it.
+    :note_source
+    {:from #{:active} :to :active
+     :guards [the-engine-notes-the-source]
+     :handler note-the-source
+     :input [:map
+             [:answered {:optional true
+                         :examples [403]
+                         :x-display {:hidden true
+                                     :label "The status GitHub answered"}}
+              [:maybe [:int {:min 100 :max 599}]]]
+             [:route {:optional true
+                      :examples ["GET /repos/ckopsa/waymark-doors/pulls"]
+                      :x-display {:hidden true :raw true
+                                  :label "The route that refused"}}
+              [:maybe [:string {:max 200}]]]]
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Source noted" :order 5
+               :description "The GitHub source says whether it could read this repository"}}}
    ;; The delegate's allow — an agent whose principal names whom it
    ;; acts for — is the suite's to prove (bench_test): a check-tier
    ;; scenario's actor carries id, roles and type, and no acts-for.
