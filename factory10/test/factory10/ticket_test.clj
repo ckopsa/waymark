@@ -119,6 +119,14 @@
           "the MACHINE refuses it, with no guard behind the refusal: a
            blocked ticket is not finished, so it is unblocked first"))))
 
+(deftest a-ticket-in-review-offers-no-hand-a-door
+  (doseq [c [(ctx the-person) (ctx the-seat) (ctx the-engine)]]
+    (is (empty? (offers (at :in_review) c))
+        "its change moves it back or ends it, from inside its own door;
+         the wire, and every hand at it, meets nothing"))
+  (let [shut (refusal (at :in_review) (ctx the-person) :return)]
+    (is (= :only-its-change-moves-it (:name (:denier shut))))))
+
 (deftest a-deferred-ticket-waits-on-its-day
   (is (= #{:resume} (offers (at :deferred {:defer_until "2026-11-19"})
                             (ctx the-person)))
@@ -219,7 +227,7 @@
 ;; ── the shape the walker and the import both read ───────────────────
 
 (deftest the-declaration-says-what-the-walker-needs
-  (is (= [:draft :open :blocked :deferred :done :dropped] (:states ticket)))
+  (is (= [:draft :open :in_review :blocked :deferred :done :dropped] (:states ticket)))
   (is (= :draft (:initial ticket))
       "born a draft: nothing walks it until a person grooms it")
   (is (= #{} (:terminal ticket)) "no tomb: reopen is a person's door")

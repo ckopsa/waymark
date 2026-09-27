@@ -453,14 +453,16 @@
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
                :merge_wait_seconds :rounds_per_change :formatter :deny
-               :orientation :enrolled_at :note}
+               :orientation :enrolled_at :note :source_note}
              fields)
           "every number a submit obeys, where the bench clones it from,
-           and the engine's own two: when the bench took it and why it
-           did not")
-      (is (= #{:enrolled_at :note} (into #{} (remove form) fields))
-          "…and the engine's two are on no form: a person states the
-           policy, and the engine says what the bench did with it")
+           and the engine's own three: when the bench took it, why it
+           did not, and what the GitHub source could not read")
+      (is (= #{:enrolled_at :note :source_note}
+             (into #{} (remove form) fields))
+          "…and the engine's three are on no form: a person states the
+           policy, and the engine says what the bench and the source did
+           with it")
       (is (contains? (:actions repo-policy) :mark_enrolled)
           "the retry's own hidden door, so a late enrolment is a
            transition and not a silent field write")))

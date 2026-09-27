@@ -274,9 +274,12 @@ Nothing else goes in the instructions (R-12.10).
    The engine commits the worktree with that sentence and two
    trailers that name the seat and the sitting, pushes the branch,
    and the rig opens the pull request when the policy says so. The
-   row moves to `submitted` and its `rounds` count grows by one. At
-   the policy's `rounds_per_change` the door refuses, and the
-   session stalls instead.
+   row moves to `submitted` and its `rounds` count grows by one, and
+   the ticket it was born from moves `open -> in_review` in the same
+   transaction: out of the walk, and not done. The seat does not
+   complete it. At the policy's `rounds_per_change` the door
+   refuses, and the session stalls instead; a stall sends the
+   ticket back to `open`, where the seat ungrooms it.
 7. The session stops. The Stop hook sums the transcript and closes
    the sitting through `POST /api/-/sittings/close`, as the clerk's
    does. The bill of the round is on the sitting row.
@@ -289,10 +292,18 @@ Nothing else goes in the instructions (R-12.10).
    on the new head mints a `ci_run` row, and the next firing reads
    the finding in the sit's own `feedback`. The merge completes the
    ticket: the change kept the ticket's address in `born_from` at the
-   mint, and the engine walks the ticket's `complete` door with its
-   own hand and the pull request's address as the sentence (R-12.32).
-   A ticket the seat already completed stays done, and a person
-   completes nothing by hand.
+   mint, and the engine walks the ticket's `land` door with its own
+   hand and the pull request's url as the sentence (R-12.32, ticket
+   2e869934). When the forge pass moves the change to `failing` (a
+   red required check or a conflict), or GitHub closes it unmerged,
+   the engine moves the ticket `in_review -> open` through `return`;
+   the seat's default `wake_on` (every ticket action under its
+   filter) hears it, and the next sit hands the same ticket with its
+   change and `feedback`. A change stuck at the round ceiling leaves
+   its ticket in review; a person's `unstick` on the change puts the
+   ticket back in the queue. None of these moves needs a person's
+   tap, and a ticket already done with an open pull request is left
+   alone.
 
 ## Before the first firing
 

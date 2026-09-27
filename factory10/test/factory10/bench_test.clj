@@ -51,6 +51,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.schedules :as schedules]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
@@ -892,6 +893,39 @@
         "and nothing was committed")
     (is (= "open" (name (:state (change-row w))))
         "the row did not move")))
+
+(deftest a-clean-worktree-whose-landing-failed-passes-the-door
+  ;; ticket 4792cd3b: a push the forge refused (a token without the
+  ;; workflow scope) left the commit built and the branch unpushed.
+  ;; The worktree is clean, but the bench still owes the landing, so
+  ;; the rig is asked to submit and the retry counts as a round.
+  (let [w (world)
+        _ (answer! (:state w) "bench__status"
+                   {:repo a-repository :branch "waymark/one" :head a-commit
+                    :base "main" :base_head a-head :dirty 0 :paths []
+                    :ahead 2 :behind 0
+                    :landing {:state "failed" :head a-commit}})
+        r (submit! w {:why "Retry the landing the forge refused."})]
+    (is (false? (:isError r)) (text-of r))
+    (is (= 1 (count (calls-of (:state w) "bench__submit")))
+        "the rig was asked to submit, and it decides")
+    (is (= "submitted" (name (:state (change-row w)))))
+    (is (= 1 (get-in (change-row w) [:data :rounds]))
+        "a retried landing counts as a round like any submit")))
+
+(deftest a-clean-worktree-with-a-landed-head-is-still-refused
+  (let [w (world)
+        _ (answer! (:state w) "bench__status"
+                   {:repo a-repository :branch "waymark/one" :head a-commit
+                    :base "main" :base_head a-head :dirty 0 :paths []
+                    :ahead 2 :behind 0
+                    :landing {:state "landed" :head a-commit}})
+        r (submit! w {:why "Nothing changed, but I am trying anyway."})]
+    (is (true? (:isError r)))
+    (is (str/includes? (text-of r) "nothing to submit"))
+    (is (empty? (calls-of (:state w) "bench__submit"))
+        "nothing is owed, so the rig is never asked")
+    (is (= "open" (name (:state (change-row w)))))))
 
 (deftest a-submit-commits-with-the-seat-and-the-sitting-on-it
   (let [w (world)
@@ -2027,6 +2061,121 @@
     (is (= "stuck" (name (:state row)))
         "the ticket was groomed once, before the rounds: no groom answers
          the stall, so the ceiling holds")))
+
+;; ── the ticket follows its change's review (ticket 2e869934) ─────────
+;;
+;; A SUBMIT IS NOT DONE. The seat's submit sends the ticket out for
+;; review and out of the walk; the change's red head, or a close with
+;; no merge, sends it back to the queue through `return`; the merge ends
+;; it through `land` with the pull request as its sentence. Every one
+;; of those moves is the change's, inside its own door, and no person
+;; taps for any of them.
+
+(defn- ticket-row [w]
+  (store/with-tx (:storage (:eng w))
+    (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket
+                             (str (:id (:ticket w))) {}))))
+
+(defn- ticket-state [w] (name (:state (ticket-row w))))
+
+(defn- last-ticket-move [w]
+  (let [st (:storage (:eng w))]
+    (last (store/with-tx st
+            (fn [tx] (store/transitions st tx {:kind :ticket
+                                               :resource-id (str (:id (:ticket w)))}
+                                        {}))))))
+
+(defn- mirror-moves-change!
+  "The forge pass takes one of its hidden doors on the change beside
+  the walk, with the mirror's own hand."
+  [w action input]
+  (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id]) action input
+               {:principal mirror/source-principal}))
+
+(deftest a-submit-sends-the-ticket-out-for-review-and-out-of-the-walk
+  (let [w (ticket-world)
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "in_review" (ticket-state w))
+        "the submit moved the ticket, in the same transaction")
+    (is (= :review (:action (last-ticket-move w))))
+    (is (empty? (get-in (sit-again! w) [:walk :rows]))
+        "a ticket under review is in no seat's walk")
+    (testing "the seat's complete finds no door: the merge ends it"
+      (is (thrown? Exception
+                   (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :complete
+                                {:close_reason "Done."} {:principal person}))))
+    (testing "and no hand at the wire takes the change's doors"
+      (is (thrown? Exception
+                   (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :return
+                                nil {:principal person}))))))
+
+(deftest a-red-change-sends-its-ticket-back-to-the-seat-that-wrote-it
+  (let [w (ticket-world)
+        _ (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+        m (last-ticket-move w)]
+    (is (= "open" (ticket-state w)) "back in the queue with no person's tap")
+    (is (= :return (:action m)))
+    (is (= "in_review" (name (:from-state m))))
+    (is (= (:id mirror/source-principal) (str (get-in m [:actor :id])))
+        "the move is the engine's, made inside the change's own door")
+    (testing "the seat that wrote the change wakes on it"
+      (let [seat-row {:data {:walk "ticket"
+                             :scope [{:kind "ticket" :actions ["complete" "ungroom"]
+                                      :filter {:repo a-repository}}]}}
+            heard (into #{} (mapcat :actions)
+                        (seats/effective-wake-on
+                         seat-row (get (inv/resources (:eng w)) :ticket)))]
+        (is (contains? heard "return")
+            "a code seat's default wake_on names every ticket action under
+             its filter, `return` among them")))
+    (testing "and the next sit hands it the same ticket with its red change"
+      (let [answer (sit-again! w)]
+        (is (= [(str (:id (:ticket w)))] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= "failing" (get-in answer [:change :state])))))
+    (testing "the seat's next round sends it out for review again"
+      (seat-invokes! w "submit" {:why a-long-sentence})
+      (is (= "in_review" (ticket-state w))))))
+
+(deftest a-green-head-sends-a-returned-ticket-out-for-review-again
+  (let [w (ticket-world)]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+    (mirror-moves-change! w :recover nil)
+    (is (= "in_review" (ticket-state w))
+        "a person pushed the fix; the ticket is out for review with it")))
+
+(deftest the-merge-completes-the-ticket-with-the-pull-requests-url
+  (let [w (ticket-world)
+        url "https://github.com/ckopsa/waymark/pull/77"]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (mirror-moves-change! w :adopt_submitted {:change_id "github:ckopsa/waymark#77"
+                                              :number 77 :url url})
+    (mirror-moves-change! w :merge nil)
+    (let [row (ticket-row w)]
+      (is (= "done" (name (:state row))))
+      (is (= (str "Merged: " url ".") (get-in row [:data :close_reason]))))
+    (is (= :land (:action (last-ticket-move w))))))
+
+(deftest a-change-closed-unmerged-reopens-its-ticket
+  (let [w (ticket-world)]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (mirror-moves-change! w :close nil)
+    (is (= "open" (ticket-state w)))
+    (is (= :return (:action (last-ticket-move w))))))
+
+(deftest the-round-ceiling-leaves-the-ticket-in-review-until-a-person-unsticks
+  (let [w (ticket-world)]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (mirror-moves-change! w :stick {:why "gate went red on the last round"
+                                    :failing_checks ["gate"]})
+    (is (= "in_review" (ticket-state w))
+        "the stuck change is what a person reads")
+    (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id]) :unstick {}
+                 {:principal person})
+    (is (= "open" (ticket-state w))
+        "the person's unstick releases the ticket to the queue")))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 

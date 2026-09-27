@@ -137,17 +137,24 @@
 
   A `task` (workqueue10) keeps its lifecycle in `status`, and its
   `complete` takes nothing. A `ticket` (this module) keeps its
-  lifecycle in the machine, and its `complete` takes the sentence the
-  record keeps — so the merge writes the pull request's own address as
-  that sentence."
+  lifecycle in the machine, and the merge ends it through `land` —
+  the change's own door, open from `open` and `in_review` (ticket
+  2e869934) — with the pull request's own address as the sentence the
+  record keeps."
   {"task" {:kind :task
+           :action :complete
            :finished? (fn [row] (= "done" (str (get-in row [:data :status]))))
            :input (fn [_change] nil)}
    "ticket" {:kind :ticket
-             :finished? (fn [row] (not= :open (some-> (:state row) name keyword)))
+             :action :land
+             :finished? (fn [row] (not (contains? #{:open :in_review}
+                                                  (some-> (:state row) name keyword))))
              :input (fn [change]
+                      ;; the pull request's url, which a reader opens;
+                      ;; its id when the mirror read no url
                       {:close_reason (str "Merged: "
-                                          (get-in change [:data :change_id])
+                                          (or (not-empty (str (get-in change [:data :url])))
+                                              (get-in change [:data :change_id]))
                                           ".")})}})
 
 (defn- born-of
@@ -190,11 +197,45 @@
                (not ((:finished? entry) walk-row))
                (:invoke ctx))
       (try
-        ((:invoke ctx) (:kind entry) id :complete ((:input entry) row))
+        ((:invoke ctx) (:kind entry) id (:action entry) ((:input entry) row))
         (catch Exception e
           (binding [*out* *err*]
             (println "factory10 change merge: the" (name (:kind entry)) id
                      "did not complete -" (ex-message e)))))))
+  row)
+
+;; ── the ticket follows its change's review (ticket 2e869934) ─────────
+
+(defn- move-the-ticket!
+  "Walk `action` on the ticket this change was born from, when that
+  ticket stands in one of `from`: `review` when a round goes out,
+  `return` when a review ends without a merge. The ticket's door opens
+  for this kind's own doors and for no hand
+  (`ticket/only-its-change-moves-it`).
+
+  BEST-EFFORT, as the merge's completion is: a change born from a
+  task or from nothing moves nothing, a ticket that stands elsewhere
+  is left where it is, and a door that refuses is said in the log —
+  the change's own move stands. A rehearsal carries no pen, and moves
+  nothing."
+  [row ctx from action]
+  (let [[entry id walk-row] (born-of row ctx)]
+    (when (and walk-row
+               (= :ticket (:kind entry))
+               (contains? from (some-> (:state walk-row) name keyword))
+               (:invoke ctx))
+      (try
+        ((:invoke ctx) :ticket id action nil)
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "factory10 change: the ticket" id "did not" (name action)
+                     "-" (ex-message e))))))))
+
+(defhandler send-the-ticket-back [row _inp ctx]
+  ;; A review that ended without a merge — a close, a stall — puts the
+  ;; ticket in the queue again, where the seat that wrote the change
+  ;; wakes on its `return`, and a person can ungroom it.
+  (move-the-ticket! row ctx #{:in_review} :return)
   row)
 
 ;; ── the bench: the four doors that reach the worktree ───────────────
@@ -222,11 +263,31 @@
 (def ^:private clean-remedy
   (str "There is nothing to submit. Edit a file with the power "
        "bench__edit first; if the work is done, say so with the stall "
-       "door and let a person look at it."))
+       "door and let a person look at it. A landing that failed (a "
+       "push the forge refused, a credential, a rig restart) is not "
+       "this case: submit again and the bench retries it."))
 
 (def ^:private nothing-detail
   "The worktree is clean: no file in it is different from the branch
   head, so there is nothing to commit and nothing to push.")
+
+(defn- landing-owed?
+  "True when the bench still owes a landing on a clean worktree
+  (ticket 4792cd3b): the last landing did not land, or the branch is
+  ahead of the base with no landing that pushed this head. The rig's
+  own submit takes that path and refuses `nothing_to_commit` itself
+  when nothing is owed, so the door lets it through rather than
+  refusing on the rig's behalf."
+  [status]
+  (let [landing (:landing status)
+        state (some-> (:state landing) name)
+        landed-head (some-> (or (:head landing) (:commit landing)) str)
+        head (some-> (:head status) str)]
+    (boolean
+     (or (and (map? landing) (not= "landed" state))
+         (and (pos? (long (or (:ahead status) 0)))
+              (or (not (map? landing))
+                  (and landed-head head (not= landed-head head))))))))
 
 (defn- rig-refusal!
   "The rig's own refusal, said again as this door's.
@@ -319,7 +380,11 @@
     (cond
       (nil? status) (bench/refuse! bench/dark-detail [bench/dark-remedy])
       (bench/refused status) (rig-refusal! "read the worktree" status)
-      (zero? (long (or (:dirty status) 0)))
+      ;; A clean worktree is refused only when nothing is owed: a
+      ;; landing that failed outside the worktree is retried by the
+      ;; rig's submit, and the retry counts as a round like any other.
+      (and (zero? (long (or (:dirty status) 0)))
+           (not (landing-owed? status)))
       (bench/refuse! nothing-detail [clean-remedy])
       :else
       (let [answer (bench/ask ctx :submit
@@ -342,27 +407,31 @@
           (nil? answer) (bench/refuse! bench/dark-detail [bench/dark-remedy])
           (bench/refused answer) (rig-refusal! "submit" answer)
           :else
-          (update row :data merge
-                  (cond-> {:branch branch
-                           :worktree_dirty 0
-                           ;; a new round is a new head: the last
-                           ;; red names are not its (ticket d1742908)
-                           :failing_checks nil
-                           :conflicts nil
-                           ;; nor is the last landing's error: this
-                           ;; submit is a landing of its own (ticket
-                           ;; 92871afb)
-                           :landing_error nil
-                           ;; nor is the last merge state: the forge
-                           ;; computes it again for the new head, and
-                           ;; a stale `conflicted` would fail the
-                           ;; round before the forge was re-read
-                           ;; (ticket 5f12e772)
-                           :mergeable "unknown"
-                           :rounds (inc (long (or (get-in row [:data :rounds])
-                                                  0)))}
-                    (:commit answer) (assoc :head_sha
-                                            (str (:commit answer))))))))))
+          (do
+            ;; the round is out: the ticket leaves the walk until its
+            ;; change comes back red or merges (ticket 2e869934)
+            (move-the-ticket! row ctx #{:open} :review)
+            (update row :data merge
+                    (cond-> {:branch branch
+                             :worktree_dirty 0
+                             ;; a new round is a new head: the last
+                             ;; red names are not its (ticket d1742908)
+                             :failing_checks nil
+                             :conflicts nil
+                             ;; nor is the last landing's error: this
+                             ;; submit is a landing of its own (ticket
+                             ;; 92871afb)
+                             :landing_error nil
+                             ;; nor is the last merge state: the forge
+                             ;; computes it again for the new head, and
+                             ;; a stale `conflicted` would fail the
+                             ;; round before the forge was re-read
+                             ;; (ticket 5f12e772)
+                             :mergeable "unknown"
+                             :rounds (inc (long (or (get-in row [:data :rounds])
+                                                    0)))}
+                      (:commit answer) (assoc :head_sha
+                                              (str (:commit answer)))))))))))
 
 (defhandler discard-the-worktree [row inp ctx]
   ;; THE ESCAPE HATCH. The worktree goes back to the branch head and
@@ -380,29 +449,47 @@
       (bench/refused answer) (rig-refusal! "discard the worktree" answer)
       :else (update row :data merge {:branch branch :worktree_dirty 0}))))
 
-(defhandler unstick-the-change [row _inp _ctx]
+(defhandler unstick-the-change [row _inp ctx]
   ;; A PERSON LOOKED AT IT. The rounds go back to zero, because the
   ;; ceiling counts the rounds nobody has read yet; a change a person
-  ;; has read and put back to work starts its count again.
+  ;; has read and put back to work starts its count again. A ticket
+  ;; the round ceiling left in review goes back to the queue with it,
+  ;; which is how a person releases a stuck change (ticket 2e869934).
+  (move-the-ticket! row ctx #{:in_review} :return)
   (assoc-in row [:data :rounds] 0))
 
 ;; ── the checks went red, or green again (ticket d1742908) ───────────
 
-(defhandler write-the-failing-checks [row inp _ctx]
+(defn- with-the-failing-checks
   ;; The names ride on the row, so the seat and the person read which
   ;; checks went red without opening GitHub. The machine moves the row.
   ;; A conflict rides as `merge-conflict` among the names, and its
   ;; paths, when the bench could name them, beside (ticket 5f12e772).
   ;; A landing that failed rides as `landing:<step>`, and the step's
   ;; output beside it (ticket 92871afb).
+  [row inp]
   (update row :data assoc
           :failing_checks (vec (:failing_checks inp))
           :conflicts (some-> (:conflicts inp) seq vec)
           :landing_error (some-> (:landing_error inp) str not-empty)))
 
-(defhandler clear-the-failing-checks [row _inp _ctx]
+(defhandler write-the-failing-checks [row inp _ctx]
+  ;; the ceiling's red: the ticket stays in review, and the stuck
+  ;; change is what a person reads (ticket 2e869934)
+  (with-the-failing-checks row inp))
+
+(defhandler fail-the-change [row inp ctx]
+  ;; A red or conflicted head sends the ticket back to the queue, and
+  ;; the seat that wrote the change wakes on its `return` and walks it
+  ;; with this change and its feedback (ticket 2e869934).
+  (move-the-ticket! row ctx #{:in_review} :return)
+  (with-the-failing-checks row inp))
+
+(defhandler clear-the-failing-checks [row _inp ctx]
   ;; A green head, or a new round: the names of the last red are not
-  ;; this head's, and a stale list would read as a live one.
+  ;; this head's, and a stale list would read as a live one. A ticket
+  ;; the red sent back goes out for review again (ticket 2e869934).
+  (move-the-ticket! row ctx #{:open} :review)
   (update row :data assoc :failing_checks nil :conflicts nil
           :landing_error nil))
 
@@ -929,15 +1016,16 @@
      ;; — see `complete-the-task-it-was-born-from`.
      :handler complete-the-task-it-was-born-from
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "GitHub merged this pull request. The row follows GitHub, so there is no way back: a merged pull request is not reopened. The ask this change was born from — a task or a ticket — is completed with it."}
+              :one-way "GitHub merged this pull request. The row follows GitHub, so there is no way back: a merged pull request is not reopened. The ask this change was born from — a task, or a ticket in review — is completed with it."}
      :display {:label "Merged" :order 2
                :description "GitHub merged the pull request"}}
 
     :close
     {:from #{:open :submitted :failing :stuck} :to :closed
      :guards [the-mirror-writes-this-row]
+     :handler send-the-ticket-back
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "GitHub closed this pull request without merging it. The way back is GitHub's own reopen, which the mirror follows with its reopen door."}
+              :one-way "GitHub closed this pull request without merging it, and a ticket this change was built for goes back to the queue. The way back is GitHub's own reopen, which the mirror follows with its reopen door."}
      :display {:label "Closed" :order 3
                :description "GitHub closed the pull request and merged nothing"}}
 
@@ -1043,7 +1131,7 @@
     :fail
     {:from #{:submitted} :to :failing
      :guards [the-mirror-writes-this-row]
-     :handler write-the-failing-checks
+     :handler fail-the-change
      :input [:map
              [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
              [:conflicts {:optional true}
@@ -1054,7 +1142,7 @@
               [:maybe [:string {:max 4000}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The required checks finished red on this head. The way back is a green head, which the house reads on its next pass, or the seat's next submit."}
+              :one-way "The required checks finished red on this head, and the ticket this change was built for goes back to the queue, so the seat that wrote it walks it again. The way back is a green head, which the house reads on its next pass, or the seat's next submit."}
      :display {:label "Failing" :order 15
                :description "The required checks went red on the head the seat pushed"}}
 
@@ -1093,7 +1181,7 @@
      ;; refuses the forge pass's own unfenced call.
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it. The way back is a person's unstick, or grooming the ticket again."}
+              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's unstick, which puts that ticket in the queue again and starts the rounds from zero."}
      :display {:label "Stuck on red" :order 17
                :description "The checks went red on the last round, and a person reads it next"}}
 
@@ -1123,11 +1211,13 @@
               under-the-round-ceiling]
      :handler submit-the-change
      ;; NO `:touches` (bead waymark-fp62.6.3.4). The round ends here
-     ;; on this change, and this door writes no other kind. The
+     ;; on this change; the one other row it moves is the ticket it
+     ;; was born from, out for review (ticket 2e869934), and that
+     ;; rides the `:one-way` sentence as the merge's does. The
      ;; harness closes the sitting with its Stop hook (spec-seat.md
      ;; R-12.17), and that report carries the bill of the round.
      :safety {:idempotent false :reversible false :confirm false
-              :one-way "The commit is written and the branch is pushed, so this round is on the record at GitHub. The way forward is another round on the same change, not a way back."}
+              :one-way "The commit is written and the branch is pushed, so this round is on the record at GitHub, and the ticket this change was built for is out for review until the change merges or comes back red. The way forward is another round on the same change, not a way back."}
      :display {:label "Submit" :style :primary :order 5
                :description "Commit the worktree with your sentence and push the branch — this ends the round"}}
 
@@ -1173,6 +1263,9 @@
                      :help "One sentence for the person who reads this next: what you tried, and what stopped you. It rides the log beside this move."}}
               [:string {:min 1 :max 480}]]]
      :edit {:draft {:shared true :live true}}
+     ;; a stalled change is not under review: its ticket goes back to
+     ;; the queue, where the seat's `ungroom` finds it (ticket 2e869934)
+     :handler send-the-ticket-back
      ;; NOT :reversible — `unstick` brings a stuck change back to
      ;; `open` and to no other state, so a stall from `submitted` has
      ;; no transition back to where it started (checks/check-reversible
