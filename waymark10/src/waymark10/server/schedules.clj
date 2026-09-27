@@ -590,6 +590,15 @@
                    :x-display
                    {:label "The wake is due"
                     :help "When the waiting wake may go out. The engine writes it when a transition matched a wake_on entry that settles, and a later match moves it forward. The wake goes out after this moment has passed. Engine-written."}}
+     [:maybe :waymark/instant]]
+    ;; The fuel wall's mark (waymark ticket b790752f). A wake that
+    ;; matched while the seat's week of fuel was spent does not fire:
+    ;; it waits as `wake_pending`, and this says when the wall last
+    ;; held one back, so a person can see why the seat is quiet.
+    [:last_halted_wake {:optional true
+                        :x-display
+                        {:label "A wake the budget held"
+                         :help "When a matching transition last found this seat's week of fuel spent. The wake waits, and it goes out when the window rolls. Engine-written."}}
      [:maybe :waymark/instant]]]
    :create-schema
    [:map

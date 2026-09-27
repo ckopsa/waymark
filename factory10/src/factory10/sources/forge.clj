@@ -48,8 +48,15 @@
   6. For each `submitted` or `failing` change of a repository with an
      active policy, it reads the checks on the head (`forge-checks`)
      against the policy's required checks and walks `fail`, `recover`
-     or, on the last round, `stick` (ticket d1742908).
-  7. It prints one census line: the calls, the rows minted and the
+     or, on the last round, `stick` (ticket d1742908). A change the
+     forge reads as `conflicted` is red too, as `merge-conflict`, with
+     the paths the bench's trial merge names (ticket 5f12e772).
+  7. For each active policy whose repository the forge refused to
+     list (401, 403 or 404), it writes the status, the route and the
+     time on the policy row through the hidden `note_source` door, and
+     clears that note the first pass the repository answers again
+     (ticket 116dfb0d).
+  8. It prints one census line: the calls, the rows minted and the
      rows moved.
 
   A HEAD THAT MOVES (bead waymark-fp62.6.9). A run ran on one commit.
@@ -78,6 +85,7 @@
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
             [factory10.mirror :as mirror]
+            [factory10.resources.repo-policy :as policy]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
   (:import (java.util.concurrent CountDownLatch TimeUnit)))
@@ -111,7 +119,11 @@
     document carries the `ci_run` kind's own fields plus
     `:change_id` (the change it ran on) and whatever the forge needs
     to find the log later. `:complete?` is false when a repository
-    did not answer; the source holds its cursor where it was.")
+    did not answer; the source holds its cursor where it was. A source
+    may also answer `:answered` (the repositories that did answer) and
+    `:refusals` ({repository {:status :route}} for each whose pulls
+    listing refused the token), which the pass writes on the policy
+    rows (ticket 116dfb0d).")
   (forge-log-tail [s check]
     "→ {:excerpt \"…\" :note \"…\" } for one check document: the tail
     of the failed job's log. A log the forge will not hand over in
@@ -538,12 +550,66 @@
                                          {:limit failing-scan-limit}))
               ["submitted" "failing"])))))
 
+;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
+;;
+;; A conflicted pull request runs no fresh checks, so it never goes
+;; red: it just sits. The row's `mergeable` already reads `conflicted`
+;; from the forge (`behind` is `blocked` there, and a branch that is
+;; only behind is not failing — the merge brings it forward). So the
+;; verdict counts a conflict as one more red name, `merge-conflict`,
+;; and the move below is the red move: `failing` under the round
+;; ceiling, `stuck` on the last round. The way back is a head with no
+;; conflict and green checks, exactly as for a red check.
+
+(def merge-conflict
+  "The name a conflict rides in `failing_checks`."
+  "merge-conflict")
+
+(defn conflicted?
+  "Does the forge say this change conflicts with its base?"
+  [row]
+  (= "conflicted" (str (get-in row [:data :mergeable]))))
+
+(defn with-conflict
+  "The checks' verdict, read together with the row's merge state. A
+  conflicted row is red whatever its checks say — still running, green
+  or red — and `merge-conflict` joins the red names."
+  [verdict row]
+  (if (conflicted? row)
+    {:verdict :red
+     :names (vec (distinct (conj (vec (when (= :red (:verdict verdict))
+                                         (:names verdict)))
+                                 merge-conflict)))}
+    verdict))
+
+(def ^:private conflict-path-limit 50)
+
+(defn conflict-paths
+  "The paths a trial merge of the base into the change's branch leaves
+  unmerged, asked of the bench with the engine's own hand, or nil. The
+  forge does not name them; the rig can, in its worktree, and aborts
+  the merge after. A rig with no such tool, or no rig at all, answers
+  nil — the change still goes failing, only without its paths."
+  [eng row]
+  (let [answer (bench/ask {:services (:services eng)} :conflicts
+                          {:repo (str (get-in row [:data :repository]))
+                           :branch (str (get-in row [:data :head_branch]))
+                           :base (str (get-in row [:data :base_branch]))})
+        paths (when (and (map? answer) (not (bench/refused answer)))
+                (:paths answer))]
+    (when (sequential? paths)
+      (not-empty (into [] (comp (map str) (remove str/blank?)
+                                (map #(subs % 0 (min (count %) 400)))
+                                (take conflict-path-limit))
+                       paths)))))
+
 (defn- failing-move
   "The one door the verdict opens on this row, as [door input], or nil.
   A red head under the round ceiling goes to `failing`; a red head on
   the last round goes to `stuck` with the names as its why; a green
-  head brings a failing change back to `submitted`."
-  [row verdict policy]
+  head brings a failing change back to `submitted`. `conflicts` is the
+  list of conflicting paths, written beside the names when there is one."
+  [row verdict policy conflicts]
   (let [names (:names verdict)]
     (case [(state-of row) (:verdict verdict)]
       [:submitted :red]
@@ -551,9 +617,11 @@
               (bench/rounds-of policy))
         (let [why (str "The checks went red on the last round the policy "
                        "gives: " (str/join ", " names) ".")]
-          [:stick {:why (subs why 0 (min (count why) why-chars))
-                   :failing_checks names}])
-        [:fail {:failing_checks names}])
+          [:stick (cond-> {:why (subs why 0 (min (count why) why-chars))
+                           :failing_checks names}
+                    (seq conflicts) (assoc :conflicts conflicts))])
+        [:fail (cond-> {:failing_checks names}
+                 (seq conflicts) (assoc :conflicts conflicts))])
       [:failing :green] [:recover {}]
       nil)))
 
@@ -581,9 +649,17 @@
          (if-not (and head policy)
            census
            (try
-             (let [verdict (check-verdict (bench/required-checks-of policy)
-                                          (forge-checks source repo head))]
-               (if-some [[door input] (failing-move row verdict policy)]
+             (let [verdict (with-conflict
+                            (check-verdict (bench/required-checks-of policy)
+                                           (forge-checks source repo head))
+                            row)
+                   ;; the rig is asked only when a conflict will move
+                   ;; the row, never for a row that stays where it is
+                   conflicts (when (and (conflicted? row)
+                                        (= :submitted (state-of row)))
+                               (conflict-paths eng row))]
+               (if-some [[door input] (failing-move row verdict policy
+                                                    conflicts)]
                  (do (inv/invoke! eng :change (str (:id row)) door input
                                   (as-opts))
                      (update census (moved-counts door) inc))
@@ -660,7 +736,50 @@
 (def ^:private fresh-census
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
-   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :refused 0})
+   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0
+   :refused 0})
+
+;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
+;; whose pulls listing the token cannot read costs its rows a pass and
+;; a log line, every pass, and nothing in the engine says so: its
+;; changes are never adopted, have no number, and so the house's merge
+;; and the person's merge ask both skip them silently. The pass writes
+;; the refusal on the repository's own policy row, where a person reads
+;; it, and clears it the first pass that reads the repository again. A
+;; note that already says the same status for the same route is left
+;; alone, so the log carries one transition when a repository goes dark
+;; and one when it comes back.
+
+(defn- source-note-pass!
+  [eng refusals answered census log-fn]
+  (let [answered (set answered)]
+    (reduce
+     (fn [census row]
+       (let [repo (str (get-in row [:data :repository]))
+             stored (str (get-in row [:data :source_note]))
+             refusal (get refusals repo)
+             input (cond
+                     refusal
+                     (when-not (str/starts-with?
+                                stored
+                                (policy/source-note-head (:status refusal)
+                                                         (:route refusal)))
+                       {:answered (:status refusal) :route (:route refusal)})
+
+                     (and (contains? answered repo) (not (str/blank? stored)))
+                     {})]
+         (if (nil? input)
+           census
+           (try
+             (inv/invoke! eng :repo_policy (str (:id row)) :note_source
+                          input (as-opts))
+             (update census :noted inc)
+             (catch Exception e
+               (log-fn "the policy of " repo " was refused its source note ("
+                       (ex-message e) ")")
+               (update census :refused inc))))))
+     census
+     (bench/policies eng :active))))
 
 (defn pass!
   "One pass of the factory mirror.
@@ -680,10 +799,12 @@
         log-fn (or log-fn warn!)]
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
-    (let [{:keys [changes checks repositories complete?]} (forge-poll source)
+    (let [{:keys [changes checks repositories complete? answered refusals]}
+          (forge-poll source)
           census (assoc fresh-census
                         :repositories (count repositories)
                         :complete? (boolean complete?))
+          census (source-note-pass! eng refusals answered census log-fn)
           census (change-pass! eng changes census log-fn)
           census (run-pass! eng source checks census log-fn)
           census (stale-pass! eng changes census log-fn)
@@ -704,6 +825,8 @@
                 (str ", " (:failing census) " changes failing, "
                      (:recovered census) " green again, "
                      (:stuck census) " stuck on red"))
+              (when (pos? (long (:noted census)))
+                (str ", " (:noted census) " policy source notes written"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
               (when-not (:complete? census)
