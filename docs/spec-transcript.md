@@ -78,9 +78,11 @@ before it stopped. A row per line makes each question one
 `waymark_query`. A blob makes each question a download and a parse
 that the connector cannot do.
 
-**D-6. The reader is a grant, and not the sitter.** The memory of a
-seat is `self`, `journal`, and `letter` (spec-seat.md section 2). A
-transcript must not become a second memory that no charter controls.
+**D-6. The reader is a grant.** A sitter does not see a transcript
+by default. A grant whose scope names the kind reads it, and that
+grant can be a seat's own. The owner's ruling, 2026-09-27: a guard
+that keeps a seat from its own transcripts is not necessary now
+(section 13).
 
 **D-7. The seat's place keeps three files.** The upload is a new
 step in `sitting-close.sh`. No file is added, so the sync workflow's
@@ -329,11 +331,9 @@ action `read`. A `filter` on `seat` narrows the entry. The mayor's
 seat reads them through a scope entry that a person approves, as any
 other kind.
 
-**R-8.3** A seat's scope must not admit its own seat's transcripts.
-The guard `transcript-is-not-memory` refuses a scope entry on either
-kind that does not filter by `seat`, on a seat whose grant would
-wear it, unless the filter names only other seats. The memory of a
-seat stays `self`, `journal`, and `letter` (D-6).
+**R-8.3** A seat's scope can admit its own seat's transcripts. No
+guard refuses it. The mayor audits its own sittings as it audits the
+other seats' (D-6).
 
 **R-8.4** The sitting's envelope must link its transcript, and the
 transcript's envelope must link its sitting and the query of its
@@ -432,8 +432,7 @@ The proxy header is recorded as a punt.
     received.`
 11. The mayor's grant, with `transcript_entry` read filtered to the
     code seat, finds each failed tool call of one sitting with one
-    `waymark_query`. The code seat's own grant cannot name its own
-    seat's transcripts: the guard refuses the scope.
+    `waymark_query`.
 12. A seat at `keep_transcripts` `none` answers no `transcript` at the
     sit, and no transcript row is born.
 13. An interactive sitting at the default `fired` answers no
@@ -456,16 +455,17 @@ The proxy header is recorded as a punt.
 - A hook for a container that the provider reclaims in the middle of a
   turn. No Stop event comes, so the transcript stops at the last post
   before it, and the seal writes the gap.
+- A guard that keeps a seat from its own transcripts, so that a
+  transcript does not become a second memory beside `self`, `journal`,
+  and `letter`. The owner's ruling, 2026-09-27: not necessary now.
 - Transcripts of sessions that sit in no seat. The key comes from the
   sit, so a session with no sit has no transcript.
 
-## 14. Questions for the owner
+## 14. The owner's decisions, 2026-09-27
 
-1. The trade in section 10: detection now, and the proxy header
-   later. Is that acceptable?
-2. The default of `transcript_days`: 30.
-3. The default of `keep_transcripts`: `fired`, so an interactive
-   sitting is kept only when the person sets `all` on the seat.
-4. R-8.3 stops a seat from reading its own transcripts. The mayor
-   then cannot read the mayor's sittings. Is that the intent, or does
-   the auditor audit itself?
+1. The trade in section 10 is accepted: detection now, and the proxy
+   header later.
+2. `transcript_days` defaults to 30.
+3. `keep_transcripts` defaults to `fired`.
+4. A seat can read its own transcripts. The guard is a punt
+   (section 13).
