@@ -419,6 +419,10 @@
                              ;; red names are not its (ticket d1742908)
                              :failing_checks nil
                              :conflicts nil
+                             ;; nor is the last landing's error: this
+                             ;; submit is a landing of its own (ticket
+                             ;; 92871afb)
+                             :landing_error nil
                              ;; nor is the last merge state: the forge
                              ;; computes it again for the new head, and
                              ;; a stale `conflicted` would fail the
@@ -462,10 +466,13 @@
   ;; checks went red without opening GitHub. The machine moves the row.
   ;; A conflict rides as `merge-conflict` among the names, and its
   ;; paths, when the bench could name them, beside (ticket 5f12e772).
+  ;; A landing that failed rides as `landing:<step>`, and the step's
+  ;; output beside it (ticket 92871afb).
   [row inp]
   (update row :data assoc
           :failing_checks (vec (:failing_checks inp))
-          :conflicts (some-> (:conflicts inp) seq vec)))
+          :conflicts (some-> (:conflicts inp) seq vec)
+          :landing_error (some-> (:landing_error inp) str not-empty)))
 
 (defhandler write-the-failing-checks [row inp _ctx]
   ;; the ceiling's red: the ticket stays in review, and the stuck
@@ -484,7 +491,8 @@
   ;; this head's, and a stale list would read as a live one. A ticket
   ;; the red sent back goes out for review again (ticket 2e869934).
   (move-the-ticket! row ctx #{:open} :review)
-  (update row :data assoc :failing_checks nil :conflicts nil))
+  (update row :data assoc :failing_checks nil :conflicts nil
+          :landing_error nil))
 
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
@@ -873,6 +881,15 @@
                  {:label "The paths that conflict"
                   :help "The paths a trial merge of the base branch into this change's branch left unmerged. The house writes them when a conflict moves the change to failing, and clears them when the head merges clean and goes green, or the seat submits again."}}
      [:maybe [:vector [:string {:max 400}]]]]
+    ;; written beside `landing:<step>` in `failing_checks` when the
+    ;; rig's landing of a submit failed; cleared with it (ticket
+    ;; 92871afb)
+    [:landing_error {:optional true
+                     :x-display
+                     {:widget "prose"
+                      :label "Why the push did not land"
+                      :help "The end of the output of the step the bench's landing failed at, when a submit never reached GitHub. The house writes it when it moves the change to failing, and clears it when the seat submits again."}}
+     [:maybe [:string {:max 4000}]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     [:url {:optional true :x-display {:hidden true}}
@@ -1140,7 +1157,11 @@
      :input [:map
              [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
              [:conflicts {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]]
+              [:maybe [:vector [:string {:max 400}]]]]
+             [:landing_error {:optional true
+                              :x-display {:widget "prose"
+                                          :label "Why the push did not land"}}
+              [:maybe [:string {:max 4000}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The required checks finished red on this head, and the ticket this change was built for goes back to the queue, so the seat that wrote it walks it again. The way back is a green head, which the house reads on its next pass, or the seat's next submit."}
@@ -1171,7 +1192,11 @@
               [:string {:min 1 :max 480}]]
              [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
              [:conflicts {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]]
+              [:maybe [:vector [:string {:max 400}]]]]
+             [:landing_error {:optional true
+                              :x-display {:widget "prose"
+                                          :label "Why the push did not land"}}
+              [:maybe [:string {:max 4000}]]]]
      ;; :large-effort — NO draft here, unlike `stall`. Only the engine
      ;; walks this door and nobody composes the why in a box; and an
      ;; `:edit` implies the version fence (waymark10.resource), which
