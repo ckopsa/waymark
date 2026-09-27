@@ -986,6 +986,21 @@ one filtered entry, and the door admits a call that any entry admits.
 A seat's scope entry is a grant entry, so a seat narrows a bench power
 with no rule of its own.
 
+The ENGINE decides `allow_protected`, and never the caller. The rig
+refuses a write under `.github/` or `.claude/` unless the call carries
+`allow_protected: true`. A workflow reads the repository's secrets and
+a `.claude/` hook runs in every session that opens the repository, so
+the power door drops any `allow_protected` a caller sends on a bench
+call. It sets the flag on a `bench.edit` call only when every one of
+the call's `path` and `move_to` that lies under `.github/` or
+`.claude/` matches a `path` glob of a filter map that admits the call,
+and that glob itself starts with `.github/` or `.claude/`. A `*` or
+`**` glob never counts, and neither does a path with a `.` or `..`
+part. Otherwise the rig refuses. A seat that must write
+`.github/workflows/test.yml` names it in its `bench.edit` filter, for
+example `{"repo": "ckopsa/waymark-doors", "path":
+".github/workflows/test.yml"}`.
+
 The engine must also name the office on each bench call. A call
 through `waymark_power` from a bound session carries `seat` and
 `sitting`, which are the ids the sit bound. A session with no bound
