@@ -17,7 +17,7 @@ and checks `claude --version` and the seat place inside it. A push to
 The image holds:
 
 - the server, run from source: `clojure -M:serve /etc/localfire/localfire.edn`
-  from `/app/localfire`, on port 8111;
+  from `/app/localfire`, on port 8112;
 - the Claude Code CLI, pinned by `CLAUDE_CODE_VERSION` in the Dockerfile;
 - the seat place, copied from the repo's `seat/` to `/srv/waymark-seat`.
 
