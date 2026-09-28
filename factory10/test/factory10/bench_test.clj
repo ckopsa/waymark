@@ -1319,6 +1319,39 @@
         "the policy leaves the merge to a person, so the rig opens the
          pull request and turns nothing on")))
 
+;; ── the bench's test (ticket bae401d5) ──────────────────────────────────
+
+(deftest a-policy-with-a-test-block-tells-the-rig-its-workflow
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:test {:workflow "tests.yml" :input "only"}})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))]
+    (is (= {:workflow "tests.yml" :input "only"} (:test (sent 0)))
+        "enroll carries the workflow the bench's test dispatches")
+    (let [current (policy-row eng (:id row))]
+      (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                   (assoc (select-keys (:data current)
+                                       [:repository :branch_pattern :base
+                                        :max_lines :opens_pr :auto_merge
+                                        :rounds_per_change :formatter
+                                        :deny :orientation])
+                          :test {:workflow "ci.yml" :input "select"})
+                   {:principal person
+                    :if-match (inv/etag :repo_policy (:id row)
+                                        (:version current))}))
+    (is (= {:workflow "ci.yml" :input "select"} (:test (sent 1)))
+        "a restate that changes the block sends it again, so the rig
+         replaces its entry")))
+
+(deftest a-policy-without-a-test-block-sends-no-test-key
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        args (:arguments (first (calls-of st "bench__enroll")))]
+    (is (not (contains? args :test))
+        "no key at all, so a rig that does not know `test` still enrolls
+         the repository")))
+
 ;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
 
 (def ^:private house-policy
