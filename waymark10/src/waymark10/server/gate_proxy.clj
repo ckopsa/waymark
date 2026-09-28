@@ -172,6 +172,15 @@
   [eng-or-rpc token]
   (some-> (servers/engine-of eng-or-rpc) (servers/token-tool token)))
 
+(defn token-tools
+  "EVERY tool a power token admits, as a caller spells them —
+  `mcp-servers/token-tools`, over a dispatcher. Empty when there is
+  no engine yet."
+  [eng-or-rpc token]
+  (if-some [eng (servers/engine-of eng-or-rpc)]
+    (servers/token-tools eng token)
+    []))
+
 ;; ── the grant's read of the policy ──────────────────────────────────
 
 (defn- admitted?
