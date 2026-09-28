@@ -1477,16 +1477,61 @@
 (deftest the-landing-verdict-names-the-failed-step
   (is (= {:verdict :red :names ["landing:push"] :error a-rejected-push}
          (forge/landing-verdict (a-failed-landing))))
-  (is (= {:verdict :red :names ["landing:push"] :error "rejected"}
+  (is (= {:verdict :red :names ["landing:push"]}
          (forge/landing-verdict {:state "failed" :failed_step "push"
                                  :error "rejected"}))
-      "a landing that names its failed step and no steps still says which")
+      "a landing that names its failed step and no steps still says which;
+       output off the steps is not the rig's shape and is not read")
   (is (= {:verdict :red :names ["landing:unknown"]}
          (forge/landing-verdict {:state "failed"}))
       "a failed landing that names nothing is still red")
   (is (= {:verdict :running} (forge/landing-verdict {:state "running"})))
   (is (nil? (forge/landing-verdict {:state "succeeded"})))
   (is (nil? (forge/landing-verdict nil))))
+
+;; The rig's own `feedback.landing` (ckopsa/waymark-bench
+;; bench/landing.py): {state, failed_step, steps: [{name, state,
+;; seconds, exit_code, output, commit}]}. A rename on the rig must break
+;; these, not read a failed landing as not failed (ticket 92871afb).
+
+(def ^:private rig-commit-step
+  {:name "commit" :state "passed" :seconds 0.4 :exit_code 0
+   :output "[bench/one 1bae3a0] Fix" :commit "1bae3a0"})
+
+(def ^:private rig-failed-landing
+  {:state "failed" :failed_step "push"
+   :steps [rig-commit-step
+           {:name "push" :state "failed" :seconds 1.2 :exit_code 1
+            :output a-rejected-push :commit nil}]})
+
+(def ^:private rig-running-landing
+  {:state "running" :failed_step nil
+   :steps [rig-commit-step
+           {:name "push" :state "running" :seconds nil :exit_code nil
+            :output nil :commit nil}]})
+
+(def ^:private rig-passed-landing
+  {:state "passed" :failed_step nil
+   :steps [rig-commit-step
+           {:name "push" :state "passed" :seconds 1.1 :exit_code 0
+            :output "To github.com:ckopsa/waymark.git" :commit "1bae3a0"}]})
+
+(deftest the-landing-verdict-reads-the-rigs-shape
+  (is (= {:verdict :red :names ["landing:push"] :error a-rejected-push}
+         (forge/landing-verdict rig-failed-landing))
+      "the failed step's name and output ride the red name")
+  (is (= {:verdict :red :names ["landing:push"] :error a-rejected-push}
+         (forge/landing-verdict (dissoc rig-failed-landing :failed_step)))
+      "without failed_step, the first step whose state failed is the one")
+  (is (= {:verdict :running} (forge/landing-verdict rig-running-landing)))
+  (is (nil? (forge/landing-verdict rig-passed-landing)))
+  (is (nil? (forge/landing-verdict {:status "failed"}))
+      "`status` is not the rig's key: only `state` is read")
+  (is (= {:verdict :red :names ["landing:unknown"]}
+         (forge/landing-verdict
+          {:state "failed"
+           :steps [{:step "push" :state "failed" :error "rejected"}]}))
+      "a step's name and output are read from `name` and `output` only"))
 
 (deftest a-conflict-joins-the-red-names
   (let [row {:data {:mergeable "conflicted"}}]
