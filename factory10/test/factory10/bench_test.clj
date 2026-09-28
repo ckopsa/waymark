@@ -1971,6 +1971,45 @@
     (is (= 31 (get-in answer [:feedback :pull_request :number]))
         "so the run gets what the last round caused all the same")))
 
+(deftest a-token-of-several-tools-lists-every-tool-it-admits
+  (let [powers (into [{:power "bench.read" :tools ["read" "prepare" "status"]
+                       :why false :constraints ["repo" "path"]}
+                      {:power "bench.symbols" :tools ["symbols" "read_symbol"]
+                       :why false :constraints ["repo" "path"]}]
+                     (remove #(= "bench.read" (:power %)))
+                     bench-powers)
+        tools-of (fn [scope]
+                   (let [st (state)
+                         _ (swap! st assoc :powers powers)
+                         eng (fresh-engine st)
+                         _ (a-policy! eng {})
+                         _ (a-change! eng {})
+                         _ (open-seat! eng {:scope scope})
+                         h (engine/handler eng)
+                         sid (get-in (rpc h (bearer) "initialize"
+                                          {:protocolVersion mcp/protocol-version
+                                           :capabilities {}
+                                           :clientInfo {:name "routine" :version "0"}})
+                                     [:headers "Mcp-Session-Id"])
+                         sat (call! h sid "waymark_sit" {:key a-key})]
+                     (is (false? (:isError sat)) (text-of sat))
+                     (get-in (doc-of sat) [:bench :tools])))
+        change {:kind "change" :actions ["submit" "discard" "stall"]}
+        reads {:kind "bench.read" :actions [] :filter {:repo a-repository}}
+        symbols {:kind "bench.symbols" :actions [] :filter {:repo a-repository}}]
+    (is (= {:bench.read "bench__read"
+            :bench.prepare "bench__prepare"
+            :bench.status "bench__status"
+            :bench.symbols "bench__symbols"
+            :bench.read_symbol "bench__read_symbol"}
+           (tools-of [change reads symbols]))
+        "a token that names several tools lists every one of them")
+    (is (= {:bench.read "bench__read"
+            :bench.prepare "bench__prepare"
+            :bench.status "bench__status"}
+           (tools-of [change reads]))
+        "a seat without bench.symbols is handed neither of its tools")))
+
 (deftest a-code-seat-that-holds-bench-rerun-is-handed-the-rerun-tool
   (let [w (ask-world (conj ask-scope {:kind "bench.rerun" :actions []
                                       :filter {:repo a-repository}}))
@@ -2802,7 +2841,12 @@
     (is (= "open" (ticket-state w)))
     (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
     (is (empty? (get-in answer [:walk :rows]))
-        "the ticket beside a stuck change is left out like a claimed row")))
+        "the ticket beside a stuck change is left out like a claimed row")
+    (let [withheld (get-in answer [:walk :withheld])]
+      (is (= [(str (:id (:ticket w)))] (mapv :id withheld))
+          "the sit answers the withheld row rather than an empty list")
+      (is (re-find #"stuck" (str (:reason (first withheld))))
+          "and says why it was held back"))))
 
 (deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
   (let [w (ticket-world)
@@ -2818,7 +2862,10 @@
         "the wakes leave the ticket out as the sit does")
     (is (= 0 (#'wakes/walk-count eng seat))
         "so a groom or a count wake reads the walk as empty")
-    (is (true? (#'wakes/empty-walk? eng seat)))))
+    (is (true? (#'wakes/empty-walk? eng seat)))
+    (is (= 0 (#'wakes/entry-count eng seat {:kind "ticket" :at_least 1
+                                             :filter {:state "open"}}))
+        "a count entry under a filter of its own leaves the ticket out too")))
 
 ;; ── a submitted round is not walked twice (ticket 60c2ec22) ────────────
 
@@ -3162,3 +3209,41 @@
         (is (not (contains? (set (keys (:unavailable doc))) :stamp_label))
             "a hidden door is ABSENT from the envelope, not listed as
              unavailable — nobody spends a call to learn it is shut")))))
+
+;; ── the holder wall judges the calling sitting (ticket 51dfd10b) ─────
+
+(deftest the-holder-wall-judges-the-calling-sitting-not-the-newest-under-the-grant
+  (let [rows (atom {"A" {:id "A" :state :open
+                         :data {:grant "G" :seat "S" :walked_rows ["T"]}}
+                    "B" {:id "B" :state :open
+                         :data {:grant "G" :seat "S" :walked_rows ["U"]}}})
+        ;; B is the newer sitting; both share the seat's grant G
+        newest-first ["B" "A"]
+        ctx (fn [sid]
+              {:principal {:id "seat:S"}
+               :grant (cond-> {:id "G"} sid (assoc :sitting sid))
+               :read (fn [_ id] (get @rows (str id)))
+               :find (fn [_ where _]
+                       (->> newest-first
+                            (map @rows)
+                            (filter #(or (nil? (:state where))
+                                         (= (:state where) (:state %))))
+                            (filter #(or (nil? (:seat where))
+                                         (= (:seat where) (get-in % [:data :seat]))))
+                            (filter #(or (nil? (:grant where))
+                                         (= (:grant where) (get-in % [:data :grant]))))
+                            vec))})
+        change {:data {:born_from "ticket:T"}}]
+    (testing "the older sitting A, which holds T, may submit T's change"
+      (is (nil? (bench/unheld-detail change (ctx "A"))))
+      (is (= "A" (bench/sitting-id (ctx "A")))
+          "the trailer names the calling sitting, not the newest"))
+    (testing "the newer sitting B, which holds U, is refused naming A"
+      (is (str/includes? (str (bench/unheld-detail change (ctx "B")))
+                         "held by sitting A")))
+    (testing "a request that names no sitting is not judged"
+      (is (nil? (bench/unheld-detail change (ctx nil)))))
+    (testing "a closed A is refused on its own write"
+      (swap! rows assoc-in ["A" :state] :closed)
+      (is (str/includes? (str (bench/unheld-detail change (ctx "A")))
+                         "sitting A is closed")))))

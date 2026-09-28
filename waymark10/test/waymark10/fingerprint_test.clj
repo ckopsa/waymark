@@ -89,6 +89,30 @@
                            :right :finalize :left :abandon
                            :display {:label "Triage"}}]))))))
 
+(deftest a-kinds-endings-are-law
+  ;; waymark-fp62.4.1.2: the ending wall reads the kind-level :over to
+  ;; shut a finished row's doors, so re-spelling the endings mints a
+  ;; revision. A kind without :over carries no facet and keeps its hash.
+  (let [h (comp fp/fingerprint-hash fp/fingerprint-of)
+        ended (assoc (plan-rmap)
+                     :over {:accomplished #{:done} :let-go #{:abandoned}})]
+    (is (not (contains? (fp/fingerprint-of (plan-rmap)) "over")))
+    (is (= (h ended) (h (assoc (plan-rmap)
+                               :over {:accomplished #{:done}
+                                      :let-go #{:abandoned}}))))
+    (is (not= (h (plan-rmap)) (h ended)))
+    (testing "re-spelling an ending moves the hash, and the move is truth"
+      (doseq [other [(assoc-in ended [:over :let-go] #{})
+                     (assoc-in ended [:over :ways-back] #{:finalize})
+                     (assoc (plan-rmap)
+                            :over {:field :status :accomplished #{"done"}})]]
+        (let [d (fp/diff-fingerprints (fp/fingerprint-of ended)
+                                      (fp/fingerprint-of other))
+              paths (map :path (concat (:added d) (:removed d) (:changed d)))]
+          (is (not= (h ended) (h other)))
+          (is (seq paths))
+          (is (every? #(= :truth (fp/classify-path %)) paths)))))))
+
 (deftest a-fingerprint-diffs-empty-against-itself
   ;; regression: leaves holding nil/false (a guard's check, an off
   ;; safety flag) are present paths, not added/removed ones
