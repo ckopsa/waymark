@@ -375,14 +375,16 @@
         _ (drain! cn)
         seat-id (linked-seat! "answer-clerk" cn)]
     (try
-      (testing "429: the row breaks with the retry sentence"
+      (testing "429: the row stays live, says the retry sentence and keeps the wake"
         (sch/answer! *fire* 429 {:retry-after "30"})
         (fire-seat! seat-id "over the cap")
         (drain! cn)
         (let [row (sched-of seat-id)]
-          (is (= :broken (:state row)))
+          (is (= :live (:state row)))
           (is (= "The Routine has no free run. Try again after 30."
-                 (get-in row [:data :note])))))
+                 (get-in row [:data :note])))
+          (is (some? (get-in row [:data :retry_after])))
+          (is (true? (get-in row [:data :wake_pending])))))
 
       (testing "and the next fire that goes out clears it"
         (sch/answer! *fire* nil)
@@ -390,7 +392,8 @@
         (drain! cn)
         (let [row (sched-of seat-id)]
           (is (= :live (:state row)))
-          (is (nil? (get-in row [:data :note])))))
+          (is (nil? (get-in row [:data :note])))
+          (is (nil? (get-in row [:data :retry_after])))))
 
       (testing "400: the provider says the Routine is paused, and the row pauses"
         (sch/answer! *fire* 400)
