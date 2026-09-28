@@ -2188,10 +2188,11 @@
 (defn- ticket-world
   "An engine with the policy, one groomed ticket, a seat that WALKS
   tickets, and a session sat in it."
-  []
+  ([] (ticket-world {}))
+  ([policy-extra]
   (let [st (state)
         eng (fresh-engine st)
-        policy (a-policy! eng {})
+        policy (a-policy! eng policy-extra)
         ticket (:row (inv/create! eng :ticket
                                   {:title "Put the size ceiling on the policy form"
                                    :type "feature"
@@ -2208,7 +2209,7 @@
                     [:headers "Mcp-Session-Id"])
         sat (call! h sid "waymark_sit" {:key a-key})]
     {:eng eng :state st :h h :sid sid :seat seat :ticket ticket
-     :policy policy :sat sat :answer (doc-of sat)}))
+     :policy policy :sat sat :answer (doc-of sat)})))
 
 (defn- seat-invokes!
   "One door on the change beside the walk, taken by the seat."
@@ -2450,6 +2451,83 @@
           "the ending on the record stands")
       (is (= :complete (:action (last-ticket-move w)))
           "and the merge walked no door on it"))))
+
+;; ── a merge that waits on other tickets (ticket d069bc3b) ────────────
+
+(defn- a-groomed-ticket!
+  "One more groomed ticket in the world's engine. → its id."
+  [w title]
+  (let [row (:row (inv/create! (:eng w) :ticket
+                               {:title title :type "feature"
+                                :repo a-repository}
+                               {:principal person}))]
+    (inv/invoke! (:eng w) :ticket (str (:id row)) :groom {}
+                 {:principal person})
+    (str (:id row))))
+
+(defn- ticket-by-id [w id]
+  (store/with-tx (:storage (:eng w))
+    (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket id {}))))
+
+(defn- end-ticket!
+  "A person's `complete` or `drop` on one ticket."
+  [w id action]
+  (inv/invoke! (:eng w) :ticket id action {:close_reason "Ended for the test."}
+               {:principal person
+                :if-match (inv/etag :ticket id (:version (ticket-by-id w id)))}))
+
+(defn- held-world
+  "A house-merged world whose change is submitted and adopted as #91,
+  and whose ticket was then told to merge after one open ticket — a
+  dependency named after the pull request exists."
+  []
+  (let [w (ticket-world house-policy)
+        dep (a-groomed-ticket! w "Land the per-repository line first")]
+    (submitted-and-adopted! w 91)
+    (is (= "in_review" (ticket-state w)))
+    (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :merge_after_in_review
+                 {:merge_after [dep]} (ticket-fence w))
+    (assoc w :dep dep)))
+
+(deftest a-change-that-merges-after-an-open-ticket-is-held-until-it-is-done
+  (let [w (held-world)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "merged"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (is (= 0 (bench/merge-green! (:eng w) seen)))
+    (is (empty? (calls-of st "bench__merge")) "a held change is not merged")
+    (is (empty? (calls-of st "bench__update_branch")) "nor brought up to date")
+    (let [change (first (changes-of (:eng w)))]
+      (is (= "held" (get-in change [:data :line_why])))
+      (is (nil? (get-in change [:data :line_place]))
+          "and it has no place in the line")
+      (is (str/includes? (str (get-in change [:data :line_reason])) (:dep w))))
+    (is (nil? (get-in (the-policy w) [:data :line_front]))
+        "a held change is never the front")
+    (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
+                       (str (:dep w) " (open)"))
+        "the ticket says what it waits on to merge")
+    (testing "the pass after its dependency is done merges it"
+      (end-ticket! w (:dep w) :complete)
+      (is (= 1 (bench/merge-green! (:eng w) seen)))
+      (is (= 1 (count (calls-of st "bench__merge"))))
+      (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
+          "and the ticket no longer says it waits"))))
+
+(deftest a-dropped-dependency-keeps-the-change-held
+  (let [w (held-world)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "merged"})
+    (end-ticket! w (:dep w) :drop)
+    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w) seen)
+    (is (empty? (calls-of st "bench__merge"))
+        "the work it waited on will never land, so a person decides")
+    (is (= "held" (get-in (first (changes-of (:eng w))) [:data :line_why])))
+    (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
+                       "(dropped)"))))
 
 (deftest the-merge-closes-a-stuck-duplicate-on-the-same-branch
   (let [w (ticket-world)

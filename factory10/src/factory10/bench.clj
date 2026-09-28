@@ -716,7 +716,7 @@
 
 (def line-whys
   "Every word `line_why` may carry."
-  ["front" "behind" "red" "conflicted" "draft" "parked"])
+  ["front" "behind" "red" "conflicted" "draft" "parked" "held"])
 
 (def ^:private reason-chars 500)
 
@@ -856,6 +856,65 @@
       (write! :change id (merge blank-change (get (:changes marks) id)) #{}))
     @wrote))
 
+;; ── a merge that waits on other tickets (ticket d069bc3b) ───────────────
+;;
+;; A ticket's `merge_after` names the tickets that must be done before
+;; its change merges. The pass HOLDS such a change: no merge call, no
+;; update and no place in its line, so the change behind it is the
+;; front. Only `done` releases it. A DROPPED dependency does not, as a
+;; dropped blocker does: the work it waited on will never land, and a
+;; person decides whether this one still should. The hold is written on
+;; the change (`line_why` held) and on its ticket (`merge_waits`).
+
+(defn merge-holds
+  "Ticket id → what it still waits on to merge, for the tickets these
+  changes were born from: each ticket its `merge_after` names that is
+  not done, as {:id :state}, with `missing` for one that is gone. A
+  ticket that waits on nothing is not in the map, and an engine that
+  declares no ticket kind answers an empty one."
+  [eng changes]
+  (if-some [rd (rdef-of-kind eng :ticket)]
+    (let [st (:storage eng)
+          load-ticket (fn [tid]
+                        (some->> (try (store/with-tx st
+                                        (fn [tx] (store/load-row st tx :ticket tid {})))
+                                      (catch Exception _ nil))
+                                 (inv/decode-row rd)))
+          waits-of (fn [tid]
+                     (into []
+                           (keep (fn [dep]
+                                   (let [s (some-> (load-ticket (str dep)) :state name)]
+                                     (when (not= "done" s)
+                                       {:id (str dep) :state (or s "missing")}))))
+                           (get-in (load-ticket tid) [:data :merge_after])))]
+      (into {}
+            (keep (fn [tid]
+                    (let [waits (waits-of tid)]
+                      (when (seq waits) [tid waits]))))
+            (distinct (keep born-ticket changes))))
+    {}))
+
+(defn held-reason
+  "The sentence a held change and its ticket carry: what it waits on,
+  each with its state, and that a dropped one waits on a person."
+  [waits]
+  (let [s (str "waits on "
+               (str/join ", " (map #(str (:id %) " (" (:state %) ")") waits))
+               " to merge"
+               (when (some #(= "dropped" (:state %)) waits)
+                 "; a dropped ticket holds it until a person restates merge_after"))]
+    (subs s 0 (min reason-chars (count s)))))
+
+(defn- mark-held-tickets!
+  "Write `merge_waits` on the ticket of every submitted change, and
+  clear it on the tickets the last pass held that nothing holds now.
+  `seen` keeps the held tickets under `:held-tickets`."
+  [eng seen changes holds]
+  (doseq [tid (into (set (get @seen :held-tickets)) (keep born-ticket changes))]
+    (mark-row! eng :ticket tid
+               {:merge_waits (some-> (get holds tid) held-reason)} #{}))
+  (swap! seen assoc :held-tickets (set (keys holds))))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
@@ -870,22 +929,39 @@
   again next pass; `red` is left, because the seat's feedback already
   carries the red checks. Then the line is written on the rows
   (`mark-lines!`): the policy names its front and who waits, and each
-  change its place and why it is not merging. Throws nothing.
+  change its place and why it is not merging. A change whose ticket
+  still waits on another to merge (`merge-holds`) is held out of all
+  of it, and says so. Throws nothing.
   → the number of `merge` calls made."
   [eng seen]
   (let [by-repo (policies-by-repo eng)
         changes (submitted-changes eng)
-        priorities (ticket-priorities eng changes)
-        lines (merge-lines changes by-repo
+        house? #(some-> (get by-repo (str (get-in % [:data :repository])))
+                        house-pass-merges?)
+        holds (merge-holds eng (filter house? changes))
+        held (filterv #(and (house? %) (get holds (born-ticket %))) changes)
+        held-ids (into #{} (map #(str (:id %))) held)
+        offered (remove #(held-ids (str (:id %))) changes)
+        priorities (ticket-priorities eng offered)
+        lines (merge-lines offered by-repo
                            #(get priorities (born-ticket %)) @seen)
         answers (atom {})
         asked (work-lines! {:services (:services eng)} seen lines by-repo
                            answers)]
     (try
       (mark-lines! eng
-                   (line-marks lines @answers @seen
-                               (parked-changes changes by-repo @seen))
+                   (update (line-marks lines @answers @seen
+                                       (parked-changes offered by-repo @seen))
+                           :changes merge
+                           (into {}
+                                 (map (fn [c]
+                                        [(str (:id c))
+                                         {:line_why "held"
+                                          :line_reason (held-reason
+                                                        (get holds (born-ticket c)))}]))
+                                 held))
                    changes)
+      (mark-held-tickets! eng seen changes holds)
       (catch Exception e
         (warn! "the merge line was not written on the rows (" (ex-message e)
                "); the next pass writes it")))

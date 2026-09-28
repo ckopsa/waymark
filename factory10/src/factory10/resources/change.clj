@@ -966,14 +966,15 @@
                            "red" "Its checks are red, so it is out of the line"
                            "conflicted" "It conflicts with the base branch"
                            "draft" "It is a draft, and a draft is not brought forward"
-                           "parked" "The bench refused this head for good"}}}
-     [:maybe [:enum "front" "behind" "red" "conflicted" "draft" "parked"]]]
+                           "parked" "The bench refused this head for good"
+                           "held" "Its ticket merges after tickets that are not done yet"}}}
+     [:maybe [:enum "front" "behind" "red" "conflicted" "draft" "parked" "held"]]]
     [:line_reason {:optional true
                    :examples ["GitHub says it cannot merge"]
                    :x-display
                    {:widget "prose"
-                    :label "Why the bench parked it"
-                    :help "The bench's own reason for refusing this head for good. Empty unless the change is parked."}}
+                    :label "Why it is parked or held"
+                    :help "The bench's own reason for refusing this head for good, or the tickets a held change waits on to merge. Empty unless the change is parked or held."}}
      [:maybe [:string {:max 500}]]]
     [:url {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 500}]]]
