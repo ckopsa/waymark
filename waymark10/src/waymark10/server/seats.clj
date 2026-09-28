@@ -1273,7 +1273,20 @@
 ;; the runner pool (waymark ticket d16b71bf): the list is restated
 ;; whole, so adding a link and taking one off are each one restate.
 (defhandler set-runners [row inp _ctx]
-  (assoc-in row [:data :runners] (vec (:runners inp))))
+  (-> row
+      (assoc-in [:data :runners] (vec (:runners inp)))
+      (update :data #(if-some [o (:runner_order inp)]
+                       (assoc % :runner_order o)
+                       (dissoc % :runner_order)))))
+
+;; the pool order (waymark ticket 529deb73): `least_used` spreads the
+;; fires; `prefer` sends each to the first link that may fire, so a
+;; later link takes only the overflow.
+(def runner-orders ["least_used" "prefer"])
+
+(def runner-order-choices
+  {"least_used" "The least-used link that may fire; list order breaks a tie."
+   "prefer" "The first link in list order that may fire; a later link takes only the overflow."})
 
 ;; R-12.19: a fire moves nothing on the seat. The row is returned as
 ;; it stands, and the transition IS the record — `:record true` puts
@@ -2873,8 +2886,14 @@
     [:runners {:optional true
                :x-display
                {:label "Runner links"
-                :help "The runner links this model's seats fire through, in order. A fire skips a link that is waiting and takes the least-used of the rest."}}
-     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]]
+                :help "The runner links this model's seats fire through, in order. A fire skips a link that is waiting and takes the rest as the pool order says."}}
+     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+    [:runner_order {:optional true
+                    :x-display
+                    {:label "Pool order"
+                     :help "How a fire picks among the runner links that may fire. Empty is least used."
+                     :choices runner-order-choices}}
+     [:maybe (into [:enum] runner-orders)]]]
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :tier #{:eq :in}}
@@ -3001,7 +3020,13 @@
              [:runners {:x-display
                         {:label "Runner links"
                          :help "The runner link ids this model's seats fire through, in order. An empty list hands the fire back to the one link."}}
-              [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+              [:vector {:max 20} [:string {:min 1 :max 200}]]]
+             [:runner_order {:optional true
+                             :x-display
+                             {:label "Pool order"
+                              :help "How a fire picks among the links that may fire. Empty is least used."
+                              :choices runner-order-choices}}
+              [:maybe (into [:enum] runner-orders)]]]
      :record true
      :guards [a-person-at-the-chair]
      :safety {:idempotent true :reversible false :confirm false

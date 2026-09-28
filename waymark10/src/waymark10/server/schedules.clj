@@ -543,6 +543,9 @@
   [row inp _ctx]
   (-> row
       (assoc-in [:data :runners] (vec (:runners inp)))
+      (update :data #(if-some [o (:runner_order inp)]
+                       (assoc % :runner_order o)
+                       (dissoc % :runner_order)))
       (update :data dissoc :note)))
 
 (defresource schedule
@@ -698,8 +701,14 @@
     [:runners {:optional true
                :x-display
                {:label "Runner links"
-                :help "The runner links this schedule fires through, in order; this list overrides its model's. A fire skips a link that is waiting and takes the least-used of the rest. Empty fires through the model's list, or through the one link."}}
+                :help "The runner links this schedule fires through, in order; this list overrides its model's. A fire skips a link that is waiting and takes the rest as the pool order says. Empty fires through the model's list, or through the one link."}}
      [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+    [:runner_order {:optional true
+                    :x-display
+                    {:label "Pool order"
+                     :help "How a fire picks among this schedule's runner links that may fire. Empty is least used."
+                     :choices seats/runner-order-choices}}
+     [:maybe (into [:enum] seats/runner-orders)]]
     [:last_runner {:optional true
                    :x-display
                    {:label "Last fired through"
@@ -881,10 +890,16 @@
              [:runners {:x-display
                         {:label "Runner links"
                          :help "The runner link ids this schedule fires through, in order. An empty list hands the fire back to the model's list, or to the one link."}}
-              [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+              [:vector {:max 20} [:string {:min 1 :max 200}]]]
+             [:runner_order {:optional true
+                             :x-display
+                             {:label "Pool order"
+                              :help "How a fire picks among the links that may fire. Empty is least used."
+                              :choices seats/runner-order-choices}}
+              [:maybe (into [:enum] seats/runner-orders)]]]
      :record true
      :guards [a-person-or-a-delegate]
-     :edit {:prefill [:runners] :fence false
+     :edit {:prefill [:runners :runner_order] :fence false
             :unfenced-reason
             "The list is restated whole; a restate replaces what stands rather than editing it."}
      :safety {:idempotent true :reversible false :confirm false
@@ -1872,6 +1887,17 @@
       (when-not (own-link-of schedule-row)
         (some->> (seats/chair-of seat-row) (raw-row eng :model) runners-of-row))))
 
+(defn pool-order-of
+  "The order ONE fire of this schedule picks its pool's links in
+  (waymark ticket 529deb73): the `runner_order` of the row whose list
+  `pool-of` took, \"least_used\" when it names none."
+  [eng schedule-row seat-row]
+  (let [source (if (runners-of-row schedule-row)
+                 schedule-row
+                 (some->> (seats/chair-of seat-row) (raw-row eng :model)))]
+    (or (some-> (get-in source [:data :runner_order]) str not-empty)
+        "least_used")))
+
 (defn fire-through-pool!
   "Fire through the pool `ids` and land the answer on the schedule. The
   run that started stamps `fired` with `last_runner`; a pool whose
@@ -1881,9 +1907,9 @@
 
   runner-links requires this namespace, so its `fire-pool!` is
   resolved at the call."
-  [eng provider-of schedule-row text at ids]
+  [eng provider-of schedule-row text at ids & [order]]
   (let [fire-pool! (requiring-resolve 'waymark10.server.runner-links/fire-pool!)
-        {:keys [runner answer retry-at]} (fire-pool! eng provider-of ids text)]
+        {:keys [runner answer retry-at]} (fire-pool! eng provider-of ids text order)]
     (cond
       runner
       (try-act! eng schedule-row :fired
@@ -1908,8 +1934,11 @@
   through the one link."
   [eng adapter schedule-row text at seat-row]
   (if-some [ids (pool-of eng schedule-row seat-row)]
+    ;; claude_routine and localfire links speak one wire, so one
+    ;; Provider fires both (529deb73)
     (fire-through-pool! eng (constantly (claude-routine adapter))
-                        schedule-row text at ids)
+                        schedule-row text at ids
+                        (pool-order-of eng schedule-row seat-row))
     (fire! eng adapter schedule-row text at (link-of eng schedule-row seat-row))))
 
 ;; ── the read-back (R-12.3) ──────────────────────────────────────────

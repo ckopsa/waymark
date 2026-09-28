@@ -21,7 +21,8 @@
   rows keep their own links; nothing fires through a seeded link yet.
 
   `fire-pool!` (d16b71bf) chooses among a pool's links: it skips a
-  link that is waiting and takes the least-used of the rest."
+  link that is waiting and takes the least-used of the rest, or, in
+  `prefer` order (529deb73), the first of the rest in list order."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -33,7 +34,11 @@
 
 (set! *warn-on-reflection* true)
 
-(def providers ["claude_routine"])
+;; `localfire` (529deb73) answers the Routine wire, so it fires through
+;; the same Provider as `claude_routine`; it is its own value so a count
+;; of cloud Routine fires never counts it, and a localfire-only check
+;; can tell its links apart.
+(def providers ["claude_routine" "localfire"])
 
 (defn- a-persons-hand?
   "A person, or a tool that person is signed in to — the rule the
@@ -94,8 +99,9 @@
 (def ^:private provider-field
   [:provider {:x-display
               {:label "The provider"
-               :help "Whose endpoint the fire URL is. A Claude Routine is the one provider today."
-               :choices {"claude_routine" "A Claude Routine, made by hand and fired by URL."}}}
+               :help "Whose endpoint the fire URL is."
+               :choices {"claude_routine" "A Claude Routine, made by hand and fired by URL."
+                         "localfire" "A localfire server on a machine you own. It answers the Routine's wire, and its fires are counted apart from the cloud Routines'."}}}
    (into [:enum] providers)])
 
 (def ^:private fire-url-field
@@ -412,35 +418,40 @@
 
 (defn pool-order
   "The links of `rows`, given in the pool's order, that may fire at
-  `at`: least used first, ties in list order."
-  [rows ^Instant at]
-  (->> rows
-       (map-indexed vector)
-       (filter (fn [[_ r]] (and (live? r) (nil? (waiting-until r at)))))
-       (sort-by (fn [[i r]] [(used (:data r) at) i]))
-       (map second)))
+  `at`. `order` \"least_used\" (the default) puts the least used first,
+  ties in list order; \"prefer\" (529deb73) keeps list order, so the
+  first link that may fire takes every fire it can."
+  [rows ^Instant at & [order]]
+  (let [free (->> rows
+                  (map-indexed vector)
+                  (filter (fn [[_ r]] (and (live? r) (nil? (waiting-until r at))))))]
+    (->> (if (= "prefer" order)
+           free
+           (sort-by (fn [[i r]] [(used (:data r) at) i]) free))
+         (map second))))
 
 (defn- links-by-id [eng]
   (into {} (map (juxt (comp str :id) identity)) (rows-of eng :runner_link {})))
 
 (defn fire-pool!
   "Fire one run through the pool `ids`: each link that may fire, in
-  `pool-order`, until one starts a run. A throttle or a refusal marks
-  only that link (`fire-link!`) and the next is tried. `provider-of`
-  answers a link row's Provider.
+  `pool-order` under `order` (\"least_used\" or \"prefer\"), until one
+  starts a run. A throttle or a refusal marks only that link
+  (`fire-link!`) and the next is tried. `provider-of` answers a link
+  row's Provider.
 
   Answers {:runner id :answer answer} for the link a run started
   through; else {:retry-at instant}, the earliest instant a live link
   of the pool is free again — nil when none will be (every link
   broken, retired or missing)."
-  [eng provider-of ids text]
+  [eng provider-of ids text & [order]]
   (let [at (or (instant-of ((:now-fn eng))) (Instant/now))
         pool (keep (links-by-id eng) (map str ids))]
     (or (some (fn [row]
                 (let [answer (fire-link! eng (provider-of row) row text)]
                   (when (contains? answer :started)
                     {:runner (str (:id row)) :answer answer})))
-              (pool-order pool at))
+              (pool-order pool at order))
         (let [fresh (links-by-id eng)]
           {:retry-at (->> pool
                           (keep #(get fresh (str (:id %))))
