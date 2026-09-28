@@ -351,7 +351,9 @@
              (ask! {:task "Watch the chores and the kitchen pool."
                     :scope [{:kind "access_chore" :actions ["finish"] :ids ["c1"]}
                             {:kind "access_pool" :actions []
-                             :filter {:tag "kitchen"}}]}))]
+                             :filter {:tag "kitchen"}}]
+                    ;; short on purpose, so the renewal below has time to add
+                    :expires_at "2026-07-13T08:30:00Z"}))]
 
     (testing "the bootstrap ask mints the grant with its scope as asked"
       (is (some? gid))
@@ -363,7 +365,10 @@
                        :task "A little more of the same."
                        :scope [{:kind "access_chore" :actions ["drop"] :ids ["c2"]}
                                {:kind "access_pool" :actions []
-                                :filter {:tag "kitchen"}}]}))
+                                :filter {:tag "kitchen"}}]
+                       ;; named, so the 24 h default (waymark-h6y) does not
+                       ;; outrun the renewal below
+                       :expires_at "2026-07-13T08:30:00Z"}))
       (is (= 2 (count (scope-of gid))))
       (let [e (entry gid "access_chore")]
         (is (= #{"finish" "drop"} (set (:actions e))))
@@ -433,14 +438,20 @@
                        :scope scope :expires_at "2026-07-13T12:00:00Z"}))
       (is (= "2026-07-13T20:00:00Z" (expiry-of gid))))
 
-    (testing "an anchored ask with the short default expiry leaves it too"
-      (approve! (ask! {:grant_id gid :task "No time named." :scope scope}))
-      (is (= "2026-07-13T20:00:00Z" (expiry-of gid))))
-
     (testing "an anchored ask that expires later moves the expiry forward"
       (approve! (ask! {:grant_id gid :task "Another day."
                        :scope scope :expires_at "2026-07-14T06:00:00Z"}))
-      (is (= "2026-07-14T06:00:00Z" (expiry-of gid))))))
+      (is (= "2026-07-14T06:00:00Z" (expiry-of gid))))
+
+    (testing "an anchored ask naming no time takes the 24 h default (waymark-h6y),
+              which is later still, so it moves the expiry forward too"
+      (approve! (ask! {:grant_id gid :task "No time named." :scope scope}))
+      (is (= "2026-07-14T08:00:00Z" (expiry-of gid))))
+
+    (testing "an anchored ask that expires before the grant leaves it"
+      (approve! (ask! {:grant_id gid :task "Briefly."
+                       :scope scope :expires_at "2026-07-14T06:00:00Z"}))
+      (is (= "2026-07-14T08:00:00Z" (expiry-of gid))))))
 
 (deftest later-expiry-keeps-the-later
   (let [early (Instant/parse "2026-07-13T12:00:00Z")
