@@ -381,6 +381,8 @@
   [e]
   (some-> (:settle_seconds e) long))
 
+(declare entry-count)
+
 (defn- wake-for
   "What this transition asks of this seat, as `{:text … :settle …}`,
   or nil when the transition wakes it not at all. The text is what
@@ -408,9 +410,13 @@
   does not stop the count entry beside it from being asked — it
   matched nothing, so what is left is the count. One transition opens
   one fire either way — the fire's idempotency key is the transition
-  it heard."
-  [eng entries t]
-  (let [matched (matching-entries entries (:kind t) (:action t))]
+  it heard.
+
+  A count entry over the seat's own walk counts the walk the sit would
+  hand (`entry-count`), not the whole collection."
+  [eng seat entries t]
+  (let [matched (matching-entries entries (:kind t) (:action t))
+        seat-row (delay (raw-row eng :seat (:id seat)))]
     (or (some (fn [e]
                 (when (and (not (count-entry? e))
                            (moved-under? eng (:kind t) (:resource-id t)
@@ -419,8 +425,7 @@
               matched)
         (some (fn [e]
                 (when (count-entry? e)
-                  (when-some [n (count-under eng (keyword (name (:kind e)))
-                                             (:filter e))]
+                  (when-some [n (entry-count eng @seat-row e)]
                     (let [n (long n)
                           settle (settle-of e)]
                       (if-some [at-least (:at_least e)]
@@ -684,14 +689,15 @@
 (defn- slots
   "What a seat with several slots has in hand at `at`. `:busy` is its
   open sittings and the runs on their way to a sit; `:free` is the rows
-  of its walk no open sitting holds, less the rows those runs will
-  take. A seat that walks nothing has no free row."
+  of its walk the sit would hand (no open sitting holds them and no
+  stuck change stands beside them, `seats/unwalkable-rows`), less the
+  rows those runs will take. A seat that walks nothing has no free row."
   [eng seat-row ^Instant at]
   (let [seat-id (str (:id seat-row))
         flying (long (in-flight eng seat-id at))
         queue (when-some [[kind f] (walk-query eng seat-row)]
                 (ids-under eng kind f))
-        unclaimed (count (remove (seats/claimed-rows eng seat-id nil) queue))]
+        unclaimed (count (remove (seats/unwalkable-rows eng seat-row nil) queue))]
     {:busy (+ (long (seats/open-sitting-count eng seat-id)) flying)
      :free (max 0 (- unclaimed flying))}))
 
@@ -773,12 +779,32 @@
   walks nothing or the count cannot be taken. The sit's own filter
   (`mcp/walk-of`): the judgment's `queue` for a seat that says one,
   and the walk's scope entry filter otherwise, both under the kind's
-  defaults through `count-under`. A judgment seat's count does not
-  subtract the subjects already judged, so it can only read high: a
-  zero here is a zero on the sit's page too."
+  defaults. Less, as the sit leaves them out, the rows another open
+  sitting holds and the tickets whose change is stuck
+  (`seats/unwalkable-rows`, ticket e031e479): with none of those the
+  count is `count-under`'s, and with some it is the queue's ids, at
+  most `queue-page` of them, less those. A judgment seat's count does
+  not subtract the subjects already judged, so it can only read high:
+  a zero here is a zero on the sit's page too."
   [eng seat-row]
   (when-some [[walk f] (walk-query eng seat-row)]
-    (count-under eng walk f)))
+    (let [skip (seats/unwalkable-rows eng seat-row nil)]
+      (if (empty? skip)
+        (count-under eng walk f)
+        (some->> (ids-under eng walk f) (remove skip) count)))))
+
+(defn- entry-count
+  "The number a COUNT entry is judged by. An entry over the seat's own
+  walk (its walk kind, under the walk's own filter) counts the walk
+  the sit would hand (`walk-count`), so a wake never fires a run whose
+  sit walks nothing (ticket e031e479). Every other entry counts the
+  collection (`count-under`), as it always has."
+  [eng seat-row e]
+  (let [kind (keyword (name (:kind e)))
+        [walk f] (when seat-row (walk-query eng seat-row))]
+    (if (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
+      (walk-count eng seat-row)
+      (count-under eng kind (:filter e)))))
 
 (defn- empty-walk?
   "Would a release put this seat's session in front of an empty queue?
@@ -978,15 +1004,14 @@
 
 (defn- count-wake-holds?
   "Does one of the seat's COUNT wakes (`at_least`) still hold now? The
-  count is `count-under`'s, the one the consumer itself would take."
+  count is `entry-count`'s, the one the consumer itself would take."
   [eng seat-row]
   (let [walk-rdef (some->> (get-in seat-row [:data :walk]) str not-empty
                            keyword (get (inv/resources eng)))]
     (boolean
      (some (fn [e]
              (when-some [at-least (:at_least e)]
-               (when-some [n (count-under eng (keyword (name (:kind e)))
-                                          (:filter e))]
+               (when-some [n (entry-count eng seat-row e)]
                  (>= (long n) (long at-least)))))
            (seats/effective-wake-on seat-row walk-rdef)))))
 
@@ -1117,7 +1142,7 @@
         :else
         (let [at (now eng)]
           (doseq [seat (seats-of eng cache)
-                  :let [wake (wake-for eng (:wake-on seat) t)]
+                  :let [wake (wake-for eng seat (:wake-on seat) t)]
                   :when wake]
             (wake-seat! eng seat t at wake)))))
     (catch Exception e

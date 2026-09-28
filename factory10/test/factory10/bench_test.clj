@@ -55,6 +55,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)
@@ -2751,6 +2752,22 @@
     (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
     (is (empty? (get-in answer [:walk :rows]))
         "the ticket beside a stuck change is left out like a claimed row")))
+
+(deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (force-ticket-state! w :open)
+        eng (:eng w)
+        seat (:seat w)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (contains? (seats/stuck-walk-rows eng "ticket")
+                   (str (:id (:ticket w)))))
+    (is (contains? (seats/unwalkable-rows eng seat nil)
+                   (str (:id (:ticket w))))
+        "the wakes leave the ticket out as the sit does")
+    (is (= 0 (#'wakes/walk-count eng seat))
+        "so a groom or a count wake reads the walk as empty")
+    (is (true? (#'wakes/empty-walk? eng seat)))))
 
 ;; ── a submitted round is not walked twice (ticket 60c2ec22) ────────────
 
