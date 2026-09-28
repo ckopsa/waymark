@@ -2889,11 +2889,18 @@
 
 (def ^:private stuck-change-note
   "What the sit says when the change this firing works is still
-  `stuck`: no door on it submits, so the seat can only say so."
+  `stuck`: no door on it submits, so the seat can only say so. It names
+  the way back for each road to `stuck` (ticket 6bdaf6fe): the round
+  ceiling leaves the ticket in review, where `groom` does not serve,
+  and a seat's stall shelves the ticket to draft."
   (str "The change for this row is stuck, and a stuck change offers no "
        "submit, stall or discard. A person, or a delegate acting for one, "
-       "puts it back to work: with its unstick door, or by grooming the "
-       "ticket again. Say that it is stuck, and stop."))
+       "puts it back to work. A change stuck at the round ceiling leaves "
+       "its ticket in review, and grooming does not serve it: unstick puts "
+       "back a change with no pull request, and unstick_submitted one that "
+       "has a pull request. A seat's stall sent the ticket to draft, and "
+       "grooming it again puts the change back to work at the next sit. "
+       "Say that it is stuck, and stop."))
 
 (def ^:private groomed-walk-prefix
   "What `born_from` starts with for a change built for a ticket. A
