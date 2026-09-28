@@ -913,6 +913,8 @@
         ;; runner-pool 1c: one runner_link copied from each model's and
         ;; schedule's own link, once — the sources keep theirs
         _ (runner-links/ensure-seeded-links! eng)
+        ;; one runner_provider row per provider, its cap empty
+        _ (runner-links/ensure-providers! eng)
         ;; the bridge of Gate's deprecation (spec-mcp-servers § 3
         ;; step 1): one mcp_server row named gate, passthrough, at the
         ;; Gate WORKQUEUE10_GATE_URL names, seeded once and never

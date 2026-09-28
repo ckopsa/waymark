@@ -21,7 +21,11 @@
   rows keep their own links; nothing fires through a seeded link yet.
 
   `fire-pool!` (d16b71bf) chooses among a pool's links: it skips a
-  link that is waiting and takes the least-used of the rest."
+  link that is waiting and takes the least-used of the rest.
+
+  `runner-provider` (ec7e7bfb) is the account behind every link of one
+  provider: its cap counts every fire through any of them, from any
+  seat, and a throttle that names the account holds them all."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -278,6 +282,117 @@
               :one-way "The link fires nothing until a person restates it."}
      :display {:label "Link refused" :style :danger}}}})
 
+;; ── the provider (ticket ec7e7bfb) ──────────────────────────────────
+;; One row per provider: the account behind all of its links. Every
+;; fire through any link of it, from any seat, counts toward its
+;; window, and a throttle that names the account holds every link.
+;; The per-Routine cap stays on each link.
+
+(g/defguard the-engine-seeds-the-provider
+  {:reads [:principal]
+   :hide true
+   :explain "A provider row is the engine's: it seeds one for each provider it knows."}
+  [_row _inp ctx]
+  (if (= :system (get-in ctx [:principal :type]))
+    (t/allow) (t/deny)))
+
+(g/defguard a-person-sets-the-cap
+  {:reads [:principal]
+   :explain "An account's cap is a person's to set, from what the provider's own terms allow."}
+  [_row _inp ctx]
+  (if (a-persons-hand? ctx) (t/allow) (t/deny)))
+
+(defhandler stamp-provider-fire
+  [row inp _ctx]
+  (update row :data
+          (fn [data]
+            (-> (merge data (select-keys inp [:window_started_at :runs_in_window]))
+                (dissoc :retry_after)))))
+
+(defhandler restate-provider
+  [row inp _ctx]
+  (update row :data merge (select-keys inp [:cap])))
+
+(defresource runner-provider
+  {:kind :runner_provider
+   :plural "runner_providers"
+   :states [:live]
+   :initial :live
+   :terminal #{}
+   :nav :system
+   :summary "{data.provider} · {state}"
+   :label-template "{data.provider} account"
+   :schema
+   [:map
+    provider-field
+    cap-field
+    [:retry_after {:optional true
+                   :x-display
+                   {:label "Free again at"
+                    :help "The provider throttled the whole account and named this time; nothing fires through any of its links before it. Engine-written."}}
+     [:maybe :waymark/instant]]
+    [:window_started_at {:optional true
+                         :x-display
+                         {:label "This window began"
+                          :help "When the account cap's current window opened. Engine-written."}}
+     [:maybe :waymark/instant]]
+    [:runs_in_window {:optional true
+                      :x-display
+                      {:label "Runs this window"
+                       :help "How many runs every link of this provider, from every seat, has started in the cap's current window. Engine-written."}}
+     [:maybe [:int {:min 0}]]]]
+   :create-schema
+   [:map
+    provider-field
+    cap-field]
+   :filterable {:state #{:eq :in}
+                :provider #{:eq :in}}
+   :sortable {:fields [:created_at :updated_at] :default "-created_at"}
+   :create-guards [the-engine-seeds-the-provider]
+   :actions
+   {:restate
+    {:from #{:live} :to :live
+     :input [:map cap-field]
+     :record true
+     :guards [a-person-sets-the-cap]
+     :edit {:prefill [:cap] :fence true}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The account holds the cap this restate says; the one before is not kept."}
+     :handler restate-provider
+     :display {:label "Set the cap" :order 1
+               :description "At most this many runs across every link of this provider, in each window"}}
+
+    ;; a run started through some link of this provider: its window
+    ;; counts one more, whichever seat or pool the fire came from.
+    :fired
+    {:from #{:live} :to :live
+     :input [:map
+             [:window_started_at {:x-display {:hidden true}} :waymark/instant]
+             [:runs_in_window {:x-display {:hidden true}} [:int {:min 0}]]]
+     :record true
+     :guards [the-engine-writes-the-fire]
+     :edit {:prefill [:window_started_at] :fence false
+            :unfenced-reason
+            "Stamped by the fire the moment the provider answered; no read preceded it to fence against."}
+     :safety engine-writes
+     :handler stamp-provider-fire
+     :display {:label "Run started"}}
+
+    ;; the provider answered that the account, not one link, has no
+    ;; free run: nothing fires through any of its links before it.
+    :throttle
+    {:from #{:live} :to :live
+     :input [:map
+             [:retry_after {:x-display {:hidden true}} :waymark/instant]]
+     :record true
+     :guards [the-engine-writes-the-fire]
+     :edit {:prefill [:retry_after] :fence false
+            :unfenced-reason
+            "Written by the fire the moment the provider throttled it; no read preceded it to fence against."}
+     :safety engine-writes
+     :handler hold-throttle
+     :display {:label "Account throttled"}}}})
+
 ;; ── the boot seed (piece 1c) ────────────────────────────────────────
 
 (def seed-actor
@@ -318,6 +433,26 @@
             (println (str "waymark10 runner links: seed from " from
                           " failed — " (ex-message e)))))))))
 
+(defn provider-row
+  "The runner_provider row of `provider` (a provider name), or nil."
+  [eng provider]
+  (when (contains? (inv/resources eng) :runner_provider)
+    (first (rows-of eng :runner_provider {:provider (str provider)}))))
+
+(defn ensure-providers!
+  "The boot seed: one runner_provider row for each provider, with no
+  cap, so a second boot makes none. A person sets the cap by restate."
+  [eng]
+  (when (contains? (inv/resources eng) :runner_provider)
+    (doseq [p providers
+            :when (nil? (provider-row eng p))]
+      (try
+        (inv/create! eng :runner_provider {:provider p} {:principal seed-actor})
+        (catch Exception e
+          (binding [*out* *err*]
+            (println (str "waymark10 runner links: seed of provider " p
+                          " failed — " (ex-message e)))))))))
+
 ;; ── firing through a link (piece 1b) ────────────────────────────────
 
 (defn- instant-of
@@ -344,37 +479,56 @@
        :runs_in_window (inc (long (or (:runs_in_window data) 0)))}
       {:window_started_at (str at) :runs_in_window 1})))
 
-(defn- act! [eng row action body]
-  (try
-    (:row (inv/invoke! eng :runner_link (str (:id row)) action body
-                       {:principal sch/system-actor}))
-    (catch Exception e
-      ;; the row may have moved under the fire (retired meanwhile);
-      ;; the provider's answer still stands and is returned
-      (binding [*out* *err*]
-        (println (str "waymark10 runner links: link " (:id row)
-                      " could not record " action " — " (ex-message e))))
-      nil)))
+(defn- act!
+  ([eng row action body] (act! eng :runner_link row action body))
+  ([eng kind row action body]
+   (try
+     (:row (inv/invoke! eng kind (str (:id row)) action body
+                        {:principal sch/system-actor}))
+     (catch Exception e
+       ;; the row may have moved under the fire (retired meanwhile);
+       ;; the provider's answer still stands and is returned
+       (binding [*out* *err*]
+         (println (str "waymark10 runner links: " (name kind) " " (:id row)
+                       " could not record " action " — " (ex-message e))))
+       nil))))
+
+(defn account-throttle?
+  "Whether a throttle answer names the account rather than the link: a
+  `:scope` of account, or a body that says account. An answer that says
+  neither is the link's, as before."
+  [answer]
+  (boolean (or (= "account" (some-> (:scope answer) name))
+               (some->> (:body answer) str (re-find #"(?i)\baccount\b")))))
 
 (defn fire-link!
   "Fire one run through `link-row` by `provider` (a schedules/Provider),
   with `text`, and write what it answered onto the link: `started`
   stamps `last_fired_at` and counts the run in the window, `throttled`
   records `retry_after`, and `bad-link` marks the link broken. Answers
-  the provider's answer."
+  the provider's answer.
+
+  A started run also counts in the window of the link's provider row,
+  and a throttle that names the account (`account-throttle?`) holds the
+  provider row instead of the link."
   [eng provider link-row text]
   (let [answer (sch/fire provider (:data link-row) text)
-        at (or (instant-of ((:now-fn eng))) (Instant/now))]
+        at (or (instant-of ((:now-fn eng))) (Instant/now))
+        account (delay (provider-row eng (get-in link-row [:data :provider])))]
     (cond
       (contains? answer :started)
-      (act! eng link-row :fired
-            (merge {:last_fired_at (str at)}
-                   (window-after (:data link-row) at)))
+      (do (act! eng link-row :fired
+                (merge {:last_fired_at (str at)}
+                       (window-after (:data link-row) at)))
+          (when-some [p @account]
+            (act! eng :runner_provider p :fired (window-after (:data p) at))))
 
       (contains? answer :throttled)
-      (act! eng link-row :throttle
-            {:retry_after (str (sch/retry-instant at (:throttled answer)
-                                                  (:body answer)))})
+      (let [until {:retry_after (str (sch/retry-instant at (:throttled answer)
+                                                        (:body answer)))}]
+        (if-some [p (when (account-throttle? answer) @account)]
+          (act! eng :runner_provider p :throttle until)
+          (act! eng link-row :throttle until)))
 
       :else
       (act! eng link-row :break nil))
@@ -420,6 +574,14 @@
        (sort-by (fn [[i r]] [(used (:data r) at) i]))
        (map second)))
 
+(defn- provider-waiting
+  "The instant after `at` before which no link of `link-row`'s provider
+  fires — the account's `retry_after`, or the close of its spent
+  window — or nil when the account lets it fire."
+  [eng link-row ^Instant at]
+  (some-> (provider-row eng (get-in link-row [:data :provider]))
+          (waiting-until at)))
+
 (defn- links-by-id [eng]
   (into {} (map (juxt (comp str :id) identity)) (rows-of eng :runner_link {})))
 
@@ -427,7 +589,9 @@
   "Fire one run through the pool `ids`: each link that may fire, in
   `pool-order`, until one starts a run. A throttle or a refusal marks
   only that link (`fire-link!`) and the next is tried. `provider-of`
-  answers a link row's Provider.
+  answers a link row's Provider. A link whose provider row is waiting
+  (its account cap spent, or throttled) is skipped, checked afresh
+  before each fire, since any seat's fire counts toward it.
 
   Answers {:runner id :answer answer} for the link a run started
   through; else {:retry-at instant}, the earliest instant a live link
@@ -437,14 +601,19 @@
   (let [at (or (instant-of ((:now-fn eng))) (Instant/now))
         pool (keep (links-by-id eng) (map str ids))]
     (or (some (fn [row]
-                (let [answer (fire-link! eng (provider-of row) row text)]
-                  (when (contains? answer :started)
-                    {:runner (str (:id row)) :answer answer})))
+                (when (nil? (provider-waiting eng row at))
+                  (let [answer (fire-link! eng (provider-of row) row text)]
+                    (when (contains? answer :started)
+                      {:runner (str (:id row)) :answer answer}))))
               (pool-order pool at))
         (let [fresh (links-by-id eng)]
           {:retry-at (->> pool
                           (keep #(get fresh (str (:id %))))
                           (filter live?)
-                          (keep #(waiting-until % at))
+                          (keep (fn [r]
+                                  (some->> [(waiting-until r at)
+                                            (provider-waiting eng r at)]
+                                           (remove nil?)
+                                           seq sort last)))
                           sort
                           first)}))))
