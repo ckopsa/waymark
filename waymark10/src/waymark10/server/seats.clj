@@ -3347,7 +3347,11 @@
      ;; the counts it already carries are what it did before it was
      ;; lost.
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "A sitting nobody closed is over with no cost recorded; the session that would have reported its tokens is gone."}
+              :one-way "A sitting nobody closed is over with no cost recorded; the session that would have reported its tokens is gone."
+              ;; the door is visible now (ticket be2c2c16), so the
+              ;; cheap-reverse battery reads it: the cost is the world's,
+              ;; not the row's, and :final is where that is spelled
+              :final "The session that sat is gone and nothing will report its tokens; its seat's next firing opens a new sitting."}
      :display {:label "Abandon" :order 9}}}
    :deviations
    ["R-10.2 lets a sitting's `model` be null (R-9.4: a token with no claim has model null), and R-10.7 wants the collection filterable by model. A promoted column is generated only for a non-`:maybe` entry, so those two cannot both be had: `model` is required at the create door, and the session's claim wins over it when there is one. A harness with nothing to declare names the row it is running as."
