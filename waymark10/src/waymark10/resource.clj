@@ -1968,7 +1968,20 @@
         (println (str "waymark10: warnings ride the declaration — "
                       "(waymark10.dev/explain " (name (:kind r))
                       ") re-reads them any time"))))
-    (vary-meta r assoc :waymark10/warnings (vec warnings))))
+    ;; a decision kind says so (waymark-442.15): the :decision key is
+    ;; gone once desugared, so the fact rides the metadata — true about
+    ;; the declaration but not law, and so no fingerprint moves
+    (cond-> (vary-meta r assoc :waymark10/warnings (vec warnings))
+      (:decision rmap)
+      (vary-meta assoc :waymark10/decision
+                 {:by (:by (:decision rmap))}))))
+
+(defn decision
+  "The decision a kind was declared as — {:by the requester's field} —
+  or nil when it declared none. Read from the metadata `resource`
+  stamps, so well-known can advertise the queue without a kind name."
+  [r]
+  (:waymark10/decision (meta r)))
 
 (defmacro defresource
   [name rmap]

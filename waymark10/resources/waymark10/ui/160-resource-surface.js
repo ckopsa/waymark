@@ -59,8 +59,9 @@ async function renderResource(view, doc, hints) {
       /* approving an ask ANYWHERE follows its requester — the agent
          hands its human a link straight to the ask envelope, so the
          hand-off must not depend on the Access panel */
-      if (kind === "approval_request" && name === "approve")
-        followRequester(doc.data?.requested_by);
+      const decision = ((wellKnownNow || {}).resources || {})[kind]?.decision;
+      if (decision && decision.by && name === "approve")
+        followRequester(doc.data?.[decision.by]);
       if (out && out.self && out.self !== doc.self) go(out.self);
       else render();
     }});
