@@ -51,6 +51,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
+            [waymark10.schema :as schema]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Duration Instant)
@@ -604,57 +605,256 @@
              (map (fn [[repo line]]
                     [repo (vec (sort-by #(line-key priority-of %) line))])))))
 
+(defn- answer-state
+  "The state word a rig's merge answer carries, or nil."
+  [answer]
+  (some-> (:state answer) name not-empty))
+
+(defn out-of-line
+  "Why a change of a line does not stand in it this pass, or nil when it
+  does. A conflicted branch is the failing path's, a draft is not
+  brought forward, a red head waits on its seat, and a head the rig
+  refused for good (`seen`) is parked. A change the rig just merged has
+  left, and says `merged`. `answer` is what the rig's merge said of it
+  this pass, or nil."
+  [change answer seen]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (cond
+      (conflicted-change? change) "conflicted"
+      (true? (get-in change [:data :draft])) "draft"
+      (= "red" (answer-state answer)) "red"
+      (and head (= head (get seen (str (:id change))))) "parked"
+      (= "merged" (answer-state answer)) "merged")))
+
 (defn front-of
-  "The change at the front of a line: the first one that can be brought
-  up to date. A conflicted branch is the failing path's and a draft is
-  not brought forward, so neither holds the line."
-  [line]
-  (first (remove #(or (conflicted-change? %) (true? (get-in % [:data :draft])))
-                 line)))
+  "The change at the front of a line: the first one that stands in it
+  (`out-of-line`). `answers` is change id → the rig's merge answer this
+  pass and `seen` the parked heads; with neither, only a conflicted
+  branch or a draft steps out of the line."
+  ([line] (front-of line {} {}))
+  ([line answers seen]
+   (first (remove #(out-of-line % (get answers (str (:id %))) seen) line))))
+
+(defn- offer-merge!
+  "One merge call for one change, with the engine's own hand → the rig's
+  answer, or nil. A refusal a new pass cannot fix parks the head in
+  `seen`, with its reason under `[:parked-why id]`."
+  [ctx seen change policy]
+  (let [id (str (:id change))
+        head (str (get-in change [:data :head_sha]))]
+    (try
+      (let [answer (ask ctx :merge (merge-args change policy))
+            why (refused answer)]
+        (cond
+          (nil? answer)
+          (warn! "the merge of " id " had no answer; the next pass asks again")
+
+          (contains? missing-power-refusals why)
+          (warn! "the rig has no merge yet (" why "); the next pass asks again")
+
+          (behind? answer)
+          nil
+
+          (contains? parked-refusals why)
+          (do (swap! seen assoc id head [:parked-why id] (reason-of answer))
+              (warn! "the rig refused to merge " id " at " head " ("
+                     (reason-of answer) "); this head is not asked again"))
+
+          why
+          (warn! "the rig refused to merge " id " at " head " ("
+                 (reason-of answer) "); the next pass asks again")
+
+          :else nil)
+        answer)
+      (catch Exception e
+        (warn! "the merge of " id " failed (" (ex-message e)
+               "); the next pass asks again")
+        nil))))
 
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
-  hand; only a line's front is brought up to date when it is behind.
+  hand; then only a line's front is brought up to date when it is
+  behind. The front is chosen after the answers, so a change that went
+  red or was parked this pass does not hold the line. `answers`, when
+  given, is an atom the pass fills with change id → the rig's answer.
   → the number of `merge` calls made."
-  [ctx seen lines by-repo]
-  (let [asked (volatile! 0)]
-    (doseq [[repo line] lines
-            :let [policy (get by-repo repo)
-                  front (some-> (front-of line) :id str)]]
-      (warn! repo ": " (or front "nothing") " is the front of the merge line, "
-             (count (remove #(= front (str (:id %))) line)) " wait")
-      (doseq [change line
-              :let [id (str (:id change))
-                    head (str (get-in change [:data :head_sha]))]]
-        (try
-          (vswap! asked inc)
-          (let [answer (ask ctx :merge (merge-args change policy))
-                why (refused answer)]
-            (cond
-              (nil? answer)
-              (warn! "the merge of " id " had no answer; the next pass asks again")
+  ([ctx seen lines by-repo] (work-lines! ctx seen lines by-repo (atom {})))
+  ([ctx seen lines by-repo answers]
+   (let [asked (volatile! 0)]
+     (doseq [[repo line] lines
+             :let [policy (get by-repo repo)]]
+       (doseq [change line]
+         (vswap! asked inc)
+         (swap! answers assoc (str (:id change))
+                (offer-merge! ctx seen change policy)))
+       (let [front (front-of line @answers @seen)
+             id (some-> front :id str)]
+         (warn! repo ": " (or id "nothing") " is the front of the merge line, "
+                (count (remove #(= id (str (:id %))) line)) " wait")
+         (when (and front (behind? (get @answers id)))
+           (update-behind! ctx seen front id
+                           (str (get-in front [:data :head_sha]))))))
+     @asked)))
 
-              (contains? missing-power-refusals why)
-              (warn! "the rig has no merge yet (" why "); the next pass asks again")
+;; ── the line, written on the rows (ticket b85aded5) ─────────────────
+;;
+;; The line above lives in memory and is rebuilt each pass, so without
+;; this nothing but a log line said which pull request is at the front
+;; or why a green one is not merging. Each pass writes the line on the
+;; rows: the repository's policy names its front and how many wait, and
+;; each change says its place and why it is not merging. It is a
+;; MAINTENANCE write (`store/update-data!`, belief.clj's door): the
+;; document moves, the version does not, and no transition is logged,
+;; because a place in a line is not a thing that happened to the row.
+;; A value that did not move is not written, so a quiet line writes
+;; nothing, and a change that left `submitted` has its place cleared.
 
-              (behind? answer)
-              (when (= id front)
-                (update-behind! ctx seen change id head))
+(def line-policy-fields
+  [:line_front :line_front_pr :line_front_waiting :line_waiting :line_at])
 
-              (contains? parked-refusals why)
-              (do (swap! seen assoc id head)
-                  (warn! "the rig refused to merge " id " at " head " ("
-                         (reason-of answer) "); this head is not asked again"))
+(def line-change-fields [:line_place :line_why :line_reason])
 
-              why
-              (warn! "the rig refused to merge " id " at " head " ("
-                     (reason-of answer) "); the next pass asks again")
+(def line-whys
+  "Every word `line_why` may carry."
+  ["front" "behind" "red" "conflicted" "draft" "parked"])
 
-              :else nil))
-          (catch Exception e
-            (warn! "the merge of " id " failed (" (ex-message e)
-                   "); the next pass asks again")))))
-    @asked))
+(def ^:private reason-chars 500)
+
+(defn front-waits-on
+  "One word for what the front waits on, from its merge answer: `update`
+  when the pass asked to bring it up to date and CI runs, `checks` while
+  its checks run, `merge` when it was offered and GitHub has not merged
+  it yet."
+  [answer]
+  (cond (behind? answer) "update"
+        (= "waiting" (answer-state answer)) "checks"
+        :else "merge"))
+
+(defn- parked-reason [seen id]
+  (some-> (get seen [:parked-why id]) str not-empty
+          (as-> s (subs s 0 (min reason-chars (count s))))))
+
+(defn parked-changes
+  "The submitted changes the house pass would offer but for a head it
+  parked — the ones `merge-lines` leaves out for that reason alone."
+  [changes by-repo seen]
+  (filterv (fn [change]
+             (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
+                   policy (get by-repo (str (get-in change [:data :repository])))]
+               (and (get-in change [:data :number]) head policy
+                    (house-pass-merges? policy)
+                    (= head (get seen (str (:id change)))))))
+           changes))
+
+(defn line-marks
+  "What one pass writes on the rows, from the lines it worked, the rig's
+  `answers` (change id → merge answer), the parked heads in `seen`, and
+  the `parked` changes the lines left out. → {:policies {repo marks}
+  :changes {id marks}}; a field a marks map leaves out is cleared. The
+  front's place is 1 and the others in the line follow in order; a
+  change out of the line has no place and says why."
+  [lines answers seen parked]
+  (let [answer-of #(get answers (str (:id %)))
+        in-line (fn [line] (vec (remove #(out-of-line % (answer-of %) seen) line)))]
+    {:policies
+     (into {}
+           (map (fn [[repo line]]
+                  (let [in (in-line line)
+                        front (first in)]
+                    [repo (if front
+                            {:line_front (str (:id front))
+                             :line_front_pr (get-in front [:data :number])
+                             :line_front_waiting (front-waits-on (answer-of front))
+                             :line_waiting (dec (count in))}
+                            {})])))
+           lines)
+     :changes
+     (merge
+      (into {}
+            (map (fn [change]
+                   (let [id (str (:id change))]
+                     [id {:line_why "parked" :line_reason (parked-reason seen id)}])))
+            parked)
+      (into {}
+            (mapcat (fn [[_ line]]
+                      (let [place (zipmap (map (comp str :id) (in-line line))
+                                          (iterate inc 1))]
+                        (map (fn [change]
+                               (let [id (str (:id change))
+                                     out (out-of-line change (answer-of change) seen)]
+                                 [id (cond
+                                       (= "merged" out) {}
+                                       (= "parked" out) {:line_why out
+                                                         :line_reason (parked-reason seen id)}
+                                       out {:line_why out}
+                                       :else {:line_place (place id)
+                                              :line_why (if (= 1 (place id))
+                                                          "front" "behind")})]))
+                             line))))
+            lines))}))
+
+(defn moved-marks
+  "The marks to write on a row whose data is `data`, or nil when none of
+  them moved. A field in `quiet` rides a write and never causes one."
+  [data marks quiet]
+  (when (some (fn [[k v]] (not= v (get data k))) (apply dissoc marks quiet))
+    marks))
+
+(defn- mark-row!
+  "One maintenance write: `marks` onto the row's data, nil removing a
+  field, only when one of them moved. → true when it wrote."
+  [eng kind id marks quiet]
+  (let [st (:storage eng)]
+    (boolean
+     (when-some [rd (rdef-of-kind eng kind)]
+       (store/with-tx st
+         (fn [tx]
+           (when-some [raw (store/load-row st tx kind id {:for-update true})]
+             (let [data (:data (inv/decode-row rd raw))]
+               (when-some [m (moved-marks data marks quiet)]
+                 (store/update-data!
+                  st tx kind id
+                  (schema/encode (:schema rd)
+                                 (reduce-kv (fn [d k v]
+                                              (if (nil? v) (dissoc d k) (assoc d k v)))
+                                            data m))
+                  (:next-flip-at raw))
+                 true)))))))))
+
+(defn- marked-change-ids
+  "The id of every change that carries a `line_why`, whatever its state."
+  [eng]
+  (if (rdef-of-kind eng :change)
+    (let [st (:storage eng)]
+      (into #{}
+            (mapcat (fn [why]
+                      (map #(str (:id %))
+                           (store/with-tx st
+                             (fn [tx] (store/query-rows st tx :change {:line_why why}
+                                                        {:limit 1000}))))))
+            line-whys))
+    #{}))
+
+(defn mark-lines!
+  "Write one pass's `marks` (`line-marks`) on the rows: every active
+  policy and every submitted change, and every change that still says a
+  place though it left `submitted`. What a marks map leaves out is
+  cleared. → how many rows were written."
+  [eng marks submitted]
+  (let [now (if-some [f (:now-fn eng)] (f) (Instant/now))
+        blank-policy (zipmap line-policy-fields (repeat nil))
+        blank-change (zipmap line-change-fields (repeat nil))
+        wrote (volatile! 0)
+        write! (fn [kind id m quiet]
+                 (when (mark-row! eng kind id m quiet) (vswap! wrote inc)))]
+    (doseq [p (policies eng :active)
+            :let [m (get (:policies marks) (str (get-in p [:data :repository])))]]
+      (write! :repo_policy (str (:id p))
+              (merge blank-policy m (when (seq m) {:line_at now}))
+              #{:line_at}))
+    (doseq [id (into (set (map #(str (:id %)) submitted)) (marked-change-ids eng))]
+      (write! :change id (merge blank-change (get (:changes marks) id)) #{}))
+    @wrote))
 
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
@@ -668,16 +868,28 @@
   that under `[:updated id]`). `merged` needs nothing here, because the
   mirror moves the row; `waiting` and every other refusal are asked
   again next pass; `red` is left, because the seat's feedback already
-  carries the red checks. Throws nothing.
+  carries the red checks. Then the line is written on the rows
+  (`mark-lines!`): the policy names its front and who waits, and each
+  change its place and why it is not merging. Throws nothing.
   → the number of `merge` calls made."
   [eng seen]
   (let [by-repo (policies-by-repo eng)
         changes (submitted-changes eng)
-        priorities (ticket-priorities eng changes)]
-    (work-lines! {:services (:services eng)} seen
-                 (merge-lines changes by-repo
-                              #(get priorities (born-ticket %)) @seen)
-                 by-repo)))
+        priorities (ticket-priorities eng changes)
+        lines (merge-lines changes by-repo
+                           #(get priorities (born-ticket %)) @seen)
+        answers (atom {})
+        asked (work-lines! {:services (:services eng)} seen lines by-repo
+                           answers)]
+    (try
+      (mark-lines! eng
+                   (line-marks lines @answers @seen
+                               (parked-changes changes by-repo @seen))
+                   changes)
+      (catch Exception e
+        (warn! "the merge line was not written on the rows (" (ex-message e)
+               "); the next pass writes it")))
+    asked))
 
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 ;;

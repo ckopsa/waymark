@@ -441,6 +441,41 @@
                       :x-display
                       {:label "Base read at"
                        :help "When the pass last wrote the base's state, which it does when that state moves."}}
+    [:maybe :waymark/instant]]
+   ;; the house's merge line (ticket b85aded5): the merge pass writes
+   ;; these each time the line moves, as a maintenance write, and
+   ;; clears them when no change stands in the line
+   [:line_front {:optional true :filter #{:eq}
+                 :examples ["2847912e-7783-4651-bead-61eab0492776"]
+                 :x-display
+                 {:raw true
+                  :label "The front of the merge line"
+                  :help "The change the house brings up to date next. Only the front is brought up to date; the others wait their turn. Empty when no change stands in the line."}}
+    [:maybe [:string {:max 64}]]]
+   [:line_front_pr {:optional true
+                    :examples [250]
+                    :x-display
+                    {:label "The front's pull request"
+                     :help "The number of the front's pull request."}}
+    [:maybe [:int {:min 1}]]]
+   [:line_front_waiting {:optional true :filter #{:eq :in}
+                         :x-display
+                         {:label "The front waits on"
+                          :choices {"update" "It was just brought up to date, and its checks run on the new head"
+                                    "checks" "Its checks are still running"
+                                    "merge" "It was offered the merge, and GitHub has not merged it yet"}}}
+    [:maybe [:enum "update" "checks" "merge"]]]
+   [:line_waiting {:optional true
+                   :examples [2]
+                   :x-display
+                   {:label "Changes waiting behind it"
+                    :help "How many other changes stand in the line behind the front."}}
+    [:maybe [:int {:min 0}]]]
+   [:line_at {:optional true
+              :examples ["2026-09-28T12:00:00Z"]
+              :x-display
+              {:label "Line read at"
+               :help "When the merge pass last wrote the line, which it does when the line moves."}}
     [:maybe :waymark/instant]]])
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────

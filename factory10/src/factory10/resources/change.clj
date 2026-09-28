@@ -949,6 +949,32 @@
      [:maybe [:string {:max 4000}]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
+    ;; the house's merge line (ticket b85aded5): the merge pass writes
+    ;; these as a maintenance write each time they move, and clears
+    ;; them when the change leaves submitted
+    [:line_place {:optional true
+                  :examples [2]
+                  :x-display
+                  {:label "Place in the merge line"
+                   :help "Where this change stands in its repository's merge line: 1 is the front, the one the house brings up to date next. Empty when it is out of the line."}}
+     [:maybe [:int {:min 1}]]]
+    [:line_why {:optional true :filter #{:eq :in}
+                :x-display
+                {:label "Why it is not merging"
+                 :choices {"front" "It is the front of the line: the house brings it up to date and merges it when green"
+                           "behind" "It waits its turn: only the front is brought up to date"
+                           "red" "Its checks are red, so it is out of the line"
+                           "conflicted" "It conflicts with the base branch"
+                           "draft" "It is a draft, and a draft is not brought forward"
+                           "parked" "The bench refused this head for good"}}}
+     [:maybe [:enum "front" "behind" "red" "conflicted" "draft" "parked"]]]
+    [:line_reason {:optional true
+                   :examples ["GitHub says it cannot merge"]
+                   :x-display
+                   {:widget "prose"
+                    :label "Why the bench parked it"
+                    :help "The bench's own reason for refusing this head for good. Empty unless the change is parked."}}
+     [:maybe [:string {:max 500}]]]
     [:url {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 500}]]]
     ;; ── where a seat-born change CAME FROM (waymark-fp62.6.3.14) ──
