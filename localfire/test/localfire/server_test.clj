@@ -304,7 +304,9 @@
     (try
       (let [r (GET (str (:base w) "/healthz"))]
         (is (= 200 (:status r)))
-        (is (= {:ok true :routines ["haiku" "sonnet"]} (:json r))))
+        (is (= {:ok true :routines ["haiku" "sonnet"]}
+               (select-keys (:json r) [:ok :routines])))
+        (is (true? (get-in r [:json :credential :ok]))))
       (testing "a path no route answers is 404 with a sentence"
         (is (= 404 (:status (GET (str (:base w) "/nothing"))))))
       (finally (server/stop! w)))))

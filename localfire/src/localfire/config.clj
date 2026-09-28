@@ -84,6 +84,8 @@
       (fail! "the config needs an :mcp map with a :url, the engine's MCP door."))
     (when-not (and (map? rs) (seq rs))
       (fail! "the config needs at least one routine under :routines."))
+    (when-not (or (nil? (:check-seconds m)) (pos-int? (:check-seconds m)))
+      (fail! "the config's :check-seconds must be a positive integer."))
     {:port          (long port)
      ;; a trailing slash on the public URL would double in every run
      ;; page link, and the engine writes that link onto the row
@@ -95,6 +97,8 @@
                      :url  (str (:url mcp))}
      :allowed-tools (vec (or (seq (map str (:allowed-tools m)))
                              default-allowed-tools))
+     ;; R-4.6: how often the credential is probed
+     :check-seconds (long (or (:check-seconds m) 600))
      :routines      (into {}
                           (map (fn [[k v]]
                                  (let [nm (routine-name k)]
