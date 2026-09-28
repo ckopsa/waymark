@@ -188,6 +188,10 @@
                     ;; waymark_sit binds THIS session, so it has to know
                     ;; which one it is
                     sid (assoc :mcp-session-id sid)
+                    ;; …and which sitting it sat in, so every door call
+                    ;; it makes is counted there (ticket f6c8d5ce)
+                    (:sitting (:bound entry))
+                    (assoc :sitting (str (:sitting (:bound entry))))
                     ;; …and where it arrived: the sit answers the
                     ;; transcript door as an absolute address, because
                     ;; the hook that posts to it has no other way to

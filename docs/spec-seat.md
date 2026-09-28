@@ -1356,13 +1356,41 @@ open to complete. An entry's `filter` (R-12.24) applies to the row
 that moved on a transition wake, and to the counted rows on a count
 wake.
 
-The damper has three parts. The engine does not fire while the seat
-has an open sitting. The engine fires at most once in
-`fire_interval_seconds`, a seat field with the default 300. A match
-the damper stops sets `wake_pending` on the schedule row. The next
-fire after the damper lifts names no row, so the session walks the
-queue. A replay after a restart is harmless, because the
-open-sitting check stops the second fire.
+The damper has three parts. The first part is a count. The seat has
+a field `max_open_sittings`, a whole number from 1 to 10, with the
+default 1. The seat is busy by its open sittings plus its fires still
+on their way to a sit. A fire counts as on its way for 600 seconds,
+the missed-fire sweep's deadline, until a sitting born after it takes
+it. The engine does not fire while the busy count has reached
+`max_open_sittings`. With the default 1 this is the old law: the
+engine does not fire while the seat has an open sitting or a fire on
+its way. The second part is the gap: the engine fires at most once in
+`fire_interval_seconds`, a seat field with the default 300. A seat of
+several slots is held by the gap only when no row is free for a new
+sitting. A row is free when it is in the walk, no open sitting holds
+it, no stuck change stands beside it, and no fire on its way will take
+it. A fire that fills a free slot for a free row goes out inside the
+gap. When no row is free, an open sitting or the gap holds the fire,
+as with one slot. The third part: a match the damper stops sets
+`wake_pending` on the schedule row. The next fire after the damper
+lifts names no row, so the session walks the queue. When a sitting of
+a seat of several slots closes, the engine may fire it with nothing
+pending, if a slot and a row for it are free. A replay after a
+restart is harmless, because the busy count stops the second fire.
+
+The sit claims its rows. It writes the rows it hands onto its sitting
+in the same transaction that finds them free, so two sits of one seat
+at the same instant never hand the same row. A sit that loses the
+race reads its walk again past the rows the other took; after three
+tries it hands no rows. The row a fire's text names is kept on the
+fire's key, and the sit reads it from there. The sit hands the named
+row alone while no other open sitting holds it. When another open
+sitting holds it, the sit hands the next free rows of the queue
+instead, and its answer says that the named row is held by another
+open sitting and that the session walks the row it was handed. When
+every open row of the walk is held by another open sitting, the sit
+hands no rows, and its answer tells the session there is nothing to
+walk: say so and stop.
 
 An entry may settle. The entry gains an optional field,
 `settle_seconds`, a whole number from 1 to 604800. The entries above
@@ -1419,8 +1447,8 @@ row: `{"kind": "inbox_item", "count": 23, "at_least": 20}`. The
 session therefore walks the queue, as a cadence firing does.
 
 The damper of R-12.22 applies with no change. The engine does not
-fire while the seat has an open sitting, and it fires at most once in
-`fire_interval_seconds`. A match the damper stops sets
+fire while the seat's busy count has reached `max_open_sittings`, and
+it fires at most once in `fire_interval_seconds`. A match the damper stops sets
 `wake_pending`, and one fire goes out when the damper lifts.
 
 The cadence stays. A seat with a count wake and a cadence fires when
@@ -1456,6 +1484,11 @@ The seat's cadence stays the floor for a house where nobody walks the
 door that empties the queue. A count wake is level and not edge: it
 fires each time it is evaluated and its condition holds, `at_least`
 and `at_most` alike, and `fire_interval_seconds` is the damper.
+
+A count entry over another kind counts every row of that kind the
+entry's `filter` matches, whatever the seat's grant: the count is the
+engine's, and it counts the whole house. The sitting it wakes still
+sees only its own scope. (Owner's ruling, 2026-09-28.)
 
 One Routine for each model. Today each seat has its own Routine, and
 a person pastes the seat's instructions and the seat's key into that
@@ -2807,10 +2840,6 @@ trusts.
 - Turn-level cost inside an interactive sitting. The tally is one sum
   over the sitting, so the record does not say which correction cost
   what. Keeping the turns is a later leg.
-- A count wake over a kind the seat cannot see. The count runs under
-  the seat's own grant, so an absent kind counts zero, and the seat
-  says nothing. A sentence in `doors.ask.seat` that says the count
-  sees nothing is the follow-up.
 
 ## 19. Effort
 

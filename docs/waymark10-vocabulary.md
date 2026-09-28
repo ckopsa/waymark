@@ -652,9 +652,32 @@ meal_ids[1] names no meal: "m-nope" is not a row this house holds.
 
 The wall advertises optimistically with no read in scope (the
 storage-free render probe), and judges for real on every write. It covers
-TOP-LEVEL entries of a door's input and of the create model; a ref nested
-inside a part (`[:vector [:map [:meal_id {:kind :meal} …]]]`) is not
-covered yet.
+TOP-LEVEL entries of a door's input and of the create model. (A ref
+nested inside a part does not occur: the plan's `days` are `plan_day`
+rows, and `plan_day.assign_meal` carries `meal_id` top-level, so the wall
+already judges it.)
+
+**A pair the wall cannot reach names its resolver** (`:resolves`). A
+KIND-AND-ID PAIR — an `<x>_kind` entry beside an `<x>_id` entry, neither
+carrying `:kind` — names a row whose kind is a value the caller types, so
+the wall has no kind to read it under. The kind resolves it itself, and
+says so on the guard that does:
+
+```clojure
+(defguardfn offers-something-light
+  {:judges [:offer_kind :offer_id :offer_action :offer_href]
+   :resolves [:offer_kind :offer_id]
+   :reads [:storage] …}
+  …)
+```
+
+`check-resolvers` warns on each field of a pair that no guard at that
+door (the create guards for the create door, the action's `:guards`
+otherwise) names in `:resolves`:
+
+```
+[resolves] action point field :subject_kind is half of a kind-and-id pair, …
+```
 
 **A scenario names a row it staged.** A declared scenario (§`:scenarios`)
 could not prove either wall while its `:given` rows were minted under

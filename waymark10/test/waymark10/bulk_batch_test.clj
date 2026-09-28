@@ -25,11 +25,13 @@
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.conformance :as conf]
             [waymark10.test.db :as db]
+            [waymark10.types :as t]
             [waymark10.wire :as wire]))
 
 ;; ── suite-local kinds ───────────────────────────────────────────────
@@ -182,6 +184,31 @@
         (is (= 1 (get-in rb [:meta :version]))))
       (is (= "done" (:state (get-row (str "/api/chores/" a)))))
       (is (= "done" (:state (get-row (str "/api/chores/" c))))))))
+
+(deftest bulk-counts-its-per-item-409s-beside-the-report
+  ;; waymark-fp62.7.11: the router bills a partial bulk's per-item 409s
+  ;; to the open sitting, so bulk! answers their count beside the
+  ;; report — and the report's wire shape is what it was
+  (let [[a b] (chores! [true false])
+        missing "chore-nobody-minted"]
+    ;; :complete is a bulk door, so its row form does not exist (a 404):
+    ;; the guard's 409 is only reachable through bulk!
+    (testing "the guard's refusal, alone, is one conflict"
+      (let [result (inv/bulk! *eng* :chore :complete {:ids [b]}
+                              {:principal (t/principal {:id "colton"
+                                                        :display "Colton"})})]
+        (is (= 1 (:conflicts result)))))
+    (testing "one 409 and one 404 in a partial bulk: one conflict"
+      (let [result (inv/bulk! *eng* :chore :complete {:ids [a b missing]}
+                              {:principal (t/principal {:id "colton"
+                                                        :display "Colton"})})]
+        (is (= 1 (:conflicts result)))))
+    (testing "the wire refusals carry their self and reason, and no status"
+      (let [[c d] (chores! [true false])
+            doc (json (req :post "/api/chores/-/complete" {:ids [c d missing]}))
+            refusals (get-in doc [:data :refusals])]
+        (is (= 2 (count refusals)))
+        (is (every? #(= #{:self :reason} (set (keys %))) refusals))))))
 
 ;; ── 2. the atomic twin rolls all back ───────────────────────────────
 

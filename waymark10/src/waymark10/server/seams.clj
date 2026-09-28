@@ -1,5 +1,5 @@
 (ns waymark10.server.seams
-  "The four doors CORE knocks on when the answer belongs to a module.
+  "The doors CORE knocks on when the answer belongs to a module.
 
   waymark-db9.3 moved every module ROUTE out of the router and left
   four module namespaces required there for calls that were not
@@ -54,8 +54,8 @@
   registry arriving through the authored surface, which is the one
   door this spec will not open.
 
-  This namespace requires NOTHING. It is four protocol declarations
-  and two metadata accessors, so every module in the artifact can
+  This namespace requires NOTHING. It is five protocol declarations
+  and three small fns, so every module in the artifact can
   implement it without a thought about load order.")
 
 (set! *warn-on-reflection* true)
@@ -107,6 +107,24 @@
   (defer! [door eng deferred principal]
     "Mint the row for one deferred call ({:kind :action :ids :input},
     the marker `invoke/bulk!` hands back) → the create! result."))
+
+(defprotocol Linking
+  "A link an assembled module LENDS a kind it does not own — the
+  law sweep's door on the core definition kind's envelope. Implemented
+  by a value on the module's own inventory entry (`:links`), so the
+  engine gathers it from what it ASSEMBLED (`modules/link-doors`), and
+  render asks it per row: a core kind never names a module's route,
+  and an engine assembled without the module advertises no door that
+  would answer 404."
+  (lend-links [door kind row]
+    "{rel {:href … :kind …}} this module adds to one row of `kind` (a
+    keyword), nil when it has nothing to say about that kind."))
+
+(defn lent-links
+  "Every assembled door's links for one row, in table order. nil or
+  empty doors lend nothing."
+  [doors kind row]
+  (into {} (mapcat #(lend-links % kind row)) doors))
 
 (def ^:private deferral-key
   "The metadata key the job kind's mint rides on. Namespaced, and
