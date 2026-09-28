@@ -750,6 +750,10 @@
   Damped — an open sitting, or a fire inside this seat's gap; for a
   seat of several slots, `damped?` — the match is REMEMBERED as
   `wake_pending` and nothing goes out.
+
+  A match the `fire` door refuses — a halt line, a parked seat — is
+  REMEMBERED the same way, as `release!` keeps its flag: a seat behind
+  a wall keeps its pending wake until the wall lifts.
   → true when a fire went out."
   [eng seat t ^Instant at {:keys [text settle]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
@@ -769,10 +773,11 @@
         (hold-at-the-wall! eng row at)
 
         :else
-        (when (fire! eng (:id seat) text
-                     (str "wake:" (:id seat) ":" (:id t)))
-          (stamp-fired! eng row at false)
-          true)))))
+        (if (fire! eng (:id seat) text
+                   (str "wake:" (:id seat) ":" (:id t)))
+          (do (stamp-fired! eng row at false)
+              true)
+          (mark-pending! eng row))))))
 
 (defn- walk-count
   "How many rows the seat's sit would hand it, or nil when the seat
