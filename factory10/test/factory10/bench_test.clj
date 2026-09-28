@@ -82,7 +82,7 @@
                                       :branch {:type "string"}}
                          :required ["repo" "branch"]}})
         ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"
-         "enroll" "repos" "unenroll" "feedback"]))
+         "enroll" "repos" "unenroll" "feedback" "rerun"]))
 
 (def ^:private bench-powers
   "The bench row's powers (waymark-fp62.6.3.3): the four the model may
@@ -100,6 +100,9 @@
     :constraints ["repo" "path"]}
    ;; a pull moves a whole checkout, so no path could narrow one
    {:power "bench.pull" :tools ["pull"] :why false
+    :constraints ["repo"]}
+   ;; re-runs the dead checks of the pushed head: a whole branch too
+   {:power "bench.rerun" :tools ["rerun"] :why false
     :constraints ["repo"]}])
 
 (def ^:private a-head "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567")
@@ -876,6 +879,38 @@
     (is (some? (:bench answer))
         "and the worktree still rides: the seat works either way")
     (is (= [(str (:id change))] (mapv :id (get-in answer [:walk :rows]))))))
+
+(deftest feedback-with-an-interrupted-finding-tells-the-seat-to-rerun-and-stop
+  (let [st (state)
+        _ (answer! st "bench__feedback"
+                   (assoc (get-in @st [:answers "bench__feedback"])
+                          :findings
+                          [{:source "pipeline" :severity "interrupted"
+                            :message "ci: interrupted: gate was cancelled"}]))
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        _ (a-change! eng {})
+        _ (open-seat! eng {})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        note (str (get-in (doc-of (call! h sid "waymark_sit" {:key a-key}))
+                          [:feedback :note]))]
+    (is (str/includes? note "ci: interrupted"))
+    (is (str/includes? note "rerun")
+        "dead CI is answered by running the checks again")
+    (is (str/includes? note "stop the sitting"))
+    (is (str/includes? note "Do not stall the ticket")
+        "and not by stalling a ticket the code did not fail")))
+
+(deftest feedback-with-no-interrupted-finding-carries-no-rerun-note
+  (let [w (world)]
+    (is (some? (:feedback (:answer w))))
+    (is (nil? (get-in (:answer w) [:feedback :note]))
+        "a red test is a verdict about the code, and the seat fixes it")))
 
 ;; ── acceptance 4 ────────────────────────────────────────────────────
 
@@ -1829,6 +1864,21 @@
     (is (= {:bench.read "bench__read"} (get-in answer [:bench :tools]))
         "a power the scope does not name is ABSENT: the seat is told
          what it may call and nothing else")))
+
+(deftest a-code-seat-that-holds-bench-rerun-is-handed-the-rerun-tool
+  (let [w (ask-world (conj ask-scope {:kind "bench.rerun" :actions []
+                                      :filter {:repo a-repository}}))
+        answer (:answer w)]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (= "bench__rerun" (get-in answer [:bench :tools :bench.rerun]))
+        "the sit lists bench.rerun beside the other bench tools"))
+  (testing "and bench.rerun chooses the repository like bench.pull"
+    (let [w (ask-world (conj ask-scope {:kind "bench.rerun" :actions []
+                                        :filter {:repo "ckopsa/other"}}))
+          answer (:answer w)]
+      (is (nil? (:bench answer)))
+      (is (str/includes? (str (:bench_note answer)) "bench.rerun")
+          "a rerun on another repository is not one repository"))))
 
 (deftest a-second-sitting-on-the-same-ask-finds-the-first-sittings-change
   (let [w (ask-world)

@@ -52,9 +52,18 @@ name the same one repository.
   {"kind": "bench.read",     "actions": [], "filter": {"repo": "ckopsa/waymark"}},
   {"kind": "bench.edit",     "actions": [], "filter": {"repo": "ckopsa/waymark"}},
   {"kind": "bench.pull",     "actions": [], "filter": {"repo": "ckopsa/waymark"}},
-  {"kind": "bench.feedback", "actions": [], "filter": {"repo": "ckopsa/waymark"}}
+  {"kind": "bench.feedback", "actions": [], "filter": {"repo": "ckopsa/waymark"}},
+  {"kind": "bench.rerun",    "actions": [], "filter": {"repo": "ckopsa/waymark"}}
 ]
 ```
+
+`bench.rerun` re-runs the failed jobs of the branch's pushed head when
+the checks died without a verdict. When the sit's `feedback` holds a
+`ci: interrupted` finding, its `note` tells the seat to call it and stop
+the sitting. The seat's scope and the bench `mcp_server` row's `powers`
+are rows, not code: a person adds the entry above to the seat's scope,
+and `{"power": "bench.rerun", "tools": ["rerun"], "constraints":
+["repo"]}` to the bench row's powers, before the sit lists the tool.
 
 Each other door on a change is the mirror's or a person's (`merge`,
 `close`, `reopen`, `observe`, `unstick`), and the seat does not get

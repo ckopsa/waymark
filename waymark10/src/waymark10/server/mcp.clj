@@ -2511,7 +2511,8 @@
   (str "The bench did not open, because this seat's scope does not "
        "name one repository. A seat that walks something other than a "
        "change reads its repository from its own bench powers: every "
-       "bench entry that writes (bench.edit, bench.pull, bench.feedback) "
+       "bench entry that writes (bench.edit, bench.pull, bench.feedback, "
+       "bench.rerun) "
        "must carry a filter with the same one repo, and every bench.find "
        "and bench.read entry must name that repo too, alone or with "
        "others after a comma. Work from the rows, and say what you "
@@ -2529,8 +2530,10 @@
   "The bench powers that CHOOSE the seat's repository: the ones that
   write its worktree, and the one that reads what a push of it caused.
   The reading powers (`bench.find`, `bench.read`) only have to include
-  it, and may name other repositories beside it (R-12.32)."
-  #{"bench.edit" "bench.pull" "bench.feedback"})
+  it, and may name other repositories beside it (R-12.32). `bench.rerun`
+  re-runs the checks of the branch the seat pushed, so it chooses the
+  repository the way `bench.pull` does."
+  #{"bench.edit" "bench.pull" "bench.feedback" "bench.rerun"})
 
 (defn- entry-repos
   "The repositories one bench entry's filter names, trimmed and in
@@ -2985,6 +2988,26 @@
            "message" (some-> (:message finding) str)}
     (seq (:locations finding)) (assoc "locations" (:locations finding))))
 
+(defn- interrupted-finding?
+  "Did the rig read this finding as DEAD CI rather than a verdict: a
+  run whose jobs were cancelled, timed out or stopped in setup? The rig
+  says so twice (severity `interrupted`, and a message that starts
+  `ci: interrupted`), and either one is enough."
+  [finding]
+  (or (= "interrupted" (some-> (:severity finding) str))
+      (str/starts-with? (str (:message finding)) "ci: interrupted")))
+
+(def ^:private interrupted-note
+  "What the sit says beside feedback that holds an interrupted finding.
+  Dead CI is not the code's fault and not the ticket's: the seat asks
+  the rig to run the checks again and ends its sitting, and the next
+  sitting reads what the new run found."
+  (str "The checks did not run to a verdict (ci: interrupted): a job was "
+       "cancelled, timed out or stopped in setup. Call the bench's rerun "
+       "tool (bench.rerun in bench.tools) with this repo and branch, then "
+       "stop the sitting. Do not stall the ticket on dead CI, and do not "
+       "change code for it."))
+
 (defn- feedback-of
   "What the submit caused, or nil. ONE `feedback` of the rig, with the
   engine's own hand and through the same caller the prepare rides
@@ -3001,15 +3024,17 @@
                                {:name (gate/bench-tool :feedback)
                                 :arguments {:repo repo :branch branch
                                             :log_bytes feedback-log-bytes}}))]
-      {"pull_request"
-       (when-some [pr (:pull_request got)]
-         {"number" (:number pr)
-          "state" (some-> (:state pr) str)
-          "url" (some-> (:url pr) str)})
-       "findings"
-       (mapv feedback-said (take feedback-findings-ceiling (:findings got)))
-       "unavailable"
-       (mapv str (:unavailable got))})
+      (let [findings (take feedback-findings-ceiling (:findings got))]
+        (cond-> {"pull_request"
+                 (when-some [pr (:pull_request got)]
+                   {"number" (:number pr)
+                    "state" (some-> (:state pr) str)
+                    "url" (some-> (:url pr) str)})
+                 "findings" (mapv feedback-said findings)
+                 "unavailable" (mapv str (:unavailable got))}
+          ;; dead CI gets the one instruction that answers it
+          (some interrupted-finding? findings)
+          (assoc "note" interrupted-note))))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 bench feedback failed -" (ex-message e)))
