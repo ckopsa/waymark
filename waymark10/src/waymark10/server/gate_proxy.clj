@@ -272,13 +272,24 @@
 (defn- entry-verdict
   "One filter map against one call's arguments → {:allow globs|nil}
   when it admits the call, {:miss {…}} when it does not. `:allow` nil
-  means this map narrows no path, and openness absorbs below."
+  means this map narrows no path, and openness absorbs below.
+
+  A path filter judges a move's `move_to` too: a move writes the file
+  it names, so the destination must match one of the same globs as the
+  source, or the call misses on `move_to`."
   [fm args]
   (reduce
    (fn [acc [f want]]
      (let [fname (name f)
-           got (get args (keyword fname))]
+           got (get args (keyword fname))
+           move-to (:move_to args)]
        (cond
+         (and (= path-filter-field fname)
+              (some? move-to)
+              (not (field-admits? fname want move-to)))
+         (reduced {:miss {:field "move_to" :got (str move-to)
+                          :want (str want)}})
+
          (and (= path-filter-field fname) (whole-tree? args))
          (update acc :allow (fnil into []) (comma-values want))
 
