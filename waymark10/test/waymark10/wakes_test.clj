@@ -150,7 +150,7 @@
                       :x-display {:label "Which batch"
                                   :help "The run of rows this one belongs to."}}
               [:string {:min 1 :max 40}]]]
-    :filterable {:state #{:eq :in} :batch #{:eq}}
+    :filterable {:state #{:eq :in} :batch #{:eq :in}}
     :default-filters {:state "open"}
     :actions
     {:complete {:from #{:open} :to :complete
@@ -1003,6 +1003,31 @@
 
     (seat-do! (:seat picky) :retire)
     (seat-do! (:seat anyone) :retire)))
+
+;; ── 10b · a comma value is any of on a field that declares :in ──────
+
+(deftest a-comma-filter-on-an-in-field-reads-as-any-of
+  (let [a "anyof-a" b "anyof-b" c "anyof-c"
+        a-id (item! a) b-id (item! b) c-id (item! c)
+        f {:batch (str a "," b)}]
+    (testing "a transition wake's filter judges a row of either batch in,
+              and a third batch's row out"
+      (is (true? (wakes/moved-under? *eng* :wake_item a-id f)))
+      (is (true? (wakes/moved-under? *eng* :wake_item b-id f)))
+      (is (false? (wakes/moved-under? *eng* :wake_item c-id f))))
+    (testing "a count wake with that filter counts both batches"
+      (is (= 2 (wakes/count-under *eng* :wake_item f))))))
+
+(deftest a-comma-wake-filter-on-a-field-without-in-is-refused-at-restate
+  (let [seat (seat! "wakecomma"
+                    {:wake_on [{:kind "wake_task" :actions ["complete"]}]})
+        p (refusal #(restate! seat {:wake_on [{:kind "wake_task"
+                                               :actions ["complete"]
+                                               :filter {:title "a,b"}}]}))]
+    (is (= :wake-on-any-of-needs-in (:guard p)))
+    (is (str/includes? (str (:detail p)) "title")
+        "the refusal names the field, not 'invalid wake_on'")
+    (seat-do! seat :retire)))
 
 ;; ── 11 · a count entry with no actions counts on every action ───────
 

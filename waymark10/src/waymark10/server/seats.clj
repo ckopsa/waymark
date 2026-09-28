@@ -754,6 +754,28 @@
     (t/deny {:vars {:kind bad}})
     (t/allow)))
 
+(g/defguard wake-on-any-of-needs-in
+  {:judges [:wake_on]
+   :reads [:services]
+   :vars [:kind :field]
+   :open "A kind's filterable fields and their ops are its collection grammar, one GET away; a field that declares in reads a comma-separated value as any of."
+   :explain "The wake_on filter on {kind} gives {field} a comma-separated value, and {field} does not admit any of (in): the value would match as one literal text and wake this seat for nothing. Name one value, or filter by a field the kind declares filterable with in."}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (if-some [bad (first (for [e (:wake_on inp)
+                               :let [rdef (rdef-of (:kind e))]
+                               :when rdef
+                               [f v] (:filter e)
+                               :let [fname (name f)]
+                               :when (and (str/includes? (str v) ",")
+                                          (not= "state" fname)
+                                          (not (contains? (get (:filterable rdef) (keyword fname)) :in)))]
+                           {:kind (str (:kind e)) :field fname}))]
+      (t/deny {:vars bad})
+      (t/allow))
+    ;; the pure render probe carries no registry — decline to guess
+    (t/allow)))
+
 (g/defguard wake-on-names-real-actions
   {:judges [:wake_on]
    :reads [:services]
@@ -2210,6 +2232,7 @@
                    wake-on-names-real-kinds
                    wake-on-names-real-actions
                    wake-on-names-no-engine-kind
+                   wake-on-any-of-needs-in
                    inbox-names-real-kinds
                    inbox-names-real-actions
                    ;; LAST, so a hold is a call every other wall passed
@@ -2386,6 +2409,7 @@
               wake-on-names-real-kinds
               wake-on-names-real-actions
               wake-on-names-no-engine-kind
+              wake-on-any-of-needs-in
               inbox-names-real-kinds
               inbox-names-real-actions
               step-carries-a-note
