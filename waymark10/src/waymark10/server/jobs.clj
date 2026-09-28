@@ -74,6 +74,13 @@
   (binding [*out* *err*]
     (println (apply str "waymark10 jobs: " parts))))
 
+(defn serves-jobs?
+  "True when eng serves the :job kind. An engine without it has no
+  job table, so the job reads skip it and log nothing — the guard
+  wakes/rows-where and schedules/rows-where carry (waymark-c631)."
+  [eng]
+  (contains? (inv/resources eng) :job))
+
 (def worker-actor
   "The system actor that mints, advances and completes deferred jobs."
   (t/principal {:id "waymark10-jobs" :type :system :display "Job worker"}))
@@ -424,12 +431,14 @@
   [eng {:keys [holder lease-seconds] :or {lease-seconds 60} :as opts}]
   (let [holder (or holder (str "worker-" (random-uuid)))
         opts (assoc opts :holder holder :lease-seconds lease-seconds)
-        running (store/with-tx (:storage eng)
-                  (fn [tx]
-                    (into (store/query-rows (:storage eng) tx :job
-                                            {:state :queued} {:limit 50})
-                          (store/query-rows (:storage eng) tx :job
-                                            {:state :running} {:limit 50}))))
+        running (if (serves-jobs? eng)
+                  (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (into (store/query-rows (:storage eng) tx :job
+                                              {:state :queued} {:limit 50})
+                            (store/query-rows (:storage eng) tx :job
+                                              {:state :running} {:limit 50}))))
+                  [])
         ;; sync jobs are the mirror daemon's — bulk-item! could not
         ;; run one (no ids, and the sync doors are system-only)
         running (remove sync-job? running)]
