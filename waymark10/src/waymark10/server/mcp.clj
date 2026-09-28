@@ -2230,8 +2230,15 @@
   handed (`seats/claimed-rows`). They are subtracted as the judged
   subjects are, and the read asks for a whole page for the same
   reason, so a second run of the seat walks the next rows and not the
-  first run's."
-  [eng call session seat claimed]
+  first run's.
+
+  `held` is the rows THIS sitting was already handed (its
+  `walked_rows`). A re-sit after a connector drop reuses the sitting,
+  and those rows, while still in the queue, keep their place on the
+  page before the queue's next rows fill it, so the run lands back on
+  the row it was walking. The page keeps the queue's order. A row that left the queue is
+  simply not on the page, and the queue's next row takes its place."
+  [eng call session seat claimed held]
   (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
     (when-some [rdef (get (inv/resources eng) (keyword walk))]
       (let [judgment (row-of eng :judgment (get-in seat [:data :judgment]))
@@ -2242,7 +2249,7 @@
             n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
                    coll/page-size-max)
             subtract? (or judgment (seq claimed))
-            asked (if subtract? coll/page-size-max n)
+            asked (if (or subtract? (seq held)) coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))
                                 {:query (query-string
                                          (cond-> {"page[size]" (str asked)}
@@ -2253,18 +2260,29 @@
                                                          walk-filter))))}))
             doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
         (when (collection-doc? doc)
-          (let [items (get-in doc ["data" "items"])
-                items (if subtract?
-                        (let [skip (into (set claimed)
-                                         (when judgment
-                                           (judged-subjects eng (:id judgment))))]
-                          (into []
-                                (comp (remove #(contains?
-                                                skip
-                                                (id-of-self (get % "self"))))
-                                      (take n))
-                                items))
-                        items)]
+          (let [id-of #(id-of-self (get % "self"))
+                skip (if subtract?
+                       (into (set claimed)
+                             (when judgment
+                               (judged-subjects eng (:id judgment))))
+                       #{})
+                items (remove #(contains? skip (id-of %))
+                              (get-in doc ["data" "items"]))
+                ;; the rows this sitting already walks, while they are
+                ;; still in the queue, are kept first and the queue's
+                ;; next rows fill what room is left: a re-sit is handed
+                ;; back its own row, not the queue's new first one. The
+                ;; page keeps the queue's order, so a walk of many rows
+                ;; reads oldest first as it always did
+                mine (into #{} (keep #(some-> % str not-empty)) held)
+                mine? #(contains? mine (id-of %))
+                kept (take n (filter mine? items))
+                chosen (into #{}
+                             (map id-of)
+                             (concat kept
+                                     (take (- n (count kept))
+                                           (remove mine? items))))
+                items (into [] (filter #(contains? chosen (id-of %))) items)]
             (cond-> {"kind" walk
                      "charter" (str (get-in seat [:data :charter]))
                      "total" (get-in doc ["data" "total"])
@@ -3274,10 +3292,13 @@
             sitter-sees (sitter-session eng sitter)
             ;; … past the rows another open sitting of this seat was
             ;; handed: a fire and a wake that land together are two
-            ;; runs, and the second walks the next row, not the first's
+            ;; runs, and the second walks the next row, not the first's.
+            ;; A reused sitting's own rows are kept, so a re-sit after a
+            ;; connector drop is handed back the row it was walking
             walk (when-not halted
                    (walk-of eng call sitter-sees seat
-                            (seats/claimed-rows eng seat-id (:id sitting))))
+                            (seats/claimed-rows eng seat-id (:id sitting))
+                            (get-in sitting [:data :walked_rows])))
             ;; … and the rows this sitting was handed are its own until
             ;; it closes
             _ (when sitting
