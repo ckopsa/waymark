@@ -2995,13 +2995,18 @@ the caps. A child cannot carry `delegates` of its own, and it cannot
 set `ignore_sitting_budget`.
 
 **R-14.4** Every authored seat records `authored_by` and `owner`.
-They are written at birth and are never typed. The seat appears in
-the owner's feed (the `delegated` population) until the owner
-approves it.
+They are written at birth, or by the person's `hand_to`, which names
+a delegating seat the live seat fits under (R-14.3); the person's
+`take_back` clears `authored_by` and the approval. An author never
+writes them alone: from an author, both doors are held. The seat
+appears in the owner's feed (the `delegated` population) until the
+owner approves it.
 
 **R-14.5** An authored seat is born `parked`. The owner's first
 unpark is the approval, and it writes `approved_by` and
-`approved_at`. After that, the author may restate the child within
+`approved_at`; a seat handed by `hand_to` is approved by that same
+tap. Both doors run from `active` alone: a parked seat is unparked
+first. After that, the author may restate the child within
 the ceiling with no new tap, and each restate is a normal transition.
 Park is not fenced, because it only takes authority away. Unpark,
 merge and retire are the owner's.
