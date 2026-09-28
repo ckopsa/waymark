@@ -92,6 +92,10 @@
               ;; is derived from law_revision and needs no column;
               ;; what they read is gone at commit and needs this one
               {:name "judgment" :type "jsonb" :ddl "judgment jsonb"}
+              ;; time travel tier 3 (spec-time-travel): the document as
+              ;; the write left it, secret fields subtracted, written
+              ;; only by a kind that declares :retain {:data true}
+              {:name "after" :type "jsonb" :ddl "after jsonb"}
               {:name "correlation_id" :type "text" :ddl "correlation_id text"}
               {:name "idempotency_key" :type "text" :ddl "idempotency_key text"}
               {:name "summary" :type "text" :ddl "summary text"}]
@@ -256,6 +260,7 @@
      ;; file that decides whether a column exists as far as the engine
      ;; is concerned
      :judgment (read-jsonb (:judgment r))
+     :after (read-jsonb (:after r))
      :correlation-id (:correlation_id r)
      :idempotency-key (:idempotency_key r)
      :summary (:summary r)}))
@@ -557,8 +562,8 @@
                [(str "INSERT INTO waymark10_transitions"
                      " (kind, resource_id, action, from_state, to_state, actor,"
                      "  law_revision, input_digest, inputs, acknowledged,"
-                     "  judgment, correlation_id, idempotency_key, summary)"
-                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                     "  judgment, after, correlation_id, idempotency_key, summary)"
+                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                      " RETURNING id, at")
                 (name (:kind record)) (:resource-id record)
                 (name (:action record))
@@ -570,6 +575,7 @@
                 (some-> (:inputs record) jsonb)
                 (some-> (:acknowledged record) not-empty jsonb)
                 (some-> (:judgment record) not-empty jsonb)
+                (some-> (:after record) jsonb)
                 (:correlation-id record)
                 (:idempotency-key record)
                 (:summary record)]

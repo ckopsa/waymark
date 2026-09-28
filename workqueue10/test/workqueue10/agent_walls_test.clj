@@ -3,8 +3,10 @@
   (docs/spec-seat.md R-14.7, docs/spec-ticket.md D-6).
 
   This walks every guard every module declares — the household's kinds
-  (workqueue10.main/check-resources) and the day job's
-  (factory10.main/check-resources) — and judges each one twice: once as
+  (workqueue10.main/check-resources), the day job's
+  (factory10.main/check-resources) and the engine's own (seats,
+  sittings, grants, schedules, transcripts, mcp servers, verdicts …,
+  through waymark10.modules/enrolled) — and judges each one twice: once as
   a bare agent (no person behind it) and once as a bare person, over
   the same row and input. A guard that refuses the agent and admits the
   person refuses the agent because it is an agent. When the same agent
@@ -28,6 +30,7 @@
             [waymark10.guards :as g]
             [waymark10.holds :as holds]
             [waymark10.machine :as machine]
+            [waymark10.modules :as modules]
             [waymark10.types :as t]
             [workqueue10.main :as queue])
   (:import (java.time Instant)))
@@ -41,7 +44,9 @@
   {:owner-is-self-or-on-behalf
    "It decides whose room a row is born in, and is not a person's lever: an agent's row is born in the agent's own room."
    :a-private-value-is-a-persons-own
-   "It decides whose value a row is, and is not a person's lever: the engine stamps the writer as the owner, so an agent's \"mine\" would be about somebody else's life."})
+   "It decides whose value a row is, and is not a person's lever: the engine stamps the writer as the owner, so an agent's \"mine\" would be about somebody else's life."
+   :a-person-corrects
+   "A correction overrules a seat's verdict, and the count of corrections is what a seat is measured by: an agent that could correct, even on a person's approval, would be writing its own measurement."})
 
 ;; ── the probe ─────────────────────────────────────────────────────────
 
@@ -119,8 +124,13 @@
        distinct
        vec))
 
-(defn- module-resources []
-  (->> (concat (factory/check-resources) (queue/check-resources))
+(defn- module-resources
+  "The modules' kinds, and the engine's own beside them (seats, sittings,
+  grants, schedules, transcripts, mcp servers, verdicts …) — the same
+  list the engine boots with, read from the module table with no store."
+  []
+  (->> (let [app (concat (factory/check-resources) (queue/check-resources))]
+         (concat app (modules/enrolled (vec app) nil)))
        (reduce (fn [acc r] (if (contains? (:seen acc) (:kind r))
                              acc
                              (-> acc (update :seen conj (:kind r))

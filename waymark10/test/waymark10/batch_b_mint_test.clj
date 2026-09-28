@@ -341,3 +341,43 @@
                        :scope [{:kind "meal" :actions ["accept"]}]}
                       scoped)]
         (is (= 409 (:status resp)))))))
+
+(defn- accepted-grant! [agent-id scope]
+  (let [gid (id-of (req :post "/api/grants" {:audience agent-id :scope scope}))]
+    (req :post (str "/api/grants/" gid "/-/accept") nil (agent-headers agent-id))
+    gid))
+
+(deftest anchorless-ask-from-one-grant-anchors-to-it
+  (let [gid (accepted-grant! "lone-grant-agent"
+                             [{:kind "plan" :actions ["assign_meal"]}])
+        made (ask! "lone-grant-agent" [{:kind "meal" :actions ["accept"]}]
+                   "See the meals too")
+        env (json made)
+        rid (id-of made)]
+    (is (= 201 (:status made)))
+    (is (= gid (get-in env [:data :grant_id]))
+        "the engine anchors the ask to the one live grant")
+    (is (str/includes? (str (get-in env [:data :note])) gid)
+        "the row says the engine anchored it")
+    (let [resp (req :post (str "/api/approval_requests/" rid "/-/approve"))]
+      (is (= 200 (:status resp)))
+      (is (= gid (get-in (json resp) [:data :grant_id]))))
+    (is (= 2 (count (get-in (json (req :get (str "/api/grants/" gid)))
+                            [:data :scope])))
+        "approval widened the held grant")
+    (is (= 1 (get-in (json (req :get "/api/grants?audience=lone-grant-agent"))
+                     [:data :total]))
+        "no replacement grant was minted")))
+
+(deftest anchorless-ask-from-several-grants-is-refused-naming-them
+  (let [g1 (accepted-grant! "twin-grant-agent"
+                            [{:kind "plan" :actions ["assign_meal"]}])
+        g2 (accepted-grant! "twin-grant-agent"
+                            [{:kind "plan" :actions ["finalize"]}])
+        resp (ask! "twin-grant-agent" [{:kind "meal" :actions ["accept"]}]
+                   "See the meals too")
+        detail (str (:detail (json resp)))]
+    (is (= 409 (:status resp)))
+    (is (str/includes? detail g1))
+    (is (str/includes? detail g2))
+    (is (str/includes? detail "grant_id"))))
