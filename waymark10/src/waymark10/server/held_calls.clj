@@ -726,12 +726,17 @@
   "The author's sitter, as the replay wears it: the seat's own member
   id, an agent, acting for the person the row was held for. It is the
   hand that asked, so the write lands in history as the author's; the
-  person's yes is on this row, as `decided_by`."
+  person's yes is on this row, as `decided_by`, and rides the write as
+  `:allowed-by`, which the transition's actor keeps as `allowed_by`
+  (invoke/actor-map). The correction count reads that mark: a write a
+  person allowed is that person's word, never the seat's own."
   [row]
   (let [caller (str (get-in row [:data :caller]))]
     (cond-> (t/principal {:id caller :type :agent :display caller})
       (some-> (get-in row [:data :owner]) str not-empty)
-      (assoc :acts-for (str (get-in row [:data :owner]))))))
+      (assoc :acts-for (str (get-in row [:data :owner])))
+      (some-> (get-in row [:data :decided_by]) str not-empty)
+      (assoc :allowed-by (str (get-in row [:data :decided_by]))))))
 
 (defn- forward-door!
   "Replay one ALLOWED held seat call at its door, once (server/

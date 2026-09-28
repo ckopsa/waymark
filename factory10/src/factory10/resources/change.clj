@@ -928,6 +928,16 @@
                  {:label "The paths that conflict"
                   :help "The paths a trial merge of the base branch into this change's branch left unmerged. The house writes them when a conflict moves the change to failing, and clears them when the head merges clean and goes green, or the seat submits again."}}
      [:maybe [:vector [:string {:max 400}]]]]
+    ;; written by the forge pass through the observe doors (ticket
+    ;; 22f91244): the head whose interrupted run it re-ran, once, and
+    ;; a note when that same head died without a verdict again
+    [:rerun_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:rerun_note {:optional true
+                  :x-display
+                  {:label "A runner that keeps dying"
+                   :help "The house re-runs a head's checks once when they die without a verdict about the code. When the same head dies again, this says so, and a person looks at the runner."}}
+     [:maybe [:string {:max 240}]]]
     ;; written beside `landing:<step>` in `failing_checks` when the
     ;; rig's landing of a submit failed; cleared with it (ticket
     ;; 92871afb)
@@ -1046,7 +1056,11 @@
              [:labels {:optional true} [:maybe [:vector [:string {:max 100}]]]]
              [:review_state {:optional true}
               [:maybe [:enum "pending" "approved" "changes_requested"
-                       "commented"]]]]
+                       "commented"]]]
+             ;; the forge pass's re-run of an interrupted head (ticket
+             ;; 22f91244)
+             [:rerun_head {:optional true} [:maybe [:string {:max 64}]]]
+             [:rerun_note {:optional true} [:maybe [:string {:max 240}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Observe" :order 10
@@ -1074,7 +1088,9 @@
              [:labels {:optional true} [:maybe [:vector [:string {:max 100}]]]]
              [:review_state {:optional true}
               [:maybe [:enum "pending" "approved" "changes_requested"
-                       "commented"]]]]
+                       "commented"]]]
+             [:rerun_head {:optional true} [:maybe [:string {:max 64}]]]
+             [:rerun_note {:optional true} [:maybe [:string {:max 240}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Observe" :order 14
