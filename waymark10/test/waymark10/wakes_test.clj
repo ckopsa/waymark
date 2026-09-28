@@ -628,7 +628,7 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "replayclerk"
+        (linked-seat! "damperclerk"
                       {:wake_on [{:kind "wake_task" :actions ["complete"]}]
                        :fire_interval_seconds 1}
                       fn')
@@ -644,7 +644,13 @@
     (is (= 1 (count (seat-fires seat))) "the close releases the wake")
 
     (testing "the same transition delivered again while the released run sits"
-      (let [open-two (sitting! seat)
+      ;; `sitting!` registers one model per seat; the second sitting
+      ;; names a model of its own
+      (let [open-two (:id (:row (inv/create! *eng* :sitting
+                                             {:seat (str seat)
+                                              :model (str (model! (str "model-two-for-" seat)))
+                                              :grant (str (grant!))}
+                                             {:principal clerk})))
             t (last (filter #(= :complete (:action %)) (log-of :wake_task task)))]
         (is (some? t))
         (wakes/handle-transition! *eng* (atom nil) t)
