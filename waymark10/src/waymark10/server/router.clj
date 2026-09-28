@@ -283,7 +283,13 @@
              (:transition result)
              (nil? (:replayed? result)))
     (when-some [sitting (open-sitting eng req)]
-      (seats/bump-counter! eng (:id sitting) :transitions)))
+      (seats/bump-counter! eng (:id sitting) :transitions))
+    ;; the corrections line: a person's write on a row a closed sitting
+    ;; last moved counts against THAT sitting, found by the previous
+    ;; transition's grant — this request wears none of it
+    (seats/count-correction! eng kind
+                             (or (get-in result [:transition :resource-id])
+                                 (get-in result [:row :id]))))
   result)
 
 ;; ── the visibility checks (phase 9a, concealment) ───────────────────
