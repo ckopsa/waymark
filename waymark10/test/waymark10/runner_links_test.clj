@@ -13,6 +13,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.runner-links :as rl]
+            [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -113,6 +114,66 @@
       (is (= "retired" (name (:state (row-of id)))))
       (inv/invoke! *eng* :runner_link id :restore nil {:principal colton})
       (is (= "live" (name (:state (row-of id))))))))
+
+(defn- stub
+  "A provider that answers `answer` to every fire."
+  [answer]
+  (reify sch/Provider
+    (fire [_ _link _text] answer)))
+
+(deftest a-fire-writes-what-the-provider-answered
+  (testing "started stamps the fire and counts the run in the window"
+    (let [id (:id (make-link! colton))]
+      (restate! id {:cap {:runs 5 :window_seconds 18000}} colton)
+      (is (= {:started "https://run.example.test/1"}
+             (rl/fire-link! *eng* (stub {:started "https://run.example.test/1"})
+                            (row-of id) "go")))
+      (let [row (row-of id)]
+        (is (= "live" (name (:state row))))
+        (is (some? (get-in row [:data :last_fired_at])))
+        (is (some? (get-in row [:data :window_started_at])))
+        (is (= 1 (get-in row [:data :runs_in_window]))))
+      (rl/fire-link! *eng* (stub {:started nil}) (row-of id) nil)
+      (is (= 2 (get-in (row-of id) [:data :runs_in_window])))))
+  (testing "throttled records retry_after and keeps the link live"
+    (let [id (:id (make-link! colton))]
+      (rl/fire-link! *eng* (stub {:throttled "30"}) (row-of id) nil)
+      (let [row (row-of id)]
+        (is (= "live" (name (:state row))))
+        (is (some? (get-in row [:data :retry_after])))
+        (is (nil? (get-in row [:data :last_fired_at]))))
+      (testing "and the next run that starts clears it"
+        (rl/fire-link! *eng* (stub {:started nil}) (row-of id) nil)
+        (is (nil? (get-in (row-of id) [:data :retry_after]))))))
+  (testing "bad-link marks the link broken"
+    (let [id (:id (make-link! colton))]
+      (rl/fire-link! *eng* (stub {:bad-link "The Routine refused the token."})
+                     (row-of id) nil)
+      (is (= "broken" (name (:state (row-of id)))))))
+  (testing "no person may write the live state"
+    (let [id (:id (make-link! colton))]
+      (is (some? (refusal #(inv/invoke! *eng* :runner_link id :break nil
+                                        {:principal colton}))))
+      (is (= "live" (name (:state (row-of id))))))))
+
+(deftest claude-routine-answers-in-three-words
+  (let [fake (sch/fake-fire)
+        p (sch/claude-routine fake)
+        link {:fire_url a-url :fire_token a-token}]
+    (testing "a 2xx is started, with the run's URL"
+      (is (= "https://claude.ai/code/session_01fake1"
+             (:started (sch/fire p link "go"))))
+      (is (= a-token (:token (first (sch/fires fake))))))
+    (testing "a 429 is throttled, with the provider's retry-after"
+      (sch/answer! fake 429 {:retry-after "30"})
+      (is (= "30" (:throttled (sch/fire p link nil)))))
+    (testing "a 401 is a bad link, with the provider's sentence"
+      (sch/answer! fake 401)
+      (is (= "The Routine refused the token." (:bad-link (sch/fire p link nil)))))
+    (testing "exactly one of the three words"
+      (sch/answer! fake 404)
+      (is (= 1 (count (select-keys (sch/fire p link nil)
+                                   [:started :throttled :bad-link])))))))
 
 (deftest an-agent-does-not-make-a-link
   (is (= :a-person-makes-the-link

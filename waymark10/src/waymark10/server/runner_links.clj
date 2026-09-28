@@ -10,16 +10,20 @@
   records. A `restate` without a token keeps the token that stands.
 
   The live-state fields (`retry_after`, `window_started_at`,
-  `runs_in_window`, `last_fired_at`) are declared and left empty: the
-  fire interface (1b) writes them. The link's liveness is the row's
-  own state, `live` or `broken`, beside `retired`.
+  `runs_in_window`, `last_fired_at`) are the engine's: `fire-link!`
+  fires through a provider (schedules/Provider, piece 1b) and writes
+  what it answered, through three hidden doors. The link's liveness is
+  the row's own state, `live` or `broken`, beside `retired`.
 
-  Not here: the fire interface (1b), seeding links from today's
-  schedule and model links (1c), and choosing among links."
+  Not here: seeding links from today's schedule and model links (1c),
+  and choosing among links."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
-            [waymark10.types :as t]))
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.schedules :as sch]
+            [waymark10.types :as t])
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -47,6 +51,30 @@
   (if (or (nil? (:token inp)) (a-persons-hand? ctx))
     (t/allow)
     (t/deny)))
+
+(g/defguard the-engine-writes-the-fire
+  {:reads [:principal]
+   :hide true
+   :explain "A link's live state is the engine's record of what the provider last answered."}
+  [_row _inp ctx]
+  (if (= :system (get-in ctx [:principal :type]))
+    (t/allow) (t/deny)))
+
+(def ^:private engine-writes
+  {:idempotent true :reversible false :confirm false
+   :one-way "Bookkeeping the engine writes as it fires through the link; the next fire moves the row again."})
+
+(defhandler stamp-fire
+  [row inp _ctx]
+  (update row :data
+          (fn [data]
+            (-> (merge data (select-keys inp [:last_fired_at :window_started_at
+                                              :runs_in_window]))
+                (dissoc :retry_after)))))
+
+(defhandler hold-throttle
+  [row inp _ctx]
+  (assoc-in row [:data :retry_after] (:retry_after inp)))
 
 (defhandler restate-link
   [row inp _ctx]
@@ -88,9 +116,9 @@
    :states [:live :broken :retired]
    :initial :live
    :terminal #{}                       ; retirement is reversible, deliberately
-   ;; :broken is the engine's to write: the fire interface (1b) marks
-   ;; a link broken when the provider refuses its token. No door does.
-   :allow-dead #{:broken}
+   ;; :broken is the engine's to write: `fire-link!` marks a link
+   ;; broken through the hidden `break` door when the provider answers
+   ;; that the link is bad.
    :nav :system
    :summary "{data.provider} · {state}"
    :label-template "{data.provider} link"
@@ -188,4 +216,107 @@
     :restore
     {:from #{:retired} :to :live
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Restore" :order 2}}}})
+     :display {:label "Restore" :order 2}}
+
+    ;; the fire's landing (1b). Hidden and engine-written: a run
+    ;; started, so the link is good and its window counts one more.
+    :fired
+    {:from #{:live :broken} :to :live
+     :input [:map
+             [:last_fired_at {:x-display {:hidden true}} :waymark/instant]
+             [:window_started_at {:x-display {:hidden true}} :waymark/instant]
+             [:runs_in_window {:x-display {:hidden true}} [:int {:min 0}]]]
+     :record true
+     :guards [the-engine-writes-the-fire]
+     :edit {:prefill [:last_fired_at] :fence false
+            :unfenced-reason
+            "Stamped by the fire the moment the provider answered; no read preceded it to fence against."}
+     :safety engine-writes
+     :handler stamp-fire
+     :display {:label "Run started"}}
+
+    ;; the provider has no free run and named a time: the link stays
+    ;; live, and nothing fires through it before `retry_after`.
+    :throttle
+    {:from #{:live} :to :live
+     :input [:map
+             [:retry_after {:x-display {:hidden true}} :waymark/instant]]
+     :record true
+     :guards [the-engine-writes-the-fire]
+     :edit {:prefill [:retry_after] :fence false
+            :unfenced-reason
+            "Written by the fire the moment the provider throttled it; no read preceded it to fence against."}
+     :safety engine-writes
+     :handler hold-throttle
+     :display {:label "Provider throttled"}}
+
+    ;; the provider answered that the link itself is bad. A restate
+    ;; with a good URL or token brings it back live.
+    :break
+    {:from #{:live} :to :broken
+     :guards [the-engine-writes-the-fire]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The link fires nothing until a person restates it."}
+     :display {:label "Link refused" :style :danger}}}})
+
+;; ── firing through a link (piece 1b) ────────────────────────────────
+
+(defn- instant-of
+  "An instant, however the row spells it — a stored string or an
+  Instant. Unparsable is nil."
+  ^Instant [v]
+  (cond
+    (instance? Instant v) v
+    (some-> v str not-empty) (try (Instant/parse (str v))
+                                  (catch Exception _ nil))))
+
+(defn window-after
+  "The cap's window once one more run starts at `at`: the open window
+  counts one more, and a closed one (or none yet) opens at `at` with
+  one. A link with no cap keeps one window, opened at its first fire."
+  [data ^Instant at]
+  (let [started (instant-of (:window_started_at data))
+        secs (some-> (get-in data [:cap :window_seconds]) long)
+        open? (and started
+                   (or (nil? secs)
+                       (.isBefore at (.plusSeconds started secs))))]
+    (if open?
+      {:window_started_at (str started)
+       :runs_in_window (inc (long (or (:runs_in_window data) 0)))}
+      {:window_started_at (str at) :runs_in_window 1})))
+
+(defn- act! [eng row action body]
+  (try
+    (:row (inv/invoke! eng :runner_link (str (:id row)) action body
+                       {:principal sch/system-actor}))
+    (catch Exception e
+      ;; the row may have moved under the fire (retired meanwhile);
+      ;; the provider's answer still stands and is returned
+      (binding [*out* *err*]
+        (println (str "waymark10 runner links: link " (:id row)
+                      " could not record " action " — " (ex-message e))))
+      nil)))
+
+(defn fire-link!
+  "Fire one run through `link-row` by `provider` (a schedules/Provider),
+  with `text`, and write what it answered onto the link: `started`
+  stamps `last_fired_at` and counts the run in the window, `throttled`
+  records `retry_after`, and `bad-link` marks the link broken. Answers
+  the provider's answer."
+  [eng provider link-row text]
+  (let [answer (sch/fire provider (:data link-row) text)
+        at (or (instant-of ((:now-fn eng))) (Instant/now))]
+    (cond
+      (contains? answer :started)
+      (act! eng link-row :fired
+            (merge {:last_fired_at (str at)}
+                   (window-after (:data link-row) at)))
+
+      (contains? answer :throttled)
+      (act! eng link-row :throttle
+            {:retry_after (str (sch/retry-instant at (:throttled answer)
+                                                  (:body answer)))})
+
+      :else
+      (act! eng link-row :break nil))
+    answer))

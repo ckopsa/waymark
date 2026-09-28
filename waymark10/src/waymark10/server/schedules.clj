@@ -1415,6 +1415,15 @@
                       (retry-seconds nil body)
                       (some->> body str (re-find #"(?i)no free run")))))))
 
+(defn retry-instant
+  "The instant a throttle names, read from `from`: the Retry-After
+  header's seconds or a number the body names, else the header's
+  HTTP-date. A throttle that names no time waits a minute."
+  ^Instant [^Instant from retry-after body]
+  (or (some->> (retry-seconds retry-after body) (.plusSeconds from))
+      (retry-date retry-after)
+      (.plusSeconds from 60)))
+
 (defn- throttle!
   "Keep the row live through `throttle`, saying the provider's sentence
   and the instant it named. The wake stays pending, and the wake loop
@@ -1423,9 +1432,7 @@
   [eng row retry-after body]
   (let [from (or (instant-of (now eng)) (Instant/now))
         secs (retry-seconds retry-after body)
-        until (or (some->> secs (.plusSeconds ^Instant from))
-                  (retry-date retry-after)
-                  (.plusSeconds ^Instant from 60))
+        until (retry-instant from retry-after body)
         sentence (or (provider-note 429 (or (some-> retry-after str not-empty)
                                             (some-> secs str)))
                      "The Routine has no free run.")]
@@ -1638,6 +1645,47 @@
     404 "No Routine answers the fire URL."
     nil))
 
+;; ── the provider fire interface (runner links 1b) ───────────────────
+;;
+;; One question every provider answers the same way, whatever its wire:
+;; start a run through this link, with this text. The answer is exactly
+;; one of three — started, throttled, or the link is bad — so a caller
+;; (a schedule, a runner link) lands it without knowing the provider.
+
+(defprotocol Provider
+  "One provider's fire, answered in one of three words."
+  (fire [p link text]
+    "Start one run through `link` ({:fire_url :fire_token}) with `text`
+    → exactly one of {:started run-url}, {:throttled retry-after} or
+    {:bad-link reason}; `run-url` and `retry-after` may be nil. The
+    answer may carry more beside its one word (`:session-id`, `:body`,
+    `:status`) for a caller that says more. Nothing throws."))
+
+(defrecord ClaudeRoutine [adapter]
+  Provider
+  (fire [_ link text]
+    (try
+      (let [answer (fire-routine adapter
+                                 (some-> (:fire_url link) str not-empty)
+                                 (some-> (:fire_token link) str not-empty)
+                                 text)]
+        {:started (some-> (:session-url answer) str not-empty)
+         :session-id (:session-id answer)})
+      (catch Exception e
+        (let [{:keys [status retry-after body]} (ex-data e)]
+          (if (throttle? status retry-after body)
+            {:throttled retry-after :body body}
+            {:bad-link (or (provider-note status retry-after)
+                           (not-empty (str (ex-message e)))
+                           "The adapter could not reach the provider.")
+             :status status}))))))
+
+(defn claude-routine
+  "The claude_routine provider, firing through `adapter` — the real
+  RoutineFire, or a test's fake."
+  [adapter]
+  (->ClaudeRoutine adapter))
+
 (def fire-payload-tag
   "The block a seat's instructions name, spelled here so the engine's
   text and a person's instructions cannot drift apart."
@@ -1726,29 +1774,24 @@
   ([eng adapter schedule-row text at]
    (fire! eng adapter schedule-row text at (link-of eng schedule-row)))
   ([eng adapter schedule-row text at link]
-   (let [url (some-> (:fire_url link) str not-empty)
-         token (some-> (:fire_token link) str not-empty)]
-     (when url
-       (try
-         (let [answer (fire-routine adapter url token text)]
-           (try-act! eng schedule-row :fired
-                     (cond-> {:last_fired_at (str (or (instant-of at) (now eng)))}
-                       (some-> (:session-url answer) str not-empty)
-                       (assoc :last_run_url (str (:session-url answer))))))
-         (catch Exception e
-           (let [{:keys [status retry-after body]} (ex-data e)
-                 sentence (provider-note status retry-after)]
-             (cond
-               ;; a throttle: the row stays live and the wake waits
-               (throttle? status retry-after body)
-               (throttle! eng schedule-row retry-after body)
+   (when (some-> (:fire_url link) str not-empty)
+     (let [answer (fire (claude-routine adapter) link text)]
+       (cond
+         (contains? answer :started)
+         (try-act! eng schedule-row :fired
+                   (cond-> {:last_fired_at (str (or (instant-of at) (now eng)))}
+                     (:started answer)
+                     (assoc :last_run_url (str (:started answer)))))
 
-               ;; a paused Routine, where the row can say so as a state
-               (and (= 400 (some-> status long)) (= :live (:state schedule-row)))
-               (try-act! eng schedule-row :pause nil)
+         ;; a throttle: the row stays live and the wake waits
+         (contains? answer :throttled)
+         (throttle! eng schedule-row (:throttled answer) (:body answer))
 
-               sentence (note! eng schedule-row sentence)
-               :else (break! eng schedule-row e)))))))))
+         ;; a paused Routine, where the row can say so as a state
+         (and (= 400 (some-> (:status answer) long)) (= :live (:state schedule-row)))
+         (try-act! eng schedule-row :pause nil)
+
+         :else (note! eng schedule-row (:bad-link answer)))))))
 
 ;; ── the read-back (R-12.3) ──────────────────────────────────────────
 
