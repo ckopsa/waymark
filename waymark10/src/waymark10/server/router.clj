@@ -2026,7 +2026,8 @@
         (let [d (ex-data e)]
           (when (and (:waymark10/problem d) (= 409 (:status d)))
             (when-some [sitting (open-sitting eng req)]
-              (seats/bump-counter! eng (:id sitting) :refusals)))
+              (seats/bump-counter! eng (:id sitting) :refusals
+                                   {:type (:type d) :guard (:guard d)})))
           (throw e))))))
 
 (defn core-static
