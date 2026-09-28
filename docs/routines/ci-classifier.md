@@ -25,7 +25,7 @@ with no change to the Routine.
 | mode | `fired` | the Routine and the wake open the sittings |
 | walk | `ci_run` | the queue: the red runs nobody has classified. The kind's default filter is `state=red`, so the collection a firing opens is exactly that work |
 | rows_per_firing | 5 | one verdict is one log tail and two short sentences. Five of them is a small sitting, and a sixth red run waits one cadence |
-| held_for | the model the Routine runs | the seat's place on the ladder. This seat starts low: the envelope frames the whole question, and the three doors are the whole answer |
+| held_for | the row id of the model the Routine runs (`waymark_query` kind `model`) | the seat's place on the ladder. This seat starts low: the envelope frames the whole question, and the three doors are the whole answer |
 | cadence_seconds | 3600 | the wake on `ci_run` create fires it sooner (R-12.22) |
 | wake_on | not set | a walk seat with no `wake_on` wakes on the walk kind's `create`, so a new red run starts a sitting (R-12.22) |
 | fire_interval_seconds | 300 | a red pipeline mints many runs in one minute; the damper holds them to one firing, and that firing walks five |
@@ -283,7 +283,7 @@ Nothing else goes in the instructions (R-12.10).
 
 1. The GitHub source has run one pass and the queue holds red runs.
 2. The seat exists and is active, with the scope above and `held_for`
-   naming the model the Routine runs.
+   holding the row id of the model the Routine runs.
 3. The seat carries its `instructions`. The engine then mints a key
    for each firing, and the Routine's prompt holds no key. The older
    way also works: `offer_key` on the model row, or `offer_key` on
