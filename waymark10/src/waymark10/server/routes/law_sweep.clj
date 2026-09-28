@@ -29,6 +29,7 @@
             [waymark10.server.law-sweep :as law-sweep]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
+            [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
@@ -58,6 +59,18 @@
          200
          (p/wire-value (law-sweep/report eng row principal
                                          (router/query-params req))))))))
+
+(def links
+  "The door above, lent to the core definition kind's envelope as
+  `sweep` (waymark-442.12): a proposer finds it on the law itself
+  rather than in docs/spec-law-sweep.md. Every definition carries it —
+  the door's own 409 names which states it answers, the same as a
+  declared link that points at a door the row's state refuses."
+  (reify seams/Linking
+    (lend-links [_ kind row]
+      (when (and (= :definition kind) (some? (:id row)))
+        {"sweep" {:href (str "/api/definitions/" (:id row) "/sweep")
+                  :kind "law_sweep"}}))))
 
 (defn routes [eng]
   {:module :law-sweep

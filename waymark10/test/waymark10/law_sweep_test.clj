@@ -208,6 +208,31 @@
                  :data {:target_kind "s_acct" :revision 2
                         :fingerprint_hash (:fingerprint-hash rdef)}}))))))))
 
+;; ── the door rides the law's envelope, lent by the assembly ─────────
+
+(deftest the-sweep-link-rides-only-an-engine-that-assembled-it
+  (let [boot-with (fn [modules]
+                    (engine/engine {:storage (memory/storage)
+                                    :resources [(acct 50)]
+                                    :deploy-mode :propose
+                                    :modules modules}))]
+    (testing "assembled with :law-sweep: each definition links its sweep"
+      (let [eng (boot-with [:law-sweep])
+            did (proposal-id eng :s_acct)
+            [status doc] (get-json eng (str "/api/definitions/" did))]
+        (is (= 200 status))
+        (is (= (str "/api/definitions/" did "/sweep")
+               (get-in doc [:links :sweep :href])))
+        (is (= "law_sweep" (get-in doc [:links :sweep :kind])))
+        (is (= 200 (first (get-json eng (get-in doc [:links :sweep :href])))))))
+    (testing "assembled without it: no link to a door that is not there"
+      (let [eng (boot-with [])
+            did (proposal-id eng :s_acct)
+            [status doc] (get-json eng (str "/api/definitions/" did))]
+        (is (= 200 status))
+        (is (nil? (get-in doc [:links :sweep])))
+        (is (= 404 (first (get-json eng (str "/api/definitions/" did "/sweep")))))))))
+
 ;; ── adoption is the reason a sweep can be honestly empty ────────────
 
 (deftest a-never-adopting-kind-says-why-nothing-drifts

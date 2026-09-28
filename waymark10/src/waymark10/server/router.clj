@@ -382,7 +382,10 @@
            :now ((:now-fn eng))
            :services (:services eng)
            :visibility (visibility-of req)
-           :resources (inv/resources eng)}
+           :resources (inv/resources eng)
+           ;; the links assembled modules lend core kinds
+           ;; (seams/Linking), gathered once at boot
+           :link-doors (:link-doors eng)}
     (:probe-reads eng) (merge (inv/render-hooks eng))))
 
 (defn envelope-response
