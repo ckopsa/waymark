@@ -129,6 +129,23 @@
   ;; machine advances the state, never this handler.
   (update row :data merge (into {} (remove (comp nil? val)) inp)))
 
+(defhandler adopt-the-pull-request [row inp _ctx]
+  ;; The identity lands as `observe` writes the facts, and the forge
+  ;; pass's note that nobody had adopted the landed pull request goes
+  ;; with the wait it described (ticket 58e706d6).
+  (-> row
+      (update :data merge (into {} (remove (comp nil? val)) inp))
+      (update :data assoc :landed_at nil :adoption_note nil)))
+
+(defhandler note-the-adoption [row inp _ctx]
+  ;; THE FORGE PASS'S OWN RECORD (ticket 58e706d6): when it first saw
+  ;; the pull request the bench's landing opened, and, once the window
+  ;; has passed with no adoption, the note that says so. An input with
+  ;; neither clears both.
+  (update row :data assoc
+          :landed_at (some-> (:landed_at inp) str not-empty)
+          :adoption_note (some-> (:adoption_note inp) str not-empty)))
+
 ;; ── the merge finishes the task the change was born from ────────────
 
 (def ^:private born-kinds
@@ -1009,6 +1026,19 @@
                       :label "Why the push did not land"
                       :help "The end of the output of the step the bench's landing failed at, when a submit never reached GitHub. The house writes it when it moves the change to failing, and clears it when the seat submits again."}}
      [:maybe [:string {:max 4000}]]]
+    ;; a submit whose landing opened a pull request the forge never
+    ;; adopted (ticket 58e706d6): the first time the forge pass saw it,
+    ;; and the note it writes once the window has passed. The adoption
+    ;; clears both.
+    [:landed_at {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:adoption_note {:optional true
+                     :examples ["landed as #7 on ckopsa/waymark but no pull request row adopted it; head bench/58e706d6"]
+                     :x-display
+                     {:widget "prose"
+                      :label "A pull request nobody adopted"
+                      :help "The bench's landing opened a pull request for this change, and the house's row never took its number, so neither the house's merge nor a merge ask sees it. Cleared when the row adopts the pull request."}}
+     [:maybe [:string {:max 500}]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     ;; the house's merge line (ticket b85aded5): the merge pass writes
@@ -1246,7 +1276,7 @@
     :adopt
     {:from #{:open} :to :open
      :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
+     :handler adopt-the-pull-request
      :input [:map
              [:change_id {:x-display {:raw true}}
               [:string {:min 1 :max 250}]]
@@ -1271,7 +1301,7 @@
     :adopt_submitted
     {:from #{:submitted} :to :submitted
      :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
+     :handler adopt-the-pull-request
      :input [:map
              [:change_id {:x-display {:raw true}}
               [:string {:min 1 :max 250}]]
@@ -1286,6 +1316,25 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Adopt" :order 12
                :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
+
+    ;; THE FORGE PASS'S NOTE (ticket 58e706d6). A submitted change whose
+    ;; landing opened a pull request that no row adopted is skipped by
+    ;; the house's merge and by the merge ask, silently. The pass writes
+    ;; when it first saw it, and after the window a note a person reads.
+    ;; Hidden, and the mirror's hand alone.
+    :note_adoption
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler note-the-adoption
+     :input [:map
+             [:landed_at {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 64}]]]
+             [:adoption_note {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Adoption noted" :order 19
+               :description "The mirror says a landed pull request is waiting for its row"}}
 
     ;; ── THE BRANCH, MINTED AGAIN (bead waymark-fp62.6.3.11) ───────
     ;; A seat-born row writes its head branch at BIRTH, from the
