@@ -32,6 +32,9 @@
     :severity        :refuse | :warning (acknowledgable, E1)
     :hold            true: a refusal is held for the person's tap
                      rather than answered 409 (waymark10.holds)
+    :resolves        vector of input fields whose row this guard reads
+                     — the kind-and-id pairs the dangling-ref wall
+                     cannot reach (checks/check-resolvers)
 
   Composites: {:all [g …]} via g/and — first deny wins, judges/reads
   union; {:any [g …]} via g/or — first allow wins, judges absent (an
