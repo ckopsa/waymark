@@ -205,6 +205,11 @@
       (is (not (scenario/check-tier? storage-bound a-neighbour-cannot-close)))
       (is (= "reads :storage"
              (scenario/deferral-reason storage-bound a-neighbour-cannot-close)))))
+  (testing "a fact gate reads only the row it is handed, so it stays offline"
+    (let [fact-gated (with-guard (g/require :bins_ready))]
+      (is (= [:facts] (:reads (g/require :bins_ready))))
+      (is (scenario/check-tier? fact-gated a-neighbour-cannot-close))
+      (is (nil? (scenario/deferral-reason fact-gated a-neighbour-cannot-close)))))
   (testing "the report prints the split"
     (let [{:keys [total checked deferred]} (scenario/report errand)]
       (is (= 4 total))

@@ -497,7 +497,7 @@
                                     (str "Not yet: "
                                          (str/replace (clojure.core/name fact) "_" " ")
                                          " does not hold."))
-          :reads [:storage]
+          :reads [:facts]
           :hide (boolean hide)
           :remedies (vec remedies)
           :severity (clojure.core/or severity :refuse)
