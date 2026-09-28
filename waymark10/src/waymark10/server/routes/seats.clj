@@ -73,7 +73,6 @@
     to read, and the honest fix is a shorter `since`, not a longer
     page."
   (:require [clojure.string :as str]
-            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
@@ -834,14 +833,23 @@
 
 (defn- inbox-match
   "A predicate on a log row. The seat's `inbox.only` names its kind
-  and its action (an empty list is every action), the sitting's grant
-  reads its kind, and it is neither a transcript nor this sitting's
-  own row. The grant is resolved once, as a request resolves it."
-  [eng seat sitting]
+  and its action (an empty list is every action), the seat's scope
+  reads the whole kind, and it is neither a transcript nor this
+  sitting's own row.
+
+  THE SCOPE IS READ OFF THE SEAT, not off a visibility resolved for
+  the sitting's grant: a seat's grant reads exactly its seat's scope
+  (R-5.2), and the door holds no principal whose grant that is. An
+  entry narrowed by ids or a filter reads only some rows of its kind,
+  so it admits none of that kind's events here."
+  [seat sitting]
   (let [only (into {} (map (fn [[k acts]] [(name k) (set (map name acts))]))
                    (get-in seat [:data :inbox :only]))
-        vis (grants/visibility eng (some-> (get-in sitting [:data :grant]) str)
-                               (sitter-of seat))
+        readable (into #{}
+                       (keep (fn [e]
+                               (when (and (nil? (:ids e)) (nil? (:filter e)))
+                                 (some-> (:kind e) name))))
+                       (get-in seat [:data :scope]))
         sitting-id (str (:id sitting))]
     (fn [t]
       (let [k (name (:kind t))
@@ -849,7 +857,7 @@
         (boolean
          (and acts
               (or (empty? acts) (contains? acts (name (:action t))))
-              ((:kind? vis) (:kind t))
+              (contains? readable k)
               (not (contains? transcript-kinds k))
               (not (and (= "sitting" k) (= sitting-id (str (:resource-id t)))))))))))
 
@@ -897,7 +905,7 @@
               (throw (p/problem :unauthorized 401 "Unauthorized" {:detail no-inbox})))
           after (whole-param req "after" 0 nil)
           wait (or (whole-param req "wait" 0 inbox-wait-max) 0)
-          match? (inbox-match eng seat sitting)
+          match? (inbox-match seat sitting)
           deadline (+ (System/nanoTime) (* (long wait) 1000000000))]
       (loop [cursor (or after (sitting-start eng sitting))]
         (let [[hits cursor] (inbox-scan eng match? cursor)]
