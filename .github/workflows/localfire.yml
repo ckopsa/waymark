@@ -136,4 +136,4 @@ jobs:
         env:
           NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
           NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
-        run: nomad var put -force nomad/jobs/localfire/deploy IMAGE_TAG='${{ needs.build.outputs.tag }}'
+        run: nomad var put -force nomad/jobs/localfire/deploy image_tag='${{ needs.build.outputs.tag }}'
