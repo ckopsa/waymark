@@ -2752,6 +2752,44 @@
     (is (empty? (get-in answer [:walk :rows]))
         "the ticket beside a stuck change is left out like a claimed row")))
 
+;; ── a submitted round is not walked twice (ticket 60c2ec22) ────────────
+
+(deftest a-ticket-stuck-from-submitted-is-never-walked
+  (let [w (ticket-world)
+        _ (seat-invokes! w "submit" {:why a-long-sentence})
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (force-ticket-state! w :open)
+        answer (sit-again! w)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
+    (is (empty? (get-in answer [:walk :rows]))
+        "a change stuck from submitted leaves its ticket out as well")))
+
+(deftest a-ticket-whose-change-is-submitted-is-not-walked-again
+  (let [w (ticket-world)
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (force-ticket-state! w :open)
+        answer (sit-again! w)]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "submitted" (name (:state (first (changes-of (:eng w)))))))
+    (is (empty? (get-in answer [:walk :rows]))
+        "a round in review is not handed to a second run of the seat")))
+
+(deftest a-submit-on-a-submitted-clean-worktree-says-it-is-already-submitted
+  (let [w (ticket-world)
+        _ (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (answer! (:state w) "bench__status"
+                   {:repo a-repository :branch "waymark/one" :head a-head
+                    :base "main" :base_head a-head :dirty 0 :paths []
+                    :ahead 1 :behind 0
+                    :landing {:state "running" :head a-head}})
+        r (seat-invokes! w "submit" {:why a-long-sentence})]
+    (is (true? (:isError r)))
+    (is (str/includes? (text-of r) "already submitted"))
+    (is (not (str/includes? (text-of r) "stall door"))
+        "a round in review is not stalled")
+    (is (= "submitted" (name (:state (first (changes-of (:eng w)))))))))
+
 (deftest an-unstick-puts-a-pull-request-back-under-review
   (let [w (ticket-world)
         _ (submitted-and-adopted! w 87)
