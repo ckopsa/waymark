@@ -880,15 +880,18 @@
 (defn- text-of [v]
   (some-> v str str/trim not-empty))
 
+;; The rig's shape (ckopsa/waymark-bench bench/landing.py), pinned by
+;; `the-landing-verdict-reads-the-rigs-shape`: {state, failed_step,
+;; steps: [{name, state, seconds, exit_code, output, commit}]}. Only
+;; `state`, `failed_step` and each step's `name`, `state` and `output`
+;; are read; a key off that shape is not guessed at.
+
 (defn- state-text [m]
-  (let [v (or (:state m) (:status m))]
+  (let [v (:state m)]
     (str/lower-case (if (keyword? v) (name v) (str v)))))
 
 (defn- step-name [step]
-  (text-of (or (:name step) (:step step) (:id step))))
-
-(defn- output-of [m]
-  (some #(text-of (get m %)) [:output :error :stderr :log :tail :message]))
+  (text-of (:name step)))
 
 (defn- tail-of [s n]
   (if (> (count s) n) (subs s (- (count s) n)) s))
@@ -912,10 +915,9 @@
                                                  (state-text %))
                                   %)
                                steps))
-              step (or named (step-name failed) (text-of (:step landing))
-                       "unknown")
+              step (or named (step-name failed) "unknown")
               name' (str "landing:" step)
-              out (or (output-of failed) (output-of landing))]
+              out (text-of (:output failed))]
           (cond-> {:verdict :red
                    :names [(subs name' 0 (min (count name') 200))]}
             out (assoc :error (tail-of out landing-error-chars))))
