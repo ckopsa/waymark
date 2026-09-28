@@ -13,10 +13,15 @@
             [clojure.string :as str]
             [localfire.prompt :as prompt]))
 
+(def default-mcp-name
+  "The MCP server's name, the cloud connector's own, so a run's tools
+  are `mcp__Waymark__…` as the seats' instructions spell them."
+  "Waymark")
+
 (def default-allowed-tools
   "What a run may reach when the config names nothing: the engine's own
-  MCP door, and the one echo the Routine prompt asks for."
-  ["mcp__waymark__*" "Bash(echo *)"])
+  MCP door and nothing else. The built-in tools are off (R-5.4)."
+  ["mcp__Waymark__*"])
 
 (defn- fail! [msg]
   (throw (ex-info msg {:localfire/config true})))
@@ -86,7 +91,7 @@
      :place         place
      :runs-dir      runs
      :claude        (or (some-> (:claude m) str not-empty) "claude")
-     :mcp           {:name (or (some-> (:name mcp) str not-empty) "waymark")
+     :mcp           {:name (or (some-> (:name mcp) str not-empty) default-mcp-name)
                      :url  (str (:url mcp))}
      :allowed-tools (vec (or (seq (map str (:allowed-tools m)))
                              default-allowed-tools))

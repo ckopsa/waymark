@@ -95,10 +95,11 @@
   "The argument vector of R-5.4, with the config's values in it.
 
   `--session-id` makes the session's id the one the engine already
-  holds, so `CLAUDE_CODE_SESSION_ID` inside the session is the id the
-  Routine prompt asks the session to echo and pass to the sit. The
-  prompt is the FIRST argument, whole and unquoted — it is the run's
-  entire payload and the server never cuts it."
+  holds, the id the Routine prompt states and the session passes to
+  the sit. `--tools \"\"` turns every built-in tool off, so the run
+  sees the Waymark tools and nothing else. The prompt is the FIRST
+  argument, whole and unquoted — it is the run's entire payload and
+  the server never cuts it."
   [cfg routine id prompt-text]
   ;; THE PROMPT COMES FIRST, right behind `-p`, and not last. Both
   ;; `--mcp-config` and `--allowedTools` are VARIADIC in Claude Code —
@@ -115,8 +116,14 @@
        "--output-format" "json"
        "--strict-mcp-config"
        "--mcp-config" (.getPath (runs/mcp-file (:runs-dir cfg) id))
+       "--tools" ""
        "--allowedTools"]
       (into (map str) (:allowed-tools cfg))))
+
+(def run-env
+  "What the server adds to a run's environment (R-5.4): tool search off,
+  so the Waymark tools load up front and no ToolSearch is needed."
+  {"ENABLE_TOOL_SEARCH" "false"})
 
 (defn- log-run!
   "One line per fire (R-7.3): the routine, the run, the status. Not the
@@ -134,10 +141,10 @@
   seconds, then destroy, and the record says `killed`.
 
   → the final record."
-  [state {:keys [id argv dir max-run-seconds]}]
+  [state {:keys [id argv dir env max-run-seconds]}]
   (let [cfg      (:config state)
         runs-dir (:runs-dir cfg)
-        handle   (spawn/start (:spawner state) argv dir {})
+        handle   (spawn/start (:spawner state) argv dir (or env {}))
         drain    (fn [in f] (future (try (io/copy in f) (catch Exception _ nil))))
         d-out    (drain (spawn/stdout handle) (runs/stdout-file runs-dir id))
         d-err    (drain (spawn/stderr handle) (runs/stderr-file runs-dir id))
@@ -163,10 +170,11 @@
     (future
       (try
         (let [argv (fire-argv cfg routine id
-                              (prompt/compose (:prompt routine) text))
+                              (prompt/compose (:prompt routine) text id))
               rec  (execute-run! state
                                  {:id id
                                   :argv argv
+                                  :env run-env
                                   :dir (runs/place-dir (:runs-dir cfg) id)
                                   :max-run-seconds (:max-run-seconds routine)})]
           (log-run! nm id (:status rec)))
