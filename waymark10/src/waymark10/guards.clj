@@ -720,7 +720,7 @@
   "The field four-eyes wall: whoever this row names in `field` cannot
   be the principal acting now. \"Not you\", where you is written down
   in the document rather than remembered from the log."
-  [field & [{:keys [explain hide name]}]]
+  [field & [{:keys [explain hide name open]}]]
   (guard
    (cond-> {:name (clojure.core/or name
                                    (keyword (str "not-the-" (clojure.core/name field))))
@@ -741,6 +741,7 @@
                                   (list '= '(:id (:principal ctx))
                                         (list 'get-in 'row [:data field]))
                                   '(t/deny) '(t/allow)))})}
+     open (assoc :open open)
      hide (assoc :hide true))))
 
 (defn is-the-field
