@@ -317,7 +317,7 @@
   ;; endings and for nobody's hand. The wire, the render probe and
   ;; every rehearsal answer nil, so it renders refused, which is true.
   (let [{:keys [kind action]} (:within ctx)]
-    (if (and (= :ticket kind) (contains? #{:complete :drop :land} action))
+    (if (and (= :ticket kind) (contains? #{:complete :drop :land :mend} action))
       (t/allow)
       (t/deny))))
 
@@ -333,6 +333,29 @@
   (if (= :change (:kind (:within ctx)))
     (t/allow)
     (t/deny)))
+
+(defguardfn only-the-base-pass-writes-this
+  {:reads [:principal :within]
+   :hide true
+   :explain "The GitHub source's base pass writes a red base's heads and ends its ticket when the base is green. A person and a model read it."}
+  ;; repo_policy's `the-engine-notes-the-source`, one kind over (ticket
+  ;; ade81ae9): the engine's system hand alone, and a hidden door
+  ;; answers 404 and says nothing. It opens only `:within` the base
+  ;; pass (forge's `base-opts`), so the render probe, which carries no
+  ;; `:within`, offers the engine nothing on a ticket under review.
+  [_row _inp ctx]
+  (if (and (= :system (:type (:principal ctx)))
+           (= :repo_policy (:kind (:within ctx))))
+    (t/allow)
+    (t/deny)))
+
+(defhandler note-a-red-head [row inp _ctx]
+  ;; One more red head of the base this ticket was opened for, kept to
+  ;; the last fifty.
+  (update-in row [:data :red_heads]
+             (fn [heads]
+               (vec (take-last 50 (distinct (conj (vec heads)
+                                                  (:red_head inp))))))))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
@@ -518,7 +541,16 @@
                    {:widget "prose"
                     :label "How it ended"
                     :help "One sentence: what was done, or why it was let go. It is what the next reader has."}}
-    [:maybe [:string {:max 480}]]]])
+    [:maybe [:string {:max 480}]]]
+   ;; ticket ade81ae9: the heads of a red base, written by the base pass
+   ;; on the one ticket it opened for that repository
+   [:red_heads {:optional true
+                :examples [["1f0c2d3e4a5b60718293a4b5c6d7e8f901234567: gate"]]
+                :x-display
+                {:raw true
+                 :label "Red heads of the base"
+                 :help "Each head of the base branch that went red while this ticket was open, with its red checks. Empty for a ticket the engine did not open."}}
+    [:maybe [:vector [:string {:max 400}]]]]])
 
 (def ^:private close-input
   [:map
@@ -744,6 +776,48 @@
               :one-way "Its pull request merged, and that is the ending on the record, with the pull request as its sentence. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
      :display {:label "Merged" :order 13
                :description "Its pull request merged — the work is done"}}
+
+    ;; ── THE BASE PASS'S THREE DOORS (ticket ade81ae9) ──────────────────
+    ;; Hidden, and the engine's hand alone. A later red head of the base
+    ;; is written on the one open ticket (a self-loop, spelled once for
+    ;; each state it serves), and a green base ends it with `mend`,
+    ;; whether or not its own change merged.
+    :note_red
+    {:from #{:open} :to :open
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-red-head
+     :input [:map
+             [:red_head {:x-display {:hidden true :raw true
+                                     :label "The red head"}}
+              [:string {:min 1 :max 400}]]]
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Red head noted" :order 14
+               :description "The base went red again on a new head"}}
+
+    :note_red_in_review
+    {:from #{:in_review} :to :in_review
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-red-head
+     :input [:map
+             [:red_head {:x-display {:hidden true :raw true
+                                     :label "The red head"}}
+              [:string {:min 1 :max 400}]]]
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Red head noted" :order 15
+               :description "The base went red again on a new head"}}
+
+    :mend
+    {:from #{:draft :open :in_review :blocked :deferred} :to :done
+     :input close-input
+     :guards [only-the-base-pass-writes-this]
+     :handler close-the-ticket
+     ;; `land`'s reasons: only the engine walks it, nobody composes the
+     ;; sentence in a box, and it reaches the row with no version in hand
+     :waives #{:edit-shape :large-effort}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The base branch is green again, and that is the ending on the record. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
+     :display {:label "Base green again" :order 16
+               :description "The base branch this ticket was opened for is green again"}}
 
     :reopen
     {:from #{:done :dropped} :to :draft

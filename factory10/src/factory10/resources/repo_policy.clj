@@ -119,6 +119,17 @@
     (t/allow)
     (t/deny)))
 
+(defguardfn the-engine-notes-the-base
+  {:reads [:principal]
+   :hide true
+   :explain "The GitHub source writes what the base branch's checks say. A person and a model read it."}
+  ;; `the-engine-notes-the-source`'s shape, for the base pass (ticket
+  ;; ade81ae9): the forge pass is the only hand that walks this door.
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx)))
+    (t/allow)
+    (t/deny)))
+
 ;; ── the restatement, and the rig it tells ───────────────────────────
 
 (defhandler restate-the-policy [row inp ctx]
@@ -173,6 +184,17 @@
                    " at " (:now ctx)
                    ": the token cannot read this repository, so the house"
                    " sees none of its pull requests and merges none."))))
+
+(defhandler note-the-base [row inp ctx]
+  ;; THE BASE PASS'S OWN RECORD (ticket ade81ae9). The input names no
+  ;; field of the row, so the door is not edit-shaped; the pass walks it
+  ;; only when one of the four moved.
+  (update row :data assoc
+          :base_state (:verdict inp)
+          :base_head (:head inp)
+          :base_red_from (:red_from inp)
+          :base_ticket (:ticket inp)
+          :base_checked_at (:now ctx)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
@@ -385,7 +407,41 @@
                   {:widget "prose"
                    :label "What the GitHub source could not read"
                    :help "The status and the route of the last pass that could not read this repository's pull requests, and when. Empty when the last pass read them."}}
-    [:maybe [:string {:max 500}]]]])
+    [:maybe [:string {:max 500}]]]
+   ;; the base branch's own state (ticket ade81ae9), so a person reads
+   ;; whether main is red without opening GitHub
+   [:base_state {:optional true
+                 :x-display
+                 {:label "The base branch is"
+                  :help "What the checks on the head of the base branch said at the last pass that saw them move: green, red, or unknown while one is still running. Empty until the first read."}}
+    [:maybe [:enum "green" "red" "unknown"]]]
+   [:base_head {:optional true
+                :examples ["1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"]
+                :x-display
+                {:raw true
+                 :label "The base branch's head"
+                 :help "The commit those checks ran on."}}
+    [:maybe [:string {:max 64}]]]
+   [:base_red_from {:optional true
+                    :examples ["1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"]
+                    :x-display
+                    {:raw true
+                     :label "Red since"
+                     :help "The first red head after a green one, while the base is not green again. Empty when the pass cannot tell."}}
+    [:maybe [:string {:max 64}]]]
+   [:base_ticket {:optional true
+                  :examples ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]
+                  :x-display
+                  {:raw true
+                   :label "The red-base ticket"
+                   :help "The ticket the engine opened the last time the base stayed red. While it has not ended, a later red head is written on it and no second ticket is opened."}}
+    [:maybe [:string {:max 64}]]]
+   [:base_checked_at {:optional true
+                      :examples ["2026-09-27T19:30:00Z"]
+                      :x-display
+                      {:label "Base read at"
+                       :help "When the pass last wrote the base's state, which it does when that state moves."}}
+    [:maybe :waymark/instant]]])
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
@@ -501,7 +557,34 @@
               [:maybe [:string {:max 200}]]]]
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Source noted" :order 5
-               :description "The GitHub source says whether it could read this repository"}}}
+               :description "The GitHub source says whether it could read this repository"}}
+
+    ;; THE BASE PASS'S OWN DOOR (ticket ade81ae9). Hidden, and the
+    ;; engine's hand alone, for note_source's reasons.
+    :note_base
+    {:from #{:active} :to :active
+     :guards [the-engine-notes-the-base]
+     :handler note-the-base
+     :input [:map
+             [:verdict {:optional true
+                        :x-display {:hidden true
+                                    :label "What the base's checks said"}}
+              [:maybe [:enum "green" "red" "unknown"]]]
+             [:head {:optional true
+                     :x-display {:hidden true :raw true
+                                 :label "The base's head"}}
+              [:maybe [:string {:max 64}]]]
+             [:red_from {:optional true
+                         :x-display {:hidden true :raw true
+                                     :label "The first red head"}}
+              [:maybe [:string {:max 64}]]]
+             [:ticket {:optional true
+                       :x-display {:hidden true :raw true
+                                   :label "The red-base ticket"}}
+              [:maybe [:string {:max 64}]]]]
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Base noted" :order 6
+               :description "The GitHub source says what the base branch's checks say"}}}
    ;; The delegate's allow — an agent whose principal names whom it
    ;; acts for — is the suite's to prove (bench_test): a check-tier
    ;; scenario's actor carries id, roles and type, and no acts-for.

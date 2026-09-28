@@ -254,10 +254,13 @@
                     ;; the MCP transport's sessions (spec-seat.md
                     ;; R-12.14): {<Mcp-Session-Id> {:created :touched
                     ;; :bound}}, where :bound is the seat a
-                    ;; waymark_sit welded this session to. Ephemeral
-                    ;; like the collab tickets and never law — a
-                    ;; restart drops them and every client is told to
-                    ;; initialize again.
+                    ;; waymark_sit welded this session to. Never law.
+                    ;; Over Postgres the atom only says this engine
+                    ;; keeps sessions: they live in the table both
+                    ;; allocations of a deploy share
+                    ;; (waymark10.server.mcp-sessions), so a deploy
+                    ;; drops none. Over the in-memory twin they live
+                    ;; here and a restart drops them.
                     :mcp-sessions (atom {})
                     :runtime (atom nil)})
         eng (assoc eng :render-fn
@@ -333,6 +336,18 @@
   ([eng server]
    (when server (http/server-stop! server))
    (stop-runtime! eng)))
+
+(defn drain!
+  "Stop taking connections and wait up to timeout-ms for the requests
+  already in flight to finish — the graceful half of a SIGTERM. A
+  deploy stops the old allocation after the new one serves, and a tool
+  call the old one is still answering should end with its answer, not
+  a reset socket. The runtime is left running; stop! after this stops
+  it. Answers once the server has stopped or the wait is spent."
+  [server timeout-ms]
+  (when server
+    (when-some [stopped (http/server-stop! server {:timeout timeout-ms})]
+      (deref stopped (+ (long timeout-ms) 1000) nil))))
 
 ;; ── the dev server (scripts/smoke10.sh) ─────────────────────────────
 

@@ -116,6 +116,7 @@
             [factory10.mirror :refer [the-mirror-writes-this-row]]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
+            [waymark10.holds :as holds]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -418,6 +419,10 @@
                              ;; red names are not its (ticket d1742908)
                              :failing_checks nil
                              :conflicts nil
+                             ;; nor is the last landing's error: this
+                             ;; submit is a landing of its own (ticket
+                             ;; 92871afb)
+                             :landing_error nil
                              ;; nor is the last merge state: the forge
                              ;; computes it again for the new head, and
                              ;; a stale `conflicted` would fail the
@@ -461,10 +466,13 @@
   ;; checks went red without opening GitHub. The machine moves the row.
   ;; A conflict rides as `merge-conflict` among the names, and its
   ;; paths, when the bench could name them, beside (ticket 5f12e772).
+  ;; A landing that failed rides as `landing:<step>`, and the step's
+  ;; output beside it (ticket 92871afb).
   [row inp]
   (update row :data assoc
           :failing_checks (vec (:failing_checks inp))
-          :conflicts (some-> (:conflicts inp) seq vec)))
+          :conflicts (some-> (:conflicts inp) seq vec)
+          :landing_error (some-> (:landing_error inp) str not-empty)))
 
 (defhandler write-the-failing-checks [row inp _ctx]
   ;; the ceiling's red: the ticket stays in review, and the stuck
@@ -483,7 +491,8 @@
   ;; this head's, and a stale list would read as a live one. A ticket
   ;; the red sent back goes out for review again (ticket 2e869934).
   (move-the-ticket! row ctx #{:open} :review)
-  (update row :data assoc :failing_checks nil :conflicts nil))
+  (update row :data assoc :failing_checks nil :conflicts nil
+          :landing_error nil))
 
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
@@ -554,13 +563,22 @@
 
 (defguardfn only-a-person-drops-the-branch
   {:judges [:drop_branch]
-   :reads [:principal]
-   :open "No door here changes this verdict. A discard that keeps the branch is the model's escape hatch and is always open; dropping the branch throws away a push that GitHub may already hold, so it is a person's hand."
-   :explain "A discard that drops the branch removes the worktree and the branch itself. That is a person's act: the model's discard puts the worktree back to the branch head and keeps the branch."}
-  [_row inp ctx]
-  (if (and (true? (:drop_branch inp)) (= :agent (:type (:principal ctx))))
-    (t/deny)
-    (t/allow)))
+   :reads [:principal :within]
+   :hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A discard that keeps the branch is the model's escape hatch and is always open; dropping the branch throws away a push that GitHub may already hold, so it waits on a person's hand."
+   :explain "A discard that drops the branch removes the worktree and the branch itself. That is a person's act, so an agent's drop is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. The model's own discard puts the worktree back to the branch head and keeps the branch."}
+  [row inp ctx]
+  ;; ticket's `only-a-person-reopens`, one kind over: every hand but an
+  ;; agent's passes, and so does an agent's discard that keeps the
+  ;; branch. An agent's drop is HELD (waymark10.holds), and the one
+  ;; agent drop this admits is the engine's replay of the held call its
+  ;; person allowed. `discard` and `discard_submitted` share this wall,
+  ;; so the replay check names the row and not the door.
+  (cond
+    (not (true? (:drop_branch inp))) (t/allow)
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :change (:id row)) (t/allow)
+    :else (t/deny)))
 
 (defguardfn a-person-or-their-delegate-unsticks
   {:reads [:principal]
@@ -612,13 +630,25 @@
 (defscenario a-model-does-not-drop-the-branch
   "A discard that keeps the branch is the model's own escape hatch. A
    discard that drops it throws away a push GitHub may already hold,
-   so that half of the door is a person's."
+   so that half of the door is a person's: the model's drop is refused
+   here, and at the wire it is held for the person's tap."
   {:kind    :change
    :attempt :discard
    :row     {:state :open :data a-pull-request}
    :input   {:drop_branch true}
    :as      {:id "bench-seat" :type :agent}
-   :expect  {:refused :only-a-person-drops-the-branch}})
+   :expect  {:refused :only-a-person-drops-the-branch
+             :because "held for the person's tap"}})
+
+(defscenario the-person-drops-the-branch
+  "And the door is really there for the person whose branch it is —
+   one tap, no grant and no ceremony."
+  {:kind    :change
+   :attempt :discard
+   :row     {:state :open :data a-pull-request}
+   :input   {:drop_branch true}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
 
 (defscenario a-model-discards-its-own-edits
   "And the escape hatch itself is always open: the worktree goes back
@@ -851,6 +881,15 @@
                  {:label "The paths that conflict"
                   :help "The paths a trial merge of the base branch into this change's branch left unmerged. The house writes them when a conflict moves the change to failing, and clears them when the head merges clean and goes green, or the seat submits again."}}
      [:maybe [:vector [:string {:max 400}]]]]
+    ;; written beside `landing:<step>` in `failing_checks` when the
+    ;; rig's landing of a submit failed; cleared with it (ticket
+    ;; 92871afb)
+    [:landing_error {:optional true
+                     :x-display
+                     {:widget "prose"
+                      :label "Why the push did not land"
+                      :help "The end of the output of the step the bench's landing failed at, when a submit never reached GitHub. The house writes it when it moves the change to failing, and clears it when the seat submits again."}}
+     [:maybe [:string {:max 4000}]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     [:url {:optional true :x-display {:hidden true}}
@@ -1118,7 +1157,11 @@
      :input [:map
              [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
              [:conflicts {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]]
+              [:maybe [:vector [:string {:max 400}]]]]
+             [:landing_error {:optional true
+                              :x-display {:widget "prose"
+                                          :label "Why the push did not land"}}
+              [:maybe [:string {:max 4000}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The required checks finished red on this head, and the ticket this change was built for goes back to the queue, so the seat that wrote it walks it again. The way back is a green head, which the house reads on its next pass, or the seat's next submit."}
@@ -1149,7 +1192,11 @@
               [:string {:min 1 :max 480}]]
              [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
              [:conflicts {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]]
+              [:maybe [:vector [:string {:max 400}]]]]
+             [:landing_error {:optional true
+                              :x-display {:widget "prose"
+                                          :label "Why the push did not land"}}
+              [:maybe [:string {:max 4000}]]]]
      ;; :large-effort — NO draft here, unlike `stall`. Only the engine
      ;; walks this door and nobody composes the why in a box; and an
      ;; `:edit` implies the version fence (waymark10.resource), which
@@ -1268,6 +1315,7 @@
    :scenarios [a-model-does-not-move-a-pull-request
                the-source-moves-the-pull-request
                a-model-does-not-drop-the-branch
+               the-person-drops-the-branch
                a-model-discards-its-own-edits
                a-model-does-not-unstick-itself
                the-person-puts-a-stuck-change-back-to-work

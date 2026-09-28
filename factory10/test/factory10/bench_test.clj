@@ -42,6 +42,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
@@ -1093,21 +1094,61 @@
     (is (= "open" (name (:state (change-row w))))
         "the change stands; only the worktree moved")))
 
-(deftest a-model-may-not-drop-the-branch-and-a-person-may
+(deftest the-branch-drop-wall-is-a-registered-hold
+  (is (holds/hold? :only-a-person-drops-the-branch)
+      "the guard's `:hold true` registered it when the module loaded"))
+
+(deftest a-models-drop-is-held-for-its-person-and-the-allow-runs-it
   (let [w (world)
+        eng (:eng w)
         change-id (str (:id (:change w)))
         r (call! (:h w) (:sid w) "waymark_invoke"
                  {:kind "change" :id change-id :action "discard"
-                  :input {:drop_branch true}})]
-    (is (true? (:isError r)))
-    (is (str/includes? (text-of r) "person's act"))
-    (is (empty? (calls-of (:state w) "bench__discard")))
+                  :input {:drop_branch true}})
+        held-id (:held_call (doc-of r))
+        held-row (fn []
+                   (store/with-tx (:storage eng)
+                     (fn [tx] (store/load-row (:storage eng) tx :held_call
+                                              (str held-id) {}))))]
+    (testing "the model's drop is not served: it waits on the person"
+      (is (false? (:isError r)) (text-of r))
+      (is (true? (:held (doc-of r))) (text-of r))
+      (is (some? held-id))
+      (is (empty? (calls-of (:state w) "bench__discard"))
+          "nothing reached the rig while the call waits")
+      (is (= "colton" (str (get-in (held-row) [:data :owner])))
+          "owned by the person the seat acts for"))
+    (testing "a forged :within, naming a call nobody allowed, is refused"
+      (let [e (try (inv/invoke! eng :change change-id :discard
+                                {:drop_branch true}
+                                {:principal (t/principal {:id "bench-seat"
+                                                          :type :agent})
+                                 :within {:kind :held_call :action :allow
+                                          :id held-id}})
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (some? e) "the door did not open")
+        (is (= :only-a-person-drops-the-branch
+               (some-> (:guard (ex-data e)) name keyword))
+            (pr-str (ex-data e))))
+      (is (empty? (calls-of (:state w) "bench__discard"))))
+    (testing "the person's Allow runs the drop exactly as written"
+      (let [out (inv/invoke! eng :held_call (str held-id) :allow {}
+                             {:principal person})]
+        (held/after-allow! eng (get (inv/resources eng) :held_call)
+                           :allow out))
+      (let [calls (calls-of (:state w) "bench__discard")]
+        (is (= 1 (count calls)))
+        (is (true? (:drop_branch (:arguments (first calls))))))
+      (is (= "done" (name (:state (held-row))))))))
 
-    (testing "and a person's own hand drops it"
-      (inv/invoke! (:eng w) :change change-id :discard {:drop_branch true}
-                   {:principal person})
-      (is (true? (:drop_branch (:arguments (first (calls-of (:state w)
-                                                            "bench__discard")))))))))
+(deftest a-persons-own-drop-runs-directly
+  (let [w (world)
+        change-id (str (:id (:change w)))]
+    (inv/invoke! (:eng w) :change change-id :discard {:drop_branch true}
+                 {:principal person})
+    (is (true? (:drop_branch (:arguments (first (calls-of (:state w)
+                                                          "bench__discard"))))))))
 
 ;; ── acceptance 6 ────────────────────────────────────────────────────
 
@@ -1124,11 +1165,11 @@
       (submit! w {:why "Nothing changed, but I am trying anyway."})
       (is (= 1 (long (get-in (sitting-of w) [:data :refusals])))))
 
-    (testing "and a guard's refusal counts beside it"
+    (testing "and a held call is an answer, not a refusal, so it counts nothing"
       (call! (:h w) (:sid w) "waymark_invoke"
              {:kind "change" :id (str (:id (:change w))) :action "discard"
               :input {:drop_branch true}})
-      (is (= 2 (long (get-in (sitting-of w) [:data :refusals])))))
+      (is (= 1 (long (get-in (sitting-of w) [:data :refusals])))))
 
     (testing "…and the sitting is still open, so the seat may go on"
       (is (= :open (:state (sitting-of w)))))))
@@ -1420,6 +1461,28 @@
       (is (= 2 (get-in row [:data :rounds])))
       (is (nil? (get-in row [:data :failing_checks]))
           "the names of the last red are not the new head's"))))
+
+(deftest a-seat-submits-again-after-a-failed-landing
+  ;; ticket 92871afb: a push the rig could not land moves the change
+  ;; to `failing` with the step's output, and the next submit is a
+  ;; landing of its own
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))]
+    (inv/invoke! (:eng w) :change id :fail
+                 {:failing_checks ["landing:push"]
+                  :landing_error "! [remote rejected] without `workflow` scope"}
+                 {:principal mirror/source-principal})
+    (is (= "failing" (name (:state (change-row w)))))
+    (is (= "! [remote rejected] without `workflow` scope"
+           (get-in (change-row w) [:data :landing_error]))
+        "the step's output rides on the row for the seat to read")
+    (let [r (submit! w {:why "Drop the workflow edit the token cannot push."})
+          row (change-row w)]
+      (is (false? (:isError r)) (text-of r))
+      (is (= "submitted" (name (:state row))))
+      (is (nil? (get-in row [:data :failing_checks])))
+      (is (nil? (get-in row [:data :landing_error]))
+          "the last landing's error is not the new round's"))))
 
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
@@ -2243,6 +2306,48 @@
                  {:principal person})
     (is (= "open" (ticket-state w))
         "the person's unstick releases the ticket to the queue")))
+
+;; ── a reopen finds the submitted change ────────────────────────────────────
+;;
+;; THE SOURCE ADOPTS A SUBMITTED CHANGE, which writes GitHub's id over
+;; `change_id`. When the pull request goes red the ticket comes back;
+;; a person may end it and then reopen and groom it again. The next sit
+;; must hand the seat THAT change, with what its submit caused — not a
+;; new open change on the same branch (ticket b35ab5b5).
+
+(deftest a-reopened-ticket-sits-with-its-submitted-change-and-its-feedback
+  (let [w (ticket-world)
+        change-id (get-in (:answer w) [:change :id])
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (mirror-moves-change! w :adopt_submitted
+                                {:change_id (str "github:" a-repository "#224")
+                                 :number 224})
+        _ (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+        _ (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :complete
+                       {:close_reason "Let go while #224 is red."}
+                       {:principal person
+                        :if-match (inv/etag :ticket (str (:id (:ticket w)))
+                                            (:version (ticket-row w)))})
+        _ (person-moves-ticket! w :reopen)
+        _ (person-moves-ticket! w :groom)
+        answer (sit-again! w)
+        rows (changes-of (:eng w))]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= 1 (count rows))
+        "the sit finds the change by `born_from`, and no second one is born")
+    (is (= (str change-id) (str (get-in answer [:change :id])))
+        "the change beside the walk is the one that was submitted")
+    (is (= "failing" (get-in answer [:change :state])))
+    (is (= (str "github:" a-repository "#224")
+           (get-in (first rows) [:data :change_id]))
+        "the adoption's id stands")
+    (is (seq (calls-of (:state w) "bench__feedback"))
+        "a change with a round behind it is asked what that round caused")
+    (is (= 31 (get-in answer [:feedback :pull_request :number]))
+        "and the seat reads it in the sit's answer")
+    (is (contains? (into #{} (map :action) (get-in answer [:change :doors]))
+                   "submit")
+        "and submit on it is the next round")))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 
