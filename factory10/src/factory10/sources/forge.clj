@@ -53,7 +53,10 @@
      the paths the bench's trial merge names (ticket 5f12e772). A
      submitted change whose bench landing failed is red before any
      check is read, as `landing:<step>`, with the step's output in
-     `landing_error` (ticket 92871afb).
+     `landing_error` (ticket 92871afb). A head whose run died without
+     a verdict (cancelled, timed out, or failed before any test step)
+     is re-run once instead, and a second death on the same head is
+     noted on the change (ticket 22f91244).
   7. For each active policy whose repository the forge refused to
      list (401, 403 or 404), it writes the status, the route and the
      time on the policy row through the hidden `note_source` door, and
@@ -156,6 +159,18 @@
     carries `:check_name`, `:status` and `:conclusion`, which
     `check-verdict` reads, and whatever `forge-log-tail` needs to find
     its log. Throws when the forge does not answer."))
+
+(defprotocol ForgeRerun
+  "A run that died without a verdict, asked to run again (ticket
+  22f91244). A protocol of its own, so a source that does not implement
+  it re-runs nothing and the pass goes on as before."
+  (forge-runs [s repository head-sha]
+    "→ [{:run_id :status :conclusion :jobs [{:name :conclusion :steps
+    [{:name :conclusion} …]} …]} …], the latest run of each workflow on
+    one head. `:jobs` is read only for a run that finished and did not
+    pass. Throws when the forge does not answer.")
+  (forge-rerun! [s repository run-id]
+    "Re-run the failed jobs of one run. Throws when the forge refuses."))
 
 ;; ── what the two kinds take ─────────────────────────────────────────
 
@@ -531,9 +546,11 @@
   "What the checks on one head say, read against the policy's required
   checks: {:verdict :red :names […]} when every required check
   finished and at least one went red, {:verdict :green} when every one
-  finished green, and nil while one is still running, has not started,
-  or ended some other way (a cancel). A policy that names no required
-  check requires every check on the head."
+  finished green, {:verdict :interrupted :names […]} when none went red
+  and at least one was cancelled — it died without a verdict, and it is
+  never green (ticket 22f91244) — and nil while one is still running,
+  has not started, or ended some other way. A policy that names no
+  required check requires every check on the head."
   [required checks]
   (let [by-name (group-by #(str (:check_name %)) checks)
         names (if (seq required)
@@ -550,7 +567,14 @@
           (seq red) {:verdict :red :names red}
           (all? #(contains? green-conclusions (str (:conclusion %))))
           {:verdict :green}
-          :else nil)))))
+          ;; a cancelled required check died without a verdict about
+          ;; the code (ticket 22f91244): never green, and named, so the
+          ;; pass can re-run it
+          :else
+          (let [cut (filterv (fn [n] (some #(= "cancelled" (str (:conclusion %)))
+                                           (get by-name n)))
+                             names)]
+            (when (seq cut) {:verdict :interrupted :names cut})))))))
 
 (def failing-scan-limit
   "How many rows of each of the two live states one pass reads."
@@ -623,6 +647,98 @@
                                 (map #(subs % 0 (min (count %) 400)))
                                 (take conflict-path-limit))
                        paths)))))
+
+;; ── a run that died without a verdict (ticket 22f91244) ────────────
+;;
+;; A runner that freezes, or a Docker that runs out of networks, kills a
+;; job before any test ran. That run says nothing about the code, and
+;; the change used to sit on it until a person re-ran it by hand. So the
+;; pass re-runs the failed jobs of an interrupted run ONCE per head, and
+;; writes the head on the row (`rerun_head`) so a restart does not forget
+;; it. The same head interrupted again is left alone, and `rerun_note`
+;; tells a person the runner is broken.
+
+(def interrupted-conclusions
+  "The job conclusions that end a job without a verdict."
+  #{"cancelled" "timed_out"})
+
+(def ^:private setup-step
+  "The steps that run before any test: the runner's own set-up, the
+  checkout, the tool set-up, the containers and the services, and the
+  clean-up after. A failure in one of these is the runner's, not the
+  code's."
+  #"(?i)\s*(set ?up|checkout|run actions/(checkout|setup-|cache)|initialize containers|create local container network|start(ing)? |pull |post |complete job|stop containers).*")
+
+(defn- setup-step? [step]
+  (boolean (re-matches setup-step (str (:name step)))))
+
+(defn- job-verdict
+  "One job of a finished run: :red when a step past set-up failed,
+  :interrupted when it was cancelled, timed out, or failed with no step
+  past set-up failing, and nil when it passed."
+  [job]
+  (let [c (str (:conclusion job))]
+    (cond
+      (contains? interrupted-conclusions c) :interrupted
+      (= "failure" c) (if (some #(and (= "failure" (str (:conclusion %)))
+                                      (not (setup-step? %)))
+                                (:steps job))
+                        :red
+                        :interrupted)
+      :else nil)))
+
+(defn interrupted-run?
+  "A finished run with at least one interrupted job and no red one. A
+  run with a failing test step is red, not interrupted — and so is a
+  fail-fast matrix, whose siblings a red job cancelled."
+  [run]
+  (let [verdicts (mapv job-verdict (:jobs run))]
+    (boolean (and (= "completed" (str (:status run)))
+                  (some #{:interrupted} verdicts)
+                  (not-any? #{:red} verdicts)))))
+
+(defn- short-head [head]
+  (subs head 0 (min (count head) 12)))
+
+(defn- rerun-noted? [row head]
+  (str/includes? (str (get-in row [:data :rerun_note])) (short-head head)))
+
+(defn- write-rerun! [eng row input]
+  (when-some [door (get observe-doors (state-of row))]
+    (inv/invoke! eng :change (str (:id row)) door input (as-opts))))
+
+(defn- rerun-interrupted!
+  "The interrupted runs of one head, re-run once, or noted when this
+  head was already re-run. → [census re-ran?]. A forge that refuses
+  costs the re-run and never the change's own move."
+  [eng source row repo head census log-fn]
+  (let [done (= head (str (get-in row [:data :rerun_head])))]
+    (if (or (not (satisfies? ForgeRerun source))
+            (and done (rerun-noted? row head)))
+      [census false]
+      (try
+        (let [runs (filterv interrupted-run? (forge-runs source repo head))]
+          (cond
+            (empty? runs) [census false]
+
+            done
+            (do (write-rerun! eng row
+                              {:rerun_note
+                               (str "The checks on head " (short-head head)
+                                    " died without a verdict again after the "
+                                    "house re-ran them once, so they are left "
+                                    "alone: look at the runner.")})
+                [(update census :rerun-noted inc) false])
+
+            :else
+            (do (doseq [run runs]
+                  (forge-rerun! source repo (:run_id run)))
+                (write-rerun! eng row {:rerun_head head})
+                [(update census :rerun inc) true])))
+        (catch Exception e
+          (log-fn "the interrupted checks of " (get-in row [:data :change_id])
+                  " were not re-run (" (ex-message e) ")")
+          [(update census :refused inc) false])))))
 
 ;; ── a landing that failed (ticket 92871afb) ─────────────────────────
 ;;
@@ -761,20 +877,30 @@
                    landing (when (contains? #{:submitted :failing}
                                             (state-of row))
                              (landing-verdict (landing-of eng row policy)))
+                   checked (when-not landing
+                             (check-verdict (bench/required-checks-of policy)
+                                            (forge-checks source repo head)))
                    verdict (case (:verdict landing)
                              :red landing
                              :running nil
-                             (with-conflict
-                               (check-verdict (bench/required-checks-of policy)
-                                              (forge-checks source repo head))
-                               row))
+                             (with-conflict checked row))
+                   ;; a head whose run died without a verdict is re-run
+                   ;; once, and the re-run is its move for this pass
+                   ;; (ticket 22f91244)
+                   [census re-ran?] (if (and checked
+                                             (not (conflicted? row))
+                                             (contains? #{:red :interrupted}
+                                                        (:verdict checked)))
+                                      (rerun-interrupted! eng source row repo
+                                                          head census log-fn)
+                                      [census false])
                    ;; the rig is asked only when a conflict will move
                    ;; the row, never for a row that stays where it is
                    conflicts (when (and (nil? landing)
                                         (conflicted? row)
                                         (= :submitted (state-of row)))
                                (conflict-paths eng row))]
-               (if-some [[door input] (when verdict
+               (if-some [[door input] (when (and verdict (not re-ran?))
                                         (failing-move row verdict policy
                                                       conflicts))]
                  (do (inv/invoke! eng :change (str (:id row)) door input
@@ -1037,7 +1163,8 @@
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0
-   :base-opened 0 :base-noted 0 :base-closed 0 :refused 0})
+   :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
+   :refused 0})
 
 ;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
 ;; whose pulls listing the token cannot read costs its rows a pass and
@@ -1128,6 +1255,10 @@
                      (:stuck census) " stuck on red"))
               (when (pos? (long (:noted census)))
                 (str ", " (:noted census) " policy source notes written"))
+              (when (pos? (long (+ (long (:rerun census))
+                                   (long (:rerun-noted census)))))
+                (str ", " (:rerun census) " interrupted heads re-run, "
+                     (:rerun-noted census) " interrupted again and left"))
               (when (pos? (long (+ (long (:base-opened census))
                                    (long (:base-noted census))
                                    (long (:base-closed census)))))
