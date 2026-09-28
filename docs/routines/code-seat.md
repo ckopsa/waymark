@@ -74,8 +74,10 @@ feedback tool. The bench row keeps the `bench.feedback` power for a
 person's own use.
 
 Each other door on a change is the mirror's or a person's (`merge`,
-`close`, `reopen`, `observe`, `unstick`), and the seat does not get
-it. A delegate acting for the person may `unstick` too, and grooming
+`close`, `reopen`, `observe`, `unstick`, `unstick_submitted`), and
+the seat does not get it. A delegate acting for the person may
+`unstick` too, or `unstick_submitted` for a change with a pull
+request. A stall shelves the ticket to `draft` itself, and grooming
 the ticket again unsticks a stalled change at the next sit (R-12.32).
 A `path` in a bench filter narrows the seat further (R-12.30). A
 seat that must not touch the workflows adds `"path": "!.github/*"` to
@@ -300,8 +302,8 @@ Nothing else goes in the instructions (R-12.10).
    the ticket it was born from moves `open -> in_review` in the same
    transaction: out of the walk, and not done. The seat does not
    complete it. At the policy's `rounds_per_change` the door
-   refuses, and the session stalls instead; a stall sends the
-   ticket back to `open`, where the seat ungrooms it.
+   refuses, and the session stalls instead; the stall shelves the
+   ticket to `draft` itself, so the seat does not ungroom it.
 7. The session stops. The Stop hook sums the transcript and closes
    the sitting through `POST /api/-/sittings/close`, as the clerk's
    does. The bill of the round is on the sitting row.
@@ -322,7 +324,9 @@ Nothing else goes in the instructions (R-12.10).
    the seat's default `wake_on` (every ticket action under its
    filter) hears it, and the next sit hands the same ticket with its
    change and `feedback`. A change stuck at the round ceiling leaves
-   its ticket in review; a person's `unstick` on the change puts the
+   its ticket in review, where grooming does not serve; a person's
+   `unstick_submitted` puts a change with a pull request back under
+   review, and `unstick` puts one with none back to work and its
    ticket back in the queue. None of these moves needs a person's
    tap, and a ticket already done with an open pull request is left
    alone.
