@@ -321,6 +321,34 @@
       (is (true? (gate/path-glob-matches? "src/?.clj" "src/a.clj")))
       (is (false? (gate/path-glob-matches? "src/?.clj" "src/ab.clj"))))))
 
+(deftest a-path-filter-judges-a-moves-move-to-by-the-same-globs
+  (let [w (world [{:kind "bench.edit" :actions []
+                   :filter {:repo a-repo :path "docs/**"}}])]
+
+    (testing "a move within the globs forwards"
+      (let [r (power! w {:tool "bench__edit"
+                         :arguments {:repo a-repo :path "docs/a.md"
+                                     :move_to "docs/b.md"}})]
+        (is (false? (:isError r)) (text-of r))
+        (is (= "docs/b.md" (:move_to (last-arguments w))))))
+
+    (testing "a move out of the globs refuses on move_to, and the rig
+              hears nothing new"
+      (let [before (count (calls w))
+            r (power! w {:tool "bench__edit"
+                         :arguments {:repo a-repo :path "docs/a.md"
+                                     :move_to "src/anything.clj"}})
+            said (text-of r)]
+        (is (true? (:isError r)) said)
+        (is (str/includes? said "move_to"))
+        (is (str/includes? said "src/anything.clj"))
+        (is (= before (count (calls w))))))
+
+    (testing "an edit with no move_to is judged by its path alone"
+      (let [r (power! w {:tool "bench__edit"
+                         :arguments {:repo a-repo :path "docs/a.md"}})]
+        (is (false? (:isError r)) (text-of r))))))
+
 ;; ── acceptance 4: two entries on one grant, admitted by either ──────
 
 (deftest two-filtered-entries-stand-on-one-grant-and-the-door-admits-by-either
@@ -645,11 +673,13 @@
       (power! w {:tool "bench__edit"
                  :arguments {:repo a-repo :path ".github/workflows/test.yml"}})
       (is (true? (:allow_protected (last-arguments w))))
-      (power! w {:tool "bench__edit"
-                 :arguments {:repo a-repo :path "src/a.clj"
-                             :move_to ".github/workflows/other.yml"}})
-      (is (not (contains? (last-arguments w) :allow_protected))
-          "a move into a protected path the filter does not name")))
+      (let [before (count (calls w))
+            r (power! w {:tool "bench__edit"
+                         :arguments {:repo a-repo :path "src/a.clj"
+                                     :move_to ".github/workflows/other.yml"}})]
+        (is (true? (:isError r)) (text-of r))
+        (is (= before (count (calls w)))
+            "a move into a protected path the filter does not name"))))
 
   (testing "a neighbour the filter does not admit refuses before the rig"
     (let [w (world [{:kind "bench.edit" :actions []

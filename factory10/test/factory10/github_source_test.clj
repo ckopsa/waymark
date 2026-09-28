@@ -238,19 +238,24 @@
                             extra)
                      {:principal mirror/source-principal})))
 
-(defn- put-at-submitted!
-  "The row a seat has pushed one round of. The state is moved by hand
-  because the `submit` door reaches a bench rig, and this suite boots
-  none: what is under test is the PASS, not the push."
-  [engine id]
+(defn- put-at!
+  "The row moved to `state` by hand, because the doors that reach it
+  need a bench rig, and this suite boots none: what is under test is
+  the PASS, not the push."
+  [engine id state]
   (let [st (:storage engine)]
     (store/with-tx st
       (fn [tx]
         (let [row (store/load-row st tx :change id {})]
           (store/save-row! st tx :change
-                           (assoc row :state :submitted
+                           (assoc row :state state
                                   :version (inc (long (:version row))))
                            (:version row)))))))
+
+(defn- put-at-submitted!
+  "The row a seat has pushed one round of."
+  [engine id]
+  (put-at! engine id :submitted))
 
 (deftest the-pull-request-a-seat-opened-is-adopted-and-not-minted-again
   (let [{:keys [engine] :as r} (rig)
@@ -313,6 +318,50 @@
                    [:data :change_id]))
         "and the seat's own row keeps its ask's id")
     (is (some? (:id ours)))))
+
+(deftest a-pull-request-that-opens-while-its-house-row-is-stuck-is-adopted
+  ;; ticket 3c59c688: #268 opened while 71cbbef9 stood stuck
+  (let [{:keys [engine] :as r} (rig)
+        ours (a-seat-born-change! engine {})
+        _ (put-at! engine (str (:id ours)) :stuck)
+        census (pass! r)
+        rows (rows-of engine :change {})
+        row (first rows)]
+    (is (= 1 (count rows)) "one row for the house's own pull request")
+    (is (= 1 (:adopted census)))
+    (is (= 0 (:minted census)))
+    (is (= (:id ours) (:id row)))
+    (is (= :stuck (:state row))
+        "the adoption leaves the row stuck: a person puts it back")
+    (is (= "github:ckopsa/waymark#31" (get-in row [:data :change_id])))
+    (is (= 31 (get-in row [:data :number])))))
+
+(deftest a-minted-duplicate-on-the-house-rows-branch-is-folded-into-it
+  ;; the regression: 0243f0a6 was minted for #268 beside 71cbbef9, and
+  ;; every later pass moved the minted row and never the house's
+  (let [{:keys [engine] :as r} (rig)
+        _ (pass! r)
+        minted (one-row engine :change {:change_id "github:ckopsa/waymark#31"})
+        ours (a-seat-born-change! engine {})
+        census (pass! r)
+        by-id (into {} (map (juxt :id identity)) (rows-of engine :change {}))
+        house (get by-id (:id ours))
+        folded (get by-id (:id minted))]
+    (is (= 1 (:folded census)))
+    (is (= 0 (:minted census)))
+    (testing "the house row holds the pull request now"
+      (is (= "github:ckopsa/waymark#31" (get-in house [:data :change_id])))
+      (is (= 31 (get-in house [:data :number]))))
+    (testing "and the minted row is closed, naming the house row"
+      (is (= :closed (:state folded)))
+      (is (= (str (:id ours)) (get-in folded [:data :superseded_by])))
+      (is (not= "github:ckopsa/waymark#31"
+                (get-in folded [:data :change_id]))))
+    (testing "the next pass moves the house row and folds nothing"
+      (let [census (pass! r)]
+        (is (= 0 (:folded census)))
+        (is (= 0 (:minted census)))
+        (is (= 2 (count (rows-of engine :change {}))))))))
 
 
 ;; ── the merge finishes the task (bead waymark-fp62.6.3.14) ──────────

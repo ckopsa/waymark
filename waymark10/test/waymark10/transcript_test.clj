@@ -381,6 +381,26 @@
       (is (= 2 (get-in tr [:data :engine_redactions])))
       (is (= 2 (get-in tr [:data :redactions :env])) "the hook's own counts are kept"))))
 
+(deftest the-engine-redacts-the-sittings-inbox-key
+  (testing "a sitting of a seat with an inbox posts a line carrying its inbox key"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng) {:inbox {:only {:meal ["accept"]}}})
+          sat (sit! h)
+          key (get-in sat [:transcript :key])
+          inbox-key (str (get-in sat [:inbox :key]))
+          leaky (line {:type "assistant"
+                       :message {:role "assistant"
+                                 :content (str "inbox " inbox-key " here")}})
+          r (upload! h key (body-of [leaky]))
+          tr (first (rows-of eng :transcript {:sitting (:sitting sat)}))
+          entry (first (rows-of eng :transcript_entry {:transcript (str (:id tr))}))]
+      (is (re-matches #"[A-Za-z0-9_-]{22}" inbox-key))
+      (is (= 200 (:status r)))
+      (is (not (str/includes? (get-in entry [:data :raw]) inbox-key)))
+      (is (str/includes? (get-in entry [:data :raw]) "[redacted:seat-key]"))
+      (is (= 1 (get-in tr [:data :engine_redactions]))))))
+
 ;; ── the transcript key closes its sitting (spec-seat.md R-12.17) ────
 
 (defn- close-with! [h key]
