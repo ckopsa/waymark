@@ -482,8 +482,13 @@
         repo (str (get-in row [:data :repository]))
         branch (bench/branch-of row policy)
         title (title-of row)
-        status (bench/ask ctx :status {:repo repo :branch branch})]
+        ;; a sitting that no longer holds the ticket never writes its
+        ;; branch (ticket d7c854b3)
+        unheld (bench/unheld-detail row ctx)
+        status (when-not unheld
+                 (bench/ask ctx :status {:repo repo :branch branch}))]
     (cond
+      unheld (bench/refuse! unheld [bench/unheld-remedy])
       (nil? status) (bench/refuse! bench/dark-detail [bench/dark-remedy])
       (bench/refused status) (rig-refusal! "read the worktree" status)
       ;; A clean worktree on a change already in review is its own
