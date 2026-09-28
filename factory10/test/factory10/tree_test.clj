@@ -303,19 +303,24 @@
     (is (= #{:submit :stall}
            (offers change (assoc a-pull-request :state :failing) the-classifier))
         "and a seat sees its own two doors on it and never the verdict")
-    (is (= #{:unstick}
+    (is (= #{:unstick_submitted}
            (offers change (assoc a-pull-request :state :stuck) the-person))
-        "a stuck change is the house asking a person to look at it")
+        "a stuck change is the house asking a person to look at it, and
+         one with a pull request goes back under review (ticket 6bdaf6fe)")
+    (is (= #{:unstick}
+           (offers change (-> a-pull-request (dissoc :number) (assoc :state :stuck))
+                   the-person))
+        "one with no pull request yet goes back to open for its next round")
     (is (empty? (offers change (assoc a-pull-request :state :stuck)
                         the-classifier))
         "and the model that stalled it may not put itself back to work"))
   (testing "a delegate acting for a person unsticks, and a model alone does not"
     (let [stuck (assoc a-pull-request :state :stuck)
-          shut (refusal change stuck the-classifier :unstick)]
+          shut (refusal change stuck the-classifier :unstick_submitted)]
       (is (= :unavailable (:status shut)))
       (is (= :a-person-or-their-delegate-unsticks (:name (:denier shut)))
           "an agent with no `acts-for` is the model alone")
-      (is (= #{:unstick}
+      (is (= #{:unstick_submitted}
              (offers change stuck (assoc the-classifier :acts-for "colton")))
           "an agent that names whom it acts for is the person's hand, the
            same way it grooms a ticket")))

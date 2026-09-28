@@ -761,6 +761,18 @@
      :display {:label "Back from review" :order 12
                :description "Its change went red, closed, stalled or was put back to work — into the queue again"}}
 
+    ;; a stall's way back (ticket 6bdaf6fe): the seat said it cannot
+    ;; build this as written, so the ticket leaves the queue for draft,
+    ;; where a person reads the stall and grooms it again — and a queue
+    ;; of tickets beside stuck changes no longer wakes the seat
+    :shelve
+    {:from #{:open :in_review} :to :draft
+     :guards [only-its-change-moves-it]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and the next sit puts its change back to work."}
+     :display {:label "Stalled" :order 17
+               :description "Its change stalled — back to draft, to be groomed again"}}
+
     ;; the merge's ending, from every state that has not ended (ticket
     ;; 3ec37f66): `in_review` most days, `open` for a change a person
     ;; merged while it was red, and `draft`, `blocked` or `deferred`

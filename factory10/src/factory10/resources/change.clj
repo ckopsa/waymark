@@ -280,10 +280,19 @@
   (assoc-in row [:data :superseded_by] (str (:superseded_by inp))))
 
 (defhandler send-the-ticket-back [row _inp ctx]
-  ;; A review that ended without a merge — a close, a stall — puts the
-  ;; ticket in the queue again, where the seat that wrote the change
-  ;; wakes on its `return`, and a person can ungroom it.
+  ;; A review that ended without a merge — a close — puts the ticket in
+  ;; the queue again, where the seat that wrote the change wakes on its
+  ;; `return`, and a person can ungroom it.
   (move-the-ticket! row ctx #{:in_review} :return)
+  row)
+
+(defhandler shelve-the-ticket [row _inp ctx]
+  ;; A STALL IS A SEAT SAYING IT CANNOT BUILD THE TICKET AS WRITTEN, so
+  ;; the ticket goes back to draft and not to the queue (ticket
+  ;; 6bdaf6fe): a ticket left open beside a stuck change was handed to
+  ;; the seat every wake, and every wake could only say it was stuck. A
+  ;; person, or mayor, reads the stall and grooms it again.
+  (move-the-ticket! row ctx #{:open :in_review} :shelve)
   row)
 
 ;; ── the bench: the four doors that reach the worktree ───────────────
@@ -506,6 +515,23 @@
   (move-the-ticket! row ctx #{:in_review} :return)
   (assoc-in row [:data :rounds] 0))
 
+(defhandler unstick-the-pull-request [row _inp ctx]
+  ;; A STUCK CHANGE WITH A PULL REQUEST GOES BACK WHERE THE PULL REQUEST
+  ;; IS (ticket 6bdaf6fe). An `open` change is read by neither the
+  ;; failing pass nor the merge pass, and the seat's submit refuses a
+  ;; clean worktree, so a green pull request put back in `open` had no
+  ;; way to the merge line. In `submitted` the next forge pass judges
+  ;; its head, red or green. Its ticket goes out for review with it,
+  ;; when the ticket is in the queue; a draft stays a draft for a
+  ;; person to groom, and the merge ends it wherever it stands.
+  (move-the-ticket! row ctx #{:open} :review)
+  (update row :data assoc
+          :rounds 0
+          ;; the forge computes these again for the head it reads next
+          :failing_checks nil
+          :conflicts nil
+          :landing_error nil))
+
 ;; ── the checks went red, or green again (ticket d1742908) ───────────
 
 (defn- with-the-failing-checks
@@ -640,6 +666,23 @@
       (t/deny)
       (t/allow))))
 
+(defn- has-a-pull-request? [row]
+  (some? (get-in row [:data :number])))
+
+(defguardfn the-change-has-no-pull-request
+  {:reads []
+   :open "No door here changes this verdict. A change with a pull request goes back to work through unstick_submitted, which lands it where its pull request is, under review."
+   :explain "This change has a pull request, so putting it back to work lands it in submitted, where the house reads its checks and merges it green: unstick_submitted is that door."}
+  [row _inp _ctx]
+  (if (has-a-pull-request? row) (t/deny) (t/allow)))
+
+(defguardfn the-change-has-a-pull-request
+  {:reads []
+   :open "No door here changes this verdict. A change with no pull request yet goes back to work through unstick, which lands it in open for its next round."
+   :explain "This change has no pull request yet, so there is nothing under review to go back to: unstick puts it in open, and the seat's next submit opens the pull request."}
+  [row _inp _ctx]
+  (if (has-a-pull-request? row) (t/allow) (t/deny)))
+
 ;; ── the law, written down as a scenario ─────────────────────────────
 ;;
 ;; Check-tier: no :given rows, and the one guard reads :principal and
@@ -713,7 +756,7 @@
    itself back to work would be answering its own question, and the
    round ceiling would stop nothing."
   {:kind    :change
-   :attempt :unstick
+   :attempt :unstick_submitted
    :row     {:state :stuck :data (assoc a-pull-request :rounds 3)}
    :as      {:id "bench-seat" :type :agent}
    :expect  {:refused :a-person-or-their-delegate-unsticks
@@ -726,10 +769,29 @@
 
 (defscenario the-person-puts-a-stuck-change-back-to-work
   "And the door is really there for the person who read it — one tap,
-   and the rounds start again."
+   and the rounds start again. A change with a pull request goes back
+   to `submitted`, where its pull request is (ticket 6bdaf6fe)."
+  {:kind    :change
+   :attempt :unstick_submitted
+   :row     {:state :stuck :data (assoc a-pull-request :rounds 3)}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-change-with-a-pull-request-is-not-put-back-in-open
+  "An `open` change is read by neither the failing pass nor the merge
+   pass, so a pull request put back there would wait forever."
   {:kind    :change
    :attempt :unstick
    :row     {:state :stuck :data (assoc a-pull-request :rounds 3)}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-change-has-no-pull-request}})
+
+(defscenario a-change-with-no-pull-request-goes-back-to-open
+  "A change that was never pushed has nothing under review: the person
+   puts it back in `open`, for the seat's next round."
+  {:kind    :change
+   :attempt :unstick
+   :row     {:state :stuck :data (assoc (dissoc a-pull-request :number) :rounds 3)}
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
@@ -1370,9 +1432,9 @@
                      :help "One sentence for the person who reads this next: what you tried, and what stopped you. It rides the log beside this move."}}
               [:string {:min 1 :max 480}]]]
      :edit {:draft {:shared true :live true}}
-     ;; a stalled change is not under review: its ticket goes back to
-     ;; the queue, where the seat's `ungroom` finds it (ticket 2e869934)
-     :handler send-the-ticket-back
+     ;; a stalled change is not under review, and its ticket could not
+     ;; be built as written: it goes back to draft (ticket 6bdaf6fe)
+     :handler shelve-the-ticket
      ;; NOT :reversible — `unstick` brings a stuck change back to
      ;; `open` and to no other state, so a stall from `submitted` has
      ;; no transition back to where it started (checks/check-reversible
@@ -1385,15 +1447,30 @@
 
     :unstick
     {:from #{:stuck} :to :open
-     :guards [a-person-or-their-delegate-unsticks]
+     :guards [a-person-or-their-delegate-unsticks
+              the-change-has-no-pull-request]
      :handler unstick-the-change
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Back to work" :style :primary :order 1
-               :description "Put this change back in the queue — the rounds start again"}}}
+               :description "Put this change back in the queue — the rounds start again"}}
+
+    ;; the same door for a change with a pull request (ticket 6bdaf6fe):
+    ;; it lands where the pull request is, so the forge pass reads its
+    ;; head and the merge pass merges it green — see `:deviations`
+    :unstick_submitted
+    {:from #{:stuck} :to :submitted
+     :guards [a-person-or-their-delegate-unsticks
+              the-change-has-a-pull-request]
+     :handler unstick-the-pull-request
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The change is under review again, and the house reads its checks on the next pass: green merges it, red sends it back to the seat. The rounds start from zero."}
+     :display {:label "Back to review" :style :primary :order 2
+               :description "Put this pull request back under review — the house merges it green"}}}
    :links [{:rel "origin" :href "{data.url}" :external true
             :summary "The pull request, at GitHub"}]
    :deviations
-   ["A self-loop that serves several states is spelled once for each: `observe` with `observe_submitted` and `observe_failing`, `discard` with `discard_submitted`, and `adopt` with `adopt_submitted`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
+   ["`unstick` is spelled twice, `unstick` and `unstick_submitted`, because it lands in two states (ticket 6bdaf6fe): a change with no pull request goes back to `open` for its next round, and a change with one goes back to `submitted`, where the forge and merge passes read it. A v10 action declares one `:to`, so each door carries the guard that says which change it is for."
+    "A self-loop that serves several states is spelled once for each: `observe` with `observe_submitted` and `observe_failing`, `discard` with `discard_submitted`, and `adopt` with `adopt_submitted`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
     "The round ceiling REFUSES and names the way to `stuck`; it does not move the row itself. Bead waymark-fp62.6.3.2's R-5 reads \"the row moves to stuck and the door names it\", and one transition cannot do both: a handler's refusal rolls back its own transaction, and an action's `:to` is one state. So `under-the-round-ceiling` refuses with `:remedies [:change/stall]`, and `stall` — a real door, with the seat's own sentence on it — makes the move."
     "The clean-worktree check is the HANDLER's, not a guard's. The only honest reading of \"is there anything to submit\" is the rig's own `status`, and a guard that reached a wire would judge differently on a day Gate was dark. The handler asks, and refuses with a 409 that carries its remedy, so the refusal counts on the sitting exactly as a guard's does."
     "A move into `failing` is counted against the round ceiling and does not add a round of its own (ticket d1742908). `submit` already adds one for each head a seat pushes, and each red head is one of those rounds; adding a second for the red would spend the ceiling twice as fast. So the forge pass reads `rounds` against the policy's ceiling at the red: under it the change goes to `failing`, at it the change goes to `stuck` through `stick`, with the red check names as its why."]
@@ -1404,4 +1481,6 @@
                a-model-discards-its-own-edits
                a-model-does-not-unstick-itself
                the-person-puts-a-stuck-change-back-to-work
+               a-change-with-a-pull-request-is-not-put-back-in-open
+               a-change-with-no-pull-request-goes-back-to-open
                a-seat-does-not-say-its-own-change-is-red]})

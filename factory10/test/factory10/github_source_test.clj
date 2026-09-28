@@ -1066,6 +1066,33 @@
     (is (nil? (forge/check-verdict [] []))
         "no check at all says nothing")))
 
+(deftest a-green-re-run-answers-for-the-red-run-before-it
+  ;; ticket 6bdaf6fe: `gate` went red, ran again on the same head and
+  ;; went green, and the pass kept reading the red run
+  (let [run (fn [id started c] {:check_name "gate" :status "completed"
+                                :conclusion c :id id :started_at started})]
+    (is (= {:verdict :green}
+           (forge/check-verdict ["gate"]
+                                [(run 101 "2026-09-28T01:37:00Z" "failure")
+                                 (run 202 "2026-09-28T01:38:30Z" "success")]))
+        "red then green on one head reads green")
+    (is (= {:verdict :green}
+           (forge/check-verdict ["gate"]
+                                [(run 202 "2026-09-28T01:38:30Z" "success")
+                                 (run 101 "2026-09-28T01:37:00Z" "failure")]))
+        "whatever order the forge lists them in")
+    (is (= {:verdict :red :names ["gate"]}
+           (forge/check-verdict ["gate"]
+                                [(run 101 "2026-09-28T01:37:00Z" "success")
+                                 (run 202 "2026-09-28T01:38:30Z" "failure")]))
+        "green then red reads red")
+    (is (nil? (forge/check-verdict
+               ["gate"]
+               [(run 101 "2026-09-28T01:37:00Z" "failure")
+                {:check_name "gate" :status "in_progress" :conclusion nil
+                 :id 202 :started_at "2026-09-28T01:38:30Z"}]))
+        "a re-run still running is not finished")))
+
 ;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
 
 (def ^:private the-conflicts
