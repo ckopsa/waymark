@@ -22,7 +22,7 @@
 (def ^:dynamic *eng* nil)
 
 (def ^:private tables
-  ["runner_links" "waymark10_transitions" "waymark10_idempotency"
+  ["runner_links" "runner_providers" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts"])
 
 (use-fixtures :once
@@ -34,6 +34,7 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (binding [*eng* (engine/engine {:storage st :resources []})]
+          (rl/ensure-providers! *eng*)
           (f))
         (finally (pg/close! st))))))
 
@@ -193,6 +194,76 @@
     (fire [_ _link _text] (swap! n inc) answer)))
 
 (defn- link-id! [] (str (:id (make-link! colton))))
+
+(defn- provider-row
+  "The claude_routine provider row, as the store holds it now."
+  []
+  (let [id (str (:id (rl/provider-row *eng* "claude_routine")))
+        rdef (get (inv/resources *eng*) :runner_provider)]
+    (some->> (store/with-tx (:storage *eng*)
+               (fn [tx]
+                 (store/load-row (:storage *eng*) tx :runner_provider id {})))
+             (inv/decode-row rdef))))
+
+(defn- set-provider-cap! [cap]
+  (let [row (provider-row)
+        id (str (:id row))]
+    (inv/invoke! *eng* :runner_provider id :restate {:cap cap}
+                 {:principal colton
+                  :if-match (inv/etag :runner_provider id (:version row))})))
+
+(defn- open-provider-window!
+  "The provider's window opened now with no runs and no throttle held,
+  written through the engine's own door as a landing fire writes it."
+  []
+  (inv/invoke! *eng* :runner_provider (str (:id (provider-row))) :fired
+               {:window_started_at (str (java.time.Instant/now))
+                :runs_in_window 0}
+               {:principal sch/system-actor}))
+
+(deftest a-provider-cap-holds-every-pool-of-its-links
+  (testing "a cap of 3 across two seats' pools: the 4th fire is held until the window closes"
+    (open-provider-window!)
+    (set-provider-cap! {:runs 3 :window_seconds 18000})
+    (try
+      (let [a (link-id!) b (link-id!) c (link-id!) d (link-id!)
+            n (atom 0)
+            go #(rl/fire-pool! *eng* (constantly (counting n {:started nil})) % nil)
+            fired (mapv go [[a b] [c d] [a b]])
+            held (go [c d])
+            p (provider-row)
+            closes (.plusSeconds (java.time.Instant/parse
+                                  (str (get-in p [:data :window_started_at])))
+                                 18000)]
+        (is (every? :runner fired))
+        (is (= 3 @n (get-in p [:data :runs_in_window])))
+        (is (nil? (:runner held)))
+        (is (= closes (:retry-at held))))
+      (finally
+        (set-provider-cap! nil)
+        (open-provider-window!))))
+  (testing "a throttle that names the account holds every link of it"
+    (try
+      (let [a (link-id!) b (link-id!) c (link-id!)
+            n (atom 0)
+            out (rl/fire-pool! *eng* (constantly (stub {:throttled "30" :scope :account}))
+                               [a b] nil)]
+        (is (nil? (:runner out)))
+        (is (some? (:retry-at out)))
+        (is (some? (get-in (provider-row) [:data :retry_after])))
+        (is (nil? (get-in (row-of a) [:data :retry_after])))
+        (is (nil? (get-in (row-of b) [:data :last_fired_at])))
+        (testing "and another seat's pool sends nothing either"
+          (is (nil? (:runner (rl/fire-pool! *eng* (constantly (counting n {:started nil}))
+                                            [c] nil))))
+          (is (zero? @n))))
+      (finally (open-provider-window!))))
+  (testing "a throttle that names no account holds only its link"
+    (let [a (link-id!) b (link-id!)
+          providers {a (stub {:throttled "30"}) b (stub {:started nil})}]
+      (is (= b (:runner (rl/fire-pool! *eng* #(providers (str (:id %))) [a b] nil))))
+      (is (some? (get-in (row-of a) [:data :retry_after])))
+      (is (nil? (get-in (provider-row) [:data :retry_after]))))))
 
 (deftest a-pool-skips-a-waiting-link-and-takes-the-least-used
   (testing "the first link throttles, so the wake goes out once, through the second"

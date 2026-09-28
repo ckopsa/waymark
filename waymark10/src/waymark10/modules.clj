@@ -232,6 +232,10 @@
              ;; through one. Nothing fires through it yet.
              {:kind :runner_link :enroll :always
               :kinds (fn [_] [runner-links/runner-link])}
+             ;; the runner provider (ticket ec7e7bfb): the account
+             ;; behind every link of one provider, and its cap
+             {:kind :runner_provider :enroll :always
+              :kinds (fn [_] [runner-links/runner-provider])}
              ;; the MCP server as a row (docs/spec-mcp-servers.md,
              ;; waymark-fp62.10): the external powers a grant names
              ;; reach the engine through a row's client, and a grant
