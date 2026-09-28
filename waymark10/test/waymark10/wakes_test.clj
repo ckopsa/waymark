@@ -1973,3 +1973,48 @@
                                    {:principal elena}))]
       (is (= :schema-invalid (:waymark10/problem p)))
       (is (str/includes? (pr-str (:errors p)) "max_open_sittings")))))
+
+(deftest a-count-wake-counts-only-the-rows-no-open-sitting-holds
+  (let [wn :wake-held-rows
+        fn' :wake-held-rows-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        held-seat (fn [nm batch]
+                    (:seat (linked-seat! nm
+                                         {:scope [{:kind "wake_item"
+                                                   :actions ["complete" "touch"]
+                                                   :filter {:batch batch}}]
+                                          :walk "wake_item"
+                                          :wake_on [{:kind "wake_item"
+                                                     :actions ["touch"]
+                                                     :filter {:batch batch}
+                                                     :at_least 1}]
+                                          :max_open_sittings 3}
+                                         fn')))
+        hold! (fn [seat row-id]
+                (let [sid (sitting! seat)]
+                  (seats/claim-rows! *eng* sid [(str row-id)])
+                  sid))]
+
+    (testing "a seat whose one open row an open sitting holds is not woken"
+      (let [row (item! "held-only")
+            seat (held-seat "heldonlyclerk" "held-only")
+            s (hold! seat row)]
+        (item-do! row :touch)
+        (drain-wakes! wn)
+        (is (empty? (seat-fires seat)))
+        (is (not (get-in (sched-of seat) [:data :wake_pending]))
+            "the count read the walk the sit would hand, and it was empty")
+        (close-sitting! s)
+        (seat-do! seat :retire)))
+
+    (testing "a seat with two open rows, one held, is woken for the other"
+      (let [held (item! "held-one-of-two")
+            _free (item! "held-one-of-two")
+            seat (held-seat "heldoneclerk" "held-one-of-two")
+            s (hold! seat held)]
+        (item-do! held :touch)
+        (drain-wakes! wn)
+        (is (= 1 (count (seat-fires seat))))
+        (close-sitting! s)
+        (seat-do! seat :retire)))))

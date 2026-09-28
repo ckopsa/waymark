@@ -263,7 +263,7 @@
 
 (deftest a-change-offers-the-mirrors-doors-to-nobody-and-the-benchs-to-everybody
   (testing "GitHub's own moves are hidden from every hand but the engine's"
-    (doseq [door [:observe :merge :close :adopt :rebranch :supersede]]
+    (doseq [door [:observe :merge :close :adopt :rebranch :supersede :fold]]
       (is (= :hidden (:status (refusal change a-pull-request the-person door)))
           "a hidden door is absent from the envelope, so nobody spends
            a turn asking about it")
@@ -276,7 +276,8 @@
          a probe with no read hook advertises optimistically — the door
          itself judges again with a real hook behind it"))
   (testing "the source moves the row, because the source is the mirror"
-    (is (= (into bench-doors [:observe :adopt :rebranch :merge :close :supersede])
+    (is (= (into bench-doors [:observe :adopt :rebranch :merge :close :supersede
+                              :fold])
            (offers change a-pull-request the-source))
         "`adopt` is the mirror's too (bead waymark-fp62.6.3.10): it
          writes the pull request's identity onto a row this house
@@ -292,12 +293,12 @@
   (testing "a submitted change keeps working, and a stuck one waits"
     (is (= #{:submit :discard_submitted :stall :observe_submitted
              :adopt_submitted :note_adoption :merge :close :fail :stick
-             :supersede}
+             :supersede :fold}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")
     (is (= #{:submit :stall :observe_failing :recover :merge :close
-             :supersede}
+             :supersede :adopt_failing :fold}
            (offers change (assoc a-pull-request :state :failing) the-source))
         "a red change is still the seat's work: the next round, or a
          green head, brings it back (ticket d1742908)")
@@ -463,7 +464,7 @@
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
                :merge_wait_seconds :rounds_per_change :formatter :deny
-               :orientation :enrolled_at :note :source_note
+               :test :orientation :enrolled_at :note :source_note
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
