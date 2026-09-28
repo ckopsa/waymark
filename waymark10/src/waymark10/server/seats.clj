@@ -4134,8 +4134,8 @@
     (when (and groom stall (> (long (:id groom)) (long (:id stall))))
       groom)))
 
-(defn stuck-walk-rows
-  "The ids of the tickets in a ticket walk whose change is stuck and
+(defn stuck-walk-reasons
+  "The tickets in a ticket walk whose change is stuck and
   waits for a person (ticket 6bdaf6fe): a `stuck` change born from the
   ticket, no live change beside it, and no groom since its stall. The
   walk leaves them out as it leaves a claimed row out, so a queue of
@@ -4150,7 +4150,10 @@
   a second run of the seat has nothing to build on it, and a submit
   there only finds a clean worktree.
 
-  Empty for any other walk and for an engine that serves no change."
+  → {ticket-id reason}: each withheld ticket with the sentence the sit
+  answers for it (ticket 87c928e9), so a seat handed an empty walk
+  can say which row was held back and why. Empty for any other walk
+  and for an engine that serves no change."
   [eng walk]
   (if-some [rdef (when (= "ticket" (str walk))
                    (get (inv/resources eng) :change))]
@@ -4169,7 +4172,10 @@
                       (let [born (str (get-in change [:data :born_from]))]
                         (when (str/starts-with? born groomed-walk-prefix)
                           (not-empty (subs born (count groomed-walk-prefix))))))]
-      (into (into #{} (keep ticket-of)
+      (into (into {} (keep (fn [change]
+                             (when-some [ticket-id (ticket-of change)]
+                               [ticket-id (str "change " (:id change)
+                                               " is submitted and in review")])))
                   (changes {:state "submitted"} stuck-scan-limit))
             (keep (fn [change]
                     (let [born (str (get-in change [:data :born_from]))]
@@ -4179,9 +4185,15 @@
                           (when (and (not (live? born))
                                      (nil? (groom-after-stall eng change
                                                               ticket-id)))
-                            ticket-id))))))
+                            [ticket-id (str "change " (:id change)
+                                            " is stuck and waits for a person")]))))))
             (changes {:state "stuck"} stuck-scan-limit)))
-    #{}))
+    {}))
+
+(defn stuck-walk-rows
+  "The ids of `stuck-walk-reasons`, as a set."
+  [eng walk]
+  (set (keys (stuck-walk-reasons eng walk))))
 
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows
