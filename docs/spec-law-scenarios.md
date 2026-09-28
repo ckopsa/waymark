@@ -167,14 +167,12 @@ scenario proves is the refusal *a client sees*, not the one a guard returned.
 
 ## Recorded punts
 
-- **`require-fact` over-declares.** `guards/require` declares `:reads [:storage]`
-  but its check consults `(get-in row [:data fact])` — the row it was already
-  handed. Under this spec's rule every `require-fact` scenario drops to the
-  conformance tier, which is a real loss for mealplan10, whose law is mostly
-  fact gates. Narrowing it (a `:reads [:facts]` verb; `:reads` is absent from
-  `guard-fp`, so the change mints no revision) is the obvious follow-on and is
-  deliberately **not** in this spec: it touches every declaration's read set
-  and deserves its own review.
+- **`require-fact` over-declared** — paid by waymark-442.7. `guards/require`
+  declared `:reads [:storage]` but its check consults `(get-in row [:data fact])`
+  — the row it was already handed. It now declares `:reads [:facts]`, and
+  `:facts` is in `offline-reads`, so a `require-fact` scenario is judged in the
+  check tier. `:reads` is absent from `guard-fp`, so the change mints no
+  revision.
 - **Cross-kind scenarios have one home.** A scenario lives on the kind whose
   action it attempts, even when its `:given` names three other kinds. There is
   no shared scenario file and there should not be; the alternative is a

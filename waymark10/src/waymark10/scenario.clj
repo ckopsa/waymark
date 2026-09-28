@@ -111,8 +111,12 @@
   scenario cannot say is the other half; \"admitted under a scope
   naming this action\" needs a minted grant and a real request, so it
   is proved in the suites, over the wire, where a grant exists to be
-  presented."
-  #{:now :principal :services.features :within :grant})
+  presented.
+
+  `:facts` (waymark-442.7) is what `guards/require` declares: its check
+  consults the maintained fact on the row it is handed, and a scenario
+  states that row whole in `:row`, so the verdict needs no storage."
+  #{:now :principal :services.features :within :grant :facts})
 
 (def out-of-state
   "The reserved denier name: a row whose state is outside the
