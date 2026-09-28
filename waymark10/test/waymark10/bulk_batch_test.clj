@@ -191,13 +191,13 @@
   ;; report — and the report's wire shape is what it was
   (let [[a b] (chores! [true false])
         missing "chore-nobody-minted"]
-    (testing "the guard's refusal, alone, is a 409"
-      (is (= 409 (try (inv/invoke! *eng* :chore b :complete {}
-                                   {:principal (t/principal {:id "colton"
-                                                             :display "Colton"})})
-                      nil
-                      (catch clojure.lang.ExceptionInfo e
-                        (:status (ex-data e)))))))
+    ;; :complete is a bulk door, so its row form does not exist (a 404):
+    ;; the guard's 409 is only reachable through bulk!
+    (testing "the guard's refusal, alone, is one conflict"
+      (let [result (inv/bulk! *eng* :chore :complete {:ids [b]}
+                              {:principal (t/principal {:id "colton"
+                                                        :display "Colton"})})]
+        (is (= 1 (:conflicts result)))))
     (testing "one 409 and one 404 in a partial bulk: one conflict"
       (let [result (inv/bulk! *eng* :chore :complete {:ids [a b missing]}
                               {:principal (t/principal {:id "colton"
