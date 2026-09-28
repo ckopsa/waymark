@@ -355,6 +355,26 @@
   "The worktree is clean: no file in it is different from the branch
   head, so there is nothing to commit and nothing to push.")
 
+(def ^:private submitted-detail
+  "This round is already submitted; wait for its checks. The worktree is
+  clean and the change is in review: its pull request carries the round.")
+
+(def ^:private submitted-remedy
+  (str "Do not stall a change in review (ticket 60c2ec22): say that the "
+       "round is submitted and stop. A red check, a conflict or a review "
+       "comment comes back as feedback at a later sit."))
+
+(defn- in-review?
+  "True when the change's round is already submitted."
+  [row]
+  (= "submitted" (some-> (:state row) name)))
+
+(defn- landing-failed?
+  "True when the bench says the last landing failed, which a submit
+  retries. A landing still running is not failed."
+  [status]
+  (= "failed" (some-> (get-in status [:landing :state]) name)))
+
 (defn- landing-owed?
   "True when the bench still owes a landing on a clean worktree
   (ticket 4792cd3b): the last landing did not land, or the branch is
@@ -381,7 +401,7 @@
   tells the seat what to do next. The rig's `remedy` sentence rides
   beside it when it sent one — it is the rig that knows what it
   refused."
-  [what answer]
+  [what answer & [row]]
   (let [named (bench/refused answer)
         reason (some-> (:reason answer) str not-empty)
         theirs (some-> (:remedy answer) str not-empty)]
@@ -391,7 +411,9 @@
      (cond-> (case named
                "push_rejected" [pull-remedy]
                "over_ceiling" [ceiling-remedy]
-               "nothing_to_commit" [clean-remedy]
+               "nothing_to_commit" (if (and row (in-review? row))
+                                      [submitted-detail submitted-remedy]
+                                      [clean-remedy])
                [(str "Read what the bench answered, do what it says, and "
                      "try again; if it refuses again, say so with the "
                      "stall door.")])
@@ -464,6 +486,13 @@
     (cond
       (nil? status) (bench/refuse! bench/dark-detail [bench/dark-remedy])
       (bench/refused status) (rig-refusal! "read the worktree" status)
+      ;; A clean worktree on a change already in review is its own
+      ;; round, still landing or waiting on checks: the refusal says so
+      ;; and names no stall (ticket 60c2ec22).
+      (and (zero? (long (or (:dirty status) 0)))
+           (in-review? row)
+           (not (landing-failed? status)))
+      (bench/refuse! submitted-detail [submitted-remedy])
       ;; A clean worktree is refused only when nothing is owed: a
       ;; landing that failed outside the worktree is retried by the
       ;; rig's submit, and the retry counts as a round like any other.
@@ -489,7 +518,7 @@
                                 title (assoc :title title)))]
         (cond
           (nil? answer) (bench/refuse! bench/dark-detail [bench/dark-remedy])
-          (bench/refused answer) (rig-refusal! "submit" answer)
+          (bench/refused answer) (rig-refusal! "submit" answer row)
           :else
           (do
             ;; the round is out: the ticket leaves the walk until its
