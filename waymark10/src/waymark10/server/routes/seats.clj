@@ -561,6 +561,12 @@
                 :type :agent
                 :display (seats/sitter-display seat)}))
 
+(defn- hook-hand
+  "The sitter, wearing `seats/hook-role` — so the close handler writes
+  `closed_by` \"hook\" and not \"door\". Only the close route wears it."
+  [seat]
+  (update (sitter-of seat) :roles conj seats/hook-role))
+
 (defn- close-doc
   "What the hook reads back: the row it closed, the counts as
   recorded, and the two numbers the engine counted and has now frozen
@@ -574,6 +580,7 @@
      :sitting (str (:id row))
      :seat (str (:id seat))
      :state (name (:state row))
+     :closed_by (:closed_by d)
      :cost_usd (:cost_usd d)
      :input_tokens (:input_tokens d)
      :output_tokens (:output_tokens d)
@@ -698,7 +705,7 @@
   (fn [req]
     (let [[seat report sitting] (paired eng req)
           closed (:row (inv/invoke! eng :sitting (str (:id sitting)) :close
-                                    report {:principal (sitter-of seat)}))]
+                                    report {:principal (hook-hand seat)}))]
       (router/json-response 200 (close-doc seat closed)))))
 
 ;; ── the transcript door (docs/spec-transcript.md § 5) ──────────────

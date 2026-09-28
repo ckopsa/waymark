@@ -170,6 +170,25 @@
   definitions `deploy` and members `registrar` precedent."
   (t/principal {:id "waymark10-seats" :type :system :display "Seats"}))
 
+(def hook-role
+  "The role the close hook's hand wears (routes/seats `sitting-close`).
+  The hook acts as the sitter, so its principal is the sitter's — this
+  role is the one mark that tells its close from the sitter's own
+  `close` through the door, and only the route puts it there."
+  :sitting-close-hook)
+
+(def closed-by-paths
+  "The four ways a sitting ends closed: through the `close` DOOR, by
+  the run's own stop HOOK, by the idle SWEEP (`sweep-sittings!`), or
+  born closed as a MISSED fire (`wakes/sweep-missed!`)."
+  ["door" "hook" "sweep" "missed"])
+
+(def ^:private closed-by-choices
+  {"door" "Door — closed through the sitting's own close action"
+   "hook" "Hook — closed by the run's stop hook"
+   "sweep" "Sweep — closed by the engine after the sitting went idle"
+   "missed" "Missed — a fire nobody sat in, born closed"})
+
 (def halt-reasons
   "The walls of R-5.2, and the only reasons a seat halts. Each is HARD
   (the grant scopes to nothing) and each must reach a person, which is
@@ -1357,6 +1376,17 @@
   (select-keys inp [:input_tokens :output_tokens
                     :cache_read_tokens :cache_write_tokens]))
 
+(defn- closed-by
+  "Which path this close came down, from the hand that closes it: the
+  engine's own actor is the sweep, the hook's hand wears `hook-role`,
+  and every other hand came through the door."
+  [ctx]
+  (let [p (:principal ctx)]
+    (cond
+      (= (:id seats-actor) (:id p)) "sweep"
+      (contains? (set (:roles p)) hook-role) "hook"
+      :else "door")))
+
 (defhandler close-sitting [row inp ctx]
   ;; R-10.4: the model's prices are read AT THIS MOMENT, the cost is
   ;; computed from them, and the prices used are written beside it —
@@ -1378,6 +1408,7 @@
                      (nil? (get-in row [:data :harness_session])))
           (assoc-in [:data :harness_session] (:harness_session inp)))
         (assoc-in [:data :ended_at] (:now ctx))
+        (assoc-in [:data :closed_by] (closed-by ctx))
         (assoc-in [:data :prices] prices)
         (assoc-in [:data :cost_usd] (cost-of counts prices)))))
 
@@ -3243,7 +3274,18 @@
               :x-display
               {:label "Fired, and nobody sat"
                :spelled-by-hand "Written by the engine's sweep when a firing's key went unspent past the sit deadline. The sitting is born closed, with every count at zero."}}
-     :boolean]]
+     :boolean]
+    ;; HOW IT WAS CLOSED. Written at every path that ends a sitting
+    ;; closed — the close handler for the door, the hook and the idle
+    ;; sweep, and `wakes/record-missed!` for a missed fire — so seat
+    ;; health reads a cut-short or never-sat run without parsing the
+    ;; note. Absent while open; not :maybe, so it promotes and filters.
+    [:closed_by {:optional true
+                 :x-display
+                 {:label "How it was closed"
+                  :choices closed-by-choices
+                  :spelled-by-hand "Written by the engine at the close: door, hook, sweep, or missed for a fire nobody sat in."}}
+     (into [:enum] closed-by-paths)]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -3309,6 +3351,7 @@
                 :model #{:eq}
                 :grant #{:eq}
                 :missed #{:eq}
+                :closed_by #{:eq :in}
                 :started_at #{:after :before :range}}
    :sortable {:fields [:started_at] :default "-started_at"}
    :links [{:rel "seat" :kind :seat
