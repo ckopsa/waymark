@@ -150,7 +150,8 @@
              [:provider {:optional true
                          :x-display
                          {:label "The provider"
-                          :help "Whose endpoint the fire URL is."}}
+                          :help "Whose endpoint the fire URL is."
+                          :choices {"claude_routine" "A Claude Routine, made by hand and fired by URL."}}}
               (into [:enum] providers)]
              [:fire_url {:optional true
                          :x-display
