@@ -354,6 +354,74 @@
       (let [[_ env] (get-json eng (str "/api/tt_ledgers/" id))]
         (is (= "closed" (str (:state env))))))))
 
+;; ── tier 3: data as-of ──────────────────────────────────────────────
+
+(r/defhandler rename-handler [row inp _ctx]
+  (assoc-in row [:data :name] (:name inp)))
+
+(def ^:private almanac
+  (r/resource
+   {:kind :tt_almanac
+    :plural "tt_almanacs"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.name} · {state}"
+    :retain {:data true}
+    :schema [:map
+             [:name [:string {:min 1 :max 40}]]
+             [:note {:optional true} [:maybe [:string {:max 60}]]]
+             [:combination {:optional true :secret true}
+              [:maybe [:string {:max 20}]]]]
+    :actions
+    {:rename {:from #{:open} :to :open
+              :input [:map [:name [:string {:min 1 :max 40}]]]
+              :safety {:idempotent true :reversible true :confirm false}
+              :handler rename-handler}
+     :close {:from #{:open} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "Closed is history."}}}}))
+
+(deftest data-as-of-rides-the-retention
+  (let [st (memory/storage)
+        eng (boot st [(ledger :warning) daybook almanac])
+        rdef (get (inv/resources eng) :tt_almanac)
+        id (:id (:row (inv/create! eng :tt_almanac
+                                   {:name "first" :note "in the drawer"
+                                    :combination "1234"} opts)))
+        mid (do (Thread/sleep 5) (java.time.Instant/now))
+        _ (Thread/sleep 5)
+        _ (inv/invoke! eng :tt_almanac id :rename {:name "second"} opts)
+        [status doc] (get-json eng (str "/api/tt_almanacs/" id)
+                               (str "as-of=" mid))]
+
+    (testing "the document as it stood, not as it stands"
+      (is (= 200 status))
+      (is (= "first" (get-in doc [:data :data :name])))
+      (is (= "in the drawer" (get-in doc [:data :data :note])))
+      (let [[_ now'] (get-json eng (str "/api/tt_almanacs/" id)
+                               (str "as-of=" (java.time.Instant/now)))]
+        (is (= "second" (get-in now' [:data :data :name])))))
+
+    (testing "a secret field is never captured"
+      (is (not (contains? (get-in doc [:data :data]) :combination))))
+
+    (testing "the retained copy rides the caller's grant"
+      (let [narrow {:field? (fn [_kind f] (not= "note" (name f)))}
+            scoped (history/row-as-of eng rdef id mid narrow)]
+        (is (= #{"name"}
+               (set (map name (keys (get-in scoped [:data :data]))))))))
+
+    (testing "a kind that declares no retention still answers, and says why"
+      (let [lid (:id (:row (inv/create! eng :tt_ledger
+                                        {:name "kept" :balance 2} opts)))
+            [_ ldoc] (get-json eng (str "/api/tt_ledgers/" lid)
+                               (str "as-of=" (java.time.Instant/now)))]
+        (is (= "open" (str (get-in ldoc [:data :state]))))
+        (is (nil? (get-in ldoc [:data :data])))
+        (is (some #(re-find #"declares no :retain \{:data true\}" (str %))
+                  (get-in ldoc [:data :notes])))))))
+
 ;; ── waymark_history rides the route (waymark-zp5) ───────────────────
 
 (deftest the-mcp-tool-is-a-pass-through

@@ -662,10 +662,14 @@
   (let [seat (load-raw eng :seat (get-in transcript-raw [:data :seat]))
         chair (when-some [c (some-> seat seats/chair-of)]
                 (when (contains? (inv/resources eng) :model)
-                  (load-raw eng :model c)))]
+                  (load-raw eng :model c)))
+        sitting (when-some [s (get-in transcript-raw [:data :sitting])]
+                  (when (contains? (inv/resources eng) :sitting)
+                    (load-raw eng :sitting s)))]
     {:hashes (into #{}
                    (remove nil?)
-                   (concat [(get-in transcript-raw [:data :key_hash])]
+                   (concat [(get-in transcript-raw [:data :key_hash])
+                            (get-in sitting [:data :inbox_key_hash])]
                            (map :hash (get-in seat [:data :fire_keys]))))
      :raw (into #{}
                 (keep #(some-> (get-in % [:data :sitter_key]) str not-empty))

@@ -31,8 +31,8 @@
   The spec's tier 2 asks for the actions that were *available* on July
   1st. This does not answer that, and the omission is the whole point
   of landing the decision record first: the log records what happened,
-  not what the row looked like, and tier 3 (`:retain {:data true}`) is
-  the spec's own recorded punt. Re-judging July's law against today's
+  not what the row looked like, except where a kind declares tier 3
+  (`:retain {:data true}`), and then only from that day. Re-judging July's law against today's
   document would return a plausible-looking wrong answer, which is
   worse than no answer and much worse than a named gap. So each
   transition says which of the two it is answering with — `evidence`
@@ -264,11 +264,20 @@
              (str "Read through your grant: an evidence value whose form read"
                   " a field you may not see is withheld and named in"
                   " `withheld`, never silently dropped."))
-           (str "The log records what happened, not what the row looked like."
-                " `data` as of a past instant is not recoverable here —"
-                " docs/spec-time-travel.md tier 3 is a recorded punt — and a"
-                " transition's stored `inputs` are not served, having no"
-                " field projection of their own.")
+           (if (decision/retains-data? rdef)
+             (str (name (:kind rdef)) " declares :retain {:data true}, so an"
+                  " as-of read answers `data` — the document as it stood,"
+                  " read through your grant as a row read is. A transition"
+                  " written before that declaration carries no copy, and"
+                  " `data` is then absent rather than guessed. A"
+                  " transition's stored `inputs` are not served, having no"
+                  " field projection of their own.")
+             (str "The log records what happened, not what the row looked"
+                  " like, so `data` as of a past instant is not recoverable"
+                  " for " (name (:kind rdef)) " — it did not opt into"
+                  " docs/spec-time-travel.md tier 3 — and a transition's"
+                  " stored `inputs` are not served, having no field"
+                  " projection of their own."))
            (when truncated
              (str "The newest " cap " transitions only (the page's cap);"
                   " older ones are unread. Ask for fewer with `limit` — never"
@@ -348,7 +357,8 @@
   own wording ('answers the envelope with state, law_revision and
   summary as of that instant'). An envelope carries `data`, `actions`,
   `links` and an ETag, and every one of them is a statement about NOW:
-  the data is not recoverable at all (tier 3), the actions would be
+  the data is served only where the kind retains it (tier 3, as
+  `data`, projected through the caller's grant), the actions would be
   today's doors probed against today's document, and a client whose
   first rule is 'follow the envelope's own href' would find live verbs
   hanging off a historical document. So the as-of read answers a
@@ -390,9 +400,19 @@
                                          " its log was severed from it by a"
                                          " hard DROP, the spec's other"
                                          " recorded punt.")])
-                                 (notes rdef (if e [e] []) (some? visible?)
-                                        false (count rows)))}
-             e (assoc :put_there_by e))}))
+                                 (cond-> (notes rdef (if e [e] [])
+                                                (some? visible?) false
+                                                (count rows))
+                                   (not (decision/retains-data? rdef))
+                                   (conj (str (name (:kind rdef))
+                                              " declares no :retain {:data"
+                                              " true}, so this as-of read"
+                                              " answers no `data`."))))}
+             e (assoc :put_there_by e)
+             ;; tier 3: the retained copy, through the same closure the
+             ;; row read narrows with — never unprojected
+             (some? (:after t)) (assoc :data (decision/project-data
+                                              (:after t) visible?)))}))
 
 ;; ── tier 1: the collection as of an instant ─────────────────────────
 
