@@ -1052,8 +1052,17 @@
         "a check the policy does not require does not make it red")
     (is (nil? (forge/check-verdict ["a" "b"] [(done "a" "failure")]))
         "a required check that has not run is not finished")
-    (is (nil? (forge/check-verdict ["a"] [(done "a" "cancelled")]))
-        "a cancel is neither red nor green")
+    (is (= {:verdict :interrupted :names ["a"]}
+           (forge/check-verdict ["a"] [(done "a" "cancelled")]))
+        "a cancelled required check died without a verdict (ticket 22f91244)")
+    (is (= {:verdict :interrupted :names ["b"]}
+           (forge/check-verdict ["a" "b"] [(done "a" "success")
+                                           (done "b" "cancelled")]))
+        "and a cancel never counts as green")
+    (is (= {:verdict :red :names ["a"]}
+           (forge/check-verdict ["a" "b"] [(done "a" "failure")
+                                           (done "b" "cancelled")]))
+        "a red check beside a cancel is red")
     (is (nil? (forge/check-verdict [] []))
         "no check at all says nothing")))
 
@@ -1318,3 +1327,116 @@
     (is (= {:verdict :green}
            (forge/with-conflict {:verdict :green}
                                 {:data {:mergeable "blocked"}})))))
+
+;; ── a run that died without a verdict (ticket 22f91244) ────────────
+
+(def ^:private the-head (get-in a-pull-request [:head :sha]))
+
+(def ^:private died-in-set-up
+  [{:name "Set up job" :conclusion "success"}
+   {:name "Initialize containers" :conclusion "failure"}
+   {:name "Run the tests" :conclusion "skipped"}])
+
+(def ^:private died-in-a-test
+  [{:name "Set up job" :conclusion "success"}
+   {:name "Run the tests" :conclusion "failure"}])
+
+(defn- interrupted-world
+  "One change at `submitted`, whose one required check ended with
+  `conclusion`, on a head whose one workflow run ended with one job at
+  `job-conclusion` and `steps`."
+  [conclusion job-conclusion steps]
+  (let [state (gh/fake-state)
+        engine (boot)
+        r {:state state :source (gh/fake-source state) :engine engine}]
+    (gh/seed-pull! state repo a-pull-request
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo the-head
+                    {:id 41752098700 :name "test10 (shard 3)"
+                     :status "completed" :conclusion conclusion
+                     :head_sha the-head})
+    (gh/seed-run! state repo the-head
+                  {:id 900 :workflow_id 11 :head_sha the-head
+                   :status "completed" :conclusion job-conclusion})
+    (gh/seed-job! state repo 900
+                  {:id 7001 :run_id 900 :name "test10 (shard 3)"
+                   :status "completed" :conclusion job-conclusion
+                   :steps steps})
+    (inv/create! engine :repo_policy
+                 {:repository repo :required_checks ["test10 (shard 3)"]}
+                 {:principal a-person})
+    (pass! r)
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (assoc-in [:data :rounds] 1))
+                             (:version row))))))
+    r))
+
+(deftest an-interrupted-run-is-re-run-once-per-head
+  (let [{:keys [state engine] :as r}
+        (interrupted-world "cancelled" "cancelled" [])
+        census (pass! r)
+        row (the-change engine)]
+    (is (= [{:repository repo :run 900}] (gh/reruns state))
+        "the run that died without a verdict runs again")
+    (is (= 1 (:rerun census)))
+    (is (= the-head (get-in row [:data :rerun_head]))
+        "the head is remembered on the row, so a restart does not forget it")
+    (is (= :submitted (:state row)) "a cancel is not red")
+    (testing "the same head interrupted again is not re-run a second time"
+      (let [census (pass! r)
+            row (the-change engine)]
+        (is (= 1 (count (gh/reruns state))))
+        (is (= 0 (:rerun census)))
+        (is (= 1 (:rerun-noted census)))
+        (is (str/includes? (str (get-in row [:data :rerun_note]))
+                           (subs the-head 0 12))
+            "and the change says so, so a person sees a broken runner")))
+    (testing "a third pass writes the note no second time"
+      (let [census (pass! r)]
+        (is (= 0 (:rerun-noted census)))
+        (is (= 1 (count (gh/reruns state))))))))
+
+(deftest a-run-that-failed-in-set-up-is-re-run-and-not-failed
+  (let [{:keys [state engine] :as r}
+        (interrupted-world "failure" "failure" died-in-set-up)
+        census (pass! r)]
+    (is (= [{:repository repo :run 900}] (gh/reruns state)))
+    (is (= 1 (:rerun census)))
+    (is (= :submitted (:state (the-change engine)))
+        "the re-run is the move this pass: no seat is woken for the runner")
+    (testing "the same head red in set-up again goes failing as red"
+      (let [census (pass! r)]
+        (is (= 1 (count (gh/reruns state))))
+        (is (= 1 (:rerun-noted census)))
+        (is (= :failing (:state (the-change engine))))))))
+
+(deftest a-run-with-a-red-test-step-is-not-re-run
+  (let [{:keys [state engine] :as r}
+        (interrupted-world "failure" "failure" died-in-a-test)
+        census (pass! r)]
+    (is (empty? (gh/reruns state)) "a red test is a verdict about the code")
+    (is (= 0 (:rerun census)))
+    (is (= :failing (:state (the-change engine))))
+    (is (nil? (get-in (the-change engine) [:data :rerun_head])))))
+
+(deftest a-run-is-interrupted-only-with-no-red-job
+  (let [run (fn [& jobs] {:status "completed" :jobs (vec jobs)})]
+    (is (forge/interrupted-run? (run {:conclusion "timed_out"})))
+    (is (forge/interrupted-run? (run {:conclusion "failure" :steps []}))
+        "a job killed with no step failing died without a verdict")
+    (is (not (forge/interrupted-run?
+              (run {:conclusion "failure" :steps died-in-a-test}
+                   {:conclusion "cancelled"})))
+        "a fail-fast sibling cancelled beside a red test is red")
+    (is (not (forge/interrupted-run? (run {:conclusion "success"}))))
+    (is (not (forge/interrupted-run?
+              {:status "in_progress" :jobs [{:conclusion "cancelled"}]}))
+        "a run still running is not judged")))

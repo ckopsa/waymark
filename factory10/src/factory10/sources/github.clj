@@ -27,6 +27,11 @@
       GET  /repos/{repo}/actions/runs/{id}/jobs     runs and their jobs
       GET  /repos/{repo}/actions/jobs/{id}/logs     the log tail
       POST /repos/{repo}/issues/{n}/labels          THE ONE WRITE
+      POST /repos/{repo}/actions/runs/{id}/rerun-failed-jobs
+                                                    and the re-run of a
+                                                    run that died without
+                                                    a verdict, once per
+                                                    head (ticket 22f91244)
 
   CHECK RUNS REFUSED. A fine-grained token cannot hold `Checks` (GitHub
   grants it to Apps only), so on a PRIVATE repository the check-runs
@@ -494,6 +499,45 @@
                                 {:params {:per_page page-size}})))))
           runs)))
 
+(defn- run-job
+  "One Actions job, as the re-run judgment reads it: its conclusion and
+  the name and conclusion of each step."
+  [job]
+  {:name (word (:name job))
+   :conclusion (word (:conclusion job))
+   :steps (mapv (fn [s] {:name (word (:name s))
+                         :conclusion (word (:conclusion s))})
+                (:steps job))})
+
+(defn- latest-runs!
+  "The latest workflow run of each workflow on the head, newest first
+  as GitHub lists them, with the jobs of a run that finished and did
+  not pass (ticket 22f91244)."
+  [this repo sha]
+  (let [runs (:workflow_runs
+              (call! this "GET" (str "/repos/" repo "/actions/runs")
+                     {:params {:head_sha sha :per_page page-size}}))
+        latest (vals (reduce (fn [m run]
+                               (let [k (str (or (:workflow_id run) (:id run)))]
+                                 (if (contains? m k) m (assoc m k run))))
+                             {}
+                             runs))]
+    (mapv (fn [run]
+            (let [status (word (:status run))
+                  conclusion (word (:conclusion run))]
+              (cond-> {:run_id (whole (:id run))
+                       :status status
+                       :conclusion conclusion}
+                (and (= "completed" status)
+                     (not (contains? forge/green-conclusions (str conclusion))))
+                (assoc :jobs
+                       (mapv run-job
+                             (:jobs (call! this "GET"
+                                           (str "/repos/" repo "/actions/runs/"
+                                                (:id run) "/jobs")
+                                           {:params {:per_page page-size}})))))))
+          latest)))
+
 (defn- refused? [e]
   (contains? #{401 403} (:status (ex-data e))))
 
@@ -743,7 +787,20 @@
        :checks (mapv (fn [check]
                        (assoc (check->doc repository nil sha check)
                               :status (word (:status check))))
-                     (check-runs! this repository sha))})))
+                     (check-runs! this repository sha))}))
+
+  forge/ForgeRerun
+  (forge-runs [this repository head-sha]
+    (latest-runs! this repository head-sha))
+
+  (forge-rerun! [this repository run-id]
+    ;; the second write (ticket 22f91244): a run that died without a
+    ;; verdict runs its failed jobs again
+    (call! this "POST"
+           (str "/repos/" repository "/actions/runs/" run-id
+                "/rerun-failed-jobs")
+           {})
+    run-id))
 
 (defn parse-repos
   "\"ckopsa/waymark, ckopsa/waymark-bench\" → the repositories to read,
@@ -908,6 +965,14 @@
 (def ^:private job-log-path #"/repos/([^/]+/[^/]+)/actions/jobs/(\d+)/logs")
 (def ^:private labels-path #"/repos/([^/]+/[^/]+)/issues/(\d+)/labels")
 (def ^:private branch-path #"/repos/([^/]+/[^/]+)/branches/(.+)")
+(def ^:private rerun-path
+  #"/repos/([^/]+/[^/]+)/actions/runs/(\d+)/rerun-failed-jobs")
+
+(defn reruns
+  "Every re-run the source asked for, oldest first, as {:repository
+  :run}."
+  [state]
+  (vec (:reruns @state)))
 
 (def blob-base
   "Where the fake's log redirect points. Another host, which is why
@@ -997,6 +1062,12 @@
                  {:repository (second m) :number (parse-long (nth m 2))
                   :labels (:labels body)})
           (mapv (fn [l] {:name l}) (:labels body)))
+
+        (re-matches rerun-path path)
+        (let [m (re-matches rerun-path path)]
+          (swap! state update :reruns (fnil conj [])
+                 {:repository (second m) :run (parse-long (nth m 2))})
+          nil)
 
         :else
         (if raw
