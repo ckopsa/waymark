@@ -121,6 +121,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
+            [waymark10.server.runner-links :as runner-links]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -909,6 +910,9 @@
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
         _ (ensure-capabilities! eng)
+        ;; runner-pool 1c: one runner_link copied from each model's and
+        ;; schedule's own link, once — the sources keep theirs
+        _ (runner-links/ensure-seeded-links! eng)
         ;; the bridge of Gate's deprecation (spec-mcp-servers § 3
         ;; step 1): one mcp_server row named gate, passthrough, at the
         ;; Gate WORKQUEUE10_GATE_URL names, seeded once and never
