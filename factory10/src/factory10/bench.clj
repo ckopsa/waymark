@@ -1395,8 +1395,20 @@
     (when (str/starts-with? id "seat:")
       (not-empty (subs id (count "seat:"))))))
 
+(defn- own-sitting-id
+  "The sitting this request was made from, or nil: the one its MCP
+  session is bound to, carried on the grant as `:sitting` (mcp's
+  waymark_invoke, then the router's invoke-opts). Never the newest
+  sitting under the grant: every sitting of a seat shares the seat's
+  grant, so with several open the newest is usually another one
+  (ticket 51dfd10b)."
+  [ctx]
+  (some-> (get-in ctx [:grant :sitting]) str not-empty))
+
 (defn sitting-id
-  "The open sitting of the leash this request wears, or nil.
+  "The open sitting of the leash this request wears, or nil. The
+  request's own sitting when it names one (own-sitting-id); otherwise
+  the open sitting under its grant, as below.
 
   `(:grant ctx)` is the guard's-eye view of the grant presented with
   this request (invoke.clj's make-ctx), and the sitting is the row
@@ -1406,11 +1418,12 @@
   sitting, names none, and the commit carries one trailer instead of
   two."
   [ctx]
-  (when-some [find' (:find ctx)]
-    (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
-      (some-> (first (find' :sitting {:grant gid :state :open}
-                            {:limit 1 :newest-first true}))
-              :id str not-empty))))
+  (or (own-sitting-id ctx)
+      (when-some [find' (:find ctx)]
+        (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
+          (some-> (first (find' :sitting {:grant gid :state :open}
+                                {:limit 1 :newest-first true}))
+                  :id str not-empty)))))
 
 (defn trailers
   "The git trailers a bench commit carries: the seat and the sitting,
@@ -1432,25 +1445,26 @@
 
 (defn unheld-detail
   "Why a seat's submit on this change is not its sitting's to make, as
-  one sentence, or nil. The newest sitting under the request's grant
-  must be open, no other open sitting of the seat may hold the ticket
-  the change was born from, and a sitting whose walk handed it rows
-  must hold that ticket among them. A person's hand, a change born of
-  no ticket, and a grant with no sitting at all are not judged here.
+  one sentence, or nil. The request's own sitting (own-sitting-id, never
+  the newest under the seat's shared grant) must be open, no OTHER open
+  sitting of the seat may hold the ticket the change was born from, and
+  a sitting whose walk handed it rows must hold that ticket among them.
+  A person's hand, a change born of no ticket, and a request that names
+  no sitting are not judged here.
   The same wall stands on bench writes at the power door
   (waymark10.server.gate-proxy)."
   [row ctx]
   (when-some [find' (:find ctx)]
     (when-some [seat (seat-id ctx)]
       (when-some [ticket (born-ticket row)]
-        (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
-          (when-some [mine (first (find' :sitting {:grant gid}
-                                         {:limit 1 :newest-first true}))]
+        (when-some [sid (own-sitting-id ctx)]
+          (when-some [mine (when-some [read' (:read ctx)]
+                             (read' :sitting sid))]
             (let [holds? (fn [s] (boolean (some #(= ticket (str %))
                                                 (get-in s [:data :walked_rows]))))
                   holder (->> (find' :sitting {:seat seat :state :open}
                                      {:limit 50 :newest-first true})
-                              (remove #(= (str (:id mine)) (str (:id %))))
+                              (remove #(= sid (str (:id %))))
                               (filter holds?)
                               first)
                   state (some-> (:state mine) name)

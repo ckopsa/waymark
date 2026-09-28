@@ -3201,3 +3201,41 @@
         (is (not (contains? (set (keys (:unavailable doc))) :stamp_label))
             "a hidden door is ABSENT from the envelope, not listed as
              unavailable — nobody spends a call to learn it is shut")))))
+
+;; ── the holder wall judges the calling sitting (ticket 51dfd10b) ─────
+
+(deftest the-holder-wall-judges-the-calling-sitting-not-the-newest-under-the-grant
+  (let [rows (atom {"A" {:id "A" :state :open
+                         :data {:grant "G" :seat "S" :walked_rows ["T"]}}
+                    "B" {:id "B" :state :open
+                         :data {:grant "G" :seat "S" :walked_rows ["U"]}}})
+        ;; B is the newer sitting; both share the seat's grant G
+        newest-first ["B" "A"]
+        ctx (fn [sid]
+              {:principal {:id "seat:S"}
+               :grant (cond-> {:id "G"} sid (assoc :sitting sid))
+               :read (fn [_ id] (get @rows (str id)))
+               :find (fn [_ where _]
+                       (->> newest-first
+                            (map @rows)
+                            (filter #(or (nil? (:state where))
+                                         (= (:state where) (:state %))))
+                            (filter #(or (nil? (:seat where))
+                                         (= (:seat where) (get-in % [:data :seat]))))
+                            (filter #(or (nil? (:grant where))
+                                         (= (:grant where) (get-in % [:data :grant]))))
+                            vec))})
+        change {:data {:born_from "ticket:T"}}]
+    (testing "the older sitting A, which holds T, may submit T's change"
+      (is (nil? (bench/unheld-detail change (ctx "A"))))
+      (is (= "A" (bench/sitting-id (ctx "A")))
+          "the trailer names the calling sitting, not the newest"))
+    (testing "the newer sitting B, which holds U, is refused naming A"
+      (is (str/includes? (str (bench/unheld-detail change (ctx "B")))
+                         "held by sitting A")))
+    (testing "a request that names no sitting is not judged"
+      (is (nil? (bench/unheld-detail change (ctx nil)))))
+    (testing "a closed A is refused on its own write"
+      (swap! rows assoc-in ["A" :state] :closed)
+      (is (str/includes? (str (bench/unheld-detail change (ctx "A")))
+                         "sitting A is closed")))))
