@@ -1339,12 +1339,14 @@
               :explain "The requester cannot judge its own ask; another principal decides."}
     :stamps  {:decided-by :approved_by}
     ;; short-lived is the DEFAULT, not an opt-in: an ask naming no
-    ;; expiry gets the engine's configured TTL (1h), stamped AT
-    ;; CREATE so the approver approves the leash that will actually
-    ;; exist. An agent proposes longer at will up to the cap; the
-    ;; approver sees the number either way.
+    ;; expiry gets the engine's configured TTL (24h, the leash's own
+    ;; cap — waymark-h6y: a shorter default killed the minted grant
+    ;; minutes after a late approval, because the offer window and
+    ;; the grant lifetime are one field), stamped AT CREATE so the
+    ;; approver approves the leash that will actually exist. An agent
+    ;; proposes shorter at will; the approver sees the number either way.
     :expires {:field :expires_at
-              :default {:service :grant-default-ttl-seconds :seconds 3600}
+              :default {:service :grant-default-ttl-seconds :seconds 86400}
               :x-display
               {:label "Good until"
                :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}
