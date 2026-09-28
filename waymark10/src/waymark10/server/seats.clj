@@ -3134,6 +3134,19 @@
                 :x-display {:label "Refusals served"
                             :help "409s served under this sitting's grant — fuel spent on law the model did not know ahead of time. Counted by the engine, frozen at the close, and read as waymark's own backlog rather than as the model's fault."}}
      [:int {:min 0}]]
+    ;; CANCELLED TEST RUNS (ticket 39b2c934). A bench.test run the rig
+    ;; answers `cancelled` is a run the sitter started and threw away —
+    ;; the seat-health `test_thrash` signal. The door counts each run
+    ;; once, by its run id, however many times the sitter polls it.
+    [:cancelled_runs {:default 0
+                      :x-display {:label "Test runs cancelled"
+                                  :help "bench.test runs the rig answered cancelled while this sitting was open, each counted once by its run id. Counted by the engine and frozen at the close."}}
+     [:int {:min 0}]]
+    [:cancelled_run_ids {:default []
+                         :x-display {:raw true
+                                     :label "Cancelled run ids"
+                                     :help "The run ids already counted in cancelled_runs, so a second poll of one run does not count it again."}}
+     [:vector :string]]
     ;; THE THIRD THE ENGINE COUNTS (R-10.6a). The transcript is the
     ;; larger part of the bill, and the transcript is what the MCP
     ;; door answered. `served` is the record of it: tool name → the
@@ -3548,6 +3561,57 @@
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   (assoc (:data row) counter n) nil)
               n)))))))
+
+(defn add-cancelled-run!
+  "Count one cancelled bench.test run on an open sitting (ticket
+  39b2c934). A run with an id is counted once: its id joins
+  `cancelled_run_ids`, and a later answer naming the same run leaves
+  the count where it is. A run with no id is counted each time, which
+  is the most an unnamed run can say. `bump-counter!`'s maintenance
+  write. → the count, or nil when there was nothing to count on."
+  [eng sitting-id run-id]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (= :open (:state row))
+            (let [run (some-> run-id str not-empty)
+                  seen (vec (:cancelled_run_ids (:data row)))
+                  n (long (or (:cancelled_runs (:data row)) 0))]
+              (if (and run (some #{run} seen))
+                n
+                (let [n (inc n)]
+                  (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                      (cond-> (assoc (:data row) :cancelled_runs n)
+                                        run (assoc :cancelled_run_ids (conj seen run)))
+                                      nil)
+                  n)))))))))
+
+(defn- ->instant [v]
+  (cond (instance? java.time.Instant v) v
+        (inst? v) (.toInstant ^java.util.Date v)
+        (some-> v str not-empty) (java.time.Instant/parse (str v))))
+
+(defn sitting-transitions
+  "The transitions made under a sitting (ticket 39b2c934): the log rows
+  whose actor carries the sitting's grant and whose `at` falls in its
+  window, `started_at` to `ended_at` (to now, while it is open). The
+  log has no sitting column; the grant and the window are the link.
+  → a vector, oldest first, or nil for an unknown sitting."
+  ([eng sitting-id] (sitting-transitions eng sitting-id {}))
+  ([eng sitting-id opts]
+   (store/with-tx (:storage eng)
+     (fn [tx]
+       (when-some [row (store/load-row (:storage eng) tx :sitting
+                                       (str sitting-id) {})]
+         (let [data (:data row)]
+           (when-some [grant (some-> (:grant data) str not-empty)]
+             (store/transitions-under-grant
+              (:storage eng) tx grant
+              (->instant (:started_at data))
+              (->instant (:ended_at data))
+              opts))))))))
 
 (defn add-served!
   "Add one call and `bytes` bytes to an open sitting's `served`, under
