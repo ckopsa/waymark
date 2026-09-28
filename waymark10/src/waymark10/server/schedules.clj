@@ -153,8 +153,9 @@
   the seat's own `fire` door is heard: the door refuses what a door
   can refuse (parked, halted, unlinked, a bare agent) and the
   provider's own answer lands on this row as a state and a note —
-  `fired` on a 2xx, `paused` on a 400, `broken` with the sentence on
-  a 429, a 401 or a 404. A replay is deduped by `last_fired_at`, and
+  `fired` on a 2xx, `paused` on a 400, `live` with `retry_after` on
+  a throttle, `broken` with the sentence on a 401, a 403 or a 404.
+  A replay is deduped by `last_fired_at`, and
   nothing here ever re-throws: a throwing consumer parks the drain.
 
   ── the engine opt a deployment owes ───────────────────────────────
@@ -467,7 +468,16 @@
       (assoc-in [:data :last_fired_at] (:last_fired_at inp))
       (cond-> (:last_run_url inp)
         (assoc-in [:data :last_run_url] (:last_run_url inp)))
-      (update :data dissoc :note)))
+      (update :data dissoc :note :retry_after)))
+
+(defhandler hold-throttle
+  [row inp _ctx]
+  ;; the wake that met the throttle waits for the time it named: the
+  ;; wake loop sends it once `retry_after` has passed, and not before
+  (-> row
+      (assoc-in [:data :note] (:note inp))
+      (assoc-in [:data :retry_after] (:retry_after inp))
+      (assoc-in [:data :wake_pending] true)))
 
 (defresource schedule
   {:kind :schedule
@@ -527,8 +537,8 @@
     [:note {:optional true
             :x-display
             {:widget "prose"
-             :label "Why this schedule is broken"
-             :help "The adapter's own sentence about why it could not reach the provider — a missing credential reads exactly as one. Cleared by the next successful push."}}
+             :label "What the provider last said"
+             :help "The adapter's own sentence about why it could not reach the provider — a missing credential reads exactly as one. On a broken row a person must act; on a live row with `retry_after` it is a throttle, and nothing is needed from anyone. Cleared by the next successful push or fire."}}
      [:maybe [:string {:max 280}]]]
     ;; ── the fire link (R-12.18) ─────────────────────────────────────
     ;; The URL is shown; the token never is. A linked row is a row a
@@ -599,6 +609,14 @@
                         :x-display
                         {:label "A wake the budget held"
                          :help "When a matching transition last found this seat's week of fuel spent. The wake waits, and it goes out when the window rolls. Engine-written."}}
+     [:maybe :waymark/instant]]
+    ;; A throttle's mark (waymark ticket 48dc648c). The provider said
+    ;; the Routine has no free run and named a time; the row stays
+    ;; live, the wake stays pending, and nothing fires before this.
+    [:retry_after {:optional true
+                   :x-display
+                   {:label "The Routine is free again at"
+                    :help "The provider throttled the last fire and named this time. The schedule stays live and its waiting wake goes out once, after this moment; nothing is needed from a person. Cleared by the next fire that goes out. Engine-written."}}
      [:maybe :waymark/instant]]]
    :create-schema
    [:map
@@ -791,7 +809,24 @@
             "Stamped by the fire consumer the moment the provider answered; no read preceded it to fence against."}
      :safety engine-writes
      :handler stamp-fire
-     :display {:label "Routine fired"}}}
+     :display {:label "Routine fired"}}
+
+    ;; the provider's throttle (waymark ticket 48dc648c): a 429, or any
+    ;; answer naming a retry time, is not a bad link. The row stays
+    ;; live, says so, and keeps its wake pending until `retry_after`.
+    :throttle
+    {:from #{:pending :live :broken} :to :live
+     :input [:map
+             [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]
+             [:retry_after {:x-display {:hidden true}} :waymark/instant]]
+     :record true
+     :guards [engine-writes-schedules]
+     :edit {:prefill [:note :retry_after] :fence false
+            :unfenced-reason
+            "Written by the fire consumer the moment the provider throttled the fire; no read preceded it to fence against."}
+     :safety engine-writes
+     :handler hold-throttle
+     :display {:label "Routine throttled"}}}
    :deviations
    ["The schedule is NOT declared through server/mirror, though R-12.0 names the calendar as the precedent. Three reasons: mirror's authority points inward (a pull wins; R-12.3 wants a read-back that reports and never repairs), mirror refuses a kind that declares its own :states (R-12.1 names four), and MirrorAdapter has no pause, resume or delete (calendar10 had to hang delete-event! off the side of the protocol). The seam is ScheduleAdapter instead, and the bookkeeping posture — hidden system doors over ordinary data fields — is borrowed from mirror whole."
     "R-12.1 lists four states; this kind has five. `ended` is where a retired or merged seat's schedule lands once the copy is deleted. The alternative was returning the row to `pending`, which means \"no copy yet\" and invites the next push to make one."
@@ -799,7 +834,7 @@
     "R-12.2 calls the push a post-commit effect at the wire boundary. It is a durable log consumer here, which is what the brief asked to be built and the more honest of the two under a crash: the log is the record, and an effect that dies takes its push with it. Wave two may move it (waymark-442.14)."
     "R-12.6's ceiling is not pushed to the provider. The Routines API is not pinned in this repository, and R-12.6 names the fallback itself — the walk's `rows_per_firing` caps the firing. One field on the create payload when the real API is known."
     "R-12.18 asks `link` to record. It does NOT record here, and the seat's `offer_key` made the same trade for the same reason: a recorded action persists its raw inputs into the transition log, and this input is the token — which R-12.11 says is never in a transition's recorded inputs. The transition row still says a link was made, by whose hand and when."
-    "R-12.20 writes the 429 as a refusal sentence. It lands here as a NOTE on a broken row instead. The fire goes out after the commit, so the provider's answer arrives when the door is already closed and there is nobody left to refuse; the row says what the provider said, and the next fire that goes out clears it."
+    "R-12.20 writes the 429 as a refusal sentence. It lands here as a NOTE on a LIVE row instead, through `throttle`. The fire goes out after the commit, so the provider's answer arrives when the door is already closed and there is nobody left to refuse; the row says what the provider said, keeps its wake pending with the `retry_after` the provider named, and the wake loop sends that wake once the time has passed. Only an answer that says the link itself is bad (401, 403, 404) breaks the row."
     "`fired` accepts a `paused` and a `pending` row as well as `live` and `broken`, where R-12.18 names two states. A linked row is left alone by push, pause and resume, so a row a 400 moved to `paused` has no other way back to `live`; a fire that the provider answers is the evidence that heals it."]})
 
 ;; ── reading the seat and the model ──────────────────────────────────
@@ -1282,6 +1317,64 @@
   (note! eng row (or (not-empty (str (ex-message e)))
                      "The adapter could not reach the provider.")))
 
+(declare instant-of provider-note)
+
+(def ^:private link-refusals
+  "The statuses that say the link itself is bad. Only these break a
+  row; a throttle never does."
+  #{401 403 404})
+
+(defn- retry-seconds
+  "The seconds a provider's answer names before the next try: the
+  Retry-After header's delta-seconds, or a number the body names
+  after 'try again after' or 'retry after'. nil when neither does."
+  [retry-after body]
+  (or (some->> retry-after str clojure.string/trim (re-matches #"\d{1,9}")
+               Long/parseLong)
+      (some->> body str
+               (re-find #"(?i)(?:try again|retry) after\D{0,3}(\d{1,9})")
+               second
+               Long/parseLong)))
+
+(defn- retry-date
+  "A Retry-After header spelled as an HTTP-date, as an instant."
+  [retry-after]
+  (try (some-> retry-after str clojure.string/trim not-empty
+               (java.time.ZonedDateTime/parse
+                java.time.format.DateTimeFormatter/RFC_1123_DATE_TIME)
+               .toInstant)
+       (catch Exception _ nil)))
+
+(defn- throttle?
+  "Is this refusal a throttle — a 429, or any answer that names a retry
+  time — and not a bad link?"
+  [status retry-after body]
+  (let [status (some-> status long)]
+    (and (not (contains? link-refusals status))
+         (not= 400 status)
+         (boolean (or (= 429 status)
+                      (some-> retry-after str not-empty)
+                      (retry-seconds nil body)
+                      (some->> body str (re-find #"(?i)no free run")))))))
+
+(defn- throttle!
+  "Keep the row live through `throttle`, saying the provider's sentence
+  and the instant it named. The wake stays pending, and the wake loop
+  sends it once, at or after that instant. A throttle that names no
+  time waits a minute."
+  [eng row retry-after body]
+  (let [from (or (instant-of (now eng)) (Instant/now))
+        secs (retry-seconds retry-after body)
+        until (or (some->> secs (.plusSeconds ^Instant from))
+                  (retry-date retry-after)
+                  (.plusSeconds ^Instant from 60))
+        sentence (or (provider-note 429 (or (some-> retry-after str not-empty)
+                                            (some-> secs str)))
+                     "The Routine has no free run.")]
+    (try-act! eng row :throttle {:note (clip sentence)
+                                 :retry_after (str until)})
+    nil))
+
 (defn own-link-of
   "The link a person put on THIS row (R-12.18), or nil. A map of the
   two fields, so every caller reads a link the same shape whether it
@@ -1548,10 +1641,13 @@
   answer on the row.
 
   2xx stamps `last_fired_at` and `last_run_url` through `fired`, which
-  also clears the note — so the first fire that goes out heals a row a
-  429 broke. A 400 is the provider saying the Routine is paused: the
-  row pauses where it can, and says the sentence where it cannot. A
-  401, a 404 and anything else land as a note on a broken row.
+  also clears the note and `retry_after`. A 429, or any answer that
+  names a retry time, is a throttle: the row stays live through
+  `throttle`, records `retry_after`, and keeps its wake pending for the
+  wake loop to send after that time. A 400 is the provider saying the
+  Routine is paused: the row pauses where it can, and says the sentence
+  where it cannot. A 401, a 403, a 404 and anything else land as a note
+  on a broken row.
 
   Nothing here re-throws and nothing here retries. A throwing consumer
   parks its cursor, and a retry inside a drain is a second run of a
@@ -1582,9 +1678,13 @@
                        (some-> (:session-url answer) str not-empty)
                        (assoc :last_run_url (str (:session-url answer))))))
          (catch Exception e
-           (let [{:keys [status retry-after]} (ex-data e)
+           (let [{:keys [status retry-after body]} (ex-data e)
                  sentence (provider-note status retry-after)]
              (cond
+               ;; a throttle: the row stays live and the wake waits
+               (throttle? status retry-after body)
+               (throttle! eng schedule-row retry-after body)
+
                ;; a paused Routine, where the row can say so as a state
                (and (= 400 (some-> status long)) (= :live (:state schedule-row)))
                (try-act! eng schedule-row :pause nil)

@@ -261,6 +261,22 @@
     (is (= "a-different-shape"
            (:guard (refusal #(act! :day_plan (:id plan) :reshape {:shape "workday"})))))))
 
+(deftest reshape-to-the-same-shape-fills-a-day-with-nothing-ahead
+  (reset! clock (at 6 0))
+  (let [plan (plan! today)
+        pid (:id plan)]
+    ;; every window let go: the day stands empty ahead, as one minted
+    ;; before its templates does
+    (doseq [s (spans-of pid)]
+      (act! :span (:id s) :skip nil))
+    (is (nil? (refusal #(act! :day_plan pid :reshape {:shape "workday"})))
+        "nothing is ahead, so the same shape may mint the day again")
+    (is (= [[(at 9 0) (at 12 0)] [(at 13 0) (at 17 0)] [(at 19 0) (at 21 0)]]
+           (->> (spans-of pid)
+                (filter #(= :planned (:state %)))
+                (mapv window)))
+        "the workday's windows arrive again")))
+
 ;; ── § 3 set, replan, close ──────────────────────────────────────────
 
 (deftest replan-opens-a-set-day-while-something-is-ahead
