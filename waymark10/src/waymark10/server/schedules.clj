@@ -1811,11 +1811,16 @@
                 ;; no instructions mints nothing: its Routine holds a
                 ;; standing key of its own, and the text is the
                 ;; person's prose alone.
+                ;; The key also keeps the walk row a wake's text names,
+                ;; so the sit hands the run that row (`seats/fire-key-row`).
                 (fire! eng (fire-adapter-of eng) row
                        (fire-text seat-row
                                   (some-> (get-in t [:inputs :text])
                                           str not-empty)
-                                  (seats/hold-fire-key! eng seat-row (:at t)))
+                                  (seats/hold-fire-key!
+                                   eng seat-row (:at t)
+                                   (some-> (get-in t [:inputs :text])
+                                           str not-empty)))
                        (:at t)
                        (link-of eng row seat-row)))))))
 

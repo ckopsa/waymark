@@ -1394,3 +1394,100 @@
 
     (testing "a role taken away is gone from the next call"
       (is (= #{} (roles-seen))))))
+
+;; ── several sittings at once: each on its own row ─────────────────────
+;;
+;; A seat whose `max_open_sittings` is above one runs several sits at
+;; once. The claim of a row is taken in the transaction that finds it
+;; free (`seats/claim-rows-atomically!`), so two sits at the same
+;; instant never walk one row, and a fire whose text names a row walks
+;; that row, or the next free one when another sitting holds it.
+
+(deftest two-sits-in-the-same-instant-never-get-the-same-row
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        note (post! eng "The school note" "house" "2026-09-18T08:00:00Z")
+        sit-as! (fn [run]
+                  (let [[sid _] (initialize! h)
+                        r (tool h (with-session sid) "waymark_sit"
+                                {:key walk-key :session run})]
+                    [r (doc-of r)]))]
+    (dotimes [i 5]
+      (let [start (java.util.concurrent.CountDownLatch. 1)
+            run! (fn [run]
+                   (future (.await start) (sit-as! run)))
+            a (run! (str "run-a-" i))
+            b (run! (str "run-b-" i))
+            _ (.countDown start)
+            [ra da] @a
+            [rb db] @b
+            rows-a (mapv :id (get-in da [:walk :rows]))
+            rows-b (mapv :id (get-in db [:walk :rows]))]
+        (testing (str "round " i ": both sits answer, each in its own sitting")
+          (is (false? (:isError ra)) (text-of ra))
+          (is (false? (:isError rb)) (text-of rb))
+          (is (not= (:sitting da) (:sitting db))))
+        (testing (str "round " i ": no row is handed twice")
+          (is (empty? (filter (set rows-a) rows-b)))
+          (is (= #{(str (:id gas)) (str (:id note))} (into (set rows-a) rows-b))
+              "and between them both rows are walked"))
+        ;; the claims end with the sittings, so the next round races
+        ;; for both rows again
+        (doseq [s [(:sitting da) (:sitting db)]]
+          (inv/invoke! eng :sitting (str s) :abandon nil
+                       {:principal seats/seats-actor}))))))
+
+(deftest a-fire-that-names-a-row-walks-that-row-or-the-next-free-one
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        seat (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3
+                                   :instructions fired-instructions})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        note (post! eng "The school note" "house" "2026-09-18T08:00:00Z")
+        ;; a wake's text: the transition as JSON, naming the row
+        text-of-wake (fn [row]
+                       (wire/write-json {:kind "post" :id (str (:id row))
+                                         :action "file" :from "queued"
+                                         :to "queued"}))
+        sit-fired! (fn [row run]
+                     (let [k (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                                   ((:now-fn eng))
+                                                   (text-of-wake row))
+                           [sid _] (initialize! h)
+                           r (tool h (with-session sid) "waymark_sit"
+                                   {:key k :seat "post-clerk" :session run})]
+                       [r (doc-of r)]))]
+
+    (testing "the key keeps the row the fire text named"
+      (let [k (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                    ((:now-fn eng)) (text-of-wake gas))]
+        (is (= (str (:id gas))
+               (seats/fire-key-row eng (seat-row-of eng (:id seat)) k)))
+        (is (nil? (seats/fire-key-row
+                   eng (seat-row-of eng (:id seat))
+                   (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                         ((:now-fn eng)) "Walk the queue.")))
+            "a person's prose names no row")))
+
+    (let [[r1 first-run] (sit-fired! note "run-note")]
+      (testing "the fire named the newer row, and the sit hands that row alone"
+        (is (false? (:isError r1)) (text-of r1))
+        (is (= [(str (:id note))] (mapv :id (get-in first-run [:walk :rows])))
+            "not the queue's oldest row: the row the run was sent to walk")))
+
+    (let [[r2 second-run] (sit-fired! note "run-again")]
+      (testing "a fire naming a row another sitting holds is handed the next
+                free row, and told so"
+        (is (false? (:isError r2)) (text-of r2))
+        (is (= [(str (:id gas))] (mapv :id (get-in second-run [:walk :rows]))))
+        (is (str/includes? (str (:note second-run)) (str (:id note))))
+        (is (str/includes? (str (:note second-run))
+                           "held by another open sitting"))))
+
+    (let [[r3 third] (sit-fired! gas "run-late")]
+      (testing "a run that finds every row held is handed none, and told to stop"
+        (is (false? (:isError r3)) (text-of r3))
+        (is (empty? (get-in third [:walk :rows])))
+        (is (str/includes? (str (:note third)) "nothing for you to walk"))))))

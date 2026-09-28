@@ -72,6 +72,19 @@
   asks the same question of every pending row on a clock (the gap is
   a duration, and nothing commits when a duration ends).
 
+  ── a seat that runs several sittings at once ──────────────────────
+
+  A seat's `max_open_sittings` is one by default, and one is the seat
+  exactly as above. Above one, part 1 reads as a count: the wake is
+  held once the seat has that many runs going, the OPEN sittings and
+  the fires still on their way to a sit (`in-flight`). Short of that,
+  while a row of the seat's walk is left that no open sitting holds
+  and no run on its way will take, the wake fires another run, and
+  part 2's gap does not hold it: a slot is not a busy queue. When a
+  sitting closes, such a seat fires again if a slot and such a row
+  are left, pending or not. Each sit then claims its own row
+  (`seats/claim-rows-atomically!`).
+
   ── the settle, and which edge a wake fires on ─────────────────────
 
   The damper above holds the matches AFTER the first one. The first
@@ -184,6 +197,12 @@
   (long (or (get-in seat-row [:data :fire_interval_seconds])
             default-fire-interval-seconds)))
 
+(defn max-open-of
+  "The seat's `max_open_sittings`, or one for a row written before the
+  field existed. One is the seat as it always was."
+  [seat-row]
+  (max 1 (long (or (get-in seat-row [:data :max_open_sittings]) 1))))
+
 (defn- active-seats
   "Every active seat a wake can reach, as the three facts a match
   needs: its id, what wakes it (`effective-wake-on`, so a walk seat's
@@ -205,7 +224,8 @@
                 (map (fn [row]
                        {:id (str (:id row))
                         :wake-on (seats/effective-wake-on row (walk-rdef row))
-                        :interval (interval-of row)})))
+                        :interval (interval-of row)
+                        :max-open (max-open-of row)})))
           (rows-where eng :seat {:state :active} seat-page))))
 
 (defn- seats-of
@@ -570,6 +590,135 @@
       (warn! "seat " seat-id " would not fire — " (ex-message e))
       nil)))
 
+;; ── the slots: a seat that runs several sittings at once ──────────────
+
+(def ^:private in-flight-seconds
+  "How long a fire counts as a run on its way to a sit: the missed-fire
+  sweep's own deadline (`default-sit-deadline-seconds`). A run that has
+  not sat by then has died, and the sweep writes it down."
+  600)
+
+(def ^:private in-flight-page
+  "The most of the seat's newest transitions, and of its newest
+  sittings, one count of the runs in flight reads."
+  50)
+
+(def ^:private queue-page
+  "The most walk rows one count of the unclaimed rows reads."
+  200)
+
+(defn- in-flight
+  "How many fires of this seat are runs that have not sat yet. A fire
+  goes out before its run opens a sitting, so a burst of wakes that
+  counted open sittings alone would read every slot free and fire past
+  the ceiling. The fires of the last `in-flight-seconds` are paired,
+  oldest first, with the sittings born after them, and a fire no
+  sitting took is a run still starting."
+  [eng seat-id ^Instant at]
+  (let [st (:storage eng)
+        cut (.minusSeconds at (long in-flight-seconds))
+        recent (fn [v] (when-some [i (instant-of v)]
+                         (when (.isAfter ^Instant i cut) i)))
+        [fires starts]
+        (store/with-tx st
+          (fn [tx]
+            [(->> (store/transitions st tx {:kind :seat
+                                            :resource-id (str seat-id)}
+                                     {:limit in-flight-page :newest-first true})
+                  (filter #(= "fire" (some-> (:action %) name)))
+                  (keep #(recent (:at %)))
+                  (sort))
+             ;; the row's own birth, on the clock the log's `at` is
+             ;; written by; a missed sitting is the sweep's record of a
+             ;; fire older than the window, and took none of these
+             (->> (store/query-rows st tx :sitting {:seat (str seat-id)}
+                                    {:limit in-flight-page :newest-first true})
+                  (remove #(true? (get-in % [:data :missed])))
+                  (keep #(recent (or (:created-at %)
+                                     (get-in % [:data :started_at]))))
+                  (sort))]))]
+    (loop [fs fires ss starts]
+      (cond
+        (empty? fs) 0
+        (empty? ss) (count fs)
+        ;; a sitting born before the oldest fire left took none of them
+        (.isBefore ^Instant (first ss) ^Instant (first fs)) (recur fs (rest ss))
+        :else (recur (rest fs) (rest ss))))))
+
+(defn- walk-query
+  "The kind the seat's sit walks and the filter it walks it under, as
+  [kind filter-map], or nil when the seat walks nothing this engine
+  serves: the judgment's `queue` for a seat that says one, and the
+  walk's scope entry filter otherwise (`mcp/walk-of`'s own choice)."
+  [eng seat-row]
+  (when-some [walk (some->> (get-in seat-row [:data :walk]) str not-empty
+                            keyword)]
+    (when (serves? eng walk)
+      [walk (if-some [judgment (raw-row eng :judgment
+                                        (some-> (get-in seat-row [:data :judgment])
+                                                str not-empty))]
+              (get-in judgment [:data :queue])
+              (seats/walk-filter seat-row))])))
+
+(defn- ids-under
+  "`count-under`'s rows by id rather than by number, at most
+  `queue-page` of them, as a set of strings; nil when the kind is not
+  served or the filter cannot be answered."
+  [eng kind filter-map]
+  (when-some [rdef (get (inv/resources eng) kind)]
+    (try
+      (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
+            conds (:conds (collections/parse-query rdef params))
+            st (:storage eng)]
+        (into #{} (map str)
+              (store/with-tx st
+                (fn [tx] (store/ids-matching st tx (:kind rdef) conds
+                                             queue-page)))))
+      (catch Exception e
+        (warn! "the walk over " (name kind) " could not be read — "
+               (ex-message e))
+        nil))))
+
+(defn- slots
+  "What a seat with several slots has in hand at `at`. `:busy` is its
+  open sittings and the runs on their way to a sit; `:free` is the rows
+  of its walk no open sitting holds, less the rows those runs will
+  take. A seat that walks nothing has no free row."
+  [eng seat-row ^Instant at]
+  (let [seat-id (str (:id seat-row))
+        flying (long (in-flight eng seat-id at))
+        queue (when-some [[kind f] (walk-query eng seat-row)]
+                (ids-under eng kind f))
+        unclaimed (count (remove (seats/claimed-rows eng seat-id nil) queue))]
+    {:busy (+ (long (seats/open-sitting-count eng seat-id)) flying)
+     :free (max 0 (- unclaimed flying))}))
+
+(defn- damped?
+  "Does the damper hold a wake of this seat at `at` (R-12.22's parts 1
+  and 2)? With one slot: an open sitting, or a fire inside the gap.
+  With several: every slot busy; or no free row, and then an open
+  sitting or the gap holds it as it always did. A free slot for a free
+  row is not held by the gap."
+  [eng seat-row schedule-row ^Instant at]
+  (let [recent? (fired-recently? schedule-row (interval-of seat-row) at)
+        max-open (max-open-of seat-row)]
+    (if (= 1 max-open)
+      (or (some? (seats/open-sitting-for-seat eng (:id seat-row))) recent?)
+      (let [{:keys [busy free]} (slots eng seat-row at)]
+        (or (>= (long busy) max-open)
+            (and (not (pos? (long free)))
+                 (or (pos? (long busy)) recent?)))))))
+
+(defn- free-slot?
+  "Has a seat with several slots a slot free AND a row for it? What a
+  closing sitting asks before it fires another run with nothing
+  pending."
+  [eng seat-row ^Instant at]
+  (let [max-open (max-open-of seat-row)]
+    (and (< 1 max-open)
+         (let [{:keys [busy free]} (slots eng seat-row at)]
+           (and (< (long busy) max-open) (pos? (long free)))))))
+
 (defn- wake-seat!
   "One active seat, one transition it asked to be woken by, and the
   text that transition earned (`wake-for`: the row that moved,
@@ -590,8 +739,9 @@
   settled entry has no first fire: the leading edge is the very thing
   it gives up.
 
-  Damped — an open sitting, or a fire inside this seat's gap — the
-  match is REMEMBERED as `wake_pending` and nothing goes out.
+  Damped — an open sitting, or a fire inside this seat's gap; for a
+  seat of several slots, `damped?` — the match is REMEMBERED as
+  `wake_pending` and nothing goes out.
   → true when a fire went out."
   [eng seat t ^Instant at {:keys [text settle]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
@@ -600,8 +750,10 @@
         settle
         (mark-settling! eng row (due-at row at settle))
 
-        (or (some? (seats/open-sitting-for-seat eng (:id seat)))
-            (fired-recently? row (:interval seat) at))
+        (if (< 1 (long (or (:max-open seat) 1)))
+          (damped? eng (raw-row eng :seat (:id seat)) row at)
+          (or (some? (seats/open-sitting-for-seat eng (:id seat)))
+              (fired-recently? row (:interval seat) at)))
         (mark-pending! eng row)
 
         ;; the fuel wall: the wake waits, and says it was held
@@ -623,14 +775,8 @@
   subtract the subjects already judged, so it can only read high: a
   zero here is a zero on the sit's page too."
   [eng seat-row]
-  (when-some [walk (some->> (get-in seat-row [:data :walk]) str not-empty
-                            keyword)]
-    (when (serves? eng walk)
-      (if-some [judgment (raw-row eng :judgment
-                                  (some-> (get-in seat-row [:data :judgment])
-                                          str not-empty))]
-        (count-under eng walk (get-in judgment [:data :queue]))
-        (count-under eng walk (seats/walk-filter seat-row))))))
+  (when-some [[walk f] (walk-query eng seat-row)]
+    (count-under eng walk f)))
 
 (defn- empty-walk?
   "Would a release put this seat's session in front of an empty queue?
@@ -660,15 +806,25 @@
   A seat whose walk has NO ROW left (`empty-walk?`) is not fired: the
   wake is often the last sitting's own `complete`, and that sitting
   took the row. Its flag is cleared without a fire, and one line says
-  so. → true when a fire went out."
-  [eng seat-row schedule-row key ^Instant at]
+  so.
+
+  A seat of several slots is held by `damped?` rather than by the two
+  walls above, and `slot?` (a sitting of it closed) lets it fire with
+  NOTHING pending when a slot and a row for it are free (`free-slot?`).
+  → true when a fire went out."
+  ([eng seat-row schedule-row key at]
+   (release! eng seat-row schedule-row key at false))
+  ([eng seat-row schedule-row key ^Instant at slot?]
   (when (and seat-row schedule-row
-             (get-in schedule-row [:data :wake_pending])
              (= :active (:state seat-row))
+             (or (get-in schedule-row [:data :wake_pending])
+                 (and slot? (free-slot? eng seat-row at)))
              (schedules/linked? eng schedule-row)
              (settled? schedule-row at)
-             (not (fired-recently? schedule-row (interval-of seat-row) at))
-             (nil? (seats/open-sitting-for-seat eng (:id seat-row))))
+             (if (< 1 (max-open-of seat-row))
+               (not (damped? eng seat-row schedule-row at))
+               (and (not (fired-recently? schedule-row (interval-of seat-row) at))
+                    (nil? (seats/open-sitting-for-seat eng (:id seat-row))))))
     (cond
       (empty-walk? eng seat-row)
       (do (write-pending! eng schedule-row false)
@@ -684,12 +840,13 @@
       :else
       (when (fire! eng (:id seat-row) nil key)
         (stamp-fired! eng schedule-row at true)
-        true))))
+        true)))))
 
 (defn- release-for-sitting!
   "A sitting closed or abandoned: the seat it belonged to may have a
   wake waiting on exactly that. Keyed by the sitting's own transition,
-  so a replayed close releases once."
+  so a replayed close releases once. A seat of several slots may fire
+  with nothing pending, when a slot and a row for it are free."
   [eng t ^Instant at]
   (when-some [sitting (raw-row eng :sitting (:resource-id t))]
     (when-some [seat-id (some-> (get-in sitting [:data :seat]) str not-empty)]
@@ -697,7 +854,8 @@
                 (raw-row eng :seat seat-id)
                 (schedules/schedule-for-seat eng seat-id)
                 (str "wake:" seat-id ":release:" (:id t))
-                at))))
+                at
+                true))))
 
 (defn sweep-pending!
   "Every schedule row carrying a pending wake, released where the
