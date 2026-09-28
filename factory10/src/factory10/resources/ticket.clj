@@ -640,7 +640,8 @@
    [:merge_waits {:optional true
                   :examples ["waits on 01HZQ7Y7F2R3W4V5X6Y7Z8A9B1 (open) to merge"]
                   :x-display
-                  {:label "Waits to merge on"
+                  {:widget "prose"
+                   :label "Waits to merge on"
                    :help "Why this ticket's green pull request is not merging: the tickets it merges after that are not done yet, each with its state. Empty when nothing holds it."}}
     [:maybe [:string {:max 500}]]]])
 
