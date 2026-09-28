@@ -480,7 +480,9 @@
              ;; the transitions a damped wake heard (waymark-fp62.21)
              :wake_heard
              ;; the runner pool and the link the last run took (d16b71bf)
-             :runners :last_runner}
+             :runners :last_runner
+             ;; the order the pool is tried in (529deb73)
+             :runner_order}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
       (doseq [a [:claim :observe :pause :resume :fail :end :fired]]
