@@ -141,29 +141,30 @@
 (defn- system? [ctx]
   (= :system (get-in ctx [:principal :type])))
 
-(def ^:private deploy-only
-  (g/guard {:name :deploy-writes-the-law
-            :explain "The law is revised by the deploy at boot, never over the wire."
-            :reads [:principal]
-            :check (fn [_ _ ctx] (if (system? ctx) (t/allow) (t/deny)))}))
+(g/defguard ^:private deploy-only
+  {:name :deploy-writes-the-law
+   :explain "The law is revised by the deploy at boot, never over the wire."
+   :reads [:principal]}
+  [_ _ ctx]
+  (if (system? ctx) (t/allow) (t/deny)))
 
-(def ^:private deploy-only-hidden
-  (g/guard {:name :deploy-writes-the-law
-            :explain "The law is revised by the deploy at boot, never over the wire."
-            :reads [:principal]
-            :hide true
-            :check (fn [_ _ ctx] (if (system? ctx) (t/allow) (t/deny)))}))
+(g/defguard ^:private deploy-only-hidden
+  {:name :deploy-writes-the-law
+   :explain "The law is revised by the deploy at boot, never over the wire."
+   :reads [:principal]
+   :hide true}
+  [_ _ ctx]
+  (if (system? ctx) (t/allow) (t/deny)))
 
-(def ^:private population-shape
-  (g/guard {:name :population-shape
-            :explain "A population is where={…} or after=true — exactly one."
-            :needs-input true
-            :check (fn [_ inp _]
-                     (let [w (:where inp)]
-                       (if (not= (boolean (and (map? w) (seq w)))
-                                 (boolean (:after inp)))
-                         (t/allow)
-                         (t/deny))))}))
+(g/defguard ^:private population-shape
+  {:explain "A population is where={…} or after=true — exactly one."
+   :needs-input true}
+  [_ inp _]
+  (let [w (:where inp)]
+    (if (not= (boolean (and (map? w) (seq w)))
+              (boolean (:after inp)))
+      (t/allow)
+      (t/deny))))
 
 (def ^:private data-law-only
   (g/expr {:name :data-law-pilots
@@ -175,22 +176,21 @@
            :when '(= (data :diff_class) "data_law")
            :explain "Blast radius is measured for data-law diffs — a code-or-shape diff promotes totally; there are no stored parameters to compare."}))
 
-(def ^:private measurable
-  ;; input-free (no judges → :needs-input false), so render's probe
-  ;; grades it and the action narrates honestly before anyone POSTs
-  (g/guard {:name :redefines-derived-facts
-            :explain "This proposal redefines no derived fact; there is no blast radius to measure."
-            :check (fn [row _ _]
-                     (let [declared (into #{}
-                                          (map name)
-                                          (keys (get-in row [:data :fingerprint
-                                                             :derived])))
-                           ;; a genesis definition (never diffed against a
-                           ;; prior revision) carries no :diff — nothing
-                           ;; redefines a derived fact when nothing changed
-                           stale (when-some [diff (get-in row [:data :diff])]
-                                   (fp/stale-facts diff))]
-                       (if (some declared stale) (t/allow) (t/deny))))}))
+;; input-free (no judges → :needs-input false), so render's probe
+;; grades it and the action narrates honestly before anyone POSTs
+(g/defguard ^:private measurable
+  {:name :redefines-derived-facts
+   :explain "This proposal redefines no derived fact; there is no blast radius to measure."}
+  [row _ _]
+  (let [declared (into #{}
+                       (map name)
+                       (keys (get-in row [:data :fingerprint :derived])))
+        ;; a genesis definition (never diffed against a prior revision)
+        ;; carries no :diff — nothing redefines a derived fact when
+        ;; nothing changed
+        stale (when-some [diff (get-in row [:data :diff])]
+                (fp/stale-facts diff))]
+    (if (some declared stale) (t/allow) (t/deny))))
 
 ;; ── the population grammar (batch C, waymark9's check_population) ──
 
