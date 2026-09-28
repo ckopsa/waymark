@@ -308,6 +308,7 @@
 
 (g/defguard audience-only
   {:reads [:principal]
+   :open "A grant is offered to one audience and no door re-addresses it; a caller who wants access of its own files an ask."
    :explain "Only the grant's audience may accept it."}
   [row _inp ctx]
   (let [p (:principal ctx)]
@@ -317,6 +318,7 @@
 
 (g/defguard no-self-dealing
   {:reads [:principal]
+   :open "The holder's own hand is the wall: the principal who offered the grant revokes it, and it lapses by itself at its expiry."
    :explain "A holder cannot judge its own access; someone else revokes it."}
   [row _inp ctx]
   (let [p (:principal ctx)]
@@ -328,6 +330,7 @@
   (g/expr {:name :past-expiry
            :when '(and (is-set (data :expires_at))
                        (<= (data :expires_at) (now)))
+           :open "Time clears it: the refusal carries the grant's own expiry as the moment this door opens."
            :explain "The grant has not reached its expiry."
            :becomes-available-at (fn [row] (get-in row [:data :expires_at]))}))
 
@@ -529,6 +532,7 @@
 
 (g/defguard not-a-substitute
   {:reads [:principal :grant]
+   :open "No door turns a substitute into the seat's full sitter mid-session; the full sitter's own session writes the memory."
    :explain "A substitute reads the seat's memory and does not write it. The seat's own sitter writes here."}
   ;; R-8.2, and the reason is CONTINUITY, not capability: the memory is
   ;; the seat's voice across sessions, and a stand-in that wrote it
@@ -570,6 +574,7 @@
 
 (g/defguard a-seat-or-a-scope
   {:judges [:seat]
+   :open "The way out is in this same form: drop the seat or drop the scope, and no other door changes the verdict."
    :explain "A grant CITES A SEAT or CARRIES A SCOPE, never both. A seat grant's authority is the seat row, read at every request, so a scope written beside it would be a second and frozen copy of exactly the thing the seat exists to keep live — and the two would disagree the first time somebody restated the seat. Drop one."}
   [_row inp _ctx]
   (if (and (some? (nonblank (:seat inp))) (seq (:scope inp)))
@@ -630,6 +635,7 @@
 (g/defguard approval-route-only
   {:reads [:principal]
    :hide true
+   :remedies [:approval_request/create]
    :explain "Scope extends only through an approved access request, never by hand."}
   [_row _inp ctx]
   (if (= :system (get-in ctx [:principal :type]))
@@ -919,6 +925,7 @@
 
 (g/defguard requester-holds-the-grant
   {:reads [:principal :grant]
+   :open "The grants you hold are the grants collection, one query away; leave grant_id empty and the ask is a bootstrap that mints its own."
    :explain "An access request extends a grant its requester holds; the named grant's audience must be you."}
   [_row inp ctx]
   (let [p (:principal ctx)]
@@ -994,6 +1001,7 @@
 
 (g/defguard requester-is-named
   {:reads [:principal]
+   :open "No door names an anonymous caller: sign in, or sit in a seat, and ask again."
    :explain "An access request names its requester; an anonymous ask would grant nobody."}
   [_row _inp ctx]
   (if (= (:id (:principal ctx)) (:id t/anonymous))
@@ -1077,6 +1085,7 @@
   {:judges [:expires_at]
    :reads [:now :seat]
    :vars [:max_hours :asked :whose]
+   :open "The ceiling is in the sentence; the way out is an earlier expires_at in this same form, and an approved follow-up ask extends."
    :explain "A leash is short — at most {max_hours} hours{whose}; this ask runs to {asked}. Propose less; an approved follow-up ask can always extend."}
   [_row inp ctx]
   (if-some [^java.time.Instant exp (:expires_at inp)]
@@ -1103,6 +1112,7 @@
 
 (g/defguard ask-names-one-thing
   {:judges [:seat]
+   :remedies [:approval_request/create]
    :explain "An ask names a SEAT or spells a SCOPE, never both. A seat ask asks to sit in an office somebody already opened, and what it opens is the office's own scope, read fresh at every request; a scope ask spells its leash entry by entry. File two asks if you want both."}
   [_row inp _ctx]
   (if (and (some? (nonblank (:seat inp))) (seq (:scope inp)))
@@ -1113,6 +1123,7 @@
   {:judges [:scope]
    :reads [:grant]
    :vars [:grant_id]
+   :open "A seat grant widens only by a restate of its seat, the opener's door on the seat row; this ask drops its scope and keeps its expiry."
    :explain "The grant {grant_id} sits in a seat, and a seat grant has no scope to widen: its authority is the seat's, restated on the seat by the person who opened it (R-5.3). An extend ask for it carries the new expiry and nothing else."}
   [_row inp ctx]
   (let [gid (nonblank (:grant_id inp))]
@@ -1192,10 +1203,12 @@
   (g/not-the-field
    :requested_by
    {:name :someone-else-decides
+    :open "The wall is about who: any principal but the requester decides, and no door makes the requester another one."
     :explain "The requester cannot judge its own ask; another principal decides."}))
 
 (g/defguard grant-still-accepting
   {:reads [:grant]
+   :open "A revoked or lapsed grant never comes back; the requester files a fresh anchorless ask, and its approval mints a new one."
    :explain "The named grant no longer accepts scope; offer a fresh grant instead."}
   [row _inp ctx]
   (if-some [read (:read ctx)]
@@ -1217,6 +1230,7 @@
 (g/defguard seat-has-one-sitter
   {:reads [:principal :now :grant :seat]
    :vars [:seat :sitter]
+   :open "The standing grant clears by its own revoke or its expiry, and a substitute ask is not limited; neither is a door on this ask."
    :explain "The seat {seat} is taken: {sitter} holds a live grant sitting in it. One office, one full sitter — two sessions under one seat's authority is two hands nobody can tell apart in the log afterwards. A SUBSTITUTE is not limited and this ask can be filed as one; otherwise revoke the grant that stands, or wait for it to lapse."}
   [row _inp ctx]
   (let [nm (nonblank (get-in row [:data :seat]))
@@ -1312,7 +1326,8 @@
               {:label "What you need it for"
                :help "The work this access is for, in one sentence. The approver is deciding about the TASK as much as the scope — 'file the week's receipts' earns a yes that 'admin' does not."}}
     :by      :requested_by               ; stamped from the principal
-    :decider {:not :requested_by         ; the field wall, not four-eyes:
+    :decider {:not {:field :requested_by ; the field wall, not four-eyes:
+                    :open "The wall is about who: any principal but the requester decides, and no door makes the requester another one."}
               ;; a decision row's requester is stamped by :on-create,
               ;; before any transition exists to be the actor of
               :name :someone-else-decides
