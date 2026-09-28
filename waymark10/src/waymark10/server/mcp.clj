@@ -3253,6 +3253,11 @@
             ;; reads the sitting's id.
             transcript-key (when sitting
                              (transcripts/issue-key! eng seat sitting))
+            ;; g''' · the inbox's key, for a seat that declares an
+            ;; `inbox`: a fresh key at each sit, alive while the
+            ;; sitting is open (seats/issue-inbox-key!)
+            inbox-key (when sitting
+                        (seats/issue-inbox-key! eng seat sitting))
             ;; h · the bind, BEFORE the walk is read: the session is
             ;; the seat's from this moment, whatever the queue answers
             _ (bind-session! eng sid {:seat seat-id :sitter sitter
@@ -3332,6 +3337,13 @@
                                (:origin session)
                                ""))
                     "key" transcript-key})
+            inbox-key
+            (assoc "inbox"
+                   {"url" (seats/inbox-url
+                           (or (get-in eng [:services :transcripts :public-origin])
+                               (:origin session)
+                               ""))
+                    "key" inbox-key})
             halted (assoc "halted" halted)
             walk (assoc "walk" walk)
             said (assoc "change" said)
