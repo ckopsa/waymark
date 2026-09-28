@@ -17,7 +17,7 @@
  ;; where the engine and a person reach this server. It goes into every
  ;; run page URL, which the engine writes onto the schedule row as
  ;; `last_run_url`, so it must be reachable from both.
- :public-url "http://192.168.1.40:8112"
+ :public-url "http://192.168.1.231:8112" ; big-colt
 
  ;; a clone of ckopsa/waymark-seat (R-8.1): CLAUDE.md,
  ;; .claude/settings.json, .claude/hooks/sitting-close.sh, and nothing

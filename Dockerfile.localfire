@@ -1,7 +1,9 @@
 # Serves localfire (spec-local-fire.md R-4.1): the house's own fire
 # endpoint, which starts Claude Code sessions in the seat place.
 # Built and pushed by .github/workflows/localfire.yml
-# (linux/arm64 → ghcr.io/ckopsa/localfire:<short sha>).
+# (linux/amd64 + linux/arm64 → ghcr.io/ckopsa/localfire:<short sha>).
+# Nothing here is arch-specific: nodesource and npm pick the build
+# platform's Node and Claude Code.
 FROM clojure:temurin-21-tools-deps-bookworm-slim
 
 # The one pin for the CLI every fired session runs. Bump it here.
@@ -44,7 +46,7 @@ COPY --chown=localfire:localfire localfire/src/ src/
 COPY seat/ /srv/waymark-seat/
 
 ENV HOME=/data
-EXPOSE 8111
+EXPOSE 8112
 
 # /etc/localfire/localfire.edn comes from the Nomad job's template;
 # LOCALFIRE_TOKEN from its environment.

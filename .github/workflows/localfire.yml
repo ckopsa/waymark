@@ -1,7 +1,8 @@
 # Builds the localfire image (Dockerfile.localfire) and, on main, names
 # it to the cluster. Built the way image.yml builds workqueue10: GHCR
-# with the built-in GITHUB_TOKEN, an arm64 runner so qemu never enters
-# it, and the bare short sha as the tag.
+# with the built-in GITHUB_TOKEN and the bare short sha as the tag. The
+# image is a multi-arch manifest (linux/amd64 for big-colt, linux/arm64):
+# an amd64 runner builds its own half natively and qemu builds arm64.
 #
 # The deploy here only WRITES the tag to nomad/jobs/localfire/deploy.
 # It dispatches nothing and restarts nothing: the localfire job reads
@@ -31,7 +32,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -46,16 +47,22 @@ jobs:
         # `git rev-parse --short HEAD`, as image.yml and the Makefile.
         run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      # buildx needs qemu for the arm64 half; amd64 is native here.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: docker/setup-buildx-action@v3
 
-      # Build into the local daemon first, so the checks below run the
-      # exact image before anything is published.
+      # Build the amd64 image into the local daemon first, so the checks
+      # below run the exact image big-colt runs before anything is
+      # published. The daemon loads one platform only.
       - name: Build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.localfire
-          platforms: linux/arm64
+          platforms: linux/amd64
           load: true
           tags: localfire:ci
           cache-from: type=gha,scope=localfire
@@ -66,6 +73,20 @@ jobs:
         run: |
           docker run --rm --entrypoint claude localfire:ci --version
           docker run --rm --entrypoint test localfire:ci -f /srv/waymark-seat/.claude/settings.json
+
+      # A PR proves both platforms build; on main the Push step below
+      # builds (and publishes) both.
+      - name: Build both platforms
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.localfire
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha,scope=localfire
+          cache-to: type=gha,mode=max,scope=localfire
+          provenance: false
 
       # Skipped on pull_request: a PR proves the image builds, it does
       # not publish one.
@@ -87,18 +108,21 @@ jobs:
             type=raw,value=${{ steps.tag.outputs.sha }}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # Every layer is in the gha cache from the build above.
+      # One multi-arch manifest under the same tags. The amd64 layers are
+      # in the gha cache from the build above; arm64 comes from the cache
+      # the last PR or push left.
       - name: Push
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.localfire
-          platforms: linux/arm64
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=localfire
+          cache-to: type=gha,mode=max,scope=localfire
           provenance: false
 
   # Names the new tag to the cluster. Nothing is dispatched or restarted.

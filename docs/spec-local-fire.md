@@ -94,7 +94,7 @@ in the working directory. The file holds no secret.
 | key | type | meaning |
 |---|---|---|
 | `:port` | integer | the port. The rig table (docs/routines/rigs.md) gives 8112 |
-| `:public-url` | string | the URL the engine and a person reach the server at, for run pages. Example `http://192.168.1.40:8112` |
+| `:public-url` | string | the URL the engine and a person reach the server at, for run pages. Example `http://192.168.1.231:8112` (big-colt) |
 | `:place` | path | the place. The server copies it for each run and never writes in it |
 | `:runs-dir` | path | where run records live |
 | `:claude` | string | the Claude Code binary. Default `claude` |
