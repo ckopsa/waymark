@@ -72,8 +72,9 @@
   engine's own hand (bead waymark-fp62.6.3.9) — are named by no entry
   of the row's powers here, and that absence is what says which is
   which. The deployment's row also carries `bench.feedback` for a
-  seat that asks the rig again itself; that power's own narrowing is
-  pinned in waymark10/test/waymark10/narrow_power_test.clj."
+  person who asks the rig again; no code seat's scope holds it, and
+  that power's own narrowing is pinned in
+  waymark10/test/waymark10/narrow_power_test.clj."
   (mapv (fn [nm]
           {:name nm
            :description (str "The bench's " nm ".")
@@ -299,7 +300,9 @@
                   :transport "stdio"
                   :command "python3"
                   :args ["-m" "bench" "--stdio"]
-                  :powers bench-powers
+                  ;; a test that needs the deployment's wider row
+                  ;; scripts its powers on the rig's state first
+                  :powers (or (:powers @st) bench-powers)
                   :note "The bench, beside the engine."}
                  {:principal person})
     eng))
@@ -1900,6 +1903,39 @@
     (is (= {:bench.read "bench__read"} (get-in answer [:bench :tools]))
         "a power the scope does not name is ABSENT: the seat is told
          what it may call and nothing else")))
+
+(deftest a-code-seat-without-bench-feedback-gets-no-feedback-tool-and-still-the-feedback
+  (let [st (state)
+        ;; the deployment's row: it carries bench.feedback for a person
+        _ (swap! st assoc :powers
+                 (conj bench-powers {:power "bench.feedback" :tools ["feedback"]
+                                     :why false :constraints ["repo"]}))
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        _ (a-change! eng {})
+        _ (open-seat! eng {:scope [{:kind "change"
+                                    :actions ["submit" "discard" "stall"]}
+                                   {:kind "bench.read" :actions []
+                                    :filter {:repo a-repository}}]})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})
+        answer (doc-of sat)]
+    (is (false? (:isError sat)) (text-of sat))
+    (is (= {:bench.read "bench__read"} (get-in answer [:bench :tools]))
+        "the bench row carries bench.feedback, but the seat's scope does
+         not, so the sit hands no feedback tool")
+    (is (not-any? #(str/includes? (str (:note answer)) %)
+                  ["bench.feedback" "bench__feedback"])
+        "and the note names no feedback tool either")
+    (is (= 1 (count (calls-of st "bench__feedback")))
+        "the sit still asks the rig once, with the engine's own hand")
+    (is (= 31 (get-in answer [:feedback :pull_request :number]))
+        "so the run gets what the last round caused all the same")))
 
 (deftest a-code-seat-that-holds-bench-rerun-is-handed-the-rerun-tool
   (let [w (ask-world (conj ask-scope {:kind "bench.rerun" :actions []
