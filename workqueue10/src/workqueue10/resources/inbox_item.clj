@@ -72,10 +72,17 @@
   wrong, and the query that reads corrections per transition is what
   decides whether a cheaper model holds. An agent that could reopen
   its own dismissal could answer its own question, and the count would
-  be measuring nothing. So `the-correction-is-a-persons` refuses every
+  be measuring nothing. So `the-correction-is-a-persons` stops every
   agent hand, with the sentence that says what to do instead. It is
   NOT `unless-granted`: a grant that opened this door would be a grant
-  that let the house buy back its own correction count.
+  that let the house buy back its own correction count. An agent's
+  reopen is HELD for its person's tap instead (the guard declares
+  `:hold true`, waymark10.holds), and the person's Allow replays it.
+  THE COUNT READS THAT REPLAY AS THE PERSON'S: the replayed transition
+  carries `allowed_by` on its actor (held-calls/door-principal), and
+  `store/corrections-by-model` counts a transition a person allowed as
+  that person's, so the reopen is a correction of the seat's `no` and
+  never a seat's own move.
 
   `dismissed` IS NOT DECLARED TERMINAL, and the spec's own declaration
   said it was — see `:deviations`. The framework refuses a door out of
@@ -93,6 +100,7 @@
   exists to take off them."
   (:require [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
+            [waymark10.holds :as holds]
             [waymark10.text :as text]
             [waymark10.types :as t]))
 
@@ -216,23 +224,31 @@
 ;; ── the one wall ────────────────────────────────────────────────────
 
 (defguardfn the-correction-is-a-persons
-  {:reads [:principal]
-   :explain "Reopening a dismissal is the person's correction, and a correction an agent could make on its own is a correction the house cannot count — the reopens after a `no` are exactly how this seat's judgment is measured. If you dismissed this one and now think you were wrong, say so where an agent may: publish a finding that cites this row, and let a person tap."}
-  [_row _inp ctx]
+  {:reads [:principal :within]
+   :hold true
+   :explain "Reopening a dismissal is the person's correction, so an agent's reopen is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it and counts it as the person's correction — the reopens after a `no` are exactly how this seat's judgment is measured. If you dismissed this one and now think you were wrong, you may also publish a finding that cites this row, and let a person tap."
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a grant that opened it would let the house buy back its own correction count."}
+  [row _inp ctx]
   ;; The person-wall's own shape (`guards/unless-granted`'s first
   ;; clause), spelled by hand and NOT made grantable: every hand but an
   ;; agent's passes, including :system — the engine's own actor is not
   ;; the subject of this law — and no scope opens it, because a scope
   ;; that did would let the house buy back the number it is grading
-  ;; itself on.
-  (if (= :agent (:type (:principal ctx)))
-    (t/deny)
-    (t/allow)))
+  ;; itself on. An agent's reopen is HELD (waymark10.holds): the one
+  ;; agent call this admits is the engine's replay of the held call its
+  ;; person allowed, and that replay is counted as the person's. The
+  ;; held row is read only when `:within` names one, which no scenario
+  ;; and no wire request does, so the check tier's answer is the door's.
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :inbox_item :reopen (:id row)) (t/allow)
+    :else (t/deny)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
 ;; All three are CHECK-TIER — no `:given` rows, and the only guard in
-;; the tree reads `:principal` and nothing else — so `make check-queue`
+;; the tree reads `:principal`, and `:within` only when a replay names
+;; one, which no scenario does — so `make check-queue`
 ;; judges them with no database, in the same breath as the usability
 ;; warnings.
 
