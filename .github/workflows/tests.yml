@@ -87,8 +87,10 @@ on:
         default: false
       only:
         description: >-
-          Narrow this dispatch to one test namespace, or to one test as
-          ns/test-name. Empty runs everything, exactly as a push does.
+          Narrow this dispatch to test namespaces, or to single tests as
+          ns/test-name, several separated by spaces or commas; each
+          suite that holds one runs, narrowed to its own. Empty runs
+          everything, exactly as a push does.
           The bench's `test` tool dispatches with this so a seat can run
           the namespace it touched in a couple of minutes instead of
           waiting on the full PR run. A name that matches no suite fails
@@ -251,9 +253,9 @@ jobs:
       # ── WHICH SUITES A NARROWED DISPATCH RUNS ──────────────────────────
       #
       # Empty `only` (every push, every PR, a plain dispatch) answers yes
-      # to both and nothing below it changes. Set, it must name a test
-      # namespace in one of the trees, or ns/test-name inside one; a
-      # name found nowhere FAILS this job, and with it the gate, so a
+      # to both and nothing below it changes. Set, each of its tokens
+      # must name a test namespace in one of the trees, or
+      # ns/test-name inside one; a name found nowhere FAILS this job, and with it the gate, so a
       # misspelt namespace cannot report a green that ran nothing.
       # quick holds calendar10's and localfire's suites, test-factory
       # holds factory10's; the two sharded suites are narrowed by
@@ -266,32 +268,48 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, pathlib, re, sys
 
-          only = os.environ.get("ONLY", "").strip()
-          if not only:
+          # Several tokens may be given, split on spaces or commas; each
+          # is resolved on its own, and every suite that holds any of
+          # them runs.
+          tokens = [t for t in re.split(r"[\s,]+", os.environ.get("ONLY", "")) if t]
+          if not tokens:
               print("quick=true")
               print("factory=true")
               sys.exit(0)
 
-          # It becomes a --focus argument; hold it to the shape of a
+          # Each becomes a --focus argument; hold it to the shape of a
           # Clojure test id before anything reads it.
-          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9._*+!?<>=-]+)?", only):
-              print(f"only={only!r} is not a namespace or ns/test-name", file=sys.stderr)
+          shape = [t for t in tokens
+                   if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9._*+!?<>=-]+)?", t)]
+          if shape:
+              print(f"only: {', '.join(repr(t) for t in shape)} is not a namespace or ns/test-name",
+                    file=sys.stderr)
               sys.exit(1)
-          ns = only.split("/", 1)[0]
 
           def namespaces(root):
               base = pathlib.Path(root, "test")
               return {str(p.relative_to(base).with_suffix("")).replace("/", ".").replace("_", "-")
                       for p in base.rglob("*_test.clj")} if base.is_dir() else set()
 
-          home = [r for r in ("waymark10", "workqueue10", "calendar10", "localfire", "factory10")
-                  if ns in namespaces(r)]
-          if not home:
-              print(f"only={only}: no test namespace {ns} in any suite", file=sys.stderr)
+          suites = {r: namespaces(r) for r in
+                    ("waymark10", "workqueue10", "calendar10", "localfire", "factory10")}
+          homes = set()
+          missing = []
+          for t in tokens:
+              ns = t.split("/", 1)[0]
+              home = [r for r, names in suites.items() if ns in names]
+              if not home:
+                  missing.append(t)
+                  continue
+              homes.update(home)
+              print(f"only: {t} lives in {', '.join(home)}", file=sys.stderr)
+          # One unknown token refuses the whole list: a typo must not
+          # come back green beside the names that did resolve.
+          if missing:
+              print(f"only: no test namespace for {', '.join(missing)} in any suite", file=sys.stderr)
               sys.exit(1)
-          print(f"only={only}: {ns} lives in {', '.join(home)}", file=sys.stderr)
-          print(f"quick={str(bool({'calendar10', 'localfire'} & set(home))).lower()}")
-          print(f"factory={str('factory10' in home).lower()}")
+          print(f"quick={str(bool({'calendar10', 'localfire'} & homes)).lower()}")
+          print(f"factory={str('factory10' in homes).lower()}")
           PY
 
   # The cheap signal, first: neither of these needs a database, and a
@@ -375,7 +393,7 @@ jobs:
         env:
           N_WAYMARK10: ${{ env.SHARDS_WAYMARK10 }}
           N_WORKQUEUE10: ${{ env.SHARDS_WORKQUEUE10 }}
-          # Checked by `changes` already: a test id, or empty.
+          # Checked by `changes` already: test ids, or empty.
           ONLY: ${{ inputs.only }}
         run: |
           set -euo pipefail
@@ -452,20 +470,23 @@ jobs:
               return [{"id": i + 1, "nses": "\n".join(sorted(g))}
                       for i, g in enumerate(groups) if g]
 
-          # A narrowed dispatch: the one namespace (or ns/test-name, which
-          # kaocha's --focus takes as it is) in ONE shard of the suite
-          # that holds it, and an empty list for the other — its matrix
-          # job is skipped on that, since an empty matrix fails a run.
-          only = os.environ.get("ONLY", "").strip()
+          # A narrowed dispatch: the tokens (namespaces, or ns/test-names,
+          # which kaocha's --focus takes as they are) that live in a
+          # suite go in ONE shard of it, one per line so each gets its
+          # own --focus; a suite holding none gets an empty list — its
+          # matrix job is skipped on that, since an empty matrix fails
+          # a run. Split as `changes` splits them.
+          import re
+          only = [t for t in re.split(r"[\s,]+", os.environ.get("ONLY", "")) if t]
 
           for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
                                     ("workqueue10", "workqueue10", "N_WORKQUEUE10")):
               names = namespaces(root)
               if only:
-                  m = ([{"id": 1, "nses": only}]
-                       if only.split("/", 1)[0] in names else [])
+                  mine = [t for t in only if t.split("/", 1)[0] in names]
+                  m = [{"id": 1, "nses": "\n".join(mine)}] if mine else []
                   print(f"{key}={json.dumps(m)}")
-                  print(f"# {key}: only={only}, {len(m)} shard",
+                  print(f"# {key}: only={' '.join(mine)}, {len(m)} shard",
                         file=__import__("sys").stderr)
                   continue
               m = shards(names, int(os.environ[envvar]))
