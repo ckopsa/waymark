@@ -89,7 +89,7 @@
            ;; …and the runner link (runner-pool work, piece 1a): a
            ;; provider, a fire URL and a held token, which no
            ;; application's vocabulary names either
-           :runner_link}
+           :runner_link :runner_provider}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -115,7 +115,7 @@
     ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call
-             :transcript :transcript_entry :runner_link
+             :transcript :transcript_entry :runner_link :runner_provider
              :judgment :verdict}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
