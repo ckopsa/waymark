@@ -52,7 +52,6 @@ name the same one repository.
   {"kind": "bench.read",     "actions": [], "filter": {"repo": "ckopsa/waymark"}},
   {"kind": "bench.edit",     "actions": [], "filter": {"repo": "ckopsa/waymark"}},
   {"kind": "bench.pull",     "actions": [], "filter": {"repo": "ckopsa/waymark"}},
-  {"kind": "bench.feedback", "actions": [], "filter": {"repo": "ckopsa/waymark"}},
   {"kind": "bench.rerun",    "actions": [], "filter": {"repo": "ckopsa/waymark"}}
 ]
 ```
@@ -64,6 +63,15 @@ the sitting. The seat's scope and the bench `mcp_server` row's `powers`
 are rows, not code: a person adds the entry above to the seat's scope,
 and `{"power": "bench.rerun", "tools": ["rerun"], "constraints":
 ["repo"]}` to the bench row's powers, before the sit lists the tool.
+
+The scope has no `bench.feedback` entry. A firing never waits for the
+checks, so a seat asked the rig for feedback only at the start of the
+next round, and the sit already does that with the engine's own hand:
+its `feedback` carries what the last round caused (R-12.31). A failing
+change wakes the seat, and the next sit hands that failure to the
+fresh run. The sit's `bench.tools` follows the scope, so it names no
+feedback tool. The bench row keeps the `bench.feedback` power for a
+person's own use.
 
 Each other door on a change is the mirror's or a person's (`merge`,
 `close`, `reopen`, `observe`, `unstick`), and the seat does not get
@@ -181,9 +189,12 @@ Then, for each seat that model holds:
 You sit in the seat `code-seat`. The sit answers the charter, one
 ticket row with its doors, one change row with its doors, and the bench: the
 worktree, the orientation path, what submit means here, and the
-feedback of the last round. Call the bench through waymark_power with
-the tool names the sit lists under bench.tools. Read the orientation
-document first, with the tool listed for bench.read.
+feedback of the last round. The sit's feedback carries what the last
+round caused: the red checks with the failed step's log, and the
+review comments. Do not ask the bench for it again. Call the bench
+through waymark_power with the tool names the sit lists under
+bench.tools. Read the orientation document first, with the tool listed
+for bench.read.
 
 Build the ticket with those tools: the bench.find and bench.read tools
 to read, the bench.edit tool to change a file, the bench.pull tool when
@@ -227,9 +238,11 @@ that key and that value as `session`. Then you sit in the seat
 `code-seat`. The sit answers the charter, one ticket row with its doors,
 one change row with its doors, and the bench: the worktree, the
 orientation path, what submit means here, and the feedback of the last
-round. Call the bench through waymark_power with the tool names the sit
-lists under bench.tools. Read the orientation document first, with the
-tool listed for bench.read.
+round. The sit's feedback carries what the last round caused: the red
+checks with the failed step's log, and the review comments. Do not ask
+the bench for it again. Call the bench through waymark_power with the
+tool names the sit lists under bench.tools. Read the orientation
+document first, with the tool listed for bench.read.
 
 Build the ticket with those tools: the bench.find and bench.read tools
 to read, the bench.edit tool to change a file, the bench.pull tool when
