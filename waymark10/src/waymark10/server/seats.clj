@@ -152,7 +152,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.store :as store]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.math RoundingMode)
            (java.nio.charset StandardCharsets)
            (java.security MessageDigest SecureRandom)
@@ -1019,7 +1020,8 @@
    :keep_transcripts :transcript_days :inbox
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
-   :rows_per_firing :wake_on :fire_interval_seconds :delegates])
+   :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
+   :delegates])
 
 (def ^:private wall-inputs
   "The seat field each wall is judged against, for the walls a person
@@ -1590,6 +1592,11 @@
 (def ^:private charter-example
   "Decide whether a message asks something of this house, and say what it asks in one line. A receipt for something already bought asks nothing. A person waiting on an answer asks something, even when they are polite about it.")
 
+(def ^:private max-open-sittings-help
+  "The one help sentence `max_open_sittings` carries at the row, the
+  create door and the restate, with the budget said beside it."
+  "How many sittings of this seat may run at once, each on a row of its own. One keeps the seat as it always was: an open sitting holds every wake. Above one, a wake starts another run while a row of the walk is left that no open sitting holds. The week's fuel is unchanged and counts every sitting, so three sittings at once spend it three times as fast.")
+
 (def fire-keys-schema
   "What the seat keeps of the keys its firings carried (R-12.37): one
   entry for each key the engine minted and no sit has spent yet.
@@ -1620,7 +1627,15 @@
                 :x-display
                 {:label "When it was fired"
                  :help "The instant of the fire that minted this key. A key still unspent some minutes after it is a run that never sat."}}
-     :waymark/instant]]])
+     :waymark/instant]
+    ;; the walk row the fire text named, when it named one, so the sit
+    ;; of a seat that runs several sittings at once hands that row and
+    ;; claims it, or says another sitting holds it (`fire-key-row`)
+    [:row {:optional true
+           :x-display
+           {:label "The row it named"
+            :help "The id of the walk row this fire's text named. The sit that spends the key hands that row, unless another open sitting of the seat already holds it."}}
+     [:string {:min 1 :max 128}]]]])
 
 (def delegates-schema
   "THE CEILING (server/delegation, invariant 2). A seat that carries one
@@ -1822,6 +1837,17 @@
                              {:label "Quietest gap between wakes, in seconds"
                               :help "The least time between two wakes the seat's own events start. A match inside the gap does not fire; it waits, and the first wake after the gap lifts walks the queue. Raise it for a busy queue: every wake costs one sitting's fuel."}}
      [:int {:min 1 :max 86400}]]
+    ;; HOW MANY RUNS AT ONCE. One is the seat as it always was: an open
+    ;; sitting holds every wake. Above one, a wake fires another run
+    ;; while fewer sittings are open and a walk row is left that no
+    ;; open sitting holds (`wakes/wake-seat!`), and each sit claims its
+    ;; own row (`claim-rows-atomically!`).
+    [:max_open_sittings {:default 1
+                         :examples [1]
+                         :x-display
+                         {:label "Sittings at once"
+                          :help max-open-sittings-help}}
+     [:int {:min 1 :max 10}]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2050,6 +2076,12 @@
                              {:label "Quietest gap between wakes, in seconds"
                               :help "The least time between two wakes the seat's own events start. A match inside the gap waits for it to lift. Five minutes is the default."}}
      [:int {:min 1 :max 86400}]]
+    [:max_open_sittings {:default 1
+                         :examples [1]
+                         :x-display
+                         {:label "Sittings at once"
+                          :help max-open-sittings-help}}
+     [:int {:min 1 :max 10}]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2214,6 +2246,12 @@
                                       {:label "Quietest gap between wakes, in seconds"
                                        :help "The least time between two wakes the seat's own events start. Raise it when a busy queue is waking this seat more often than the work deserves."}}
               [:int {:min 1 :max 86400}]]
+             [:max_open_sittings {:default 1
+                                  :examples [1]
+                                  :x-display
+                                  {:label "Sittings at once"
+                                   :help max-open-sittings-help}}
+              [:int {:min 1 :max 10}]]
              [:delegates {:optional true
                           :x-display
                           {:label "What it may author"
@@ -2252,7 +2290,7 @@
                       :budget_usd_per_week :sitting_budget_tokens
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
-                      :fire_interval_seconds :delegates]
+                      :fire_interval_seconds :max_open_sittings :delegates]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
@@ -3588,6 +3626,19 @@
                         (.getBytes (str (:hash e)) StandardCharsets/UTF_8)))
                      (live-keys row now))))))
 
+(defn- named-row
+  "The id of the walk row a fire's text names, or nil. A wake's text is
+  the transition as JSON (`wakes/wake-text`): the kind and the row id.
+  Only a row of the kind this seat WALKS counts, and any other text — a
+  person's prose, a count wake's count — names nothing."
+  [seat-row text]
+  (when-some [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
+    (when-some [s (some-> text str str/trim not-empty)]
+      (when (str/starts-with? s "{")
+        (let [m (try (wire/read-json s) (catch Exception _ nil))]
+          (when (and (map? m) (= walk (str (:kind m))))
+            (some-> (:id m) str not-empty)))))))
+
 (defn hold-fire-key!
   "Mint the key ONE fire carries, and keep its hash on the seat row.
   The key comes back, for the fire text to carry. Nil comes back when
@@ -3606,8 +3657,14 @@
   one seat do not write over each other's key.
 
   The expired entries go at the same moment, and the newest keys stay,
-  up to `key-ceiling`."
-  [eng seat-row at]
+  up to `key-ceiling`.
+
+  `text` is the fire's own text. When it is a wake's text naming a row
+  of the kind the seat walks, the entry keeps that row's id (`:row`),
+  so the sit that spends the key knows which row the run was sent to
+  walk (`fire-key-row`)."
+  ([eng seat-row at] (hold-fire-key! eng seat-row at nil))
+  ([eng seat-row at text]
   (when (and seat-row
              (some-> (get-in seat-row [:data :instructions]) str not-empty)
              (get (inv/resources eng) :seat))
@@ -3615,9 +3672,11 @@
           key (mint-key)
           ttl (long (or (get-in seat-row [:data :sitting_idle_seconds])
                         default-idle-seconds))
-          entry {:hash (key-hash key)
-                 :expires_at (str (.plusSeconds at ttl))
-                 :fired_at (str at)}]
+          named (named-row seat-row text)
+          entry (cond-> {:hash (key-hash key)
+                         :expires_at (str (.plusSeconds at ttl))
+                         :fired_at (str at)}
+                  named (assoc :row named))]
       (store/with-tx (:storage eng)
         (fn [tx]
           (when-some [row (store/load-row (:storage eng) tx :seat
@@ -3629,7 +3688,7 @@
                                   (assoc (:data row) :fire_keys
                                          (conj kept entry))
                                   (:next-flip-at row))
-              key)))))))
+              key))))))))
 
 (defn fire-key-held?
   "Does this seat hold an unspent, unexpired key for `key`?
@@ -3640,6 +3699,14 @@
   [eng seat-row key]
   (boolean (and seat-row
                 (some? (fire-key-entry seat-row key ((:now-fn eng)))))))
+
+(defn fire-key-row
+  "The walk row the fire that minted `key` named, or nil (`named-row`).
+  A READ, like `fire-key-held?`: the sit asks it BEFORE it spends the
+  key, since the spend takes the entry off the row."
+  [eng seat-row key]
+  (when seat-row
+    (some-> (fire-key-entry seat-row key ((:now-fn eng))) :row str not-empty)))
 
 (defn spend-fire-key!
   "Spend the key of one firing: take its hash off the seat row, so the
@@ -3791,6 +3858,56 @@
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   (assoc (:data row) :walked_rows ids) nil)
               true)))))))
+
+(defn claim-rows-atomically!
+  "`claim-rows!`, with the read of the other sittings' claims IN THE
+  SAME TRANSACTION as the write. The seat row is read FOR UPDATE first,
+  so every claim of one seat runs one at a time: two sits of the seat
+  at the same instant cannot both find a row free and both write it.
+
+  The claim is all or nothing. When a row asked for is already held by
+  another open sitting of the seat, nothing is written, and the answer
+  says which rows are held, so the sit reads its walk again past them.
+  → {:claimed? bool :taken #{ids other open sittings hold}}."
+  [eng seat-id sitting-id row-ids]
+  (let [ids (into [] (keep #(some-> % str not-empty)) row-ids)
+        st (:storage eng)]
+    (if-not (and seat-id sitting-id (get (inv/resources eng) :sitting))
+      {:claimed? true :taken #{}}
+      (store/with-tx st
+        (fn [tx]
+          (store/load-row st tx :seat (str seat-id) {:for-update true})
+          (let [open (store/query-rows st tx :sitting
+                                       {:seat (str seat-id) :state :open}
+                                       {:limit open-sitting-page
+                                        :newest-first true})
+                taken (into #{}
+                            (comp (remove #(= (str sitting-id) (str (:id %))))
+                                  (mapcat #(get-in % [:data :walked_rows]))
+                                  (keep #(some-> % str not-empty)))
+                            open)
+                mine (first (filter #(= (str sitting-id) (str (:id %))) open))]
+            (cond
+              (some taken ids) {:claimed? false :taken taken}
+
+              (and mine (seq ids))
+              (do (store/update-data! st tx :sitting (str sitting-id)
+                                      (assoc (:data mine) :walked_rows ids) nil)
+                  {:claimed? true :taken taken})
+
+              :else {:claimed? true :taken taken})))))))
+
+(defn open-sitting-count
+  "How many sittings of this seat are OPEN now: the runs the seat's
+  `max_open_sittings` is judged against (`wakes/wake-seat!`)."
+  [eng seat-id]
+  (if (and seat-id (get (inv/resources eng) :sitting))
+    (count (store/with-tx (:storage eng)
+             (fn [tx]
+               (store/query-rows (:storage eng) tx :sitting
+                                 {:seat (str seat-id) :state :open}
+                                 {:limit open-sitting-page}))))
+    0))
 
 (defn resit-sitting
   "The OPEN sitting of the seat `named` names that this spent firing's

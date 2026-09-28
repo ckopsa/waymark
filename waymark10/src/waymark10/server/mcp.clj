@@ -2237,8 +2237,12 @@
   and those rows, while still in the queue, keep their place on the
   page before the queue's next rows fill it, so the run lands back on
   the row it was walking. The page keeps the queue's order. A row that left the queue is
-  simply not on the page, and the queue's next row takes its place."
-  [eng call session seat claimed held]
+  simply not on the page, and the queue's next row takes its place.
+
+  `only` is the one row a fire's text named (`seats/fire-key-row`):
+  when it is given, the page holds that row alone, or nothing when the
+  row is not in the queue or is claimed."
+  [eng call session seat claimed held only]
   (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
     (when-some [rdef (get (inv/resources eng) (keyword walk))]
       (let [judgment (row-of eng :judgment (get-in seat [:data :judgment]))
@@ -2249,7 +2253,7 @@
             n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
                    coll/page-size-max)
             subtract? (or judgment (seq claimed))
-            asked (if (or subtract? (seq held)) coll/page-size-max n)
+            asked (if (or subtract? (seq held) only) coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))
                                 {:query (query-string
                                          (cond-> {"page[size]" (str asked)}
@@ -2266,8 +2270,9 @@
                              (when judgment
                                (judged-subjects eng (:id judgment))))
                        #{})
-                items (remove #(contains? skip (id-of %))
-                              (get-in doc ["data" "items"]))
+                items (cond->> (remove #(contains? skip (id-of %))
+                                       (get-in doc ["data" "items"]))
+                        only (filter #(= (str only) (id-of %))))
                 ;; the rows this sitting already walks, while they are
                 ;; still in the queue, are kept first and the queue's
                 ;; next rows fill what room is left: a re-sit is handed
@@ -2356,6 +2361,64 @@
   them and is not refused for leaving them out."
   (str " Your bench calls carry the bench's repo and branch; leave them "
        "out."))
+
+(def ^:private every-row-held-note
+  "What a sit is told when every open row of its walk is held by
+  another open sitting of the seat: the run has nothing to do, and
+  stopping at once is the cheap end of it."
+  (str "Every open row of your walk is held by another open sitting of "
+       "this seat, so there is nothing for you to walk. Say so and stop."))
+
+(defn- named-row-held-note
+  "What a sit is told when the row its fire text named is held by
+  another open sitting of the seat: it is handed the next free row
+  instead, and must not walk the one the text names."
+  [row-id]
+  (str " The row your fire text names, " row-id ", is held by another "
+       "open sitting of this seat. Walk the row below instead of it."))
+
+(def ^:private claim-tries
+  "How many times one sit reads its walk again past the rows another
+  sit of the seat claimed first."
+  3)
+
+(defn- claimed-walk!
+  "The walk this sit hands, its rows CLAIMED for `sitting` in the same
+  transaction that finds them free (`seats/claim-rows-atomically!`),
+  so two sits of one seat at the same instant never hand the same row.
+  A sit that loses the race reads its walk again past the rows the
+  other took, and after `claim-tries` it hands no rows at all.
+
+  `named` is the row the fire's text named (`seats/fire-key-row`): it
+  is handed alone while no other open sitting holds it, and when one
+  does the sit hands the queue's next free rows and says so.
+  → {:walk w :named-held? bool :all-held? bool}."
+  [eng call sitter-sees seat sitting named]
+  (let [seat-id (str (:id seat))
+        held (get-in sitting [:data :walked_rows])
+        walk-past (fn [taken only]
+                    (walk-of eng call sitter-sees seat taken held only))]
+    (loop [n 1
+           taken (seats/claimed-rows eng seat-id (:id sitting))]
+      (let [only (when (and named (not (contains? taken named))) named)
+            walk (or (when only
+                       (let [w (walk-past taken only)]
+                         (when (seq (get w "rows")) w)))
+                     (walk-past taken nil))
+            ids (mapv #(get % "id") (get walk "rows"))
+            claim (if sitting
+                    (seats/claim-rows-atomically! eng seat-id (:id sitting) ids)
+                    {:claimed? true :taken taken})
+            seen (into (set taken) (:taken claim))
+            said (fn [w]
+                   {:walk w
+                    :named-held? (boolean (and named (contains? seen named)))
+                    :all-held? (boolean (and w (empty? (get w "rows"))
+                                             (seq seen)))})]
+        (cond
+          (:claimed? claim) (said walk)
+          (< n (long claim-tries)) (recur (inc n) seen)
+          :else (said (some-> walk (assoc "rows" []))))))))
 
 
 ;; ── the bench, in the sit's answer (spec-seat.md R-12.29) ───────────
@@ -3250,6 +3313,10 @@
         ;; that cost nothing.
         standing? (boolean (and keyed person
                                 (seats/standing-key? eng keyed (:key args))))
+        ;; the walk row the firing's text named, read BEFORE the spend,
+        ;; which takes the key's entry off the seat row
+        named-row (when (and keyed person (not standing?))
+                    (seats/fire-key-row eng keyed (:key args)))
         fired? (and keyed person (not standing?)
                     (true? (seats/spend-fire-key! eng keyed (:key args))))
         spent? (and seat person (or standing? fired? (some? resit)))]
@@ -3334,16 +3401,12 @@
             ;; handed: a fire and a wake that land together are two
             ;; runs, and the second walks the next row, not the first's.
             ;; A reused sitting's own rows are kept, so a re-sit after a
-            ;; connector drop is handed back the row it was walking
-            walk (when-not halted
-                   (walk-of eng call sitter-sees seat
-                            (seats/claimed-rows eng seat-id (:id sitting))
-                            (get-in sitting [:data :walked_rows])))
-            ;; … and the rows this sitting was handed are its own until
-            ;; it closes
-            _ (when sitting
-                (seats/claim-rows! eng (:id sitting)
-                                   (map #(get % "id") (get walk "rows"))))
+            ;; connector drop is handed back the row it was walking.
+            ;; The rows this sitting was handed are its own until it
+            ;; closes, claimed in the transaction that found them free
+            {walk :walk named-held? :named-held? all-held? :all-held?}
+            (when-not halted
+              (claimed-walk! eng call sitter-sees seat sitting named-row))
             ;; i' · the change this firing submits: the walk's own
             ;; first row for a code seat (R-12.29), and the row the
             ;; engine finds or mints for a seat that walks a queue of
@@ -3385,8 +3448,11 @@
                               seats/default-mode)
                     :note (str "You sit in `" named "`. "
                                (cond halted halted-note
+                                     all-held? every-row-held-note
                                      walk walk-note
                                      :else no-walk-note)
+                               (when named-held?
+                                 (named-row-held-note named-row))
                                (when (get walk "judgment")
                                  judgment-walk-note)
                                (when said change-beside-the-walk-note)

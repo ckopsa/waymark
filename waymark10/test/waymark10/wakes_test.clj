@@ -1823,3 +1823,88 @@
         (is (not (get-in (sched-of seat) [:data :wake_pending])))))
 
     (seat-do! seat :retire)))
+
+;; ── several sittings at once (max_open_sittings) ───────────────────────
+;;
+;; A seat of three slots runs three sittings at once, each on its own
+;; row. The damper counts the runs on their way to a sit as well as the
+;; open sittings, so a burst of wakes stops at the ceiling, and a
+;; closing sitting fires one more run while a row is left that no open
+;; sitting holds. One slot is the seat as it always was, which the
+;; suite above still proves untouched.
+
+(deftest a-seat-of-three-slots-runs-three-sittings-and-holds-the-fourth
+  (let [wn :wake-slots
+        fn' :wake-slots-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        batch "three-slots"
+        {:keys [seat]}
+        (linked-seat! "slotclerk"
+                      {:scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                :filter {:batch batch}}]
+                       :walk "wake_item"
+                       :wake_on [{:kind "wake_item" :actions ["touch"]}]
+                       :max_open_sittings 3}
+                      fn')
+        rows (vec (repeatedly 5 #(item! batch)))
+        model-id (str (model! "model-for-slotclerk"))
+        open! (fn [row-id]
+                (let [sid (:id (:row (inv/create! *eng* :sitting
+                                                  {:seat (str seat)
+                                                   :model model-id
+                                                   :grant (str (grant!))}
+                                                  {:principal clerk})))]
+                  (seats/claim-rows! *eng* sid [(str row-id)])
+                  sid))]
+
+    (testing "the seat holds the field it was given"
+      (is (= 3 (get-in (raw :seat seat) [:data :max_open_sittings]))))
+
+    (testing "three wakes in a burst fire three runs, the gap notwithstanding"
+      (doseq [id (take 3 rows)] (item-do! id :touch))
+      (drain-wakes! wn)
+      (is (= 3 (count (seat-fires seat)))
+          "a free slot for a free row is not held by the gap")
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (testing "a fourth wake is held: three runs are on their way to a sit"
+      (item-do! (nth rows 3) :touch)
+      (drain-wakes! wn)
+      (is (= 3 (count (seat-fires seat))))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (let [sittings (mapv open! (take 3 rows))]
+      (testing "with three sittings open on three rows, the fourth still waits"
+        (item-do! (nth rows 4) :touch)
+        (drain-wakes! wn)
+        (is (= 3 (count (seat-fires seat))))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+      (testing "closing one sitting fires one more run, for the rows left free"
+        (item-do! (first rows) :complete)
+        (close-sitting! (first sittings))
+        (drain-wakes! wn)
+        (let [ts (seat-fires seat)]
+          (is (= 4 (count ts)))
+          (is (nil? (get-in (last ts) [:inputs :text]))
+              "a release names no row: the sit hands the next free one"))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))
+        (is (= #{(str (nth rows 1)) (str (nth rows 2))}
+               (seats/claimed-rows *eng* seat nil))
+            "the fourth and fifth rows are the ones no sitting holds"))
+
+      (doseq [s (rest sittings)] (close-sitting! s)))
+
+    (seat-do! seat :retire))
+
+  (testing "the field defaults to one, and eleven is refused by the schema"
+    (let [seat (seat! "oneslot" {})]
+      (is (= 1 (get-in (raw :seat seat) [:data :max_open_sittings])))
+      (seat-do! seat :retire))
+    (let [p (refusal #(inv/create! *eng* :seat
+                                   (seat-body "elevenslots"
+                                              {:max_open_sittings 11})
+                                   {:principal elena}))]
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "max_open_sittings")))))
