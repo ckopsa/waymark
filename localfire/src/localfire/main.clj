@@ -27,9 +27,10 @@
                       (die! (str "localfire: " (ex-message e)))))]
       ;; R-5.6, before the first fire of this life
       (let [lost (runs/mark-lost! (:runs-dir cfg))
-            st   (server/start! {:config cfg :token token})]
+            st   (server/start! {:config cfg :token token :check? true})]
         (println (str "localfire listening on " (:port st)
                       " public-url=" (:public-url cfg)
                       " routines=" (str/join "," (sort (keys (:routines cfg))))
-                      " lost=" lost))
+                      " lost=" lost
+                      " credential=" (:ok @(:credential st))))
         @(promise)))))

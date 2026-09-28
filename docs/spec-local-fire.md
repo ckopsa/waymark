@@ -100,6 +100,7 @@ in the working directory. The file holds no secret.
 | `:claude` | string | the Claude Code binary. Default `claude` |
 | `:mcp` | map `{:name :url}` | the engine's MCP door for the session. Default name `waymark` |
 | `:allowed-tools` | list of strings | passed to `--allowedTools`. Default `["mcp__waymark__*" "Bash(echo *)"]` |
+| `:check-seconds` | positive integer | how often the credential check of R-4.6 runs. Default 600 |
 | `:routines` | map name → routine | the routines below |
 
 A routine has `:model` (required, the CLI model id), `:max-concurrent`
@@ -121,19 +122,30 @@ token in a log line, a run record or a page.
 | `POST /routines/{routine}/resume` | bearer | 200 `{"routine": …, "paused": false}` |
 | `GET /runs/{id}` | none | the run page, section 7 |
 | `GET /runs` | none | the run list, newest first, at most 100 |
-| `GET /healthz` | none | 200 `{"ok": true, "routines": [names]}` |
+| `GET /healthz` | none | 200 `{"ok": true, "routines": [names], "credential": {"ok", "checked_at", "detail"}}`; 503 with the same body when the credential check fails |
+| `POST /check` | bearer | runs the credential check of R-4.6 now; 200 `{"ok", "checked_at", "detail"}`, 503 when it fails |
 
 The pause is a file, `{runs-dir}/paused/{routine}`, so it survives a
 restart. The run pages carry no bearer check because they hold no
 secret (R-7.3) and the engine's row links to them for a person's
 browser.
 
+**R-4.6** The server must check its credential: once at start, and
+then every `:check-seconds`. The check is a headless probe that starts
+claude with a run's `mcp.json` shape and asks it to call one cheap
+Waymark read (`waymark_discover`) and exit; it passes when that call
+answers. The server records `{ok, checked_at, detail}`, which
+`/healthz` answers. While the check fails, a fire answers 429 (R-5.1)
+with `Retry-After` set to the seconds until the next check, and the
+engine reads 429 as throttled: its runner pool skips this link until
+then and fires the next one, a cloud Routine.
+
 **R-4.5** The server must not demand the `anthropic-beta` or
 `anthropic-version` headers. The engine sends them, and the server
 ignores them. A body with no bytes is read as `{}`, because a fire with
 no text is a fire. A body that parses to anything but a JSON object
 answers 422 with one sentence, and the engine breaks the row with that
-sentence. The body is judged after the four judgments of R-5.1, so a
+sentence. The body is judged after the five judgments of R-5.1, so a
 caller with the wrong bearer learns nothing from its body, and a run
 slot the body refuses is given back.
 
@@ -141,8 +153,10 @@ slot the body refuses is given back.
 
 **R-5.1** `POST /fire/{routine}` must judge in this order and stop at
 the first that holds: no bearer or a wrong bearer, 401; no routine of
-that name, 404; the routine paused, 400; running processes of the
-routine at or above `:max-concurrent`, 429 with `Retry-After: 60`.
+that name, 404; the routine paused, 400; the credential check of
+R-4.6 failing, 429 with `Retry-After` the seconds until the next
+check; running processes of the routine at or above
+`:max-concurrent`, 429 with `Retry-After: 60`.
 Each refusal carries a JSON body with one sentence in `detail`. The
 order is a decision, not an accident: a paused routine at its cap
 answers 400 and not 429, so the engine's row says `paused` and not
