@@ -1862,6 +1862,35 @@
 
     (seat-do! seat :retire)))
 
+;; ── a wake the fire door refuses waits ───────────────────────────────
+;;
+;; A halt line other than the budget's is judged by the `fire` door
+;; itself. Its refusal used to drop the match: nothing set
+;; `wake_pending`, so when a person lifted the line the rows that came
+;; in meanwhile never woke the seat.
+
+(deftest a-wake-the-fire-door-refuses-is-left-pending
+  (let [wn :wake-halt-wall
+        fn' :wake-halt-wall-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "haltclerk"
+                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]}
+                      fn')]
+    (is (true? (seats/seat-halt! *eng* seat "model_not_held"
+                                 "This session declares nothing and haltclerk is held for 1 model(s).")))
+
+    (testing "a matching transition fires nothing, and the wake waits"
+      (task-do! (task! "a thing behind the halt") :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (drain-fires! fn')
+      (is (empty? (fires-of token))))
+
+    (seat-do! seat :retire)))
+
 ;; ── the cadence a chair's Routine does not keep ─────────────────────
 
 (defn- stamp-last-fired!
