@@ -137,6 +137,7 @@
             :summary "The grant this request extends or minted"}]
    :create-guards [grants/requester-is-named
                    grants/requester-holds-the-grant
+                   grants/an-anchorless-ask-names-its-grant
                    grants/asks-are-paced
                    grants/asks-are-few
                    grants/asks-are-short
@@ -257,6 +258,10 @@
   ;; computed here. Re-pin it from the first CI run — the failure
   ;; prints the hash to paste — and keep this paragraph as the note
   ;; the comment above asks for.
+  ;;
+  ;; THE LAW MOVED AGAIN (waymark-7v7v): create gained
+  ;; an-anchorless-ask-names-its-grant, which refuses an anchorless ask
+  ;; from a holder of several live grants. Re-pin from CI the same way.
   "87c403a19083ff896dbc1c83cde04098c1867bc0cd9eb16bcfa7ee7fcb111dce")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
