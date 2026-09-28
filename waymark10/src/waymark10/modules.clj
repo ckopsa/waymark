@@ -154,6 +154,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.presence :as presence]
             [waymark10.server.roles :as roles]
+            [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
@@ -225,6 +226,12 @@
               :kinds (fn [_] [seats/sitting])}
              {:kind :schedule :enroll :always
               :kinds (fn [_] [schedules/schedule])}
+             ;; the runner link (runner-pool work, piece 1a): one
+             ;; provider endpoint and the credential that opens it,
+             ;; held beside the schedule because a schedule will fire
+             ;; through one. Nothing fires through it yet.
+             {:kind :runner_link :enroll :always
+              :kinds (fn [_] [runner-links/runner-link])}
              ;; the MCP server as a row (docs/spec-mcp-servers.md,
              ;; waymark-fp62.10): the external powers a grant names
              ;; reach the engine through a row's client, and a grant
@@ -553,7 +560,12 @@
    ;; So: a module, propose-only as the DOOR's own state constraint
    ;; (`law-sweep/swept-from`), and an engine that does not want the
    ;; surface simply does not assemble it.
-   {:module :law-sweep :routes law-sweep-routes/routes :pack packs/law-sweep}
+   ;; The door rides the definition envelope as a LENT link
+   ;; (waymark-442.12): `:links` is a seams/Linking value, so the
+   ;; core kind names no module route and an engine without this
+   ;; module shows no `sweep` link.
+   {:module :law-sweep :routes law-sweep-routes/routes
+    :links law-sweep-routes/links :pack packs/law-sweep}
 
    ;; the belief layer (waymark-bug): the nightly fold that keeps every
    ;; hypothesis's posterior equal to the arithmetic over its atoms.
@@ -676,6 +688,12 @@
         (comp (mapcat :enrols)
               (mapcat #(contributed % resources)))
         (selected modules)))
+
+(defn link-doors
+  "Every assembled module's `seams/Linking` value, in table order —
+  the links a module lends kinds it does not own."
+  [modules]
+  (into [] (keep :links) (selected modules)))
 
 (defn route-sets
   "Every assembled module's routes, asked of this engine, in table

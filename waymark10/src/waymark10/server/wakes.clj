@@ -738,6 +738,8 @@
          (let [{:keys [busy free]} (slots eng seat-row at)]
            (and (< (long busy) max-open) (pos? (long free)))))))
 
+(declare empty-walk?)
+
 (defn- wake-seat!
   "One active seat, one transition it asked to be woken by, and the
   text that transition earned (`wake-for`: the row that moved,
@@ -787,6 +789,14 @@
         (at-the-fuel-wall? eng (raw-row eng :seat (:id seat)) at)
         (hold-at-the-wall! eng row at)
 
+        ;; the walk would hand nothing (ticket 87c928e9): a transition
+        ;; wake asks the same question `release!` does, so a row the
+        ;; walk withholds never fires a run that sits and finds nothing
+        (empty-walk? eng (raw-row eng :seat (:id seat)))
+        (do (warn! "seat " (:id seat) " has an empty walk — its wake"
+                   " fires nothing")
+            nil)
+
         :else
         (if (fire! eng (:id seat) text
                    (str "wake:" (:id seat) ":" (:id t)))
@@ -817,13 +827,26 @@
   "The number a COUNT entry is judged by. An entry over the seat's own
   walk (its walk kind, under the walk's own filter) counts the walk
   the sit would hand (`walk-count`), so a wake never fires a run whose
-  sit walks nothing (ticket e031e479). Every other entry counts the
-  collection (`count-under`), as it always has."
+  sit walks nothing (ticket e031e479). An entry over the walk's kind
+  under a filter of its own counts that filter's rows less the ones the
+  sit would withhold (`seats/unwalkable-rows`, ticket 87c928e9), so a
+  row the walk holds back never fires the seat whatever filter its
+  entry writes. Every other entry counts the collection
+  (`count-under`), as it always has."
   [eng seat-row e]
   (let [kind (keyword (name (:kind e)))
         [walk f] (when seat-row (walk-query eng seat-row))]
-    (if (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
+    (cond
+      (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
       (walk-count eng seat-row)
+
+      (and walk (= walk kind))
+      (let [skip (seats/unwalkable-rows eng seat-row nil)]
+        (if (empty? skip)
+          (count-under eng kind (:filter e))
+          (some->> (ids-under eng kind (:filter e)) (remove skip) count)))
+
+      :else
       (count-under eng kind (:filter e)))))
 
 (defn- empty-walk?
