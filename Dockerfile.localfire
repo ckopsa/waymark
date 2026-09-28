@@ -1,0 +1,51 @@
+# Serves localfire (spec-local-fire.md R-4.1): the house's own fire
+# endpoint, which starts Claude Code sessions in the seat place.
+# Built and pushed by .github/workflows/localfire.yml
+# (linux/arm64 → ghcr.io/ckopsa/localfire:<short sha>).
+FROM clojure:temurin-21-tools-deps-bookworm-slim
+
+# The one pin for the CLI every fired session runs. Bump it here.
+ARG CLAUDE_CODE_VERSION=2.0.0
+ARG NODE_MAJOR=22
+
+# Node LTS for the Claude Code CLI; git, curl and jq for what a
+# session and the seat place's hooks reach for.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl git jq \
+ && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+ && npm cache clean --force
+
+# A fixed uid, so the host volume at /data keeps one owner across
+# rebuilds. HOME is /data: the Claude login (/data/.claude*) and the
+# runs (/data/runs) live on the job's volume, not in the image.
+# The Maven repository cannot live under HOME (the volume hides it),
+# so the user-level deps.edn under CLJ_CONFIG points it into /app.
+RUN useradd --uid 1500 --home-dir /data --no-create-home --shell /bin/bash localfire \
+ && mkdir -p /app/localfire /app/.clojure /data /etc/localfire \
+ && printf '{:mvn/local-repo "/app/.m2/repository"}\n' > /app/.clojure/deps.edn \
+ && chown -R localfire:localfire /app /data
+ENV CLJ_CONFIG=/app/.clojure
+
+USER localfire
+WORKDIR /app/localfire
+
+# Dependency layer: deps.edn first, so a source-only change never
+# re-downloads the world.
+COPY --chown=localfire:localfire localfire/deps.edn deps.edn
+RUN HOME=/app clojure -P -M:serve
+
+COPY --chown=localfire:localfire localfire/src/ src/
+
+# The seat place, baked in: the image moves with every change to seat/,
+# so the node never clones it.
+COPY seat/ /srv/waymark-seat/
+
+ENV HOME=/data
+EXPOSE 8111
+
+# /etc/localfire/localfire.edn comes from the Nomad job's template;
+# LOCALFIRE_TOKEN from its environment.
+ENTRYPOINT ["clojure", "-M:serve", "/etc/localfire/localfire.edn"]
