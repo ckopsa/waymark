@@ -478,7 +478,9 @@
              ;; a throttle's own instant: the pending wake waits for it
              :retry_after
              ;; the transitions a damped wake heard (waymark-fp62.21)
-             :wake_heard}
+             :wake_heard
+             ;; the runner pool and the link the last run took (d16b71bf)
+             :runners :last_runner}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
       (doseq [a [:claim :observe :pause :resume :fail :end :fired]]
