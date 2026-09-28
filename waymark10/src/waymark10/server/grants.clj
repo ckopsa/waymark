@@ -934,6 +934,64 @@
               (if (and row (= (get-in row [:data :audience]) (:id p)))
                 (t/allow) (t/deny))))))
 
+(defn- auto-anchorable?
+  "An ask the engine may anchor for its requester (waymark-7v7v): it
+  names no grant, it is not a seat ask (a seat ask is always a
+  bootstrap — R-5.4's middle row), and a person or agent files it."
+  [inp ctx]
+  (and (nil? (:grant_id inp))
+       (nil? (nonblank (:seat inp)))
+       (not= :system (:type (:principal ctx)))))
+
+(defn- live-leashes
+  "The requester's live scope grants: accepted, unexpired by the ctx
+  clock, and holding no seat (an office widens by restating the seat,
+  never by an ask). nil when the ctx cannot look — a probe ctx carries
+  no :find, and a door that cannot look declines to guess."
+  [ctx pid]
+  (when-some [find' (:find ctx)]
+    (let [now (:now ctx)]
+      (filterv (fn [g]
+                 (and (= :accepted (:state g))
+                      (nil? (get-in g [:data :seat]))
+                      (let [exp (get-in g [:data :expires_at])]
+                        (or (nil? exp) (neg? (compare now exp))))))
+               (find' :grant {:audience pid} {:limit 100})))))
+
+(g/defguard an-anchorless-ask-names-its-grant
+  {:reads [:principal :now :grant]
+   :vars [:grants]
+   :explain "You hold several live grants ({grants}); pass grant_id to name the one this ask widens."}
+  [_row inp ctx]
+  ;; an anchorless ask from a holder of live grants would MINT a
+  ;; replacement, and the session would wear it and lose the sight it
+  ;; had. One live grant is anchored at birth (anchor-the-lone-grant);
+  ;; several leave the engine nothing honest to pick
+  (let [live (when (auto-anchorable? inp ctx)
+               (live-leashes ctx (:id (:principal ctx))))]
+    (if (< 1 (count live))
+      (t/deny {:vars {:grants (str/join ", " (sort (map :id live)))}})
+      (t/allow))))
+
+(defn anchor-the-lone-grant
+  "The ask's birth hook (waymark-7v7v): an anchorless ask from a
+  holder of exactly ONE live grant is anchored to it, and the note
+  says the engine did it, so its approval widens that grant rather
+  than minting a replacement. None stays the bootstrap mint; several
+  were refused at the door by an-anchorless-ask-names-its-grant."
+  [row ctx]
+  (if-not (auto-anchorable? (:data row) ctx)
+    row
+    (let [live (live-leashes ctx (get-in row [:data :requested_by]))]
+      (if (= 1 (count live))
+        (let [gid (str (:id (first live)))]
+          (-> row
+              (assoc-in [:data :grant_id] gid)
+              (assoc-in [:data :note]
+                        (str "Anchored by the engine to " gid
+                             ", the one live grant you hold: approval widens it."))))
+        row))))
+
 (g/defguard requester-is-named
   {:reads [:principal]
    :explain "An access request names its requester; an anonymous ask would grant nobody."}
@@ -1355,8 +1413,12 @@
    :links [{:rel "grant" :kind :grant
             :href "/api/grants/{data.grant_id}"
             :summary "The grant this request extends or minted"}]
+   ;; the engine anchors an anchorless ask from a holder of one live
+   ;; grant; the sugar runs its stamps first, so requested_by is set
+   :on-create anchor-the-lone-grant
    :create-guards [requester-is-named
                    requester-holds-the-grant
+                   an-anchorless-ask-names-its-grant
                    asks-are-paced
                    asks-are-few
                    asks-are-short

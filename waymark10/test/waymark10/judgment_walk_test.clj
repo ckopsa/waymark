@@ -478,3 +478,127 @@
         (is (= [{:kind "expense" :actions ["create"]}]
                (seats/effective-wake-on written expense))
             "it names verdict.reopen itself if it wants the reopen too")))))
+
+;; ── 5 · a listed verdict files one draft ticket ───────────────────────
+
+(def ^:private groomers-ticket
+  "The groomers' ticket, as much of factory10's as a filing needs."
+  (r/resource
+   {:kind :ticket
+    :plural "tickets"
+    :states [:draft :dropped]
+    :initial :draft
+    :terminal #{:dropped}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title {:x-display {:label "Title"}} [:string {:min 1 :max 200}]]
+             [:detail {:optional true :x-display {:label "Detail"}}
+              [:maybe [:string {:max 20000}]]]
+             [:type {:x-display {:label "Type"}} [:string {:min 1 :max 20}]]
+             [:priority {:x-display {:label "Priority"}} [:int {:min 0 :max 4}]]
+             [:repo {:optional true :x-display {:label "Repo"}}
+              [:maybe [:string {:max 140}]]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:drop {:from #{:draft} :to :dropped
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "Dropped is dropped."}
+            :display {:label "Drop" :order 1
+                      :description "Let this ticket go"}}}}))
+
+(defn- ticket-engine []
+  (engine/engine {:storage (memory/storage) :resources [expense groomers-ticket]}))
+
+(def ^:private sitter (t/principal {:id "expense-sitter" :type :agent}))
+
+(defn- say! [eng judgment subject word remedy]
+  (:row (inv/create! eng :verdict
+                     (verdict-input judgment (:id subject)
+                                    {:verdict word :remedy remedy})
+                     {:principal sitter})))
+
+(defn- tickets [eng]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/query-rows (:storage eng) tx :ticket {} {:limit 50}))))
+
+(defn- drain-tickets! [eng]
+  (consumers/drain-consumer! eng :judgment-ticket-test (judgments/consumer-fn eng)))
+
+(def ^:private ask-remedy
+  "Ask the kitchen what the knives were for.")
+
+(deftest a-listed-verdict-files-one-draft-ticket
+  (let [eng (ticket-engine)
+        judgment (promoted-judgment! eng {:files_ticket_on ["query"]})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        _ (drain-tickets! eng)
+        said (say! eng judgment knives "query" ask-remedy)]
+    (testing "a listed verdict files one draft ticket naming the subject and the remedy"
+      (drain-tickets! eng)
+      (let [ts (tickets eng)
+            tk (first ts)
+            detail (str (get-in tk [:data :detail]))]
+        (is (= 1 (count ts)))
+        (is (= "draft" (name (:state tk))))
+        (is (= "bug" (str (get-in tk [:data :type]))))
+        (is (= 2 (long (get-in tk [:data :priority]))))
+        (is (= "ckopsa/waymark" (str (get-in tk [:data :repo]))))
+        (is (str/starts-with? (str (get-in tk [:data :title])) "query on expense "))
+        (is (str/includes? detail ask-remedy))
+        (is (str/includes? detail (str (:id knives))))
+        (is (str/includes? detail (str (:id said))))))
+    (testing "the replay files nothing more"
+      (drain-tickets! eng)
+      (is (= 1 (count (tickets eng)))))
+    (testing "a verdict the judgment does not list files none"
+      (say! eng judgment flour "keep" "Nothing to do.")
+      (drain-tickets! eng)
+      (is (= 1 (count (tickets eng)))))
+    (testing "a second verdict on the same subject files none"
+      (reopen! eng (:id said))
+      (say! eng judgment knives "query" "Ask the kitchen once more.")
+      (drain-tickets! eng)
+      (is (= 1 (count (tickets eng)))))))
+
+(deftest a-judgment-without-the-list-files-nothing
+  (let [eng (ticket-engine)
+        judgment (promoted-judgment! eng {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")]
+    (drain-tickets! eng)
+    (say! eng judgment knives "query" ask-remedy)
+    (drain-tickets! eng)
+    (is (empty? (tickets eng)))))
+
+(deftest the-ticket-lands-in-the-judgments-repo
+  (let [eng (ticket-engine)
+        judgment (promoted-judgment! eng {:files_ticket_on ["query"]
+                                          :ticket_repo "ckopsa/kitchen"})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")]
+    (drain-tickets! eng)
+    (say! eng judgment knives "query" ask-remedy)
+    (drain-tickets! eng)
+    (is (= ["ckopsa/kitchen"] (mapv #(str (get-in % [:data :repo])) (tickets eng))))))
+
+(deftest a-word-that-is-no-verdict-is-refused-at-create
+  (let [eng (ticket-engine)
+        refused (try
+                  (inv/create! eng :judgment
+                               {:name "kitchen-spend" :subject_kind "expense"
+                                :verdicts [{:name "keep" :sentence keep-sentence}
+                                           {:name "query" :sentence query-sentence}]
+                                :files_ticket_on ["queried"]}
+                               {:principal person})
+                  nil
+                  (catch Exception e e))]
+    (is (some? refused) "the create is refused")
+    (is (empty? (store/with-tx (:storage eng)
+                  (fn [tx] (store/query-rows (:storage eng) tx :judgment
+                                             {} {:limit 5})))))))
+
+(deftest a-sittings-ticket-names-its-seat
+  (is (= "cut_off on code-seat's sitting fc5faac6"
+         (judgments/ticket-title "cut_off" "code-seat" "sitting"
+                                 "fc5faac6-74c4-437d-a35c-fdbed565aa25")))
+  (is (= "cut_off on expense 01234567"
+         (judgments/ticket-title "cut_off" nil "expense" "0123456789"))))

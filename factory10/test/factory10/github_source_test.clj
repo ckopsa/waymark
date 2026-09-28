@@ -1613,3 +1613,53 @@
     (is (not (forge/interrupted-run?
               {:status "in_progress" :jobs [{:conclusion "cancelled"}]}))
         "a run still running is not judged")))
+
+;; ── commit statuses and late reds (ticket 3aca3ae8) ─────────────────
+
+(defn- a-status [state]
+  {:context "quality-gate" :state state
+   :target_url "https://gate.example/runs/1"
+   :created_at "2026-09-18T13:40:00Z" :updated_at "2026-09-18T13:50:00Z"})
+
+(deftest a-failing-commit-status-makes-the-change-failing
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["quality-gate"]} 1)
+        sha (get-in a-pull-request [:head :sha])]
+    (gh/seed-status! state repo sha (a-status "failure"))
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (= :failing (:state row)))
+      (is (= ["quality-gate"] (get-in row [:data :failing_checks]))
+          "the status's context is the red name"))
+    (let [run (one-row engine :ci_run
+                       {:run_id (gh/status-id repo sha "quality-gate")})]
+      (is (= :red (:state run)) "the red status is a red run, keyed by head and context")
+      (is (= "quality-gate" (get-in run [:data :check_name]))))))
+
+(deftest a-pending-commit-status-keeps-the-change-unknown
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["quality-gate"]} 1)]
+    (gh/seed-status! state repo (get-in a-pull-request [:head :sha])
+                     (a-status "pending"))
+    (pass! r)
+    (is (= :submitted (:state (the-change engine))))))
+
+(deftest a-check-that-goes-red-after-the-push-mints-one-run
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["gate"]} 1)
+        sha (get-in a-pull-request [:head :sha])
+        run-id (gh/run-id repo 41752098600)]
+    (is (nil? (one-row engine :ci_run {:run_id run-id})))
+    ;; the check finishes; the pull request's updated_at does not move
+    (gh/seed-check! state repo sha
+                    {:id 41752098600 :name "late" :status "completed"
+                     :conclusion "failure" :head_sha sha
+                     :details_url "https://github.com/ckopsa/waymark/actions/runs/900/job/7001"})
+    (let [first-pass (pass! r)
+          second-pass (pass! r)]
+      (is (= 1 (:runs-minted first-pass)))
+      (is (= 0 (:runs-minted second-pass)) "and not twice")
+      (is (= 1 (count (rows-of engine :ci_run {:run_id run-id}))))
+      (is (= (str (:id (the-change engine)))
+             (str (get-in (one-row engine :ci_run {:run_id run-id})
+                          [:data :change])))))))
