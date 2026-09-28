@@ -308,7 +308,8 @@
         "a stuck change is the house asking a person to look at it, and
          one with a pull request goes back under review (ticket 6bdaf6fe)")
     (is (= #{:unstick}
-           (offers change (-> a-pull-request (dissoc :number) (assoc :state :stuck))
+           (offers change (-> a-pull-request (update :data dissoc :number)
+                                      (assoc :state :stuck))
                    the-person))
         "one with no pull request yet goes back to open for its next round")
     (is (empty? (offers change (assoc a-pull-request :state :stuck)

@@ -796,11 +796,14 @@
 
     (testing "the checks on one head read through Actions too"
       (is (= [{:check_name "test10 (shard 3)" :status "completed"
-               :conclusion "failure"}
+               :conclusion "failure" :id 7001
+               :started_at "2026-09-18T13:41:00Z"}
               {:check_name "check-queue" :status "completed"
-               :conclusion "success"}]
+               :conclusion "success" :id 7002 :started_at nil}]
              (forge/forge-checks source private-repo
-                                 (get-in a-pull-request [:head :sha])))))))
+                                 (get-in a-pull-request [:head :sha])))
+          "each run carries its id and start, so the newest of one
+           name speaks for it (ticket 6bdaf6fe)"))))
 
 (deftest a-failed-check-read-costs-the-checks-and-not-the-pass
   (let [state (gh/fake-state)
