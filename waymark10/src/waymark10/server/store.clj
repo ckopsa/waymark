@@ -80,7 +80,11 @@
     A CORRECTION is a person's transition on a row whose IMMEDIATELY
     PREVIOUS transition on that same (kind, resource_id) was written
     by one of `actor-ids` — the members that sat the seat in the
-    window. So this is a window function over the log, LAG by (kind,
+    window. A write a person ALLOWED — a held call's replay, whose
+    actor carries `allowed_by` (invoke/actor-map) — is that person's
+    transition: it counts as a correction when it follows the seat's
+    own, and a transition after it corrects nothing of the seat's. So
+    this is a window function over the log, LAG by (kind,
     resource_id) ordered by id, and it is the one question the other
     five cannot be asked as a row read: nothing on a row records that
     somebody undid an agent.

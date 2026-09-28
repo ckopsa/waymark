@@ -177,13 +177,19 @@
   are facts ABOUT the actor, the column is jsonb, so neither needs a
   migration or a field of its own — and both are simply absent when
   there was nothing to say, which is the honest thing to write. The
-  model is the session's CLAIM, unverified here as everywhere."
+  model is the session's CLAIM, unverified here as everywhere.
+
+  `allowed_by` is the person whose Allow this write replays (held-
+  calls/door-principal sets it from the held call's `decided_by`), so
+  the hand stays the author's and the log still says whose yes it was;
+  the correction count reads it (store/corrections-by-model)."
   [principal grant-id]
   (cond-> {:type (name (:type principal))
            :id (:id principal)
            :display (:display principal)}
     grant-id (assoc :grant grant-id)
-    (:model principal) (assoc :model (:model principal))))
+    (:model principal) (assoc :model (:model principal))
+    (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))))
 
 (defn- body-digest [body]
   ;; exact decimals in a wire body digest as their {"dec" …} nodes
