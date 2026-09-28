@@ -1331,6 +1331,100 @@
       (is (nil? (get-in row [:data :landing_error])))
       (is (= 0 (:failing census))))))
 
+;; ── a landed pull request nobody adopted (ticket 58e706d6) ──────────
+
+(def ^:private a-landed-branch "bench/58e706d6")
+
+(defn- the-unadopted [engine]
+  (one-row engine :change {:change_id "ticket:58e706d6"}))
+
+(defn- rewrite-unadopted! [engine f]
+  (let [id (str (:id (the-unadopted engine)))
+        st (:storage engine)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :change id {})]
+          (store/save-row! st tx :change
+                           (assoc (f row) :version (inc (long (:version row))))
+                           (:version row)))))))
+
+(defn- unadopted-world
+  "One seat-born change at `submitted` with no number, whose bench
+  feedback names `pr` for its branch, over a forge that lists no pull
+  request at all, so nothing adopts it."
+  [pr]
+  (let [state (gh/fake-state)
+        rpc (fn [_method params]
+              (when (= "bench__feedback" (str (:name params)))
+                {:structuredContent
+                 {:result {:repo repo :landing {:state "landed"}
+                           :pull_request pr
+                           :pipelines [] :statuses [] :comments []}}}))
+        engine (engine/engine {:storage (memory/storage)
+                               :resources (vec (main/resources))
+                               :services {:bench-rpc rpc}})]
+    (inv/create! engine :repo_policy {:repository repo} {:principal a-person})
+    (inv/create! engine :change {:change_id "ticket:58e706d6"
+                                 :repository repo
+                                 :title "A landed change"
+                                 :base_branch "main"
+                                 :head_branch a-landed-branch}
+                 {:principal mirror/source-principal})
+    (rewrite-unadopted! engine #(assoc % :state :submitted))
+    {:state state :source (gh/fake-source state) :engine engine}))
+
+(deftest a-landed-pull-request-nobody-adopted-says-so-after-the-window
+  (let [{:keys [engine] :as r}
+        (unadopted-world {:number 7 :state "open"
+                          :url "https://github.com/ckopsa/waymark/pull/7"})
+        note (str "landed as #7 on " repo
+                  " but no pull request row adopted it; head " a-landed-branch)
+        long-ago (str (.minus (java.time.Instant/now)
+                              (java.time.Duration/ofMinutes 20)))]
+    (let [census (pass! r)
+          row (the-unadopted engine)]
+      (is (some? (get-in row [:data :landed_at]))
+          "the pass stamps the first time it saw the pull request")
+      (is (nil? (get-in row [:data :adoption_note]))
+          "and says nothing inside the window")
+      (is (= 0 (:adoption-noted census))))
+    (rewrite-unadopted! engine #(assoc-in % [:data :landed_at] long-ago))
+    (let [census (pass! r)
+          row (the-unadopted engine)]
+      (is (= note (get-in row [:data :adoption_note]))
+          "after the window the row says what landed and where")
+      (is (= long-ago (get-in row [:data :landed_at]))
+          "the first sight stands")
+      (is (= 1 (:adoption-noted census))))
+    (testing "a second pass does not write the same note again"
+      (let [census (pass! r)]
+        (is (= 0 (:adoption-noted census)))
+        (is (= note (get-in (the-unadopted engine) [:data :adoption_note])))))
+    (testing "the adoption clears it"
+      (inv/invoke! engine :change (str (:id (the-unadopted engine)))
+                   :adopt_submitted
+                   {:change_id "github:ckopsa/waymark#7" :number 7}
+                   {:principal mirror/source-principal})
+      (let [row (one-row engine :change {:change_id "github:ckopsa/waymark#7"})]
+        (is (= 7 (get-in row [:data :number])))
+        (is (nil? (get-in row [:data :adoption_note])))
+        (is (nil? (get-in row [:data :landed_at])))))))
+
+(deftest a-change-with-no-landed-pull-request-is-not-noted
+  (let [{:keys [engine] :as r} (unadopted-world nil)]
+    (pass! r)
+    (is (nil? (get-in (the-unadopted engine) [:data :landed_at])))
+    (is (nil? (get-in (the-unadopted engine) [:data :adoption_note])))))
+
+(deftest the-adoption-note-says-when-the-forge-already-ended-it
+  (is (= (str "landed as #7 on " repo " but no pull request row adopted"
+              " it; head b; the pull request is already merged on the forge")
+         (forge/adoption-note repo "b" {:number 7 :state "merged"})))
+  (is (str/ends-with? (forge/adoption-note repo "b" {:number 7 :state "closed"})
+                      "already closed on the forge"))
+  (is (str/ends-with? (forge/adoption-note repo "b" {:number 7 :state "open"})
+                      "head b")))
+
 (deftest the-landing-verdict-names-the-failed-step
   (is (= {:verdict :red :names ["landing:push"] :error a-rejected-push}
          (forge/landing-verdict (a-failed-landing))))

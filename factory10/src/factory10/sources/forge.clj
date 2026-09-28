@@ -99,7 +99,8 @@
             [factory10.resources.ticket :as ticket]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
-  (:import (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Instant)
+           (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
 
@@ -945,6 +946,106 @@
      census
      (live-changes eng))))
 
+;; ── a landed pull request nobody adopted (ticket 58e706d6) ──────────
+;;
+;; A submitted change whose bench landing opened a pull request, but
+;; which the forge never adopts, keeps its ask's id and no number, and
+;; the house's merge and the person's merge ask both skip it silently.
+;; The pass asks the bench's feedback for the branch's pull request,
+;; stamps the first time it saw one, and once the window has passed
+;; writes a note on the row. The adoption clears it, and a note that
+;; already says the same thing is left alone.
+
+(def adoption-note-window-ms
+  "How long a landed pull request waits for its adoption before the
+  row says so: a few passes, so an ordinary adoption never notes."
+  (* 15 60 1000))
+
+(def ^:private adoption-note-chars 500)
+
+(defn adoption-note
+  "The words a change carries when its landed pull request `pr` (the
+  bench feedback's `pull_request`) has no row: the number, the
+  repository and the head, and whether the forge already ended it."
+  [repo branch pr]
+  (let [st (some-> (:state pr) name str/lower-case)
+        ended (cond (or (true? (:merged pr)) (= "merged" st)) "merged"
+                    (= "closed" st) "closed")
+        note (str "landed as #" (:number pr) " on " repo
+                  " but no pull request row adopted it; head " branch
+                  (when ended
+                    (str "; the pull request is already " ended
+                         " on the forge")))]
+    (subs note 0 (min (count note) adoption-note-chars))))
+
+(defn- landed-pull-request
+  "The pull request the bench's feedback names for this change's
+  branch, or nil. A rig that does not answer, or refuses, names none."
+  [eng row policy]
+  (let [answer (bench/ask {:services (:services eng)} :feedback
+                          {:repo (str (get-in row [:data :repository]))
+                           :branch (bench/branch-of row policy)})
+        pr (when (and (map? answer) (not (bench/refused answer)))
+             (:pull_request answer))]
+    (when (and (map? pr) (integer? (:number pr)))
+      pr)))
+
+(defn- adoption-move
+  "The `note_adoption` input this pass writes on the row, or nil: the
+  first sight stamped, or the note once the window has passed and the
+  stored note says something else."
+  [row repo branch pr ^Instant now]
+  (let [stamp (text-of (get-in row [:data :landed_at]))
+        seen (when stamp
+               (try (Instant/parse stamp) (catch Exception _ nil)))
+        note (adoption-note repo branch pr)]
+    (cond
+      (nil? seen) {:landed_at (str now)}
+
+      (and (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
+              (long adoption-note-window-ms))
+           (not= note (str (get-in row [:data :adoption_note]))))
+      {:landed_at stamp :adoption_note note})))
+
+(defn- adoption-note-pass!
+  "Every submitted change of a repository with an active policy that
+  has no number → the pull request its landing opened, and at most one
+  `note_adoption`. A rig that does not answer, or a door the engine
+  refuses, costs that change one pass and nothing else."
+  [eng census log-fn]
+  (let [by-repo (into {}
+                      (keep (fn [p]
+                              (when-some [r (some-> (get-in p [:data :repository])
+                                                    str not-empty)]
+                                [r p])))
+                      (bench/policies eng :active))
+        now (if-some [f (:now-fn eng)] (f) (Instant/now))]
+    (reduce
+     (fn [census row]
+       (let [repo (str (get-in row [:data :repository]))
+             policy (get by-repo repo)]
+         (if-not (and policy
+                      (= :submitted (state-of row))
+                      (nil? (get-in row [:data :number])))
+           census
+           (try
+             (let [pr (landed-pull-request eng row policy)
+                   input (when pr
+                           (adoption-move row repo (bench/branch-of row policy)
+                                          pr now))]
+               (if (nil? input)
+                 census
+                 (do (inv/invoke! eng :change (str (:id row)) :note_adoption
+                                  input (as-opts))
+                     (cond-> census
+                       (:adoption_note input) (update :adoption-noted inc)))))
+             (catch Exception e
+               (log-fn "the change " (get-in row [:data :change_id])
+                       " was refused its adoption note (" (ex-message e) ")")
+               (update census :refused inc))))))
+     census
+     (live-changes eng))))
+
 ;; ── a red base opens one ticket (ticket ade81ae9) ────────────────────
 ;;
 ;; A base branch that goes red stops every pull request on it, and
@@ -1199,7 +1300,7 @@
 (def ^:private fresh-census
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
-   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0
+   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
    :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
    :refused 0})
 
@@ -1274,6 +1375,7 @@
           census (stale-pass! eng changes census log-fn)
           census (label-pass! eng source census log-fn)
           census (failing-pass! eng source census log-fn)
+          census (adoption-note-pass! eng census log-fn)
           census (base-pass! eng source census log-fn)
           census (assoc census :calls (forge-calls source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
@@ -1292,6 +1394,9 @@
                      (:stuck census) " stuck on red"))
               (when (pos? (long (:noted census)))
                 (str ", " (:noted census) " policy source notes written"))
+              (when (pos? (long (:adoption-noted census)))
+                (str ", " (:adoption-noted census)
+                     " landed pull requests noted unadopted"))
               (when (pos? (long (+ (long (:rerun census))
                                    (long (:rerun-noted census)))))
                 (str ", " (:rerun census) " interrupted heads re-run, "
