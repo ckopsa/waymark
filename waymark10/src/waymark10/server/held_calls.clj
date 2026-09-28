@@ -995,7 +995,8 @@
                        :help "The tool the engine calls, prefixed with the server's name (tgrambot__send_message) or bare (send_message)."}}
     [:string {:min 1 :max 200}]]
    [:input_template {:x-display {:label "Input"
-                                 :help "The tool's arguments. A string value may carry {kind}, {id}, {action}, {summary}, {caller}, {why}, {link} and {expires_at}; the engine fills them from the moved row. The text always carries the link."}}
+                                 :help "The tool's arguments. A string value may carry {kind}, {id}, {action}, {summary}, {caller}, {why}, {link} and {expires_at}; the engine fills them from the moved row. The text always carries the link."
+                                 :spelled-by-hand "The tool's own arguments as JSON, e.g. {\"chat_id\": \"42\", \"text\": \"{summary} {link}\"}"}}
     [:map-of :keyword :any]]
    [:on {:x-display {:label "Hears"
                      :help "The transitions that send a notice: {kind, actions}."}}

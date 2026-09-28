@@ -120,7 +120,7 @@
     ;; and the means by which a wake is scheduled
     (is (= ["approval_request" "attachment" "definition"
             "grant" "held_call" "job" "judgment" "mcp_server" "meal"
-            "member" "model"
+            "member" "model" "notifier"
             "plan" "role" "schedule" "seat"
             "sitting" "subscription" "task"
             ;; docs/spec-transcript.md: and what a sitting said, one

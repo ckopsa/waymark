@@ -165,7 +165,7 @@
              ;; like the clock sweeper beside it. Core's fifth came
              ;; with waymark-fp62.10.2: the held calls' expiry, so
              ;; nothing a person never answered runs late (R-14, R-7)
-             :mcp-discover :held-call-expiry
+             :mcp-discover :held-call-expiry :notifier
              ;; core's sixth: the seat's clock, so a transcript seals
              ;; and an idle sitting closes between deploys
              :seat-clock
