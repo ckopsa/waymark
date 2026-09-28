@@ -189,6 +189,13 @@
   [repo id]
   (str "github:" repo "/check-run/" id))
 
+(defn status-id
+  "A commit status's own address: github:owner/repo/status/{sha}/{context}.
+  A status has no run id, so the head and the context name it (ticket
+  3aca3ae8)."
+  [repo sha context]
+  (str "github:" repo "/status/" sha "/" context))
+
 ;; ── the transport ───────────────────────────────────────────────────
 
 (defn- query-string [params]
@@ -383,7 +390,10 @@
   needs and the row does not keep: which change it ran on, and where
   the job log lives."
   [repo change-id* head-sha check]
-  (cond-> {:run_id (run-id repo (:id check))
+  (cond-> {:run_id (if-some [context (:context check)]
+                     (status-id repo (or (clamp (:head_sha check) 64) head-sha)
+                                context)
+                     (run-id repo (:id check)))
            :change_id change-id*
            :repository repo
            :check_id (whole (:id check))
@@ -541,24 +551,59 @@
 (defn- refused? [e]
   (contains? #{401 403} (:status (ex-data e))))
 
+(defn status->check
+  "One commit status → the check run shape this source reads (ticket
+  3aca3ae8). A status has no run: its `:context` names it, and the head
+  and the context are its address. `pending` is still running; `error`
+  is red, as `failure` is."
+  [sha status]
+  (let [state (word (:state status))
+        done? (and state (not= "pending" state))]
+    {:context (clamp (:context status) 100)
+     :name (:context status)
+     :status (if done? "completed" "in_progress")
+     :conclusion (when done? (if (= "error" state) "failure" state))
+     :head_sha sha
+     :started_at (:created_at status)
+     :completed_at (when done? (:updated_at status))
+     :html_url (:target_url status)
+     :details_url (:target_url status)}))
+
+(defn- statuses!
+  "Every commit status on the head, as check runs: a required check
+  that reports as a status (an external quality gate) is a check like
+  any other (ticket 3aca3ae8). GitHub's combined status answers the
+  latest of each context. A token that may not read statuses answers
+  none."
+  [this repo sha]
+  (try
+    (mapv #(status->check sha %)
+          (:statuses (call! this "GET"
+                            (str "/repos/" repo "/commits/" sha "/status")
+                            {:params {:per_page page-size}})))
+    (catch clojure.lang.ExceptionInfo e
+      (if (refused? e) [] (throw e)))))
+
 (defn- check-runs!
-  "Every check run on the head, as one page. `filter=latest` is
-  GitHub's own: a check run that ran twice answers once. A repository
-  whose check-runs route refused the token is read through Actions,
-  and stays so for the rest of the pass."
+  "Every check run on the head, as one page, and every commit status
+  beside them. `filter=latest` is GitHub's own: a check run that ran
+  twice answers once. A repository whose check-runs route refused the
+  token is read through Actions, and stays so for the rest of the pass."
   [{:keys [actions-only] :as this} repo sha]
-  (if (contains? @actions-only repo)
-    (actions-checks! this repo sha)
-    (try
-      (let [resp (call! this "GET"
-                        (str "/repos/" repo "/commits/" sha "/check-runs")
-                        {:params {:per_page page-size :filter "latest"}})]
-        (vec (:check_runs resp)))
-      (catch clojure.lang.ExceptionInfo e
-        (if (refused? e)
-          (do (swap! actions-only conj repo)
-              (actions-checks! this repo sha))
-          (throw e))))))
+  (into
+   (if (contains? @actions-only repo)
+     (actions-checks! this repo sha)
+     (try
+       (let [resp (call! this "GET"
+                         (str "/repos/" repo "/commits/" sha "/check-runs")
+                         {:params {:per_page page-size :filter "latest"}})]
+         (vec (:check_runs resp)))
+       (catch clojure.lang.ExceptionInfo e
+         (if (refused? e)
+           (do (swap! actions-only conj repo)
+               (actions-checks! this repo sha))
+           (throw e)))))
+   (statuses! this repo sha)))
 
 (defn- head-checks!
   "The check runs of one open head for the pass. A read that fails
@@ -769,13 +814,17 @@
     ;; filtered: a pending and a green check are what the failing pass
     ;; needs to tell "not yet" from "red" (ticket d1742908). The id and
     ;; the start say which of two runs of one name is the newer, so a
-    ;; green re-run answers for the red run before it (ticket 6bdaf6fe)
+    ;; green re-run answers for the red run before it (ticket 6bdaf6fe).
+    ;; Each carries its ci_run document on its metadata, so the run
+    ;; pass mints a late red from this same read (ticket 3aca3ae8)
     (mapv (fn [check]
-            {:check_name (clamp (:name check) 200)
-             :status (word (:status check))
-             :conclusion (word (:conclusion check))
-             :id (:id check)
-             :started_at (word (:started_at check))})
+            (with-meta
+              {:check_name (clamp (:name check) 200)
+               :status (word (:status check))
+               :conclusion (word (:conclusion check))
+               :id (:id check)
+               :started_at (word (:started_at check))}
+              {:doc (check->doc repository nil head-sha check)}))
           (check-runs! this repository head-sha)))
 
   (forge-base [this repository branch]
@@ -882,7 +931,7 @@
 
 (defn fake-state
   "A fresh in-memory GitHub. Script it with `seed-pull!`,
-  `seed-check!`, `seed-job!`, `seed-log!`, `log-mode!` and `down!`;
+  `seed-check!`, `seed-status!`, `seed-job!`, `seed-log!`, `log-mode!` and `down!`;
   read it back with `requests` and `labels-pushed`."
   []
   (atom {:repos {} :logs {} :log-mode :text :labels [] :requests []
@@ -908,6 +957,14 @@
   [state repo sha check]
   (swap! state update-in [:repos repo :checks sha]
          (fn [cs] (conj (vec cs) check))))
+
+(defn seed-status!
+  "One commit status at the fake, on one head, in GitHub's own shape
+  ({:context :state :target_url …}). The combined status route answers
+  them (ticket 3aca3ae8)."
+  [state repo sha status]
+  (swap! state update-in [:repos repo :statuses sha]
+         (fn [ss] (conj (vec ss) status))))
 
 (defn seed-branch!
   "One branch at the fake, with its head. The base pass reads it
@@ -986,6 +1043,7 @@
 (def ^:private files-path #"/repos/([^/]+/[^/]+)/pulls/(\d+)/files")
 (def ^:private reviews-path #"/repos/([^/]+/[^/]+)/pulls/(\d+)/reviews")
 (def ^:private checks-path #"/repos/([^/]+/[^/]+)/commits/([^/]+)/check-runs")
+(def ^:private statuses-path #"/repos/([^/]+/[^/]+)/commits/([^/]+)/status")
 (def ^:private runs-path #"/repos/([^/]+/[^/]+)/actions/runs")
 (def ^:private jobs-path #"/repos/([^/]+/[^/]+)/actions/runs/(\d+)/jobs")
 (def ^:private job-log-path #"/repos/([^/]+/[^/]+)/actions/jobs/(\d+)/logs")
@@ -1055,6 +1113,10 @@
                                  " " path)
                             {:status status}))
             {:check_runs (vec (get-in (repo-of m) [:checks (nth m 2)]))}))
+
+        (re-matches statuses-path path)
+        (let [m (re-matches statuses-path path)]
+          {:statuses (vec (get-in (repo-of m) [:statuses (nth m 2)]))})
 
         (re-matches runs-path path)
         (let [m (re-matches runs-path path)]
