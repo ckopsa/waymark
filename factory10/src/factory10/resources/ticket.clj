@@ -28,7 +28,8 @@
   head, a close without a merge, a stall and a person's unstick send it
   back through `return` to `open`, so the seat that wrote the change
   wakes and walks it again with its change and feedback; the merge ends
-  it through `land` with the pull request as its sentence. All three
+  it through `land` with the pull request as its sentence, from any
+  state that has not ended (ticket 3ec37f66). All three
   doors are the change's, inside its own transaction
   (`only-its-change-moves-it`), and no hand at the wire takes them.
 
@@ -760,11 +761,14 @@
      :display {:label "Back from review" :order 12
                :description "Its change went red, closed, stalled or was put back to work — into the queue again"}}
 
-    ;; the merge's ending, from `in_review` or from `open` (a change a
-    ;; person merged while it was red). Not `complete`: that door is a
-    ;; hand's, and fenced by its draft.
+    ;; the merge's ending, from every state that has not ended (ticket
+    ;; 3ec37f66): `in_review` most days, `open` for a change a person
+    ;; merged while it was red, and `draft`, `blocked` or `deferred`
+    ;; for a ticket a stall, a groomer or a person moved while its pull
+    ;; request waited green. GitHub merged it whatever the queue says.
+    ;; Not `complete`: that door is a hand's, and fenced by its draft.
     :land
-    {:from #{:open :in_review} :to :done
+    {:from #{:draft :open :in_review :blocked :deferred} :to :done
      :input close-input
      :guards [only-its-change-moves-it children-are-finished]
      :handler close-the-ticket
