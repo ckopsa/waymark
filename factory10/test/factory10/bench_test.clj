@@ -1385,7 +1385,9 @@
              (:head_sha (:arguments (last (calls-of st "bench__merge"))))))
       (is (= 1 (count (calls-of st "bench__update_branch")))))))
 
-(defn- policy-row [{:keys [eng]}]
+(defn- the-policy
+  "The one policy row of a world, as stored."
+  [{:keys [eng]}]
   (first (store/with-tx (:storage eng)
            (fn [tx] (store/query-rows (:storage eng) tx :repo_policy
                                       {:repository a-repository}
@@ -1402,11 +1404,11 @@
     (bench/merge-green! (:eng w) seen)
     (is (= {:line_front id :line_front_pr 31
             :line_front_waiting "update" :line_waiting 0}
-           (select-keys (:data (policy-row w))
+           (select-keys (:data (the-policy w))
                         [:line_front :line_front_pr :line_front_waiting
                          :line_waiting]))
         "the policy names the front and how many wait")
-    (is (some? (get-in (policy-row w) [:data :line_at])))
+    (is (some? (get-in (the-policy w) [:data :line_at])))
     (is (= {:line_place 1 :line_why "front"}
            (select-keys (:data (change-row w)) [:line_place :line_why])))
     (is (= "submitted" (name (:state (change-row w))))
@@ -1416,8 +1418,8 @@
       (bench/merge-green! (:eng w) seen)
       (is (= "draft" (get-in (change-row w) [:data :line_why])))
       (is (nil? (get-in (change-row w) [:data :line_place])))
-      (is (nil? (get-in (policy-row w) [:data :line_front])))
-      (is (nil? (get-in (policy-row w) [:data :line_at]))))))
+      (is (nil? (get-in (the-policy w) [:data :line_front])))
+      (is (nil? (get-in (the-policy w) [:data :line_at]))))))
 
 (deftest a-merge-refused-as-out-of-date-is-brought-up-to-date
   (let [w (submitted-world house-policy)
