@@ -140,6 +140,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgment :as judgment]
             [waymark10.server.problems :as p]
+            [waymark10.server.seams :as seams]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
   (:import (java.net URLEncoder)
@@ -647,8 +648,8 @@
   advertises its EFFECTIVE :limit/:max-limit (declared, else the
   framework defaults) rather than a bare true, so a client can read
   the grid affordance's bounds straight off the envelope."
-  [rdef row resources]
-  (into {}
+  [rdef row resources link-doors]
+  (into (seams/lent-links link-doors (:kind rdef) row)
         (keep (fn [{:keys [rel summary badge embed] :as ld}]
                 (when-some [entry (cond
                                     (:edge ld) (edge-link rdef row resources ld)
@@ -959,7 +960,8 @@
               :fields fields
               :actions actions
               :unavailable unavailable
-              :links (render-links rdef public-row resources)
+              :links (render-links rdef public-row resources
+                                   (:link-doors ctx-opts))
               :meta (cond-> {:version (:version row)
                              :etag (inv/etag (:kind rdef) (:id row) (:version row))}
                       (:updated-at row) (assoc :updated-at (str (:updated-at row)))
@@ -974,7 +976,7 @@
   State, summary, links and meta stay — they cost nothing (and they
   project like the full envelope's: batch B's redaction holds at
   every depth)."
-  [rdef row {:keys [resources visibility]}]
+  [rdef row {:keys [resources visibility link-doors]}]
   (let [secret (not-empty (schema/secret-fields (:schema rdef)))
         redacted (not-empty (into (set (redacted-fields rdef visibility))
                                   secret))
@@ -990,7 +992,7 @@
       :summary (project-summary rdef hrow redacted)
       :actions nil
       :unavailable nil
-      :links (render-links rdef public-row resources)
+      :links (render-links rdef public-row resources link-doors)
       :meta (cond-> {:version (:version row)
                      :etag (inv/etag (:kind rdef) (:id row) (:version row))}
               (:updated-at row) (assoc :updated-at (str (:updated-at row)))

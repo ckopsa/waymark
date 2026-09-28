@@ -474,7 +474,9 @@
              :fire_url :fire_token :last_fired_at :last_run_url
              :wake_pending :wake_fired_at :wake_due_at :last_halted_wake
              ;; a throttle's own instant: the pending wake waits for it
-             :retry_after}
+             :retry_after
+             ;; the transitions a damped wake heard (waymark-fp62.21)
+             :wake_heard}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
       (doseq [a [:claim :observe :pause :resume :fail :end :fired]]
