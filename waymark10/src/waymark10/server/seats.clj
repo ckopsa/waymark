@@ -3134,6 +3134,18 @@
                 :x-display {:label "Refusals served"
                             :help "409s served under this sitting's grant — fuel spent on law the model did not know ahead of time. Counted by the engine, frozen at the close, and read as waymark's own backlog rather than as the model's fault."}}
      [:int {:min 0}]]
+    ;; WHICH LAW THE LAST REFUSAL WAS. The count says how many; this
+    ;; says what the newest one was, so the close can tell whether the
+    ;; last invoke or bench write was refused, and on which guard.
+    [:last_refusal {:optional true
+                    :x-display
+                    {:raw true
+                     :label "The last refusal"
+                     :help "The newest 409 served under this sitting's grant: its problem type, the guard that refused when one did, and when. Stamped by the engine beside the count, frozen at the close."}}
+     [:maybe [:map
+              [:type [:maybe [:string {:max 200}]]]
+              [:guard {:optional true} [:maybe [:string {:max 200}]]]
+              [:at [:string {:max 64}]]]]]
     ;; THE THIRD THE ENGINE COUNTS (R-10.6a). The transcript is the
     ;; larger part of the bill, and the transcript is what the MCP
     ;; door answered. `served` is the record of it: tool name → the
@@ -3534,20 +3546,34 @@
   MAINTENANCE write — document only, version untouched, no transition
   (see the ns docstring). → the new count, or nil when there was
   nothing to count: an unknown id, a sitting already closed, or a
-  counter this kind does not keep."
-  [eng sitting-id counter]
-  (when (and sitting-id
-             (contains? #{:transitions :refusals} counter)
-             (get (inv/resources eng) :sitting))
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (when-some [row (store/load-row (:storage eng) tx :sitting
-                                        (str sitting-id) {:for-update true})]
-          (when (= :open (:state row))
-            (let [n (inc (long (or (get (:data row) counter) 0)))]
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                  (assoc (:data row) counter n) nil)
-              n)))))))
+  counter this kind does not keep.
+
+  With a `refusal` ({:type :guard}) on a `:refusals` count, the same
+  write stamps `:last_refusal` — the problem type, the guard name when
+  one refused, and the moment — so the close can read which law the
+  newest refusal was, not only how many there were."
+  ([eng sitting-id counter] (bump-counter! eng sitting-id counter nil))
+  ([eng sitting-id counter refusal]
+   (when (and sitting-id
+              (contains? #{:transitions :refusals} counter)
+              (get (inv/resources eng) :sitting))
+     (store/with-tx (:storage eng)
+       (fn [tx]
+         (when-some [row (store/load-row (:storage eng) tx :sitting
+                                         (str sitting-id) {:for-update true})]
+           (when (= :open (:state row))
+             (let [n (inc (long (or (get (:data row) counter) 0)))
+                   stamp (when (and refusal (= :refusals counter))
+                           (cond-> {:type (some-> (:type refusal) str not-empty)
+                                    :at (str (java.time.Instant/now))}
+                             (some? (:guard refusal))
+                             (assoc :guard (let [g (:guard refusal)]
+                                             (if (keyword? g) (name g) (str g))))))]
+               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                   (cond-> (assoc (:data row) counter n)
+                                     stamp (assoc :last_refusal stamp))
+                                   nil)
+               n))))))))
 
 (defn add-served!
   "Add one call and `bytes` bytes to an open sitting's `served`, under
