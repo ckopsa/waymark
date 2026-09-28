@@ -140,6 +140,7 @@
   (:require [clojure.string :as str]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             ;; the walked kind's own doors, read out of its rdef: the
             ;; filter guard asks whether one of them LEAVES the state
             ;; the walk filters by (bead waymark-fp62.12, R-2), and
@@ -912,6 +913,23 @@
     (t/allow)
     (t/deny)))
 
+(g/defguard the-engine-or-the-persons-tap
+  {:reads [:principal :within]
+   :hold true
+   :vars [:seat :started_at]
+   :explain "Abandoning seat {seat}'s sitting, open since {started_at}, is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written."}
+  [row _inp ctx]
+  ;; NOT hidden (ticket be2c2c16): a door the grant admits must never
+  ;; answer not-found. The sweep and a person pass; an agent's abandon,
+  ;; the mayor's of another seat's sitting included, waits for the
+  ;; person, and the one agent abandon this admits is the engine's
+  ;; replay of the held call that person allowed.
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :sitting :abandon (:id row)) (t/allow)
+    :else (t/deny {:vars {:seat (str (get-in row [:data :seat]))
+                          :started_at (str (get-in row [:data :started_at]))}})))
+
 (g/defguard folded-by-a-merge
   {:reads [:within]
    :hide true
@@ -1426,6 +1444,30 @@
    ;; #{:human :agent :system}), and a wall that also answered to a
    ;; word only scenarios spell would be two vocabularies for one fact
    :as      {:id "colton" :type :human}
+   :expect  {:allowed true}})
+
+(def ^:private an-open-sitting
+  {:seat "02eee915-354f-4010-a36f-7adfbd532395"
+   :model "claude-sonnet"
+   :started_at "2026-09-28T10:00:00Z"})
+
+(defscenario another-hand-abandons-a-sitting-at-the-persons-tap
+  "A seat whose grant admits `sitting.abandon` asks to end another
+   seat's sitting, and the ask waits for the person's tap: a held
+   call, never a not-found."
+  {:kind    :sitting
+   :attempt :abandon
+   :row     {:state :open :data an-open-sitting}
+   :as      {:id "mayor" :type :agent}
+   :expect  {:refused :the-engine-or-the-persons-tap
+             :because "held for the person's tap"}})
+
+(defscenario the-sweep-abandons-a-lost-sitting
+  "And the sweep still ends a lost sitting by its own hand."
+  {:kind    :sitting
+   :attempt :abandon
+   :row     {:state :open :data an-open-sitting}
+   :as      {:id "waymark10-seats" :type :system}
    :expect  {:allowed true}})
 
 (def ^:private a-minted-key
@@ -3299,7 +3341,7 @@
     ;; not a zero one.
     :abandon
     {:from #{:open} :to :abandoned
-     :guards [the-engines-own-hand]
+     :guards [the-engine-or-the-persons-tap]
      ;; no handler: nothing is written. The ending of a sitting
      ;; nobody closed is the ABSENCE of a bill, not a zero one, and
      ;; the counts it already carries are what it did before it was
@@ -3312,7 +3354,9 @@
     "R-10.6 has the engine count transitions and refusals. `bump-counter!` is a maintenance write (`store/update-data!`, jobs.clj's progress precedent) rather than a transition: a logged transition per counted transition would double the log — the counter would cost more log than the thing it counts. The `close` is a real transition and freezes both numbers."
     "`tally` writes a `cost_usd` and NO `prices` map, where the close writes both. The prices are copied down beside a bill a reprice must not be able to move, and the only bill is the close's; a tally's cost is a reading of the row at that moment, re-read at the next turn, and a prices map beside it would say a running figure was final. A sitting closed by the sweep from its last tally is costed by the close, at the close's prices, like every other."
     "`close` and `tally` share ONE input (`report-input`) rather than declaring the five counts twice. The two doors take the same report from the same hook — one ends the sitting, the other writes the running total — and two spellings would be two shapes for a harness to keep in step, which is exactly the drift § 3 of the spec is about."
-    "`harness_session` is on the BIRTH door as well as the close's (R-12.15, R-12.17), which no other count-bearing field is. The reason is that it is not a count: it is the only fact a session knows at the sit that the engine cannot derive, and the pairing it makes is what lets two overlapping wakes of one seat each end their own sitting. It is `:maybe`, so it is not filterable and the pairing reads one page of the seat's open sittings rather than querying — `model`'s recorded wall, one field over. The close writes it only onto a row that carries none: a report naming another run's id must not move a bill."]})
+    "`harness_session` is on the BIRTH door as well as the close's (R-12.15, R-12.17), which no other count-bearing field is. The reason is that it is not a count: it is the only fact a session knows at the sit that the engine cannot derive, and the pairing it makes is what lets two overlapping wakes of one seat each end their own sitting. It is `:maybe`, so it is not filterable and the pairing reads one page of the seat's open sittings rather than querying — `model`'s recorded wall, one field over. The close writes it only onto a row that carries none: a report naming another run's id must not move a bill."]
+   :scenarios [another-hand-abandons-a-sitting-at-the-persons-tap
+               the-sweep-abandons-a-lost-sitting]})
 
 ;; ── the seam wave two calls ─────────────────────────────────────────
 
