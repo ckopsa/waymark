@@ -121,6 +121,11 @@
     (cond-> (assoc-in row [:data :blocked_by] (vec (:blocked_by inp)))
       (#{:draft :open} from) (assoc-in [:data :blocked_from] (name from)))))
 
+(defhandler state-the-merge-order [row inp _ctx]
+  ;; `block`'s rule, one field over: the list is REPLACED, and an empty
+  ;; one says the change merges when it is green.
+  (assoc-in row [:data :merge_after] (vec (:merge_after inp))))
+
 (defhandler clear-the-blockers [row _inp _ctx]
   ;; The transition log keeps who blocked what; the row says what
   ;; holds NOW, and an unblocked ticket is blocked by nothing.
@@ -245,6 +250,76 @@
         (t/allow)))
     (t/allow)))
 
+;; NO DEPENDENCY MAY MAKE A CYCLE (ticket d069bc3b). A ticket waits on
+;; two kinds of other ticket: its blockers, to be worked, and its
+;; `merge_after`, to merge. Either edge can close a loop with the other
+;; — A blocked by B while B merges after A holds both for ever — so one
+;; walk follows the union of both from the tickets a write names, and
+;; the write is refused when the walk comes back to the ticket written.
+;; An ended ticket waits on nothing, so the walk does not go through it.
+
+(def ^:private walk-limit
+  "The most tickets one cycle walk reads."
+  500)
+
+(defn- waits-of
+  "The ids ticket `t` waits on, to be worked or to merge."
+  [t]
+  (when-not (contains? ended (state-of t))
+    (map str (concat (get-in t [:data :blocked_by])
+                     (get-in t [:data :merge_after])))))
+
+(defn cycle-path
+  "The path by which the tickets `named` lead back to `self`, through
+  every ticket's blockers and `merge_after`, as ids from `self` to
+  `self` — or nil when none does. Breadth first, so the path is a
+  shortest one. `read'` is the ctx hook."
+  [self named read']
+  (loop [queue (into clojure.lang.PersistentQueue/EMPTY
+                     (map (fn [id] [self (str id)]))
+                     (distinct named))
+         seen #{}]
+    (when-some [path (peek queue)]
+      (let [id (peek path)]
+        (cond
+          (= self id) path
+          (contains? seen id) (recur (pop queue) seen)
+          :else
+          (let [t (when (< (count seen) walk-limit) (read' :ticket id))]
+            (recur (into (pop queue) (map #(conj path %)) (waits-of t))
+                   (conj seen id))))))))
+
+(defn- cycle-text [path]
+  (str "a cycle: " (str/join " → " path)))
+
+(defguardfn the-merge-order-makes-no-cycle
+  {:judges [:merge_after]
+   :reads [:ticket]
+   :vars [:which]
+   ;; the closure acknowledgment, the blockers' own: which tickets wait
+   ;; on this one is the collection's to say, not a form's
+   :open "The tickets named are any tickets, and which of them wait on this one is read from their rows at the write; no form can recite it."
+   :explain "A ticket cannot wait to merge on {which}. Name tickets that exist and that do not wait, by what blocks them or what they merge after, on this one."}
+  [row inp ctx]
+  (let [read' (:read ctx)
+        self (some-> (:id row) str)
+        named (map str (:merge_after inp))]
+    (cond
+      (and self (some #(= self %) named))
+      (t/deny {:vars {:which "itself"}
+               :errors {:merge_after ["a ticket cannot merge after itself"]}})
+      (nil? read') (t/allow)
+      :else
+      (let [problem (or (some #(when (nil? (read' :ticket %))
+                                 (str % ", which is not a ticket"))
+                              named)
+                        (some-> (when self (cycle-path self named read'))
+                                cycle-text))]
+        (if problem
+          (t/deny {:vars {:which problem}
+                   :errors {:merge_after [problem]}})
+          (t/allow))))))
+
 (defguardfn the-blockers-are-open-and-not-itself
   {:judges [:blocked_by]
    :reads [:ticket]
@@ -254,7 +329,7 @@
    ;; blockers are a list of refs, and no published constraint can say
    ;; which tickets are still open — the collection can, one GET away.
    :open "The blockers are tickets, and the open ones are the tickets collection under its default filter, one query away; no form can recite which of them have ended."
-   :explain "A ticket waits on open work: {which}. Name blockers that are still open, and never the ticket itself."}
+   :explain "A ticket waits on open work: {which}. Name blockers that are still open, never the ticket itself, and none that waits on this one."}
   [row inp ctx]
   (let [read' (:read ctx)
         self (str (:id row))
@@ -272,7 +347,9 @@
                                 (contains? ended (state-of b))
                                 (str id " has ended")
                                 :else nil)))
-                          named)]
+                          named)
+            problem (or problem
+                        (some-> (cycle-path self named read') cycle-text))]
         (if problem
           (t/deny {:vars {:which problem}
                    :errors {:blocked_by [problem]}})
@@ -461,7 +538,7 @@
 
 (def ^:private stated-fields
   "What a person or a seat STATES about a ticket: the create door and
-  the restate door collect the same four, because a restatement is
+  the restate door collect the same five, because a restatement is
   the whole statement again."
   [[:title {:examples ["The code seat walks ticket rows instead of task rows"]
             :x-display
@@ -487,7 +564,13 @@
            {:raw true
             :label "The repository"
             :help "The repository this ask is built in, as GitHub spells it. A seat's bench filter names the same one, so a ticket for another repository never reaches its worktree."}}
-    [:maybe [:string {:max 140}]]]])
+    [:maybe [:string {:max 140}]]]
+   ;; ticket d069bc3b: holds the MERGE, not the build — see bench.clj
+   [:merge_after {:optional true :kind :ticket
+                  :x-display
+                  {:label "Merges after"
+                   :help "The tickets, in any repository, that must be done before this one's change merges. A seat builds it meanwhile; the house holds its green pull request until every one of them is done, and a dropped one holds it until a person restates this list."}}
+    [:maybe [:vector {:max 50} :waymark/ref]]]])
 
 (def ^:private birth-fields
   "What a birth may say beyond the statement: where it sits in the
@@ -551,7 +634,16 @@
                 {:raw true
                  :label "Red heads of the base"
                  :help "Each head of the base branch that went red while this ticket was open, with its red checks. Empty for a ticket the engine did not open."}}
-    [:maybe [:vector [:string {:max 400}]]]]])
+    [:maybe [:vector [:string {:max 400}]]]]
+   ;; ticket d069bc3b: written by the house merge pass, as the change's
+   ;; place in the line is, and cleared when nothing holds the merge
+   [:merge_waits {:optional true
+                  :examples ["waits on 01HZQ7Y7F2R3W4V5X6Y7Z8A9B1 (open) to merge"]
+                  :x-display
+                  {:widget "prose"
+                   :label "Waits to merge on"
+                   :help "Why this ticket's green pull request is not merging: the tickets it merges after that are not done yet, each with its state. Empty when nothing holds it."}}
+    [:maybe [:string {:max 500}]]]])
 
 (def ^:private close-input
   [:map
@@ -562,6 +654,20 @@
       :label "How it ended"
       :help "One sentence for the next reader: what was done, or why this is let go. Say the outcome — merged, superseded by, no longer wanted because — and not the diagnosis."}}
     [:string {:min 1 :max 480}]]])
+
+(def ^:private merge-after-input
+  [:map
+   [:merge_after {:kind :ticket
+                  :x-display
+                  {:label "Merges after"
+                   :help "Every ticket, in any repository, that must be done before this one's change merges. State the whole set: this replaces the list, and an empty one lets it merge when it is green."}}
+    [:vector {:max 50} :waymark/ref]]])
+
+(def ^:private merge-after-safety
+  {:idempotent true :reversible true :confirm false})
+
+(def ^:private merge-after-description
+  "Name the tickets that must be done before this one's change merges")
 
 ;; ── :ticket — one ask of the factory ────────────────────────────────
 
@@ -600,14 +706,15 @@
    ;; date and the ending are on no birth: a ticket is born a draft,
    ;; and the doors below are how it becomes ready and stops being.
    :create-schema (into [:map] (concat stated-fields birth-fields))
-   :create-guards [the-parent-is-open-at-birth]
+   :create-guards [the-parent-is-open-at-birth the-merge-order-makes-no-cycle]
    :actions
    {:restate
     {:from #{:draft} :to :draft
      :input (into [:map] stated-fields)
+     :guards [the-merge-order-makes-no-cycle]
      :handler restate-the-ticket
      :record true
-     :edit {:prefill [:title :detail :type :repo]}
+     :edit {:prefill [:title :detail :type :repo :merge_after]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :order 2
                :description "Say what needs doing again, whole"}}
@@ -667,6 +774,50 @@
               :one-way "This ticket leaves the queue until the tickets it waits on end. When the last of them ends it goes back where it stood — the queue, or draft for a draft — and a person's unblock lands it in the queue sooner."}
      :display {:label "Blocked by" :order 4
                :description "Wait on other tickets — this one leaves the queue until they end"}}
+
+    ;; THE MERGE ORDER, STATED WHOLE (ticket d069bc3b). It holds the
+    ;; merge and never the build, so it is open wherever a change can
+    ;; be waiting — after the pull request exists too. One door per
+    ;; state, because each is a self-loop (the deviations say why).
+    :merge_after
+    {:from #{:open} :to :open
+     :input merge-after-input
+     :guards [the-merge-order-makes-no-cycle]
+     :handler state-the-merge-order
+     :edit {:prefill [:merge_after]}
+     :safety merge-after-safety
+     :display {:label "Merges after" :order 17
+               :description merge-after-description}}
+
+    :merge_after_draft
+    {:from #{:draft} :to :draft
+     :input merge-after-input
+     :guards [the-merge-order-makes-no-cycle]
+     :handler state-the-merge-order
+     :edit {:prefill [:merge_after]}
+     :safety merge-after-safety
+     :display {:label "Merges after" :order 18
+               :description merge-after-description}}
+
+    :merge_after_in_review
+    {:from #{:in_review} :to :in_review
+     :input merge-after-input
+     :guards [the-merge-order-makes-no-cycle]
+     :handler state-the-merge-order
+     :edit {:prefill [:merge_after]}
+     :safety merge-after-safety
+     :display {:label "Merges after" :order 19
+               :description merge-after-description}}
+
+    :merge_after_blocked
+    {:from #{:blocked} :to :blocked
+     :input merge-after-input
+     :guards [the-merge-order-makes-no-cycle]
+     :handler state-the-merge-order
+     :edit {:prefill [:merge_after]}
+     :safety merge-after-safety
+     :display {:label "Merges after" :order 20
+               :description merge-after-description}}
 
     :unblock
     {:from #{:blocked} :to :open
@@ -854,6 +1005,7 @@
    :deviations
    ["`restate` serves `draft` alone and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
     "`complete`, `drop` and `block` are one-way, not reversible. Each leaves from more than one state and its reverse lands in one (`reopen` in `draft`, `unblock` in `open`), and checks/check-reversible asks a reversible door for a way back to each `:from`. The way back is real in every case, and the `:one-way` sentence names it."
+    "`merge_after` is four doors, one self-loop for each state a change can wait in (`draft`, `open`, `in_review`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. `merge_after_in_review` is the one door a hand may take on a ticket under review, because it holds the merge and moves no state."
     "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket

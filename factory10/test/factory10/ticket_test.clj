@@ -76,12 +76,12 @@
 
 (deftest a-draft-is-groomed-by-a-person-and-never-by-a-seat
   (testing "a person at a draft meets groom, and the doors that shape it"
-    (is (= #{:restate :groom :block :complete :drop}
+    (is (= #{:restate :groom :block :complete :drop :merge_after_draft}
            (offers (at :draft) (ctx the-person)))
         "prioritize and defer are absent: a draft is not in the queue,
          so it has no rank there and nothing to park"))
   (testing "a seat at a draft meets everything but groom"
-    (is (= #{:restate :block :complete :drop}
+    (is (= #{:restate :block :complete :drop :merge_after_draft}
            (offers (at :draft) (ctx the-seat)))
         "a seat that could groom could fill its own queue")
     (let [shut (refusal (at :draft) (ctx the-seat) :groom)]
@@ -97,33 +97,34 @@
 
 (deftest an-open-ticket-is-the-queue-and-offers-every-working-door
   (testing "a seat at an open ticket meets the doors that end or park it"
-    (is (= #{:prioritize :block :defer :complete :drop}
+    (is (= #{:prioritize :block :defer :complete :drop :merge_after}
            (offers (at :open) (ctx the-seat)))
         "restate is absent — a groomed statement is what the seat builds
          — and reopen, unblock and resume are absent — nothing ended it
          and nothing holds it"))
   (testing "a person meets the same doors and the way back to draft"
-    (is (= #{:prioritize :block :defer :complete :drop :ungroom}
+    (is (= #{:prioritize :block :defer :complete :drop :ungroom :merge_after}
            (offers (at :open) (ctx the-person)))
         "what a seat may reach at all is the grant's question, not this
          kind's; ungroom is the one door here that is a person's")))
 
 (deftest a-blocked-ticket-is-out-of-the-queue-and-waits
   (let [row (at :blocked {:blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]})]
-    (is (= #{:block :unblock} (offers row (ctx the-person)))
-        "restate the blockers, or clear them — nothing else, because a
-         blocked ticket is not worked and not ended")
+    (is (= #{:block :unblock :merge_after_blocked} (offers row (ctx the-person)))
+        "restate the blockers, clear them, or state what it merges after
+         — nothing else, because a blocked ticket is not worked and not
+         ended")
     (let [shut (refusal row (ctx the-person) :complete)]
       (is (= :unavailable (:status shut)))
       (is (nil? (:denier shut))
           "the MACHINE refuses it, with no guard behind the refusal: a
            blocked ticket is not finished, so it is unblocked first"))))
 
-(deftest a-ticket-in-review-offers-no-hand-a-door
+(deftest a-ticket-in-review-offers-no-hand-a-door-that-moves-it
   (doseq [c [(ctx the-person) (ctx the-seat) (ctx the-engine)]]
-    (is (empty? (offers (at :in_review) c))
+    (is (= #{:merge_after_in_review} (offers (at :in_review) c))
         "its change moves it back or ends it, from inside its own door;
-         the wire, and every hand at it, meets nothing"))
+         the wire meets only the merge order, which moves no state"))
   (let [shut (refusal (at :in_review) (ctx the-person) :return)]
     (is (= :only-its-change-moves-it (:name (:denier shut))))))
 
@@ -204,6 +205,49 @@
           "a blocker that is not a ticket is refused by name")
       (is (= :allow (judge ["B-done"] nil))
           "the probe with no hook declines to guess"))))
+
+(deftest no-dependency-makes-a-cycle
+  ;; ticket d069bc3b: one walk over blocked_by and merge_after together
+  (let [row (at :open {} "T")
+        merge-guard (first (:guards (get (:actions ticket) :merge_after)))
+        block-guard (first (:guards (get (:actions ticket) :block)))
+        judge (fn [guard inp rows]
+                (first (g/evaluate guard row inp (ctx the-person rows))))
+        base {"T" row "A" (at :open {} "A") "B" (at :open {} "B")}]
+    (testing "a write that makes no cycle passes"
+      (is (= :allow (:verdict (judge merge-guard {:merge_after ["A"]} base))))
+      (is (= :allow (:verdict (judge block-guard {:blocked_by ["A"]} base)))))
+    (testing "a direct cycle is refused with its path"
+      (let [rows (assoc base "A" (at :open {:merge_after ["T"]} "A"))
+            v (judge merge-guard {:merge_after ["A"]} rows)]
+        (is (= :deny (:verdict v)))
+        (is (re-find #"T → A → T" (pr-str v)))))
+    (testing "a three-long cycle is refused with its path"
+      (let [rows (-> base
+                     (assoc "A" (at :open {:merge_after ["B"]} "A"))
+                     (assoc "B" (at :open {:merge_after ["T"]} "B")))
+            v (judge merge-guard {:merge_after ["A"]} rows)]
+        (is (= :deny (:verdict v)))
+        (is (re-find #"T → A → B → T" (pr-str v)))))
+    (testing "a cycle mixed across the two fields is refused, either way"
+      (let [rows (assoc base "A" (at :blocked {:blocked_by ["T"]} "A"))
+            v (judge merge-guard {:merge_after ["A"]} rows)]
+        (is (= :deny (:verdict v)))
+        (is (re-find #"T → A → T" (pr-str v))))
+      (let [rows (assoc base "B" (at :open {:merge_after ["T"]} "B"))
+            v (judge block-guard {:blocked_by ["B"]} rows)]
+        (is (= :deny (:verdict v)))
+        (is (re-find #"T → B → T" (pr-str v)))))
+    (testing "an ended ticket waits on nothing, so it closes no cycle"
+      (let [rows (assoc base "A" (at :done {:merge_after ["T"]
+                                             :close_reason "done"} "A"))]
+        (is (= :allow (:verdict (judge merge-guard {:merge_after ["A"]} rows))))))
+    (testing "itself, and a ticket that is not one, are refused"
+      (is (= :deny (:verdict (judge merge-guard {:merge_after ["T"]} base))))
+      (is (= :deny (:verdict (judge merge-guard {:merge_after ["nobody"]} base)))))
+    (testing "restate and the birth judge the same field"
+      (is (some #{merge-guard} (:guards (get (:actions ticket) :restate))))
+      (is (some #{merge-guard} (:create-guards ticket))))))
 
 (deftest a-child-is-born-under-an-open-parent
   (let [rows {"P-open" (at :open {} "P-open")
