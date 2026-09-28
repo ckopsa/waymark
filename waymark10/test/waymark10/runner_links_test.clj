@@ -77,6 +77,13 @@
                       :fire_token a-token}
                      {:principal principal})))
 
+(defn- make-localfire-link! [principal]
+  (:row (inv/create! *eng* :runner_link
+                     {:provider "localfire"
+                      :fire_url a-url
+                      :fire_token a-token}
+                     {:principal principal})))
+
 (deftest the-token-is-the-one-secret
   (is (= #{:fire_token} (schema/secret-fields (:schema rl/runner-link)))))
 
@@ -303,3 +310,40 @@
       (is (= {:retry-at nil}
              (rl/fire-pool! *eng* (constantly (stub {:started nil}))
                             [a "no-such-link"] nil))))))
+
+(deftest a-prefer-pool-sends-only-the-overflow-to-a-capped-cloud-link
+  (let [lf (str (:id (make-localfire-link! colton)))
+        cloud (link-id!)
+        busy (atom false)
+        fires {lf (atom 0) cloud (atom 0)}
+        provider-of (fn [row]
+                      (let [id (str (:id row))]
+                        (reify sch/Provider
+                          (fire [_ _link _text]
+                            (swap! (fires id) inc)
+                            (if (and (= id lf) @busy)
+                              {:throttled "600"}
+                              {:started nil})))))
+        fire! #(:runner (rl/fire-pool! *eng* provider-of [lf cloud] nil "prefer"))]
+    (restate! cloud {:cap {:runs 1 :window_seconds 18000}} colton)
+    (is (= "localfire" (str (get-in (row-of lf) [:data :provider]))))
+    (testing "localfire takes every fire it can"
+      (is (= [lf lf lf] (vec (repeatedly 3 fire!))))
+      (is (zero? @(fires cloud))))
+    (testing "when localfire answers throttled, the next fire goes to the cloud link"
+      (reset! busy true)
+      (is (= cloud (fire!)))
+      (is (= [4 1] [@(fires lf) @(fires cloud)])))
+    (testing "once the cloud cap is spent, the wake waits for the earlier retry_after"
+      (let [out (rl/fire-pool! *eng* provider-of [lf cloud] nil "prefer")
+            lf-free (java.time.Instant/parse
+                     (str (get-in (row-of lf) [:data :retry_after])))]
+        (is (nil? (:runner out)))
+        (is (= lf-free (:retry-at out)))
+        (is (= [4 1] [@(fires lf) @(fires cloud)]))))))
+
+(deftest a-least-used-pool-keeps-its-rule-when-named
+  (let [a (link-id!) b (link-id!)]
+    (is (= [a b a b]
+           (vec (repeatedly 4 #(:runner (rl/fire-pool! *eng* (constantly (stub {:started nil}))
+                                                       [a b] nil "least_used"))))))))
