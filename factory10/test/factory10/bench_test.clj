@@ -1385,6 +1385,40 @@
              (:head_sha (:arguments (last (calls-of st "bench__merge"))))))
       (is (= 1 (count (calls-of st "bench__update_branch")))))))
 
+(defn- policy-row [{:keys [eng]}]
+  (first (store/with-tx (:storage eng)
+           (fn [tx] (store/query-rows (:storage eng) tx :repo_policy
+                                      {:repository a-repository}
+                                      {:limit 1})))))
+
+(deftest the-merge-line-is-written-on-the-rows
+  ;; ticket b85aded5
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})
+        id (str (:id (change-row w)))]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! (:eng w) seen)
+    (is (= {:line_front id :line_front_pr 31
+            :line_front_waiting "update" :line_waiting 0}
+           (select-keys (:data (policy-row w))
+                        [:line_front :line_front_pr :line_front_waiting
+                         :line_waiting]))
+        "the policy names the front and how many wait")
+    (is (some? (get-in (policy-row w) [:data :line_at])))
+    (is (= {:line_place 1 :line_why "front"}
+           (select-keys (:data (change-row w)) [:line_place :line_why])))
+    (is (= "submitted" (name (:state (change-row w))))
+        "a place in the line moves no state")
+    (testing "a draft steps out, and the empty line is cleared"
+      (mirror-says! w {:draft true})
+      (bench/merge-green! (:eng w) seen)
+      (is (= "draft" (get-in (change-row w) [:data :line_why])))
+      (is (nil? (get-in (change-row w) [:data :line_place])))
+      (is (nil? (get-in (policy-row w) [:data :line_front])))
+      (is (nil? (get-in (policy-row w) [:data :line_at]))))))
+
 (deftest a-merge-refused-as-out-of-date-is-brought-up-to-date
   (let [w (submitted-world house-policy)
         st (:state w)]
