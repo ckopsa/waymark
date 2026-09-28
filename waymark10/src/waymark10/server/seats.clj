@@ -734,6 +734,26 @@
     ;; exactly as the scope guards do
     (t/allow)))
 
+(def ^:private engine-own-kinds
+  "The kinds the wake consumer never matches (`wakes/own-kinds`, which
+  this file cannot require): a seat woken by its own sitting or its
+  own fire would wake itself forever."
+  #{"seat" "sitting" "schedule" "subscription"})
+
+(g/defguard wake-on-names-no-engine-kind
+  {:judges [:wake_on]
+   :reads [:services]
+   :vars [:kind]
+   :open "The four kinds are the engine's own writing about a wake, fixed in code; every other kind this surface serves may wake a seat."
+   :explain "A seat is never woken by {kind}: the engine's own kinds (seat, sitting, schedule, subscription) are dropped before a wake is matched, so a seat cannot wake itself forever. To wake when a fired sitting ends, wake on transcript seal."}
+  [_row inp _ctx]
+  (if-some [bad (first (for [e (:wake_on inp)
+                             :let [k (str (:kind e))]
+                             :when (contains? engine-own-kinds k)]
+                         k))]
+    (t/deny {:vars {:kind bad}})
+    (t/allow)))
+
 (g/defguard wake-on-names-real-actions
   {:judges [:wake_on]
    :reads [:services]
@@ -2189,6 +2209,7 @@
                    walk-matches-the-judgment
                    wake-on-names-real-kinds
                    wake-on-names-real-actions
+                   wake-on-names-no-engine-kind
                    inbox-names-real-kinds
                    inbox-names-real-actions
                    ;; LAST, so a hold is a call every other wall passed
@@ -2364,6 +2385,7 @@
               walk-matches-the-judgment
               wake-on-names-real-kinds
               wake-on-names-real-actions
+              wake-on-names-no-engine-kind
               inbox-names-real-kinds
               inbox-names-real-actions
               step-carries-a-note
