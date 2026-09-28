@@ -645,6 +645,15 @@
                    {:label "The wake is due"
                     :help "When the waiting wake may go out. The engine writes it when a transition matched a wake_on entry that settles, and a later match moves it forward. The wake goes out after this moment has passed. Engine-written."}}
      [:maybe :waymark/instant]]
+    ;; The replay's mark (waymark-fp62.21). The drain delivers at
+    ;; least once, and a damped match carries no idempotency key, so
+    ;; the wake remembers the last transitions it heard and a replay
+    ;; of one of them sets nothing pending again.
+    [:wake_heard {:optional true
+                  :x-display
+                  {:label "Transitions the wake heard"
+                   :help "The last transitions that matched this seat's wake_on, so a re-delivered one does not wake the seat twice. Engine-written."}}
+     [:maybe [:vector :string]]]
     ;; The fuel wall's mark (waymark ticket b790752f). A wake that
     ;; matched while the seat's week of fuel was spent does not fire:
     ;; it waits as `wake_pending`, and this says when the wall last

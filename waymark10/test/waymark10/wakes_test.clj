@@ -620,6 +620,44 @@
 
     (seat-do! seat :retire)))
 
+(deftest a-damped-match-delivered-twice-fires-the-seat-once
+  ;; waymark-fp62.21: the drain re-delivered a damped match while the
+  ;; released run's sitting was open, and the next release fired again
+  (let [wn :wake-replay-damped
+        fn' :wake-replay-damped-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "replayclerk"
+                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
+                       :fire_interval_seconds 1}
+                      fn')
+        open-one (sitting! seat)
+        task (task! "one mention")]
+    (task-do! task :complete)
+    (drain-wakes! wn)
+    (is (empty? (seat-fires seat)) "the open sitting damps the match")
+    (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+
+    (close-sitting! open-one)
+    (drain-wakes! wn)
+    (is (= 1 (count (seat-fires seat))) "the close releases the wake")
+
+    (testing "the same transition delivered again while the released run sits"
+      (let [open-two (sitting! seat)
+            t (last (filter #(= :complete (:action %)) (log-of :wake_task task)))]
+        (is (some? t))
+        (wakes/handle-transition! *eng* (atom nil) t)
+        (is (not (get-in (sched-of seat) [:data :wake_pending]))
+            "a replay sets nothing pending")
+        (Thread/sleep 1200)
+        (close-sitting! open-two)
+        (drain-wakes! wn)
+        (wakes/sweep-pending! *eng*)
+        (is (= 1 (count (seat-fires seat))) "one match, one fire")))
+
+    (seat-do! seat :retire)))
+
 (deftest a-throttled-routine-stays-live-and-its-wake-goes-out-after-the-time-it-named
   (let [wn :wake-throttle
         fn' :wake-throttle-fires

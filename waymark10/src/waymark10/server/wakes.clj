@@ -120,6 +120,14 @@
   it happens: `schedules/already-fired?` compares the row's stamp
   against the fire transition's own instant.
 
+  The key guards only the fire path. A DAMPED match fires nothing and
+  carries no key, so a replay of it while the released run's sitting
+  was open set `wake_pending` again, and the next release fired the
+  seat a second time for the one transition (waymark-fp62.21). So the
+  schedule row remembers the last transitions it heard
+  (`wake_heard`), and `wake-seat!` answers a replay of one of them
+  with silence, on every path.
+
   Nothing here re-throws. A throwing consumer parks its cursor, and a
   parked cursor stops every other seat in the house from being woken
   by anything."
@@ -495,6 +503,32 @@
     (write-pending! eng schedule-row true))
   nil)
 
+(def ^:private heard-cap
+  "How many transitions a schedule row remembers hearing. A replay is
+  the drain's last batch again, so a short tail is enough."
+  32)
+
+(defn- heard?
+  "Did this seat's wake already hear transition `t`? (the replay)"
+  [schedule-row t]
+  (boolean (some #{(str (:id t))} (get-in schedule-row [:data :wake_heard]))))
+
+(defn- remember-heard!
+  "Remember that the wake heard `t`, by the same maintenance write as
+  the pending flag. → the row as written, so the writes after this one
+  build on it and do not drop the mark."
+  [eng schedule-row t]
+  (let [heard (->> (conj (vec (get-in schedule-row [:data :wake_heard]))
+                         (str (:id t)))
+                   (take-last heard-cap)
+                   (vec))
+        row (assoc-in schedule-row [:data :wake_heard] heard)]
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/update-data! (:storage eng) tx :schedule (:id row)
+                            (:data row) (:next-flip-at row))))
+    row))
+
 (defn- due-at
   "The moment a settled wake is due, as the row should hold it after
   this match: the match's own instant plus the entry's quiet time, or
@@ -763,11 +797,17 @@
   A match the `fire` door refuses — a halt line, a parked seat — is
   REMEMBERED the same way, as `release!` keeps its flag: a seat behind
   a wall keeps its pending wake until the wall lifts.
+
+  A transition this seat's wake already heard (`heard?`) is the
+  drain's replay, and it is silence on every path, the damped one
+  included (waymark-fp62.21).
   → true when a fire went out."
   [eng seat t ^Instant at {:keys [text settle]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
-    (when (schedules/linked? eng row)
-      (cond
+    (when (and (schedules/linked? eng row)
+               (not (heard? row t)))
+      (let [row (remember-heard! eng row t)]
+       (cond
         settle
         (mark-settling! eng row (due-at row at settle))
 
@@ -790,7 +830,7 @@
                    (str "wake:" (:id seat) ":" (:id t)))
           (do (stamp-fired! eng row at false)
               true)
-          (mark-pending! eng row))))))
+          (mark-pending! eng row)))))))
 
 (defn- walk-count
   "How many rows the seat's sit would hand it, or nil when the seat
