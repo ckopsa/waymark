@@ -1,0 +1,121 @@
+(ns factory10.merge-line-test
+  "The house merge pass brings one pull request per repository up to
+  date at a time, and the rest wait in line (ticket d82d649a).
+
+  The line is worked with no engine at all: `work-lines!` takes the
+  ctx a door would, and the rig behind `:bench-rpc` is a fake that
+  answers each pull request by its number.
+
+  Run: cd factory10 && clojure -M:test"
+  (:require [clojure.test :refer [deftest is testing]]
+            [factory10.bench :as bench])
+  (:import (java.time Instant)))
+
+(def ^:private t0 (Instant/parse "2026-09-28T12:00:00Z"))
+
+(defn- policy [repo]
+  {:data {:repository repo :merge_by "house" :required_checks ["gate"]
+          :merge_method "squash"}})
+
+(def ^:private by-repo
+  {"ckopsa/waymark" (policy "ckopsa/waymark")
+   "ckopsa/waymark-bench" (policy "ckopsa/waymark-bench")})
+
+(defn- a-change
+  "One submitted pull request: its id ends in its number, its ticket is
+  t<number>, and it was born `minute` minutes after t0."
+  [repo number minute & {:as extra}]
+  {:id (str "change-" number)
+   :created-at (.plusSeconds ^Instant t0 (long (* 60 minute)))
+   :data (merge {:repository repo :number number
+                 :head_sha (str "head-" number)
+                 :born_from (str "ticket:t" number)}
+                extra)})
+
+(defn- rig
+  "A fake rig: `answers` is number -> what its merge says (behind when
+  unnamed), and every update_branch says updated."
+  [answers]
+  (let [calls (atom [])]
+    {:calls calls
+     :ctx {:services
+           {:bench-rpc
+            (fn [_ {tool :name args :arguments}]
+              (swap! calls conj [tool (:number args)])
+              {:structuredContent
+               {:result (if (= tool "bench__merge")
+                          (get @answers (:number args) {:state "behind"})
+                          {:state "updated"})}})}}}))
+
+(defn- numbers-of [{:keys [calls]} tool]
+  (into [] (keep (fn [[t number]] (when (= t tool) number))) @calls))
+
+(defn- pass!
+  [{:keys [ctx]} seen changes priorities]
+  (bench/work-lines! ctx seen
+                     (bench/merge-lines changes by-repo
+                                        #(get priorities (bench/born-ticket %))
+                                        @seen)
+                     by-repo))
+
+(deftest the-line-is-ticket-priority-then-age
+  (let [old-low (a-change "ckopsa/waymark" 1 0)
+        new-high (a-change "ckopsa/waymark" 2 30)
+        old-high (a-change "ckopsa/waymark" 3 10)
+        lines (bench/merge-lines [old-low new-high old-high] by-repo
+                                 #(get {"t1" 2 "t2" 0 "t3" 0}
+                                       (bench/born-ticket %))
+                                 {})]
+    (is (= ["change-3" "change-2" "change-1"]
+           (mapv :id (get lines "ckopsa/waymark")))
+        "the lower priority number first, and the older of two equals")))
+
+(deftest one-behind-change-per-repository-is-brought-up-to-date
+  (let [r (rig (atom {}))
+        seen (atom {})
+        a (a-change "ckopsa/waymark" 1 0)
+        b (a-change "ckopsa/waymark" 2 1)
+        c (a-change "ckopsa/waymark" 3 2)]
+    (is (= 3 (pass! r seen [a b c] {})) "each change still gets its merge call")
+    (is (= [1] (numbers-of r "bench__update_branch"))
+        "three behind green changes, one update: the front's")
+    (pass! r seen [a b c] {})
+    (is (= [1] (numbers-of r "bench__update_branch"))
+        "the front waits for its CI, and the others are still left alone")
+    (testing "the front merged: the next pass brings the second forward"
+      (pass! r seen [b c] {})
+      (is (= [1 2] (numbers-of r "bench__update_branch"))))))
+
+(deftest a-green-up-to-date-change-merges-whatever-its-place
+  (let [r (rig (atom {2 {:state "merged"}}))
+        a (a-change "ckopsa/waymark" 1 0)
+        b (a-change "ckopsa/waymark" 2 1)]
+    (pass! r (atom {}) [a b] {})
+    (is (= [1 2] (numbers-of r "bench__merge"))
+        "the second in line is offered its merge while the first is the front")
+    (is (= [1] (numbers-of r "bench__update_branch")))))
+
+(deftest each-repository-has-its-own-front
+  (let [r (rig (atom {}))
+        changes [(a-change "ckopsa/waymark" 1 0)
+                 (a-change "ckopsa/waymark" 2 1)
+                 (a-change "ckopsa/waymark-bench" 3 2)
+                 (a-change "ckopsa/waymark-bench" 4 3)]]
+    (pass! r (atom {}) changes {})
+    (is (= #{1 3} (set (numbers-of r "bench__update_branch"))))))
+
+(deftest a-conflicted-or-draft-change-does-not-hold-the-line
+  (let [r (rig (atom {}))
+        changes [(a-change "ckopsa/waymark" 1 0 :mergeable "conflicted")
+                 (a-change "ckopsa/waymark" 2 1 :draft true)
+                 (a-change "ckopsa/waymark" 3 2)]]
+    (pass! r (atom {}) changes {})
+    (is (= [3] (numbers-of r "bench__update_branch")))))
+
+(deftest a-parked-front-leaves-the-line
+  (let [r (rig (atom {}))
+        seen (atom {"change-1" "head-1"})]
+    (pass! r seen [(a-change "ckopsa/waymark" 1 0)
+                   (a-change "ckopsa/waymark" 2 1)] {})
+    (is (= [2] (numbers-of r "bench__merge")))
+    (is (= [2] (numbers-of r "bench__update_branch")))))
