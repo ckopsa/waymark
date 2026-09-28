@@ -1,5 +1,6 @@
 (ns waymark10.fingerprint-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.properties :as prop]
             [waymark10.fingerprint :as fp]
@@ -116,7 +117,26 @@
                                   (fp/fingerprint-of strict))]
       (is (= ["machine.actions.finalize.guards.0.severity"]
              (mapv :path (:changed d))))
-      (is (= :data-law (fp/classify-diff d))))))
+      (is (= :data-law (fp/classify-diff d)))))
+  (testing "a create-door guard's expression tree (waymark-442.9)"
+    (let [gated (fn [w] (assoc (plan-rmap) :create-guards
+                               [{:name :one-plan :when w :explain "x"}]))
+          a (fp/fingerprint-of (gated '(not (data :has_conflicts))))
+          b (fp/fingerprint-of (gated '(<= (data :calendar_conflicts) 1)))
+          d (fp/diff-fingerprints a b)]
+      (is (not= (fp/fingerprint-hash a) (fp/fingerprint-hash b))
+          "editing a create guard moves the hash")
+      (is (= (fp/fingerprint-hash a)
+             (fp/fingerprint-hash
+              (fp/fingerprint-of (gated '(not (data :has_conflicts))))))
+          "editing nothing does not")
+      (is (every? #(str/starts-with? % "create.guards.0.expr")
+                  (map :path (mapcat d [:added :removed :changed]))))
+      (is (= :data-law (fp/classify-diff d)))))
+  (testing "no create guards, no create-guard facet"
+    (is (= (fp/fingerprint-hash (fp/fingerprint-of (plan-rmap)))
+           (fp/fingerprint-hash
+            (fp/fingerprint-of (assoc (plan-rmap) :create-guards [])))))))
 
 (deftest code-and-shape-promote-totally
   (testing "handler identity"
