@@ -177,7 +177,10 @@
 
     :retire
     {:from #{:live :broken} :to :retired
-     :safety {:idempotent true :reversible true :confirm false}
+     ;; Not :reversible: restore brings a link back :live, never
+     ;; :broken, so a broken link's retirement has no exact undo.
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Restore brings the link back live; a link retired while broken does not return broken."}
      :display {:label "Retire" :style :danger :order 9
                :description "Nothing fires through this link until it is restored"}}
 
