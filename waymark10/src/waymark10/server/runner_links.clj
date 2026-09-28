@@ -15,13 +15,18 @@
   what it answered, through three hidden doors. The link's liveness is
   the row's own state, `live` or `broken`, beside `retired`.
 
-  Not here: seeding links from today's schedule and model links (1c),
-  and choosing among links."
+  `ensure-seeded-links!` (piece 1c) is the boot seed: one link for
+  each model and each schedule that holds its own fire URL and token,
+  recorded by `seeded_from` so a second boot makes none. The source
+  rows keep their own links; nothing fires through a seeded link yet.
+
+  Not here: choosing among links."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as sch]
+            [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -39,9 +44,11 @@
 
 (g/defguard a-person-makes-the-link
   {:reads [:principal]
-   :explain "A runner link is a person's to make. A person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes its fire URL and its token here. An agent does not make a link."}
+   :explain "A runner link is a person's to make. A person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes its fire URL and its token here. An agent does not make a link; the engine copies only a link a person already pasted onto a model or a schedule."}
   [_row _inp ctx]
-  (if (a-persons-hand? ctx) (t/allow) (t/deny)))
+  (if (or (a-persons-hand? ctx)
+          (= :system (get-in ctx [:principal :type])))
+    (t/allow) (t/deny)))
 
 (g/defguard a-person-writes-the-token
   {:judges [:token]
@@ -110,6 +117,14 @@
                                           :help "How long one window lasts."}}
              [:int {:min 1 :max 31622400}]]]]])
 
+(def ^:private seeded-from-field
+  [:seeded_from {:optional true
+                 :x-display
+                 {:hidden true
+                  :label "Copied from"
+                  :help "The model or schedule whose own link the engine copied this one from at boot, as kind:id. Empty for a link a person made here."}}
+   [:maybe [:string {:min 1 :max 200}]]])
+
 (defresource runner-link
   {:kind :runner_link
    :plural "runner_links"
@@ -155,7 +170,8 @@
                      :x-display
                      {:label "Last fired"
                       :help "When the engine last started a run through this link. Engine-written."}}
-     [:maybe :waymark/instant]]]
+     [:maybe :waymark/instant]]
+    seeded-from-field]
    :create-schema
    [:map
     provider-field
@@ -166,9 +182,11 @@
                    :label "The token"
                    :help "The credential that opens that one Routine. The engine holds it and never shows it again."}}
      [:string {:min 16 :max 400}]]
-    cap-field]
+    cap-field
+    seeded-from-field]
    :filterable {:state #{:eq :in}
-                :provider #{:eq :in}}
+                :provider #{:eq :in}
+                :seeded_from #{:eq}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
    :create-guards [a-person-makes-the-link]
    :actions
@@ -258,6 +276,46 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The link fires nothing until a person restates it."}
      :display {:label "Link refused" :style :danger}}}})
+
+;; ── the boot seed (piece 1c) ────────────────────────────────────────
+
+(def seed-actor
+  "The actor the boot seed wears."
+  (t/principal {:id "waymark10-runner-links" :type :system
+                :display "Runner links"}))
+
+(defn- rows-of [eng kind where]
+  (if (contains? (inv/resources eng) kind)
+    (store/with-tx (:storage eng)
+      (fn [tx] (store/query-rows (:storage eng) tx kind where {:limit 100000})))
+    []))
+
+(defn ensure-seeded-links!
+  "The boot seed: for each model and each schedule that holds its own
+  fire URL and token, one runner link with provider claude_routine,
+  that URL and a copy of the token, recorded by `seeded_from`
+  (`model:<id>` or `schedule:<id>`) so running it again makes none.
+  The source rows keep their own links untouched."
+  [eng]
+  (when (contains? (inv/resources eng) :runner_link)
+    (doseq [kind [:model :schedule]
+            r (rows-of eng kind {})
+            :let [url (some-> (get-in r [:data :fire_url]) str not-empty)
+                  token (some-> (get-in r [:data :fire_token]) str not-empty)
+                  from (str (name kind) ":" (:id r))]
+            :when (and url token
+                       (empty? (rows-of eng :runner_link {:seeded_from from})))]
+      (try
+        (inv/create! eng :runner_link
+                     {:provider "claude_routine"
+                      :fire_url url
+                      :fire_token token
+                      :seeded_from from}
+                     {:principal seed-actor})
+        (catch Exception e
+          (binding [*out* *err*]
+            (println (str "waymark10 runner links: seed from " from
+                          " failed — " (ex-message e)))))))))
 
 ;; ── firing through a link (piece 1b) ────────────────────────────────
 
