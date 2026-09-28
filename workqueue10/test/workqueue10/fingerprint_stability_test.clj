@@ -141,7 +141,9 @@
                            (filter (fn [[_ w]] (str/starts-with? w "[opaque-residue]")))
                            (map first))
                      (main/check-resources))]
-    (is (= #{"grocery_list" "meal_line" "plan_day" "product" "rotation"}
+    ;; empty since waymark ticket 5937bb50: the meal-plan :accepts
+    ;; guards now capture their form through defacceptsfn
+    (is (= #{}
            (set warned))
         (str "the formless residue is this census and no wider; when a kind "
              "leaves it, delete it from here — when one JOINS it, ask why"))))

@@ -282,8 +282,11 @@
   (when (and (not= :sitting kind)
              (:transition result)
              (nil? (:replayed? result)))
-    (when-some [sitting (open-sitting eng req)]
-      (seats/bump-counter! eng (:id sitting) :transitions)))
+    ;; the calling session's own sitting first (ticket f6c8d5ce): a
+    ;; bound session is never counted on a sibling under the grant
+    (when-some [sitting-id (or (some-> (:waymark10/sitting req) str not-empty)
+                               (:id (open-sitting eng req)))]
+      (seats/bump-counter! eng sitting-id :transitions)))
   result)
 
 ;; ── the visibility checks (phase 9a, concealment) ───────────────────

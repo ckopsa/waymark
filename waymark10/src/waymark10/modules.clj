@@ -154,6 +154,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.presence :as presence]
             [waymark10.server.roles :as roles]
+            [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
@@ -225,6 +226,12 @@
               :kinds (fn [_] [seats/sitting])}
              {:kind :schedule :enroll :always
               :kinds (fn [_] [schedules/schedule])}
+             ;; the runner link (runner-pool work, piece 1a): one
+             ;; provider endpoint and the credential that opens it,
+             ;; held beside the schedule because a schedule will fire
+             ;; through one. Nothing fires through it yet.
+             {:kind :runner_link :enroll :always
+              :kinds (fn [_] [runner-links/runner-link])}
              ;; the MCP server as a row (docs/spec-mcp-servers.md,
              ;; waymark-fp62.10): the external powers a grant names
              ;; reach the engine through a row's client, and a grant
