@@ -139,17 +139,18 @@
   A `task` (workqueue10) keeps its lifecycle in `status`, and its
   `complete` takes nothing. A `ticket` (this module) keeps its
   lifecycle in the machine, and the merge ends it through `land` —
-  the change's own door, open from `open` and `in_review` (ticket
-  2e869934) — with the pull request's own address as the sentence the
-  record keeps."
+  the change's own door, open from every state that has not ended
+  (tickets 2e869934 and 3ec37f66) — with the pull request's own
+  address as the sentence the record keeps. A ticket already `done`
+  or `dropped` is left as it is."
   {"task" {:kind :task
            :action :complete
            :finished? (fn [row] (= "done" (str (get-in row [:data :status]))))
            :input (fn [_change] nil)}
    "ticket" {:kind :ticket
              :action :land
-             :finished? (fn [row] (not (contains? #{:open :in_review}
-                                                  (some-> (:state row) name keyword))))
+             :finished? (fn [row] (contains? #{:done :dropped}
+                                             (some-> (:state row) name keyword)))
              :input (fn [change]
                       ;; the pull request's url, which a reader opens;
                       ;; its id when the mirror read no url
@@ -173,6 +174,44 @@
           (when-some [read (:read ctx)]
             (when-some [walk-row (read (:kind entry) id)]
               [entry id walk-row])))))))
+
+(def ^:private unended-changes
+  "The states a duplicate may stand in when the merge closes it: every
+  state but the two endings."
+  #{:open :submitted :failing :stuck})
+
+(defn- close-the-duplicates!
+  "Close every other change born from the same ask on the same branch
+  (ticket 3ec37f66). A second row minted for one ticket is a change
+  nobody will merge, and a stuck one holds the seat's queue; once one
+  of them merges, the rest are closed through `supersede`, naming the
+  pull request that merged.
+
+  BEST-EFFORT, as the ticket's ending is: a row that refuses is said in
+  the log, and the merge stands. A rehearsal carries no pen, and closes
+  nothing."
+  [row ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)
+        self (str (:id row))
+        born (some-> (get-in row [:data :born_from]) str not-empty)
+        repo (some-> (get-in row [:data :repository]) str not-empty)
+        branch (some-> (get-in row [:data :head_branch]) str not-empty)]
+    (when (and find' invoke' born repo branch)
+      (doseq [dup (find' :change {:repository repo :head_branch branch}
+                         {:limit 100})
+              :when (and (not= self (str (:id dup)))
+                         (= born (str (get-in dup [:data :born_from])))
+                         (contains? unended-changes
+                                    (some-> (:state dup) name keyword)))]
+        (try
+          (invoke' :change (str (:id dup)) :supersede
+                   {:superseded_by (or (not-empty (str (get-in row [:data :url])))
+                                       (str (get-in row [:data :change_id])))})
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factory10 change merge: the duplicate" (:id dup)
+                       "was not closed -" (ex-message e)))))))))
 
 (defhandler complete-the-task-it-was-born-from [row _inp ctx]
   ;; THE ASK IS DONE WHEN ITS PULL REQUEST MERGES (bead
@@ -203,6 +242,7 @@
           (binding [*out* *err*]
             (println "factory10 change merge: the" (name (:kind entry)) id
                      "did not complete -" (ex-message e)))))))
+  (close-the-duplicates! row ctx)
   row)
 
 ;; ── the ticket follows its change's review (ticket 2e869934) ─────────
@@ -231,6 +271,13 @@
           (binding [*out* *err*]
             (println "factory10 change: the ticket" id "did not" (name action)
                      "-" (ex-message e))))))))
+
+(defhandler write-what-superseded-it [row inp _ctx]
+  ;; The pull request that merged in this one's place rides on the row,
+  ;; so a reader of a closed duplicate sees which change did the work
+  ;; (ticket 3ec37f66). Its ticket already ended with that merge, so
+  ;; nothing is sent back.
+  (assoc-in row [:data :superseded_by] (str (:superseded_by inp))))
 
 (defhandler send-the-ticket-back [row _inp ctx]
   ;; A review that ended without a merge — a close, a stall — puts the
@@ -902,7 +949,11 @@
     ;; task this change was built for. Hidden, like every other fact
     ;; the engine writes and nobody types.
     [:born_from {:optional true :x-display {:hidden true}}
-     [:maybe [:string {:max 250}]]]]
+     [:maybe [:string {:max 250}]]]
+    ;; the merged change a duplicate was closed for (ticket 3ec37f66):
+    ;; written by `supersede` and by nothing else. Hidden, as the url is.
+    [:superseded_by {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 500}]]]]
    ;; THE BIRTH DOOR IS THE MIRROR'S, AND IT IS HIDDEN. A person meets
    ;; no create form for this kind. The source mints the row with what
    ;; GitHub answered; everything but the identity is optional,
@@ -1038,7 +1089,7 @@
      ;; — see `complete-the-task-it-was-born-from`.
      :handler complete-the-task-it-was-born-from
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "GitHub merged this pull request. The row follows GitHub, so there is no way back: a merged pull request is not reopened. The ask this change was born from — a task, or a ticket in review — is completed with it."}
+              :one-way "GitHub merged this pull request. The row follows GitHub, so there is no way back: a merged pull request is not reopened. The ask this change was born from — a task, or a ticket that has not ended — is completed with it, and another change built for that ask on the same branch is closed."}
      :display {:label "Merged" :order 2
                :description "GitHub merged the pull request"}}
 
@@ -1050,6 +1101,24 @@
               :one-way "GitHub closed this pull request without merging it, and a ticket this change was built for goes back to the queue. The way back is GitHub's own reopen, which the mirror follows with its reopen door."}
      :display {:label "Closed" :order 3
                :description "GitHub closed the pull request and merged nothing"}}
+
+    ;; the merge's close of a DUPLICATE (ticket 3ec37f66): another
+    ;; change born from the same ask on the same branch merged, so this
+    ;; one is let go with the merged one's address on it. Not `close`:
+    ;; that door is GitHub's word and sends the ticket back, and this
+    ;; one's ticket has just ended.
+    :supersede
+    {:from #{:open :submitted :failing :stuck} :to :closed
+     :guards [the-mirror-writes-this-row]
+     :handler write-what-superseded-it
+     :input [:map
+             [:superseded_by {:x-display {:hidden true}}
+              [:string {:min 1 :max 500}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Another change built for the same ask merged, so this duplicate is closed and names the one that merged. The way back is GitHub's own reopen, which the mirror follows with its reopen door."}
+     :display {:label "Superseded" :order 18
+               :description "Another change for the same ask merged, and this one is closed"}}
 
     :reopen
     {:from #{:closed} :to :open
