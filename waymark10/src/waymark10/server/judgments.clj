@@ -40,6 +40,13 @@
   revision it was written at. This file knows nothing about that one;
   they share four letters and no seam.
 
+  A VERDICT MAY ALSO FILE A TICKET. A judgment whose `files_ticket_on`
+  names the verdict's word files ONE draft ticket for the subject,
+  under the engine's hand, so a remedy a person must act on reaches
+  the groomers. The key is the judgment's and the subject's, never the
+  verdict's: a second verdict on the same subject finds it taken and
+  files nothing more.
+
   Nothing here re-throws. A throwing consumer parks its cursor, and a
   parked cursor stops every later verdict's consequence with it."
   (:require [waymark10.server.consumers :as consumers]
@@ -93,12 +100,78 @@
              " would not run — " (ex-message e))
       nil)))
 
+(defn- short-id [id]
+  (let [s (str id)] (subs s 0 (min 8 (count s)))))
+
+(defn ticket-title
+  "'<verdict> on <seat name>'s sitting <short id>' when the subject is a
+  sitting and its seat has a name; '<verdict> on <kind> <short id>'
+  otherwise."
+  [verdict-name seat-name subject-kind subject-id]
+  (if seat-name
+    (str verdict-name " on " seat-name "'s sitting " (short-id subject-id))
+    (str verdict-name " on " subject-kind " " (short-id subject-id))))
+
+(defn- seat-name-of
+  "The name of the seat a sitting belongs to, or nil for any other kind."
+  [eng subject-kind subject-id]
+  (when (= "sitting" subject-kind)
+    (when-some [seat-id (some-> (raw-row eng :sitting subject-id)
+                                (get-in [:data :seat]) str not-empty)]
+      (or (some-> (raw-row eng :seat seat-id) (get-in [:data :name])
+                  str not-empty)
+          seat-id))))
+
+(defn- ticket-key
+  "One ticket per judgment per subject: the idempotency key it is filed
+  under, and what a second verdict finds already taken."
+  [judgment subject-kind subject-id]
+  (str "judgment-ticket:" (:id judgment) ":" subject-kind ":" subject-id))
+
+(defn- files-ticket? [judgment verdict]
+  (contains? (set (map str (get-in judgment [:data :files_ticket_on])))
+             (str (get-in verdict [:data :verdict]))))
+
+(defn- file-ticket!
+  "The draft ticket a listed verdict earns, filed as the engine. Best
+  effort, `walk-consequence!`'s posture: a refusal is a warning and the
+  verdict stands. → true when a ticket was filed, nil otherwise."
+  [eng judgment verdict subject-kind subject-id]
+  (when (serves? eng :ticket)
+    (let [st (:storage eng)
+          k (ticket-key judgment subject-kind subject-id)
+          word (str (get-in verdict [:data :verdict]))]
+      (when-not (store/with-tx st (fn [tx] (store/idempotency-lookup st tx k :ticket)))
+        (try
+          (inv/create! eng :ticket
+                       {:title (ticket-title word
+                                             (seat-name-of eng subject-kind subject-id)
+                                             subject-kind subject-id)
+                        :detail (str (get-in verdict [:data :remedy])
+                                     "\n\nSubject: " subject-kind " " subject-id
+                                     "\nVerdict: " (:id verdict)
+                                     "\nJudgment: " (get-in judgment [:data :name]))
+                        :repo (or (some-> (get-in judgment [:data :ticket_repo])
+                                          str not-empty)
+                                  "ckopsa/waymark")
+                        :type "bug"
+                        :priority 2}
+                       {:principal schedules/system-actor
+                        :idempotency-key k})
+          true
+          (catch Exception e
+            (warn! "the ticket for " subject-kind " " subject-id
+                   " would not file — " (ex-message e))
+            nil))))))
+
 (defn handle-transition!
   "One transition → the consequence it implies, or nothing.
 
       verdict judge, no corrects   walk the judgment's consequence on
                                    the subject, under the engine's own
-                                   actor and the verdict's own key
+                                   actor and the verdict's own key;
+                                   and file one draft ticket when the
+                                   word is in `files_ticket_on`
       verdict judge, corrects      nothing: the subject was walked for
                                    the verdict this one overrules
       everything else              nothing
@@ -113,14 +186,16 @@
         (when (nil? (some-> (get-in verdict [:data :corrects]) str not-empty))
           (when-some [judgment (raw-row eng :judgment
                                         (get-in verdict [:data :judgment]))]
-            (when-some [door (some-> (get-in judgment [:data :consequence])
-                                     str not-empty)]
-              (let [kind (some-> (get-in verdict [:data :subject_kind])
-                                 str not-empty)
-                    id (some-> (get-in verdict [:data :subject_id])
-                               str not-empty)]
-                (when (and kind id (serves? eng (keyword kind)))
-                  (walk-consequence! eng kind id door (:id verdict)))))))))
+            (let [kind (some-> (get-in verdict [:data :subject_kind])
+                               str not-empty)
+                  id (some-> (get-in verdict [:data :subject_id])
+                             str not-empty)]
+              (when (and kind id (serves? eng (keyword kind)))
+                (when-some [door (some-> (get-in judgment [:data :consequence])
+                                         str not-empty)]
+                  (walk-consequence! eng kind id door (:id verdict)))
+                (when (files-ticket? judgment verdict)
+                  (file-ticket! eng judgment verdict kind id))))))))
     (catch Exception e
       (warn! "transition " (:id t) " could not be handled — " (ex-message e))
       nil))

@@ -79,6 +79,10 @@
   what to do, short enough that nobody writes a report into it."
   240)
 
+(def default-ticket-repo
+  "Where a filed ticket lands when the author names no repo."
+  "ckopsa/waymark")
+
 ;; ── the field set, as one map ───────────────────────────────────────
 
 (def verdict-entry
@@ -131,6 +135,15 @@
     {:raw true
      :label "What a verdict earns"
      :help "The name of a door on the subject kind that a landed verdict may walk — the action, not its label. Leave it blank and a verdict is a record and nothing more, which is the honest answer for a judgment that only measures."}}
+   :files_ticket_on
+   {:x-display
+    {:label "Verdicts that file a ticket"
+     :help "The verdict words whose remedy a person must act on. Each one said files ONE draft ticket for the subject, so the remedy reaches the groomers instead of waiting for someone to go looking. Every word must be one of this judgment's verdicts."}}
+   :ticket_repo
+   {:x-display
+    {:raw true
+     :label "Where the ticket lands"
+     :help "The repository a filed ticket names, owner/name. ckopsa/waymark when left blank."}}
    :notes
    {:examples ["Written after the classifier's first month. The words are the ones the household already says in stand-up."]
     :x-display
@@ -236,12 +249,32 @@
       (t/allow))
     (t/allow)))
 
+(g/defguard files-ticket-on-names-verdicts
+  ;; :judges is empty like the promote guards': no schema can say one
+  ;; field's items must be names from another, and a declared free-text
+  ;; field here reads to the usability battery as a missing picker
+  {:judges []
+   :reads []
+   :vars [:word :words]
+   :remedies [:judgment/revise]
+   :explain "A ticket is filed on {word}, which is none of this judgment's verdicts. Its verdicts are {words}. A word no seat may say is a ticket that could never be filed."}
+  [row inp _ctx]
+  ;; judged at the doors that WRITE the list — create and revise —
+  ;; so the input is the document; a row is the fallback for a probe
+  (let [doc (if (contains? inp :verdicts) inp (:data row))
+        words (into (sorted-set) (map #(str (:name %))) (:verdicts doc))
+        bad (->> (:files_ticket_on doc) (map str) (remove words) first)]
+    (if bad
+      (t/deny {:vars {:word bad :words (str/join ", " words)}})
+      (t/allow))))
+
 ;; ── the hands ───────────────────────────────────────────────────────
 
 (def ^:private authored-fields
   "The fields a person writes — the whole of the judgment, which is
   what `revise` restates."
-  [:name :subject_kind :queue :verdicts :remedy_max :consequence :notes])
+  [:name :subject_kind :queue :verdicts :remedy_max :consequence
+   :files_ticket_on :ticket_repo :notes])
 
 (defhandler restate-the-judgment
   [row inp _ctx]
@@ -294,6 +327,10 @@
     (entry :remedy_max {:default default-remedy-max}
            [:int {:min 40 :max 1000}])
     (entry :consequence {:optional true} [:maybe [:string {:max 60}]])
+    (entry :files_ticket_on {:optional true}
+           [:maybe [:vector {:max 12} [:string {:min 1 :max 40}]]])
+    (entry :ticket_repo {:optional true :default default-ticket-repo}
+           [:maybe [:string {:min 1 :max 140}]])
     (entry :notes {:optional true} [:maybe [:string {:max 1200}]])
     ;; the judgment this one stood down for, written by `supersede`
     ;; and by nothing else: a pointer forward so a reader who lands on
@@ -315,7 +352,13 @@
     (entry :remedy_max {:default default-remedy-max}
            [:int {:min 40 :max 1000}])
     (entry :consequence {:optional true} [:maybe [:string {:max 60}]])
+    (entry :files_ticket_on {:optional true}
+           [:maybe [:vector {:max 12} [:string {:min 1 :max 40}]]])
+    (entry :ticket_repo {:optional true :default default-ticket-repo}
+           [:maybe [:string {:min 1 :max 140}]])
     (entry :notes {:optional true} [:maybe [:string {:max 1200}]])]
+   ;; a ticket filed on a word no seat may say is refused at birth
+   :create-guards [files-ticket-on-names-verdicts]
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:name :created_at] :default "name"}
    :links [{:rel "verdicts" :kind :verdict
@@ -341,8 +384,13 @@
       (entry :remedy_max {:default default-remedy-max}
              [:int {:min 40 :max 1000}])
       (entry :consequence {:optional true} [:maybe [:string {:max 60}]])
+      (entry :files_ticket_on {:optional true}
+             [:maybe [:vector {:max 12} [:string {:min 1 :max 40}]]])
+      (entry :ticket_repo {:optional true :default default-ticket-repo}
+             [:maybe [:string {:min 1 :max 140}]])
       (entry :notes {:optional true} [:maybe [:string {:max 1200}]])]
      :edit {:prefill authored-fields}
+     :guards [files-ticket-on-names-verdicts]
      :record true
      :handler restate-the-judgment
      :safety {:idempotent true :reversible false :confirm false}

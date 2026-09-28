@@ -223,11 +223,20 @@
   "Which door writes the forge's identity onto a row this house
   already holds, read from the row's state. The same two states
   `observe` serves, and for the same reason: a v10 action declares
-  one `:to`, so a self-loop is spelled once for each state. A state
-  in neither column is adopted by nobody — a stuck, merged or closed
-  row is not a row waiting for its pull request."
+  one `:to`, so a self-loop is spelled once for each state. A
+  `failing` or `stuck` row is adopted too (ticket 3c59c688): a pull
+  request the house itself opened is that row's whatever its state,
+  and the adoption leaves the state where it is. A merged or closed
+  row is adopted by nobody — its story is over."
   {:open :adopt
-   :submitted :adopt_submitted})
+   :submitted :adopt_submitted
+   :failing :adopt_failing
+   :stuck :adopt_stuck})
+
+(def fold-states
+  "The states a forge-minted duplicate can be folded from (ticket
+  3c59c688). A merged or closed row is left as it is."
+  #{:open :submitted :failing :stuck})
 
 (def adoption-scan-limit
   "How many rows of one branch the adoption reads. A head branch
@@ -380,8 +389,8 @@
 
   Three things make one: the same repository, the same head branch,
   and a `change_id` that is not the forge's. A row at a state with no
-  adopt door is not one — a stuck, merged or closed row on that
-  branch is a row whose story is elsewhere. nil is the ordinary
+  adopt door is not one — a merged or closed row on that branch is a
+  row whose story is elsewhere. nil is the ordinary
   answer: almost every pull request the forge reads was opened by a
   person, and that is a mint and not an adoption."
   [eng doc]
@@ -411,6 +420,23 @@
                      (present doc adopt-fields)
                      (as-opts))))
 
+(defn- fold-duplicate!
+  "A row the forge minted beside the house's own row for the same pull
+  request (ticket 3c59c688: 0243f0a6 minted for #268 while 71cbbef9
+  stood stuck). The minted row is closed, gives up the id and names
+  the house row; the house row adopts the id and moves with the forge."
+  [eng minted ours doc]
+  (inv/invoke! eng :change (str (:id minted)) :fold
+               {:folded_into (str (:id ours))} (as-opts))
+  (move-change! eng (adopt-change! eng ours doc) doc))
+
+(defn- forge-minted?
+  "A row the forge minted, not one the house built for an ask: it was
+  born of no ask, and it stands where a fold can take it."
+  [row]
+  (and (str/blank? (str (get-in row [:data :born_from])))
+       (contains? fold-states (state-of row))))
+
 (defn- change-pass!
   "Every pull request the forge answered → a row minted, a row
   adopted, or a row moved. A row the engine refuses is counted and
@@ -420,8 +446,14 @@
    (fn [census doc]
      (try
        (if-some [existing (row-by eng :change {:change_id (:change_id doc)})]
-         (let [[_ moved?] (move-change! eng existing doc)]
-           (cond-> census moved? (update :moved inc)))
+         (if-some [ours (when (forge-minted? existing)
+                          (adoptable-row eng doc))]
+           ;; a duplicate minted before the house row could adopt:
+           ;; fold it, so one row holds the pull request
+           (do (fold-duplicate! eng existing ours doc)
+               (update census :folded inc))
+           (let [[_ moved?] (move-change! eng existing doc)]
+             (cond-> census moved? (update :moved inc))))
          (if-some [ours (adoptable-row eng doc)]
            ;; the house asked for this pull request: the seat built
            ;; the branch and its submit opened it. One row, adopted
@@ -1298,7 +1330,7 @@
 ;; ── the pass ────────────────────────────────────────────────────────
 
 (def ^:private fresh-census
-  {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
+  {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :folded 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
    :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0

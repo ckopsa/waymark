@@ -739,6 +739,14 @@
               (and post? (= (:uri req) "/api/-/sittings/transcript"))
               (handler req)
 
+              ;; the inbox door (spec-seat.md R-12.38), the transcript
+              ;; door's sibling: a cloud session tails its seat's inbox
+              ;; with its sitting's inbox key and holds no bearer. The
+              ;; key answers for one open sitting and reads only what
+              ;; its grant reads. GET only, as the door has no other.
+              (and get? (= (:uri req) "/api/-/sittings/inbox"))
+              (handler req)
+
               ;; the close, the transcript door's sibling (spec-seat.md
               ;; R-12.17): the same hook closes its own sitting with
               ;; the same transcript key, or a standing seat key, and
