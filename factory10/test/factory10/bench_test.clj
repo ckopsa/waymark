@@ -55,6 +55,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)
@@ -1317,6 +1318,39 @@
     (is (= {:auto_merge false} (:pull_request land))
         "the policy leaves the merge to a person, so the rig opens the
          pull request and turns nothing on")))
+
+;; ── the bench's test (ticket bae401d5) ──────────────────────────────────
+
+(deftest a-policy-with-a-test-block-tells-the-rig-its-workflow
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:test {:workflow "tests.yml" :input "only"}})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))]
+    (is (= {:workflow "tests.yml" :input "only"} (:test (sent 0)))
+        "enroll carries the workflow the bench's test dispatches")
+    (let [current (policy-row eng (:id row))]
+      (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                   (assoc (select-keys (:data current)
+                                       [:repository :branch_pattern :base
+                                        :max_lines :opens_pr :auto_merge
+                                        :rounds_per_change :formatter
+                                        :deny :orientation])
+                          :test {:workflow "ci.yml" :input "select"})
+                   {:principal person
+                    :if-match (inv/etag :repo_policy (:id row)
+                                        (:version current))}))
+    (is (= {:workflow "ci.yml" :input "select"} (:test (sent 1)))
+        "a restate that changes the block sends it again, so the rig
+         replaces its entry")))
+
+(deftest a-policy-without-a-test-block-sends-no-test-key
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        args (:arguments (first (calls-of st "bench__enroll")))]
+    (is (not (contains? args :test))
+        "no key at all, so a rig that does not know `test` still enrolls
+         the repository")))
 
 ;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
 
@@ -2751,6 +2785,60 @@
     (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
     (is (empty? (get-in answer [:walk :rows]))
         "the ticket beside a stuck change is left out like a claimed row")))
+
+(deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (force-ticket-state! w :open)
+        eng (:eng w)
+        seat (:seat w)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (contains? (seats/stuck-walk-rows eng "ticket")
+                   (str (:id (:ticket w)))))
+    (is (contains? (seats/unwalkable-rows eng seat nil)
+                   (str (:id (:ticket w))))
+        "the wakes leave the ticket out as the sit does")
+    (is (= 0 (#'wakes/walk-count eng seat))
+        "so a groom or a count wake reads the walk as empty")
+    (is (true? (#'wakes/empty-walk? eng seat)))))
+
+;; ── a submitted round is not walked twice (ticket 60c2ec22) ────────────
+
+(deftest a-ticket-stuck-from-submitted-is-never-walked
+  (let [w (ticket-world)
+        _ (seat-invokes! w "submit" {:why a-long-sentence})
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (force-ticket-state! w :open)
+        answer (sit-again! w)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
+    (is (empty? (get-in answer [:walk :rows]))
+        "a change stuck from submitted leaves its ticket out as well")))
+
+(deftest a-ticket-whose-change-is-submitted-is-not-walked-again
+  (let [w (ticket-world)
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (force-ticket-state! w :open)
+        answer (sit-again! w)]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "submitted" (name (:state (first (changes-of (:eng w)))))))
+    (is (empty? (get-in answer [:walk :rows]))
+        "a round in review is not handed to a second run of the seat")))
+
+(deftest a-submit-on-a-submitted-clean-worktree-says-it-is-already-submitted
+  (let [w (ticket-world)
+        _ (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (answer! (:state w) "bench__status"
+                   {:repo a-repository :branch "waymark/one" :head a-head
+                    :base "main" :base_head a-head :dirty 0 :paths []
+                    :ahead 1 :behind 0
+                    :landing {:state "running" :head a-head}})
+        r (seat-invokes! w "submit" {:why a-long-sentence})]
+    (is (true? (:isError r)))
+    (is (str/includes? (text-of r) "already submitted"))
+    (is (not (str/includes? (text-of r) "stall door"))
+        "a round in review is not stalled")
+    (is (= "submitted" (name (:state (first (changes-of (:eng w)))))))))
 
 (deftest an-unstick-puts-a-pull-request-back-under-review
   (let [w (ticket-world)
