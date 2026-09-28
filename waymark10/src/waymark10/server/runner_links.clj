@@ -88,6 +88,9 @@
    :states [:live :broken :retired]
    :initial :live
    :terminal #{}                       ; retirement is reversible, deliberately
+   ;; :broken is the engine's to write: the fire interface (1b) marks
+   ;; a link broken when the provider refuses its token. No door does.
+   :allow-dead #{:broken}
    :nav :system
    :summary "{data.provider} · {state}"
    :label-template "{data.provider} link"
