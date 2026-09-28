@@ -212,10 +212,15 @@
 
 (deftest the-sweep-link-rides-only-an-engine-that-assembled-it
   (let [boot-with (fn [modules]
-                    (engine/engine {:storage (memory/storage)
-                                    :resources [(acct 50)]
-                                    :deploy-mode :propose
-                                    :modules modules}))]
+                    ;; a proposal needs a law to propose against: the
+                    ;; first boot promotes 100, the second holds 50.
+                    (let [st (memory/storage)]
+                      (boot st [(acct 100)] :promote)
+                      (boot st [(acct 100)] :promote)
+                      (engine/engine {:storage st
+                                      :resources [(acct 50)]
+                                      :deploy-mode :propose
+                                      :modules modules})))]
     (testing "assembled with :law-sweep: each definition links its sweep"
       (let [eng (boot-with [:law-sweep])
             did (proposal-id eng :s_acct)
