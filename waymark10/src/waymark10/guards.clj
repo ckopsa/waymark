@@ -1031,6 +1031,28 @@
                               '~(expr/canonical-gensyms
                                  (list* 'fn params body))})}))))
 
+(defmacro defaccepts
+  "defguard's twin for an acceptance set: a single-field :accepts guard
+  whose identity is its canonical printed form, captured exactly as
+  defguard captures :check (the fingerprint hashes :accepts the same
+  way, so a bare (fn [row] …) is opaque residue):
+
+     (defaccepts item-on-list
+       {:judges [:name]
+        :explain \"No item named '{name}' on this list.\"}
+       [row]
+       (mapv :name (get-in row [:data :items])))
+
+  params are [row] or [row ctx], shaped by :reads."
+  [name opts params & body]
+  `(def ~name
+     (guard (merge ~opts
+                   {:name ~(keyword name)
+                    :accepts (with-meta (fn ~params ~@body)
+                               {:waymark10/form
+                                '~(expr/canonical-gensyms
+                                   (list* 'fn params body))})}))))
+
 ;; ── the engine's own walls (waymark-fp62.4.1) ───────────────────────
 ;;
 ;; THE CHARTER MUST BE TRUE. An envelope that advertises a door is

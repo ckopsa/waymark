@@ -30,7 +30,8 @@
   Recorded deviation: v10 declares no field defaults, so the name and
   the starter themes land in :on-create when the create body leaves
   them blank."
-  (:require [waymark10.dsl :refer [defresource defhandler guard]]))
+  (:require [waymark10.dsl :refer [defacceptsfn defresource defhandler
+                                   guard]]))
 
 (def default-themes
   ["breakfast for dinner" "indian" "greek" "soup night"])
@@ -38,13 +39,12 @@
 ;; removable = what's on the rotation, unless that would empty it.
 ;; One declaration: the rendered enum, the enforcement, and the
 ;; per-part availability all come from this set.
-(def not-last-theme
-  (guard {:name :not-last-theme
-          :judges [:theme]
-          :accepts (fn [row]
-                     (let [themes (get-in row [:data :themes])]
-                       (if (< 1 (count themes)) (vec themes) [])))
-          :explain "'{theme}' cannot be removed; the rotation must keep at least one theme."}))
+(defacceptsfn not-last-theme
+  {:judges [:theme]
+   :explain "'{theme}' cannot be removed; the rotation must keep at least one theme."}
+  [row]
+  (let [themes (get-in row [:data :themes])]
+    (if (< 1 (count themes)) (vec themes) [])))
 
 (defhandler activate-rotation [row _inp ctx]
   (assoc-in row [:data :activated_at] (:now ctx)))
