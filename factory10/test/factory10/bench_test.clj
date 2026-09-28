@@ -1971,6 +1971,45 @@
     (is (= 31 (get-in answer [:feedback :pull_request :number]))
         "so the run gets what the last round caused all the same")))
 
+(deftest a-token-of-several-tools-lists-every-tool-it-admits
+  (let [powers (into [{:power "bench.read" :tools ["read" "prepare" "status"]
+                       :why false :constraints ["repo" "path"]}
+                      {:power "bench.symbols" :tools ["symbols" "read_symbol"]
+                       :why false :constraints ["repo" "path"]}]
+                     (remove #(= "bench.read" (:power %)))
+                     bench-powers)
+        tools-of (fn [scope]
+                   (let [st (state)
+                         _ (swap! st assoc :powers powers)
+                         eng (fresh-engine st)
+                         _ (a-policy! eng {})
+                         _ (a-change! eng {})
+                         _ (open-seat! eng {:scope scope})
+                         h (engine/handler eng)
+                         sid (get-in (rpc h (bearer) "initialize"
+                                          {:protocolVersion mcp/protocol-version
+                                           :capabilities {}
+                                           :clientInfo {:name "routine" :version "0"}})
+                                     [:headers "Mcp-Session-Id"])
+                         sat (call! h sid "waymark_sit" {:key a-key})]
+                     (is (false? (:isError sat)) (text-of sat))
+                     (get-in (doc-of sat) [:bench :tools])))
+        change {:kind "change" :actions ["submit" "discard" "stall"]}
+        reads {:kind "bench.read" :actions [] :filter {:repo a-repository}}
+        symbols {:kind "bench.symbols" :actions [] :filter {:repo a-repository}}]
+    (is (= {:bench.read "bench__read"
+            :bench.prepare "bench__prepare"
+            :bench.status "bench__status"
+            :bench.symbols "bench__symbols"
+            :bench.read_symbol "bench__read_symbol"}
+           (tools-of [change reads symbols]))
+        "a token that names several tools lists every one of them")
+    (is (= {:bench.read "bench__read"
+            :bench.prepare "bench__prepare"
+            :bench.status "bench__status"}
+           (tools-of [change reads]))
+        "a seat without bench.symbols is handed neither of its tools")))
+
 (deftest a-code-seat-that-holds-bench-rerun-is-handed-the-rerun-tool
   (let [w (ask-world (conj ask-scope {:kind "bench.rerun" :actions []
                                       :filter {:repo a-repository}}))

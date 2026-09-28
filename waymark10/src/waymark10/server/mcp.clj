@@ -2674,23 +2674,25 @@
        vec))
 
 (defn- bench-tools-of
-  "THE TOOL FOR EACH BENCH POWER THE SEAT HOLDS (R-12.29,
-  waymark-fp62.6.3.12) → {\"bench.read\" \"bench__read\", …}.
+  "EVERY BENCH TOOL THE SEAT'S GRANT HOLDS (R-12.29,
+  waymark-fp62.6.3.12) → {\"bench.read\" \"bench__read\",
+  \"bench.prepare\" \"bench__prepare\", …}.
 
   The seat's scope gives the tokens and the bench row's powers give
-  the tool, through the same `token-tool` the power door resolves a
-  name with. So the sit TELLS the seat what to call, and no
-  instruction has to name a spelling.
-
-  A token the row does not map to exactly one tool is ABSENT: the
-  door would refuse that name, and a map that promised it would send
-  the seat at a 404."
+  EVERY tool each token names, through the same `token-tools` the
+  power door admits a call by. Each tool is keyed by its own bare
+  name under the rig's prefix, so a token that covers several tools
+  (`bench.read` → read, prepare, status; `bench.symbols` → symbols,
+  read_symbol) lists them all, and a token of one tool keeps the key
+  it always had. The map is built from the grant, so it cannot drift
+  from it: a power the scope does not name adds no tool."
   [eng seat]
-  (into (sorted-map)
-        (keep (fn [token]
-                (when-some [nm (gate/token-tool eng token)]
-                  [token nm])))
-        (bench-tokens seat)))
+  (let [prefix (gate/bench-tool "")]
+    (into (sorted-map)
+          (for [token (bench-tokens seat)
+                nm (gate/token-tools eng token)
+                :when (str/starts-with? nm prefix)]
+            [(str bench-power-prefix (subs nm (count prefix))) nm]))))
 
 (defn- change-by-id
   "The change row with this `change_id`, or nil. `change_id` is
