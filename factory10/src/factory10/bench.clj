@@ -541,6 +541,121 @@
               (warn! "the rig refused to update " id " at " head " ("
                      (reason-of answer) ")")))))))
 
+;; ONE CHANGE PER REPOSITORY AT A TIME (ticket d82d649a). Bringing every
+;; behind change up to date in one pass starts one CI run each, and the
+;; first merge makes all the others stale again. So each repository's
+;; submitted changes stand in ONE LINE — ticket priority first (lower
+;; number first), then the change's birth, then its id — and only the
+;; FRONT is brought up to date. Every change still gets its one merge
+;; call a pass, because a merge costs no CI: one that is green and up to
+;; date merges at once, whatever its place. A behind change that is not
+;; the front is left alone until it is. The front leaves the line when
+;; it merges or goes red (either way it is no longer submitted) or when
+;; its head is parked; the line is rebuilt from the rows each pass, so
+;; a restart loses only the memory of the head already updated.
+
+(defn born-ticket
+  "The id of the ticket this change was born from, or nil."
+  [change]
+  (let [born (str (get-in change [:data :born_from]))]
+    (when (str/starts-with? born "ticket:")
+      (not-empty (subs born (count "ticket:"))))))
+
+(defn- ticket-priorities
+  "Ticket id → its priority, for the tickets these changes were born
+  from — empty in an engine that declares no ticket kind."
+  [eng changes]
+  (if-some [rd (rdef-of-kind eng :ticket)]
+    (let [st (:storage eng)]
+      (into {}
+            (keep (fn [tid]
+                    (when-some [raw (try (store/with-tx st
+                                           (fn [tx] (store/load-row st tx :ticket tid {})))
+                                         (catch Exception _ nil))]
+                      [tid (get-in (inv/decode-row rd raw) [:data :priority])])))
+            (distinct (keep born-ticket changes))))
+    {}))
+
+(defn line-key
+  "Where a change stands in its repository's line: its ticket's
+  priority (none is last), then when the change was born, then its id."
+  [priority-of change]
+  (let [prio (priority-of change)
+        born (:created-at change)]
+    [(if (number? prio) (long prio) Long/MAX_VALUE)
+     (if (inst? born) (inst-ms born) Long/MAX_VALUE)
+     (str (:id change))]))
+
+(defn merge-lines
+  "The changes the house pass offers, as repository → its line in the
+  order it is worked. A change needs a number, a head that `seen` has
+  not parked, and a policy `house-pass-merges?`. `priority-of` is
+  change → its ticket's priority, or nil."
+  [changes by-repo priority-of seen]
+  (->> changes
+       (filter (fn [change]
+                 (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
+                       policy (get by-repo (str (get-in change [:data :repository])))]
+                   (and (get-in change [:data :number]) head policy
+                        (house-pass-merges? policy)
+                        (not= head (get seen (str (:id change))))))))
+       (group-by #(str (get-in % [:data :repository])))
+       (into (sorted-map)
+             (map (fn [[repo line]]
+                    [repo (vec (sort-by #(line-key priority-of %) line))])))))
+
+(defn front-of
+  "The change at the front of a line: the first one that can be brought
+  up to date. A conflicted branch is the failing path's and a draft is
+  not brought forward, so neither holds the line."
+  [line]
+  (first (remove #(or (conflicted-change? %) (true? (get-in % [:data :draft])))
+                 line)))
+
+(defn work-lines!
+  "One merge call for every change of every line, with the engine's own
+  hand; only a line's front is brought up to date when it is behind.
+  → the number of `merge` calls made."
+  [ctx seen lines by-repo]
+  (let [asked (volatile! 0)]
+    (doseq [[repo line] lines
+            :let [policy (get by-repo repo)
+                  front (some-> (front-of line) :id str)]]
+      (warn! repo ": " (or front "nothing") " is the front of the merge line, "
+             (count (remove #(= front (str (:id %))) line)) " wait")
+      (doseq [change line
+              :let [id (str (:id change))
+                    head (str (get-in change [:data :head_sha]))]]
+        (try
+          (vswap! asked inc)
+          (let [answer (ask ctx :merge (merge-args change policy))
+                why (refused answer)]
+            (cond
+              (nil? answer)
+              (warn! "the merge of " id " had no answer; the next pass asks again")
+
+              (contains? missing-power-refusals why)
+              (warn! "the rig has no merge yet (" why "); the next pass asks again")
+
+              (behind? answer)
+              (when (= id front)
+                (update-behind! ctx seen change id head))
+
+              (contains? parked-refusals why)
+              (do (swap! seen assoc id head)
+                  (warn! "the rig refused to merge " id " at " head " ("
+                         (reason-of answer) "); this head is not asked again"))
+
+              why
+              (warn! "the rig refused to merge " id " at " head " ("
+                     (reason-of answer) "); the next pass asks again")
+
+              :else nil))
+          (catch Exception e
+            (warn! "the merge of " id " failed (" (ex-message e)
+                   "); the next pass asks again")))))
+    @asked))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
@@ -548,52 +663,21 @@
   an atom of change id → the head the rig refused for good (a
   `parked-refusals` name): that head is never offered again, and a new
   head is offered afresh. A branch the rig says is behind its base is
-  brought up to date with `update_branch`, once per head (`seen` keeps
+  brought up to date with `update_branch` only when it is the front of
+  its repository's line (`merge-lines`), once per head (`seen` keeps
   that under `[:updated id]`). `merged` needs nothing here, because the
   mirror moves the row; `waiting` and every other refusal are asked
   again next pass; `red` is left, because the seat's feedback already
   carries the red checks. Throws nothing.
   → the number of `merge` calls made."
   [eng seen]
-  (let [ctx {:services (:services eng)}
-        by-repo (policies-by-repo eng)
-        asked (volatile! 0)]
-    (doseq [change (submitted-changes eng)
-            :let [id (str (:id change))
-                  number (get-in change [:data :number])
-                  head (some-> (get-in change [:data :head_sha]) str not-empty)
-                  policy (get by-repo (str (get-in change [:data :repository])))]
-            :when (and number head policy
-                       (house-pass-merges? policy)
-                       (not= head (get @seen id)))]
-      (try
-        (vswap! asked inc)
-        (let [answer (ask ctx :merge (merge-args change policy))
-              why (refused answer)]
-          (cond
-            (nil? answer)
-            (warn! "the merge of " id " had no answer; the next pass asks again")
-
-            (contains? missing-power-refusals why)
-            (warn! "the rig has no merge yet (" why "); the next pass asks again")
-
-            (behind? answer)
-            (update-behind! ctx seen change id head)
-
-            (contains? parked-refusals why)
-            (do (swap! seen assoc id head)
-                (warn! "the rig refused to merge " id " at " head " ("
-                       (reason-of answer) "); this head is not asked again"))
-
-            why
-            (warn! "the rig refused to merge " id " at " head " ("
-                   (reason-of answer) "); the next pass asks again")
-
-            :else nil))
-        (catch Exception e
-          (warn! "the merge of " id " failed (" (ex-message e)
-                 "); the next pass asks again"))))
-    @asked))
+  (let [by-repo (policies-by-repo eng)
+        changes (submitted-changes eng)
+        priorities (ticket-priorities eng changes)]
+    (work-lines! {:services (:services eng)} seen
+                 (merge-lines changes by-repo
+                              #(get priorities (born-ticket %)) @seen)
+                 by-repo)))
 
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 ;;
