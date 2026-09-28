@@ -2841,7 +2841,12 @@
     (is (= "open" (ticket-state w)))
     (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
     (is (empty? (get-in answer [:walk :rows]))
-        "the ticket beside a stuck change is left out like a claimed row")))
+        "the ticket beside a stuck change is left out like a claimed row")
+    (let [withheld (get-in answer [:walk :withheld])]
+      (is (= [(str (:id (:ticket w)))] (mapv :id withheld))
+          "the sit answers the withheld row rather than an empty list")
+      (is (re-find #"stuck" (str (:reason (first withheld))))
+          "and says why it was held back"))))
 
 (deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
   (let [w (ticket-world)
@@ -2857,7 +2862,10 @@
         "the wakes leave the ticket out as the sit does")
     (is (= 0 (#'wakes/walk-count eng seat))
         "so a groom or a count wake reads the walk as empty")
-    (is (true? (#'wakes/empty-walk? eng seat)))))
+    (is (true? (#'wakes/empty-walk? eng seat)))
+    (is (= 0 (#'wakes/entry-count eng seat {:kind "ticket" :at_least 1
+                                             :filter {:state "open"}}))
+        "a count entry under a filter of its own leaves the ticket out too")))
 
 ;; ── a submitted round is not walked twice (ticket 60c2ec22) ────────────
 
