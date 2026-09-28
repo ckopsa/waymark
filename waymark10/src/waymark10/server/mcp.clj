@@ -395,6 +395,19 @@
   [eng id]
   (some-> (binding-of eng id) :sitting))
 
+(defn- calling-sitting
+  "The id of the sitting a call is served, tallied and refused as
+  (ticket f6c8d5ce): the one THIS connector session is bound to, open
+  or closed — never a sibling that happens to be the newest open
+  sitting under the seat's shared grant. Only a session bound to no
+  sitting falls back to the open one under its grant."
+  [eng session]
+  (if-some [bound (some-> (bound-sitting eng (:mcp-session-id session))
+                          str not-empty)]
+    bound
+    (when-some [gid (get-in session [:visibility :grant :id])]
+      (some-> (seats/open-sitting-for-grant eng gid) :id str))))
+
 (defn- bound-seat
   "The seat this session is bound to, or nil. Read from the BINDING
   and not from the sitting row: `waymark_sit` writes the seat and the
@@ -468,6 +481,9 @@
            :headers (or headers {})
            :waymark10/principal (:principal session)}
     (:visibility session) (assoc :waymark10/visibility (:visibility session))
+    ;; the sitting this session is bound to rides every door call, so
+    ;; the router counts a transition on THIS sitting (ticket f6c8d5ce)
+    (:sitting session) (assoc :waymark10/sitting (:sitting session))
     query (assoc :query-string query)
     body (assoc :body (wire/write-json body))))
 
@@ -3899,11 +3915,7 @@
   the model the very bytes it is there to measure."
   [eng session tool-name result]
   (try
-    (when-some [sitting-id
-                (or (when (= "waymark_sit" tool-name)
-                      (bound-sitting eng (:mcp-session-id session)))
-                    (when-some [gid (get-in session [:visibility :grant :id])]
-                      (:id (seats/open-sitting-for-grant eng gid))))]
+    (when-some [sitting-id (calling-sitting eng session)]
       (seats/add-served! eng sitting-id tool-name (result-bytes result)
                          (dropped-bytes result)))
     (catch Exception e
@@ -3943,14 +3955,46 @@
   [eng session tool-name out]
   (try
     (when (power-refusal? tool-name out)
-      (when-some [gid (get-in session [:visibility :grant :id])]
-        (when-some [sitting (seats/open-sitting-for-grant eng gid)]
-          (seats/bump-counter! eng (:id sitting) :refusals))))
+      (when-some [sitting-id (calling-sitting eng session)]
+        (seats/bump-counter! eng sitting-id :refusals)))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 mcp refusal counter" tool-name "failed -"
                  (ex-message e)))
       nil)))
+
+(defn- closed-sitting-refusal
+  "The `sitting_closed` refusal for a call on a session whose sitting
+  is no longer open, or nil (ticket f6c8d5ce). The call is never
+  re-attributed to another sitting of the seat: a run whose close came
+  while it was still working learns that its sitting is over rather
+  than spending on a sibling's bill. `waymark_sit` is the one door left
+  open, because a re-sit is how a run whose connector dropped finds
+  its own sitting again. A bench tool through `waymark_power` is left to
+  the gate's hold guard, which names the ticket the closed sitting no
+  longer holds and refuses its writes, while its reads still forward."
+  [eng session tool-name arguments]
+  (when-not (or (= "waymark_sit" (str tool-name))
+                (and (= "waymark_power" (str tool-name))
+                     (str/starts-with? (str (or (get arguments :tool)
+                                                (get arguments "tool")))
+                                       "bench__")))
+    (when-some [sid (some-> (bound-sitting eng (:mcp-session-id session))
+                            str not-empty)]
+      (when-some [row (row-of eng :sitting sid)]
+        (let [state (some-> (:state row) name)]
+          (when (not= "open" state)
+            (refusal
+             (p/problem :sitting_closed 409 "Sitting closed"
+                        {:detail (str "This session sat in sitting " sid
+                                      ", and it is " state
+                                      (when-some [e (get-in row [:data :ended_at])]
+                                        (str " since " e))
+                                      ". A call is never counted on another"
+                                      " sitting of the seat; this run's"
+                                      " sitting is over.")
+                         :sitting sid
+                         :state state}))))))))
 
 (defn message
   "One JSON-RPC message → the response to send, or nil when there is
@@ -3980,8 +4024,10 @@
        "tools/list"
        (rpc-result id {:tools (listing)})
        "tools/call"
-       (let [out (call-tool eng call gate-rpc session
-                            (:name params) (:arguments params))]
+       (let [out (or (closed-sitting-refusal eng session (:name params)
+                                             (:arguments params))
+                     (call-tool eng call gate-rpc session
+                                (:name params) (:arguments params)))]
          (if (= ::unknown-tool out)
            (rpc-error id invalid-request
                       (str "Unknown tool " (pr-str (:name params))
