@@ -10,8 +10,9 @@
   implements `ForgeSource`, declared below, for `ThreadSource`'s own
   argument: a source must not answer a question its authority never
   asks. A forge has no `push`, no `create` and no `list`; it has pull
-  requests, check runs, job logs and exactly one write. Four verbs say
-  that, and a fifth would be a lie about GitHub.
+  requests, check runs, job logs and exactly one write. Five verbs say
+  that (the fifth, the checks on one head, is ticket d1742908's), and
+  a verb that wrote anything else would be a lie about GitHub.
 
   WHERE THE ENGINE IS. workqueue10's confluence hands its documents to
   the sync machine, which owns the writes. Nothing owns the writes
@@ -44,7 +45,25 @@
   5. For each `classified` ci_run with no label on it, it pushes one
      label (`forge-label!`) and walks `stamp_label`. That push is the
      only write the source makes at the forge.
-  6. It prints one census line: the calls, the rows minted and the
+  6. For each `submitted` or `failing` change of a repository with an
+     active policy, it reads the checks on the head (`forge-checks`)
+     against the policy's required checks and walks `fail`, `recover`
+     or, on the last round, `stick` (ticket d1742908). A change the
+     forge reads as `conflicted` is red too, as `merge-conflict`, with
+     the paths the bench's trial merge names (ticket 5f12e772). A
+     submitted change whose bench landing failed is red before any
+     check is read, as `landing:<step>`, with the step's output in
+     `landing_error` (ticket 92871afb).
+  7. For each active policy whose repository the forge refused to
+     list (401, 403 or 404), it writes the status, the route and the
+     time on the policy row through the hidden `note_source` door, and
+     clears that note the first pass the repository answers again
+     (ticket 116dfb0d).
+  8. For each active policy it reads the head of its base branch and
+     the checks on it (`forge-base`). A base red on two passes opens
+     one groomed fix ticket in that repository, a later red head is
+     noted on it, and a green base completes it (ticket ade81ae9).
+  9. It prints one census line: the calls, the rows minted and the
      rows moved.
 
   A HEAD THAT MOVES (bead waymark-fp62.6.9). A run ran on one commit.
@@ -71,7 +90,10 @@
   asks for the label within one cadence, which the pass gives. The
   consumer is recorded as the cheaper beat, not as a punt."
   (:require [clojure.string :as str]
+            [factory10.bench :as bench]
             [factory10.mirror :as mirror]
+            [factory10.resources.repo-policy :as policy]
+            [factory10.resources.ticket :as ticket]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
   (:import (java.util.concurrent CountDownLatch TimeUnit)))
@@ -93,9 +115,10 @@
 ;; ── the seam ────────────────────────────────────────────────────────
 
 (defprotocol ForgeSource
-  "One forge, already speaking the factory's own documents. Four
-  verbs: what moved, one log tail, one label, and the call count the
-  census prints."
+  "One forge, already speaking the factory's own documents. Six
+  verbs: what moved, one log tail, one label, the call count the
+  census prints, the checks on one head, and the head of a base
+  branch with its checks."
   (forge-poll [s]
     "→ {:changes [change-doc …] :checks [check-doc …]
         :repositories [name …] :complete? bool}.
@@ -105,7 +128,11 @@
     document carries the `ci_run` kind's own fields plus
     `:change_id` (the change it ran on) and whatever the forge needs
     to find the log later. `:complete?` is false when a repository
-    did not answer; the source holds its cursor where it was.")
+    did not answer; the source holds its cursor where it was. A source
+    may also answer `:answered` (the repositories that did answer) and
+    `:refusals` ({repository {:status :route}} for each whose pulls
+    listing refused the token), which the pass writes on the policy
+    rows (ticket 116dfb0d).")
   (forge-log-tail [s check]
     "→ {:excerpt \"…\" :note \"…\" } for one check document: the tail
     of the failed job's log. A log the forge will not hand over in
@@ -116,7 +143,19 @@
     The only write this source makes. Throws when the forge refuses.")
   (forge-calls [s]
     "→ how many calls this source made since the last `forge-poll`
-    started. The census line's first number."))
+    started. The census line's first number.")
+  (forge-checks [s repository head-sha]
+    "→ [{:check_name :status :conclusion} …] for every check run on
+    one head, the latest of each (ticket d1742908). The poll reads
+    checks only on pull requests that moved, and a check that finishes
+    moves no pull request, so the failing pass asks head by head.
+    Throws when the forge does not answer.")
+  (forge-base [s repository branch]
+    "→ {:head_sha sha :checks [check-doc …]} for the head of one branch,
+    or nil when the branch has none (ticket ade81ae9). Each check
+    carries `:check_name`, `:status` and `:conclusion`, which
+    `check-verdict` reads, and whatever `forge-log-tail` needs to find
+    its log. Throws when the forge does not answer."))
 
 ;; ── what the two kinds take ─────────────────────────────────────────
 
@@ -141,7 +180,8 @@
   no observe door at all, and the pass does not argue with the
   machine."
   {:open :observe
-   :submitted :observe_submitted})
+   :submitted :observe_submitted
+   :failing :observe_failing})
 
 (def forge-id-prefix
   "What a `change_id` the FORGE owns starts with. A row the engine
@@ -193,6 +233,12 @@
 
 (defn- as-opts []
   {:principal mirror/source-principal})
+
+(defn- base-opts
+  "The engine's hand inside the base pass: the ticket's base doors open
+  only `:within` it (ticket `only-the-base-pass-writes-this`)."
+  []
+  (assoc (as-opts) :within {:kind :repo_policy :action :note_base}))
 
 (defn- warn! [& parts]
   (binding [*out* *err*]
@@ -255,9 +301,11 @@
   (case [row-state (str forge-state)]
     [:open "merged"] :merge
     [:submitted "merged"] :merge
+    [:failing "merged"] :merge
     [:stuck "merged"] :merge
     [:open "closed"] :close
     [:submitted "closed"] :close
+    [:failing "closed"] :close
     [:stuck "closed"] :close
     [:closed "open"] :reopen
     nil))
@@ -472,6 +520,457 @@
    census
    changes))
 
+;; ── the checks' verdict on a submitted change (ticket d1742908) ───────
+
+(def green-conclusions
+  "The conclusions a required check may finish with and still let the
+  change merge. `neutral` and `skipped` are GitHub's own passes."
+  #{"success" "neutral" "skipped"})
+
+(defn check-verdict
+  "What the checks on one head say, read against the policy's required
+  checks: {:verdict :red :names […]} when every required check
+  finished and at least one went red, {:verdict :green} when every one
+  finished green, and nil while one is still running, has not started,
+  or ended some other way (a cancel). A policy that names no required
+  check requires every check on the head."
+  [required checks]
+  (let [by-name (group-by #(str (:check_name %)) checks)
+        names (if (seq required)
+                (vec (distinct required))
+                (vec (sort (remove str/blank? (keys by-name)))))
+        runs (mapv #(get by-name %) names)
+        all? (fn [pred] (every? (fn [rs] (and (seq rs) (every? pred rs))) runs))]
+    (when (and (seq names) (all? #(= "completed" (str (:status %)))))
+      (let [red (filterv (fn [n] (some #(contains? red-conclusions
+                                                   (str (:conclusion %)))
+                                       (get by-name n)))
+                         names)]
+        (cond
+          (seq red) {:verdict :red :names red}
+          (all? #(contains? green-conclusions (str (:conclusion %))))
+          {:verdict :green}
+          :else nil)))))
+
+(def failing-scan-limit
+  "How many rows of each of the two live states one pass reads."
+  200)
+
+(def ^:private why-chars 480)
+
+(defn- live-changes
+  "Every change a seat has pushed and nobody has merged: `submitted`
+  and `failing`, read from the store and not from the poll — a check
+  that finishes moves no pull request, so the window would miss it."
+  [eng]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (into []
+              (mapcat #(store/query-rows st tx :change {:state %}
+                                         {:limit failing-scan-limit}))
+              ["submitted" "failing"])))))
+
+;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
+;;
+;; A conflicted pull request runs no fresh checks, so it never goes
+;; red: it just sits. The row's `mergeable` already reads `conflicted`
+;; from the forge (`behind` is `blocked` there, and a branch that is
+;; only behind is not failing — the merge brings it forward). So the
+;; verdict counts a conflict as one more red name, `merge-conflict`,
+;; and the move below is the red move: `failing` under the round
+;; ceiling, `stuck` on the last round. The way back is a head with no
+;; conflict and green checks, exactly as for a red check.
+
+(def merge-conflict
+  "The name a conflict rides in `failing_checks`."
+  "merge-conflict")
+
+(defn conflicted?
+  "Does the forge say this change conflicts with its base?"
+  [row]
+  (= "conflicted" (str (get-in row [:data :mergeable]))))
+
+(defn with-conflict
+  "The checks' verdict, read together with the row's merge state. A
+  conflicted row is red whatever its checks say — still running, green
+  or red — and `merge-conflict` joins the red names."
+  [verdict row]
+  (if (conflicted? row)
+    {:verdict :red
+     :names (vec (distinct (conj (vec (when (= :red (:verdict verdict))
+                                         (:names verdict)))
+                                 merge-conflict)))}
+    verdict))
+
+(def ^:private conflict-path-limit 50)
+
+(defn conflict-paths
+  "The paths a trial merge of the base into the change's branch leaves
+  unmerged, asked of the bench with the engine's own hand, or nil. The
+  forge does not name them; the rig can, in its worktree, and aborts
+  the merge after. A rig with no such tool, or no rig at all, answers
+  nil — the change still goes failing, only without its paths."
+  [eng row]
+  (let [answer (bench/ask {:services (:services eng)} :conflicts
+                          {:repo (str (get-in row [:data :repository]))
+                           :branch (str (get-in row [:data :head_branch]))
+                           :base (str (get-in row [:data :base_branch]))})
+        paths (when (and (map? answer) (not (bench/refused answer)))
+                (:paths answer))]
+    (when (sequential? paths)
+      (not-empty (into [] (comp (map str) (remove str/blank?)
+                                (map #(subs % 0 (min (count %) 400)))
+                                (take conflict-path-limit))
+                       paths)))))
+
+;; ── a landing that failed (ticket 92871afb) ─────────────────────────
+;;
+;; The rig lands a submit in steps: it commits, pushes, and opens the
+;; pull request. When a step fails, nothing reached GitHub, so no check
+;; will ever run on the head and the change would sit at `submitted`
+;; for good. The bench's `feedback` names the landing. A failed one is
+;; one more red name, `landing:<step>`, and the step's output rides
+;; beside it in `landing_error`; the move is the red move, so it counts
+;; against the round ceiling and wakes the seat as a red check does. A
+;; landing still running leaves the row alone, and the seat's next
+;; submit is a landing of its own and brings the row back to
+;; `submitted`.
+
+(def ^:private landing-error-chars 4000)
+
+(def ^:private failed-landing-states #{"failed" "failure" "error"})
+
+(def ^:private running-landing-states
+  #{"running" "pending" "queued" "in_progress" "started"})
+
+(defn- text-of [v]
+  (some-> v str str/trim not-empty))
+
+(defn- state-text [m]
+  (let [v (or (:state m) (:status m))]
+    (str/lower-case (if (keyword? v) (name v) (str v)))))
+
+(defn- step-name [step]
+  (text-of (or (:name step) (:step step) (:id step))))
+
+(defn- output-of [m]
+  (some #(text-of (get m %)) [:output :error :stderr :log :tail :message]))
+
+(defn- tail-of [s n]
+  (if (> (count s) n) (subs s (- (count s) n)) s))
+
+(defn landing-verdict
+  "What the bench's landing of the last submit says: {:verdict :red
+  :names [\"landing:<step>\"] :error \"…\"} when a step failed, with the
+  tail of that step's output; {:verdict :running} while it still runs;
+  nil for a landing that finished well, or no landing at all."
+  [landing]
+  (when (map? landing)
+    (let [st (state-text landing)]
+      (cond
+        (contains? failed-landing-states st)
+        (let [steps (filter map? (when (sequential? (:steps landing))
+                                   (:steps landing)))
+              named (text-of (:failed_step landing))
+              failed (or (when named
+                           (some #(when (= named (step-name %)) %) steps))
+                         (some #(when (contains? failed-landing-states
+                                                 (state-text %))
+                                  %)
+                               steps))
+              step (or named (step-name failed) (text-of (:step landing))
+                       "unknown")
+              name' (str "landing:" step)
+              out (or (output-of failed) (output-of landing))]
+          (cond-> {:verdict :red
+                   :names [(subs name' 0 (min (count name') 200))]}
+            out (assoc :error (tail-of out landing-error-chars))))
+
+        (contains? running-landing-states st)
+        {:verdict :running}
+
+        :else nil))))
+
+(defn landing-of
+  "The landing the bench's feedback names for this change's branch,
+  asked with the engine's own hand, or nil. A rig that does not answer,
+  or refuses, says nothing about the landing, and the checks decide."
+  [eng row policy]
+  (let [answer (bench/ask {:services (:services eng)} :feedback
+                          {:repo (str (get-in row [:data :repository]))
+                           :branch (bench/branch-of row policy)})]
+    (when (and (map? answer) (not (bench/refused answer)))
+      (:landing answer))))
+
+(defn- failing-move
+  "The one door the verdict opens on this row, as [door input], or nil.
+  A red head under the round ceiling goes to `failing`; a red head on
+  the last round goes to `stuck` with the names as its why; a green
+  head brings a failing change back to `submitted`. `conflicts` is the
+  list of conflicting paths, written beside the names when there is one;
+  a failed landing's output rides as the verdict's `:error`."
+  [row verdict policy conflicts]
+  (let [names (:names verdict)
+        error (:error verdict)]
+    (case [(state-of row) (:verdict verdict)]
+      [:submitted :red]
+      (if (>= (long (or (get-in row [:data :rounds]) 0))
+              (bench/rounds-of policy))
+        (let [why (str "The checks went red on the last round the policy "
+                       "gives: " (str/join ", " names) ".")]
+          [:stick (cond-> {:why (subs why 0 (min (count why) why-chars))
+                           :failing_checks names}
+                    (seq conflicts) (assoc :conflicts conflicts)
+                    error (assoc :landing_error error))])
+        [:fail (cond-> {:failing_checks names}
+                 (seq conflicts) (assoc :conflicts conflicts)
+                 error (assoc :landing_error error))])
+      [:failing :green] [:recover {}]
+      nil)))
+
+(def ^:private moved-counts
+  {:fail :failing :recover :recovered :stick :stuck})
+
+(defn- failing-pass!
+  "Every submitted or failing change of a repository with an active
+  policy → its head's checks, read against the policy, and at most one
+  door. A change with no head, or of a repository with no policy, is
+  left where it is. A forge that does not answer, or a door the engine
+  refuses, costs that change one pass and nothing else."
+  [eng source census log-fn]
+  (let [by-repo (into {}
+                      (keep (fn [p]
+                              (when-some [r (some-> (get-in p [:data :repository])
+                                                    str not-empty)]
+                                [r p])))
+                      (bench/policies eng :active))]
+    (reduce
+     (fn [census row]
+       (let [repo (str (get-in row [:data :repository]))
+             head (some-> (get-in row [:data :head_sha]) str not-empty)
+             policy (get by-repo repo)]
+         (if-not (and head policy)
+           census
+           (try
+             (let [;; a change's landing first (ticket 92871afb): a
+                   ;; push that failed has no checks to wait on, and
+                   ;; one still landing has none yet. A failing change
+                   ;; is read too, so the old head's green checks do
+                   ;; not recover a landing that is still red.
+                   landing (when (contains? #{:submitted :failing}
+                                            (state-of row))
+                             (landing-verdict (landing-of eng row policy)))
+                   verdict (case (:verdict landing)
+                             :red landing
+                             :running nil
+                             (with-conflict
+                               (check-verdict (bench/required-checks-of policy)
+                                              (forge-checks source repo head))
+                               row))
+                   ;; the rig is asked only when a conflict will move
+                   ;; the row, never for a row that stays where it is
+                   conflicts (when (and (nil? landing)
+                                        (conflicted? row)
+                                        (= :submitted (state-of row)))
+                               (conflict-paths eng row))]
+               (if-some [[door input] (when verdict
+                                        (failing-move row verdict policy
+                                                      conflicts))]
+                 (do (inv/invoke! eng :change (str (:id row)) door input
+                                  (as-opts))
+                     (update census (moved-counts door) inc))
+                 census))
+             (catch Exception e
+               (log-fn "the checks of " (get-in row [:data :change_id])
+                       " did not move the change (" (ex-message e) ")")
+               (update census :refused inc))))))
+     census
+     (live-changes eng))))
+
+;; ── a red base opens one ticket (ticket ade81ae9) ────────────────────
+;;
+;; A base branch that goes red stops every pull request on it, and
+;; nothing else in the engine reads a base. So for each active policy
+;; the pass reads the head of the policy's `base` and its checks, and
+;; judges them with `check-verdict`, as a pull request's head is judged.
+;; The state lands on the policy row (`base_state`, `base_head`) through
+;; the hidden `note_base` door, only when it moved.
+;;
+;; RED TWICE OPENS ONE TICKET. A red read on one pass is remembered; a
+;; red read on the NEXT pass too mints one p0 `bug` ticket in that
+;; repository and grooms it with the engine's own hand, so the
+;; repository's code seat wakes on `groom`. A check that is mid-rerun
+;; reads `unknown` between, and that starts the count again. While that
+;; ticket has not ended, a later red head is written on it (`red_heads`)
+;; and no second ticket is minted. A green base ends it through the
+;; hidden `mend` door, whether or not its own change merged.
+
+(def ^:private base-log-tails
+  "How many red checks of a base carry their log tail into the ticket."
+  3)
+
+(def ^:private ended-ticket #{:done :dropped})
+
+(def ^:private red-head-doors
+  "The door that writes a red head on the ticket, read from its state.
+  A self-loop is spelled once for each state it serves; a draft, a
+  blocked or a deferred ticket is a person's, and is left alone."
+  {:open :note_red
+   :in_review :note_red_in_review})
+
+(defn- cut [s n]
+  (let [s (str s)] (subs s 0 (min (count s) (long n)))))
+
+(defn- red-head-line [sha names]
+  (cut (str sha ": " (str/join ", " names)) 400))
+
+(defn- seen-head? [ticket-row sha]
+  (boolean (some #(str/starts-with? (str %) (str sha))
+                 (get-in ticket-row [:data :red_heads]))))
+
+(defn- red-main-detail
+  "The body a code seat reads: what is red, where, the log, and what to
+  do about it."
+  [source repo base head red-from red-checks]
+  (let [tails (for [c (take base-log-tails red-checks)]
+                (let [{:keys [excerpt note]}
+                      (try (forge-log-tail source (assoc c :repository repo))
+                           (catch Exception e {:note (ex-message e)}))]
+                  (str "### " (:check_name c) "\n\n"
+                       (if (str/blank? (str excerpt))
+                         (str "No log tail: " (or note "the forge gave none") ".")
+                         (str "```\n" excerpt "\n```")))))]
+    (cut (str "## What is red\n\n"
+              "The head of `" base "` in " repo " is `" head "`, and these "
+              "checks on it finished red:\n\n"
+              (str/join "\n" (map #(str "- " (:check_name %)
+                                        (when-some [u (:url %)] (str " — " u)))
+                                  red-checks))
+              "\n\n"
+              (when red-from
+                (str "The first red head after a green one was `" red-from
+                     "`: that commit, or the merge that made it, is the "
+                     "likely cause.\n\n"))
+              "## The log\n\n" (str/join "\n\n" tails) "\n\n"
+              "## What to do\n\n"
+              "The engine opened this ticket because `" base "` stayed red "
+              "for two passes. The fix goes on a branch like any ticket's, "
+              "and merges through its pull request. Do not revert other "
+              "people's merges unless the log shows that is the only fix, "
+              "and if it is, say so in the submit. The engine completes "
+              "this ticket when the head of `" base "` is green again, "
+              "whether or not this ticket's change merged.")
+         ticket/detail-chars)))
+
+(defn- open-red-ticket!
+  "One groomed p0 bug in the policy's repository, with the red head
+  written on it. → its id."
+  [eng source repo base head red-from red-checks names]
+  (let [row (:row (inv/create! eng :ticket
+                               {:title (cut (str base " is red: "
+                                                 (str/join ", " names))
+                                            200)
+                                :detail (red-main-detail source repo base head
+                                                         red-from red-checks)
+                                :type "bug"
+                                :priority 0
+                                :repo repo}
+                               (as-opts)))
+        id (str (:id row))]
+    (inv/invoke! eng :ticket id :groom {} (as-opts))
+    (inv/invoke! eng :ticket id :note_red
+                 {:red_head (red-head-line head names)} (base-opts))
+    id))
+
+(defn- blank->nil [v] (some-> v str not-empty))
+
+(defn- base-move!
+  "One policy's base, read and judged, and at most one ticket move.
+  → the census."
+  [eng source policy census]
+  (let [repo (str (get-in policy [:data :repository]))
+        base (bench/base-of policy)
+        base-read (forge-base source repo base)
+        head (blank->nil (:head_sha base-read))]
+    (if (nil? head)
+      census
+      (let [data (:data policy)
+            verdict (check-verdict (bench/required-checks-of policy)
+                                   (:checks base-read))
+            now (case (:verdict verdict) :red "red" :green "green" "unknown")
+            was (str (:base_state data))
+            stored-ticket (blank->nil (:base_ticket data))
+            known (row-by-id eng :ticket stored-ticket)
+            live (when (and known (not (ended-ticket (state-of known))))
+                   known)
+            red-from (case now
+                       "red" (if (= "green" was)
+                               head
+                               (blank->nil (:base_red_from data)))
+                       "green" nil
+                       (blank->nil (:base_red_from data)))
+            names (:names verdict)
+            red-checks (filterv #(and (some #{(str (:check_name %))} names)
+                                      (contains? red-conclusions
+                                                 (str (:conclusion %))))
+                                (:checks base-read))
+            [census ticket-id]
+            (cond
+              (not (and (= "red" now) (= "red" was)))
+              (if (and (= "green" now) live)
+                (do (inv/invoke! eng :ticket (str (:id live)) :mend
+                                 {:close_reason (str base " is green again at "
+                                                     head ".")}
+                                 (base-opts))
+                    [(update census :base-closed inc) stored-ticket])
+                [census stored-ticket])
+
+              ;; red twice, on a head the known ticket already carries:
+              ;; nothing new, and a ticket a person ended on this very
+              ;; head is not minted again
+              (and known (seen-head? known head))
+              [census stored-ticket]
+
+              live
+              (if-some [door (red-head-doors (state-of live))]
+                (do (inv/invoke! eng :ticket stored-ticket door
+                                 {:red_head (red-head-line head names)}
+                                 (base-opts))
+                    [(update census :base-noted inc) stored-ticket])
+                [census stored-ticket])
+
+              :else
+              [(update census :base-opened inc)
+               (open-red-ticket! eng source repo base head red-from
+                                 red-checks names)])
+            input {:verdict now :head head :red_from red-from
+                   :ticket ticket-id}
+            stored {:verdict (blank->nil (:base_state data))
+                    :head (blank->nil (:base_head data))
+                    :red_from (blank->nil (:base_red_from data))
+                    :ticket stored-ticket}]
+        (when (not= input stored)
+          (inv/invoke! eng :repo_policy (str (:id policy)) :note_base input
+                       (as-opts)))
+        census))))
+
+(defn- base-pass!
+  "Every active policy → its base read, judged, and written. A base the
+  forge will not read costs that repository this pass and nothing
+  else, and writes nothing."
+  [eng source census log-fn]
+  (reduce
+   (fn [census policy]
+     (try
+       (base-move! eng source policy census)
+       (catch Exception e
+         (log-fn "the base of " (get-in policy [:data :repository])
+                 " was not read (" (ex-message e) ")")
+         census)))
+   census
+   (bench/policies eng :active)))
+
 ;; ── the one write ───────────────────────────────────────────────────
 
 (defn- unlabelled?
@@ -537,7 +1036,50 @@
 (def ^:private fresh-census
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
-   :runs-orphan 0 :labelled 0 :refused 0})
+   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0
+   :base-opened 0 :base-noted 0 :base-closed 0 :refused 0})
+
+;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
+;; whose pulls listing the token cannot read costs its rows a pass and
+;; a log line, every pass, and nothing in the engine says so: its
+;; changes are never adopted, have no number, and so the house's merge
+;; and the person's merge ask both skip them silently. The pass writes
+;; the refusal on the repository's own policy row, where a person reads
+;; it, and clears it the first pass that reads the repository again. A
+;; note that already says the same status for the same route is left
+;; alone, so the log carries one transition when a repository goes dark
+;; and one when it comes back.
+
+(defn- source-note-pass!
+  [eng refusals answered census log-fn]
+  (let [answered (set answered)]
+    (reduce
+     (fn [census row]
+       (let [repo (str (get-in row [:data :repository]))
+             stored (str (get-in row [:data :source_note]))
+             refusal (get refusals repo)
+             input (cond
+                     refusal
+                     (when-not (str/starts-with?
+                                stored
+                                (policy/source-note-head (:status refusal)
+                                                         (:route refusal)))
+                       {:answered (:status refusal) :route (:route refusal)})
+
+                     (and (contains? answered repo) (not (str/blank? stored)))
+                     {})]
+         (if (nil? input)
+           census
+           (try
+             (inv/invoke! eng :repo_policy (str (:id row)) :note_source
+                          input (as-opts))
+             (update census :noted inc)
+             (catch Exception e
+               (log-fn "the policy of " repo " was refused its source note ("
+                       (ex-message e) ")")
+               (update census :refused inc))))))
+     census
+     (bench/policies eng :active))))
 
 (defn pass!
   "One pass of the factory mirror.
@@ -557,14 +1099,18 @@
         log-fn (or log-fn warn!)]
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
-    (let [{:keys [changes checks repositories complete?]} (forge-poll source)
+    (let [{:keys [changes checks repositories complete? answered refusals]}
+          (forge-poll source)
           census (assoc fresh-census
                         :repositories (count repositories)
                         :complete? (boolean complete?))
+          census (source-note-pass! eng refusals answered census log-fn)
           census (change-pass! eng changes census log-fn)
           census (run-pass! eng source checks census log-fn)
           census (stale-pass! eng changes census log-fn)
           census (label-pass! eng source census log-fn)
+          census (failing-pass! eng source census log-fn)
+          census (base-pass! eng source census log-fn)
           census (assoc census :calls (forge-calls source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
               (:minted census) " changes minted, " (:adopted census)
@@ -574,6 +1120,20 @@
               (when (pos? (long (:runs-superseded census)))
                 (str ", " (:runs-superseded census) " red runs superseded "
                      "on a head that moved"))
+              (when (pos? (long (+ (long (:failing census))
+                                   (long (:recovered census))
+                                   (long (:stuck census)))))
+                (str ", " (:failing census) " changes failing, "
+                     (:recovered census) " green again, "
+                     (:stuck census) " stuck on red"))
+              (when (pos? (long (:noted census)))
+                (str ", " (:noted census) " policy source notes written"))
+              (when (pos? (long (+ (long (:base-opened census))
+                                   (long (:base-noted census))
+                                   (long (:base-closed census)))))
+                (str ", " (:base-opened census) " red-base tickets opened, "
+                     (:base-noted census) " red heads noted, "
+                     (:base-closed census) " closed on green"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
               (when-not (:complete? census)

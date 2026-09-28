@@ -21,6 +21,17 @@
   is open, which is a fact the engine already holds and not a status a
   model sets and forgets.
 
+  IN REVIEW IS THE SEVENTH, AND ONLY ITS CHANGE MOVES IT (ticket
+  2e869934). A code seat's submit moves the ticket its change was born
+  from `open -> in_review`: the work is out for review and the ticket
+  is out of every walk. It is not done. The change's red or conflicted
+  head, a close without a merge, a stall and a person's unstick send it
+  back through `return` to `open`, so the seat that wrote the change
+  wakes and walks it again with its change and feedback; the merge ends
+  it through `land` with the pull request as its sentence. All three
+  doors are the change's, inside its own transaction
+  (`only-its-change-moves-it`), and no hand at the wire takes them.
+
   GROOMED IS A STATE, AND A SEAT CANNOT REACH IT. The owner's ruling,
   2026-09-26: a task is groomed before it is picked up. So the birth
   lands in `draft`, where nothing walks, and `groom` is walled for a
@@ -61,6 +72,7 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
+            [waymark10.server.invoke :as inv]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -76,7 +88,7 @@
 
 (def ^:private unfinished
   "The states a child may NOT be in when its parent ends."
-  #{:open :blocked :deferred})
+  #{:open :in_review :blocked :deferred})
 
 (def ^:private ended
   "The states a blocker or a parent may NOT be in when it is named."
@@ -100,12 +112,20 @@
   ;; The list is REPLACED, not appended. The door prefills the blockers
   ;; that stand, so a person states the whole set again — two spellings
   ;; of one list would be two lists.
-  (assoc-in row [:data :blocked_by] (vec (:blocked_by inp))))
+  ;;
+  ;; The state it was blocked FROM is kept, so the last blocker's ending
+  ;; returns a draft to `draft` and not to the queue. A restatement from
+  ;; `blocked` keeps what the first block wrote.
+  (let [from (state-of row)]
+    (cond-> (assoc-in row [:data :blocked_by] (vec (:blocked_by inp)))
+      (#{:draft :open} from) (assoc-in [:data :blocked_from] (name from)))))
 
 (defhandler clear-the-blockers [row _inp _ctx]
   ;; The transition log keeps who blocked what; the row says what
   ;; holds NOW, and an unblocked ticket is blocked by nothing.
-  (assoc-in row [:data :blocked_by] []))
+  (-> row
+      (assoc-in [:data :blocked_by] [])
+      (assoc-in [:data :blocked_from] nil)))
 
 (defhandler defer-the-ticket [row inp _ctx]
   (assoc-in row [:data :defer_until] (:defer_until inp)))
@@ -113,9 +133,63 @@
 (defhandler resume-the-ticket [row _inp _ctx]
   (assoc-in row [:data :defer_until] nil))
 
-(defhandler close-the-ticket [row inp _ctx]
+(defn- still-waits-on
+  "The blockers `waiter` still waits on once `ending` ends: the ending
+  ticket leaves the list, and so does any other blocker that has ended
+  or is gone — a list that named one would keep the ticket blocked by
+  nothing, and the `block` door refuses to restate it."
+  [waiter ending read']
+  (into []
+        (remove (fn [id]
+                  (or (= ending (str id))
+                      (let [b (read' :ticket (str id))]
+                        (or (nil? b) (contains? ended (state-of b)))))))
+        (get-in waiter [:data :blocked_by])))
+
+(defn- release-the-waiters!
+  "THE LAST BLOCKER'S ENDING UNBLOCKS (the loop that needs no person).
+  Every blocked ticket whose `blocked_by` names the ticket that is
+  ending is re-judged in the same transaction: with blockers left, the
+  `block` door restates the shorter list; with none, the ticket goes
+  back where it was blocked from — `unblock` into the queue, the same
+  transition a person's tap makes, so a seat's wake on `unblock` fires
+  as it always has, or `return_to_draft` for a draft nobody groomed.
+
+  BEST-EFFORT, as the change's merge is: a waiter that refuses is said
+  in the log, and the ending stands. A probe or a rehearsal carries no
+  pen, and releases nothing."
+  [row ctx]
+  (let [find' (:find ctx)
+        read' (:read ctx)
+        invoke' (:invoke ctx)
+        ending (str (:id row))]
+    (when (and find' read' invoke')
+      (doseq [waiter (find' :ticket {:state "blocked"} {:limit 500})
+              :when (some #(= ending (str %))
+                          (get-in waiter [:data :blocked_by]))
+              :let [left (still-waits-on waiter ending read')
+                    ;; `block` is fenced (its :edit implies it), so the
+                    ;; version read here is named as an honest client
+                    ;; would name it (worksheet/apply-invocations!)
+                    fence {:if-match (inv/etag :ticket (:id waiter)
+                                               (:version waiter))}]]
+        (try
+          (cond
+            (seq left)
+            (invoke' :ticket (:id waiter) :block {:blocked_by left} fence)
+            (= "draft" (get-in waiter [:data :blocked_from]))
+            (invoke' :ticket (:id waiter) :return_to_draft nil fence)
+            :else
+            (invoke' :ticket (:id waiter) :unblock nil fence))
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factory10 ticket ending: the ticket" (:id waiter)
+                       "was not released -" (ex-message e)))))))))
+
+(defhandler close-the-ticket [row inp ctx]
   ;; One handler for both endings. The machine says which ending; the
-  ;; handler writes the sentence.
+  ;; handler writes the sentence, and releases what waited on it.
+  (release-the-waiters! row ctx)
   (assoc-in row [:data :close_reason] (:close_reason inp)))
 
 (defhandler reopen-the-ticket [row _inp _ctx]
@@ -234,6 +308,55 @@
     (holds/approved-hold? ctx :ticket :reopen (:id row)) (t/allow)
     :else (t/deny)))
 
+(defguardfn only-an-ending-returns-a-ticket-to-draft
+  {:reads [:within]
+   :open "No door clears this one. A blocked draft goes back to draft when the last ticket it waits on ends, and the engine moves it then; a person who wants it sooner unblocks it into the queue, or states its blockers again."
+   :explain "A blocked ticket returns to draft only when the last ticket it waits on is completed or dropped: the ending moves it, in the same transaction, and no hand does."}
+  [_row _inp ctx]
+  ;; `:within`, vocabulary § 6: the door opens for this kind's own
+  ;; endings and for nobody's hand. The wire, the render probe and
+  ;; every rehearsal answer nil, so it renders refused, which is true.
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :ticket kind) (contains? #{:complete :drop :land :mend} action))
+      (t/allow)
+      (t/deny))))
+
+(defguardfn only-its-change-moves-it
+  {:reads [:within]
+   :open "No door clears this one. A ticket goes out for review when its change is submitted, and comes back when that change goes red, closes, stalls or is unstuck; the change moves it then, and a person who wants it sooner works the change."
+   :explain "A ticket under review is moved by the change it was built in and by no hand: the change's submit sends it out, its red head, close, stall or unstick sends it back, and its merge ends it."}
+  [_row _inp ctx]
+  ;; `only-an-ending-returns-a-ticket-to-draft`'s shape, one kind over:
+  ;; the door opens inside a `change` door's own transaction and for
+  ;; nobody's hand. The wire, the render probe and every rehearsal
+  ;; answer nil, so it renders refused, which is true.
+  (if (= :change (:kind (:within ctx)))
+    (t/allow)
+    (t/deny)))
+
+(defguardfn only-the-base-pass-writes-this
+  {:reads [:principal :within]
+   :hide true
+   :explain "The GitHub source's base pass writes a red base's heads and ends its ticket when the base is green. A person and a model read it."}
+  ;; repo_policy's `the-engine-notes-the-source`, one kind over (ticket
+  ;; ade81ae9): the engine's system hand alone, and a hidden door
+  ;; answers 404 and says nothing. It opens only `:within` the base
+  ;; pass (forge's `base-opts`), so the render probe, which carries no
+  ;; `:within`, offers the engine nothing on a ticket under review.
+  [_row _inp ctx]
+  (if (and (= :system (:type (:principal ctx)))
+           (= :repo_policy (:kind (:within ctx))))
+    (t/allow)
+    (t/deny)))
+
+(defhandler note-a-red-head [row inp _ctx]
+  ;; One more red head of the base this ticket was opened for, kept to
+  ;; the last fifty.
+  (update-in row [:data :red_heads]
+             (fn [heads]
+               (vec (take-last 50 (distinct (conj (vec heads)
+                                                  (:red_head inp))))))))
+
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
 ;; Check-tier: no :given rows, and the one guard on the attempted door
@@ -301,6 +424,31 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :out-of-state
              :because "Done"}})
+
+(defscenario a-person-does-not-return-a-blocked-ticket-to-draft
+  "The way back to draft from blocked is the last blocker's ending,
+   made by the engine inside that ending. A hand at the wire is
+   refused, and the refusal says what moves it instead."
+  {:kind    :ticket
+   :attempt :return_to_draft
+   :row     {:state :blocked
+             :data (assoc a-draft-ticket
+                          :blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]
+                          :blocked_from "draft")}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :only-an-ending-returns-a-ticket-to-draft
+             :because "last ticket it waits on"}})
+
+(defscenario a-person-does-not-take-a-ticket-out-of-review
+  "A ticket under review comes back when its change says so — red,
+   closed, stalled or unstuck — and no hand at the wire moves it. The
+   refusal says what moves it instead."
+  {:kind    :ticket
+   :attempt :return
+   :row     {:state :in_review :data a-draft-ticket}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :only-its-change-moves-it
+             :because "moved by the change"}})
 
 ;; ── the fields, spelled once and read by three doors ────────────────
 
@@ -376,6 +524,11 @@
                  {:label "Waits on"
                   :help "The tickets that must end before this one is worked. While any of them is open this ticket is blocked and out of the queue."}}
     [:vector :waymark/ref]]
+   [:blocked_from {:optional true
+                   :x-display
+                   {:label "Blocked while"
+                    :help "Where this ticket stood when it was blocked. When the last ticket it waits on ends it goes back there: a groomed ticket to the queue, a draft to draft."}}
+    [:maybe [:enum "draft" "open"]]]
    [:defer_until {:optional true
                   :examples ["2026-11-19"]
                   :x-display
@@ -388,7 +541,16 @@
                    {:widget "prose"
                     :label "How it ended"
                     :help "One sentence: what was done, or why it was let go. It is what the next reader has."}}
-    [:maybe [:string {:max 480}]]]])
+    [:maybe [:string {:max 480}]]]
+   ;; ticket ade81ae9: the heads of a red base, written by the base pass
+   ;; on the one ticket it opened for that repository
+   [:red_heads {:optional true
+                :examples [["1f0c2d3e4a5b60718293a4b5c6d7e8f901234567: gate"]]
+                :x-display
+                {:raw true
+                 :label "Red heads of the base"
+                 :help "Each head of the base branch that went red while this ticket was open, with its red checks. Empty for a ticket the engine did not open."}}
+    [:maybe [:vector [:string {:max 400}]]]]])
 
 (def ^:private close-input
   [:map
@@ -407,7 +569,7 @@
    :plural "tickets"
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
-   :states [:draft :open :blocked :deferred :done :dropped]
+   :states [:draft :open :in_review :blocked :deferred :done :dropped]
    :initial :draft
    ;; NO TOMB. Both endings come back through `reopen`, a person's
    ;; door, to `draft`: a ticket ended wrongly is groomed again.
@@ -484,10 +646,11 @@
 
     ;; THE BLOCKERS, STATED WHOLE. From `draft` or `open` the door
     ;; blocks; from `blocked` it restates the set. One door, because
-    ;; all three land in `blocked`. Stating what a ticket waits on is
-    ;; part of grooming it, so `unblock` lands in `open` and never back
-    ;; in `draft` — which is why this door is one-way and not
-    ;; reversible.
+    ;; all three land in `blocked`. A person's `unblock` lands in `open`;
+    ;; the last blocker's ENDING returns the ticket where it was blocked
+    ;; from (`blocked_from`), so a draft nobody groomed goes back to
+    ;; `draft`. Two ways back to two states is why this door is one-way
+    ;; and not reversible.
     :block
     {:from #{:draft :open :blocked} :to :blocked
      :input [:map
@@ -500,7 +663,7 @@
      :handler state-the-blockers
      :edit {:prefill [:blocked_by]}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This ticket leaves the queue until the tickets it waits on end. The way back is unblock, which lands it in the queue as groomed work: naming what it waits on was the grooming."}
+              :one-way "This ticket leaves the queue until the tickets it waits on end. When the last of them ends it goes back where it stood — the queue, or draft for a draft — and a person's unblock lands it in the queue sooner."}
      :display {:label "Blocked by" :order 4
                :description "Wait on other tickets — this one leaves the queue until they end"}}
 
@@ -510,6 +673,18 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Unblock" :style :primary :order 1
                :description "Back into the queue — nothing holds this one now"}}
+
+    ;; THE ENGINE'S WAY BACK FOR A DRAFT. The last blocker's ending
+    ;; opens it (release-the-waiters!), and no hand at the wire does:
+    ;; a draft was never groomed, so its blockers ending does not put
+    ;; it in the queue.
+    :return_to_draft
+    {:from #{:blocked} :to :draft
+     :guards [only-an-ending-returns-a-ticket-to-draft]
+     :handler clear-the-blockers
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Return to draft" :order 10
+               :description "The last ticket it waited on ended — back to draft, to be groomed"}}
 
     :defer
     {:from #{:open} :to :deferred
@@ -546,7 +721,7 @@
      ;; a mis-click must not discard what was typed
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This is the ending on the record, with its sentence. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
+              :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
      :display {:label "Complete" :style :primary :order 6
                :description "The work is done — say what was done"}}
 
@@ -557,9 +732,92 @@
      :handler close-the-ticket
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This is the ending on the record, with its sentence. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
+              :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
      :display {:label "Drop" :style :danger :order 7
                :description "Let this go — say why"}}
+
+    ;; ── THE CHANGE'S THREE DOORS (ticket 2e869934) ───────────────────
+    ;; Walked by the change born from this ticket, inside its own
+    ;; door, and by no hand: see `only-its-change-moves-it`. None is
+    ;; fenced, because the change names no version it read.
+    :review
+    {:from #{:open} :to :in_review
+     :guards [only-its-change-moves-it]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The change built for this ticket was submitted, so the ticket leaves the queue while its pull request is reviewed. Its change sends it back if the checks go red, and its merge ends it."}
+     :display {:label "Out for review" :order 11
+               :description "Its change was submitted — out of the queue while the pull request is reviewed"}}
+
+    ;; one door back for every way a review ends without a merge, so a
+    ;; seat's wake_on hears one action: `return`, not `resume` —
+    ;; `resume` is a person's door out of `deferred`, and a wake on it
+    ;; would read a person's not-now as the checks' red
+    :return
+    {:from #{:in_review} :to :open
+     :guards [only-its-change-moves-it]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Its change went red, closed without a merge, stalled or was put back to work, so the ticket is in the queue again and the seat that wrote the change walks it next. The change's next submit sends it out for review again."}
+     :display {:label "Back from review" :order 12
+               :description "Its change went red, closed, stalled or was put back to work — into the queue again"}}
+
+    ;; the merge's ending, from `in_review` or from `open` (a change a
+    ;; person merged while it was red). Not `complete`: that door is a
+    ;; hand's, and fenced by its draft.
+    :land
+    {:from #{:open :in_review} :to :done
+     :input close-input
+     :guards [only-its-change-moves-it children-are-finished]
+     :handler close-the-ticket
+     ;; change's `stick`, one kind over: only the engine walks this
+     ;; door and nobody composes the sentence in a box, and an `:edit`
+     ;; would fence a door the change reaches with no version in hand
+     :waives #{:edit-shape :large-effort}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Its pull request merged, and that is the ending on the record, with the pull request as its sentence. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
+     :display {:label "Merged" :order 13
+               :description "Its pull request merged — the work is done"}}
+
+    ;; ── THE BASE PASS'S THREE DOORS (ticket ade81ae9) ──────────────────
+    ;; Hidden, and the engine's hand alone. A later red head of the base
+    ;; is written on the one open ticket (a self-loop, spelled once for
+    ;; each state it serves), and a green base ends it with `mend`,
+    ;; whether or not its own change merged.
+    :note_red
+    {:from #{:open} :to :open
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-red-head
+     :input [:map
+             [:red_head {:x-display {:hidden true :raw true
+                                     :label "The red head"}}
+              [:string {:min 1 :max 400}]]]
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Red head noted" :order 14
+               :description "The base went red again on a new head"}}
+
+    :note_red_in_review
+    {:from #{:in_review} :to :in_review
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-red-head
+     :input [:map
+             [:red_head {:x-display {:hidden true :raw true
+                                     :label "The red head"}}
+              [:string {:min 1 :max 400}]]]
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Red head noted" :order 15
+               :description "The base went red again on a new head"}}
+
+    :mend
+    {:from #{:draft :open :in_review :blocked :deferred} :to :done
+     :input close-input
+     :guards [only-the-base-pass-writes-this]
+     :handler close-the-ticket
+     ;; `land`'s reasons: only the engine walks it, nobody composes the
+     ;; sentence in a box, and it reaches the row with no version in hand
+     :waives #{:edit-shape :large-effort}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The base branch is green again, and that is the ending on the record. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
+     :display {:label "Base green again" :order 16
+               :description "The base branch this ticket was opened for is green again"}}
 
     :reopen
     {:from #{:done :dropped} :to :draft
@@ -585,4 +843,6 @@
                the-person-grooms-a-ticket
                a-seat-does-not-reopen-a-ticket
                the-person-reopens-a-ticket
-               a-finished-ticket-is-not-put-back-by-a-side-door]})
+               a-finished-ticket-is-not-put-back-by-a-side-door
+               a-person-does-not-return-a-blocked-ticket-to-draft
+               a-person-does-not-take-a-ticket-out-of-review]})

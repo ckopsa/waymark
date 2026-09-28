@@ -706,6 +706,126 @@
       (is (= "2026-09-18T10:00:00Z" (gh/cursor source))
           "the cursor advances only when every repository answered"))))
 
+;; ── check runs refused (a private repository) ───────────────────────
+;;
+;; A fine-grained token cannot hold `Checks`, so on a PRIVATE repository
+;; the check-runs route answers 403. The source reads the same head
+;; through the Actions API instead, and no failure of the check read
+;; costs a repository its pass.
+
+(def ^:private private-repo "ckopsa/waymark-doors")
+
+(def ^:private a-private-pull
+  (assoc a-pull-request
+         :number 5
+         :html_url "https://github.com/ckopsa/waymark-doors/pull/5"))
+
+(def ^:private a-red-job
+  "The Actions job behind the red check, in the shape the jobs route
+  answers."
+  {:id 7001
+   :run_id 900
+   :name "test10 (shard 3)"
+   :status "completed"
+   :conclusion "failure"
+   :head_sha (get-in a-pull-request [:head :sha])
+   :started_at "2026-09-18T13:41:00Z"
+   :completed_at "2026-09-18T13:52:00Z"
+   :html_url "https://github.com/ckopsa/waymark-doors/actions/runs/900/job/7001"})
+
+(def ^:private a-green-job
+  {:id 7002 :run_id 900 :name "check-queue" :status "completed"
+   :conclusion "success"
+   :head_sha (get-in a-pull-request [:head :sha])
+   :html_url "https://github.com/ckopsa/waymark-doors/actions/runs/900/job/7002"})
+
+(defn- private-rig
+  "A private repository whose check-runs route answers `status`, with
+  one open pull request and one workflow run of one red and one green
+  job on its head."
+  [state status]
+  (let [sha (get-in a-pull-request [:head :sha])]
+    (gh/seed-pull! state private-repo a-private-pull {:files the-files})
+    (gh/checks-answer! state private-repo status)
+    (gh/seed-run! state private-repo sha {:id 900 :head_sha sha})
+    (gh/seed-job! state private-repo 900 a-red-job)
+    (gh/seed-job! state private-repo 900 a-green-job)
+    (gh/seed-log! state "7001" the-log)))
+
+(deftest a-refused-check-read-is-made-through-actions
+  (let [state (gh/fake-state)
+        _ (private-rig state 403)
+        ;; a second open head, so the pass shows it remembered the 403
+        _ (gh/seed-pull! state private-repo
+                         (-> a-private-pull
+                             (assoc :number 6)
+                             (assoc-in [:head :ref] "another")
+                             (assoc-in [:head :sha] "feedface")))
+        engine (boot)
+        source (gh/fake-source state {:repos private-repo})
+        census (forge/pass! {:source source :engine engine :log-fn quiet})
+        change (one-row engine :change
+                        {:change_id "github:ckopsa/waymark-doors#5"})
+        run (one-row engine :ci_run
+                     {:run_id "github:ckopsa/waymark-doors/check-run/7001"})]
+    (testing "the pull request is adopted with its number"
+      (is (some? change))
+      (is (= 5 (get-in change [:data :number])))
+      (is (= (get-in a-pull-request [:head :sha])
+             (get-in change [:data :head_sha])))
+      (is (some? (one-row engine :change
+                          {:change_id "github:ckopsa/waymark-doors#6"}))))
+
+    (testing "its red Actions job is a ci_run, as a red check run would be"
+      (is (= 1 (:runs-minted census)))
+      (is (= :red (:state run)))
+      (is (= "test10 (shard 3)" (get-in run [:data :check_name])))
+      (is (= "failure" (get-in run [:data :conclusion])))
+      (is (= (str (:id change)) (str (get-in run [:data :change]))))
+      (is (= "line 500"
+             (last (str/split-lines (get-in run [:data :log_excerpt]))))
+          "the job page names the job, so the log hop still finds it")
+      (is (nil? (one-row engine :ci_run
+                         {:run_id "github:ckopsa/waymark-doors/check-run/7002"}))
+          "the green job is nobody's work"))
+
+    (testing "the refusal is remembered for the rest of the pass"
+      (is (= 1 (count (filter #(str/ends-with? (str (:path %)) "/check-runs")
+                              (gh/requests state))))
+          "the second head went straight to Actions"))
+
+    (testing "the checks on one head read through Actions too"
+      (is (= [{:check_name "test10 (shard 3)" :status "completed"
+               :conclusion "failure"}
+              {:check_name "check-queue" :status "completed"
+               :conclusion "success"}]
+             (forge/forge-checks source private-repo
+                                 (get-in a-pull-request [:head :sha])))))))
+
+(deftest a-failed-check-read-costs-the-checks-and-not-the-pass
+  (let [state (gh/fake-state)
+        _ (private-rig state 500)
+        _ (gh/seed-pull! state repo a-pull-request {:files the-files})
+        _ (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
+                          a-red-check)
+        source (gh/fake-source state {:repos [private-repo repo]})
+        answer (forge/forge-poll source)]
+    (is (true? (:complete? answer))
+        "both repositories answered, so the cursor may move")
+    (is (= #{"github:ckopsa/waymark-doors#5" "github:ckopsa/waymark#31"}
+           (into #{} (map :change_id) (:changes answer)))
+        "the pull request is still adopted, checks or no checks")
+    (is (= 5 (:number (first (filter #(= private-repo (:repository %))
+                                     (:changes answer))))))
+    (is (= ["github:ckopsa/waymark/check-run/41752098311"]
+           (mapv :run_id (:checks answer)))
+        "the failing repository has no checks, and the other's pass is
+         untouched")
+    (is (not-any? #(str/includes? (str (:path %)) "/actions/runs")
+                  (filter #(str/includes? (str (:path %)) private-repo)
+                          (gh/requests state)))
+        "a 500 is not a refusal: Actions is read only on 401 and 403")))
+
 ;; ── the repositories are the rows (bead waymark-fp62.6.3.8) ─────────
 
 (def ^:private a-person (t/principal {:id "colton" :display "Colton"}))
@@ -754,6 +874,62 @@
       (is (= [repo] (:repositories (forge/forge-poll source)))
           "the house stops working a repository with one tap"))))
 
+;; ── a repository the token cannot read (ticket 116dfb0d) ───────────────
+
+(defn- source-note-of [engine repository]
+  (get-in (one-row engine :repo_policy {:repository repository})
+          [:data :source_note]))
+
+(deftest a-repository-the-source-cannot-read-says-so-on-its-policy-row
+  (let [state (gh/fake-state)
+        engine (boot)
+        source (gh/fake-source state {:repos-fn #(bench/active-repositories
+                                                  engine)})
+        doors "ckopsa/waymark-doors"]
+    (gh/seed-pull! state repo a-pull-request {:files the-files})
+    (gh/seed-pull! state doors
+                   (assoc a-pull-request :number 7
+                          :html_url "https://github.com/ckopsa/waymark-doors/pull/7")
+                   {})
+    (policy! engine repo)
+    (policy! engine doors)
+    (gh/refuse! state doors 403)
+
+    (testing "a 403 on one repository's pulls listing lands on its row"
+      (let [census (pass! {:source source :engine engine})
+            note (source-note-of engine doors)]
+        (is (= 1 (:noted census)))
+        (is (str/starts-with?
+             (str note)
+             "GitHub answered 403 for GET /repos/ckopsa/waymark-doors/pulls at ")
+            "the status, the route and the time")
+        (is (nil? (source-note-of engine repo))
+            "and the repository that answered carries no note")
+        (is (some? (the-change engine))
+            "the other repository's pass is not cost by the refusal")))
+
+    (testing "a second refusal of the same kind writes nothing again"
+      (let [before (source-note-of engine doors)]
+        (is (= 0 (:noted (pass! {:source source :engine engine}))))
+        (is (= before (source-note-of engine doors)))))
+
+    (testing "a good pass clears the note"
+      (gh/refuse! state doors nil)
+      (is (= 1 (:noted (pass! {:source source :engine engine}))))
+      (is (nil? (source-note-of engine doors))))
+
+    (testing "a pass with nothing to say writes nothing"
+      (is (= 0 (:noted (pass! {:source source :engine engine})))))))
+
+(deftest a-source-note-is-the-engines-hand-alone
+  (let [engine (boot)
+        row (policy! engine "ckopsa/waymark-doors")]
+    (is (thrown? Exception
+                 (inv/invoke! engine :repo_policy (str (:id row)) :note_source
+                              {:answered 403 :route "GET /repos/x/y/pulls"}
+                              {:principal a-person}))
+        "a person reads the note and never writes it")))
+
 ;; ── the wiring's own contract ───────────────────────────────────────
 
 (deftest no-token-means-no-source
@@ -771,3 +947,374 @@
          (gh/parse-repos "ckopsa/waymark, ckopsa/waymark-bench")))
   (is (= ["ckopsa/waymark"] (gh/parse-repos ""))
       "nothing named is the proving ground's own repository"))
+
+;; ── a red change is a state (ticket d1742908) ──────────────────────────
+
+(def ^:private a-new-head "9a8b7c6d5e4f30291827364554637281900aabbc")
+
+(defn- red-world
+  "The rig, a policy for its repository, and its one change minted and
+  then put at `submitted` with `rounds` spent. The head carries the
+  rig's red `test10 (shard 3)` and green `check-queue`."
+  [policy rounds]
+  (let [{:keys [engine] :as r} (rig)]
+    (inv/create! engine :repo_policy (merge {:repository repo} policy)
+                 {:principal a-person})
+    (pass! r)
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (assoc-in [:data :rounds] rounds))
+                             (:version row))))))
+    r))
+
+(deftest a-red-required-check-moves-a-submitted-change-to-failing
+  (let [{:keys [engine] :as r} (red-world {:required_checks ["test10 (shard 3)"
+                                                              "check-queue"]}
+                                          1)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :failing (:state row)))
+    (is (= ["test10 (shard 3)"] (get-in row [:data :failing_checks]))
+        "the red names ride on the row, and the green one does not")
+    (is (= 1 (:failing census)))
+    (testing "a second pass on the same red head moves nothing"
+      (let [census (pass! r)]
+        (is (= :failing (:state (the-change engine))))
+        (is (= 0 (:failing census)))))))
+
+(deftest a-pending-required-check-does-not-move-the-change
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)" "gate"]} 1)]
+    (testing "a required check that has not started is not finished"
+      (pass! r)
+      (is (= :submitted (:state (the-change engine)))))
+    (testing "nor is one still running, whatever is red beside it"
+      (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
+                      {:id 41752098400 :name "gate" :status "in_progress"})
+      (pass! r)
+      (is (= :submitted (:state (the-change engine)))))))
+
+(deftest a-green-later-head-moves-a-failing-change-back
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)"]} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (gh/seed-pull! state repo
+                   (assoc a-pull-request
+                          :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                          :updated_at "2026-09-18T14:00:00Z")
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo a-new-head
+                    {:id 41752098500 :name "test10 (shard 3)"
+                     :status "completed" :conclusion "success"
+                     :head_sha a-new-head})
+    (let [census (pass! r)
+          row (the-change engine)]
+      (is (= a-new-head (get-in row [:data :head_sha]))
+          "a failing row follows the head it is read against")
+      (is (= :submitted (:state row)))
+      (is (nil? (get-in row [:data :failing_checks])))
+      (is (= 1 (:recovered census))))))
+
+(deftest the-red-head-on-the-last-round-sticks-the-change
+  (let [{:keys [engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)"] :rounds_per_change 2}
+                   2)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :stuck (:state row))
+        "the seat's next submit would be refused at the ceiling, so the
+         house stops here and a person reads it")
+    (is (= ["test10 (shard 3)"] (get-in row [:data :failing_checks])))
+    (is (= 1 (:stuck census)))
+    (is (= 0 (:failing census)))))
+
+(deftest a-policy-with-no-required-check-requires-every-finished-check
+  (let [{:keys [engine] :as r} (red-world {} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (is (= ["test10 (shard 3)"]
+           (get-in (the-change engine) [:data :failing_checks])))))
+
+(deftest the-verdict-reads-the-required-checks
+  (let [done (fn [n c] {:check_name n :status "completed" :conclusion c})]
+    (is (= {:verdict :red :names ["a"]}
+           (forge/check-verdict ["a" "b"] [(done "a" "failure") (done "b" "success")])))
+    (is (= {:verdict :green}
+           (forge/check-verdict ["a"] [(done "a" "success") (done "x" "failure")]))
+        "a check the policy does not require does not make it red")
+    (is (nil? (forge/check-verdict ["a" "b"] [(done "a" "failure")]))
+        "a required check that has not run is not finished")
+    (is (nil? (forge/check-verdict ["a"] [(done "a" "cancelled")]))
+        "a cancel is neither red nor green")
+    (is (nil? (forge/check-verdict [] []))
+        "no check at all says nothing")))
+
+;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
+
+(def ^:private the-conflicts
+  ["clone-mcp/clone_mcp/nomad.py" "clone-mcp/clone_mcp/server.py"])
+
+(defn- conflict-world
+  "One change at `submitted` with `rounds` spent, whose pull request
+  GitHub reads with `mergeable-state` and whose one check is green. The
+  bench behind the engine answers `conflicts` with `paths`, and
+  `:asked` holds every tool it was called with."
+  [mergeable-state paths policy rounds]
+  (let [state (gh/fake-state)
+        asked (atom [])
+        rpc (fn [_method params]
+              (swap! asked conj params)
+              (when (and paths (= "bench__conflicts" (str (:name params))))
+                {:structuredContent {:result {:paths paths}}}))
+        engine (engine/engine {:storage (memory/storage)
+                               :resources (vec (main/resources))
+                               :services {:bench-rpc rpc}})
+        r {:state state :source (gh/fake-source state) :engine engine
+           :asked asked}]
+    (gh/seed-pull! state repo (assoc a-pull-request
+                                     :mergeable_state mergeable-state)
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
+                    a-green-check)
+    (inv/create! engine :repo_policy (merge {:repository repo} policy)
+                 {:principal a-person})
+    (pass! r)
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (assoc-in [:data :rounds] rounds))
+                             (:version row))))))
+    r))
+
+(defn- conflict-asks [{:keys [asked]}]
+  (filterv #(= "bench__conflicts" (str (:name %))) @asked))
+
+(deftest a-conflicted-submitted-change-goes-failing-with-its-paths
+  (let [{:keys [engine] :as r} (conflict-world "dirty" the-conflicts {} 1)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= "conflicted" (get-in row [:data :mergeable])))
+    (is (= :failing (:state row))
+        "a conflicted pull request runs no fresh checks, and still fails")
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks]))
+        "its checks are green, so the conflict is the one red name")
+    (is (= the-conflicts (get-in row [:data :conflicts]))
+        "the paths the bench's trial merge named ride on the row")
+    (is (= 1 (:failing census)))
+    (let [args (:arguments (first (conflict-asks r)))]
+      (is (= repo (:repo args)))
+      (is (= "waymark-fp62.6.4" (:branch args)))
+      (is (= "main" (:base args))))
+    (testing "a second pass on the same conflict moves nothing and asks nothing"
+      (let [census (pass! r)]
+        (is (= :failing (:state (the-change engine))))
+        (is (= 0 (:failing census)))
+        (is (= 1 (count (conflict-asks r))))))))
+
+(deftest a-conflict-with-no-bench-answer-still-goes-failing
+  (let [{:keys [engine] :as r} (conflict-world "dirty" nil {} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (is (= ["merge-conflict"] (get-in (the-change engine) [:data :failing_checks])))
+    (is (nil? (get-in (the-change engine) [:data :conflicts]))
+        "a bench that cannot name the paths costs the paths, never the move")))
+
+(deftest a-behind-change-is-not-failing
+  (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
+        census (pass! r)]
+    (is (= :submitted (:state (the-change engine)))
+        "behind is not a conflict: the merge brings the branch forward")
+    (is (= 0 (:failing census)))
+    (is (empty? (conflict-asks r)) "and the bench is not asked")))
+
+(deftest a-resolved-green-head-returns-the-change-to-submitted
+  (let [{:keys [state engine] :as r} (conflict-world "dirty" the-conflicts {} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    (gh/seed-pull! state repo
+                   (assoc a-pull-request
+                          :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                          :mergeable_state "clean"
+                          :updated_at "2026-09-18T14:00:00Z")
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo a-new-head
+                    (assoc a-green-check :id 41752098600 :head_sha a-new-head))
+    (let [census (pass! r)
+          row (the-change engine)]
+      (is (= :submitted (:state row)))
+      (is (nil? (get-in row [:data :failing_checks])))
+      (is (nil? (get-in row [:data :conflicts])))
+      (is (= 1 (:recovered census))))))
+
+(deftest a-conflict-on-the-last-round-sticks-the-change
+  (let [{:keys [engine] :as r}
+        (conflict-world "dirty" the-conflicts {:rounds_per_change 2} 2)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :stuck (:state row))
+        "a conflict round counts against the ceiling like a red round")
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+    (is (= the-conflicts (get-in row [:data :conflicts])))
+    (is (= 1 (:stuck census)))))
+
+;; ── a landing that failed (ticket 92871afb) ─────────────────────────────
+
+(def ^:private a-rejected-push
+  (str "To github.com:ckopsa/waymark-doors.git\n"
+       " ! [remote rejected] waymark/1bae3a0a -> waymark/1bae3a0a "
+       "(refusing to allow a Personal Access Token to create or update "
+       "workflow `.github/workflows/test.yml` without `workflow` scope)\n"
+       "error: failed to push some refs"))
+
+(defn- a-failed-landing []
+  {:state "failed"
+   :steps [{:name "commit" :state "done" :output "[waymark/one 1bae3a0] Fix"}
+           {:name "push" :state "failed" :output a-rejected-push}]})
+
+(defn- landing-world
+  "One change at `submitted` with `rounds` spent, whose one check is
+  `check`. The bench behind the engine answers `feedback` with whatever
+  the `landing` atom holds."
+  [landing check policy rounds]
+  (let [state (gh/fake-state)
+        rpc (fn [_method params]
+              (when (= "bench__feedback" (str (:name params)))
+                {:structuredContent
+                 {:result {:repo repo :landing @landing :pull_request nil
+                           :pipelines [] :statuses [] :comments []}}}))
+        engine (engine/engine {:storage (memory/storage)
+                               :resources (vec (main/resources))
+                               :services {:bench-rpc rpc}})
+        r {:state state :source (gh/fake-source state) :engine engine}]
+    (gh/seed-pull! state repo (assoc a-pull-request :mergeable_state "clean")
+                   {:files the-files :reviews the-reviews})
+    (gh/seed-check! state repo (get-in a-pull-request [:head :sha]) check)
+    (inv/create! engine :repo_policy (merge {:repository repo} policy)
+                 {:principal a-person})
+    (pass! r)
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (assoc-in [:data :rounds] rounds))
+                             (:version row))))))
+    r))
+
+(deftest a-failed-landing-moves-a-submitted-change-to-failing
+  (let [landing (atom (a-failed-landing))
+        {:keys [engine] :as r} (landing-world landing a-green-check {} 1)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :failing (:state row))
+        "a push that never landed will never run a check, so it fails now")
+    (is (= ["landing:push"] (get-in row [:data :failing_checks]))
+        "the failed step is the red name")
+    (is (= a-rejected-push (get-in row [:data :landing_error]))
+        "and the step's own output rides beside it")
+    (is (= 1 (:failing census)))
+    (testing "a second pass on the same landing moves nothing"
+      (let [census (pass! r)]
+        (is (= :failing (:state (the-change engine))))
+        (is (= 0 (:failing census)))))))
+
+(deftest a-failed-landing-on-the-last-round-sticks-the-change
+  (let [landing (atom (a-failed-landing))
+        {:keys [engine] :as r}
+        (landing-world landing a-green-check {:rounds_per_change 2} 2)
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :stuck (:state row))
+        "a failed landing counts against the ceiling like a red check")
+    (is (= ["landing:push"] (get-in row [:data :failing_checks])))
+    (is (= a-rejected-push (get-in row [:data :landing_error])))
+    (is (= 1 (:stuck census)))))
+
+(deftest a-running-landing-does-not-move-the-change
+  (let [landing (atom {:state "running"
+                       :steps [{:name "push" :state "running"}]})
+        {:keys [engine] :as r}
+        (landing-world landing
+                       {:id 41752098700 :name "test10 (shard 3)"
+                        :status "completed" :conclusion "failure"
+                        :head_sha (get-in a-pull-request [:head :sha])}
+                       {} 1)
+        census (pass! r)]
+    (is (= :submitted (:state (the-change engine)))
+        "a landing still running is left alone, whatever the old head said")
+    (is (= 0 (:failing census)))))
+
+(deftest a-resubmit-that-lands-stays-submitted
+  (let [landing (atom (a-failed-landing))
+        {:keys [engine] :as r} (landing-world landing a-green-check {} 1)]
+    (pass! r)
+    (is (= :failing (:state (the-change engine))))
+    ;; the seat's next submit: the door clears the red names and the
+    ;; landing's error (factory10.bench-test's own a-seat-submits-
+    ;; again-from-failing walks the door itself), and the rig lands it
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (update :data assoc :failing_checks nil
+                                         :landing_error nil))
+                             (:version row))))))
+    (reset! landing {:state "succeeded"
+                     :steps [{:name "commit" :state "done"}
+                             {:name "push" :state "done"}]})
+    (let [census (pass! r)
+          row (the-change engine)]
+      (is (= :submitted (:state row))
+          "a landing that finished well hands the change back to its checks")
+      (is (nil? (get-in row [:data :landing_error])))
+      (is (= 0 (:failing census))))))
+
+(deftest the-landing-verdict-names-the-failed-step
+  (is (= {:verdict :red :names ["landing:push"] :error a-rejected-push}
+         (forge/landing-verdict (a-failed-landing))))
+  (is (= {:verdict :red :names ["landing:push"] :error "rejected"}
+         (forge/landing-verdict {:state "failed" :failed_step "push"
+                                 :error "rejected"}))
+      "a landing that names its failed step and no steps still says which")
+  (is (= {:verdict :red :names ["landing:unknown"]}
+         (forge/landing-verdict {:state "failed"}))
+      "a failed landing that names nothing is still red")
+  (is (= {:verdict :running} (forge/landing-verdict {:state "running"})))
+  (is (nil? (forge/landing-verdict {:state "succeeded"})))
+  (is (nil? (forge/landing-verdict nil))))
+
+(deftest a-conflict-joins-the-red-names
+  (let [row {:data {:mergeable "conflicted"}}]
+    (is (= {:verdict :red :names ["a" "merge-conflict"]}
+           (forge/with-conflict {:verdict :red :names ["a"]} row)))
+    (is (= {:verdict :red :names ["merge-conflict"]}
+           (forge/with-conflict {:verdict :green} row)))
+    (is (= {:verdict :red :names ["merge-conflict"]}
+           (forge/with-conflict nil row))
+        "a conflict fails the change while its checks still run")
+    (is (= {:verdict :green}
+           (forge/with-conflict {:verdict :green}
+                                {:data {:mergeable "blocked"}})))))

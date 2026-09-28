@@ -47,12 +47,14 @@
   sentence that says the bench is dark."
   (:require [clojure.string :as str]
             [waymark10.server.gate-proxy :as gate]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Duration Instant)
+           (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
 
@@ -440,6 +442,26 @@
                                          {:limit 1000})))))
     []))
 
+(defn- policies-by-repo
+  "The active policies, by the repository each one names."
+  [eng]
+  (into {}
+        (keep (fn [p]
+                (when-some [repo (some-> (get-in p [:data :repository])
+                                         str not-empty)]
+                  [repo p])))
+        (policies eng :active)))
+
+(defn house-pass-merges?
+  "Does the house's merge pass merge this repository's green changes?
+  Only when the policy says `auto_merge`, `merge_by: house` and names
+  at least one required check. Every other policy leaves the merge to
+  somebody else, and a green change there waits on its person."
+  [policy]
+  (boolean (and (not (false? (get-in policy [:data :auto_merge])))
+                (house-merges? policy)
+                (seq (required-checks-of policy)))))
+
 (defn merge-args
   "What the rig's `merge` is told: the pull request, the head it may
   merge and nothing else, and the policy's checks and method."
@@ -450,56 +472,375 @@
    :required_checks (required-checks-of policy)
    :merge_method (merge-method-of policy)})
 
+;; A BRANCH BEHIND ITS BASE (ticket a95c3d63). Main's protection wants a
+;; branch up to date before it merges, so a green change whose branch
+;; fell behind is refused by GitHub and would wait forever. The pass
+;; asks the rig's `update_branch` to bring it forward instead: the new
+;; head re-runs CI, and a later pass merges it when green. One update
+;; per head, so a busy main cannot make the pass loop; a conflicted
+;; branch is left to the failing path (ticket 5f12e772).
+
+(def parked-refusals
+  "The merge refusals a new pass cannot fix: the head is remembered and
+  not offered again. Any other refusal — `head_moved` among them — is
+  asked again next pass, and a new head is a new offer anyway."
+  #{"draft" "no_required_checks" "not_mergeable"})
+
+(def ^:private behind-reason
+  "What GitHub says when it refuses a merge because the branch is not
+  up to date with its base, or a required status is still expected."
+  #"(?i)out of date|not up to date|up-to-date|status checks? .*(is|are) expected")
+
+(defn behind?
+  "Does the rig's merge answer say the branch is behind its base?"
+  [answer]
+  (or (= "behind" (some-> (:state answer) str))
+      (and (= "merge_refused" (refused answer))
+           (boolean (re-find behind-reason (str (:reason answer)))))))
+
+(defn- conflicted-change? [change]
+  (= "conflicted" (str (get-in change [:data :mergeable]))))
+
+(defn update-args
+  "What the rig's `update_branch` is told: the pull request and the head
+  it may bring forward."
+  [change]
+  {:repo (str (get-in change [:data :repository]))
+   :number (get-in change [:data :number])
+   :head_sha (str (get-in change [:data :head_sha]))})
+
+(defn- update-behind!
+  "Bring one behind change's branch up to date, once for this head.
+  `seen` remembers the head under `[:updated id]`; a missing power or
+  no answer is not remembered, so the next pass asks again."
+  [ctx seen change id head]
+  (cond
+    (conflicted-change? change)
+    (warn! id " is behind and conflicted; the failing path has it")
+
+    (true? (get-in change [:data :draft]))
+    (warn! id " is behind but a draft; it is not brought forward")
+
+    (= head (get @seen [:updated id]))
+    nil
+
+    :else
+    (let [answer (ask ctx :update_branch (update-args change))
+          why (refused answer)]
+      (cond
+        (nil? answer)
+        (warn! "the update of " id " had no answer; the next pass asks again")
+
+        (contains? missing-power-refusals why)
+        (warn! "the rig has no update_branch yet (" why
+               "); the next pass asks again")
+
+        :else
+        (do (swap! seen assoc [:updated id] head)
+            (when why
+              (warn! "the rig refused to update " id " at " head " ("
+                     (reason-of answer) ")")))))))
+
+;; ONE CHANGE PER REPOSITORY AT A TIME (ticket d82d649a). Bringing every
+;; behind change up to date in one pass starts one CI run each, and the
+;; first merge makes all the others stale again. So each repository's
+;; submitted changes stand in ONE LINE — ticket priority first (lower
+;; number first), then the change's birth, then its id — and only the
+;; FRONT is brought up to date. Every change still gets its one merge
+;; call a pass, because a merge costs no CI: one that is green and up to
+;; date merges at once, whatever its place. A behind change that is not
+;; the front is left alone until it is. The front leaves the line when
+;; it merges or goes red (either way it is no longer submitted) or when
+;; its head is parked; the line is rebuilt from the rows each pass, so
+;; a restart loses only the memory of the head already updated.
+
+(defn born-ticket
+  "The id of the ticket this change was born from, or nil."
+  [change]
+  (let [born (str (get-in change [:data :born_from]))]
+    (when (str/starts-with? born "ticket:")
+      (not-empty (subs born (count "ticket:"))))))
+
+(defn- ticket-priorities
+  "Ticket id → its priority, for the tickets these changes were born
+  from — empty in an engine that declares no ticket kind."
+  [eng changes]
+  (if-some [rd (rdef-of-kind eng :ticket)]
+    (let [st (:storage eng)]
+      (into {}
+            (keep (fn [tid]
+                    (when-some [raw (try (store/with-tx st
+                                           (fn [tx] (store/load-row st tx :ticket tid {})))
+                                         (catch Exception _ nil))]
+                      [tid (get-in (inv/decode-row rd raw) [:data :priority])])))
+            (distinct (keep born-ticket changes))))
+    {}))
+
+(defn line-key
+  "Where a change stands in its repository's line: its ticket's
+  priority (none is last), then when the change was born, then its id."
+  [priority-of change]
+  (let [prio (priority-of change)
+        born (:created-at change)]
+    [(if (number? prio) (long prio) Long/MAX_VALUE)
+     (if (inst? born) (inst-ms born) Long/MAX_VALUE)
+     (str (:id change))]))
+
+(defn merge-lines
+  "The changes the house pass offers, as repository → its line in the
+  order it is worked. A change needs a number, a head that `seen` has
+  not parked, and a policy `house-pass-merges?`. `priority-of` is
+  change → its ticket's priority, or nil."
+  [changes by-repo priority-of seen]
+  (->> changes
+       (filter (fn [change]
+                 (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
+                       policy (get by-repo (str (get-in change [:data :repository])))]
+                   (and (get-in change [:data :number]) head policy
+                        (house-pass-merges? policy)
+                        (not= head (get seen (str (:id change))))))))
+       (group-by #(str (get-in % [:data :repository])))
+       (into (sorted-map)
+             (map (fn [[repo line]]
+                    [repo (vec (sort-by #(line-key priority-of %) line))])))))
+
+(defn front-of
+  "The change at the front of a line: the first one that can be brought
+  up to date. A conflicted branch is the failing path's and a draft is
+  not brought forward, so neither holds the line."
+  [line]
+  (first (remove #(or (conflicted-change? %) (true? (get-in % [:data :draft])))
+                 line)))
+
+(defn work-lines!
+  "One merge call for every change of every line, with the engine's own
+  hand; only a line's front is brought up to date when it is behind.
+  → the number of `merge` calls made."
+  [ctx seen lines by-repo]
+  (let [asked (volatile! 0)]
+    (doseq [[repo line] lines
+            :let [policy (get by-repo repo)
+                  front (some-> (front-of line) :id str)]]
+      (warn! repo ": " (or front "nothing") " is the front of the merge line, "
+             (count (remove #(= front (str (:id %))) line)) " wait")
+      (doseq [change line
+              :let [id (str (:id change))
+                    head (str (get-in change [:data :head_sha]))]]
+        (try
+          (vswap! asked inc)
+          (let [answer (ask ctx :merge (merge-args change policy))
+                why (refused answer)]
+            (cond
+              (nil? answer)
+              (warn! "the merge of " id " had no answer; the next pass asks again")
+
+              (contains? missing-power-refusals why)
+              (warn! "the rig has no merge yet (" why "); the next pass asks again")
+
+              (behind? answer)
+              (when (= id front)
+                (update-behind! ctx seen change id head))
+
+              (contains? parked-refusals why)
+              (do (swap! seen assoc id head)
+                  (warn! "the rig refused to merge " id " at " head " ("
+                         (reason-of answer) "); this head is not asked again"))
+
+              why
+              (warn! "the rig refused to merge " id " at " head " ("
+                     (reason-of answer) "); the next pass asks again")
+
+              :else nil))
+          (catch Exception e
+            (warn! "the merge of " id " failed (" (ex-message e)
+                   "); the next pass asks again")))))
+    @asked))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
   house`, gets ONE `merge` call with the engine's own hand. `seen` is
-  an atom of change id → the head the rig last refused: a refused head
-  is logged once and never offered again, and a new head is offered
-  afresh. `merged` needs nothing here, because the mirror moves the
-  row; `waiting` is asked again next pass; `red` is left, because the
-  seat's feedback already carries the red checks. Throws nothing.
+  an atom of change id → the head the rig refused for good (a
+  `parked-refusals` name): that head is never offered again, and a new
+  head is offered afresh. A branch the rig says is behind its base is
+  brought up to date with `update_branch` only when it is the front of
+  its repository's line (`merge-lines`), once per head (`seen` keeps
+  that under `[:updated id]`). `merged` needs nothing here, because the
+  mirror moves the row; `waiting` and every other refusal are asked
+  again next pass; `red` is left, because the seat's feedback already
+  carries the red checks. Throws nothing.
   → the number of `merge` calls made."
   [eng seen]
-  (let [ctx {:services (:services eng)}
-        by-repo (into {}
-                      (keep (fn [p]
-                              (when-some [repo (some-> (get-in p [:data :repository])
-                                                       str not-empty)]
-                                [repo p])))
-                      (policies eng :active))
-        asked (volatile! 0)]
+  (let [by-repo (policies-by-repo eng)
+        changes (submitted-changes eng)
+        priorities (ticket-priorities eng changes)]
+    (work-lines! {:services (:services eng)} seen
+                 (merge-lines changes by-repo
+                              #(get priorities (born-ticket %)) @seen)
+                 by-repo)))
+
+;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
+;;
+;; A repository the house pass does not merge leaves a green change to
+;; its person, and nothing said so but somebody polling. So a submitted
+;; change GitHub calls `clean` (no conflict, the required checks green)
+;; that has stood clean at one head for the policy's
+;; `merge_wait_seconds` raises ONE held call for a person's tap: the
+;; rig's `merge`, with the very arguments the house pass would send. The
+;; person's Allow forwards it (held-calls/forward!), so the tap merges
+;; the change exactly as the house would have.
+;;
+;; ONE ASK PER HEAD, AND THE ROWS REMEMBER IT. The held_call rows are
+;; the record: while an ask for the pull request is still held, no
+;; second one is raised, whatever head it stands at now; and an ask
+;; that was answered — refused, expired or merged — is never raised
+;; again for the same head. Only the moment a change turned clean lives
+;; in memory, so a restart makes the wait start again, which errs on the
+;; side of asking later rather than twice.
+
+(def default-merge-wait-seconds
+  "How long a green, clean change waits on its person before the house
+  asks for the merge, when the policy names no `merge_wait_seconds`."
+  3600)
+
+(defn merge-wait-of [policy]
+  (long (or (get-in policy [:data :merge_wait_seconds])
+            default-merge-wait-seconds)))
+
+(def merge-asker
+  "The caller a merge ask names: the house's own pass. It is never the
+  person who answers, so the held call's first wall stands."
+  "factory10-merge-ask")
+
+(defn- field-of
+  "One field of a held call's stored input, however its keys decoded."
+  [m k]
+  (or (get m k) (get m (name k))))
+
+(defn merge-asks
+  "Every merge ask the house has raised, decoded — empty in an engine
+  that declares no held_call kind."
+  [eng]
+  (if-some [rd (rdef-of-kind eng :held_call)]
+    (let [st (:storage eng)]
+      (mapv #(inv/decode-row rd %)
+            (store/with-tx st
+              (fn [tx] (store/query-rows st tx :held_call
+                                         {:tool (gate/bench-tool :merge)
+                                          :caller merge-asker}
+                                         {:limit 1000})))))
+    []))
+
+(defn- asked-already?
+  "Is there an ask for this pull request still waiting, or one for this
+  head at all?"
+  [asks change head]
+  (some (fn [a]
+          (let [in (get-in a [:data :input])]
+            (and (= (str (field-of in :repo))
+                    (str (get-in change [:data :repository])))
+                 (= (str (field-of in :number))
+                    (str (get-in change [:data :number])))
+                 (or (contains? #{:held :allowed}
+                                (some-> (:state a) name keyword))
+                     (= head (str (field-of in :head_sha)))))))
+        asks))
+
+(defn pull-url [change]
+  (or (some-> (get-in change [:data :url]) str not-empty)
+      (str "https://github.com/" (get-in change [:data :repository])
+           "/pull/" (get-in change [:data :number]))))
+
+(defn waited-text
+  "A wait in seconds, as a person reads it: 1h 5m, or 45m."
+  [seconds]
+  (let [m (quot (long seconds) 60)
+        h (quot m 60)]
+    (if (pos? h)
+      (str h "h " (rem m 60) "m")
+      (str m "m"))))
+
+(defn merge-ask-why
+  "The one sentence the person reads: the pull request, the title and
+  how long it has waited."
+  [change seconds]
+  (str "Merge " (pull-url change) " ("
+       (or (some-> (get-in change [:data :title]) str not-empty) "untitled")
+       "): its checks are green, it merges clean, and it has waited "
+       (waited-text seconds) " for a person."))
+
+(defn- owner-of
+  "The person the change's seat belongs to: the `owner` of the seat the
+  change's `author` names, or nil when the seat names none. A merge ask
+  is a tool call, answered by a person who holds the approver role; the
+  owner is who it is written for."
+  [eng change]
+  (when-some [author (some-> (get-in change [:data :author]) str not-empty)]
+    (when-some [rd (rdef-of-kind eng :seat)]
+      (let [st (:storage eng)
+            raw (store/with-tx st
+                  (fn [tx] (first (store/query-rows st tx :seat {:name author}
+                                                    {:limit 1}))))]
+        (some-> raw (->> (inv/decode-row rd)) (get-in [:data :owner])
+                str not-empty)))))
+
+(defn- raise-merge-ask!
+  "Mint the one held call a person's tap turns into the rig's merge."
+  [eng change policy seconds]
+  (let [args (merge-args change policy)
+        owner (owner-of eng change)]
+    (inv/create! eng :held_call
+                 (cond-> {:tool (gate/bench-tool :merge)
+                          :why (:text (held/capped (merge-ask-why change seconds)
+                                                   240))
+                          :caller merge-asker
+                          :input args
+                          :forward args
+                          :shown (:text (held/capped
+                                         (str "merge " (:repo args) "#"
+                                              (:number args))
+                                         140))}
+                   owner (assoc :owner owner))
+                 {:principal held/engine-actor})))
+
+(defn ask-for-merges!
+  "One ask pass. Every submitted change with a number and a head, whose
+  repository's active policy leaves the merge to a person
+  (`house-pass-merges?` is false), that GitHub calls `clean` and is not
+  a draft, is timed from the first pass that saw it clean at this head.
+  Once it has waited the policy's `merge_wait_seconds`, it raises one
+  merge ask unless `asked-already?`. `waiting` is an atom of change id
+  → {:head :since}. Throws nothing. → the number of asks raised."
+  [eng waiting ^Instant now]
+  (let [by-repo (policies-by-repo eng)
+        asks (merge-asks eng)
+        raised (volatile! 0)
+        clean (volatile! {})]
     (doseq [change (submitted-changes eng)
             :let [id (str (:id change))
                   number (get-in change [:data :number])
                   head (some-> (get-in change [:data :head_sha]) str not-empty)
                   policy (get by-repo (str (get-in change [:data :repository])))]
             :when (and number head policy
-                       (not (false? (get-in policy [:data :auto_merge])))
-                       (house-merges? policy)
-                       (seq (required-checks-of policy))
-                       (not= head (get @seen id)))]
-      (try
-        (vswap! asked inc)
-        (let [answer (ask ctx :merge (merge-args change policy))
-              why (refused answer)]
-          (cond
-            (nil? answer)
-            (warn! "the merge of " id " had no answer; the next pass asks again")
-
-            (contains? missing-power-refusals why)
-            (warn! "the rig has no merge yet (" why "); the next pass asks again")
-
-            why
-            (do (swap! seen assoc id head)
-                (warn! "the rig refused to merge " id " at " head " ("
-                       (reason-of answer) "); this head is not asked again"))
-
-            :else nil))
-        (catch Exception e
-          (warn! "the merge of " id " failed (" (ex-message e)
-                 "); the next pass asks again"))))
-    @asked))
+                       (not (house-pass-merges? policy))
+                       (= "clean" (str (get-in change [:data :mergeable])))
+                       (not (true? (get-in change [:data :draft]))))]
+      (let [prior (get @waiting id)
+            ^Instant since (if (= head (:head prior)) (:since prior) now)
+            seconds (.getSeconds (Duration/between since now))]
+        (vswap! clean assoc id {:head head :since since})
+        (when (and (<= (merge-wait-of policy) seconds)
+                   (not (asked-already? asks change head)))
+          (try
+            (raise-merge-ask! eng change policy seconds)
+            (vswap! raised inc)
+            (catch Exception e
+              (warn! "the merge ask for " id " did not land ("
+                     (ex-message e) "); the next pass asks again"))))))
+    ;; a change that is no longer clean, or no longer submitted, starts
+    ;; its wait again the next time it is
+    (reset! waiting @clean)
+    @raised))
 
 (def default-enrol-seconds
   "How often the retry pass runs. The discover sweep's own cadence, in
@@ -516,10 +857,13 @@
 
   The house's merge pass (`merge-green!`) rides the same beat and the
   same election, so one process per database asks the rig to merge,
-  and its memory of refused heads lives as long as that holder."
+  and its memory of refused heads lives as long as that holder. So does
+  the person's merge ask (`ask-for-merges!`), and its memory of when a
+  change turned clean."
   [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}}]
   (let [stop (CountDownLatch. 1)
         seen (atom {})
+        waiting (atom {})
         t (Thread. ^Runnable
                    (fn []
                      (loop []
@@ -532,6 +876,10 @@
                          (try (merge-green! eng seen)
                               (catch Exception e
                                 (warn! "the merge pass failed ("
+                                       (ex-message e) ")")))
+                         (try (ask-for-merges! eng waiting (Instant/now))
+                              (catch Exception e
+                                (warn! "the merge ask pass failed ("
                                        (ex-message e) ")")))
                          (recur))))
                    "factory10-bench-enrol")]

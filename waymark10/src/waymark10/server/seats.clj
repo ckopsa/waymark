@@ -746,6 +746,43 @@
       (t/allow))
     (t/allow)))
 
+;; An `inbox`'s `only` is a kind → actions map, the shape of a
+;; subscriber's `only`; spelled as `wake_on` entries it is judged by
+;; the same two lookups, in two guards of its own because a guard
+;; judges the one field it names.
+
+(defn- inbox-entries
+  "The seat's `inbox` `only` as `wake_on`-shaped entries."
+  [inbox]
+  (for [[k actions] (:only inbox)]
+    {:kind (name k) :actions actions}))
+
+(g/defguard inbox-names-real-kinds
+  {:judges [:inbox]
+   :reads [:services]
+   :vars [:kind]
+   :open "The legal kind names are well-known's resources, one GET away; enumerating the registry into this form would duplicate it."
+   :explain "An inbox holds a kind this surface serves; there is no kind {kind}."}
+  [_row inp ctx]
+  (if-some [names-of (:action-names ctx)]
+    (if-some [bad (wake-on-unknown-kind names-of (inbox-entries (:inbox inp)))]
+      (t/deny {:vars {:kind bad}})
+      (t/allow))
+    (t/allow)))
+
+(g/defguard inbox-names-real-actions
+  {:judges [:inbox]
+   :reads [:services]
+   :vars [:kind :action :actions]
+   :open "Each kind's action vocabulary is well-known's actions list, one GET away; the refusal spells the kind's real actions when an entry misses."
+   :explain "There is no action {action} on {kind}; its actions are: {actions}. Name its actions, or an empty list for every one."}
+  [_row inp ctx]
+  (if-some [names-of (:action-names ctx)]
+    (if-some [bad (wake-on-unknown-action names-of (inbox-entries (:inbox inp)))]
+      (t/deny {:vars bad})
+      (t/allow))
+    (t/allow)))
+
 (defn- field-moved?
   "Did a restate change this field? One spelling, because two doors
   ask it: the note guard below, and the halt line the restate lifts
@@ -979,7 +1016,7 @@
   [:charter :instructions :mode :scope :substitute_drop :held_for
    :substitute_for
    :standing_ttl_seconds :cadence_seconds :sitting_idle_seconds
-   :keep_transcripts :transcript_days
+   :keep_transcripts :transcript_days :inbox
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :delegates])
@@ -1383,6 +1420,34 @@
                                  :help transcript-days-help}}
    [:int {:min 1 :max 3650}]])
 
+(def ^:private inbox-help
+  "What the engine holds for this seat's sittings to pull, said the way a subscriber's `only` is: a kind, and the actions on it that count, or an empty list for every action. Leave it empty for a seat with no inbox.")
+
+(def inbox-field
+  "THE SEAT'S INBOX. A cloud session cannot run a local receiver, so
+  the engine holds the inbox and the sitting pulls it; the sit answers
+  the address and a key for it (`issue-inbox-key!`). Absent is no
+  inbox. Each kind and each action is judged by `inbox-names-real-kinds`
+  and `inbox-names-real-actions`.
+
+  The field says where its tokens come from the way a `wake_on`
+  entry's `kind` does (`:x-options {:from :kinds}`): the kinds are
+  the keys of `only`, and the chips beside the box offer them. `only`
+  itself is a map-of, whose keys no form can list, so it wears the
+  reason it is typed (`:spelled-by-hand`), as the scope's `filter`
+  does."
+  [:inbox {:optional true
+           :examples [{:only {:seat ["restate" "park"]}}]
+           :x-options {:from :kinds}
+           :x-display {:label "Its inbox"
+                       :help inbox-help}}
+   [:maybe [:map
+            [:only {:x-options {:from :kinds}
+                    :x-display {:label "Kinds and their actions"
+                                :spelled-by-hand "A kind → actions map, the shape of a subscriber's `only`, and a form cannot list its keys, so each pair is typed: a kind name, then the list of its actions that count, or an empty list for every action. The chips beside the box offer every kind name."
+                                :help "Which transitions the engine holds for this seat's sittings: each kind by name, and the actions on it that count. An empty list counts every action of that kind."}}
+             [:map-of :keyword [:vector [:string {:min 1 :max 64}]]]]]]])
+
 (def ^:private idle-help
   "R-12.25's safety net under the wait, said where a person sets it."
   "How long an interactive sitting may go untallied before the engine closes it. The Stop hook tallies after every turn, so this is the gap that says somebody shut the laptop — the sweep then closes the sitting with the last tally's counts rather than leaving it open forever. It means nothing to a fired seat.")
@@ -1697,6 +1762,7 @@
      [:int {:min 60 :max 86400}]]
     keep-transcripts-field
     transcript-days-field
+    inbox-field
     [:budget_usd_per_week {:examples [5M]
                            :x-display
                            {:label "Fuel for seven days, in dollars"
@@ -1939,6 +2005,7 @@
      [:int {:min 60 :max 86400}]]
     keep-transcripts-field
     transcript-days-field
+    inbox-field
     [:budget_usd_per_week {:examples [5M]
                            :x-display
                            {:label "Fuel for seven days, in dollars"
@@ -2033,6 +2100,8 @@
                    walk-matches-the-judgment
                    wake-on-names-real-kinds
                    wake-on-names-real-actions
+                   inbox-names-real-kinds
+                   inbox-names-real-actions
                    ;; LAST, so a hold is a call every other wall passed
                    delegation/authors-within-the-ceiling]
    :on-create seat-born
@@ -2100,6 +2169,7 @@
               [:int {:min 60 :max 86400}]]
              keep-transcripts-field
              transcript-days-field
+             inbox-field
              [:budget_usd_per_week {:examples [5M]
                                     :x-display
                                     {:label "Fuel for seven days, in dollars"
@@ -2178,7 +2248,7 @@
                       :held_for
                       :substitute_for :standing_ttl_seconds :cadence_seconds
                       :sitting_idle_seconds
-                      :keep_transcripts :transcript_days
+                      :keep_transcripts :transcript_days :inbox
                       :budget_usd_per_week :sitting_budget_tokens
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
@@ -2199,6 +2269,8 @@
               walk-matches-the-judgment
               wake-on-names-real-kinds
               wake-on-names-real-actions
+              inbox-names-real-kinds
+              inbox-names-real-actions
               step-carries-a-note
               delegation/authors-within-the-ceiling]
      :safety {:idempotent true :reversible true :confirm false}
@@ -2906,6 +2978,25 @@
                                  :label "The firing key's hash"
                                  :spelled-by-hand "The SHA-256 of the firing key that opened this sitting. The sit writes it; it answers only while the sitting is open; the engine never shows a key."}}
      [:maybe [:string {:max 64}]]]
+    ;; THE INBOX'S KEY. A seat that declares an `inbox` is answered a
+    ;; fresh key at each sit (`issue-inbox-key!`), and its hash is kept
+    ;; here, on the sitting, so the key answers only while the sitting
+    ;; is open (`inbox-sitting-by-key`).
+    [:inbox_key_hash {:optional true :secret true
+                      :x-display {:hidden true
+                                  :label "The inbox key's hash"
+                                  :spelled-by-hand "The SHA-256 of the inbox key the last sit answered. The sit writes it; it answers only while the sitting is open; the engine never shows a key."}}
+     [:maybe [:string {:max 64}]]]
+    ;; THE ROWS THIS SITTING WAS HANDED. The sit writes the ids of its
+    ;; walk here, and a second sitting of the same seat opened while
+    ;; this one is open walks past them to the next rows. The claim
+    ;; ends with the sitting: only an OPEN sitting's rows are read.
+    [:walked_rows {:optional true
+                   :x-display
+                   {:raw true
+                    :label "The rows it was handed"
+                    :spelled-by-hand "The ids of the walk rows the sit handed this sitting. The sit writes it, and a second open sitting of the same seat is not handed them."}}
+     [:maybe [:vector [:string {:max 128}]]]]
     ;; A FIRE NOBODY SAT IN. The clock sweep writes this row, already
     ;; closed, when a firing's key is still unspent past the sit
     ;; deadline (`wakes/sweep-missed!`), so an audit that reads the
@@ -3599,6 +3690,106 @@
             (when (= :open (:state row))
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   (assoc (:data row) :fire_key_hash h) nil)
+              true)))))))
+
+;; ── the inbox's key ─────────────────────────────────────────────────
+
+(defn issue-inbox-key!
+  "Mint a fresh inbox key for this sitting, keep its hash on the
+  sitting, and answer the key. → the key, or nil when the seat declares
+  no `inbox` or the sitting is no longer open.
+
+  `transcripts/issue-key!`'s shape and its reason: EACH SIT MINTS A NEW
+  KEY AND THE OLD ONE STOPS ANSWERING, the row keeps the hash alone,
+  and the write is a maintenance write, so the record of a credential
+  is not in the log. The key dies with the sitting, because
+  `inbox-sitting-by-key` reads open sittings only."
+  [eng seat-row sitting-row]
+  (when (and seat-row sitting-row
+             (some? (get-in seat-row [:data :inbox]))
+             (get (inv/resources eng) :sitting))
+    (let [key (mint-key)]
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (when-some [row (store/load-row (:storage eng) tx :sitting
+                                          (str (:id sitting-row)) {:for-update true})]
+            (when (= :open (:state row))
+              (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                                  (assoc (:data row) :inbox_key_hash (key-hash key))
+                                  (:next-flip-at row))
+              key)))))))
+
+(defn inbox-url
+  "The absolute address of the inbox door, from the origin the sit
+  arrived under."
+  [origin]
+  (str (str/replace (str origin) #"/+$" "") "/api/-/sittings/inbox"))
+
+(def ^:private inbox-sitting-page
+  "The most open sittings the inbox door reads for a key: every seat's
+  open sittings, which are a handful while the sweep keeps up."
+  500)
+
+(defn inbox-sitting-by-key
+  "The open sitting this inbox key belongs to, raw, or nil for a bad
+  key, a key a later sit replaced, or a sitting that has ended.
+
+  THE KEY IS FOUND BY READING THE OPEN SITTINGS, for
+  `transcripts/transcript-by-key`'s reason: `inbox_key_hash` is
+  :secret, and a :secret field may never be :filterable."
+  [eng key]
+  (when-some [wanted (key-hash key)]
+    (when (get (inv/resources eng) :sitting)
+      (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)]
+        (->> (store/with-tx (:storage eng)
+               (fn [tx]
+                 (store/query-rows (:storage eng) tx :sitting {:state :open}
+                                   {:limit inbox-sitting-page})))
+             (filter (fn [r]
+                       (when-some [held (some-> (get-in r [:data :inbox_key_hash])
+                                                str not-empty)]
+                         (MessageDigest/isEqual
+                          wanted
+                          (.getBytes ^String held StandardCharsets/UTF_8)))))
+             first)))))
+
+(defn claimed-rows
+  "The walk row ids the OTHER open sittings of this seat were handed:
+  the rows a second run of the seat must not walk again. A fire and a
+  wake that land together start two runs, and without this both sits
+  answer the same first row, so both work one branch and the next row
+  waits. The claim ends with the sitting — a closed, abandoned or swept
+  sitting holds nothing — and the sitting `sitting-id` names is left
+  out, so a re-sit is handed its own rows again. → a set of ids."
+  [eng seat-id sitting-id]
+  (if (and seat-id (get (inv/resources eng) :sitting))
+    (into #{}
+          (comp (remove #(= (str sitting-id) (str (:id %))))
+                (mapcat #(get-in % [:data :walked_rows]))
+                (keep #(some-> % str not-empty)))
+          (store/with-tx (:storage eng)
+            (fn [tx]
+              (store/query-rows (:storage eng) tx :sitting
+                                {:seat (str seat-id) :state :open}
+                                {:limit open-sitting-page
+                                 :newest-first true}))))
+    #{}))
+
+(defn claim-rows!
+  "Write the walk row ids this sit handed on the sitting it opened, so
+  `claimed-rows` keeps them from a second open sitting of the seat. A
+  MAINTENANCE write, `keep-fire-key!`'s spelling: only an OPEN sitting
+  takes the claim. → true when it was written."
+  [eng sitting-id row-ids]
+  (let [ids (into [] (keep #(some-> % str not-empty)) row-ids)]
+    (when (and sitting-id (seq ids) (get (inv/resources eng) :sitting))
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (when-some [row (store/load-row (:storage eng) tx :sitting
+                                          (str sitting-id) {:for-update true})]
+            (when (= :open (:state row))
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  (assoc (:data row) :walked_rows ids) nil)
               true)))))))
 
 (defn resit-sitting

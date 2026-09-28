@@ -325,7 +325,107 @@
         row (a-server! eng {:name "emila" :powers emila-powers})]
     (is (= :dark (:state row)))
     (is (str/includes? (str (get-in row [:data :last_error])) "nobody home"))
+    (is (= "engine" (get-in row [:data :dark_by]))
+        "a failure put it dark, so the engine probes it")
     (is (empty? (get-in row [:data :tools])))))
+
+;; ── a dark row comes back on its own ────────────────────────────────
+
+(defn- flaky-server
+  "The fake server, failing every message while `down?` holds, the
+  way a rig does while it restarts."
+  [down? log]
+  (let [inner (fake-server (atom three-tools) log)]
+    (fn [method params]
+      (when @down?
+        (throw (client/unreachable "the fake is restarting.")))
+      (inner method params))))
+
+(deftest a-row-a-failure-darkened-is-live-again-after-the-probe
+  (let [down? (atom false)
+        eng (fresh-engine {:clients {"emila" (flaky-server down? (atom []))}})
+        _ (a-server! eng {:name "emila" :powers emila-powers})
+        t0 1000000
+        state #(:state (servers/row-by-name eng "emila"))]
+    (reset! down? true)
+    (is (p/problem? (refused #(servers/call! eng "emila__read" {:uid "1"}))))
+    (is (= :dark (state)) "one failed call puts the row dark")
+    (is (= "engine" (get-in (servers/row-by-name eng "emila") [:data :dark_by])))
+
+    (testing "the first pass starts the wait, and a probe the server does
+              not answer waits the next step"
+      (is (= [] (servers/probe-dark! eng t0)))
+      (is (= [] (servers/probe-dark! eng (+ t0 30000))))
+      (is (= :dark (state))))
+
+    (reset! down? false)
+    (testing "the server is back, but the wait is not over"
+      (is (= [] (servers/probe-dark! eng (+ t0 60000))))
+      (is (= :dark (state))))
+
+    (testing "and when it is, the probe opens the row without a person"
+      (is (= ["emila"] (servers/probe-dark! eng (+ t0 90000))))
+      (let [live (servers/row-by-name eng "emila")]
+        (is (= :live (:state live)))
+        (is (nil? (get-in live [:data :last_error])))
+        (is (nil? (get-in live [:data :dark_by])))
+        (is (= clock (get-in live [:data :revived_at]))
+            "the row records that it came back on its own")
+        (is (= 3 (count (get-in live [:data :tools])))))
+      (is (false? (:isError (servers/call! eng "emila__read" {:uid "2"})))))))
+
+(deftest a-row-a-person-put-dark-stays-dark
+  (let [log (atom [])
+        eng (fresh-engine {:clients {"emila" (fake-server (atom three-tools) log)}})
+        row (a-server! eng {:name "emila" :powers emila-powers})]
+    (inv/invoke! eng :mcp_server (:id row) :retire nil {:principal colton})
+    (inv/invoke! eng :mcp_server (:id row) :restore nil {:principal colton})
+    (let [dark (servers/row-by-name eng "emila")]
+      (is (= :dark (:state dark)))
+      (is (= "person" (get-in dark [:data :dark_by]))))
+    (reset! log [])
+
+    (testing "no probe pass and no call revives it, though the server answers"
+      (is (= [] (servers/probe-dark! eng 0)))
+      (is (= [] (servers/probe-dark! eng 100000000)))
+      (is (nil? (servers/revive! eng (servers/row-by-name eng "emila"))))
+      (let [e (refused #(servers/call! eng "emila__read" {:uid "1"}))]
+        (is (= 503 (:status (ex-data e))))
+        (is (str/includes? (str (ex-data e)) "A person put it dark")))
+      (is (= :dark (:state (servers/row-by-name eng "emila"))))
+      (is (= [] @log) "the server was never asked"))
+
+    (testing "a person's mark_live opens it, and it did not come back on its own"
+      (inv/invoke! eng :mcp_server (:id row) :mark_live nil {:principal colton})
+      (let [live (servers/row-by-name eng "emila")]
+        (is (= :live (:state live)))
+        (is (nil? (get-in live [:data :dark_by])))
+        (is (nil? (get-in live [:data :revived_at])))))))
+
+(deftest a-call-to-a-dark-row-whose-server-is-back-goes-through
+  (let [down? (atom false)
+        log (atom [])
+        eng (fresh-engine {:clients {"emila" (flaky-server down? log)}})
+        _ (a-server! eng {:name "emila" :powers emila-powers})]
+    (reset! down? true)
+    (refused #(servers/call! eng "emila__read" {:uid "1"}))
+    (is (= :dark (:state (servers/row-by-name eng "emila"))))
+
+    (testing "while the server is down, the one probe fails and the call answers 503"
+      (let [e (refused #(servers/call! eng "emila__read" {:uid "1"}))]
+        (is (= 503 (:status (ex-data e))))
+        (is (str/includes? (str (first (:remedies (ex-data e)))) "mark_live")))
+      (is (= :dark (:state (servers/row-by-name eng "emila")))))
+
+    (reset! down? false)
+    (testing "once it is back, the call's own probe opens the row and the call goes out"
+      (let [out (servers/call! eng "emila__read" {:uid "9"})]
+        (is (false? (:isError out)))
+        (is (= "answered read {\"uid\":\"9\"}" (text-of out))))
+      (let [live (servers/row-by-name eng "emila")]
+        (is (= :live (:state live)))
+        (is (= clock (get-in live [:data :revived_at]))))
+      (is (= "tools/call" (:method (last @log)))))))
 
 ;; ── acceptance 5: a secret never lands in auth_env ──────────────────
 

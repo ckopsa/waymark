@@ -141,7 +141,7 @@
             "refused by the WALL, not by the machine — the door is in
              state, so the row must say why")
         (is (re-find #"person's correction" (str (:reason shut))))
-        (is (re-find #"let a person tap" (str (:reason shut))))))
+        (is (re-find #"held for the person's tap" (str (:reason shut))))))
     (testing "the engine's own actor is not the subject of this law"
       (is (= :available
              (:status (refusal ci-run classified the-source :reclassify)))))
@@ -289,10 +289,17 @@
         "GitHub reopens a closed pull request, so the row comes back"))
   (testing "a submitted change keeps working, and a stuck one waits"
     (is (= #{:submit :discard_submitted :stall :observe_submitted
-             :adopt_submitted :merge :close}
+             :adopt_submitted :merge :close :fail :stick}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")
+    (is (= #{:submit :stall :observe_failing :recover :merge :close}
+           (offers change (assoc a-pull-request :state :failing) the-source))
+        "a red change is still the seat's work: the next round, or a
+         green head, brings it back (ticket d1742908)")
+    (is (= #{:submit :stall}
+           (offers change (assoc a-pull-request :state :failing) the-classifier))
+        "and a seat sees its own two doors on it and never the verdict")
     (is (= #{:unstick}
            (offers change (assoc a-pull-request :state :stuck) the-person))
         "a stuck change is the house asking a person to look at it")
@@ -423,7 +430,7 @@
       (is (not (contains? fields :labelled_at)))))
 
   (testing "the change machine carries the bench"
-    (is (= [:open :submitted :stuck :merged :closed] (:states change)))
+    (is (= [:open :submitted :failing :stuck :merged :closed] (:states change)))
     (is (= #{:merged} (:terminal change))
         "closed is not a tomb: GitHub reopens a closed pull request.
          Neither is stuck: a person puts it back to work")
@@ -445,15 +452,22 @@
           form (into #{} (map first) (rest (:create-schema repo-policy)))]
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
-               :rounds_per_change :formatter :deny
-               :orientation :enrolled_at :note}
+               :merge_wait_seconds :rounds_per_change :formatter :deny
+               :orientation :enrolled_at :note :source_note
+               :base_state :base_head :base_checked_at :base_red_from
+               :base_ticket}
              fields)
           "every number a submit obeys, where the bench clones it from,
-           and the engine's own two: when the bench took it and why it
-           did not")
-      (is (= #{:enrolled_at :note} (into #{} (remove form) fields))
-          "…and the engine's two are on no form: a person states the
-           policy, and the engine says what the bench did with it")
+           and the engine's own: when the bench took it, why it did not,
+           what the GitHub source could not read, and the base branch's
+           state as the source last read it (ticket ade81ae9)")
+      (is (= #{:enrolled_at :note :source_note
+               :base_state :base_head :base_checked_at :base_red_from
+               :base_ticket}
+             (into #{} (remove form) fields))
+          "…and the engine's are on no form: a person states the
+           policy, and the engine says what the bench and the source did
+           with it")
       (is (contains? (:actions repo-policy) :mark_enrolled)
           "the retry's own hidden door, so a late enrolment is a
            transition and not a silent field write")))
