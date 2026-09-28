@@ -396,8 +396,12 @@
             :label "The test workflow"
             :help "The workflow the bench's test dispatches, and the name of its input that narrows the run to what a seat touched."}}
     [:map
-     [:workflow [:string {:min 1 :max 200}]]
-     [:input [:string {:min 1 :max 120}]]]]
+     [:workflow {:x-display {:label "Workflow"
+                             :help "The workflow file the bench's test dispatches, such as tests.yml."}}
+      [:string {:min 1 :max 200}]]
+     [:input {:x-display {:label "Narrowing input"
+                          :help "The name of the workflow's input that narrows the run to what a seat touched."}}
+      [:string {:min 1 :max 120}]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
