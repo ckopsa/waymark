@@ -377,12 +377,45 @@
       (t/allow)
       (t/deny))))
 
+(defn- whole-link
+  "A row's fire URL and token when it holds BOTH, else nil — a schedule
+  or a model, read the same."
+  [r]
+  (let [url (some-> (get-in r [:data :fire_url]) str not-empty)
+        token (some-> (get-in r [:data :fire_token]) str not-empty)]
+    (when (and url token) {:fire_url url :fire_token token})))
+
+(defn- chair-link-read
+  "The chair's link of a schedule, read through a guard's or a
+  handler's `read` in the transaction at hand (waymark ticket
+  1cdf9362): the seat the schedule stands for, the first model it is
+  held for, and that model's link."
+  [read' schedule-row]
+  (some->> (get-in schedule-row [:data :seat]) str not-empty
+           (read' :seat)
+           seats/chair-of
+           (read' :model)
+           whole-link))
+
+(defn- link-to-copy
+  "The link `link_like` copies from the row `like-id` names, or nil
+  (waymark ticket 1cdf9362): a live schedule's own link; else, for a
+  schedule that fires through its model, that model's link; else, when
+  the id names a model, the model's own link."
+  [read' like-id]
+  (if-some [source (read' :schedule like-id)]
+    (cond
+      (= :ended (:state source)) nil
+      (whole-link source) (when (= :live (:state source)) (whole-link source))
+      :else (chair-link-read read' source))
+    (whole-link (read' :model like-id))))
+
 (g/defguard the-copy-is-linked
   {:judges [:like]
-   :reads [:schedule]
+   :reads [:schedule :seat :model]
    :vars [:like]
    :remedies [:schedule/link]
-   :explain "{like} is not a live schedule with a link of its own, or it is this schedule. Name a schedule a person has already linked by hand."}
+   :explain "{like} is not a live schedule with a link of its own, a schedule whose model is linked, or a linked model — or it is this schedule. Name one that already fires."}
   [row inp ctx]
   ;; `seats/merge-target-is-active`'s shape: the ref names another row,
   ;; the row must stand, and the probe ctx declines to guess.
@@ -391,13 +424,17 @@
       (nil? like-id) (t/allow)          ; the schema refuses the blank
       (= like-id (str (:id row))) (t/deny {:vars {:like like-id}})
       (nil? (:read ctx)) (t/allow)      ; probe ctx — decline to guess
-      :else (let [source ((:read ctx) :schedule like-id)]
-              (if (and source
-                       (= :live (:state source))
-                       (some-> (get-in source [:data :fire_url]) str not-empty)
-                       (some-> (get-in source [:data :fire_token]) str not-empty))
-                (t/allow)
-                (t/deny {:vars {:like like-id}}))))))
+      (link-to-copy (:read ctx) like-id) (t/allow)
+      :else (t/deny {:vars {:like like-id}}))))
+
+(g/defguard the-chair-is-linked
+  {:reads [:seat :model]
+   :remedies [:model/link]
+   :explain "The model this seat is held for has no link. Link the model's Routine first; this schedule then fires through it with no token of its own."}
+  [row _inp ctx]
+  (if-some [read' (:read ctx)]
+    (if (chair-link-read read' row) (t/allow) (t/deny))
+    (t/allow)))                         ; probe ctx — decline to guess
 
 (def no-link-note
   "The note an unlinked row carries (R-12.18), spelled once so the
@@ -450,10 +487,10 @@
   ;; the guard has read the source in this same transaction; this
   ;; read is the same row, and the token moves row to row without
   ;; ever being an input, an output or a recorded value.
-  (let [source ((:read ctx) :schedule (str (:like inp)))]
+  (let [link (link-to-copy (:read ctx) (str (:like inp)))]
     (-> row
-        (assoc-in [:data :fire_url] (get-in source [:data :fire_url]))
-        (assoc-in [:data :fire_token] (get-in source [:data :fire_token]))
+        (assoc-in [:data :fire_url] (:fire_url link))
+        (assoc-in [:data :fire_token] (:fire_token link))
         (update :data dissoc :note))))
 
 (defhandler clear-link
@@ -461,6 +498,13 @@
   (-> row
       (update :data dissoc :fire_url :fire_token)
       (assoc-in [:data :note] no-link-note)))
+
+;; back to the chair (waymark ticket 1cdf9362): the row's own link goes,
+;; so `link-of` falls through to the model's, and no note stands —
+;; the guard has seen that the model holds a link.
+(defhandler fire-through-chair
+  [row _inp _ctx]
+  (update row :data dissoc :fire_url :fire_token :note))
 
 (defhandler stamp-fire
   [row inp _ctx]
@@ -771,7 +815,7 @@
              [:like {:kind :schedule
                      :x-display
                      {:label "Link it like which schedule"
-                      :help "A live schedule a person has already linked. This one takes its fire URL and token, copied inside the engine; neither is shown or sent."}}
+                      :help "A live schedule a person has already linked, a schedule that fires through its model, or a linked model. This one takes that fire URL and token, copied inside the engine; neither is shown or sent."}}
               :waymark/ref]]
      :record true
      :guards [the-copy-is-linked]
@@ -792,6 +836,20 @@
      :handler clear-link
      :display {:label "Unlink the Routine" :style :danger :order 4
                :description "The engine forgets the fire URL and the token; nothing wakes this seat until it is linked again"}}
+
+    ;; the way back with no paste (waymark ticket 1cdf9362): the row
+    ;; drops any link of its own and fires through its model's Routine,
+    ;; whose token the model already holds. No input, so nothing
+    ;; secret crosses; refused, naming `model.link`, when the model
+    ;; has no link.
+    :relink_model
+    {:from #{:pending :live :paused :broken} :to :live
+     :guards [the-chair-is-linked]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Any link of this row's own leaves it; the model's Routine fires it from then on."}
+     :handler fire-through-chair
+     :display {:label "Fire through the model" :order 5
+               :description "Drop this row's own link and fire through the Routine of the model the seat is held for — no token is pasted"}}
 
     ;; the fire's landing (R-12.19). Hidden, engine-written, and the
     ;; one door that clears a 429's note: the next fire that goes out

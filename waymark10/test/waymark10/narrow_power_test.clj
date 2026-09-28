@@ -716,3 +716,69 @@
                  :arguments {:repo a-repo :path "docs/a.md"}})
       (is (= {:repo a-repo :path "docs/a.md"}
              (select-keys (last-arguments w) [:repo :path :allow_protected]))))))
+
+;; ── the sitting that holds the row writes its branch (ticket d7c854b3) ─
+
+(deftest a-bench-write-from-a-sitting-that-no-longer-holds-the-ticket-is-refused
+  (let [w (world [{:kind "bench.read" :actions [] :filter {:repo a-repo}}
+                  {:kind "bench.edit" :actions [] :filter {:repo a-repo}}])
+        eng (:eng w)
+        seat (a-seat! eng)
+        model (a-model! eng)
+        ticket "t-held-one"
+        ;; no repo_policy kind in this engine: the default pattern
+        branch (str "waymark/" ticket)
+        claim! (requiring-resolve 'waymark10.server.seats/claim-rows!)
+        sit! (fn []
+               (let [s (:row (inv/create! eng :sitting
+                                          {:seat (:id seat) :model (:id model)
+                                           :grant (:grant w)}
+                                          {:principal clerk}))
+                     sid (mcp/open-session! eng)]
+                 (mcp/bind-session! eng sid {:seat (:id seat) :sitter clerk
+                                             :sitting (:id s)
+                                             :bench {:repo a-repo :branch branch}})
+                 (claim! eng (:id s) [ticket])
+                 {:id (str (:id s))
+                  :w (assoc w :session (assoc (:session w) :mcp-session-id sid))}))
+        edit! (fn [bound]
+                (power! bound {:tool "bench__edit"
+                               :arguments {:path "src/a.clj"}}))
+        a (sit!)]
+
+    (testing "the sitting that holds the ticket writes its branch"
+      (let [r (edit! (:w a))]
+        (is (false? (:isError r)) (text-of r))
+        (is (= branch (:branch (last-arguments w))))))
+
+    (inv/invoke! eng :sitting (:id a) :close
+                 {:input_tokens 1000 :output_tokens 100
+                  :cache_read_tokens 0 :cache_write_tokens 0 :turns 1}
+                 {:principal clerk})
+
+    (testing "closed, it is refused before the rig"
+      (let [n (count (calls w))
+            r (edit! (:w a))
+            said (text-of r)]
+        (is (true? (:isError r)) said)
+        (is (str/includes? said (str "no longer holds ticket " ticket)) said)
+        (is (str/includes? said "stop, do not write") said)
+        (is (= n (count (calls w))) "nothing reached the rig")))
+
+    (let [b (sit!)]
+      (testing "once a second sitting is handed the ticket, the first is
+                refused naming it, and the second is accepted"
+        (let [n (count (calls w))
+              r (edit! (:w a))
+              said (text-of r)]
+          (is (true? (:isError r)) said)
+          (is (str/includes? said (str "held by sitting " (:id b))) said)
+          (is (= n (count (calls w))) "nothing reached the rig"))
+        (let [r (edit! (:w b))]
+          (is (false? (:isError r)) (text-of r))
+          (is (= branch (:branch (last-arguments w))))))
+
+      (testing "a read from the closed sitting still forwards"
+        (let [r (power! (:w a) {:tool "bench__read"
+                                :arguments {:path "src/a.clj"}})]
+          (is (false? (:isError r)) (text-of r)))))))

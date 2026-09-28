@@ -709,10 +709,13 @@
         target (:id (sched-of new-id))]
     (link-schedule! source a-seat-url own-token)
 
-    (testing "a row with no link of its own cannot be copied"
-      (is (thrown? clojure.lang.ExceptionInfo
-                   (inv/invoke! *eng* :schedule (str source) :link_like
-                                {:like (str target)} {:principal mayor}))))
+    (testing "a row with no link of its own, whose model has none either, cannot be copied"
+      (let [bare-id (seat! "linked-like-bare" 3600 [(model! "claude-chair-bare")])]
+        (drain! cn)
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (inv/invoke! *eng* :schedule (str source) :link_like
+                                  {:like (str (:id (sched-of bare-id)))} {:principal mayor})))
+        (seat-do! bare-id :retire)))
 
     (testing "nor can a row be linked like itself"
       (is (thrown? clojure.lang.ExceptionInfo
@@ -741,3 +744,43 @@
 
     (seat-do! linked-id :retire)
     (seat-do! new-id :retire)))
+
+(deftest a-broken-schedule-goes-back-to-its-model
+  ;; waymark ticket 1cdf9362: no token is pasted on the way back.
+  (let [cn :sched-relink-model
+        _ (drain! cn)
+        chair (model! "claude-chair-relink")
+        _ (link-model! chair a-chair-url a-chair-token)
+        bare (model! "claude-chair-unlinked")
+        by-chair-id (seat! "fires-through-model" 3600 [chair])
+        broken-id (seat! "broken-then-relinked" 3600 [chair])
+        bare-id (seat! "model-has-no-link" 3600 [bare])
+        _ (drain! cn)
+        target (:id (sched-of broken-id))]
+
+    (testing "link_like naming a schedule that fires through its model copies the model's link"
+      (inv/invoke! *eng* :schedule (str target) :link_like
+                   {:like (str (:id (sched-of by-chair-id)))} {:principal mayor})
+      (is (= :live (:state (sched-of broken-id))))
+      (is (= {:fire_url a-chair-url :fire_token a-chair-token}
+             (sch/own-link-of (sched-of broken-id)))))
+
+    (inv/invoke! *eng* :schedule (str target) :unlink nil {:principal elena})
+    (is (= :broken (:state (sched-of broken-id))))
+
+    (testing "relink_model brings it back live without a token, on the model's Routine"
+      (inv/invoke! *eng* :schedule (str target) :relink_model nil {:principal mayor})
+      (is (= :live (:state (sched-of broken-id))))
+      (is (nil? (sch/own-link-of (sched-of broken-id))))
+      (is (= {:fire_url a-chair-url :fire_token a-chair-token}
+             (sch/link-of *eng* (sched-of broken-id))))
+      (fire-seat! broken-id "Back on the model's Routine.")
+      (drain! cn)
+      (is (= a-chair-url (:fire-url (last (fires-of a-chair-token))))))
+
+    (testing "and it is refused when the model has no link"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! *eng* :schedule (str (:id (sched-of bare-id)))
+                                :relink_model nil {:principal mayor}))))
+
+    (doseq [s [by-chair-id broken-id bare-id]] (seat-do! s :retire))))

@@ -657,6 +657,95 @@
               (str "State a repo_policy for " repo ", or prepare in an"
                    " enrolled repository."))]})))
 
+;; ── the sitting that holds the row (ticket d7c854b3) ────────────────
+;;
+;; A branch the repository's own branch_pattern minted names ONE walk
+;; row (`bench/<ticket id>`), and a write on it is the write of the
+;; sitting that holds that row. A sitting closed early while its run
+;; still edits, or one another open sitting of its seat has taken the
+;; row from, is refused before the forward: two sittings never write
+;; one branch. Reads stay open, a branch outside the pattern is not
+;; judged, and neither is a call that names no sitting (the REST door,
+;; the engine's own hand). A sitting whose walk handed it no row at all
+;; is judged only on being open and on no other sitting holding the row.
+
+(def ^:private bench-writes #{:edit :edit_many :pull :submit})
+
+(defn- bench-write? [tname]
+  (boolean (some #(= tname (bench-tool %)) bench-writes)))
+
+(defn- branch-row-id
+  "The walk row a branch was minted for: what the `*` of the
+  repository's branch_pattern stands for in it, or nil for a branch
+  outside the pattern."
+  [policy branch]
+  (let [pattern (or (some-> (get-in policy [:data :branch_pattern]) str not-empty)
+                    default-branch-pattern)
+        [pre post] (str/split pattern #"\*" 2)
+        pre (str pre)
+        post (str post)
+        branch (str branch)]
+    (when (and (str/includes? pattern "*")
+               (str/starts-with? branch pre)
+               (str/ends-with? branch post)
+               (> (count branch) (+ (count pre) (count post))))
+      (subs branch (count pre) (- (count branch) (count post))))))
+
+(defn- holds-row? [sitting row-id]
+  (boolean (some #(= row-id (str %)) (get-in sitting [:data :walked_rows]))))
+
+(defn- bench-hold-block
+  "Why a bench write should be refused because the calling sitting does
+  not hold the row its branch was minted for, as {:row :sitting :state
+  :ended :holder}, or nil when it should not be."
+  [eng tname args opts]
+  (when (bench-write? tname)
+    (let [sid (some-> (:sitting opts) str not-empty)
+          branch (some-> (:branch args) str not-empty)]
+      (when (and sid branch (get (inv/resources eng) :sitting))
+        (when-some [row-id (branch-row-id (repo-policy-of eng (:repo args)) branch)]
+          (let [st (:storage eng)
+                [sitting holder]
+                (store/with-tx st
+                  (fn [tx]
+                    (let [s (store/load-row st tx :sitting sid {})
+                          seat (some-> (get-in s [:data :seat]) str not-empty)]
+                      [s (when seat
+                           (->> (store/query-rows st tx :sitting
+                                                  {:seat seat :state :open}
+                                                  {:limit 50 :newest-first true})
+                                (remove #(= sid (str (:id %))))
+                                (filter #(holds-row? % row-id))
+                                first))])))
+                state (some-> (:state sitting) name)
+                walked (seq (get-in sitting [:data :walked_rows]))]
+            (when (and sitting
+                       (or holder
+                           (not= "open" state)
+                           (and walked (not (holds-row? sitting row-id)))))
+              {:row row-id :sitting sid :state state
+               :ended (get-in sitting [:data :ended_at])
+               :holder (some-> (:id holder) str)})))))))
+
+(defn- refuse-bench-hold
+  "The 409 for a bench write from a sitting that no longer holds the
+  row its branch was minted for. It names the row and why, and the
+  remedy is to stop: the sitting that holds the row finishes it."
+  [tname {:keys [row sitting state ended holder]}]
+  (throw (p/problem
+          :sitting-does-not-hold 409 "Not this sitting's row"
+          {:detail
+           (str "Invoking " tname " writes the branch of ticket " row
+                ", and this sitting no longer holds ticket " row " ("
+                (cond
+                  holder (str "held by sitting " holder)
+                  (not= "open" state) (str "sitting " sitting " is " state
+                                           (when ended (str ", closed at " ended)))
+                  :else (str "sitting " sitting "'s walk never handed it that row"))
+                "); stop, do not write.")
+           :remedies
+           ["Stop: do not write this branch. The sitting that holds the row finishes it; close this one."]})))
+
 (defn- carries-why? [args]
   (or (not (str/blank? (str (:why args))))
       (not (str/blank? (str (:__why args))))))
@@ -729,7 +818,8 @@
      (let [gentry (grants/capability-entry vis token)
            args (bench-protected tname gentry args)
            verdict (when gentry (filter-verdict (:filters gentry) args))
-           prepare-block (bench-prepare-block eng vis tname args)]
+           prepare-block (bench-prepare-block eng vis tname args)
+           hold-block (bench-hold-block eng tname args opts)]
        (cond
          (nil? gentry)
          (refuse-invoke
@@ -744,6 +834,9 @@
 
          prepare-block
          (refuse-bench-prepare tname prepare-block)
+
+         hold-block
+         (refuse-bench-hold tname hold-block)
 
          (and why (not (carries-why? args)))
          (refuse-why tname)
