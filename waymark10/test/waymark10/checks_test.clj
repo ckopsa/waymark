@@ -158,6 +158,44 @@
                    :edit {:prefill [:nope]}
                    :input [:map [:name [:string {:max 100}]]]))))
 
+(def pair-input
+  [:map
+   [:subject_kind [:string {:max 20}]]
+   [:subject_id [:string {:max 40}]]])
+
+(def pair-resolves
+  (g/guard {:name :pair-resolves :judges [:subject_kind :subject_id]
+            :resolves [:subject_kind :subject_id]
+            :explain "{subject_id} is not a row."
+            :check (fn [_ _ _] (t/allow))}))
+
+(deftest resolvers
+  ;; waymark-fp62.4.1.1: a kind-and-id pair is out of the dangling-ref
+  ;; wall's reach, so the kind names the guard that resolves it.
+  (let [point (fn [input guards]
+                (with-action base :point
+                  {:from #{:open} :to :open
+                   :input input
+                   :guards guards
+                   :safety {:idempotent true :reversible false :confirm false}}))
+        quiet? (fn [m] (not-any? #(str/includes? % "[resolves]") (warnings-of m)))]
+    (testing "an unguarded pair warns, naming each field"
+      (warns "action point field :subject_kind is half of a kind-and-id pair"
+             (point pair-input []))
+      (warns "action point field :subject_id is half of a kind-and-id pair"
+             (point pair-input [])))
+    (testing "a guard naming both in :resolves quiets it"
+      (is (quiet? (point pair-input [pair-resolves]))))
+    (testing "…on the create door too"
+      (warns "the create door field :subject_kind"
+             (assoc base :schema (into [:map [:name [:string {:max 100}]]]
+                                       (rest pair-input)))))
+    (testing "a typed ref is the wall's, not a pair"
+      (is (quiet? (point [:map
+                          [:subject_kind [:string {:max 20}]]
+                          [:subject_id {:kind :thing} :waymark/ref]]
+                         []))))))
+
 (deftest ref-shape
   ;; waymark-fp62.7.8: :kind says the field holds the id of a row, and
   ;; every surface draws a picker from it. Three shapes can hold one.

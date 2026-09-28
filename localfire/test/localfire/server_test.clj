@@ -84,7 +84,7 @@
     :public-url (str "http://127.0.0.1:" port)
     :place      (str place)
     :runs-dir   (str runs-dir)
-    :mcp        {:name "waymark" :url "http://127.0.0.1:9/mcp"}
+    :mcp        {:url "http://127.0.0.1:9/mcp"}
     :routines   (or routines {"sonnet" {:model "claude-sonnet-4-5"}})}))
 
 (defn world
@@ -232,7 +232,7 @@
                  (get-in r [:json :claude_code_session_url])))
 
           (is (wait-for #(= 1 (count @(:calls w)))))
-          (let [{:keys [argv dir]} (first @(:calls w))]
+          (let [{:keys [argv dir env]} (first @(:calls w))]
             (testing "R-5.4: the argument vector, prompt FIRST"
               ;; `--mcp-config` and `--allowedTools` are variadic, so
               ;; every argument behind them is swallowed. The prompt
@@ -245,17 +245,22 @@
                       "--output-format" "json"
                       "--strict-mcp-config"
                       "--mcp-config" (.getPath (runs/mcp-file (:runs w) id))
-                      "--allowedTools" "mcp__waymark__*" "Bash(echo *)"]
+                      "--tools" ""
+                      "--allowedTools" "mcp__Waymark__*"]
                      (vec (drop 3 argv))))
               (is (str/includes? (nth argv 2) "<routine-fire-payload>"))
-              (is (str/includes? (nth argv 2) "Key: sk-secret-abc")))
+              (is (str/includes? (nth argv 2) "    Key: sk-secret-abc"))
+              (is (str/starts-with? (nth argv 2) (str "Your session id is " id "."))))
+
+            (testing "R-5.4: the Waymark tools load up front, no ToolSearch"
+              (is (= {"ENABLE_TOOL_SEARCH" "false"} env)))
 
             (testing "R-5.3: the run runs in its own copy of the place"
               (is (= (.getPath (runs/place-dir (:runs w) id)) dir))
               (is (.isFile (io/file dir "CLAUDE.md")))
               (is (.isFile (io/file dir ".claude" "settings.json")))
               (is (.canExecute (io/file dir ".claude" "hooks" "sitting-close.sh")))
-              (is (= {"mcpServers" {"waymark" {"type" "http"
+              (is (= {"mcpServers" {"Waymark" {"type" "http"
                                                "url" "http://127.0.0.1:9/mcp"}}}
                      (json/read-value (slurp (runs/mcp-file (:runs w) id)))))))
 
@@ -299,7 +304,9 @@
     (try
       (let [r (GET (str (:base w) "/healthz"))]
         (is (= 200 (:status r)))
-        (is (= {:ok true :routines ["haiku" "sonnet"]} (:json r))))
+        (is (= {:ok true :routines ["haiku" "sonnet"]}
+               (select-keys (:json r) [:ok :routines])))
+        (is (true? (get-in r [:json :credential :ok]))))
       (testing "a path no route answers is 404 with a sentence"
         (is (= 404 (:status (GET (str (:base w) "/nothing"))))))
       (finally (server/stop! w)))))

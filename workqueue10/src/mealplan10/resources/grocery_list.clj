@@ -113,8 +113,9 @@
 
   Recorded punt: the with_plan profile has no v10 spelling."
   (:require [mealplan10.resources.meal-line :as meal-line]
-            [waymark10.dsl :refer [defderived defguardfn defresource
-                                   defhandler guard require-fact]]
+            [waymark10.dsl :refer [defacceptsfn defderived defguardfn
+                                   defresource defhandler guard
+                                   require-fact]]
             [waymark10.types :as t])
   (:import (java.time LocalDate)))
 
@@ -139,32 +140,30 @@
 
 ;; what's on the list: the rendered enum, the per-part availability,
 ;; and the enforcement, from one set
-(def item-on-list
-  (guard {:name :item-on-list
-          :judges [:name]
-          :accepts (fn [row] (mapv :name (get-in row [:data :items])))
-          :explain "No item named '{name}' on this list."}))
+(defacceptsfn item-on-list
+  {:judges [:name]
+   :explain "No item named '{name}' on this list."}
+  [row]
+  (mapv :name (get-in row [:data :items])))
 
 ;; a checked item drops out of check_item's admitted set — so the
 ;; button disappears from that row instead of staying clickable for a
 ;; no-op
-(def item-not-checked
-  (guard {:name :item-not-checked
-          :judges [:name]
-          :accepts (fn [row]
-                     (into [] (keep #(when-not (:have %) (:name %)))
-                           (get-in row [:data :items])))
-          :explain "'{name}' is already checked off."}))
+(defacceptsfn item-not-checked
+  {:judges [:name]
+   :explain "'{name}' is already checked off."}
+  [row]
+  (into [] (keep #(when-not (:have %) (:name %)))
+        (get-in row [:data :items])))
 
 ;; the mirror of item_not_checked: uncheck_item only admits rows that
 ;; are actually checked, so an accidental tap has a one-tap way back
-(def item-checked
-  (guard {:name :item-checked
-          :judges [:name]
-          :accepts (fn [row]
-                     (into [] (keep #(when (:have %) (:name %)))
-                           (get-in row [:data :items])))
-          :explain "'{name}' isn't checked off yet."}))
+(defacceptsfn item-checked
+  {:judges [:name]
+   :explain "'{name}' isn't checked off yet."}
+  [row]
+  (into [] (keep #(when (:have %) (:name %)))
+        (get-in row [:data :items])))
 
 ;; the gate judges the stored rollup fact; hoisted so its :check fn
 ;; has one identity per process (a fresh g/require per boot would

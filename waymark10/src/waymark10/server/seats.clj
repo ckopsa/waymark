@@ -1971,7 +1971,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -2220,7 +2220,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
