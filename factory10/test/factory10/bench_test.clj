@@ -2230,7 +2230,7 @@
   (let [w (ticket-world)
         submitted (seat-invokes! w "submit" {:why a-long-sentence})
         stalled (seat-invokes! w "stall" {:why a-stall-sentence})
-        _ (person-moves-ticket! w :ungroom)
+        ;; the stall sent the ticket to draft itself (ticket 6bdaf6fe)
         _ (person-moves-ticket! w :groom)
         answer (sit-again! w)
         row (first (changes-of (:eng w)))]
@@ -2258,11 +2258,10 @@
     (is (false? (:isError stalled)) (text-of stalled))
     (is (= "stuck" (name (:state row)))
         "the only groom came before the stall: nobody has read it yet")
-    (is (not (contains? (into #{} (map :action) (get-in answer [:change :doors]))
-                        "submit")))
-    (is (str/includes? (str (or (:change_note answer) (:bench_note answer)))
-                       "stuck")
-        "and the note says the change is stuck")))
+    (is (empty? (get-in answer [:walk :rows]))
+        "and the seat is handed nothing: the stall sent the ticket to
+         draft, so no wake spends a sitting on saying it is stuck (ticket
+         6bdaf6fe)")))
 
 (deftest a-change-stuck-at-the-round-ceiling-stays-stuck
   (let [w (ticket-world)
@@ -2417,8 +2416,7 @@
   (let [w (ticket-world)
         url (submitted-and-adopted! w 82)]
     (seat-invokes! w "stall" {:why a-stall-sentence})
-    (person-moves-ticket! w :ungroom)
-    (is (= "draft" (ticket-state w)) "the stall and the ungroom sent it back")
+    (is (= "draft" (ticket-state w)) "the stall sent it back")
     (mirror-moves-change! w :merge nil)
     (is (landed-with? w url)
         "a person merged the stuck change's pull request, and the draft ends")))
@@ -2572,6 +2570,83 @@
                  {:principal person})
     (is (= "open" (ticket-state w))
         "the person's unstick releases the ticket to the queue")))
+
+;; ── a stuck change does not loop its seat (ticket 6bdaf6fe) ────────────
+;;
+;; A TICKET LEFT OPEN BESIDE A STUCK CHANGE WAS HANDED TO THE SEAT EVERY
+;; WAKE, and every wake could only say it was stuck. So the stall sends
+;; the ticket to draft, the walk leaves out a ticket whose change is
+;; stuck, and a person's unstick puts a pull request back under review
+;; where the passes read it.
+
+(defn- force-ticket-state!
+  "The ticket stands in `state`, as prod's did before the stall moved it."
+  [w state]
+  (let [st (:storage (:eng w))
+        id (str (:id (:ticket w)))]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :ticket id {})]
+          (store/save-row! st tx :ticket
+                           (assoc row :state state
+                                  :version (inc (long (:version row))))
+                           (:version row)))))))
+
+(deftest a-stall-sends-the-ticket-back-to-draft
+  (let [w (ticket-world)
+        _ (seat-invokes! w "submit" {:why a-long-sentence})
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        m (last-ticket-move w)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "draft" (ticket-state w))
+        "the seat could not build it as written: a person grooms it again")
+    (is (= :shelve (:action m)))
+    (is (= "in_review" (name (:from-state m))))
+    (is (empty? (get-in (sit-again! w) [:walk :rows]))
+        "a draft is in no seat's walk")))
+
+(deftest a-walk-with-only-a-stuck-change-ticket-answers-no-row
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (force-ticket-state! w :open)
+        answer (sit-again! w)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (ticket-state w)))
+    (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
+    (is (empty? (get-in answer [:walk :rows]))
+        "the ticket beside a stuck change is left out like a claimed row")))
+
+(deftest an-unstick-puts-a-pull-request-back-under-review
+  (let [w (ticket-world)
+        _ (submitted-and-adopted! w 87)
+        id (get-in (:answer w) [:change :id])
+        _ (mirror-moves-change! w :stick {:why "gate went red on the last round"
+                                          :failing_checks ["gate"]})]
+    (is (thrown? Exception
+                 (inv/invoke! (:eng w) :change id :unstick {}
+                              {:principal person}))
+        "`open` is read by neither the failing pass nor the merge pass")
+    (inv/invoke! (:eng w) :change id :unstick_submitted {}
+                 {:principal person})
+    (let [row (first (changes-of (:eng w)))]
+      (is (= "submitted" (name (:state row)))
+          "the change is back where its pull request is")
+      (is (zero? (long (get-in row [:data :rounds])))
+          "and the rounds start again")
+      (is (nil? (get-in row [:data :failing_checks]))))
+    (is (= "in_review" (ticket-state w))
+        "the ticket stays out for review with its pull request")))
+
+(deftest an-unstick-with-no-pull-request-lands-in-open
+  (let [w (ticket-world)
+        id (get-in (:answer w) [:change :id])
+        _ (seat-invokes! w "stall" {:why a-stall-sentence})]
+    (is (thrown? Exception
+                 (inv/invoke! (:eng w) :change id :unstick_submitted {}
+                              {:principal person}))
+        "there is no pull request to go back to")
+    (inv/invoke! (:eng w) :change id :unstick {} {:principal person})
+    (is (= "open" (name (:state (first (changes-of (:eng w)))))))))
 
 ;; ── a reopen finds the submitted change ────────────────────────────────────
 ;;

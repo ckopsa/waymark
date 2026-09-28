@@ -767,11 +767,15 @@
   (forge-checks [this repository head-sha]
     ;; the same route the poll reads the red runs from, with nothing
     ;; filtered: a pending and a green check are what the failing pass
-    ;; needs to tell "not yet" from "red" (ticket d1742908)
+    ;; needs to tell "not yet" from "red" (ticket d1742908). The id and
+    ;; the start say which of two runs of one name is the newer, so a
+    ;; green re-run answers for the red run before it (ticket 6bdaf6fe)
     (mapv (fn [check]
             {:check_name (clamp (:name check) 200)
              :status (word (:status check))
-             :conclusion (word (:conclusion check))})
+             :conclusion (word (:conclusion check))
+             :id (:id check)
+             :started_at (word (:started_at check))})
           (check-runs! this repository head-sha)))
 
   (forge-base [this repository branch]

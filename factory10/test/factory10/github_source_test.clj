@@ -796,11 +796,14 @@
 
     (testing "the checks on one head read through Actions too"
       (is (= [{:check_name "test10 (shard 3)" :status "completed"
-               :conclusion "failure"}
+               :conclusion "failure" :id 7001
+               :started_at "2026-09-18T13:41:00Z"}
               {:check_name "check-queue" :status "completed"
-               :conclusion "success"}]
+               :conclusion "success" :id 7002 :started_at nil}]
              (forge/forge-checks source private-repo
-                                 (get-in a-pull-request [:head :sha])))))))
+                                 (get-in a-pull-request [:head :sha])))
+          "each run carries its id and start, so the newest of one
+           name speaks for it (ticket 6bdaf6fe)"))))
 
 (deftest a-failed-check-read-costs-the-checks-and-not-the-pass
   (let [state (gh/fake-state)
@@ -1065,6 +1068,33 @@
         "a red check beside a cancel is red")
     (is (nil? (forge/check-verdict [] []))
         "no check at all says nothing")))
+
+(deftest a-green-re-run-answers-for-the-red-run-before-it
+  ;; ticket 6bdaf6fe: `gate` went red, ran again on the same head and
+  ;; went green, and the pass kept reading the red run
+  (let [run (fn [id started c] {:check_name "gate" :status "completed"
+                                :conclusion c :id id :started_at started})]
+    (is (= {:verdict :green}
+           (forge/check-verdict ["gate"]
+                                [(run 101 "2026-09-28T01:37:00Z" "failure")
+                                 (run 202 "2026-09-28T01:38:30Z" "success")]))
+        "red then green on one head reads green")
+    (is (= {:verdict :green}
+           (forge/check-verdict ["gate"]
+                                [(run 202 "2026-09-28T01:38:30Z" "success")
+                                 (run 101 "2026-09-28T01:37:00Z" "failure")]))
+        "whatever order the forge lists them in")
+    (is (= {:verdict :red :names ["gate"]}
+           (forge/check-verdict ["gate"]
+                                [(run 101 "2026-09-28T01:37:00Z" "success")
+                                 (run 202 "2026-09-28T01:38:30Z" "failure")]))
+        "green then red reads red")
+    (is (nil? (forge/check-verdict
+               ["gate"]
+               [(run 101 "2026-09-28T01:37:00Z" "failure")
+                {:check_name "gate" :status "in_progress" :conclusion nil
+                 :id 202 :started_at "2026-09-28T01:38:30Z"}]))
+        "a re-run still running is not finished")))
 
 ;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
 
