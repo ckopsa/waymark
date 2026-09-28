@@ -3970,9 +3970,15 @@
   while it was still working learns that its sitting is over rather
   than spending on a sibling's bill. `waymark_sit` is the one door left
   open, because a re-sit is how a run whose connector dropped finds
-  its own sitting again."
-  [eng session tool-name]
-  (when (not= "waymark_sit" (str tool-name))
+  its own sitting again. A bench tool through `waymark_power` is left to
+  the gate's hold guard, which names the ticket the closed sitting no
+  longer holds and refuses its writes, while its reads still forward."
+  [eng session tool-name arguments]
+  (when-not (or (= "waymark_sit" (str tool-name))
+                (and (= "waymark_power" (str tool-name))
+                     (str/starts-with? (str (or (get arguments :tool)
+                                                (get arguments "tool")))
+                                       "bench__")))
     (when-some [sid (some-> (bound-sitting eng (:mcp-session-id session))
                             str not-empty)]
       (when-some [row (row-of eng :sitting sid)]
@@ -4018,7 +4024,8 @@
        "tools/list"
        (rpc-result id {:tools (listing)})
        "tools/call"
-       (let [out (or (closed-sitting-refusal eng session (:name params))
+       (let [out (or (closed-sitting-refusal eng session (:name params)
+                                             (:arguments params))
                      (call-tool eng call gate-rpc session
                                 (:name params) (:arguments params)))]
          (if (= ::unknown-tool out)

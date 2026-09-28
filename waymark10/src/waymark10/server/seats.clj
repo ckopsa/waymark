@@ -4030,6 +4030,12 @@
   gives the rows of a sitting that closed."
   120)
 
+(defn- walked-rdef
+  "The rdef of the kind this seat walks, or nil."
+  [eng seat-row]
+  (some->> (get-in seat-row [:data :walk]) str not-empty keyword
+           (get (inv/resources eng))))
+
 (defn- graced-rows
   "The walk rows a sitting of this seat CLOSED within the seat's
   `release_grace_seconds` walked (ticket f6c8d5ce). A close can land
@@ -4037,8 +4043,10 @@
   its last answer is in flight — and a fire a minute later must not
   take its ticket out from under it. An abandoned sitting was swept,
   not closed, and holds nothing; the sitting `sitting-id` names is
-  left out, as `claimed-rows` leaves it. → a set of ids."
-  [st tx seat-row sitting-id now]
+  left out, as `claimed-rows` leaves it. A row whose work is over
+  (`machine/work-over?` under the walked kind's `rdef`) was finished,
+  not released, and is not held. → a set of ids."
+  [st tx seat-row rdef sitting-id now]
   (let [grace (long (or (get-in seat-row [:data :release_grace_seconds])
                         release-grace-default))
         now (instant-of now)]
@@ -4051,7 +4059,13 @@
                                                 (get-in % [:data :ended_at]))]
                                (.isAfter ^Instant ended since)))
                     (mapcat #(get-in % [:data :walked_rows]))
-                    (keep #(some-> % str not-empty)))
+                    (keep #(some-> % str not-empty))
+                    (remove #(when rdef
+                               (when-some [r (store/load-row
+                                              st tx (keyword (str (get-in seat-row [:data :walk])))
+                                              % {})]
+                                 (machine/work-over?
+                                  rdef (inv/decode-row rdef r))))))
               (store/query-rows st tx :sitting
                                 {:seat (str (:id seat-row)) :state :closed}
                                 {:limit open-sitting-page
@@ -4072,8 +4086,9 @@
     (let [st (:storage eng)]
       (store/with-tx st
         (fn [tx]
-          (into (graced-rows st tx (store/load-row st tx :seat (str seat-id) {})
-                             sitting-id ((:now-fn eng)))
+          (into (let [seat-row (store/load-row st tx :seat (str seat-id) {})]
+                  (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                               sitting-id ((:now-fn eng))))
                 (comp (remove #(= (str sitting-id) (str (:id %))))
                       (mapcat #(get-in % [:data :walked_rows]))
                       (keep #(some-> % str not-empty)))
@@ -4218,7 +4233,8 @@
                                        {:seat (str seat-id) :state :open}
                                        {:limit open-sitting-page
                                         :newest-first true})
-                taken (into (graced-rows st tx seat-row sitting-id ((:now-fn eng)))
+                taken (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                                         sitting-id ((:now-fn eng)))
                             (comp (remove #(= (str sitting-id) (str (:id %))))
                                   (mapcat #(get-in % [:data :walked_rows]))
                                   (keep #(some-> % str not-empty)))
