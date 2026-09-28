@@ -1485,6 +1485,11 @@ door that empties the queue. A count wake is level and not edge: it
 fires each time it is evaluated and its condition holds, `at_least`
 and `at_most` alike, and `fire_interval_seconds` is the damper.
 
+A count entry over another kind counts every row of that kind the
+entry's `filter` matches, whatever the seat's grant: the count is the
+engine's, and it counts the whole house. The sitting it wakes still
+sees only its own scope. (Owner's ruling, 2026-09-28.)
+
 One Routine for each model. Today each seat has its own Routine, and
 a person pastes the seat's instructions and the seat's key into that
 Routine by hand. The engine does not hold the instructions, so a seat
@@ -2835,10 +2840,6 @@ trusts.
 - Turn-level cost inside an interactive sitting. The tally is one sum
   over the sitting, so the record does not say which correction cost
   what. Keeping the turns is a later leg.
-- A count wake over a kind the seat cannot see. The count runs under
-  the seat's own grant, so an absent kind counts zero, and the seat
-  says nothing. A sentence in `doors.ask.seat` that says the count
-  sees nothing is the follow-up.
 
 ## 19. Effort
 

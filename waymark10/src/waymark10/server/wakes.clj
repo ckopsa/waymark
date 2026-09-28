@@ -300,7 +300,9 @@
 
   What the count does NOT wear is a grant's projection. The number is
   the engine's; what the woken session then sees is the sitting's,
-  through the seat's scope (R-12.24's punt). A filter the kind cannot
+  through the seat's scope (R-12.24: a count entry over another kind
+  counts every row the filter matches, whatever the seat's grant). A
+  filter the kind cannot
   answer is a warning and a nil — a seat that cannot be counted for
   is a seat that says nothing, rather than a consumer that parks."
   [eng kind filter-map]
