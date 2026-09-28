@@ -53,8 +53,9 @@
     [server (.getPort (.getAddress server)) seen]))
 
 (defn- transcript!
-  "A fired run's transcript: one sit, its answer, one more turn."
-  [dir port]
+  "A fired run's transcript: one sit, its answer, the `middle` lines,
+  one more turn."
+  [dir port & [middle]]
   (let [f (io/file dir "run.jsonl")
         sat (wire/write-json
              {:sitting "s-1" :mode "fired"
@@ -79,10 +80,12 @@
                           :usage {:input_tokens 5 :output_tokens 7
                                   :cache_read_input_tokens 0
                                   :cache_creation_input_tokens 0}}}]]
-    (spit f (str (str/join "\n" (map wire/write-json lines)) "\n"))
+    (spit f (str (str/join "\n" (map wire/write-json
+                                      (concat (butlast lines) middle [(last lines)])))
+                 "\n"))
     f))
 
-(defn- run-hook! [dir transcript]
+(defn- run-hook! [dir transcript & [hook]]
   (let [pb (ProcessBuilder. ^java.util.List ["bash" (str script)])
         env (.environment pb)]
     (doseq [k ["WAYMARK_SEAT_URL" "WAYMARK_SEAT_KEY" "http_proxy" "HTTP_PROXY"
@@ -94,9 +97,10 @@
           err (future (slurp (.getErrorStream p)))]
       (with-open [in (.getOutputStream p)]
         (.write in (.getBytes ^String (wire/write-json
-                                       {:session_id "h-1"
-                                        :transcript_path (str transcript)
-                                        :stop_hook_active false})
+                                       (merge {:session_id "h-1"
+                                               :transcript_path (str transcript)
+                                               :stop_hook_active false}
+                                              hook))
                               "UTF-8")))
       {:exit (.waitFor p) :out @out :err @err})))
 
@@ -131,4 +135,61 @@
         (testing "today's hold, with the id and the counts"
           (is (str/includes? out "\"decision\": \"block\""))
           (is (str/includes? out "s-1"))))
+      (finally (.stop server 0)))))
+
+(def ^:private launch
+  "A background agent launched mid-run, and the harness's answer."
+  [{:type "assistant" :requestId "r-a"
+    :message {:role "assistant"
+              :content [{:type "tool_use" :id "tu-2" :name "Agent"
+                         :input {:prompt "Map the hook." :run_in_background true}}]
+              :usage {:input_tokens 10 :output_tokens 2
+                      :cache_read_input_tokens 0
+                      :cache_creation_input_tokens 0}}}
+   {:type "user"
+    :message {:role "user"
+              :content [{:type "tool_result" :tool_use_id "tu-2"
+                         :content [{:type "text"
+                                    :text "Async agent launched successfully.\nagentId: ag-1"}]}]}}])
+
+(def ^:private hand-back
+  "The agent's task notification, and the turn it wakes."
+  [{:type "user"
+    :message {:role "user"
+              :content "<task-notification>\n<task-id>ag-1</task-id>\n<status>completed</status>\n</task-notification>"}}
+   {:type "assistant" :requestId "r-b"
+    :message {:role "assistant"
+              :content [{:type "text" :text "Read the report."}]
+              :usage {:input_tokens 20 :output_tokens 4
+                      :cache_read_input_tokens 0
+                      :cache_creation_input_tokens 0}}}])
+
+(deftest a-fired-run-closes-only-when-its-agents-have-handed-back
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)]
+    (try
+      (testing "a subagent's stop neither closes nor holds"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port launch)
+                         {:hook_event_name "SubagentStop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (zero? (count @seen)))))
+      (testing "a stop with the agent still out neither closes nor holds"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port launch)
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (zero? (count @seen)))))
+      (testing "the stop after the hand-back closes once, with the whole run"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port (concat launch hand-back))
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (= 1 (count @seen)))
+          (is (= {:input_tokens 135 :output_tokens 33 :cache_read_tokens 3000
+                  :cache_write_tokens 400 :turns 4}
+                 (select-keys (:body (first @seen)) (keys counts))))))
       (finally (.stop server 0)))))
