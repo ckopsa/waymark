@@ -30,8 +30,8 @@
   double-tap with the same input replays naturally instead of denying
   (v9's rule: idempotent stays declared, replay-safety over a guard
   that would refuse the second tap)."
-  (:require [waymark10.dsl :refer [defaction defderived defresource
-                                   defhandler guard]])
+  (:require [waymark10.dsl :refer [defacceptsfn defaction defderived
+                                   defresource defhandler guard]])
   (:import (java.math RoundingMode)))
 
 (def overwrite
@@ -151,23 +151,22 @@
   {:over [:est_cost_cents]
    :expr '(is-set (var :est_cost_cents))})
 
-(def substitution-applies
-  ;; one acceptance set drives the rendered picker enum, availability,
-  ;; and enforcement: the ACCEPTED substitutions FROM this line's
-  ;; ingredient. nil (no constraint) on a probe with no hooks.
-  (guard {:name :substitution-applies
-          :judges [:substitution_id]
-          :reads [:substitution]
-          :accepts (fn [row ctx]
-                     (when-some [find' (:find ctx)]
-                       (mapv :id
-                             (find' :substitution
-                                    {:from_ingredient_id
-                                     (get-in row [:data :ingredient_id])
-                                     :state :accepted}
-                                    {:limit 100}))))
-          :explain "No accepted substitution stands in for this line's ingredient."
-          :remedies [:substitution/accept]}))
+;; one acceptance set drives the rendered picker enum, availability,
+;; and enforcement: the ACCEPTED substitutions FROM this line's
+;; ingredient. nil (no constraint) on a probe with no hooks.
+(defacceptsfn substitution-applies
+  {:judges [:substitution_id]
+   :reads [:substitution]
+   :explain "No accepted substitution stands in for this line's ingredient."
+   :remedies [:substitution/accept]}
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (mapv :id
+          (find' :substitution
+                 {:from_ingredient_id
+                  (get-in row [:data :ingredient_id])
+                  :state :accepted}
+                 {:limit 100}))))
 
 ;; ── handlers ────────────────────────────────────────────────────────
 

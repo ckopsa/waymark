@@ -678,6 +678,47 @@
           (for [a (machine/actions-seq r) :when (:input a)]
             [(str "action " (name (:name a))) (:input a)]))))
 
+(defn- pair-fields
+  "The KIND-AND-ID PAIRS of one input form: an `<x>_kind` entry beside an
+  `<x>_id` entry, neither a typed ref (no `:kind` property). The target
+  kind is a runtime value, so the dangling-ref wall cannot resolve the
+  id; both fields are answered, in the order they are declared."
+  [form]
+  (let [em (into {} (schema/entry-map form))
+        untyped? (fn [k] (and (contains? em k)
+                              (nil? (get-in em [k :properties :kind]))))]
+    (into []
+          (mapcat (fn [k]
+                    (when-some [[_ stem] (re-matches #"(.+)_kind" (name k))]
+                      (let [id-k (keyword (str stem "_id"))]
+                        (when (and (untyped? k) (untyped? id-k))
+                          [k id-k])))))
+          (schema/entry-keys form))))
+
+(defn- check-resolvers
+  "The dangling-ref wall resolves every top-level entry that carries
+  `:kind`; a KIND-AND-ID PAIR it cannot reach, because the kind is a
+  value the caller types. Such a pair is the kind's own to resolve: each
+  field of one warns unless a guard at that door (the create guards for
+  the create door, the action's guards otherwise) names it in
+  `:resolves` (waymark-fp62.4.1.1)."
+  [r]
+  (vec
+   (for [[where form guards]
+         (cons ["the create door" (or (:create-schema r) (:schema r))
+                (:create-guards r)]
+               (for [a (machine/actions-seq r) :when (:input a)]
+                 [(str "action " (name (:name a))) (:input a) (:guards a)]))
+         :let [resolved (into #{}
+                              (comp (mapcat g/iter-leaves) (mapcat :resolves))
+                              guards)]
+         f (pair-fields form)
+         :when (not (resolved f))]
+     (str "[resolves] " where " field " f " is half of a kind-and-id "
+          "pair, so the dangling-ref wall cannot resolve it: the kind is "
+          "a value the caller types. Resolve the row in a guard and name "
+          "the field in its :resolves."))))
+
 (defn- check-ref-shape
   "`:kind` on an entry is the picker's declaration: it says this field
   holds the ID of a row of that kind. Every surface reads it — the
@@ -1558,7 +1599,7 @@
           check-handler-signatures check-opaque-residue
           check-summary-template check-waive-tokens
           check-place check-edit check-altitude check-long-text
-          check-options check-ref-shape
+          check-options check-ref-shape check-resolvers
           check-filterable check-sortable check-default-filters
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require

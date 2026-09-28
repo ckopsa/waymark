@@ -238,6 +238,7 @@
 
 (defguardfn offers-something-light
   {:judges [:offer_kind :offer_id :offer_action :offer_href]
+   :resolves [:offer_kind :offer_id]
    :reads [:storage]
    :vars [:problem]
    :open "An insight offers one next step: a kind and an action this house declares, on a row it names, and the action light enough to tap. The address the card reaches it at is derived from that pair — supply one only if it says the same thing."
