@@ -254,6 +254,7 @@
    :reads []
    :vars [:word :words]
    :remedies [:judgment/revise]
+   :open "The words a ticket may be filed on are this judgment's own verdicts, written in the same form; no schema can say that one field's items must be names from another."
    :explain "A ticket is filed on {word}, which is none of this judgment's verdicts. Its verdicts are {words}. A word no seat may say is a ticket that could never be filed."}
   [row inp _ctx]
   ;; judged at the doors that WRITE the list — create and revise —
