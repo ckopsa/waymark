@@ -254,3 +254,33 @@
         (is (str/blank? out))
         (is (= 1 (count @seen))))
       (finally (.stop server 0)))))
+
+(def ^:private seat-settings
+  (first (filter #(.isFile (io/file %))
+                 ["../seat/.claude/settings.json"
+                  "seat/.claude/settings.json"])))
+
+(deftest the-seat-place-tells-the-seat-its-session-id-at-start
+  (let [hooks (:hooks (wire/read-json (slurp seat-settings)))
+        command-of (fn [event] (-> hooks event first :hooks first :command))
+        close "$CLAUDE_PROJECT_DIR/.claude/hooks/sitting-close.sh"]
+    (testing "the closing hooks still run sitting-close.sh"
+      (is (= close (command-of :Stop)))
+      (is (= close (command-of :SubagentStop)))
+      (is (= (str close " end") (command-of :SessionEnd))))
+    (testing "SessionStart answers the stdin's session id as additionalContext"
+      (let [p (.start (ProcessBuilder. ^java.util.List
+                                       ["bash" "-c" (command-of :SessionStart)]))
+            out (future (slurp (.getInputStream p)))
+            err (future (slurp (.getErrorStream p)))]
+        (with-open [in (.getOutputStream p)]
+          (.write in (.getBytes ^String (wire/write-json
+                                         {:session_id "s-42"
+                                          :hook_event_name "SessionStart"
+                                          :source "startup"})
+                                "UTF-8")))
+        (is (zero? (.waitFor p)) @err)
+        (let [said (:hookSpecificOutput (wire/read-json @out))]
+          (is (= "SessionStart" (:hookEventName said)))
+          (is (= "Your session id is s-42; pass it as `session` to waymark_sit."
+                 (:additionalContext said))))))))
