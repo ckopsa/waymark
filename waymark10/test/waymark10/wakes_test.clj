@@ -775,6 +775,19 @@
           "and the stored wake_on did not move")
       (seat-do! seat :retire)))
 
+  (testing "and a restate naming an engine-own kind is refused with the
+            kind to wake on instead"
+    (let [seat (seat! "wakeownkind" {})
+          was (get-in (raw :seat seat) [:data :wake_on])
+          p (refusal #(restate! seat {:wake_on [{:kind "sitting"
+                                                 :actions ["close"]}]}))]
+      (is (= :wake-on-names-no-engine-kind (:guard p)))
+      (is (str/includes? (str (:detail p)) "sitting"))
+      (is (str/includes? (str (:detail p)) "transcript seal"))
+      (is (= was (get-in (raw :seat seat) [:data :wake_on]))
+          "and the stored wake_on did not move")
+      (seat-do! seat :retire)))
+
   (testing "a gap of zero seconds is refused by the schema"
     (let [p (refusal #(inv/create! *eng* :seat
                                    (seat-body "zerogap"
@@ -1824,6 +1837,58 @@
 
     (seat-do! seat :retire)))
 
+;; ── the cadence a chair's Routine does not keep ─────────────────────
+
+(defn- stamp-last-fired!
+  "The provider's stamp, written as the schedules consumer writes it."
+  [seat-id ^Instant at]
+  (let [row (sched-of seat-id)]
+    (store/with-tx (:storage *eng*)
+      (fn [tx]
+        (store/update-data! (:storage *eng*) tx :schedule (:id row)
+                            (assoc (:data row) :last_fired_at (str at))
+                            (:next-flip-at row))))))
+
+(deftest a-chair-linked-seat-fires-on-its-cadence-and-an-own-linked-one-does-not
+  (let [fn' :wake-cadence-fires
+        _ (drain-fires! fn')
+        model (model! "cadence-chair")
+        _ (inv/invoke! *eng* :model (str model) :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_cadencechair/fire")
+                        :token "rk-test-cadencechair-0123456789abcdef"}
+                       {:principal elena})
+        chaired (seat! "cadencechaired" {:held_for [(str model)]})
+        _ (drain-fires! fn')
+        now (Instant/now)
+        at-now (assoc *eng* :now-fn (constantly now))]
+    (stamp-last-fired! chaired (.minusSeconds now 7200))
+
+    (testing "a chair-linked seat of cadence 3600 whose schedule last
+              fired two hours ago is fired once by the tick"
+      (is (sch/linked? *eng* (sched-of chaired)))
+      (is (not (sch/linked? (sched-of chaired))))
+      (wakes/tick! at-now)
+      (is (= 1 (count (seat-fires chaired))))
+      (is (nil? (get-in (first (seat-fires chaired)) [:inputs :text]))
+          "a cadence fire names no row, so the session walks the queue")
+      (is (not (get-in (sched-of chaired) [:data :wake_pending]))))
+
+    (testing "and not again inside the cadence"
+      (wakes/tick! at-now)
+      (wakes/tick! (assoc *eng* :now-fn (constantly (.plusSeconds now 1800))))
+      (is (= 1 (count (seat-fires chaired)))))
+
+    (testing "an own-linked schedule is left to its provider's cron"
+      (let [{:keys [seat]} (linked-seat! "cadenceown" {} fn')]
+        (stamp-last-fired! seat (.minusSeconds now 7200))
+        (wakes/tick! at-now)
+        (is (empty? (seat-fires seat)))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))
+        (seat-do! seat :retire)))
+
+    (seat-do! chaired :retire)))
+
 ;; ── several sittings at once (max_open_sittings) ───────────────────────
 ;;
 ;; A seat of three slots runs three sittings at once, each on its own
@@ -1908,3 +1973,48 @@
                                    {:principal elena}))]
       (is (= :schema-invalid (:waymark10/problem p)))
       (is (str/includes? (pr-str (:errors p)) "max_open_sittings")))))
+
+(deftest a-count-wake-counts-only-the-rows-no-open-sitting-holds
+  (let [wn :wake-held-rows
+        fn' :wake-held-rows-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        held-seat (fn [nm batch]
+                    (:seat (linked-seat! nm
+                                         {:scope [{:kind "wake_item"
+                                                   :actions ["complete" "touch"]
+                                                   :filter {:batch batch}}]
+                                          :walk "wake_item"
+                                          :wake_on [{:kind "wake_item"
+                                                     :actions ["touch"]
+                                                     :filter {:batch batch}
+                                                     :at_least 1}]
+                                          :max_open_sittings 3}
+                                         fn')))
+        hold! (fn [seat row-id]
+                (let [sid (sitting! seat)]
+                  (seats/claim-rows! *eng* sid [(str row-id)])
+                  sid))]
+
+    (testing "a seat whose one open row an open sitting holds is not woken"
+      (let [row (item! "held-only")
+            seat (held-seat "heldonlyclerk" "held-only")
+            s (hold! seat row)]
+        (item-do! row :touch)
+        (drain-wakes! wn)
+        (is (empty? (seat-fires seat)))
+        (is (not (get-in (sched-of seat) [:data :wake_pending]))
+            "the count read the walk the sit would hand, and it was empty")
+        (close-sitting! s)
+        (seat-do! seat :retire)))
+
+    (testing "a seat with two open rows, one held, is woken for the other"
+      (let [held (item! "held-one-of-two")
+            _free (item! "held-one-of-two")
+            seat (held-seat "heldoneclerk" "held-one-of-two")
+            s (hold! seat held)]
+        (item-do! held :touch)
+        (drain-wakes! wn)
+        (is (= 1 (count (seat-fires seat))))
+        (close-sitting! s)
+        (seat-do! seat :retire)))))

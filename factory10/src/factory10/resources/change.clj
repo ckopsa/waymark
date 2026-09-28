@@ -296,6 +296,16 @@
   ;; nothing is sent back.
   (assoc-in row [:data :superseded_by] (str (:superseded_by inp))))
 
+(defhandler fold-into-the-house-row [row inp _ctx]
+  ;; A row the forge minted beside a house row on the same branch
+  ;; (ticket 3c59c688) gives the pull request's id up, so the house
+  ;; row can adopt it — `change_id` is `:unique` — and names the house
+  ;; row that holds the work now. Nothing is sent back: the work goes
+  ;; on, on the other row.
+  (update row :data assoc
+          :change_id (str "folded:" (get-in row [:data :change_id]))
+          :superseded_by (str (:folded_into inp))))
+
 (defhandler send-the-ticket-back [row _inp ctx]
   ;; A review that ended without a merge — a close — puts the ticket in
   ;; the queue again, where the seat that wrote the change wakes on its
@@ -345,6 +355,26 @@
   "The worktree is clean: no file in it is different from the branch
   head, so there is nothing to commit and nothing to push.")
 
+(def ^:private submitted-detail
+  "This round is already submitted; wait for its checks. The worktree is
+  clean and the change is in review: its pull request carries the round.")
+
+(def ^:private submitted-remedy
+  (str "Do not stall a change in review (ticket 60c2ec22): say that the "
+       "round is submitted and stop. A red check, a conflict or a review "
+       "comment comes back as feedback at a later sit."))
+
+(defn- in-review?
+  "True when the change's round is already submitted."
+  [row]
+  (= "submitted" (some-> (:state row) name)))
+
+(defn- landing-failed?
+  "True when the bench says the last landing failed, which a submit
+  retries. A landing still running is not failed."
+  [status]
+  (= "failed" (some-> (get-in status [:landing :state]) name)))
+
 (defn- landing-owed?
   "True when the bench still owes a landing on a clean worktree
   (ticket 4792cd3b): the last landing did not land, or the branch is
@@ -371,7 +401,7 @@
   tells the seat what to do next. The rig's `remedy` sentence rides
   beside it when it sent one — it is the rig that knows what it
   refused."
-  [what answer]
+  [what answer & [row]]
   (let [named (bench/refused answer)
         reason (some-> (:reason answer) str not-empty)
         theirs (some-> (:remedy answer) str not-empty)]
@@ -381,7 +411,9 @@
      (cond-> (case named
                "push_rejected" [pull-remedy]
                "over_ceiling" [ceiling-remedy]
-               "nothing_to_commit" [clean-remedy]
+               "nothing_to_commit" (if (and row (in-review? row))
+                                      [submitted-detail submitted-remedy]
+                                      [clean-remedy])
                [(str "Read what the bench answered, do what it says, and "
                      "try again; if it refuses again, say so with the "
                      "stall door.")])
@@ -454,6 +486,13 @@
     (cond
       (nil? status) (bench/refuse! bench/dark-detail [bench/dark-remedy])
       (bench/refused status) (rig-refusal! "read the worktree" status)
+      ;; A clean worktree on a change already in review is its own
+      ;; round, still landing or waiting on checks: the refusal says so
+      ;; and names no stall (ticket 60c2ec22).
+      (and (zero? (long (or (:dirty status) 0)))
+           (in-review? row)
+           (not (landing-failed? status)))
+      (bench/refuse! submitted-detail [submitted-remedy])
       ;; A clean worktree is refused only when nothing is owed: a
       ;; landing that failed outside the worktree is retried by the
       ;; rig's submit, and the retry counts as a round like any other.
@@ -479,7 +518,7 @@
                                 title (assoc :title title)))]
         (cond
           (nil? answer) (bench/refuse! bench/dark-detail [bench/dark-remedy])
-          (bench/refused answer) (rig-refusal! "submit" answer)
+          (bench/refused answer) (rig-refusal! "submit" answer row)
           :else
           (do
             ;; the round is out: the ticket leaves the walk until its
@@ -672,7 +711,7 @@
 
 (defguardfn a-person-or-their-delegate-unsticks
   {:reads [:principal]
-   :open "No door here changes this verdict. A stuck change is the house asking a person to look at it, and a model alone that could put itself back to work would be answering its own question. A person taps, or a delegate acting for one does — and grooming the ticket again puts a ticket's change back to work at the next sit."
+   :open "No door here changes this verdict. A stuck change is the house asking a person to look at it, and a model alone that could put itself back to work would be answering its own question. A person taps unstick, or unstick_submitted for a change with a pull request, or a delegate acting for one does. After a seat's stall, which sends the ticket to draft, grooming the ticket again puts its change back to work at the next sit; a change stuck at the round ceiling leaves its ticket in review, where grooming does not serve."
    :explain "This change is stuck: it reached the round ceiling, or a seat said it could not finish. A person, or a delegate acting for one under a grant the person approved, reads it and puts it back to work."}
   [_row _inp ctx]
   ;; ticket's `a-person-or-their-delegate-grooms`, one kind over: the
@@ -1317,6 +1356,60 @@
      :display {:label "Adopt" :order 12
                :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
 
+    ;; the same write on a `failing` or `stuck` row (ticket 3c59c688).
+    ;; A pull request the house itself opened is the house row's
+    ;; whatever state that row stands in, so it is adopted and never
+    ;; minted beside it. The adoption records the identity and LEAVES
+    ;; the state: a stuck row stays stuck, because a person still puts
+    ;; it back to work — and with the number on it now, `unstick_submitted`
+    ;; is the door that does, so the merge pass reads it.
+    :adopt_failing
+    {:from #{:failing} :to :failing
+     :guards [the-mirror-writes-this-row]
+     :handler adopt-the-pull-request
+     :input [:map
+             [:change_id {:x-display {:raw true}}
+              [:string {:min 1 :max 250}]]
+             [:number {:optional true} [:maybe [:int {:min 1}]]]
+             [:url {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Adopt" :order 20
+               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
+
+    :adopt_stuck
+    {:from #{:stuck} :to :stuck
+     :guards [the-mirror-writes-this-row]
+     :handler adopt-the-pull-request
+     :input [:map
+             [:change_id {:x-display {:raw true}}
+              [:string {:min 1 :max 250}]]
+             [:number {:optional true} [:maybe [:int {:min 1}]]]
+             [:url {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Adopt" :order 21
+               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
+
+    ;; THE FOLD (ticket 3c59c688): a row the forge minted for a pull
+    ;; request the house row on the same branch should have adopted.
+    ;; It is closed, gives up the pull request's id and names the house
+    ;; row, and the house row adopts the id in the same pass.
+    :fold
+    {:from #{:open :submitted :failing :stuck} :to :closed
+     :guards [the-mirror-writes-this-row]
+     :handler fold-into-the-house-row
+     :input [:map
+             [:folded_into {:x-display {:hidden true}}
+              [:string {:min 1 :max 500}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "This row was a second row for a pull request the house's own change opened, so it is closed and names that change, which holds the pull request from now on."}
+     :display {:label "Folded" :order 22
+               :description "A duplicate row for the house's own pull request, folded into the house's change"}}
+
     ;; THE FORGE PASS'S NOTE (ticket 58e706d6). A submitted change whose
     ;; landing opened a pull request that no row adopted is skipped by
     ;; the house's merge and by the merge ask, silently. The pass writes
@@ -1426,7 +1519,7 @@
      ;; refuses the forge pass's own unfenced call.
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's unstick, which puts that ticket in the queue again and starts the rounds from zero."}
+              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's own door, or their delegate's: unstick_submitted for a change with a pull request, which puts it under review again, or unstick for one with none, which puts that ticket in the queue again. Either starts the rounds from zero; grooming does not serve a ticket in review."}
      :display {:label "Stuck on red" :order 17
                :description "The checks went red on the last round, and a person reads it next"}}
 
@@ -1517,7 +1610,7 @@
      ;; asks for one for each :from). The way back is real and it is a
      ;; PERSON'S (or their delegate's), which is what the sentence says.
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The house stops working this change and waits. The way back is a person's own door, or their delegate's — unstick, or grooming the ticket again — which puts the change in the queue again and starts the rounds from zero."}
+              :one-way "The house stops working this change and waits, and the ticket it was built for goes to draft. The way back is a person's groom of that ticket, or their delegate's, which puts the change back to work at the next sit with its rounds at zero; unstick, or unstick_submitted for a change with a pull request, puts the change alone back to work."}
      :display {:label "Stuck" :order 8
                :description "Say what stopped you and stop working this change — a person reads it next"}}
 
@@ -1546,7 +1639,7 @@
             :summary "The pull request, at GitHub"}]
    :deviations
    ["`unstick` is spelled twice, `unstick` and `unstick_submitted`, because it lands in two states (ticket 6bdaf6fe): a change with no pull request goes back to `open` for its next round, and a change with one goes back to `submitted`, where the forge and merge passes read it. A v10 action declares one `:to`, so each door carries the guard that says which change it is for."
-    "A self-loop that serves several states is spelled once for each: `observe` with `observe_submitted` and `observe_failing`, `discard` with `discard_submitted`, and `adopt` with `adopt_submitted`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
+    "A self-loop that serves several states is spelled once for each: `observe` with `observe_submitted` and `observe_failing`, `discard` with `discard_submitted`, and `adopt` with `adopt_submitted`, `adopt_failing` and `adopt_stuck`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
     "The round ceiling REFUSES and names the way to `stuck`; it does not move the row itself. Bead waymark-fp62.6.3.2's R-5 reads \"the row moves to stuck and the door names it\", and one transition cannot do both: a handler's refusal rolls back its own transaction, and an action's `:to` is one state. So `under-the-round-ceiling` refuses with `:remedies [:change/stall]`, and `stall` — a real door, with the seat's own sentence on it — makes the move."
     "The clean-worktree check is the HANDLER's, not a guard's. The only honest reading of \"is there anything to submit\" is the rig's own `status`, and a guard that reached a wire would judge differently on a day Gate was dark. The handler asks, and refuses with a 409 that carries its remedy, so the refusal counts on the sitting exactly as a guard's does."
     "A move into `failing` is counted against the round ceiling and does not add a round of its own (ticket d1742908). `submit` already adds one for each head a seat pushes, and each red head is one of those rounds; adding a second for the red would spend the ceiling twice as fast. So the forge pass reads `rounds` against the policy's ceiling at the red: under it the change goes to `failing`, at it the change goes to `stuck` through `stick`, with the red check names as its why."]
