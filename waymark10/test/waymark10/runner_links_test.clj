@@ -178,3 +178,57 @@
 (deftest an-agent-does-not-make-a-link
   (is (= :a-person-makes-the-link
          (:guard (refusal #(make-link! clerk))))))
+
+(defn- counting
+  "A provider that answers `answer` to every fire and counts them in `n`."
+  [n answer]
+  (reify sch/Provider
+    (fire [_ _link _text] (swap! n inc) answer)))
+
+(defn- link-id! [] (str (:id (make-link! colton))))
+
+(deftest a-pool-skips-a-waiting-link-and-takes-the-least-used
+  (testing "the first link throttles, so the wake goes out once, through the second"
+    (let [a (link-id!) b (link-id!)
+          fires {a (atom 0) b (atom 0)}
+          providers {a (counting (fires a) {:throttled "30"})
+                     b (counting (fires b) {:started nil})}
+          provider-of #(providers (str (:id %)))]
+      (is (= b (:runner (rl/fire-pool! *eng* provider-of [a b] "go"))))
+      (is (= [1 1] [@(fires a) @(fires b)]))
+      (is (some? (get-in (row-of a) [:data :retry_after])))
+      (testing "and the next fire skips the waiting link"
+        (is (= b (:runner (rl/fire-pool! *eng* provider-of [a b] nil))))
+        (is (= 1 @(fires a))))))
+  (testing "with every link throttled nothing starts, and the pool names the earlier time"
+    (let [a (link-id!) b (link-id!)
+          out (rl/fire-pool! *eng*
+                             #(stub {:throttled (if (= a (str (:id %))) "30" "90")})
+                             [a b] nil)
+          later (java.time.Instant/parse
+                 (str (get-in (row-of b) [:data :retry_after])))]
+      (is (nil? (:runner out)))
+      (is (some? (:retry-at out)))
+      (is (.isBefore ^java.time.Instant (:retry-at out) later))
+      (testing "and a second fire before that time sends nothing"
+        (let [n (atom 0)]
+          (is (nil? (:runner (rl/fire-pool! *eng* (constantly (counting n {:started nil}))
+                                            [a b] nil))))
+          (is (zero? @n))))))
+  (testing "least-used selection alternates two links over four fires"
+    (let [a (link-id!) b (link-id!)]
+      (is (= [a b a b]
+             (vec (repeatedly 4 #(:runner (rl/fire-pool! *eng* (constantly (stub {:started nil}))
+                                                         [a b] nil))))))))
+  (testing "a link whose cap is spent is skipped until its window closes"
+    (let [a (link-id!) b (link-id!)]
+      (restate! a {:cap {:runs 1 :window_seconds 18000}} colton)
+      (is (= [a b b]
+             (vec (repeatedly 3 #(:runner (rl/fire-pool! *eng* (constantly (stub {:started nil}))
+                                                         [a b] nil))))))))
+  (testing "a broken or missing link is skipped, and a pool with none to fire names no time"
+    (let [a (link-id!)]
+      (rl/fire-link! *eng* (stub {:bad-link "no"}) (row-of a) nil)
+      (is (= {:retry-at nil}
+             (rl/fire-pool! *eng* (constantly (stub {:started nil}))
+                            [a "no-such-link"] nil))))))

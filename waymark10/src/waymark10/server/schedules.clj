@@ -377,13 +377,24 @@
       (t/allow)
       (t/deny))))
 
+(defn runners-of-row
+  "A row's own list of runner link ids, in order, or nil when it names
+  none (waymark ticket d16b71bf) — a schedule or a model, read the same."
+  [r]
+  (some->> (get-in r [:data :runners]) (keep #(some-> % str not-empty)) vec not-empty))
+
 (defn- whole-link
-  "A row's fire URL and token when it holds BOTH, else nil — a schedule
-  or a model, read the same."
+  "A row's fire URL and token when it holds BOTH, and its runner list
+  when it names one; nil when it holds neither — a schedule or a model,
+  read the same."
   [r]
   (let [url (some-> (get-in r [:data :fire_url]) str not-empty)
-        token (some-> (get-in r [:data :fire_token]) str not-empty)]
-    (when (and url token) {:fire_url url :fire_token token})))
+        token (some-> (get-in r [:data :fire_token]) str not-empty)
+        runners (runners-of-row r)]
+    (when (or (and url token) runners)
+      (cond-> {}
+        (and url token) (assoc :fire_url url :fire_token token)
+        runners (assoc :runners runners)))))
 
 (defn- chair-link-read
   "The chair's link of a schedule, read through a guard's or a
@@ -491,6 +502,9 @@
     (-> row
         (assoc-in [:data :fire_url] (:fire_url link))
         (assoc-in [:data :fire_token] (:fire_token link))
+        ;; the runner list comes too (d16b71bf): it names links, never
+        ;; a credential
+        (assoc-in [:data :runners] (:runners link))
         (update :data dissoc :note))))
 
 (defhandler clear-link
@@ -512,6 +526,8 @@
       (assoc-in [:data :last_fired_at] (:last_fired_at inp))
       (cond-> (:last_run_url inp)
         (assoc-in [:data :last_run_url] (:last_run_url inp)))
+      (cond-> (:last_runner inp)
+        (assoc-in [:data :last_runner] (:last_runner inp)))
       (update :data dissoc :note :retry_after)))
 
 (defhandler hold-throttle
@@ -522,6 +538,12 @@
       (assoc-in [:data :note] (:note inp))
       (assoc-in [:data :retry_after] (:retry_after inp))
       (assoc-in [:data :wake_pending] true)))
+
+(defhandler write-runners
+  [row inp _ctx]
+  (-> row
+      (assoc-in [:data :runners] (vec (:runners inp)))
+      (update :data dissoc :note)))
 
 (defresource schedule
   {:kind :schedule
@@ -670,7 +692,19 @@
                    :x-display
                    {:label "The Routine is free again at"
                     :help "The provider throttled the last fire and named this time. The schedule stays live and its waiting wake goes out once, after this moment; nothing is needed from a person. Cleared by the next fire that goes out. Engine-written."}}
-     [:maybe :waymark/instant]]]
+     [:maybe :waymark/instant]]
+    ;; the runner pool (waymark ticket d16b71bf): the links a fire goes
+    ;; out through, in order, and the one the last run started through.
+    [:runners {:optional true
+               :x-display
+               {:label "Runner links"
+                :help "The runner links this schedule fires through, in order; this list overrides its model's. A fire skips a link that is waiting and takes the least-used of the rest. Empty fires through the model's list, or through the one link."}}
+     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+    [:last_runner {:optional true
+                   :x-display
+                   {:label "Last fired through"
+                    :help "The runner link the last run started through. Engine-written."}}
+     [:maybe [:string {:min 1 :max 200}]]]]
    :create-schema
    [:map
     [:seat {:kind :seat
@@ -837,6 +871,28 @@
      :display {:label "Link like another" :order 3
                :description "Fire through the same Routine as {like} — its fire URL and token are copied inside the engine, and no credential is pasted"}}
 
+    ;; the runner pool (waymark ticket d16b71bf): a person restates the
+    ;; list of links this schedule fires through — adding one and taking
+    ;; one off are each one restate. A list names links, never a
+    ;; credential, so this door records.
+    :set_runners
+    {:from #{:pending :live :paused :broken} :to :live
+     :input [:map
+             [:runners {:x-display
+                        {:label "Runner links"
+                         :help "The runner link ids this schedule fires through, in order. An empty list hands the fire back to the model's list, or to the one link."}}
+              [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+     :record true
+     :guards [a-person-or-a-delegate]
+     :edit {:prefill [:runners] :fence false
+            :unfenced-reason
+            "The list is restated whole; a restate replaces what stands rather than editing it."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The new list replaces the one this row held; another restate puts it back."}
+     :handler write-runners
+     :display {:label "Runner links" :order 4
+               :description "Name the runner links this schedule fires through, in order"}}
+
     :unlink
     {:from #{:live :paused :broken} :to :broken
      :guards [a-person-or-a-delegate]
@@ -868,7 +924,9 @@
      :input [:map
              [:last_fired_at {:x-display {:hidden true}} :waymark/instant]
              [:last_run_url {:optional true :x-display {:hidden true}}
-              [:maybe [:string {:max 400}]]]]
+              [:maybe [:string {:max 400}]]]
+             [:last_runner {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:min 1 :max 200}]]]]
      :record true
      :guards [engine-writes-schedules]
      :edit {:prefill [:last_fired_at] :fence false
@@ -1802,6 +1860,58 @@
 
          :else (note! eng schedule-row (:bad-link answer)))))))
 
+;; ── the runner pool (waymark ticket d16b71bf) ──────────────────────
+
+(defn pool-of
+  "The runner link ids ONE fire of this schedule goes out through, in
+  order, or nil for a fire through the one link `link-of` names. The
+  schedule's own list wins; a schedule a person linked by hand keeps
+  its own link; else the chair's list."
+  [eng schedule-row seat-row]
+  (or (runners-of-row schedule-row)
+      (when-not (own-link-of schedule-row)
+        (some->> (seats/chair-of seat-row) (raw-row eng :model) runners-of-row))))
+
+(defn fire-through-pool!
+  "Fire through the pool `ids` and land the answer on the schedule. The
+  run that started stamps `fired` with `last_runner`; a pool whose
+  every link is waiting keeps the wake pending until the earliest of
+  them is free (48dc648c's rule, across the pool); a pool with no link
+  that can fire says so. `provider-of` answers a link row's Provider.
+
+  runner-links requires this namespace, so its `fire-pool!` is
+  resolved at the call."
+  [eng provider-of schedule-row text at ids]
+  (let [fire-pool! (requiring-resolve 'waymark10.server.runner-links/fire-pool!)
+        {:keys [runner answer retry-at]} (fire-pool! eng provider-of ids text)]
+    (cond
+      runner
+      (try-act! eng schedule-row :fired
+                (cond-> {:last_fired_at (str (or (instant-of at) (now eng)))
+                         :last_runner runner}
+                  (:started answer)
+                  (assoc :last_run_url (str (:started answer)))))
+
+      retry-at
+      (try-act! eng schedule-row :throttle
+                {:note (clip (str "Every runner link in this pool is waiting; the wake goes out at "
+                                  retry-at "."))
+                 :retry_after (str retry-at)})
+
+      :else
+      (note! eng schedule-row
+             "No runner link in this pool can fire: each is broken, retired or missing."))
+    nil))
+
+(defn- fire-by-pool-or-link!
+  "One fire of this schedule: through its pool when it has one, else
+  through the one link."
+  [eng adapter schedule-row text at seat-row]
+  (if-some [ids (pool-of eng schedule-row seat-row)]
+    (fire-through-pool! eng (constantly (claude-routine adapter))
+                        schedule-row text at ids)
+    (fire! eng adapter schedule-row text at (link-of eng schedule-row seat-row))))
+
 ;; ── the read-back (R-12.3) ──────────────────────────────────────────
 
 (defn- stamp-seen!
@@ -2023,7 +2133,7 @@
                 ;; person's prose alone.
                 ;; The key also keeps the walk row a wake's text names,
                 ;; so the sit hands the run that row (`seats/fire-key-row`).
-                (fire! eng (fire-adapter-of eng) row
+                (fire-by-pool-or-link! eng (fire-adapter-of eng) row
                        (fire-text seat-row
                                   (some-> (get-in t [:inputs :text])
                                           str not-empty)
@@ -2032,7 +2142,7 @@
                                    (some-> (get-in t [:inputs :text])
                                            str not-empty)))
                        (:at t)
-                       (link-of eng row seat-row)))))))
+                       seat-row))))))
 
       (and (= :schedule kind) (= :restate action))
       (when-some [row (raw-row eng :schedule (:resource-id t))]

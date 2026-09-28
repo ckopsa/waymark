@@ -1270,6 +1270,11 @@
 (defhandler clear-chair-link [row _inp _ctx]
   (update row :data dissoc :fire_url :fire_token))
 
+;; the runner pool (waymark ticket d16b71bf): the list is restated
+;; whole, so adding a link and taking one off are each one restate.
+(defhandler set-runners [row inp _ctx]
+  (assoc-in row [:data :runners] (vec (:runners inp))))
+
 ;; R-12.19: a fire moves nothing on the seat. The row is returned as
 ;; it stands, and the transition IS the record — `:record true` puts
 ;; the text in the log's inputs, the ledger counts the move, and the
@@ -2861,7 +2866,15 @@
                   {:hidden true
                    :label "The Routine's token"
                    :spelled-by-hand "Written by Link and cleared by Unlink; never shown again, and never asked for by a form that already holds it."}}
-     [:maybe [:string {:min 16 :max 400}]]]]
+     [:maybe [:string {:min 16 :max 400}]]]
+    ;; the runner pool (waymark ticket d16b71bf): the links every seat
+    ;; this model is the chair of fires through, unless its schedule
+    ;; names its own list or its own link.
+    [:runners {:optional true
+               :x-display
+               {:label "Runner links"
+                :help "The runner links this model's seats fire through, in order. A fire skips a link that is waiting and takes the least-used of the rest."}}
+     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]]
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :tier #{:eq :in}}
@@ -2978,7 +2991,24 @@
               :one-way "The fire URL and the token leave this model; linking again means pasting both once more."}
      :handler clear-chair-link
      :display {:label "Unlink the Routine" :style :danger :order 6
-               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}}
+               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}
+
+    ;; the runner pool (waymark ticket d16b71bf). A list names links,
+    ;; never a credential, so this door records.
+    :set_runners
+    {:from #{:active} :to :active
+     :input [:map
+             [:runners {:x-display
+                        {:label "Runner links"
+                         :help "The runner link ids this model's seats fire through, in order. An empty list hands the fire back to the one link."}}
+              [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+     :record true
+     :guards [a-person-at-the-chair]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The new list replaces the one this model held; another restate puts it back."}
+     :handler set-runners
+     :display {:label "Runner links" :order 7
+               :description "Name the runner links this model's seats fire through, in order"}}}
    :deviations
    ["THE CHAIR'S TWO WRITE FENCES ARE BOTH GUARDS, where the schedule fences its link by omission. `sitter_key`, `fire_url` and `fire_token` are declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry all three. `key-not-written-by-hand` and `link-not-written-by-hand` are what refuse them, and each refusal names the door that writes the field instead. Both secrets stay `{:secret true}`, so the advertised create body drops them, no form asks, and the usability policies skip them; what a caller gains over silent omission is the sentence."
     "R-9.2 calls `name` unique and R-4.7's precedent (roles.clj's `one-spelling`) judges only ACTIVE rows. The two disagree about a retired model, so this kind takes the index's reading: `one_model_spelling` refuses any spelling already on record, active or retired, and its sentence sends the reader to `reactivate`. A second row for one identifier would split its prices, and a closed sitting costed against the wrong half would be wrong forever."]})
