@@ -341,6 +341,17 @@
       (assoc "create" {"defaults" (schema-defaults
                                    (or (:create-schema rmap) (:schema rmap)))})
 
+      ;; create-door guards are judgment law exactly as an action's are
+      ;; (waymark-442.9): widening the create gate must move the hash,
+      ;; mint a revision and show in the diff. Non-empty-only, so every
+      ;; create-guard-free kind hashes byte-identical to before
+      (seq (:create-guards rmap))
+      (update "create" assoc "guards"
+              (mapv (fn [g]
+                      (guard-fp (str kind ".create.guards." (name (:name g)))
+                                g))
+                    (:create-guards rmap)))
+
       ;; recorded deviations are reviewable law (advertisement-class):
       ;; editing one shows in the diff and mints a revision. Projected
       ;; only when non-empty, so every deviation-free kind's hash is
@@ -459,7 +470,7 @@
   #"^derived\.[^.]+\.(?:tolerance$|expr(?:\..+)?$|(?:count|sum)\.where(?:\..+)?$|over\.\d+\.(?:child|related)\.where(?:\..+)?$)")
 
 (def ^:private judgment-law-path
-  #"^machine\.actions\.[^.]+\.guards\.\d+\.(?:expr(?:\..+)?$|vars_exprs(?:\..+)?$|explain$|remedies(?:\.\d+)?$|hide$|severity$|requires_token$)")
+  #"^(?:machine\.actions\.[^.]+|create)\.guards\.\d+\.(?:expr(?:\..+)?$|vars_exprs(?:\..+)?$|explain$|remedies(?:\.\d+)?$|hide$|severity$|requires_token$)")
 
 (defn classify-diff
   ":data-law when every added/removed/changed path is overlayable —

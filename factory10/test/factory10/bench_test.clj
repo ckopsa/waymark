@@ -1971,6 +1971,45 @@
     (is (= 31 (get-in answer [:feedback :pull_request :number]))
         "so the run gets what the last round caused all the same")))
 
+(deftest a-token-of-several-tools-lists-every-tool-it-admits
+  (let [powers (into [{:power "bench.read" :tools ["read" "prepare" "status"]
+                       :why false :constraints ["repo" "path"]}
+                      {:power "bench.symbols" :tools ["symbols" "read_symbol"]
+                       :why false :constraints ["repo" "path"]}]
+                     (remove #(= "bench.read" (:power %)))
+                     bench-powers)
+        tools-of (fn [scope]
+                   (let [st (state)
+                         _ (swap! st assoc :powers powers)
+                         eng (fresh-engine st)
+                         _ (a-policy! eng {})
+                         _ (a-change! eng {})
+                         _ (open-seat! eng {:scope scope})
+                         h (engine/handler eng)
+                         sid (get-in (rpc h (bearer) "initialize"
+                                          {:protocolVersion mcp/protocol-version
+                                           :capabilities {}
+                                           :clientInfo {:name "routine" :version "0"}})
+                                     [:headers "Mcp-Session-Id"])
+                         sat (call! h sid "waymark_sit" {:key a-key})]
+                     (is (false? (:isError sat)) (text-of sat))
+                     (get-in (doc-of sat) [:bench :tools])))
+        change {:kind "change" :actions ["submit" "discard" "stall"]}
+        reads {:kind "bench.read" :actions [] :filter {:repo a-repository}}
+        symbols {:kind "bench.symbols" :actions [] :filter {:repo a-repository}}]
+    (is (= {:bench.read "bench__read"
+            :bench.prepare "bench__prepare"
+            :bench.status "bench__status"
+            :bench.symbols "bench__symbols"
+            :bench.read_symbol "bench__read_symbol"}
+           (tools-of [change reads symbols]))
+        "a token that names several tools lists every one of them")
+    (is (= {:bench.read "bench__read"
+            :bench.prepare "bench__prepare"
+            :bench.status "bench__status"}
+           (tools-of [change reads]))
+        "a seat without bench.symbols is handed neither of its tools")))
+
 (deftest a-code-seat-that-holds-bench-rerun-is-handed-the-rerun-tool
   (let [w (ask-world (conj ask-scope {:kind "bench.rerun" :actions []
                                       :filter {:repo a-repository}}))
@@ -2555,17 +2594,19 @@
                 :if-match (inv/etag :ticket id (:version (ticket-by-id w id)))}))
 
 (defn- held-world
-  "A house-merged world whose change is submitted and adopted as #91,
-  and whose ticket was then told to merge after one open ticket — a
-  dependency named after the pull request exists."
-  []
-  (let [w (ticket-world house-policy)
+  "A house-merged world (or one under `policy`) whose change is
+  submitted and adopted as #91, and whose ticket was then told to merge
+  after one open ticket — a dependency named after the pull request
+  exists."
+  ([] (held-world house-policy))
+  ([policy]
+  (let [w (ticket-world policy)
         dep (a-groomed-ticket! w "Land the per-repository line first")]
     (submitted-and-adopted! w 91)
     (is (= "in_review" (ticket-state w)))
     (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :merge_after_in_review
                  {:merge_after [dep]} (ticket-fence w))
-    (assoc w :dep dep)))
+    (assoc w :dep dep))))
 
 (deftest a-change-that-merges-after-an-open-ticket-is-held-until-it-is-done
   (let [w (held-world)
@@ -2592,6 +2633,22 @@
       (is (= 1 (count (calls-of st "bench__merge"))))
       (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
           "and the ticket no longer says it waits"))))
+
+(deftest a-person-merged-change-that-merges-after-an-open-ticket-raises-no-ask
+  (let [w (held-world person-policy)
+        eng (:eng w)
+        waiting (atom {})]
+    (mirror-moves-change! w :observe_submitted {:mergeable "clean"})
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 600)))
+        "a clean change whose ticket waits on an open one is not asked")
+    (is (empty? (bench/merge-asks eng)))
+    (testing "once its dependency is done, it is asked after its own wait"
+      (end-ticket! w (:dep w) :complete)
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 601)))
+          "the wait starts when nothing holds it")
+      (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 700))))
+      (is (= 1 (count (bench/merge-asks eng)))))))
 
 (deftest a-dropped-dependency-keeps-the-change-held
   (let [w (held-world)
