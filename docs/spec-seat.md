@@ -1158,9 +1158,13 @@ branch, because the forge holds it. The sit does this before it opens
 the bench, so the worktree of R-12.29 is made on the new branch.
 
 A groom answers a stall. A seat that cannot build a ticket stalls the
-ticket's change, which moves it to `stuck`, and ungrooms the ticket.
+ticket's change, which moves it to `stuck`, and the stall itself
+shelves the ticket to `draft`, so the seat does not ungroom it.
 A stuck change offers no `submit`, `stall` or `discard`. The door
-`unstick` puts it back to `open` with its rounds at zero. A person
+`unstick` puts a change with no pull request back to `open` with its
+rounds at zero, and `unstick_submitted` puts a change that has one
+(a `number`) back to `submitted`; plain `unstick` refuses a change
+with a number. A person
 takes that door, or a delegate that acts for a person (an agent whose
 `acts-for` is set), the same way a delegate grooms a ticket. A model
 alone, with no `acts-for`, must not unstick a change. When a person
@@ -1171,7 +1175,8 @@ than the change's newest `stall` transition. The sit takes `unstick`
 with the engine's own hand, and logs who groomed the ticket and when.
 It does this before it mints the branch again. A change with no stall
 after the last groom stays `stuck`, the change at the round ceiling
-included. When the change is still `stuck`, or the unstick refuses,
+included: its ticket stays `in_review`, where `groom` does not serve,
+and only `unstick` or `unstick_submitted` puts it back to work. When the change is still `stuck`, or the unstick refuses,
 the sit answers as it did before, with a note that says the change is
 stuck.
 
