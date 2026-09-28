@@ -184,6 +184,11 @@
                         own, byte for byte"
                 (is (some? (await-frame live #(= "event: presence" (first %)))))
                 (is (some? (await-frame live #(= "event: intent" (first %)))))
+                ;; each route's own snapshot too: the four streams open
+                ;; together, but a frame on `live` says nothing about
+                ;; whether `pres` and `ints` have delivered theirs yet
+                (is (some? (await-frame pres #(= "event: presence" (first %)))))
+                (is (some? (await-frame ints #(= "event: intent" (first %)))))
                 (is (= (named (frames @(:lines pres)) "presence")
                        (named (frames @(:lines live)) "presence"))
                     "the presence snapshot is the presence route's frame")
