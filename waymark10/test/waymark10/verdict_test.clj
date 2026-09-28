@@ -16,10 +16,13 @@
   `unique_index_test`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
             [waymark10.verdict :as verdict]
             [waymark10.wire :as wire]))
 
@@ -234,20 +237,43 @@
                                       "&state=overruled"))]
         (is (= 1 (get-in page [:doc :data :total])))))))
 
-(deftest an-agent-does-not-correct
+(deftest an-agents-correction-is-held-for-its-person
   (let [{:keys [eng seat] :as w} (world)
         said (judge! eng seat (verdict-body w))
         vid (id-of (get-in said [:doc :self]))
         other (leash! eng "seat-bo")
-        out (judge! eng other (verdict-body w :verdict "this_change"
-                                            :remedy "I disagree."
-                                            :corrects vid))]
-    (is (= 409 (:status out)))
-    (is (= :a-person-corrects (guard-of out)))
-    (is (str/includes? (detail-of out) "a person's answer"))
-    (testing "and the first verdict still stands — nothing was written"
-      (is (= "said" (str (get-in (call! eng :get (str "/api/verdicts/" vid))
-                                 [:doc :state])))))))
+        body (verdict-body w :verdict "this_change"
+                           :remedy "I disagree."
+                           :corrects vid)
+        out (judge! eng other body)
+        hid (str (get-in out [:doc :held_call]))
+        standing #(str (get-in (call! eng :get (str "/api/verdicts/" vid))
+                               [:doc :state]))]
+    (testing "an agent's correcting judge is a hold, not a 409"
+      (is (= 202 (:status out)) (pr-str (:doc out)))
+      (is (true? (get-in out [:doc :held])))
+      (is (holds/hold? :a-person-corrects)
+          "the guard's `:hold true` registered it when the module loaded")
+      (is (= "said" (standing)) "and nothing was written yet"))
+    (testing "a forged :within, naming a call nobody allowed, is refused"
+      (let [agent (t/principal {:id "seat-bo" :type :agent})
+            e (try (inv/create! eng :verdict body
+                                {:principal agent
+                                 :within {:kind :held_call :action :allow
+                                          :id hid}})
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (= :a-person-corrects (some-> (:guard (ex-data e)) name keyword))
+            (pr-str (ex-data e)))
+        (is (= "said" (standing)))))
+    (testing "the person's Allow writes the correction under the person's name"
+      (let [ok (call! eng :post (str "/api/held_calls/" hid "/-/allow"))]
+        (is (= 200 (:status ok)) (pr-str (:doc ok))))
+      (is (= "overruled" (standing)))
+      (let [page (call! eng :get (str "/api/verdicts?corrects=" vid))
+            fix (call! eng :get (str (get-in page [:doc :data :items 0 :self])))]
+        (is (= 1 (get-in page [:doc :data :total])))
+        (is (= "mom" (str (get-in fix [:doc :data :said_by]))))))))
 
 (deftest a-correction-cites-the-answer-that-stands
   (let [{:keys [eng seat] :as w} (world)
@@ -263,7 +289,7 @@
                                               :remedy "Not this one."
                                               :corrects stray-id))]
         (is (= 409 (:status out)))
-        (is (= :a-person-corrects (guard-of out)))
+        (is (= :a-correction-cites-what-stands (guard-of out)))
         (is (str/includes? (detail-of out) "a different row"))))
     (testing "…and the one that cites the answer that stands is taken"
       (is (= 201 (:status (judge! eng nil
@@ -491,6 +517,6 @@
                                             :remedy "The change dropped a migration."
                                             :corrects vid))]
       (is (= 409 (:status out)))
-      (is (= :a-person-corrects (guard-of out)))
+      (is (= :a-correction-cites-what-stands (guard-of out)))
       (is (str/includes? (detail-of out) "was reopened"))
       (is (str/includes? (detail-of out) "nothing to correct")))))
