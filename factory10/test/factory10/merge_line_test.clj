@@ -119,3 +119,93 @@
                    (a-change "ckopsa/waymark" 2 1)] {})
     (is (= [2] (numbers-of r "bench__merge")))
     (is (= [2] (numbers-of r "bench__update_branch")))))
+
+;; ── the line, written on the rows (ticket b85aded5) ─────────────────
+
+(defn- marks!
+  "One pass, and what it would write on the rows."
+  [{:keys [ctx]} seen changes]
+  (let [lines (bench/merge-lines changes by-repo (constantly nil) @seen)
+        answers (atom {})]
+    (bench/work-lines! ctx seen lines by-repo answers)
+    (bench/line-marks lines @answers @seen
+                      (bench/parked-changes changes by-repo @seen))))
+
+(deftest the-policy-names-the-front-and-each-change-its-place
+  (let [m (marks! (rig (atom {})) (atom {})
+                  [(a-change "ckopsa/waymark" 1 0)
+                   (a-change "ckopsa/waymark" 2 1)
+                   (a-change "ckopsa/waymark" 3 2)])]
+    (is (= {:line_front "change-1" :line_front_pr 1
+            :line_front_waiting "update" :line_waiting 2}
+           (get-in m [:policies "ckopsa/waymark"]))
+        "the front, its pull request, what it waits on, and 2 waiting")
+    (is (= {"change-1" {:line_place 1 :line_why "front"}
+            "change-2" {:line_place 2 :line_why "behind"}
+            "change-3" {:line_place 3 :line_why "behind"}}
+           (:changes m)))))
+
+(deftest a-red-change-leaves-the-count
+  (let [m (marks! (rig (atom {2 {:state "red"}})) (atom {})
+                  [(a-change "ckopsa/waymark" 1 0)
+                   (a-change "ckopsa/waymark" 2 1)
+                   (a-change "ckopsa/waymark" 3 2)])]
+    (is (= 1 (get-in m [:policies "ckopsa/waymark" :line_waiting])))
+    (is (= {:line_why "red"} (get-in m [:changes "change-2"]))
+        "a red change has no place, and says why")
+    (is (= {:line_place 2 :line_why "behind"} (get-in m [:changes "change-3"])))))
+
+(deftest a-red-front-does-not-hold-the-line
+  (let [r (rig (atom {1 {:state "red"}}))
+        m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0)
+                               (a-change "ckopsa/waymark" 2 1)])]
+    (is (= "change-2" (get-in m [:policies "ckopsa/waymark" :line_front])))
+    (is (= [2] (numbers-of r "bench__update_branch"))
+        "the change behind the red one is brought up to date")))
+
+(deftest after-the-front-merges-the-next-pass-moves-the-front
+  (let [r (rig (atom {}))
+        seen (atom {})
+        a (a-change "ckopsa/waymark" 1 0)
+        b (a-change "ckopsa/waymark" 2 1)
+        c (a-change "ckopsa/waymark" 3 2)]
+    (marks! r seen [a b c])
+    (let [m (marks! r seen [b c])]
+      (is (= {:line_front "change-2" :line_front_pr 2
+              :line_front_waiting "update" :line_waiting 1}
+             (get-in m [:policies "ckopsa/waymark"])))
+      (is (= {:line_place 1 :line_why "front"} (get-in m [:changes "change-2"])))
+      (is (nil? (get-in m [:changes "change-1"]))
+          "the merged change is not in the pass, so its marks are cleared"))))
+
+(deftest the-front-says-what-it-waits-on
+  (is (= "update" (bench/front-waits-on {:state "behind"})))
+  (is (= "checks" (bench/front-waits-on {:state "waiting"})))
+  (is (= "merge" (bench/front-waits-on {:refused "merge_refused"
+                                         :reason "GitHub has not merged it"}))))
+
+(deftest conflicted-draft-and-parked-changes-say-why
+  (let [seen (atom {"change-3" "head-3" [:parked-why "change-3"] "not mergeable"})
+        m (marks! (rig (atom {})) seen
+                  [(a-change "ckopsa/waymark" 1 0 :mergeable "conflicted")
+                   (a-change "ckopsa/waymark" 2 1 :draft true)
+                   (a-change "ckopsa/waymark" 3 2)
+                   (a-change "ckopsa/waymark" 4 3)])]
+    (is (= {"change-1" {:line_why "conflicted"}
+            "change-2" {:line_why "draft"}
+            "change-3" {:line_why "parked" :line_reason "not mergeable"}
+            "change-4" {:line_place 1 :line_why "front"}}
+           (:changes m)))
+    (is (= 0 (get-in m [:policies "ckopsa/waymark" :line_waiting])))))
+
+(deftest an-unchanged-line-writes-nothing
+  (let [data {:line_front "change-1" :line_front_pr 1
+              :line_front_waiting "checks" :line_waiting 2
+              :line_at "2026-09-28T12:00:00Z"}]
+    (is (nil? (bench/moved-marks data (assoc data :line_at "2026-09-28T12:05:00Z")
+                                 #{:line_at}))
+        "only the time moved, so nothing is written")
+    (is (some? (bench/moved-marks data (assoc data :line_waiting 1) #{:line_at}))
+        "a moved count is written")
+    (is (nil? (bench/moved-marks {} {:line_place nil :line_why nil} #{}))
+        "clearing what is already clear writes nothing")))

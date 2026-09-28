@@ -464,15 +464,21 @@
                :merge_wait_seconds :rounds_per_change :formatter :deny
                :orientation :enrolled_at :note :source_note
                :base_state :base_head :base_checked_at :base_red_from
-               :base_ticket}
+               :base_ticket
+               :line_front :line_front_pr :line_front_waiting
+               :line_waiting :line_at}
              fields)
           "every number a submit obeys, where the bench clones it from,
            and the engine's own: when the bench took it, why it did not,
-           what the GitHub source could not read, and the base branch's
-           state as the source last read it (ticket ade81ae9)")
+           what the GitHub source could not read, the base branch's
+           state as the source last read it (ticket ade81ae9), and the
+           house's merge line as the merge pass last wrote it (ticket
+           b85aded5)")
       (is (= #{:enrolled_at :note :source_note
                :base_state :base_head :base_checked_at :base_red_from
-               :base_ticket}
+               :base_ticket
+               :line_front :line_front_pr :line_front_waiting
+               :line_waiting :line_at}
              (into #{} (remove form) fields))
           "…and the engine's are on no form: a person states the
            policy, and the engine says what the bench and the source did
