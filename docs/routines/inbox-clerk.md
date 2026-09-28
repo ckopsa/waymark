@@ -371,7 +371,7 @@ judgment on `inbox-clerk` reads its fired sittings only.
 
 ## Before the first firing
 
-1. The seat exists and is active, with `held_for` naming the model
+1. The seat exists and is active, with `held_for` holding the row id of the model
    the Routine runs.
 2. The inbox source has run one pass and the queue holds rows.
 3. The seat carries its `instructions`. The engine then mints a key

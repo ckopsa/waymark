@@ -334,7 +334,13 @@
      ;; a wall can refuse an agent UNLESS its own scope admits the
      ;; door. Nil for everybody who presented no live grant, which is
      ;; the posture those walls had before there was a door at all.
-     :grant (:grant (visibility-of req))
+     ;; with the calling sitting on it as `:sitting` when the request
+     ;; came from a session bound to one (mcp's waymark_invoke): every
+     ;; sitting of a seat shares the seat's grant, so the grant alone
+     ;; cannot say which sitting is calling (ticket 51dfd10b)
+     :grant (let [g (:grant (visibility-of req))
+                  sid (some-> (:waymark10/sitting req) str not-empty)]
+              (cond-> g (and (map? g) sid) (assoc :sitting sid)))
      :acknowledged (into #{} (map keyword) (csv (get headers "waymark-acknowledge")))
      ;; dry_run=1 is the full rehearsal; dry_run=partial judges only
      ;; what the caller provided (design §23) — anything else is a

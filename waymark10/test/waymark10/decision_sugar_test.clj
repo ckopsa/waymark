@@ -273,7 +273,12 @@
   ;; THE LAW MOVED AGAIN (waymark-7v7v): create gained
   ;; an-anchorless-ask-names-its-grant, which refuses an anchorless ask
   ;; from a holder of several live grants. Re-pin from CI the same way.
-  "87c403a19083ff896dbc1c83cde04098c1867bc0cd9eb16bcfa7ee7fcb111dce")
+  ;;
+  ;; THE LAW MOVED AGAIN (waymark-442.9): create-door guards joined the
+  ;; fingerprint (create.guards, absent when a kind declares none), so
+  ;; the ask's create walls now show in its hash — and the edit above,
+  ;; which never moved it, finally does. Re-pinned from CI (PR #298).
+  "7bc24c757b70be6a91bf17546f60151f9c158e6d6b7dfe0af6d3cecc077ffe38")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

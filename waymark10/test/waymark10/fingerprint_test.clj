@@ -1,5 +1,6 @@
 (ns waymark10.fingerprint-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.properties :as prop]
             [waymark10.fingerprint :as fp]
@@ -88,6 +89,30 @@
                            :right :finalize :left :abandon
                            :display {:label "Triage"}}]))))))
 
+(deftest a-kinds-endings-are-law
+  ;; waymark-fp62.4.1.2: the ending wall reads the kind-level :over to
+  ;; shut a finished row's doors, so re-spelling the endings mints a
+  ;; revision. A kind without :over carries no facet and keeps its hash.
+  (let [h (comp fp/fingerprint-hash fp/fingerprint-of)
+        ended (assoc (plan-rmap)
+                     :over {:accomplished #{:done} :let-go #{:abandoned}})]
+    (is (not (contains? (fp/fingerprint-of (plan-rmap)) "over")))
+    (is (= (h ended) (h (assoc (plan-rmap)
+                               :over {:accomplished #{:done}
+                                      :let-go #{:abandoned}}))))
+    (is (not= (h (plan-rmap)) (h ended)))
+    (testing "re-spelling an ending moves the hash, and the move is truth"
+      (doseq [other [(assoc-in ended [:over :let-go] #{})
+                     (assoc-in ended [:over :ways-back] #{:finalize})
+                     (assoc (plan-rmap)
+                            :over {:field :status :accomplished #{"done"}})]]
+        (let [d (fp/diff-fingerprints (fp/fingerprint-of ended)
+                                      (fp/fingerprint-of other))
+              paths (map :path (concat (:added d) (:removed d) (:changed d)))]
+          (is (not= (h ended) (h other)))
+          (is (seq paths))
+          (is (every? #(= :truth (fp/classify-path %)) paths)))))))
+
 (deftest a-fingerprint-diffs-empty-against-itself
   ;; regression: leaves holding nil/false (a guard's check, an off
   ;; safety flag) are present paths, not added/removed ones
@@ -116,7 +141,26 @@
                                   (fp/fingerprint-of strict))]
       (is (= ["machine.actions.finalize.guards.0.severity"]
              (mapv :path (:changed d))))
-      (is (= :data-law (fp/classify-diff d))))))
+      (is (= :data-law (fp/classify-diff d)))))
+  (testing "a create-door guard's expression tree (waymark-442.9)"
+    (let [gated (fn [w] (assoc (plan-rmap) :create-guards
+                               [{:name :one-plan :when w :explain "x"}]))
+          a (fp/fingerprint-of (gated '(not (data :has_conflicts))))
+          b (fp/fingerprint-of (gated '(<= (data :calendar_conflicts) 1)))
+          d (fp/diff-fingerprints a b)]
+      (is (not= (fp/fingerprint-hash a) (fp/fingerprint-hash b))
+          "editing a create guard moves the hash")
+      (is (= (fp/fingerprint-hash a)
+             (fp/fingerprint-hash
+              (fp/fingerprint-of (gated '(not (data :has_conflicts))))))
+          "editing nothing does not")
+      (is (every? #(str/starts-with? % "create.guards.0.expr")
+                  (map :path (mapcat d [:added :removed :changed]))))
+      (is (= :data-law (fp/classify-diff d)))))
+  (testing "no create guards, no create-guard facet"
+    (is (= (fp/fingerprint-hash (fp/fingerprint-of (plan-rmap)))
+           (fp/fingerprint-hash
+            (fp/fingerprint-of (assoc (plan-rmap) :create-guards [])))))))
 
 (deftest code-and-shape-promote-totally
   (testing "handler identity"
