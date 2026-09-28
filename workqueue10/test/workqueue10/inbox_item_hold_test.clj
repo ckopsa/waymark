@@ -66,11 +66,19 @@
       (store/transitions (:storage eng) tx
                          {:kind :inbox_item :resource-id (str id)} {}))))
 
-(defn- corrections [eng]
-  (store/with-tx (:storage eng)
-    (fn [tx]
-      (store/corrections-by-model (:storage eng) tx ["inbox-clerk"]
-                                  Instant/EPOCH []))))
+(defn- corrections
+  "The clerk's corrections, read as the seats route reads them: the
+  framework's own kinds are excluded, so the person's approve of the
+  clerk's ask (and its Allow of the held call) is bookkeeping, not a
+  correction."
+  [eng]
+  (let [excluded (into [] (keep (fn [[k rdef]]
+                                  (when (= :system (:nav rdef)) (name k))))
+                       (inv/resources eng))]
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/corrections-by-model (:storage eng) tx ["inbox-clerk"]
+                                    Instant/EPOCH excluded)))))
 
 (defn- move!
   "One door on one row, fenced at the row's current version."
