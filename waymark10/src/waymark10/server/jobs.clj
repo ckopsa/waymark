@@ -101,18 +101,20 @@
 (defn- system? [ctx]
   (= :system (get-in ctx [:principal :type])))
 
-(def ^:private worker-only
-  (g/guard {:name :worker-writes-the-job
-            :explain "Jobs are minted by a deferred bulk call and finished by the worker, never over the wire."
-            :reads [:principal]
-            :check (fn [_ _ ctx] (if (system? ctx) (t/allow) (t/deny)))}))
+(g/defguard ^:private worker-only
+  {:name :worker-writes-the-job
+   :explain "Jobs are minted by a deferred bulk call and finished by the worker, never over the wire."
+   :reads [:principal]}
+  [_ _ ctx]
+  (if (system? ctx) (t/allow) (t/deny)))
 
-(def ^:private worker-only-hidden
-  (g/guard {:name :worker-writes-the-job
-            :explain "Jobs are minted by a deferred bulk call and finished by the worker, never over the wire."
-            :reads [:principal]
-            :hide true
-            :check (fn [_ _ ctx] (if (system? ctx) (t/allow) (t/deny)))}))
+(g/defguard ^:private worker-only-hidden
+  {:name :worker-writes-the-job
+   :explain "Jobs are minted by a deferred bulk call and finished by the worker, never over the wire."
+   :reads [:principal]
+   :hide true}
+  [_ _ ctx]
+  (if (system? ctx) (t/allow) (t/deny)))
 
 (declare enqueue!)
 
