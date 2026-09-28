@@ -463,7 +463,7 @@
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
                :merge_wait_seconds :rounds_per_change :formatter :deny
-               :orientation :enrolled_at :note :source_note
+               :test :orientation :enrolled_at :note :source_note
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting

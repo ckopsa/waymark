@@ -387,6 +387,17 @@
             :label "Paths the bench never serves"
             :help "Globs, one for each row. A file that matches one is never read and never written, whatever the grant says. The rig holds the same list in its own configuration; this row is what a person reads."}}
     [:vector [:string {:min 1 :max 200}]]]
+   ;; the bench's test (ticket bae401d5). OPTIONAL: a repository with
+   ;; no test workflow states none, and enroll then sends no `test`.
+   [:test {:optional true
+           :examples [{:workflow "tests.yml" :input "only"}]
+           :x-display
+           {:raw true
+            :label "The test workflow"
+            :help "The workflow the bench's test dispatches, and the name of its input that narrows the run to what a seat touched."}}
+    [:map
+     [:workflow [:string {:min 1 :max 200}]]
+     [:input [:string {:min 1 :max 120}]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
@@ -586,7 +597,7 @@
                       :merge_method :merge_wait_seconds
                       :deploy_check :deploy_wait_seconds
                       :rounds_per_change :formatter
-                      :deny :orientation]}
+                      :deny :test :orientation]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
                :description "State what submit means in this repository again, whole"}}
