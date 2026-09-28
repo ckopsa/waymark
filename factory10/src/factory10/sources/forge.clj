@@ -542,6 +542,26 @@
   change merge. `neutral` and `skipped` are GitHub's own passes."
   #{"success" "neutral" "skipped"})
 
+(defn- run-order
+  "Where one run of a check stands among the runs of the same name:
+  its forge id first, which grows with every run the forge starts, and
+  its start time beside it. A run that carries neither sorts first."
+  [check]
+  (let [id (str (:id check))]
+    [(if (re-matches #"\d{1,18}" id) (Long/parseLong id) -1)
+     (str (:started_at check))]))
+
+(defn- newest-runs
+  "The runs of one check name that speak for it: the newest alone when
+  every run says where it stands (ticket 6bdaf6fe) — a re-run that went
+  green on the same head answers for the red run before it — and every
+  run as it came when one of them does not, because then there is no
+  telling which is newer."
+  [runs]
+  (if (and (next runs) (every? #(or (some? (:id %)) (some? (:started_at %))) runs))
+    [(last (sort-by run-order runs))]
+    runs))
+
 (defn check-verdict
   "What the checks on one head say, read against the policy's required
   checks: {:verdict :red :names […]} when every required check
@@ -550,9 +570,11 @@
   and at least one was cancelled — it died without a verdict, and it is
   never green (ticket 22f91244) — and nil while one is still running,
   has not started, or ended some other way. A policy that names no
-  required check requires every check on the head."
+  required check requires every check on the head. Of several runs of
+  one name, the newest speaks for it (`newest-runs`)."
   [required checks]
-  (let [by-name (group-by #(str (:check_name %)) checks)
+  (let [by-name (update-vals (group-by #(str (:check_name %)) checks)
+                             newest-runs)
         names (if (seq required)
                 (vec (distinct required))
                 (vec (sort (remove str/blank? (keys by-name)))))

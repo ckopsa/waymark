@@ -2241,8 +2241,12 @@
 
   `only` is the one row a fire's text named (`seats/fire-key-row`):
   when it is given, the page holds that row alone, or nothing when the
-  row is not in the queue or is claimed."
-  [eng call session seat claimed held only]
+  row is not in the queue or is claimed.
+
+  `stuck` is the tickets whose change waits for a person
+  (`stuck-walk-rows`, ticket 6bdaf6fe). They are subtracted as the
+  claimed rows are: a seat handed one could only say it is stuck."
+  [eng call session seat claimed held only stuck]
   (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
     (when-some [rdef (get (inv/resources eng) (keyword walk))]
       (let [judgment (row-of eng :judgment (get-in seat [:data :judgment]))
@@ -2252,7 +2256,7 @@
             walk-filter (when-not judgment (seats/walk-filter seat))
             n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
                    coll/page-size-max)
-            subtract? (or judgment (seq claimed))
+            subtract? (or judgment (seq claimed) (seq stuck))
             asked (if (or subtract? (seq held) only) coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))
                                 {:query (query-string
@@ -2266,7 +2270,7 @@
         (when (collection-doc? doc)
           (let [id-of #(id-of-self (get % "self"))
                 skip (if subtract?
-                       (into (set claimed)
+                       (into (into (set claimed) stuck)
                              (when judgment
                                (judged-subjects eng (:id judgment))))
                        #{})
@@ -2377,6 +2381,8 @@
   (str " The row your fire text names, " row-id ", is held by another "
        "open sitting of this seat. Walk the row below instead of it."))
 
+(declare stuck-walk-rows)
+
 (def ^:private claim-tries
   "How many times one sit reads its walk again past the rows another
   sit of the seat claimed first."
@@ -2396,8 +2402,11 @@
   [eng call sitter-sees seat sitting named]
   (let [seat-id (str (:id seat))
         held (get-in sitting [:data :walked_rows])
+        ;; read once for the sit: the tickets beside a stuck change
+        ;; are out of the walk whichever try claims (ticket 6bdaf6fe)
+        stuck (stuck-walk-rows eng (get-in seat [:data :walk]))
         walk-past (fn [taken only]
-                    (walk-of eng call sitter-sees seat taken held only))]
+                    (walk-of eng call sitter-sees seat taken held only stuck))]
     (loop [n 1
            taken (seats/claimed-rows eng seat-id (:id sitting))]
       (let [only (when (and named (not (contains? taken named))) named)
@@ -2901,6 +2910,56 @@
               (store/transitions st tx {:kind kind :resource-id (str id)}
                                  {:newest-first true}))))))
 
+(def ^:private stuck-scan-limit
+  "How many stuck changes one walk reads to leave their tickets out. A
+  stuck change waits for a person, and a house that works holds few."
+  200)
+
+(defn- groom-after-stall
+  "The ticket's newest `groom` when it is newer than the change's newest
+  `stall`, or nil: a person has read the stall and stands behind the
+  ticket again. A change that was never stalled, or a ticket not groomed
+  since, answers nil."
+  [eng change ticket-id]
+  (let [groom (latest-transition eng :ticket ticket-id "groom")
+        stall (latest-transition eng :change (:id change) "stall")]
+    (when (and groom stall (> (long (:id groom)) (long (:id stall))))
+      groom)))
+
+(defn- stuck-walk-rows
+  "The ids of the tickets in a ticket walk whose change is stuck and
+  waits for a person (ticket 6bdaf6fe): a `stuck` change born from the
+  ticket, no live change beside it, and no groom since its stall. The
+  walk leaves them out as it leaves a claimed row out, so a queue of
+  only such tickets answers an empty walk and no wake spends a sitting
+  on saying it is stuck. A groom after the stall puts the ticket back,
+  and the sit then unsticks its change (`regroomed-change`).
+
+  Empty for any other walk and for an engine that serves no change."
+  [eng walk]
+  (if (and (= "ticket" (str walk))
+           (get (inv/resources eng) :change))
+    (let [rdef (get (inv/resources eng) :change)
+          st (:storage eng)
+          stuck (->> (store/with-tx st
+                       (fn [tx]
+                         (store/query-rows st tx :change {:state "stuck"}
+                                           {:limit stuck-scan-limit})))
+                     (map #(inv/decode-row rdef %)))]
+      (into #{}
+            (keep (fn [change]
+                    (let [born (str (get-in change [:data :born_from]))]
+                      (when (str/starts-with? born groomed-walk-prefix)
+                        (when-some [ticket-id (born-row-id change)]
+                          (when (and (nil? (change-in-state
+                                            eng {:born_from born}
+                                            [:open :submitted :failing]))
+                                     (nil? (groom-after-stall eng change
+                                                              ticket-id)))
+                            ticket-id))))))
+            stuck))
+    #{}))
+
 (defn- regroomed-change
   "The change this firing works, put back to work when a person groomed
   its ticket again after the change was stalled — else the row as it
@@ -2927,22 +2986,25 @@
                                    groomed-walk-prefix)
                  (some? (get (inv/resources eng) :ticket)))
         (when-some [ticket-id (born-row-id change)]
-          (let [groom (latest-transition eng :ticket ticket-id "groom")
-                stall (latest-transition eng :change (:id change) "stall")]
-            (when (and groom stall (> (long (:id groom)) (long (:id stall))))
-              (try
-                (let [moved (:row (inv/invoke! eng :change (str (:id change))
-                                               :unstick {}
-                                               {:principal seat-change-principal}))]
-                  (println "waymark10 seat change unstuck -" (str (:id change))
-                           "- ticket" ticket-id "groomed by"
-                           (str (get-in groom [:actor :id])) "at" (str (:at groom)))
-                  moved)
-                (catch Exception e
-                  (binding [*out* *err*]
-                    (println "waymark10 seat change unstick failed -"
-                             (ex-message e)))
-                  nil))))))
+          (when-some [groom (groom-after-stall eng change ticket-id)]
+            (try
+              ;; a change with a pull request goes back where the pull
+              ;; request is, under review (ticket 6bdaf6fe)
+              (let [door (if (some? (get-in change [:data :number]))
+                           :unstick_submitted
+                           :unstick)
+                    moved (:row (inv/invoke! eng :change (str (:id change))
+                                             door {}
+                                             {:principal seat-change-principal}))]
+                (println "waymark10 seat change unstuck -" (str (:id change))
+                         "- ticket" ticket-id "groomed by"
+                         (str (get-in groom [:actor :id])) "at" (str (:at groom)))
+                moved)
+              (catch Exception e
+                (binding [*out* *err*]
+                  (println "waymark10 seat change unstick failed -"
+                           (ex-message e)))
+                nil)))))
       change))
 
 (defn- change-of-sitting
