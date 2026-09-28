@@ -620,6 +620,55 @@
 
     (seat-do! seat :retire)))
 
+(deftest a-throttled-routine-stays-live-and-its-wake-goes-out-after-the-time-it-named
+  (let [wn :wake-throttle
+        fn' :wake-throttle-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "throttleclerk"
+                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
+                       :fire_interval_seconds 1}
+                      fn')]
+    (try
+      (sch/answer! *fire* 429 {:retry-after "2"})
+      (task-do! (task! "the one the provider throttles") :complete)
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (sch/answer! *fire* nil)
+      (is (= 1 (count (fires-of token))) "the throttled POST went out once")
+      (let [row (sched-of seat)]
+        (is (= :live (:state row)) "a throttle is not a broken link")
+        (is (true? (get-in row [:data :wake_pending])))
+        (is (some? (get-in row [:data :retry_after])))
+        (is (= "The Routine has no free run. Try again after 2."
+               (get-in row [:data :note]))))
+
+      (testing "before the time it named nothing goes out, and a new match folds in"
+        (task-do! (task! "a second match, inside the throttle") :complete)
+        (drain-wakes! wn)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (seat-fires seat))))
+        (is (= 1 (count (fires-of token))))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+      (testing "after it, the sweep sends the waiting wake exactly once"
+        (Thread/sleep 2200)
+        (wakes/sweep-pending! *eng*)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 2 (count (seat-fires seat))))
+        (is (= 2 (count (fires-of token))))
+        (let [row (sched-of seat)]
+          (is (= :live (:state row)))
+          (is (nil? (get-in row [:data :retry_after])))
+          (is (nil? (get-in row [:data :note])))
+          (is (not (get-in row [:data :wake_pending])))))
+      (finally
+        (sch/answer! *fire* nil)
+        (seat-do! seat :retire)))))
+
 ;; ── 4 · the walk seat's computed default ────────────────────────────
 
 (deftest a-walk-seat-with-no-wake-on-wakes-on-its-own-queue

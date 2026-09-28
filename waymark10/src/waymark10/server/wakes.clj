@@ -536,6 +536,15 @@
     (not (.isBefore at ^Instant due))
     true))
 
+(defn- throttled?
+  "Is the provider's throttle still on? The row's `retry_after` is the
+  time the provider named; before it nothing is sent, and a wake that
+  matches in the meantime folds into the one already pending."
+  [schedule-row ^Instant at]
+  (if-some [until (instant-of (get-in schedule-row [:data :retry_after]))]
+    (.isBefore at ^Instant until)
+    false))
+
 ;; ── the fuel wall ────────────────────────────────────────────────────
 ;;
 ;; A wake is fuel, and a seat whose week of fuel is spent has none to
@@ -768,6 +777,10 @@
               (fired-recently? row (:interval seat) at)))
         (mark-pending! eng row)
 
+        ;; a throttled Routine: the wake waits for the time it named
+        (throttled? row at)
+        (mark-pending! eng row)
+
         ;; the fuel wall: the wake waits, and says it was held
         (at-the-fuel-wall? eng (raw-row eng :seat (:id seat)) at)
         (hold-at-the-wall! eng row at)
@@ -854,6 +867,7 @@
                  (and slot? (free-slot? eng seat-row at)))
              (schedules/linked? eng schedule-row)
              (settled? schedule-row at)
+             (not (throttled? schedule-row at))
              (if (< 1 (max-open-of seat-row))
                (not (damped? eng seat-row schedule-row at))
                (and (not (fired-recently? schedule-row (interval-of seat-row) at))
