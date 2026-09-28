@@ -80,7 +80,8 @@
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.math RoundingMode)
            (java.time Instant)
            (java.time.temporal ChronoUnit)))
@@ -756,12 +757,173 @@
           body (transcript-body req)]
       (router/json-response 200 (transcripts/upload! eng key body)))))
 
+;; ── the inbox door (docs/spec-seat.md R-12.38) ──────────────────────
+
+(def ^:private inbox-path
+  "Where `seats/inbox-url` points: the transcript door's sibling."
+  "/api/-/sittings/inbox")
+
+(def ^:private inbox-key-header
+  "`Waymark-Inbox-Key`, read lowercased as ring hands it over."
+  "waymark-inbox-key")
+
+(def ^:private no-inbox
+  "The one sentence every refused key is answered with: a wrong key, a
+  key a later sit replaced and a key whose sitting ended look alike."
+  "No open sitting answers this inbox key.")
+
+(def ^:private inbox-wait-max
+  "The longest `wait`, in seconds: under the idle timeout of the
+  proxies a cloud session reaches the engine through."
+  25)
+
+(def ^:private inbox-page
+  "The log rows one read takes."
+  200)
+
+(def ^:private inbox-pages
+  "The most pages one answer reads. A tail far behind the log catches
+  up across answers, through `Waymark-Inbox-After`, and never holds
+  one request for the whole log."
+  25)
+
+(def ^:private inbox-tick-ms
+  "How often a waiting request reads the log again."
+  250)
+
+(def ^:private transcript-kinds
+  "The kinds that hold a sitting's own words. The door never serves
+  them: a session tailing its inbox must not be fed its transcript."
+  #{"transcript" "transcript_entry"})
+
+(defn- whole-param
+  "A whole-number query parameter from `lo` to `hi` (nil `hi` for no
+  top), nil when absent. Anything else is 422, `since-of`'s reason."
+  [req param lo hi]
+  (when-some [raw (some-> (get (router/query-params req) param) str str/trim not-empty)]
+    (let [n (try (Long/parseLong raw) (catch NumberFormatException _ nil))]
+      (when-not (and n (<= (long lo) (long n)) (or (nil? hi) (<= (long n) (long hi))))
+        (invalid! param (str "must be a whole number "
+                             (if hi (str "from " lo " to " hi) (str "of at least " lo))
+                             "; got " (pr-str raw) ".")))
+      n)))
+
+(defn- log-after
+  "One page of the log after event `after`, oldest first."
+  [eng after]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx] (store/transitions st tx {:since after} {:limit inbox-page})))))
+
+(defn- sitting-start
+  "Where a tail with no `after` begins: just before the sitting's first
+  event, so it reads from the sitting's start. A sitting the log does
+  not know begins at the log's newest event, never at its first."
+  [eng sitting]
+  (let [st (:storage eng)
+        [own newest] (store/with-tx st
+                       (fn [tx]
+                         [(first (store/transitions st tx {:kind :sitting
+                                                           :resource-id (str (:id sitting))}
+                                                    {:limit 1}))
+                          (first (store/transitions st tx {} {:newest-first true :limit 1}))]))]
+    (cond own (dec (long (:id own)))
+          newest (long (:id newest))
+          :else 0)))
+
+(defn- inbox-match
+  "A predicate on a log row. The seat's `inbox.only` names its kind
+  and its action (an empty list is every action), the seat's scope
+  reads the whole kind, and it is neither a transcript nor this
+  sitting's own row.
+
+  THE SCOPE IS READ OFF THE SEAT, not off a visibility resolved for
+  the sitting's grant: a seat's grant reads exactly its seat's scope
+  (R-5.2), and the door holds no principal whose grant that is. An
+  entry narrowed by ids or a filter reads only some rows of its kind,
+  so it admits none of that kind's events here."
+  [seat sitting]
+  (let [only (into {} (map (fn [[k acts]] [(name k) (set (map name acts))]))
+                   (get-in seat [:data :inbox :only]))
+        readable (into #{}
+                       (keep (fn [e]
+                               (when (and (nil? (:ids e)) (nil? (:filter e)))
+                                 (some-> (:kind e) name))))
+                       (get-in seat [:data :scope]))
+        sitting-id (str (:id sitting))]
+    (fn [t]
+      (let [k (name (:kind t))
+            acts (get only k)]
+        (boolean
+         (and acts
+              (or (empty? acts) (contains? acts (name (:action t))))
+              (contains? readable k)
+              (not (contains? transcript-kinds k))
+              (not (and (= "sitting" k) (= sitting-id (str (:resource-id t)))))))))))
+
+(defn- inbox-line
+  "One event as the door answers it (R-12.38)."
+  [t]
+  {:kind (name (:kind t))
+   :id (str (:resource-id t))
+   :action (name (:action t))
+   :from (some-> (:from-state t) name)
+   :to (some-> (:to-state t) name)
+   :summary (:summary t)
+   :at (str (:at t))
+   :event (:id t)})
+
+(defn- inbox-scan
+  "The matching events after `cursor`, read a page at a time until the
+  log ends, a page matched, or `inbox-pages` ran out. → [events, the
+  last event read]."
+  [eng match? cursor]
+  (loop [cursor cursor pages 1]
+    (let [rows (log-after eng cursor)
+          hits (filterv match? rows)
+          cursor (if-some [r (last rows)] (:id r) cursor)]
+      (if (or (seq hits) (< (count rows) inbox-page) (>= pages inbox-pages))
+        [hits cursor]
+        (recur cursor (inc pages))))))
+
+(defn- sitting-inbox
+  "GET /api/-/sittings/inbox — the events a seat's inbox names, after
+  `after` or from the sitting's start, as newline-delimited JSON
+  (docs/spec-seat.md R-12.38).
+
+  ANONYMOUS ON PURPOSE, the transcript door's reasoning: the key in the
+  header is the whole credential, it answers for one open sitting, and
+  it reads only what that sitting's grant reads. `wait` holds the
+  request until an event lands or the seconds run out, reading the log
+  again each quarter second: a handful of open sittings can afford it,
+  and it needs no dispatcher, so it answers the same on every engine."
+  [eng]
+  (fn [req]
+    (let [sitting (seats/inbox-sitting-by-key eng (get-in req [:headers inbox-key-header]))
+          seat (some->> (get-in sitting [:data :seat]) (seat-row eng))
+          _ (when-not (and sitting seat)
+              (throw (p/problem :unauthorized 401 "Unauthorized" {:detail no-inbox})))
+          after (whole-param req "after" 0 nil)
+          wait (or (whole-param req "wait" 0 inbox-wait-max) 0)
+          match? (inbox-match seat sitting)
+          deadline (+ (System/nanoTime) (* (long wait) 1000000000))]
+      (loop [cursor (or after (sitting-start eng sitting))]
+        (let [[hits cursor] (inbox-scan eng match? cursor)]
+          (if (and (empty? hits) (< (System/nanoTime) (long deadline)))
+            (do (Thread/sleep (long inbox-tick-ms))
+                (recur cursor))
+            {:status 200
+             :headers {"Content-Type" "application/x-ndjson"
+                       "Waymark-Inbox-After" (str cursor)}
+             :body (apply str (map #(str (wire/write-json (inbox-line %)) "\n") hits))}))))))
+
 (defn routes [eng]
   {:module :seats
    :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
             [close-path {:post (sitting-close eng)}]
             [tally-path {:post (sitting-tally eng)}]
-            [transcript-path {:post (sitting-transcript eng)}]]})
+            [transcript-path {:post (sitting-transcript eng)}]
+            [inbox-path {:get (sitting-inbox eng)}]]})
 
 ;; ── what discover shows a sitter (R-7.4, R-12.3) ────────────────────
 

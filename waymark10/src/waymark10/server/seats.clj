@@ -734,6 +734,26 @@
     ;; exactly as the scope guards do
     (t/allow)))
 
+(def ^:private engine-own-kinds
+  "The kinds the wake consumer never matches (`wakes/own-kinds`, which
+  this file cannot require): a seat woken by its own sitting or its
+  own fire would wake itself forever."
+  #{"seat" "sitting" "schedule" "subscription"})
+
+(g/defguard wake-on-names-no-engine-kind
+  {:judges [:wake_on]
+   :reads [:services]
+   :vars [:kind]
+   :open "The four kinds are the engine's own writing about a wake, fixed in code; every other kind this surface serves may wake a seat."
+   :explain "A seat is never woken by {kind}: the engine's own kinds (seat, sitting, schedule, subscription) are dropped before a wake is matched, so a seat cannot wake itself forever. To wake when a fired sitting ends, wake on transcript seal."}
+  [_row inp _ctx]
+  (if-some [bad (first (for [e (:wake_on inp)
+                             :let [k (str (:kind e))]
+                             :when (contains? engine-own-kinds k)]
+                         k))]
+    (t/deny {:vars {:kind bad}})
+    (t/allow)))
+
 (g/defguard wake-on-names-real-actions
   {:judges [:wake_on]
    :reads [:services]
@@ -830,6 +850,36 @@
               (if (and target (= :active (:state target)))
                 (t/allow)
                 (t/deny {:vars {:into into-id}}))))))
+
+(g/defguard author-can-take-it
+  {:judges [:author]
+   :reads [:seat]
+   :vars [:detail]
+   :explain "A seat is handed only to a seat that delegates, and only when it fits under that seat's ceiling: {detail}."}
+  [row inp ctx]
+  ;; hand_to (invariant 3 and 4 of server/delegation): the person's
+  ;; tap writes the author AND the approval, so the seat must already
+  ;; be one the author could have authored — R-14.3 whole, the ceiling
+  ;; judged by the same `misfit` the create and restate doors read.
+  (let [author-id (some-> (:author inp) str not-empty)]
+    (cond
+      (nil? author-id) (t/allow)          ; the schema refuses the blank
+      (= author-id (str (:id row)))
+      (t/deny {:vars {:detail "a seat does not author itself"}})
+      (delegation/delegating? row)
+      (t/deny {:vars {:detail (str "this seat carries a ceiling of its own"
+                                   " (delegates), and an authored seat may not")}})
+      (nil? (:read ctx)) (t/allow)      ; probe ctx — decline to guess
+      :else
+      (let [author ((:read ctx) :seat author-id)]
+        (cond
+          (not (and author (delegation/delegating? author)))
+          (t/deny {:vars {:detail (str author-id " is not a seat that"
+                                       " delegates: it carries no ceiling")}})
+          :else
+          (if-some [m (delegation/misfit author (:data row))]
+            (t/deny {:vars {:detail m}})
+            (t/allow)))))))
 
 (g/defguard the-engines-own-hand
   {:reads [:principal]
@@ -1079,6 +1129,33 @@
       (update :data dissoc :halt)
       first-approval?
       (update :data assoc :approved_by approver :approved_at (:now ctx)))))
+
+(defhandler hand-seat-to [row inp ctx]
+  ;; INVARIANT 3 and 4: the person's hand writes the author, and the
+  ;; same tap IS the approval — the seat is live already, so there is
+  ;; no first unpark to carry it. The person is the one who decided a
+  ;; held call when this replays one, else the hand at the door.
+  (let [person (or (some-> (delegation/allowed-hold ctx :seat (:id row))
+                           (get-in [:data :decided_by]) str not-empty)
+                   (delegation/owner-of ctx)
+                   (str (get-in ctx [:principal :id])))]
+    (update row :data assoc
+            :authored_by (str (:author inp))
+            :owner person
+            :approved_by person
+            :approved_at (:now ctx))))
+
+(defhandler take-seat-back [row _inp _ctx]
+  ;; hand_to undone: the author and the approval go, and the author's
+  ;; restates are held again under invariant 4.
+  (update row :data dissoc :authored_by :approved_by :approved_at))
+
+(defn- parked-says
+  "hand_to and take_back run from `active` alone, like restate; a
+  parked seat is told the way back."
+  [row _ctx]
+  (when (= :parked (:state row))
+    "The seat is parked. Unpark it first — unpark is the person's own lever."))
 
 (defn seat-born
   "The seat's on-create (invariant 3 and 4 of server/delegation): a
@@ -2132,6 +2209,7 @@
                    walk-matches-the-judgment
                    wake-on-names-real-kinds
                    wake-on-names-real-actions
+                   wake-on-names-no-engine-kind
                    inbox-names-real-kinds
                    inbox-names-real-actions
                    ;; LAST, so a hold is a call every other wall passed
@@ -2307,6 +2385,7 @@
               walk-matches-the-judgment
               wake-on-names-real-kinds
               wake-on-names-real-actions
+              wake-on-names-no-engine-kind
               inbox-names-real-kinds
               inbox-names-real-actions
               step-carries-a-note
@@ -2432,6 +2511,36 @@
      :safety {:idempotent true :reversible false :confirm true
               :consequence "The office closes for good. Its sittings and its whole history stay on record; its grants scope to nothing and expire on their own clocks. Opening the work again is a new seat."}
      :display {:label "Retire" :style :danger :order 9}}
+
+    ;; ── the person's hand-off (invariant 3 and 4) ───────────────────
+    ;; A person gives a live seat to a delegating seat to author, and
+    ;; takes it back. Both are the person's levers: from an author they
+    ;; are held, like unpark, merge and retire.
+    :hand_to
+    {:from #{:active} :to :active
+     :input [:map
+             [:author {:kind :seat
+                       :x-display
+                       {:label "Hand to which seat"
+                        :help "A seat that delegates. It restates this seat within its ceiling from now on, with no new tap; this tap is the approval."}}
+              :waymark/ref]]
+     :record true
+     :guards [a-person not-a-sitter author-can-take-it
+              delegation/the-persons-lever]
+     :safety {:idempotent true :reversible true :confirm false}
+     :out-of-state-says parked-says
+     :handler hand-seat-to
+     :display {:label "Hand to" :order 14
+               :description "A delegating seat authors this one within its ceiling; take_back undoes it"}}
+
+    :take_back
+    {:from #{:active} :to :active
+     :guards [a-person not-a-sitter delegation/the-persons-lever]
+     :safety {:idempotent true :reversible true :confirm false}
+     :out-of-state-says parked-says
+     :handler take-seat-back
+     :display {:label "Take back" :order 15
+               :description "The author and its approval go; its restates wait on you again"}}
 
     ;; ── the concealed three (R-7.2, R-7.7) ──────────────────────────
     ;; System actor, logged, hidden from every envelope — members'
@@ -3885,7 +3994,14 @@
   walk leaves them out as it leaves a claimed row out, so a queue of
   only such tickets answers an empty walk and no wake spends a sitting
   on saying it is stuck. A groom after the stall puts the ticket back,
-  and the sit then unsticks its change.
+  and the sit then unsticks its change. A stuck change is one whatever
+  state it was stuck from: `open`, `submitted` or `failing` (ticket
+  60c2ec22).
+
+  A ticket whose change is `submitted` is left out too (ticket
+  60c2ec22): its round is in review and its landing may still run, so
+  a second run of the seat has nothing to build on it, and a submit
+  there only finds a clean worktree.
 
   Empty for any other walk and for an engine that serves no change."
   [eng walk]
@@ -3901,8 +4017,13 @@
           live? (fn [born]
                   (some #(contains? #{:open :submitted :failing}
                                     (some-> (:state %) name keyword))
-                        (changes {:born_from born} live-change-scan-limit)))]
-      (into #{}
+                        (changes {:born_from born} live-change-scan-limit)))
+          ticket-of (fn [change]
+                      (let [born (str (get-in change [:data :born_from]))]
+                        (when (str/starts-with? born groomed-walk-prefix)
+                          (not-empty (subs born (count groomed-walk-prefix))))))]
+      (into (into #{} (keep ticket-of)
+                  (changes {:state "submitted"} stuck-scan-limit))
             (keep (fn [change]
                     (let [born (str (get-in change [:data :born_from]))]
                       (when (str/starts-with? born groomed-walk-prefix)

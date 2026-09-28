@@ -140,7 +140,8 @@
 (def ^:private mayor-scope
   "What the mayor's OWN sitter may touch: seats and judgments, and no
   ticket at all — the ceiling below is not this."
-  [{:kind "seat" :actions ["create" "restate" "park" "unpark" "retire" "merge"]}
+  [{:kind "seat" :actions ["create" "restate" "park" "unpark" "retire" "merge"
+                           "hand_to" "take_back"]}
    {:kind "judgment" :actions ["create" "revise" "promote" "supersede"]}])
 
 (def ^:private ceiling
@@ -500,3 +501,92 @@
           asked (author! h as "bench-long" {:ignore_sitting_budget true})]
       (is (= 202 (:status asked)))
       (is (str/includes? (str (:why (json asked))) "ignore_sitting_budget")))))
+
+;; ── the person's hand-off · hand_to and take_back ──────────────────
+
+(defn- hand-to! [h who seat author]
+  (req h :post (str "/api/seats/" seat "/-/hand_to")
+       {:headers who :body {:author author}}))
+
+(defn- persons-seat! [h nm extra]
+  (let [made (req h :post "/api/seats" {:headers person :body (body nm extra)})]
+    (assert (= 201 (:status made)) (pr-str (json made)))
+    (id-of made)))
+
+(deftest a-person-hands-a-seat-to-the-mayor-and-takes-it-back
+  (let [{:keys [h]} (world)
+        {:keys [as mayor]} (open-mayor! h)
+        seat (persons-seat! h "code-seat" {})]
+    (testing "before the hand-off the mayor's restate is held"
+      (let [asked (restate-as! h as seat {:budget_usd_per_week 3})]
+        (is (= 202 (:status asked)) (pr-str (json asked)))))
+    (testing "the person hands it over, and the tap is the approval"
+      (let [done (hand-to! h person seat mayor)
+            data (:data (get-row h "seats" seat person))]
+        (is (= 200 (:status done)) (pr-str (json done)))
+        (is (= mayor (:authored_by data)))
+        (is (= "colton" (:owner data)))
+        (is (= "colton" (:approved_by data)))
+        (is (some? (:approved_at data)))))
+    (testing "within the ceiling the mayor's restate goes through"
+      (let [done (restate-as! h as seat {:budget_usd_per_week 4})]
+        (is (= 200 (:status done)) (pr-str (json done)))
+        (is (== 4 (budget-of h seat)))))
+    (testing "past the ceiling it is still held"
+      (let [asked (restate-as! h as seat {:budget_usd_per_week 9})]
+        (is (= 202 (:status asked)) (pr-str (json asked)))
+        (is (== 4 (budget-of h seat)))))
+    (testing "take_back makes the mayor's restate held again"
+      (let [done (req h :post (str "/api/seats/" seat "/-/take_back")
+                      {:headers person})
+            data (:data (get-row h "seats" seat person))]
+        (is (= 200 (:status done)) (pr-str (json done)))
+        (is (nil? (:authored_by data)))
+        (is (nil? (:approved_by data)))
+        (let [asked (restate-as! h as seat {:budget_usd_per_week 3})]
+          (is (= 202 (:status asked)) (pr-str (json asked)))
+          (is (str/includes? (str (:why (json asked))) "was not authored by mayor"))
+          (is (== 4 (budget-of h seat))))))))
+
+(deftest the-mayor-does-not-hand-a-seat-to-itself
+  (let [{:keys [h]} (world)
+        {:keys [as mayor]} (open-mayor! h)
+        seat (persons-seat! h "code-seat" {})
+        asked (hand-to! h as seat mayor)]
+    (is (= 202 (:status asked)) (pr-str (json asked)))
+    (is (str/includes? (str (:why (json asked))) "Invariant 4"))
+    (is (nil? (get-in (get-row h "seats" seat person) [:data :authored_by])))
+    (testing "and take_back from the mayor is held too"
+      (let [_ (hand-to! h person seat mayor)
+            asked (req h :post (str "/api/seats/" seat "/-/take_back")
+                       {:headers as})]
+        (is (= 202 (:status asked)) (pr-str (json asked)))
+        (is (= mayor (get-in (get-row h "seats" seat person)
+                             [:data :authored_by])))))))
+
+(deftest hand-to-refuses-what-the-author-could-not-have-authored
+  (let [{:keys [h]} (world)
+        {:keys [mayor]} (open-mayor! h)]
+    (testing "a seat that does not delegate is no author"
+      (let [plain (persons-seat! h "plain" {})
+            seat (persons-seat! h "code-seat" {})
+            refused (hand-to! h person seat plain)]
+        (is (= 409 (:status refused)) (pr-str (json refused)))
+        (is (str/includes? (pr-str (json refused)) "carries no ceiling"))))
+    (testing "a scope past the ceiling names the entry"
+      (let [seat (persons-seat! h "wide"
+                                {:scope [{:kind "dl_ticket"
+                                          :actions ["create" "finish" "drop"]
+                                          :filter {:repo "bench"}}]})
+            refused (hand-to! h person seat mayor)]
+        (is (= 409 (:status refused)) (pr-str (json refused)))
+        (is (str/includes? (pr-str (json refused)) "past the ceiling"))
+        (is (str/includes? (pr-str (json refused)) "drop"))
+        (is (nil? (get-in (get-row h "seats" seat person)
+                          [:data :authored_by])))))
+    (testing "a parked seat is told to unpark first"
+      (let [seat (persons-seat! h "resting" {})
+            _ (req h :post (str "/api/seats/" seat "/-/park") {:headers person})
+            refused (hand-to! h person seat mayor)]
+        (is (= 409 (:status refused)) (pr-str (json refused)))
+        (is (str/includes? (pr-str (json refused)) "Unpark it first"))))))
