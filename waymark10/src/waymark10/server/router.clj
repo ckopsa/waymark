@@ -1218,7 +1218,14 @@
                                      action result))
             (dry-run-response result))
 
-        :else (report-response result)))))
+        :else
+        ;; R-10.6: a partial bulk's per-item 409s count on the
+        ;; sitting as a thrown one would (waymark-fp62.7.11)
+        (do (when (pos? (or (:conflicts result) 0))
+              (when-some [sitting (open-sitting eng req)]
+                (dotimes [_ (:conflicts result)]
+                  (seats/bump-counter! eng (:id sitting) :refusals))))
+            (report-response result))))))
 
 (defn- batch-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
@@ -1997,12 +2004,14 @@
   middleware there: one refusal at either door counts once
   (waymark-fp62.7, item 2).
 
-  It counts a refusal the engine THREW. A bulk or batch call that
-  reports a per-item refusal in a 200 report counts nothing: the
-  report keeps the refusal's sentence and drops its status, so a
-  per-item 409 cannot be told from a per-item 404 or 422 here. An
-  atomic bulk, whose refusal leaves as one thrown 409, is counted like
-  any other."
+  It counts a refusal the engine THREW. An atomic bulk or batch, whose
+  refusal leaves as one thrown 409, is counted like any other. A
+  partial bulk reports its per-item refusals in a 200 report, which
+  keeps each refusal's sentence and drops its status; `bulk!` answers
+  the count of per-item 409s beside that report, and `bulk-action`
+  counts them on the sitting (waymark-fp62.7.11). A batch has no
+  partial mode, and a deferred bulk's items run in the job worker,
+  outside any sitting's request."
   [handler eng]
   (fn [req]
     (try
