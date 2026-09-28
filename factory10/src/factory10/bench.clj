@@ -473,6 +473,21 @@
    :required_checks (required-checks-of policy)
    :merge_method (merge-method-of policy)})
 
+(def default-deploy-wait-seconds
+  "How long the line waits on a deploy that does not report, when the
+  policy names no `deploy_wait_seconds` (ticket 47217098)."
+  1800)
+
+(defn deploy-check-of
+  "The check on the base whose success means a commit is deployed, or
+  nil when a merge counts as deployed."
+  [policy]
+  (some-> (get-in policy [:data :deploy_check]) str str/trim not-empty))
+
+(defn deploy-wait-of [policy]
+  (long (or (get-in policy [:data :deploy_wait_seconds])
+            default-deploy-wait-seconds)))
+
 ;; A BRANCH BEHIND ITS BASE (ticket a95c3d63). Main's protection wants a
 ;; branch up to date before it merges, so a green change whose branch
 ;; fell behind is refused by GitHub and would wait forever. The pass
@@ -683,10 +698,16 @@
    (let [asked (volatile! 0)]
      (doseq [[repo line] lines
              :let [policy (get by-repo repo)]]
-       (doseq [change line]
-         (vswap! asked inc)
-         (swap! answers assoc (str (:id change))
-                (offer-merge! ctx seen change policy)))
+       ;; with a deploy check, one merge ends the line's offers: the
+       ;; next change waits on its deploy (ticket 47217098)
+       (loop [[change & more] line]
+         (when change
+           (vswap! asked inc)
+           (let [answer (offer-merge! ctx seen change policy)]
+             (swap! answers assoc (str (:id change)) answer)
+             (when-not (and (deploy-check-of policy)
+                            (= "merged" (answer-state answer)))
+               (recur more)))))
        (let [front (front-of line @answers @seen)
              id (some-> front :id str)]
          (warn! repo ": " (or id "nothing") " is the front of the merge line, "
@@ -800,7 +821,7 @@
   (when (some (fn [[k v]] (not= v (get data k))) (apply dissoc marks quiet))
     marks))
 
-(defn- mark-row!
+(defn mark-row!
   "One maintenance write: `marks` onto the row's data, nil removing a
   field, only when one of them moved. → true when it wrote."
   [eng kind id marks quiet]
@@ -856,6 +877,155 @@
       (write! :change id (merge blank-change (get (:changes marks) id)) #{}))
     @wrote))
 
+;; ── one deploy at a time (ticket 47217098) ────────────────────────────
+;;
+;; A repository whose policy names a `deploy_check` merges one change and
+;; then waits for it to deploy. The merge pass writes each house merge on
+;; the policy (`deploy_waits_on`, as "change ticket number"), and while
+;; one is there the repository is offered nothing. The forge pass takes
+;; a merge off once that check is green on a base commit that holds it
+;; (`note-deploy!`). A red deploy holds the line and says so; a deploy
+;; that never reports holds it `deploy_wait_seconds` at most. A ticket
+;; whose merge is still on the list does not yet meet another ticket's
+;; `merge_after`. All of it is a maintenance write, as the line is.
+
+(defn deploy-waits
+  "The house merges a policy says are not deployed yet, oldest first, as
+  [{:change :ticket :number}]."
+  [policy]
+  (mapv (fn [s]
+          (let [[change ticket number] (str/split (str s) #" ")]
+            {:change change
+             :ticket (when (and ticket (not= "-" ticket)) ticket)
+             :number (some-> number parse-long)}))
+        (get-in policy [:data :deploy_waits_on])))
+
+(defn- wait-entry [{:keys [change ticket number]}]
+  (str change " " (or ticket "-") " " (or number "-")))
+
+(defn- now-of [eng] (if-some [f (:now-fn eng)] (f) (Instant/now)))
+
+(defn- instant-of [v]
+  (cond (instance? Instant v) v
+        (inst? v) (Instant/ofEpochMilli (inst-ms v))
+        (string? v) (try (Instant/parse v) (catch Exception _ nil))))
+
+(defn- clip [s] (subs s 0 (min reason-chars (count s))))
+
+(defn- merges-named [waits]
+  (str/join ", " (map #(if (:number %) (str "#" (:number %)) (:change %)) waits)))
+
+(defn deploy-held
+  "Repository → the sentence its line waits on, for every policy with a
+  `deploy_check` whose house merges are not all deployed. A wait longer
+  than `deploy_wait_seconds` on a deploy that is not red is let go here:
+  the waits are cleared and the policy's note says so."
+  [eng by-repo]
+  (let [now (now-of eng)]
+    (into {}
+          (keep (fn [[repo policy]]
+                  (let [check (deploy-check-of policy)
+                        waits (deploy-waits policy)
+                        since (instant-of (get-in policy [:data :deploy_waiting_since]))
+                        red? (= "red" (str (get-in policy [:data :deploy_state])))
+                        cap (deploy-wait-of policy)]
+                    (when (and check (seq waits))
+                      (if (and (not red?) since
+                               (>= (.getSeconds (Duration/between since now)) cap))
+                        (do (mark-row! eng :repo_policy (str (:id policy))
+                                       {:deploy_waits_on nil
+                                        :deploy_waiting_since nil
+                                        :deploy_note
+                                        (clip (str "The deploy of " (merges-named waits)
+                                                   " did not report on " check " within "
+                                                   cap " seconds; the line went on at "
+                                                   now "."))}
+                                       #{})
+                            nil)
+                        [repo (clip (str "The line waits on the deploy of "
+                                         (merges-named waits)
+                                         (when since (str ", since " since))
+                                         (when red?
+                                           (str "; " check " is red, and a red deploy"
+                                                " holds the line"))
+                                         "."))])))))
+          by-repo)))
+
+(defn- note-merges!
+  "Write this pass's house merges on their policies' waits, for the
+  repositories with a `deploy_check`."
+  [eng by-repo lines answers]
+  (doseq [[repo line] lines
+          :let [policy (get by-repo repo)
+                merged (filter #(= "merged" (answer-state (get answers (str (:id %)))))
+                               line)]
+          :when (and (deploy-check-of policy) (seq merged))]
+    (mark-row! eng :repo_policy (str (:id policy))
+               {:deploy_waits_on
+                (into (vec (get-in policy [:data :deploy_waits_on]))
+                      (map #(wait-entry {:change (str (:id %))
+                                         :ticket (born-ticket %)
+                                         :number (get-in % [:data :number])}))
+                      merged)
+                :deploy_waiting_since
+                (or (instant-of (get-in policy [:data :deploy_waiting_since]))
+                    (now-of eng))}
+               #{})))
+
+(defn undeployed-tickets
+  "Ticket id → the repository whose deploy it still waits on, for every
+  house merge an active policy says is not deployed yet."
+  [eng]
+  (into {}
+        (for [p (policies eng :active)
+              :when (deploy-check-of p)
+              w (deploy-waits p)
+              :when (:ticket w)]
+          [(:ticket w) (str (get-in p [:data :repository]))])))
+
+(def ^:private red-deploys
+  #{"failure" "timed_out" "cancelled" "action_required" "startup_failure"})
+
+(defn note-deploy!
+  "What the forge pass read of one policy's base says of its deploy.
+  `base-read` is forge-base's {:head_sha :checks}; `covers?` is (fn
+  [number sha]) → whether that pull request's merge is `sha` or an
+  ancestor of it. The `deploy_check` green on the head records it as
+  deployed and takes every merge it covers off the waits; red says so
+  and holds the line; one still running writes nothing. → true when it
+  wrote."
+  [eng policy base-read covers?]
+  (let [check (deploy-check-of policy)
+        head (some-> (:head_sha base-read) str not-empty)
+        run (last (filter #(= check (str (:check_name %))) (:checks base-read)))
+        conclusion (some-> (:conclusion run) str not-empty)
+        id (str (:id policy))]
+    (cond
+      (not (and check head conclusion)) false
+
+      (= "success" conclusion)
+      (let [left (filterv #(not (and (:number %) (covers? (:number %) head)))
+                          (deploy-waits policy))]
+        (mark-row! eng :repo_policy id
+                   (cond-> {:deployed_head head
+                            :deploy_state "green"
+                            :deploy_waits_on (not-empty (mapv wait-entry left))}
+                     (not= head (get-in policy [:data :deployed_head]))
+                     (assoc :deployed_at (now-of eng))
+                     (empty? left)
+                     (assoc :deploy_waiting_since nil :deploy_note nil))
+                   #{}))
+
+      (contains? red-deploys conclusion)
+      (mark-row! eng :repo_policy id
+                 {:deploy_state "red"
+                  :deploy_note (clip (str check " finished " conclusion " at " head
+                                          "; the house merges nothing more here"
+                                          " until it is green."))}
+                 #{})
+
+      :else false)))
+
 ;; ── a merge that waits on other tickets (ticket d069bc3b) ───────────────
 ;;
 ;; A ticket's `merge_after` names the tickets that must be done before
@@ -880,12 +1050,22 @@
                                         (fn [tx] (store/load-row st tx :ticket tid {})))
                                       (catch Exception _ nil))
                                  (inv/decode-row rd)))
+          ;; done is not enough while its merge waits on a deploy
+          ;; (ticket 47217098)
+          undeployed (undeployed-tickets eng)
           waits-of (fn [tid]
                      (into []
                            (keep (fn [dep]
-                                   (let [s (some-> (load-ticket (str dep)) :state name)]
-                                     (when (not= "done" s)
-                                       {:id (str dep) :state (or s "missing")}))))
+                                   (let [s (some-> (load-ticket (str dep)) :state name)
+                                         undeployed-in (get undeployed (str dep))]
+                                     (cond
+                                       (not= "done" s)
+                                       {:id (str dep) :state (or s "missing")}
+
+                                       undeployed-in
+                                       {:id (str dep)
+                                        :state (str "done, not deployed in "
+                                                    undeployed-in)}))))
                            (get-in (load-ticket tid) [:data :merge_after])))]
       (into {}
             (keep (fn [tid]
@@ -931,10 +1111,12 @@
   (`mark-lines!`): the policy names its front and who waits, and each
   change its place and why it is not merging. A change whose ticket
   still waits on another to merge (`merge-holds`) is held out of all
-  of it, and says so. Throws nothing.
+  of it, and says so. A repository whose last house merge is not yet
+  deployed (`deploy-held`) is offered nothing. Throws nothing.
   → the number of `merge` calls made."
   [eng seen]
-  (let [by-repo (policies-by-repo eng)
+  (let [deploy-holds (deploy-held eng (policies-by-repo eng))
+        by-repo (policies-by-repo eng)
         changes (submitted-changes eng)
         house? #(some-> (get by-repo (str (get-in % [:data :repository])))
                         house-pass-merges?)
@@ -946,9 +1128,14 @@
         lines (merge-lines offered by-repo
                            #(get priorities (born-ticket %)) @seen)
         answers (atom {})
-        asked (work-lines! {:services (:services eng)} seen lines by-repo
+        asked (work-lines! {:services (:services eng)} seen
+                           (apply dissoc lines (keys deploy-holds)) by-repo
                            answers)]
     (try
+      (note-merges! eng by-repo lines @answers)
+      (doseq [[repo why] deploy-holds]
+        (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
+                   {:deploy_note why} #{}))
       (mark-lines! eng
                    (update (line-marks lines @answers @seen
                                        (parked-changes offered by-repo @seen))

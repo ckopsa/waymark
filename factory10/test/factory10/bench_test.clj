@@ -2527,6 +2527,96 @@
     (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
                        "(dropped)"))))
 
+;; ── one deploy at a time (ticket 47217098) ─────────────────────────────
+
+(def ^:private deploy-policy (assoc house-policy :deploy_check "deploy"))
+
+(defn- deploy-read [sha conclusion]
+  {:head_sha sha :checks [{:check_name "deploy" :conclusion conclusion}]})
+
+(def ^:private long-ago (Instant/parse "2000-01-01T00:00:00Z"))
+
+(deftest a-merge-holds-its-repository-until-a-deploy-holds-the-merge
+  (let [w (submitted-world deploy-policy)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "merged"})
+    (is (= 1 (bench/merge-green! eng seen)))
+    (is (= [31] (mapv :number (bench/deploy-waits (the-policy w))))
+        "the house's merge is written on the policy")
+    (testing "the next pass merges nothing while the deploy has not reported"
+      (is (= 0 (bench/merge-green! eng seen)))
+      (is (= 1 (count (calls-of st "bench__merge"))))
+      (is (str/includes? (str (get-in (the-policy w) [:data :deploy_note]))
+                         "the deploy of #31")))
+    (testing "a green deploy on a commit without the merge releases nothing"
+      (bench/note-deploy! eng (the-policy w) (deploy-read "d1" "success")
+                          (fn [_ _] false))
+      (is (= "d1" (get-in (the-policy w) [:data :deployed_head])))
+      (is (= 0 (bench/merge-green! eng seen))))
+    (testing "a green deploy on a descendant of the merge releases the line"
+      (bench/note-deploy! eng (the-policy w) (deploy-read "d2" "success")
+                          (fn [n sha] (and (= 31 n) (= "d2" sha))))
+      (is (empty? (bench/deploy-waits (the-policy w))))
+      (is (some? (get-in (the-policy w) [:data :deployed_at])))
+      (is (= 1 (bench/merge-green! eng seen)))
+      (is (= 2 (count (calls-of st "bench__merge")))))))
+
+(deftest a-red-deploy-holds-the-line-past-the-wait-and-says-so
+  (let [w (submitted-world deploy-policy)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "merged"})
+    (bench/merge-green! eng seen)
+    (bench/note-deploy! eng (the-policy w) (deploy-read "d1" "failure")
+                        (fn [_ _] true))
+    (bench/mark-row! eng :repo_policy (str (:id (the-policy w)))
+                     {:deploy_waiting_since long-ago} #{})
+    (is (= 0 (bench/merge-green! eng seen)) "a red deploy is not waited out")
+    (let [p (the-policy w)]
+      (is (= "red" (str (get-in p [:data :deploy_state]))))
+      (is (str/includes? (str (get-in p [:data :deploy_note])) "red")))))
+
+(deftest a-deploy-that-never-reports-lets-the-line-go-after-the-wait
+  (let [w (submitted-world deploy-policy)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "merged"})
+    (bench/merge-green! eng seen)
+    (bench/mark-row! eng :repo_policy (str (:id (the-policy w)))
+                     {:deploy_waiting_since long-ago} #{})
+    (is (= 1 (bench/merge-green! eng seen)) "the wait's cap lets the line go on")
+    (is (str/includes? (str (get-in (the-policy w) [:data :deploy_note]))
+                       "did not report"))))
+
+(deftest a-merge-after-a-merged-ticket-waits-for-its-repository-to-deploy
+  (let [w (held-world)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})
+        other (:row (inv/create! eng :repo_policy
+                                 {:repository "ckopsa/waymark-bench"
+                                  :required_checks ["gate"]
+                                  :deploy_check "deploy"}
+                                 {:principal person}))
+        other-policy #(first (filter (fn [p] (= (str (:id other)) (str (:id p))))
+                                     (bench/policies eng :active)))]
+    (answer! st "bench__merge" {:state "merged"})
+    (bench/mark-row! eng :repo_policy (str (:id other))
+                     {:deploy_waits_on [(str "c-7 " (:dep w) " 7")]} #{})
+    (end-ticket! w (:dep w) :complete)
+    (is (= 0 (bench/merge-green! eng seen))
+        "done, but not deployed in its own repository")
+    (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
+                       "not deployed in ckopsa/waymark-bench"))
+    (testing "the pass after that repository's deploy covers it merges"
+      (bench/note-deploy! eng (other-policy) (deploy-read "b1" "success")
+                          (fn [n _] (= 7 n)))
+      (is (= 1 (bench/merge-green! eng seen))))))
+
 (deftest the-merge-closes-a-stuck-duplicate-on-the-same-branch
   (let [w (ticket-world)
         url (submitted-and-adopted! w 85)
