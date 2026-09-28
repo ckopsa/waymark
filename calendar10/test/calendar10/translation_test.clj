@@ -3,9 +3,11 @@
   and back, the identity split, the env parsing, and the two traps
   worth pinning — Google's exclusive all-day end, and a non-JSON error
   body. No network, no database."
-  (:require [calendar10.source :as src]
+  (:require [calendar10.resources.event :as event]
+            [calendar10.source :as src]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [deftest is testing]]
+            [waymark10.server.mirror :as mirror]))
 
 ;; a timed event as API v3 actually sends it
 (def timed
@@ -178,3 +180,58 @@
     (is (nil? (src/parse-body nil 204))))
   (testing "real JSON still parses"
     (is (= {:id "x"} (src/parse-body "{\"id\":\"x\"}" 200)))))
+
+;; ── a birth: what an absent all_day means ──────────────────────────────
+;; born-when is the pure half of the event kind's :on-create
+
+(def ^:private when-keys [:all_day :date :end_date :starts_at :ends_at])
+
+;; 17:00–20:00 MDT on the 29th, as the house creates it: no all_day
+(def ^:private party
+  {:title "Wilfred's party"
+   :starts_at "2026-08-29T23:00:00Z"
+   :ends_at "2026-08-30T02:00:00Z"})
+
+(deftest a-start-time-makes-a-timed-event
+  (let [d (event/born-when party "America/Denver")]
+    (is (false? (:all_day d)) "a start with no all_day is timed, not all-day")
+    (testing "the day is the start's day in the household zone"
+      (is (= "2026-08-29" (:date d)))
+      (is (= "2026-08-29" (:end_date d))
+          "20:00 MDT is still the 29th, though UTC says the 30th"))
+    (testing "the push sends a dateTime, not an all-day date"
+      (let [body (src/doc->event d)]
+        (is (= {:dateTime "2026-08-29T23:00:00Z"} (:start body)))
+        (is (= {:dateTime "2026-08-30T02:00:00Z"} (:end body)))))))
+
+(deftest only-a-date-makes-an-all-day-event
+  (let [d (event/born-when {:title "Family picnic" :date "2026-08-08"}
+                           "America/Denver")]
+    (is (true? (:all_day d)))
+    (is (= "2026-08-08" (:date d)))
+    (is (= {:date "2026-08-08"} (:start (src/doc->event d))))))
+
+(deftest an-explicit-all-day-is-kept
+  (testing "all-day with a start still says all-day"
+    (is (true? (:all_day (event/born-when (assoc party :all_day true
+                                                 :date "2026-08-29")
+                                          "America/Denver")))))
+  (testing "timed without a start still says timed"
+    (is (false? (:all_day (event/born-when {:title "x" :all_day false}
+                                           "America/Denver")))))
+  (testing "a named date is not overwritten by the derived one"
+    (is (= "2026-09-01" (:date (event/born-when (assoc party :date "2026-09-01")
+                                                "America/Denver"))))))
+
+(deftest a-timed-birth-round-trips-without-conflict
+  (let [d (event/born-when party "America/Denver")]
+    (testing "the fake calendar hands back the when it was given"
+      (let [fake (src/fake-calendar)
+            [x _] (mirror/push-create fake d)
+            [pulled _] (mirror/pull fake x)]
+        (is (= (select-keys d when-keys) (select-keys pulled when-keys)))))
+    (testing "Google reads the body we send back as the same when"
+      (let [google (assoc (src/doc->event d) :id "born-1")]
+        (is (= (select-keys d when-keys)
+               (select-keys (src/event->doc "family" google "America/Denver")
+                            when-keys)))))))

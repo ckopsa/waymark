@@ -47,7 +47,8 @@
   push at the transport — moving it would move every occurrence, and
   \"change this one\" versus \"change every Tuesday\" is a fork this
   kind has no vocabulary for."
-  (:require [waymark10.dsl :refer [defguard defguardfn defhandler one-of
+  (:require [calendar10.source :as src]
+            [waymark10.dsl :refer [defguard defguardfn defhandler one-of
                                    refuse resource]]
             [waymark10.server.mirror :as mirror]
             [waymark10.types :as t]))
@@ -63,6 +64,32 @@
 ;; owns conflicted; resolve_conflict is the way back)
 (def ^:private writable #{:fresh :stale :unreachable})
 
+(defn- all-day?
+  "What an input means by all day: its own word when it says one, and
+  otherwise all-day only when it names no start. The guards and the
+  birth read it the same way, so a create with a start time is timed."
+  [inp]
+  (if (some? (:all_day inp))
+    (boolean (:all_day inp))
+    (nil? (:starts_at inp))))
+
+(defn born-when
+  "A created document's when, settled: :all_day as all-day? reads it,
+  and a timed event names its day (and last day) in the household
+  zone, as calendar10.source reads Google's events back — so the row
+  and the mirror agree on what was made."
+  [d zone]
+  (let [all-day (all-day? d)
+        date (or (:date d)
+                 (when-not all-day
+                   (src/local-date (some-> (:starts_at d) str) zone)))
+        end-date (or (:end_date d)
+                     (when-not all-day
+                       (src/local-date (some-> (:ends_at d) str) zone)))]
+    (cond-> (assoc d :all_day all-day)
+      date (assoc :date date)
+      end-date (assoc :end_date end-date))))
+
 ;; a create guard judges the birth INPUT (the row is nil at the door),
 ;; so these are guard FNs, not exprs over row facts — and they answer
 ;; (t/allow)/(t/deny), never a bare boolean, which the door would read
@@ -73,7 +100,7 @@
   {:judges [:all_day :date :starts_at]
    :explain "Say when: an all-day event names its date, a timed one its start."}
   [_row inp _ctx]
-  (if (if (:all_day inp) (some? (:date inp)) (some? (:starts_at inp)))
+  (if (if (all-day? inp) (some? (:date inp)) (some? (:starts_at inp)))
     (t/allow)
     (t/deny)))
 
@@ -81,7 +108,7 @@
   {:judges [:all_day :date :end_date :starts_at :ends_at]
    :explain "An event cannot end before it begins."}
   [_row inp _ctx]
-  (let [[a b] (if (:all_day inp)
+  (let [[a b] (if (all-day? inp)
                 [(:date inp) (:end_date inp)]
                 [(:starts_at inp) (:ends_at inp)])]
     (if (or (nil? a) (nil? b) (not (neg? (compare (str b) (str a)))))
@@ -237,9 +264,11 @@
                                 ;; is OUR row, not a discovery mint
                                 (assoc :born_here
                                        (nil? (:external_id d)))
-                                (update :all_day #(if (some? %) % true))
+                                ;; a start time means a timed event,
+                                ;; and it names its day in the zone
+                                (born-when (:zone adapter))
                                 ;; a one-day event names its day once
-                                (update :end_date #(or % (:date d)))
+                                (as-> d' (update d' :end_date #(or % (:date d'))))
                                 ;; ours by default; the transport routes
                                 ;; the create by this tag
                                 (update :calendar #(or % "family"))
