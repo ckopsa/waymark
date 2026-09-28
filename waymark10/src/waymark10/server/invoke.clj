@@ -880,6 +880,8 @@
                  ;; the record says what the guards actually saw
                  :judgment (decision/record (:law-revision row) basis
                                             overridden)
+                 ;; tier 3: the document as this write leaves it
+                 :after (decision/after-record rdef (:data advanced))
                  :correlation-id correlation-id
                  :idempotency-key idempotency-key
                  :summary (:summary advanced)})
@@ -2138,6 +2140,8 @@
                        ;; row it just stamped
                        :judgment (decision/record (:law-revision row) basis
                                                   overridden)
+                       ;; tier 3: the document as it was born
+                       :after (decision/after-record rdef (:data row))
                        :correlation-id correlation-id
                        ;; the key a client sent rides the birth's own
                        ;; transition exactly as finish! stamps it on an

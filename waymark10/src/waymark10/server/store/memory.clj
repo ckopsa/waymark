@@ -279,7 +279,8 @@
                   ;; drops would pass against memory. The round-trip
                   ;; is the most this store can prove; the obligation
                   ;; runs against both for the rest
-                  (update :judgment jsonish))]
+                  (update :judgment jsonish)
+                  (update :after jsonish))]
       (swap! state #(-> %
                         (update :transitions (fnil conj []) rec)
                         (update :pending-notify (fnil conj []) id)))
