@@ -118,7 +118,7 @@
         (is (= "Sous" (:welcome doc)))
         (is (= "X-Waymark-Invite" (get-in doc [:bind :header])))
         (is (= "/api/approval_requests" (get-in doc [:ask :href])))
-        (is (= 3600 (get-in doc [:ask :ttl :default_seconds])))
+        (is (= 86400 (get-in doc [:ask :ttl :default_seconds])))
         (is (= 86400 (get-in doc [:ask :ttl :max_seconds]))))
       (is (= 404 (:status (req h :get "/api/-/welcome?invite=wrong" {})))))
 
@@ -156,8 +156,9 @@
                              :body {:task "A quick errand."
                                     :scope [{:kind "access_errand"
                                              :actions ["finish"]}]}}))]
-        (is (= "2026-07-13T09:00:00Z"
-               (str (get-in bare [:data :expires_at]))))))
+        (is (= "2026-07-14T08:00:00Z"
+               (str (get-in bare [:data :expires_at])))
+            "an ask naming no expiry runs to the 24-hour cap from filing")))
 
     (testing "4 · four-eyes holds; the human's approve mints the leash"
       (let [asks (json (req h :get "/api/approval_requests?state=offered"
