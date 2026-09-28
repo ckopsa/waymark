@@ -268,6 +268,24 @@
                     (:verdict v)))
         "the probe with no hook declines to guess")))
 
+(deftest a-birth-under-an-invented-parent-refuses-at-the-door
+  ;; waymark-fp62.4.1 acceptance: the framework's ref wall, not the
+  ;; ticket's own guard, names the field and the kind it expected
+  (let [rows {"P-open" (at :open {} "P-open")}
+        wall (g/names-a-row-that-stands (:create-ref-fields ticket))
+        c (assoc (ctx the-person rows)
+                 :rdef-of (fn [k] (when (= :ticket k) ticket)))
+        judge (fn [inp]
+                (let [[v d] (g/evaluate wall nil inp c)]
+                  {:verdict (:verdict v) :reason (g/render-reason d v nil)}))]
+    (is (some #(= :parent (:field %)) (:create-ref-fields ticket))
+        "parent is a ref the create door carries")
+    (is (= :allow (:verdict (judge {:parent "P-open"}))))
+    (let [{:keys [verdict reason]} (judge {:parent "invented-01"})]
+      (is (= :deny verdict))
+      (is (re-find #"parent" reason) "the sentence names the field")
+      (is (re-find #"ticket" reason) "and the kind it expected"))))
+
 ;; ── the shape the walker and the import both read ───────────────────
 
 (deftest the-declaration-says-what-the-walker-needs
