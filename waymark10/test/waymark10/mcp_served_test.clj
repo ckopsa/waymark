@@ -443,3 +443,51 @@
         (is (nil? (:bytes_per_transition empty-doc))
             "zero transitions have no bytes apiece, and 0 would be a lie
              in the cheap direction")))))
+
+;; ── 6 · two sittings of one seat, each on its own session ─────────────
+
+(deftest each-sitting-of-one-seat-is-counted-on-its-own-session
+  ;; ticket f6c8d5ce: the seat's sittings share one grant, and a call
+  ;; was counted on the NEWEST open sitting under it
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        seat (open-seat! eng model)
+        sit-as (fn [harness]
+                 (let [sid (initialize! h)
+                       r (tool h (with-session sid) "waymark_sit"
+                               {:key a-key :session harness})]
+                   {:sid sid :sitting (str (:sitting (doc-of r)))}))
+        a (sit-as "run-a")
+        b (sit-as "run-b")
+        _ (meal! eng "Ramen")]
+    (is (not= (:sitting a) (:sitting b)) "two runs, two sittings")
+
+    (testing "the older sitting's call lands on its own served"
+      (let [r (tool h (with-session (:sid a)) "waymark_query" {:kind "meal"})]
+        (is (false? (:isError r)) (text-of r))
+        (is (= {:calls 1 :bytes (bytes-of r)}
+               (line-of eng (:sitting a) "waymark_query")))
+        (is (= {:calls 0 :bytes 0} (line-of eng (:sitting b) "waymark_query"))
+            "and not on the newer one")))
+
+    (seats/claim-rows! eng (:sitting a) ["ticket-a"])
+    (close! h (:sid a) (:sitting a))
+
+    (testing "a call from the closed sitting's session is refused"
+      (let [r (tool h (with-session (:sid a)) "waymark_query" {:kind "meal"})]
+        (is (true? (:isError r)))
+        (is (clojure.string/includes? (text-of r) "sitting_closed") (text-of r))
+        (is (clojure.string/includes? (text-of r) (:sitting a))))
+      (is (= {:calls 0 :bytes 0} (line-of eng (:sitting b) "waymark_query"))
+          "never re-attributed to the sibling"))
+
+    (testing "the closed sitting's rows rest through the grace"
+      (is (contains? (seats/claimed-rows eng (:id seat) (:sitting b)) "ticket-a")
+          "within it, no other sitting is handed them")
+      (is (not (contains? (seats/claimed-rows
+                           (assoc eng :now-fn
+                                  (constantly (.plusSeconds ^Instant clock 121)))
+                           (:id seat) (:sitting b))
+                          "ticket-a"))
+          "after it, they are free"))))

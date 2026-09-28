@@ -50,9 +50,9 @@
   truth, drifting both directions. An unassigned or eating-out day
   honestly reads 0 — no meal, no lines feeding the night."
   (:require [mealplan10.themes :as themes]
-            [waymark10.dsl :refer [defaction defderived defguardfn
-                                   defresource defhandler expr-guard
-                                   guard]]
+            [waymark10.dsl :refer [defacceptsfn defaction defderived
+                                   defguardfn defresource defhandler
+                                   expr-guard guard]]
             [waymark10.types :as t])
   (:import (java.time DayOfWeek LocalDate)))
 
@@ -117,21 +117,20 @@
     (t/allow)
     (t/deny)))
 
-(def theme-in-rotation
-  ;; the plan's linked rotation's themes, one hop further than before:
-  ;; day → plan → rotation. nil (no constraint) when the chain breaks
-  ;; or the probe carries no :read.
-  (guard {:name :theme-in-rotation
-          :judges [:theme]
-          :reads [:plan :rotation]
-          :accepts (fn [row ctx]
-                     (when-some [read (:read ctx)]
-                       (when-some [plan (read :plan (get-in row [:data :plan_id]))]
-                         (when-some [rid (get-in plan [:data :rotation_id])]
-                           (when-some [rotation (read :rotation rid)]
-                             (vec (get-in rotation [:data :themes])))))))
-          :explain "'{theme}' is not in the Sunday rotation. Add it there first."
-          :remedies [:rotation/add_theme]}))
+;; the plan's linked rotation's themes, one hop further than before:
+;; day → plan → rotation. nil (no constraint) when the chain breaks
+;; or the probe carries no :read.
+(defacceptsfn theme-in-rotation
+  {:judges [:theme]
+   :reads [:plan :rotation]
+   :explain "'{theme}' is not in the Sunday rotation. Add it there first."
+   :remedies [:rotation/add_theme]}
+  [row ctx]
+  (when-some [read (:read ctx)]
+    (when-some [plan (read :plan (get-in row [:data :plan_id]))]
+      (when-some [rid (get-in plan [:data :rotation_id])]
+        (when-some [rotation (read :rotation rid)]
+          (vec (get-in rotation [:data :themes])))))))
 
 (defguardfn meal-is-listed
   {:judges [:meal_id] :reads [:meal]
@@ -148,40 +147,38 @@
 ;; one acceptance set, two consumers: THIS day's picker offers exactly
 ;; the on-list meals that serve its night (a rotating Sunday binds
 ;; nothing), and the invoke enforces membership in the same set
-(def meal-fits-day
-  (guard {:name :meal-fits-day
-          :judges [:meal_id]
-          :reads [:meal]
-          :accepts (fn [row ctx]
-                     (when-some [find' (:find ctx)]
-                       (let [theme (get-in row [:data :theme])]
-                         (when (not= themes/rotating theme)
-                           (into []
-                                 (keep #(when (some #{theme}
-                                                    (get-in % [:data :themes]))
-                                          (:id %)))
-                                 (find' :meal {:state :on_list}
-                                        {:limit 500}))))))
-          :explain "That meal doesn't serve this day's theme night. Pick the Sunday theme first if the day still rotates, or assign off-theme with confirmation."
-          :remedies [:plan_day/set_sunday_theme :plan_day/assign_off_theme]}))
+(defacceptsfn meal-fits-day
+  {:judges [:meal_id]
+   :reads [:meal]
+   :explain "That meal doesn't serve this day's theme night. Pick the Sunday theme first if the day still rotates, or assign off-theme with confirmation."
+   :remedies [:plan_day/set_sunday_theme :plan_day/assign_off_theme]}
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (let [theme (get-in row [:data :theme])]
+      (when (not= themes/rotating theme)
+        (into []
+              (keep #(when (some #{theme}
+                                 (get-in % [:data :themes]))
+                       (:id %)))
+              (find' :meal {:state :on_list}
+                     {:limit 500}))))))
 
-(def side-fits-day
-  ;; the same admitted set, judging the side's field
-  (guard {:name :side-fits-day
-          :judges [:side_id]
-          :reads [:meal]
-          :accepts (fn [row ctx]
-                     (when-some [find' (:find ctx)]
-                       (let [theme (get-in row [:data :theme])]
-                         (when (not= themes/rotating theme)
-                           (into []
-                                 (keep #(when (some #{theme}
-                                                    (get-in % [:data :themes]))
-                                          (:id %)))
-                                 (find' :meal {:state :on_list}
-                                        {:limit 500}))))))
-          :explain "That side doesn't serve this day's theme night."
-          :remedies [:plan_day/assign_off_theme]}))
+;; the same admitted set, judging the side's field
+(defacceptsfn side-fits-day
+  {:judges [:side_id]
+   :reads [:meal]
+   :explain "That side doesn't serve this day's theme night."
+   :remedies [:plan_day/assign_off_theme]}
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (let [theme (get-in row [:data :theme])]
+      (when (not= themes/rotating theme)
+        (into []
+              (keep #(when (some #{theme}
+                                 (get-in % [:data :themes]))
+                       (:id %)))
+              (find' :meal {:state :on_list}
+                     {:limit 500}))))))
 
 (defguardfn side-is-listed
   {:judges [:side_id] :reads [:meal]
