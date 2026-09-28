@@ -1678,14 +1678,19 @@
                      (not= acknowledge sentence))
               (refusal (confirm-refusal aname sentence acknowledge))
               (answer
-               (call (request session :post
-                              (or (:href entry) (str self "/-/" (name aname)))
-                              {:body (or input {})
-                               :query (when dry_run "dry_run=1")
-                               :headers (invoke-headers
-                                         session entry
-                                         (get-in env-resp [:headers "ETag"])
-                                         acknowledge_warnings)}))
+               ;; the sitting this session is bound to rides the request,
+               ;; so a wall judges THIS sitting and not the newest under
+               ;; the seat's shared grant (ticket 51dfd10b)
+               (call (assoc (request session :post
+                                     (or (:href entry) (str self "/-/" (name aname)))
+                                     {:body (or input {})
+                                      :query (when dry_run "dry_run=1")
+                                      :headers (invoke-headers
+                                                session entry
+                                                (get-in env-resp [:headers "ETag"])
+                                                acknowledge_warnings)})
+                            :waymark10/sitting
+                            (bound-sitting eng (:mcp-session-id session))))
                return
                ;; `from` and the changed set come off the row as READ —
                ;; the same read the gate and the ETag came from
