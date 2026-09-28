@@ -3,7 +3,9 @@
   begins.
 
   The first two are the cadence, which the schedule's copy at the
-  provider fires, and a person's own `fire`. This is the third — a
+  provider fires — or, for a schedule with no link of its own that
+  rides its chair's Routine, this file's tick (`sweep-cadence!`) — and
+  a person's own `fire`. This is the third — a
   transition the seat ASKED to be woken by. The seat says which ones
   in `wake_on`, a list of scope-shaped entries; a committed
   transition that matches one opens the seat's own `fire` door, with
@@ -874,6 +876,59 @@
             0
             (rows-where eng :schedule {:wake_pending true} pending-page))))
 
+;; ── the cadence a chair's Routine does not keep ─────────────────────
+;;
+;; A schedule with its own link has a copy at the provider, and the
+;; provider's cron keeps its cadence. A schedule that rides its CHAIR'S
+;; Routine has no copy anywhere — the adapter leaves it alone, and the
+;; one Routine a model stands for carries no cron of any one seat — so
+;; nobody kept its cadence and it fired only on wakes. The tick keeps
+;; it: a cadence owed is a pending wake, released by `release!` under
+;; the same damper, empty-walk and fuel checks as any other.
+
+(defn- cadence-due?
+  "Is this seat's cadence owed at `at`? A seat with no cadence owes
+  nothing. The last fire is `fired-recently?`'s, the later of the
+  provider's stamp and the wake's own, so a seat woken inside its
+  cadence is not fired again by it."
+  [seat-row schedule-row ^Instant at]
+  (let [cadence (get-in seat-row [:data :cadence_seconds])]
+    (boolean
+     (and (number? cadence)
+          (pos? (long cadence))
+          (not (fired-recently? schedule-row (long cadence) at))))))
+
+(defn sweep-cadence!
+  "Every active seat whose schedule rides its chair's link, whose
+  cadence is owed, marked `wake_pending` so the release that follows
+  fires it. A schedule with its own link is left to its provider's
+  cron, and an interactive seat is fired by nobody (R-10.8). → the
+  number of wakes marked."
+  [eng]
+  (let [at (now eng)]
+    (reduce (fn [n seat-row]
+              (let [row (when-not (seats/interactive-seat? seat-row)
+                          (schedules/schedule-for-seat eng (:id seat-row)))]
+                (if (and row
+                         (not (schedules/linked? row))
+                         (schedules/linked? eng row)
+                         (not (true? (get-in row [:data :wake_pending])))
+                         (cadence-due? seat-row row at))
+                  (do (write-pending! eng row true) (inc n))
+                  n)))
+            0
+            (rows-where eng :seat {:state :active} seat-page))))
+
+(defn tick!
+  "The tick's whole body, and the one call a test makes instead of
+  waiting for it: the cadences owed, then every pending wake. → the
+  number of fires that went out."
+  [eng]
+  (try (sweep-cadence! eng)
+       (catch Exception e
+         (warn! "the cadence sweep failed: " (ex-message e))))
+  (sweep-pending! eng))
+
 ;; ── the fire nobody sat in ──────────────────────────────────────────
 ;;
 ;; A fire mints a key (`seats/hold-fire-key!`) and the run's sit spends
@@ -1098,7 +1153,7 @@
                      (loop []
                        (when-not (.await stop (long interval-ms)
                                          TimeUnit/MILLISECONDS)
-                         (try (sweep-pending! eng)
+                         (try (tick! eng)
                               (catch Exception e
                                 (warn! "the pending sweep failed: "
                                        (ex-message e))))
