@@ -118,7 +118,7 @@
            ;; row readable rather than dropping the whole pass
            nil))))
 
-(defn- local-date
+(defn local-date
   "The instant's date in the household zone — what :date means, and
   what mealplan's plan overlap predicate joins on."
   [^String instant zone]

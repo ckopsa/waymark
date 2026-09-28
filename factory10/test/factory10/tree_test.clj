@@ -291,7 +291,8 @@
         "GitHub reopens a closed pull request, so the row comes back"))
   (testing "a submitted change keeps working, and a stuck one waits"
     (is (= #{:submit :discard_submitted :stall :observe_submitted
-             :adopt_submitted :merge :close :fail :stick :supersede}
+             :adopt_submitted :note_adoption :merge :close :fail :stick
+             :supersede}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")

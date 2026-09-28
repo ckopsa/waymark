@@ -228,6 +228,9 @@
                ;; (docs/spec-transcript.md R-5.1): its own key, one
                ;; transcript's lines
                "/api/-/sittings/transcript"
+               ;; …and the fourth, a seat's inbox (spec-seat.md
+               ;; R-12.38): its own key, one sitting's events
+               "/api/-/sittings/inbox"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
@@ -272,6 +275,8 @@
                  "/api/-/sittings/tally"
                  ;; and the transcript door (spec-transcript R-5.1)
                  "/api/-/sittings/transcript"
+                 ;; and the inbox door (R-12.38)
+                 "/api/-/sittings/inbox"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))

@@ -726,6 +726,21 @@
                    (map #(merge-scope-entries (by-kind %))))
           entries)))
 
+(defn- ->instant ^java.time.Instant [v]
+  (if (instance? java.time.Instant v) v (java.time.Instant/parse (str v))))
+
+(defn later-expiry
+  "The expiry a widen leaves on a grant: the later of the grant's
+  `current` and the ask's `asked`. A widen never shortens (waymark-fp62.20:
+  a standing grant died because an anchored ask's earlier expiry was
+  written over its own). A nil `current` means no expiry, and stays nil."
+  [current asked]
+  (cond
+    (nil? current) nil
+    (nil? asked) current
+    (neg? (compare (->instant current) (->instant asked))) asked
+    :else current))
+
 (defhandler extend-grant [row inp _ctx]
   ;; R-5.3: a SEAT grant has no scope to fold, and an extend on one
   ;; moves the expiry alone. Nothing here writes a scope onto a seat
@@ -736,7 +751,10 @@
     (and (nil? (seat-cited row)) (some? (:scope inp)))
     (update-in [:data :scope] merge-scope (:scope inp))
 
-    (:expires_at inp) (assoc-in [:data :expires_at] (:expires_at inp))))
+    ;; a seat grant's extend comes only from an approved anchored ask
+    ;; too, so it never means 'shorten' either: the same later-of rule
+    (and (:expires_at inp) (some? (get-in row [:data :expires_at])))
+    (update-in [:data :expires_at] later-expiry (:expires_at inp))))
 
 ;; ── the grant resource ──────────────────────────────────────────────
 

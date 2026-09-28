@@ -129,6 +129,23 @@
   ;; machine advances the state, never this handler.
   (update row :data merge (into {} (remove (comp nil? val)) inp)))
 
+(defhandler adopt-the-pull-request [row inp _ctx]
+  ;; The identity lands as `observe` writes the facts, and the forge
+  ;; pass's note that nobody had adopted the landed pull request goes
+  ;; with the wait it described (ticket 58e706d6).
+  (-> row
+      (update :data merge (into {} (remove (comp nil? val)) inp))
+      (update :data assoc :landed_at nil :adoption_note nil)))
+
+(defhandler note-the-adoption [row inp _ctx]
+  ;; THE FORGE PASS'S OWN RECORD (ticket 58e706d6): when it first saw
+  ;; the pull request the bench's landing opened, and, once the window
+  ;; has passed with no adoption, the note that says so. An input with
+  ;; neither clears both.
+  (update row :data assoc
+          :landed_at (some-> (:landed_at inp) str not-empty)
+          :adoption_note (some-> (:adoption_note inp) str not-empty)))
+
 ;; ── the merge finishes the task the change was born from ────────────
 
 (def ^:private born-kinds
@@ -655,7 +672,7 @@
 
 (defguardfn a-person-or-their-delegate-unsticks
   {:reads [:principal]
-   :open "No door here changes this verdict. A stuck change is the house asking a person to look at it, and a model alone that could put itself back to work would be answering its own question. A person taps, or a delegate acting for one does — and grooming the ticket again puts a ticket's change back to work at the next sit."
+   :open "No door here changes this verdict. A stuck change is the house asking a person to look at it, and a model alone that could put itself back to work would be answering its own question. A person taps unstick, or unstick_submitted for a change with a pull request, or a delegate acting for one does. After a seat's stall, which sends the ticket to draft, grooming the ticket again puts its change back to work at the next sit; a change stuck at the round ceiling leaves its ticket in review, where grooming does not serve."
    :explain "This change is stuck: it reached the round ceiling, or a seat said it could not finish. A person, or a delegate acting for one under a grant the person approved, reads it and puts it back to work."}
   [_row _inp ctx]
   ;; ticket's `a-person-or-their-delegate-grooms`, one kind over: the
@@ -1009,6 +1026,19 @@
                       :label "Why the push did not land"
                       :help "The end of the output of the step the bench's landing failed at, when a submit never reached GitHub. The house writes it when it moves the change to failing, and clears it when the seat submits again."}}
      [:maybe [:string {:max 4000}]]]
+    ;; a submit whose landing opened a pull request the forge never
+    ;; adopted (ticket 58e706d6): the first time the forge pass saw it,
+    ;; and the note it writes once the window has passed. The adoption
+    ;; clears both.
+    [:landed_at {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:adoption_note {:optional true
+                     :examples ["landed as #7 on ckopsa/waymark but no pull request row adopted it; head bench/58e706d6"]
+                     :x-display
+                     {:widget "prose"
+                      :label "A pull request nobody adopted"
+                      :help "The bench's landing opened a pull request for this change, and the house's row never took its number, so neither the house's merge nor a merge ask sees it. Cleared when the row adopts the pull request."}}
+     [:maybe [:string {:max 500}]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     ;; the house's merge line (ticket b85aded5): the merge pass writes
@@ -1246,7 +1276,7 @@
     :adopt
     {:from #{:open} :to :open
      :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
+     :handler adopt-the-pull-request
      :input [:map
              [:change_id {:x-display {:raw true}}
               [:string {:min 1 :max 250}]]
@@ -1271,7 +1301,7 @@
     :adopt_submitted
     {:from #{:submitted} :to :submitted
      :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
+     :handler adopt-the-pull-request
      :input [:map
              [:change_id {:x-display {:raw true}}
               [:string {:min 1 :max 250}]]
@@ -1286,6 +1316,25 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Adopt" :order 12
                :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
+
+    ;; THE FORGE PASS'S NOTE (ticket 58e706d6). A submitted change whose
+    ;; landing opened a pull request that no row adopted is skipped by
+    ;; the house's merge and by the merge ask, silently. The pass writes
+    ;; when it first saw it, and after the window a note a person reads.
+    ;; Hidden, and the mirror's hand alone.
+    :note_adoption
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler note-the-adoption
+     :input [:map
+             [:landed_at {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 64}]]]
+             [:adoption_note {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Adoption noted" :order 19
+               :description "The mirror says a landed pull request is waiting for its row"}}
 
     ;; ── THE BRANCH, MINTED AGAIN (bead waymark-fp62.6.3.11) ───────
     ;; A seat-born row writes its head branch at BIRTH, from the
@@ -1377,7 +1426,7 @@
      ;; refuses the forge pass's own unfenced call.
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's unstick, which puts that ticket in the queue again and starts the rounds from zero."}
+              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's own door, or their delegate's: unstick_submitted for a change with a pull request, which puts it under review again, or unstick for one with none, which puts that ticket in the queue again. Either starts the rounds from zero; grooming does not serve a ticket in review."}
      :display {:label "Stuck on red" :order 17
                :description "The checks went red on the last round, and a person reads it next"}}
 
@@ -1468,7 +1517,7 @@
      ;; asks for one for each :from). The way back is real and it is a
      ;; PERSON'S (or their delegate's), which is what the sentence says.
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The house stops working this change and waits. The way back is a person's own door, or their delegate's — unstick, or grooming the ticket again — which puts the change in the queue again and starts the rounds from zero."}
+              :one-way "The house stops working this change and waits, and the ticket it was built for goes to draft. The way back is a person's groom of that ticket, or their delegate's, which puts the change back to work at the next sit with its rounds at zero; unstick, or unstick_submitted for a change with a pull request, puts the change alone back to work."}
      :display {:label "Stuck" :order 8
                :description "Say what stopped you and stop working this change — a person reads it next"}}
 

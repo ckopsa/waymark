@@ -25,12 +25,13 @@
   2e869934). A code seat's submit moves the ticket its change was born
   from `open -> in_review`: the work is out for review and the ticket
   is out of every walk. It is not done. The change's red or conflicted
-  head, a close without a merge, a stall and a person's unstick send it
-  back through `return` to `open`, so the seat that wrote the change
-  wakes and walks it again with its change and feedback; the merge ends
-  it through `land` with the pull request as its sentence, from any
-  state that has not ended (ticket 3ec37f66). All three
-  doors are the change's, inside its own transaction
+  head, a close without a merge and a person's unstick send it back
+  through `return` to `open`, so the seat that wrote the change wakes
+  and walks it again with its change and feedback; a stall sends it
+  through `shelve` to `draft`, where a person grooms it again (ticket
+  6bdaf6fe); the merge ends it through `land` with the pull request as
+  its sentence, from any state that has not ended (ticket 3ec37f66).
+  All four doors are the change's, inside its own transaction
   (`only-its-change-moves-it`), and no hand at the wire takes them.
 
   GROOMED IS A STATE, AND A SEAT CANNOT REACH IT. The owner's ruling,
@@ -401,8 +402,8 @@
 
 (defguardfn only-its-change-moves-it
   {:reads [:within]
-   :open "No door clears this one. A ticket goes out for review when its change is submitted, and comes back when that change goes red, closes, stalls or is unstuck; the change moves it then, and a person who wants it sooner works the change."
-   :explain "A ticket under review is moved by the change it was built in and by no hand: the change's submit sends it out, its red head, close, stall or unstick sends it back, and its merge ends it."}
+   :open "No door clears this one. A ticket goes out for review when its change is submitted, and comes back to the queue when that change goes red, closes or is unstuck; a stall sends it to draft instead, to be groomed again. The change moves it then, and a person who wants it sooner works the change."
+   :explain "A ticket under review is moved by the change it was built in and by no hand: the change's submit sends it out, its red head, close or unstick sends it back to the queue, its stall sends it to draft, and its merge ends it."}
   [_row _inp ctx]
   ;; `only-an-ending-returns-a-ticket-to-draft`'s shape, one kind over:
   ;; the door opens inside a `change` door's own transaction and for
@@ -908,9 +909,9 @@
     {:from #{:in_review} :to :open
      :guards [only-its-change-moves-it]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "Its change went red, closed without a merge, stalled or was put back to work, so the ticket is in the queue again and the seat that wrote the change walks it next. The change's next submit sends it out for review again."}
+              :one-way "Its change went red, closed without a merge or was put back to work, so the ticket is in the queue again and the seat that wrote the change walks it next. The change's next submit sends it out for review again."}
      :display {:label "Back from review" :order 12
-               :description "Its change went red, closed, stalled or was put back to work — into the queue again"}}
+               :description "Its change went red, closed or was put back to work — into the queue again"}}
 
     ;; a stall's way back (ticket 6bdaf6fe): the seat said it cannot
     ;; build this as written, so the ticket leaves the queue for draft,
