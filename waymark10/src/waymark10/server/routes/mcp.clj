@@ -15,7 +15,10 @@
   something that tells the sessions apart, and the id is it. An
   unknown or expired id on any message but `initialize` answers 404,
   which is the protocol's own way of saying start a new session. The
-  map itself is ephemeral engine state (:mcp-sessions), never law.
+  sessions are engine state, never law: over Postgres a table both
+  allocations of a deploy share (waymark10.server.mcp-sessions), so a
+  deploy answers no live client 404, and over the in-memory twin the
+  engine's :mcp-sessions atom.
 
   GET /api/-/mcp with `Accept: text/event-stream` is the other half,
   and it carries exactly ONE kind of server-initiated frame:
