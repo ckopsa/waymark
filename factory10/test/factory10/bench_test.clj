@@ -2322,6 +2322,108 @@
       (is (= (str "Merged: " url ".") (get-in row [:data :close_reason]))))
     (is (= :land (:action (last-ticket-move w))))))
 
+;; ── the merge ends the ticket wherever it stands (ticket 3ec37f66) ────
+;;
+;; A ticket is not always in review when its pull request merges: a
+;; red head or a stall sent it back to the queue, a groomer ungroomed
+;; it, a person blocked it. GitHub merged the work all the same, so
+;; `land` ends it from every state that has not ended, and leaves an
+;; ending alone.
+
+(defn- submitted-and-adopted!
+  "The seat's round, and the pull request its push opened, adopted.
+  Answers the pull request's url."
+  [w number]
+  (let [url (str "https://github.com/ckopsa/waymark/pull/" number)]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (mirror-moves-change! w :adopt_submitted
+                          {:change_id (str "github:ckopsa/waymark#" number)
+                           :number number :url url})
+    url))
+
+(defn- ticket-fence [w]
+  {:principal person
+   :if-match (inv/etag :ticket (str (:id (:ticket w)))
+                       (:version (ticket-row w)))})
+
+(defn- landed-with? [w url]
+  (let [row (ticket-row w)]
+    (and (= "done" (name (:state row)))
+         (= (str "Merged: " url ".") (get-in row [:data :close_reason]))
+         (= :land (:action (last-ticket-move w))))))
+
+(deftest the-merge-completes-an-open-ticket
+  (let [w (ticket-world)
+        url (submitted-and-adopted! w 81)]
+    (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+    (is (= "open" (ticket-state w)) "the red head sent it back")
+    (mirror-moves-change! w :merge nil)
+    (is (landed-with? w url))))
+
+(deftest the-merge-completes-a-draft-ticket
+  (let [w (ticket-world)
+        url (submitted-and-adopted! w 82)]
+    (seat-invokes! w "stall" {:why a-stall-sentence})
+    (person-moves-ticket! w :ungroom)
+    (is (= "draft" (ticket-state w)) "the stall and the ungroom sent it back")
+    (mirror-moves-change! w :merge nil)
+    (is (landed-with? w url)
+        "a person merged the stuck change's pull request, and the draft ends")))
+
+(deftest the-merge-completes-a-blocked-ticket
+  (let [w (ticket-world)
+        other (:row (inv/create! (:eng w) :ticket
+                                 {:title "Name the ceiling on the form"
+                                  :type "feature"
+                                  :repo a-repository}
+                                 {:principal person}))
+        url (submitted-and-adopted! w 83)]
+    (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+    (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :block
+                 {:blocked_by [(str (:id other))]} (ticket-fence w))
+    (is (= "blocked" (ticket-state w)))
+    (mirror-moves-change! w :merge nil)
+    (is (landed-with? w url))))
+
+(deftest the-merge-leaves-a-done-ticket-done
+  (let [w (ticket-world)]
+    (submitted-and-adopted! w 84)
+    (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+    (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :complete
+                 {:close_reason "Done by hand."} (ticket-fence w))
+    (mirror-moves-change! w :merge nil)
+    (let [row (ticket-row w)]
+      (is (= "done" (name (:state row))))
+      (is (= "Done by hand." (get-in row [:data :close_reason]))
+          "the ending on the record stands")
+      (is (= :complete (:action (last-ticket-move w)))
+          "and the merge walked no door on it"))))
+
+(deftest the-merge-closes-a-stuck-duplicate-on-the-same-branch
+  (let [w (ticket-world)
+        url (submitted-and-adopted! w 85)
+        merged (first (changes-of (:eng w)))
+        dup (:row (inv/create! (:eng w) :change
+                               {:change_id "github:ckopsa/waymark#86"
+                                :repository a-repository
+                                :head_branch (get-in merged [:data :head_branch])
+                                :born_from (get-in merged [:data :born_from])}
+                               {:principal mirror/source-principal}))
+        dup-row #(change-row {:eng (:eng w) :change dup})]
+    (inv/invoke! (:eng w) :change (str (:id dup)) :stall
+                 {:why a-stall-sentence}
+                 {:principal person
+                  :if-match (inv/etag :change (str (:id dup))
+                                      (:version (dup-row)))})
+    (is (= "stuck" (name (:state (dup-row)))))
+    (mirror-moves-change! w :merge nil)
+    (is (landed-with? w url))
+    (is (= "closed" (name (:state (dup-row))))
+        "the duplicate no longer holds the seat's queue")
+    (is (= url (get-in (dup-row) [:data :superseded_by]))
+        "and it names the change that merged")
+    (is (= "merged" (name (:state (change-row {:eng (:eng w) :change merged})))))))
+
 (deftest a-change-closed-unmerged-reopens-its-ticket
   (let [w (ticket-world)]
     (seat-invokes! w "submit" {:why a-long-sentence})
