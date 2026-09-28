@@ -3023,6 +3023,7 @@ is still refused by `not-a-sitter`.
 
 **R-14.8** `ignore_sitting_budget` on a seat lifts the per-sitting
 token ceiling. The `sitting_budget_reached` wall then never stands.
+The weekly dollar budget still applies.
 
 **R-14.9** A person's lever is approval-required, never person-only.
 R-14.5's levers and R-14.7's held call are one case of a rule that
@@ -3034,7 +3035,6 @@ call waits for the person's tap instead of dying as a `409`. A wall
 that stays a flat refusal does not guard a lever: it decides whose
 room a row is born in. CI enforces this:
 `workqueue10/test/workqueue10/agent_walls_test.clj` judges every guard
-every module declares as a bare agent, a bare person and an approved
-delegate, and fails on a wall only the agent's type closes unless it
-holds or is named, with its reason, in that test's `flat-walls`.
-The weekly dollar budget still applies.
+every module declares as a bare agent and as a bare person, and fails
+on a wall only the agent's type closes unless it holds or is named,
+with its reason, in that test's `flat-walls`.
