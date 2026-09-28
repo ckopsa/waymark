@@ -672,7 +672,7 @@
 
 (defguardfn a-person-or-their-delegate-unsticks
   {:reads [:principal]
-   :open "No door here changes this verdict. A stuck change is the house asking a person to look at it, and a model alone that could put itself back to work would be answering its own question. A person taps, or a delegate acting for one does — and grooming the ticket again puts a ticket's change back to work at the next sit."
+   :open "No door here changes this verdict. A stuck change is the house asking a person to look at it, and a model alone that could put itself back to work would be answering its own question. A person taps unstick, or unstick_submitted for a change with a pull request, or a delegate acting for one does. After a seat's stall, which sends the ticket to draft, grooming the ticket again puts its change back to work at the next sit; a change stuck at the round ceiling leaves its ticket in review, where grooming does not serve."
    :explain "This change is stuck: it reached the round ceiling, or a seat said it could not finish. A person, or a delegate acting for one under a grant the person approved, reads it and puts it back to work."}
   [_row _inp ctx]
   ;; ticket's `a-person-or-their-delegate-grooms`, one kind over: the
@@ -1426,7 +1426,7 @@
      ;; refuses the forge pass's own unfenced call.
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's unstick, which puts that ticket in the queue again and starts the rounds from zero."}
+              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's own door, or their delegate's: unstick_submitted for a change with a pull request, which puts it under review again, or unstick for one with none, which puts that ticket in the queue again. Either starts the rounds from zero; grooming does not serve a ticket in review."}
      :display {:label "Stuck on red" :order 17
                :description "The checks went red on the last round, and a person reads it next"}}
 
@@ -1517,7 +1517,7 @@
      ;; asks for one for each :from). The way back is real and it is a
      ;; PERSON'S (or their delegate's), which is what the sentence says.
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The house stops working this change and waits. The way back is a person's own door, or their delegate's — unstick, or grooming the ticket again — which puts the change in the queue again and starts the rounds from zero."}
+              :one-way "The house stops working this change and waits, and the ticket it was built for goes to draft. The way back is a person's groom of that ticket, or their delegate's, which puts the change back to work at the next sit with its rounds at zero; unstick, or unstick_submitted for a change with a pull request, puts the change alone back to work."}
      :display {:label "Stuck" :order 8
                :description "Say what stopped you and stop working this change — a person reads it next"}}
 

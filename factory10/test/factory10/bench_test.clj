@@ -2314,6 +2314,16 @@
         "the ticket was groomed once, before the rounds: no groom answers
          the stall, so the ceiling holds")))
 
+(deftest the-stuck-note-names-the-doors-that-are-open
+  ;; ticket 6bdaf6fe: a change stuck at the round ceiling leaves its
+  ;; ticket in review, where `groom` does not serve, so the note names
+  ;; unstick and unstick_submitted for it, and grooming for a stall
+  (let [note @#'mcp/stuck-change-note]
+    (is (str/includes? note "round ceiling leaves its ticket in review, and grooming does not serve it"))
+    (is (str/includes? note "unstick puts back a change with no pull request"))
+    (is (str/includes? note "unstick_submitted one that has a pull request"))
+    (is (str/includes? note "A seat's stall sent the ticket to draft, and grooming it again"))))
+
 ;; ── the ticket follows its change's review (ticket 2e869934) ─────────
 ;;
 ;; A SUBMIT IS NOT DONE. The seat's submit sends the ticket out for

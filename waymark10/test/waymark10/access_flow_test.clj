@@ -403,3 +403,53 @@
                                  :filter {:tag "garage"}}]})]
         (is (= 409 (:status resp)))
         (is (re-find #"cannot be filter-scoped" (str (:detail (json resp)))))))))
+
+(deftest an-anchored-approval-never-shortens-the-grant
+  ;; waymark-fp62.20: a long session's standing grant died when an
+  ;; anchored ask with an earlier expiry was approved and its expiry
+  ;; was written over the grant's. A widen keeps the later of the two.
+  (let [{:keys [h]} (scratch)
+        ask! (fn [body] (req h :post "/api/approval_requests"
+                             {:headers (agent-headers) :body body}))
+        approve! (fn [resp]
+                   (let [self (:self (json resp))]
+                     (is (= 201 (:status resp)) (pr-str (json resp)))
+                     (is (= 200 (:status (req h :post (str self "/-/approve")
+                                              {:headers human}))))
+                     (get-in (json (req h :get self {:headers human}))
+                             [:data :grant_id])))
+        expiry-of (fn [gid] (str (get-in (json (req h :get (str "/api/grants/" gid)
+                                                    {:headers human}))
+                                         [:data :expires_at])))
+        scope [{:kind "access_chore" :actions ["finish"]}]
+        gid (approve! (ask! {:task "A long session's standing leash."
+                             :scope scope
+                             :expires_at "2026-07-13T20:00:00Z"}))]
+    (is (= "2026-07-13T20:00:00Z" (expiry-of gid)))
+
+    (testing "an anchored ask that expires before the grant leaves the grant's expiry"
+      (approve! (ask! {:grant_id gid :task "A little more, briefly."
+                       :scope scope :expires_at "2026-07-13T12:00:00Z"}))
+      (is (= "2026-07-13T20:00:00Z" (expiry-of gid))))
+
+    (testing "an anchored ask with the short default expiry leaves it too"
+      (approve! (ask! {:grant_id gid :task "No time named." :scope scope}))
+      (is (= "2026-07-13T20:00:00Z" (expiry-of gid))))
+
+    (testing "an anchored ask that expires later moves the expiry forward"
+      (approve! (ask! {:grant_id gid :task "Another day."
+                       :scope scope :expires_at "2026-07-14T06:00:00Z"}))
+      (is (= "2026-07-14T06:00:00Z" (expiry-of gid))))))
+
+(deftest later-expiry-keeps-the-later
+  (let [early (Instant/parse "2026-07-13T12:00:00Z")
+        late (Instant/parse "2026-07-13T20:00:00Z")]
+    (testing "an earlier ask leaves the grant's expiry"
+      (is (= late (grants/later-expiry late early))))
+    (testing "a later ask moves it forward"
+      (is (= late (grants/later-expiry early late))))
+    (testing "a stored string compares as an instant"
+      (is (= "2026-07-13T20:00:00Z" (grants/later-expiry "2026-07-13T20:00:00Z" early)))
+      (is (= late (grants/later-expiry "2026-07-13T12:00:00Z" late))))
+    (testing "a grant with no expiry keeps none"
+      (is (nil? (grants/later-expiry nil late))))))
