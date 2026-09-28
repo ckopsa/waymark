@@ -2631,6 +2631,28 @@
                                           {:limit 1}))))
              (inv/decode-row rdef))))
 
+(def ^:private change-scan-limit
+  "How many change rows one lookup by a data field reads. A walk row
+  and a branch each hold one live change in a house that works, and
+  the ceiling keeps a strange history from making the sit read a
+  table."
+  20)
+
+(defn- change-in-state
+  "The first change row whose data match `where` and whose state is
+  the first of `states` any of them is in, or nil. `states` is the
+  order of preference."
+  [eng where states]
+  (when-some [rdef (get (inv/resources eng) :change)]
+    (let [st (:storage eng)
+          rows (->> (store/with-tx st
+                      (fn [tx]
+                        (store/query-rows st tx :change where
+                                          {:limit change-scan-limit})))
+                    (map #(inv/decode-row rdef %)))
+          in? (fn [state row] (= state (some-> (:state row) name keyword)))]
+      (some (fn [state] (some #(when (in? state %) %) rows)) states))))
+
 (def ^:private change-title-max
   "The change kind's own ceiling on a title. A walk row's summary line
   is short, and a title that overran it would refuse the mint."
@@ -2672,44 +2694,62 @@
   identity over `change_id` — so a field of its own is what lets the
   merge complete the walk row this change was built for.
 
+  A REOPENED ROW FINDS ITS SUBMITTED CHANGE (ticket b35ab5b5). Once
+  the adoption has written GitHub's id over `change_id`, the lookup by
+  `change_id` misses, so the row's own `born_from` is read first: a
+  `submitted` or `failing` change is the answer (its feedback is the
+  next round's work), then the one `change_id` still names, then a
+  `stuck` one. And a branch that already carries an open, submitted,
+  failing or stuck change is that change's: no second row is minted
+  under it.
+
   → [change nil], or [nil sentence] when there is no repository to
   mint against and when the mint itself refuses."
   [eng seat walk]
   (let [row (get-in walk ["rows" 0])
         row-id (some-> (get row "id") str not-empty)
         change-id (str (get walk "kind") ":" row-id)]
-    (if-some [found (change-by-id eng change-id)]
+    (if-some [found (or (change-in-state eng {:born_from change-id}
+                                         [:submitted :failing])
+                        (change-by-id eng change-id)
+                        (change-in-state eng {:born_from change-id}
+                                         [:stuck]))]
       [found nil]
       (if-some [repo (seat-repository seat)]
         (let [policy (repo-policy-of eng repo)]
-          (try
-            [(:row (inv/create!
-                    eng :change
-                    {:change_id change-id
-                     ;; …and the same words again, in a field the
-                     ;; adoption does not touch (waymark-fp62.6.3.14).
-                     ;; `change_id` becomes GitHub's at the adoption,
-                     ;; so the row would forget which walk row it was
-                     ;; built for — and the merge must know, because
-                     ;; it completes that row.
-                     :born_from change-id
-                     :repository repo
-                     :title (walk-row-title row)
-                     :head_branch (pattern-branch policy row-id)
-                     :base_branch (or (some-> (get-in policy [:data :base])
-                                              str not-empty)
-                                      default-base)
-                     :author (str (get-in seat [:data :name]))}
-                    {:principal seat-change-principal}))
-             nil]
-            (catch Exception e
-              (binding [*out* *err*]
-                (println "waymark10 seat change mint failed -" (ex-message e)))
-              ;; a peer sitting that minted the same id one moment ago
-              ;; is the ordinary cause, and its row is the answer
-              (if-some [raced (change-by-id eng change-id)]
-                [raced nil]
-                [nil no-change-note]))))
+          (if-some [held (change-in-state
+                          eng {:repository repo
+                               :head_branch (pattern-branch policy row-id)}
+                          [:submitted :failing :open :stuck])]
+            [held nil]
+            (try
+              [(:row (inv/create!
+                      eng :change
+                      {:change_id change-id
+                       ;; …and the same words again, in a field the
+                       ;; adoption does not touch (waymark-fp62.6.3.14).
+                       ;; `change_id` becomes GitHub's at the adoption,
+                       ;; so the row would forget which walk row it was
+                       ;; built for — and the merge must know, because
+                       ;; it completes that row.
+                       :born_from change-id
+                       :repository repo
+                       :title (walk-row-title row)
+                       :head_branch (pattern-branch policy row-id)
+                       :base_branch (or (some-> (get-in policy [:data :base])
+                                                str not-empty)
+                                        default-base)
+                       :author (str (get-in seat [:data :name]))}
+                      {:principal seat-change-principal}))
+               nil]
+              (catch Exception e
+                (binding [*out* *err*]
+                  (println "waymark10 seat change mint failed -" (ex-message e)))
+                ;; a peer sitting that minted the same id one moment ago
+                ;; is the ordinary cause, and its row is the answer
+                (if-some [raced (change-by-id eng change-id)]
+                  [raced nil]
+                  [nil no-change-note])))))
         [nil seat-repo-note]))))
 
 (def ^:private forge-change-prefix
