@@ -169,8 +169,11 @@ function secretDialog({heading, note, value, copyOk, copyFallback,
   return dlg;
 }
 async function renderAccess(view, seq) {
+  let w = null;
+  try { w = await wellKnown(); } catch { /* the asks stay empty */ }
+  const asksHref = collectionHref(w, askKind(w));
   const [members, asks, grants, powers] = await Promise.all([
-    fullItems("/api/members"), fullItems("/api/approval_requests"),
+    fullItems("/api/members"), asksHref ? fullItems(asksHref) : [],
     fullItems("/api/grants"), fullItems("/api/capabilities")]);
   if (seq !== renderSeq) return;
   clearLiveTimers();

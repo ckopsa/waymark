@@ -50,7 +50,7 @@ async function jumpTargets() {
   const screen = (label, href, where) => out.push({label, href, where});
   screen("Home", "", "dashboard");
   screen("Dashboard", "dashboard", "counts");
-  if (w.resources && w.resources.member && w.resources.approval_request)
+  if (w.resources && w.resources.member && askKind(w))
     screen("Access", "access", "grants");
   /* the kinds themselves: the active domain's first, then the other
      applications', then the engine's own machinery — the order the
