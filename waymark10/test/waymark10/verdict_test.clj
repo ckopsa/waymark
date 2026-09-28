@@ -241,7 +241,10 @@
   (let [{:keys [eng seat] :as w} (world)
         said (judge! eng seat (verdict-body w))
         vid (id-of (get-in said [:doc :self]))
-        other (leash! eng "seat-bo")
+        ;; a hold waits on a person (`delegation/hold-owner`): an agent
+        ;; nobody stands behind keeps the flat refusal, so this one
+        ;; acts for mom, the person whose Allow replays it
+        other (assoc (leash! eng "seat-bo") "x-waymark-acts-for" "mom")
         body (verdict-body w :verdict "this_change"
                            :remedy "I disagree."
                            :corrects vid)
