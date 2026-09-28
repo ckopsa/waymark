@@ -131,6 +131,7 @@
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.runtime :as runtime]
+            [waymark10.resource :as res]
             [waymark10.server.seams :as seams]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -513,7 +514,14 @@
                                                   ;; ENGINE_KINDS set retires
                                                   :nav (name (:nav r :primary))}
                                            (:domain r)
-                                           (assoc :domain (name (:domain r))))]))
+                                           (assoc :domain (name (:domain r)))
+                                           ;; a decision kind advertises
+                                           ;; itself, and the field its
+                                           ;; requester is stamped into
+                                           (res/decision r)
+                                           (assoc :decision
+                                                  {:by (some-> (res/decision r)
+                                                               :by name)}))]))
                                  resources)}
          ;; global navigation between the deployable's applications:
          ;; every distinct declared domain, sorted — present only when
@@ -522,6 +530,12 @@
          (assoc :domains (->> resources
                               (keep (comp :domain val))
                               (map name) distinct sort vec))
+         ;; every decision kind, sorted — the generic UI derives its
+         ;; queues from this list instead of naming a kind by hand
+         (some (comp res/decision val) resources)
+         (assoc :decisions (->> resources
+                                (filter (comp res/decision val))
+                                (map (comp name key)) sort vec))
          ;; the declared surfaces (phase 9b) — hidden from a scoped
          ;; request, whose surface routes 404 anyway
          (and (seq (:surfaces eng)) (nil? vis))

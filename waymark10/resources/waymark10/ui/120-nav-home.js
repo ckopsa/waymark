@@ -80,9 +80,18 @@ async function renderNav(current) {
       nav.append(el("a", {href: "#" + r.href,
         style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
-  if (w.resources && w.resources.member && w.resources.approval_request)
+  if (w.resources && w.resources.member && askKind(w))
     nav.append(el("a", {href: "#access",
       style: current === "access" ? "font-weight:700" : ""}, "Access"));
+  /* every other decision kind is a queue with a tab of its own (the
+     ask kind's queue is the Access panel) */
+  for (const kind of decisionKinds(w)) {
+    const r = w.resources[kind];
+    if (kind === askKind(w) || navTier(r) === "primary") continue;
+    if (r.domain && r.domain !== active) continue;
+    nav.append(el("a", {href: "#" + r.href,
+      style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
+  }
   /* secondary and system kinds fold behind ⋯ — domainless (the
      engine's own) always, a domain's own only while that domain is
      active */

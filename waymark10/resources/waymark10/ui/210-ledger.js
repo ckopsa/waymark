@@ -209,7 +209,7 @@ function onRowFrame({event, id, data: ev}) {
       feedBox.prepend(ledgerRow(ev, isFollowed));
       while (feedBox.children.length > 20) feedBox.lastChild.remove();
     }
-    if (["member", "approval_request", "grant"].includes(ev.kind)) {
+    if (["member", "grant", ...decisionKinds(wellKnownNow)].includes(ev.kind)) {
       clearTimeout(refetchTimer);
       refetchTimer = setTimeout(render, 350);
     }

@@ -23,6 +23,17 @@ function wellKnown() {
    engine's own kinds declare :nav :system and fold behind the ⋯ from
    the wire alone. */
 function navTier(r) { return (r || {}).nav || "primary"; }
+/* decision kinds ride the wire too: every queue a verdict drains.
+   The ask kind is the one the :ask door posts to — how sight is
+   negotiated — so the chrome never names it */
+function decisionKinds(w) {
+  return Object.entries((w || {}).resources || {})
+    .filter(([, r]) => r.decision).map(([k]) => k);
+}
+function askKind(w) {
+  const href = (((w || {}).doors || {}).ask || {}).href;
+  return decisionKinds(w).find(k => w.resources[k].href === href) || null;
+}
 function domainOf(w, href) {
   for (const r of Object.values(w.resources || {}))
     if (r.href === href && r.domain) return r.domain;

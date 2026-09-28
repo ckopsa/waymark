@@ -153,6 +153,35 @@
   [rdef]
   (boolean (get-in rdef [:retain :judgment])))
 
+(defn retains-data?
+  "Does this kind retain the document itself on every transition —
+  time travel's tier 3, :retain {:data true}? The same one map as
+  `retains?`, and the same default: off."
+  [rdef]
+  (boolean (get-in rdef [:retain :data])))
+
+(defn after-record
+  "The document as a write left it, for the transition's `after`
+  column — nil unless the kind declares :retain {:data true}. The
+  first lock again: secret fields are SUBTRACTED here, so a retained
+  copy never holds a value a later read would have to remember to
+  hide. Encoded to the stored form, exactly as the row's own column."
+  [rdef data]
+  (when (retains-data? rdef)
+    (let [secret (not-empty (schema/secret-fields (:schema rdef)))]
+      (schema/encode (:schema rdef)
+                     (cond-> (or data {}) secret (#(apply dissoc % secret)))))))
+
+(defn project-data
+  "A retained document, read through a grant's field visibility — the
+  second lock, `project`'s twin for tier 3. A field the visibility
+  conceals is dropped, as a row read drops it. nil `visible?` projects
+  nothing (the system door)."
+  [data visible?]
+  (if (or (nil? data) (nil? visible?))
+    data
+    (into {} (filter (fn [[k _]] (visible? (name k)))) data)))
+
 (def ^:private value-cap
   "The longest evidence string recorded. :vars bounds the record by
   construction — a guard declares two or three names, not a document

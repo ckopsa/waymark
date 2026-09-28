@@ -59,7 +59,11 @@
     :retain {:judgment true}, and nil everywhere else rather than an
     empty object that would lie about coverage. Which guards judged
     needs no column: it derives from :law-revision through
-    waymark10.server.decision/basis.")
+    waymark10.server.decision/basis.
+
+    :after is time travel's tier 3 — the document as the write left
+    it, present only for a kind declaring :retain {:data true}
+    (waymark10.server.decision/after-record), nil everywhere else.")
   (transitions [st tx where opts]
     "Log rows: where {:kind … :resource-id … :since id}, newest-last.")
   (transition-stats [st tx since include-system?]

@@ -153,6 +153,9 @@
     one head, the latest of each (ticket d1742908). The poll reads
     checks only on pull requests that moved, and a check that finishes
     moves no pull request, so the failing pass asks head by head.
+    Commit statuses count as checks. A check may carry its `ci_run`
+    document on its metadata (`:doc`), from which the run pass mints a
+    red that finished after the push (ticket 3aca3ae8).
     Throws when the forge does not answer.")
   (forge-base [s repository branch]
     "→ {:head_sha sha :checks [check-doc …]} for the head of one branch,
@@ -659,6 +662,56 @@
                                          {:limit failing-scan-limit}))
               ["submitted" "failing"])))))
 
+(defn- head-reader
+  "The checks of each head, read once for the whole pass (ticket
+  3aca3ae8): the run pass and the failing pass ask the same heads, and
+  the forge answers each one time. A read that throws is not kept, so
+  the next asker tries again."
+  [source]
+  (let [seen (atom {})]
+    (fn [repo head]
+      (let [k [repo head]]
+        (if-some [hit (find @seen k)]
+          (val hit)
+          (let [checks (forge-checks source repo head)]
+            (swap! seen assoc k checks)
+            checks))))))
+
+(defn- live-reds
+  "The finished red runs on the head of every live change of a
+  repository with an active policy, from the same per-head read the
+  failing pass makes (ticket 3aca3ae8). A check that goes red after the
+  push moves no pull request, so the poll's window never carries it;
+  this read does. Each check carries its `ci_run` document on its
+  metadata (`:doc`); a source whose checks carry none answers nothing
+  here. A run the poll already carried is left to the poll's own."
+  [eng read-checks polled log-fn]
+  (let [repos (into #{}
+                    (keep #(some-> (get-in % [:data :repository]) str not-empty))
+                    (bench/policies eng :active))
+        known (into #{} (map :run_id) polled)
+        red (fn [row head check]
+              (when-some [doc (:doc (meta check))]
+                (when (and (= "completed" (str (:status check)))
+                           (contains? red-conclusions (str (:conclusion check)))
+                           (not (contains? known (:run_id doc))))
+                  (assoc doc
+                         :change_id (get-in row [:data :change_id])
+                         :head_sha head))))]
+    (into []
+          (mapcat
+           (fn [row]
+             (let [repo (str (get-in row [:data :repository]))
+                   head (some-> (get-in row [:data :head_sha]) str not-empty)]
+               (when (and head (contains? repos repo))
+                 (try
+                   (into [] (keep #(red row head %)) (read-checks repo head))
+                   (catch Exception e
+                     (log-fn "the checks of " (get-in row [:data :change_id])
+                             " did not answer (" (ex-message e) ")")
+                     nil))))))
+          (live-changes eng))))
+
 ;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
 ;;
 ;; A conflicted pull request runs no fresh checks, so it never goes
@@ -917,8 +970,9 @@
   policy → its head's checks, read against the policy, and at most one
   door. A change with no head, or of a repository with no policy, is
   left where it is. A forge that does not answer, or a door the engine
-  refuses, costs that change one pass and nothing else."
-  [eng source census log-fn]
+  refuses, costs that change one pass and nothing else. `read-checks`
+  is the pass's one read of each head (`head-reader`)."
+  [eng source read-checks census log-fn]
   (let [by-repo (into {}
                       (keep (fn [p]
                               (when-some [r (some-> (get-in p [:data :repository])
@@ -943,7 +997,7 @@
                              (landing-verdict (landing-of eng row policy)))
                    checked (when-not landing
                              (check-verdict (bench/required-checks-of policy)
-                                            (forge-checks source repo head)))
+                                            (read-checks repo head)))
                    verdict (case (:verdict landing)
                              :red landing
                              :running nil
@@ -1403,10 +1457,14 @@
                         :complete? (boolean complete?))
           census (source-note-pass! eng refusals answered census log-fn)
           census (change-pass! eng changes census log-fn)
-          census (run-pass! eng source checks census log-fn)
+          read-checks (head-reader source)
+          census (run-pass! eng source
+                            (into (vec checks)
+                                  (live-reds eng read-checks checks log-fn))
+                            census log-fn)
           census (stale-pass! eng changes census log-fn)
           census (label-pass! eng source census log-fn)
-          census (failing-pass! eng source census log-fn)
+          census (failing-pass! eng source read-checks census log-fn)
           census (adoption-note-pass! eng census log-fn)
           census (base-pass! eng source census log-fn)
           census (assoc census :calls (forge-calls source))]
