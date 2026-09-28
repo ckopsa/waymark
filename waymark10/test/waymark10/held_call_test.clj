@@ -18,6 +18,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.server.capabilities :as caps]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
@@ -660,3 +661,145 @@
         "R-6: an ask you cannot read the answer to is not an ask")
     (is (false? ((:action? vis) :held_call :allow))
         "and the verdicts stay a person's")))
+
+;; ── the notifier's fake chat (waymark-fp62.10.3) ──────────────────
+
+(def ^:private chat-tools
+  [{:name "send_message" :description "Send a chat message."
+    :inputSchema {:type "object"
+                  :properties {:chat_id {:type "string"}
+                               :text {:type "string"}}}}])
+
+(defn- fake-chat [log down?]
+  (fn [method params]
+    (swap! log conj {:method method :params params})
+    (when (and @down? (= "tools/call" method))
+      (throw (client/unreachable "the fake is down.")))
+    (case method
+      "tools/list" {:tools chat-tools}
+      "tools/call" {:content [{:type "text" :text "sent"}] :isError false})))
+
+(defn- chat-world []
+  (let [log (atom [])
+        down? (atom false)
+        fake (fake-chat log down?)
+        eng (engine/engine {:storage (memory/storage)
+                            :resources [caps/capability]
+                            :services {:mcp-servers
+                                       {:client-fn (fn [row]
+                                                     (when (= "tgrambot"
+                                                              (get-in row [:data :name]))
+                                                       fake))}}})
+        _ (inv/create! eng :capability
+                       {:token "chat.send"
+                        :description "chat.send through a server row."
+                        :enforced_by "this engine's own power door"}
+                       {:principal colton})
+        server (:row (inv/create! eng :mcp_server
+                                  {:name "tgrambot" :transport "http"
+                                   :url "http://fake.invalid/mcp/"
+                                   :powers [{:power "chat.send"
+                                             :tools ["send_message"]
+                                             :approval "person"}]}
+                                  {:principal colton}))]
+    {:eng eng :log log :down? down? :server-id (str (:id server))}))
+
+(defn- chat-notifier! [{:keys [eng server-id]} on]
+  (:row (inv/create! eng :notifier
+                     {:name "the owner's chat"
+                      :server server-id
+                      :tool "tgrambot__send_message"
+                      :input_template {:chat_id "42"
+                                       :text "{kind} {action}: {summary} {link}"}
+                      :on on
+                      :audience "colton"
+                      :link_base "https://work.example.org/"}
+                     {:principal colton})))
+
+(defn- drain-notices! [eng]
+  (consumers/drain-consumer! eng held/notifier-consumer
+                             (held/notifier-consumer-fn eng)))
+
+(defn- chat-sends [log]
+  (filterv #(= "tools/call" (:method %)) @log))
+
+(defn- hold-chat! [{:keys [eng server-id]}]
+  (:row (held/hold! eng {:server server-id :tool "tgrambot__send_message"
+                         :input {:chat_id "7" :text "hi"}
+                         :forward {:chat_id "7" :text "hi"}
+                         :why "say hello" :caller "mail-clerk"})))
+
+(defn- chat-notifier-data [eng id]
+  (:data (store/with-tx (:storage eng)
+           #(store/load-row (:storage eng) % :notifier (str id) {}))))
+
+(defn- chat-held-count [eng]
+  (store/with-tx (:storage eng)
+    #(store/count-matching (:storage eng) % :held_call [])))
+
+(deftest a-notifier-sends-one-message-per-held-call-carrying-the-link
+  (let [{:keys [eng log] :as w} (chat-world)
+        n (chat-notifier! w [{:kind "held_call" :actions ["create"]}])]
+    (drain-notices! eng)
+    (let [call (hold-chat! w)]
+      (drain-notices! eng)
+      (let [s (chat-sends log)
+            text (get-in (first s) [:params :arguments :text])]
+        (is (= 1 (count s)))
+        (is (= "send_message" (get-in (first s) [:params :name])))
+        (is (str/includes? (str text)
+                           (str "https://work.example.org/api/held_calls/" (:id call))))
+        (is (= 1 (:sent (chat-notifier-data eng (:id n)))))))))
+
+(deftest a-failed-notice-counts-and-the-held-call-stands
+  (let [{:keys [eng down?] :as w} (chat-world)
+        n (chat-notifier! w [{:kind "held_call" :actions ["create"]}])]
+    (drain-notices! eng)
+    (reset! down? true)
+    (let [call (hold-chat! w)]
+      (drain-notices! eng)
+      (let [data (chat-notifier-data eng (:id n))]
+        (is (= 1 (:failed data)))
+        (is (not (str/blank? (str (:last_error data))))))
+      (is (= :held (:state (store/with-tx (:storage eng)
+                             #(store/load-row (:storage eng) % :held_call
+                                              (str (:id call)) {})))))
+      (is (= 1 (chat-held-count eng))))))
+
+(deftest the-notifiers-send-does-not-hold
+  (testing "the tool's power says approval person, and the engine's own send passes"
+    (let [{:keys [eng log] :as w} (chat-world)]
+      (chat-notifier! w [{:kind "held_call" :actions ["create"]}])
+      (drain-notices! eng)
+      (hold-chat! w)
+      (drain-notices! eng)
+      (is (= 1 (count (chat-sends log))))
+      (is (= 1 (chat-held-count eng)) "only the call that was held, none for the notice"))))
+
+(deftest a-notifier-on-a-halt-sends-on-a-halt
+  (let [{:keys [eng log] :as w} (chat-world)]
+    (chat-notifier! w [{:kind "seat" :actions ["mark_halted"]}])
+    (held/notice-transition! eng {:id 1 :kind :seat :resource-id "s-1"
+                                  :action :mark_halted :actor "waymark10-seats"
+                                  :summary "code-seat · halted"})
+    (held/notice-transition! eng {:id 2 :kind :seat :resource-id "s-1"
+                                  :action :resume :actor "waymark10-seats"})
+    (is (= 1 (count (chat-sends log))))))
+
+(deftest the-audiences-own-transition-sends-no-notice
+  (let [{:keys [eng log] :as w} (chat-world)]
+    (chat-notifier! w [{:kind "seat" :actions ["mark_halted"]}])
+    (held/notice-transition! eng {:id 1 :kind :seat :resource-id "s-1"
+                                  :action :mark_halted :actor "colton"})
+    (is (= [] (chat-sends log)))))
+
+(deftest a-restart-replays-no-notice-already-sent
+  (let [{:keys [eng log] :as w} (chat-world)]
+    (chat-notifier! w [{:kind "held_call" :actions ["create"]}])
+    (drain-notices! eng)
+    (hold-chat! w)
+    (drain-notices! eng)
+    (is (= 1 (count (chat-sends log))))
+    (testing "a fresh consumer function, as a restarted engine builds, reads the cursor"
+      (drain-notices! eng)
+      (is (= 1 (count (chat-sends log)))))))
