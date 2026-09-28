@@ -995,8 +995,23 @@
     (pg/close! storage)
     (reset! dev nil)))
 
+(def ^:private drain-ms
+  "How long a SIGTERM waits for in-flight requests before the process
+  stops (WORKQUEUE10_DRAIN_MS). The job's kill_timeout is the real
+  ceiling: past it the scheduler kills the process whatever is left."
+  (or (some-> (System/getenv "WORKQUEUE10_DRAIN_MS") parse-long) 20000))
+
 (defn -main [& _]
   (start!)
+  ;; SIGTERM drains: the server stops taking connections and lets the
+  ;; calls already in flight answer, then everything else stops. Until
+  ;; this hook a deploy's stop cut every in-flight tool call off.
+  (.addShutdownHook (Runtime/getRuntime)
+                    (Thread. ^Runnable
+                     (fn []
+                       (when-some [server (:server @dev)]
+                         (engine/drain! server drain-ms))
+                       (stop!))))
   ;; WAYMARK10_WATCH=1 (make dev-queue): reload-on-save — changed
   ;; sources under src/ load-file, then stop!/start!
   (when (= "1" (System/getenv "WAYMARK10_WATCH"))
