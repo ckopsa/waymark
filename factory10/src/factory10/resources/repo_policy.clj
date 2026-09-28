@@ -352,6 +352,22 @@
                          {:label "How long a green change waits on you"
                           :help "When the house does not merge this repository, a change whose checks are green and that merges clean waits this many seconds for a person. Then the house asks for the merge once, as a held call: your Allow merges it."}}
     [:int {:min 60 :max 604800}]]
+   ;; one deploy at a time (ticket 47217098). OPTIONAL for the reason
+   ;; merge_wait_seconds is.
+   [:deploy_check {:optional true
+                   :examples ["deploy"]
+                   :x-display
+                   {:raw true
+                    :label "The job that deploys the base"
+                    :help "The name of the check on the base branch whose success means that commit is deployed. After each house merge the house merges nothing more here until this check is green on a commit that holds the merge. Empty means a merge counts as deployed."}}
+    [:maybe [:string {:max 200}]]]
+   [:deploy_wait_seconds {:optional true
+                          :default 1800
+                          :examples [1800]
+                          :x-display
+                          {:label "How long the line waits on a deploy"
+                           :help "The longest the house waits for the deploy check to report on a merge before it notes that and merges the next change. A red deploy holds the line past it."}}
+    [:int {:min 60 :max 86400}]]
    [:rounds_per_change {:default 3
                         :examples [3]
                         :x-display
@@ -442,6 +458,47 @@
                       {:label "Base read at"
                        :help "When the pass last wrote the base's state, which it does when that state moves."}}
     [:maybe :waymark/instant]]
+   ;; one deploy at a time (ticket 47217098): the merge pass writes the
+   ;; house's merges here, and the forge pass takes each off once the
+   ;; deploy check is green on a base commit that holds it
+   [:deploy_waits_on {:optional true
+                      :examples [["2847912e-7783-4651-bead-61eab0492776 47217098-4c6a-484d-88c0-f6eb69ab820c 250"]]
+                      :x-display
+                      {:raw true
+                       :label "Merges not deployed yet"
+                       :help "Each house merge whose deploy the line waits on: the change, its ticket and its pull request. The house merges nothing more in this repository while one is here."}}
+    [:maybe [:vector [:string {:max 200}]]]]
+   [:deploy_waiting_since {:optional true
+                           :examples ["2026-09-28T12:00:00Z"]
+                           :x-display
+                           {:label "Waiting on a deploy since"
+                            :help "When the oldest merge above was made."}}
+    [:maybe :waymark/instant]]
+   [:deployed_head {:optional true
+                    :examples ["1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"]
+                    :x-display
+                    {:raw true
+                     :label "The last deployed commit"
+                     :help "The newest base commit the forge pass saw the deploy check green on."}}
+    [:maybe [:string {:max 64}]]]
+   [:deployed_at {:optional true
+                  :examples ["2026-09-28T12:00:00Z"]
+                  :x-display
+                  {:label "Deployed at"
+                   :help "When the forge pass first saw that commit deployed."}}
+    [:maybe :waymark/instant]]
+   [:deploy_state {:optional true
+                   :x-display
+                   {:label "The last deploy was"
+                    :help "What the deploy check said at its last finish: green, or red, which holds the line until it is green again."}}
+    [:maybe [:enum "green" "red"]]]
+   [:deploy_note {:optional true
+                  :examples ["The line waits on the deploy of #250, since 2026-09-28T12:00:00Z."]
+                  :x-display
+                  {:widget "prose"
+                   :label "What the line waits for"
+                   :help "The deploy the house's merge line waits on and since when, a red deploy, or a wait the house gave up on."}}
+    [:maybe [:string {:max 500}]]]
    ;; the house's merge line (ticket b85aded5): the merge pass writes
    ;; these each time the line moves, as a maintenance write, and
    ;; clears them when no change stands in the line
@@ -527,6 +584,7 @@
      :edit {:prefill [:repository :clone_url :branch_pattern :base :max_lines
                       :opens_pr :auto_merge :merge_by :required_checks
                       :merge_method :merge_wait_seconds
+                      :deploy_check :deploy_wait_seconds
                       :rounds_per_change :formatter
                       :deny :orientation]}
      :safety {:idempotent true :reversible true :confirm false}

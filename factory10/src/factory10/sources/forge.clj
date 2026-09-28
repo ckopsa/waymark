@@ -172,6 +172,15 @@
   (forge-rerun! [s repository run-id]
     "Re-run the failed jobs of one run. Throws when the forge refuses."))
 
+(defprotocol ForgeDeploy
+  "Whether a merged pull request is in a commit of its base, for the
+  line that waits on a deploy (ticket 47217098). A protocol of its own:
+  a source that does not implement it counts a green deploy as covering
+  every merge before it."
+  (forge-covers? [s repository number sha]
+    "→ true when pull request `number` is merged and its merge commit is
+    `sha` or an ancestor of it. Throws when the forge does not answer."))
+
 ;; ── what the two kinds take ─────────────────────────────────────────
 
 (def change-create-fields
@@ -1101,6 +1110,12 @@
         (when (not= input stored)
           (inv/invoke! eng :repo_policy (str (:id policy)) :note_base input
                        (as-opts)))
+        ;; the deploy the merge line waits on, from the same read
+        ;; (ticket 47217098)
+        (bench/note-deploy! eng policy base-read
+                            (fn [number sha]
+                              (or (not (satisfies? ForgeDeploy source))
+                                  (forge-covers? source repo number sha))))
         census))))
 
 (defn- base-pass!

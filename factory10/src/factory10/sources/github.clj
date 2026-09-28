@@ -793,6 +793,22 @@
                               :status (word (:status check))))
                      (check-runs! this repository sha))}))
 
+  forge/ForgeDeploy
+  (forge-covers? [this repository number sha]
+    ;; the pull request's merge commit, then GitHub's compare of it with
+    ;; the deployed commit: `ahead` means the merge is an ancestor of it
+    ;; (ticket 47217098)
+    (let [pull (call! this "GET" (str "/repos/" repository "/pulls/" number) {})
+          merged (word (:merge_commit_sha pull))]
+      (boolean
+       (when (and merged (or (true? (:merged pull)) (word (:merged_at pull))))
+         (or (= merged sha)
+             (let [answer (call! this "GET"
+                                 (str "/repos/" repository "/compare/"
+                                      merged "..." sha)
+                                 {})]
+               (contains? #{"ahead" "identical"} (word (:status answer)))))))))
+
   forge/ForgeRerun
   (forge-runs [this repository head-sha]
     (latest-runs! this repository head-sha))
@@ -899,6 +915,12 @@
   [state repo branch sha]
   (swap! state assoc-in [:repos repo :branches branch] sha))
 
+(defn seed-ancestor!
+  "Say `sha` is an ancestor of `head`, for the compare route the deploy
+  read walks (ticket 47217098). Any other pair of commits has diverged."
+  [state repo head sha]
+  (swap! state update-in [:repos repo :ancestors head] (fnil conj #{}) sha))
+
 (defn seed-run!
   "One workflow run on one head, for the Actions read the source makes
   when the check-runs route refuses. Its jobs come from `seed-job!`."
@@ -969,6 +991,7 @@
 (def ^:private job-log-path #"/repos/([^/]+/[^/]+)/actions/jobs/(\d+)/logs")
 (def ^:private labels-path #"/repos/([^/]+/[^/]+)/issues/(\d+)/labels")
 (def ^:private branch-path #"/repos/([^/]+/[^/]+)/branches/(.+)")
+(def ^:private compare-path #"/repos/([^/]+/[^/]+)/compare/([^.]+)\.\.\.(.+)")
 (def ^:private rerun-path
   #"/repos/([^/]+/[^/]+)/actions/runs/(\d+)/rerun-failed-jobs")
 
@@ -1053,6 +1076,12 @@
             :missing {:status 404 :body "not found"}
             {:status 200 :body (get (:logs st) job "")
              :content-type "text/plain"}))
+
+        (re-matches compare-path path)
+        (let [[_ r from to] (re-matches compare-path path)]
+          {:status (cond (= from to) "identical"
+                         (contains? (get-in st [:repos r :ancestors to]) from) "ahead"
+                         :else "diverged")})
 
         (re-matches branch-path path)
         (let [m (re-matches branch-path path)]
