@@ -1027,12 +1027,42 @@
 
 ;; ── the migrate CLI (make migrate-queue) ────────────────────────────
 
+(defn print-plan!
+  "Print the migration plan — `lines`, each step already described —
+  to stdout AND stderr between `=== plan begin ===` and
+  `=== plan end ===`, so either stream the dispatcher captures carries
+  it, and flush both. Answers the exit code the deploy gate judges by:
+  0 on an empty plan, 1 while steps wait."
+  [lines]
+  (let [block (str "=== plan begin ===\n"
+                   (if (empty? lines)
+                     "workqueue10: storage matches the declarations — empty plan.\n"
+                     (apply str
+                            (str "workqueue10: " (count lines) " migration step(s):\n")
+                            (map #(str "  " % "\n") lines)))
+                   "=== plan end ===\n")]
+    (doseq [^java.io.Writer w [*out* *err*]]
+      (.write w block)
+      (.flush w))
+    (if (empty? lines) 0 1)))
+
+(defn linger-seconds
+  "How long a dry run waits after printing its plan, from `env`'s
+  MIGRATE_LINGER_SECONDS (default 15): the dispatched allocation must
+  outlive the dispatcher's poll, or the plan dies unread with it."
+  [env]
+  (or (when-some [s (get env "MIGRATE_LINGER_SECONDS")]
+        (try (max 0 (Long/parseLong (.trim ^String s)))
+             (catch NumberFormatException _ nil)))
+      15))
+
 (defn migrate!
   "Print the schema plan for this app's full registry against
   WORKQUEUE10_DSN; APPLY=1 executes it, DESTRUCTIVE=1 additionally
   the state-rename UPDATEs (otherwise destructive steps are skipped
   and said so). Exits 0 on an empty plan or a fully applied one, 1
-  while steps remain — scriptable as a deploy gate."
+  while steps remain — scriptable as a deploy gate. A dry run lingers
+  MIGRATE_LINGER_SECONDS after printing so a dispatcher reads the plan."
   [& _]
   (let [storage (pg/storage (dsn))]
     (try
@@ -1041,24 +1071,26 @@
                                                  (thread-sources)
                                                  (calendar-adapter)
                                                  nil))
-            steps (migrate/plan storage (vals (:kinds reg)))]
-        (if (empty? steps)
-          (println "workqueue10: storage matches the declarations — empty plan.")
-          (do
-            (println (str "workqueue10: " (count steps) " migration step(s):"))
-            (doseq [s steps] (println " " (migrate/describe s)))
-            (if (= "1" (System/getenv "APPLY"))
-              (let [destructive? (= "1" (System/getenv "DESTRUCTIVE"))
-                    {:keys [applied skipped]}
-                    (migrate/apply! storage steps {:destructive? destructive?})]
-                (println (str "applied " (count applied) " step(s)."))
-                (when (seq skipped)
-                  (println (str "SKIPPED " (count skipped)
-                                " destructive step(s) — re-run with DESTRUCTIVE=1:"))
-                  (doseq [s skipped] (println " " (migrate/describe s)))
-                  (System/exit 1)))
-              (do (println "dry run — APPLY=1 executes (DESTRUCTIVE=1 includes state renames).")
-                  (System/exit 1))))))
+            steps (migrate/plan storage (vals (:kinds reg)))
+            code  (print-plan! (map migrate/describe steps))]
+        (if (= "1" (System/getenv "APPLY"))
+          (when (seq steps)
+            (let [destructive? (= "1" (System/getenv "DESTRUCTIVE"))
+                  {:keys [applied skipped]}
+                  (migrate/apply! storage steps {:destructive? destructive?})]
+              (println (str "applied " (count applied) " step(s)."))
+              (when (seq skipped)
+                (println (str "SKIPPED " (count skipped)
+                              " destructive step(s) — re-run with DESTRUCTIVE=1:"))
+                (doseq [s skipped] (println " " (migrate/describe s)))
+                (System/exit 1))))
+          (do (when (seq steps)
+                (println "dry run — APPLY=1 executes (DESTRUCTIVE=1 includes state renames)."))
+              (flush)
+              (.flush *err*)
+              (let [secs (linger-seconds (System/getenv))]
+                (when (pos? secs) (Thread/sleep (* 1000 secs))))
+              (when (= 1 code) (System/exit 1)))))
       (finally
         (pg/close! storage)
         (shutdown-agents)))))
