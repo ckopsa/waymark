@@ -85,6 +85,16 @@ on:
           unverified here, so they stay out of the path every push takes.
         type: boolean
         default: false
+      only:
+        description: >-
+          Narrow this dispatch to one test namespace, or to one test as
+          ns/test-name. Empty runs everything, exactly as a push does.
+          The bench's `test` tool dispatches with this so a seat can run
+          the namespace it touched in a couple of minutes instead of
+          waiting on the full PR run. A name that matches no suite fails
+          the run: a typo must not come back green.
+        type: string
+        default: ''
 
 concurrency:
   group: tests-${{ github.ref }}
@@ -185,6 +195,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.detect.outputs.code }}
+      quick: ${{ steps.select.outputs.quick }}
+      factory: ${{ steps.select.outputs.factory }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -236,11 +248,57 @@ jobs:
             echo "no code paths in this diff — the suites are skipped"
           fi
 
+      # ── WHICH SUITES A NARROWED DISPATCH RUNS ──────────────────────────
+      #
+      # Empty `only` (every push, every PR, a plain dispatch) answers yes
+      # to both and nothing below it changes. Set, it must name a test
+      # namespace in one of the trees, or ns/test-name inside one; a
+      # name found nowhere FAILS this job, and with it the gate, so a
+      # misspelt namespace cannot report a green that ran nothing.
+      # quick holds calendar10's and localfire's suites, test-factory
+      # holds factory10's; the two sharded suites are narrowed by
+      # `discover`, from the same name.
+      - id: select
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, pathlib, re, sys
+
+          only = os.environ.get("ONLY", "").strip()
+          if not only:
+              print("quick=true")
+              print("factory=true")
+              sys.exit(0)
+
+          # It becomes a --focus argument; hold it to the shape of a
+          # Clojure test id before anything reads it.
+          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9._*+!?<>=-]+)?", only):
+              print(f"only={only!r} is not a namespace or ns/test-name", file=sys.stderr)
+              sys.exit(1)
+          ns = only.split("/", 1)[0]
+
+          def namespaces(root):
+              base = pathlib.Path(root, "test")
+              return {str(p.relative_to(base).with_suffix("")).replace("/", ".").replace("_", "-")
+                      for p in base.rglob("*_test.clj")} if base.is_dir() else set()
+
+          home = [r for r in ("waymark10", "workqueue10", "calendar10", "localfire", "factory10")
+                  if ns in namespaces(r)]
+          if not home:
+              print(f"only={only}: no test namespace {ns} in any suite", file=sys.stderr)
+              sys.exit(1)
+          print(f"only={only}: {ns} lives in {', '.join(home)}", file=sys.stderr)
+          print(f"quick={str(bool({'calendar10', 'localfire'} & set(home))).lower()}")
+          print(f"factory={str('factory10' in home).lower()}")
+          PY
+
   # The cheap signal, first: neither of these needs a database, and a
   # declaration error should not wait behind a JVM suite to be told.
   quick:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.quick == 'true'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     steps:
       - uses: actions/checkout@v4
@@ -282,7 +340,7 @@ jobs:
   # declaration error should not wait behind a suite to be told.
   test-factory:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.factory == 'true'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     steps:
       - uses: actions/checkout@v4
@@ -317,6 +375,8 @@ jobs:
         env:
           N_WAYMARK10: ${{ env.SHARDS_WAYMARK10 }}
           N_WORKQUEUE10: ${{ env.SHARDS_WORKQUEUE10 }}
+          # Checked by `changes` already: a test id, or empty.
+          ONLY: ${{ inputs.only }}
         run: |
           set -euo pipefail
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -392,9 +452,22 @@ jobs:
               return [{"id": i + 1, "nses": "\n".join(sorted(g))}
                       for i, g in enumerate(groups) if g]
 
+          # A narrowed dispatch: the one namespace (or ns/test-name, which
+          # kaocha's --focus takes as it is) in ONE shard of the suite
+          # that holds it, and an empty list for the other — its matrix
+          # job is skipped on that, since an empty matrix fails a run.
+          only = os.environ.get("ONLY", "").strip()
+
           for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
                                     ("workqueue10", "workqueue10", "N_WORKQUEUE10")):
               names = namespaces(root)
+              if only:
+                  m = ([{"id": 1, "nses": only}]
+                       if only.split("/", 1)[0] in names else [])
+                  print(f"{key}={json.dumps(m)}")
+                  print(f"# {key}: only={only}, {len(m)} shard",
+                        file=__import__("sys").stderr)
+                  continue
               m = shards(names, int(os.environ[envvar]))
               print(f"{key}={json.dumps(m)}")
               print(f"# {key}: {len(names)} namespaces over {len(m)} shards",
@@ -403,7 +476,7 @@ jobs:
 
   test10:
     needs: [changes, discover]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.discover.outputs.waymark10 != '[]'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       # One shard failing must not hide the others: the point of a
@@ -550,7 +623,7 @@ jobs:
 
   test-queue:
     needs: [changes, discover]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.discover.outputs.workqueue10 != '[]'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       fail-fast: false
@@ -709,7 +782,7 @@ jobs:
   # does no work, and the one check a merge waits on must not queue
   # behind the cluster's load.
   gate:
-    needs: [changes, quick, test-factory, test10, test-queue]
+    needs: [changes, discover, quick, test-factory, test10, test-queue]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -721,6 +794,8 @@ jobs:
           TEST_FACTORY: ${{ needs.test-factory.result }}
           TEST10: ${{ needs.test10.result }}
           TEST_QUEUE: ${{ needs.test-queue.result }}
+          DISCOVER: ${{ needs.discover.result }}
+          ONLY: ${{ inputs.only }}
         run: |
           set -euo pipefail
           echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE"
@@ -732,7 +807,19 @@ jobs:
             echo "gate: PASS — no code paths in this diff; the suites have nothing to say."
             exit 0
           fi
+          # A skipped matrix job is only a narrowed one if `discover` ran:
+          # a failed discover skips both matrices too.
+          if [ "$DISCOVER" != "success" ]; then
+            echo "gate: FAIL — code changed and discover did not succeed ($DISCOVER)."
+            exit 1
+          fi
+          # A narrowed dispatch skips every suite that does not hold its
+          # namespace, on purpose; `changes` has already failed the run if
+          # none does. Skipped counts only there — never on a push or PR.
           for r in "$QUICK" "$TEST_FACTORY" "$TEST10" "$TEST_QUEUE"; do
+            if [ -n "${ONLY:-}" ] && [ "$r" = "skipped" ]; then
+              continue
+            fi
             if [ "$r" != "success" ]; then
               echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE)."
               exit 1
