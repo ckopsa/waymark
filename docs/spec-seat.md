@@ -117,8 +117,8 @@ work.
 | `instructions` | string, up to 2000, optional | what one firing does, in the person's words. The engine puts it at the head of the fire text. R-12.33. |
 | `scope` | scope schema | the seat's authority |
 | `substitute_drop` | scope schema | the entries a substitute does not get |
-| `held_for` | list of model refs | the models that can sit as the full sitter. Empty means any. The seat's place on the ladder. |
-| `substitute_for` | list of model refs | the models that can sit as a substitute. Empty means any. |
+| `held_for` | list of model row ids | the models that can sit as the full sitter. Empty means any. The seat's place on the ladder. Find a model's id with `waymark_query` kind `model`. |
+| `substitute_for` | list of model row ids | the models that can sit as a substitute. Empty means any. |
 | `standing_ttl_seconds` | int | the longest leash a grant in this seat can request |
 | `cadence_seconds` | int | how often the schedule fires the seat. The fixed wake cost. |
 | `mode` | enum `fired`, `interactive`, default `fired` | who opens a sitting here. A schedule, a person or a wake fires a fired seat. A person sits in an interactive seat, and nothing fires it. R-10.8. |
@@ -1748,8 +1748,8 @@ One POST to `/api/seats`, by a person who will not sit in it.
   "substitute_drop": [
     {"kind": "insight", "actions": ["create"]}
   ],
-  "held_for": ["claude-opus-5"],
-  "substitute_for": ["claude-sonnet-5"],
+  "held_for": ["<model row id for Opus 5>"],
+  "substitute_for": ["<model row id for Sonnet 5>"],
   "standing_ttl_seconds": 604800,
   "cadence_seconds": 3600,
   "budget_usd_per_week": 12.00,
@@ -1763,7 +1763,9 @@ power, and a scope entry names a power in its `kind` field.
 todo` is legal because `source` is declared filterable with eq, so
 the seat sees the todo tasks and not the chores or the meals.
 `insight.create` exists. The drop entry is inside the scope. Both
-model names are active model rows. Seven days is at the cap.
+model row ids name active model rows; each placeholder stands for
+an id, which `waymark_query` kind `model` lists. Seven days is at
+the cap.
 
 The first draft of this charter had a sixth sentence: "Do not move
 or send mail. The scope does not open those doors." It is cut. The
@@ -1996,7 +1998,7 @@ The person restates the seat. No deploy.
     {"kind": "email.read", "actions": []},
     {"kind": "inbox_item", "actions": ["research", "yes", "no"]}
   ],
-  "held_for": ["claude-sonnet-5"],
+  "held_for": ["<model row id for Sonnet 5>"],
   "walk": "inbox_item",
   "cadence_seconds": 3600,
   "budget_usd_per_week": 4.00,
@@ -2010,7 +2012,7 @@ The scope no longer names `task.create`. The task is born inside
 the yes handler through the cross-write door, under the outer
 principal, and `:touches` says so. The charter lost the receipts
 sentence and the journal sentence. It is 234 characters. The seat is
-held for an economy model as its full sitter, and
+held for an economy model's row id as its full sitter, and
 `step-carries-a-note` records why.
 
 **The schedule.** The person touched only the seat. The engine
@@ -2060,7 +2062,7 @@ prose seat never recorded.
 ### 13.10 Week five: the floor
 
 The person tries one more rung. `restate` with `held_for`
-`["claude-haiku-4-5"]` and the note "Try the last rung." Two weeks
+`["<model row id for Haiku 4.5>"]` and the note "Try the last rung." Two weeks
 later:
 
 | question | week three, Sonnet | week five, Haiku |
@@ -2073,7 +2075,7 @@ later:
 
 Corrections per transition rose five times over. The step does not
 hold (R-11.4). The person restates `held_for` back to
-`["claude-sonnet-5"]` with the note "Haiku says yes to requests that
+`["<model row id for Sonnet 5>"]` with the note "Haiku says yes to requests that
 are not for Colton. The judgment is real at this rung." The floor is
 Sonnet. Both steps are in the transition log with their reasons.
 
@@ -2103,7 +2105,7 @@ The person has four levers on the seat row, and none needs a deploy.
 Sonnet is unavailable for a day. The person restates the schedule
 row's `model` to `claude-haiku-4-5`, the adapter pushes it, and the
 agent asks with `substitute: true`, because the person set
-`substitute_for` to `["claude-haiku-4-5"]` in week five.
+`substitute_for` to `["<model row id for Haiku 4.5>"]` in week five.
 `model-may-sit` passes on `substitute_for`. The substitute walks the
 same tree. It reads the journal and cannot write it, by
 `not-a-substitute`. Every transition it makes carries
@@ -2184,8 +2186,8 @@ tree cannot hold.
     {"kind": "outcome", "actions": ["create", "rework"]},
     {"kind": "hypothesis", "actions": ["create", "restate", "still_stands", "dismiss"]}
   ],
-  "held_for": ["claude-fable-5-1"],
-  "substitute_for": ["claude-opus-5"],
+  "held_for": ["<model row id for Fable 5.1>"],
+  "substitute_for": ["<model row id for Opus 5>"],
   "standing_ttl_seconds": 604800,
   "cadence_seconds": 3600,
   "budget_usd_per_week": 40.00,
