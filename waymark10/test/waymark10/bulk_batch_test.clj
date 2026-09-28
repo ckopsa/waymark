@@ -192,7 +192,12 @@
   (let [[a b] (chores! [true false])
         missing "chore-nobody-minted"]
     (testing "the guard's refusal, alone, is a 409"
-      (is (= 409 (:status (req :post (str "/api/chores/" b "/complete") {})))))
+      (is (= 409 (try (inv/invoke! *eng* :chore b :complete {}
+                                   {:principal (t/principal {:id "colton"
+                                                             :display "Colton"})})
+                      nil
+                      (catch clojure.lang.ExceptionInfo e
+                        (:status (ex-data e)))))))
     (testing "one 409 and one 404 in a partial bulk: one conflict"
       (let [result (inv/bulk! *eng* :chore :complete {:ids [a b missing]}
                               {:principal (t/principal {:id "colton"
