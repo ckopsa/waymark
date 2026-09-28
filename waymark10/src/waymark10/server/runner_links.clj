@@ -20,7 +20,8 @@
   recorded by `seeded_from` so a second boot makes none. The source
   rows keep their own links; nothing fires through a seeded link yet.
 
-  Not here: choosing among links."
+  `fire-pool!` (d16b71bf) chooses among a pool's links: it skips a
+  link that is waiting and takes the least-used of the rest."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -378,3 +379,72 @@
       :else
       (act! eng link-row :break nil))
     answer))
+
+;; ── the pool (waymark ticket d16b71bf) ─────────────────────────────
+;; A model or a schedule names `runners`, an ordered list of link ids.
+;; A fire skips a link that is not live, whose `retry_after` is still
+;; ahead, or whose cap is spent in its open window, and takes the one
+;; with the fewest runs in its window; list order breaks a tie.
+
+(defn- live? [row]
+  (= "live" (some-> (:state row) name)))
+
+(defn- used
+  "The runs this link has started in its window as it stands at `at`."
+  [data ^Instant at]
+  (dec (long (:runs_in_window (window-after data at)))))
+
+(defn waiting-until
+  "The instant after `at` before which this link fires nothing — its
+  `retry_after`, or the close of a window whose cap is spent — or nil
+  when it may fire now."
+  [row ^Instant at]
+  (let [data (:data row)
+        runs (some-> (get-in data [:cap :runs]) long)
+        secs (some-> (get-in data [:cap :window_seconds]) long)
+        started (instant-of (:window_started_at data))
+        closes (when (and runs secs started (>= (used data at) (long runs)))
+                 (.plusSeconds ^Instant started (long secs)))]
+    (->> [(instant-of (:retry_after data)) closes]
+         (filter #(and % (.isAfter ^Instant % at)))
+         sort
+         last)))
+
+(defn pool-order
+  "The links of `rows`, given in the pool's order, that may fire at
+  `at`: least used first, ties in list order."
+  [rows ^Instant at]
+  (->> rows
+       (map-indexed vector)
+       (filter (fn [[_ r]] (and (live? r) (nil? (waiting-until r at)))))
+       (sort-by (fn [[i r]] [(used (:data r) at) i]))
+       (map second)))
+
+(defn- links-by-id [eng]
+  (into {} (map (juxt (comp str :id) identity)) (rows-of eng :runner_link {})))
+
+(defn fire-pool!
+  "Fire one run through the pool `ids`: each link that may fire, in
+  `pool-order`, until one starts a run. A throttle or a refusal marks
+  only that link (`fire-link!`) and the next is tried. `provider-of`
+  answers a link row's Provider.
+
+  Answers {:runner id :answer answer} for the link a run started
+  through; else {:retry-at instant}, the earliest instant a live link
+  of the pool is free again — nil when none will be (every link
+  broken, retired or missing)."
+  [eng provider-of ids text]
+  (let [at (or (instant-of ((:now-fn eng))) (Instant/now))
+        pool (keep (links-by-id eng) (map str ids))]
+    (or (some (fn [row]
+                (let [answer (fire-link! eng (provider-of row) row text)]
+                  (when (contains? answer :started)
+                    {:runner (str (:id row)) :answer answer})))
+              (pool-order pool at))
+        (let [fresh (links-by-id eng)]
+          {:retry-at (->> pool
+                          (keep #(get fresh (str (:id %))))
+                          (filter live?)
+                          (keep #(waiting-until % at))
+                          sort
+                          first)}))))
