@@ -2248,9 +2248,12 @@
   when it is given, the page holds that row alone, or nothing when the
   row is not in the queue or is claimed.
 
-  `stuck` is the tickets whose change waits for a person
-  (`seats/stuck-walk-rows`, ticket 6bdaf6fe). They are subtracted as the
-  claimed rows are: a seat handed one could only say it is stuck."
+  `stuck` is the tickets whose change waits for a person, each with
+  its reason (`seats/stuck-walk-reasons`, ticket 6bdaf6fe). They are
+  subtracted as the claimed rows are: a seat handed one could only say
+  it is stuck. The queue rows left out for either cause are answered
+  under `withheld`, each with its reason (ticket 87c928e9), so an empty
+  walk over a queue that is not empty says why."
   [eng call session seat claimed held only stuck]
   (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
     (when-some [rdef (get (inv/resources eng) (keyword walk))]
@@ -2275,7 +2278,7 @@
         (when (collection-doc? doc)
           (let [id-of #(id-of-self (get % "self"))
                 skip (if subtract?
-                       (into (into (set claimed) stuck)
+                       (into (into (set claimed) (keys stuck))
                              (when judgment
                                (judged-subjects eng (:id judgment))))
                        #{})
@@ -2296,12 +2299,25 @@
                              (concat kept
                                      (take (- n (count kept))
                                            (remove mine? items))))
-                items (into [] (filter #(contains? chosen (id-of %))) items)]
+                items (into [] (filter #(contains? chosen (id-of %))) items)
+                claimed? (set claimed)
+                withheld (into []
+                               (keep (fn [item]
+                                       (let [id (id-of item)]
+                                         (cond
+                                           (contains? stuck id)
+                                           {"id" id "reason" (get stuck id)}
+
+                                           (contains? claimed? id)
+                                           {"id" id
+                                            "reason" "another open sitting of this seat holds it"}))))
+                               (get-in doc ["data" "items"]))]
             (cond-> {"kind" walk
                      "charter" (str (get-in seat [:data :charter]))
                      "total" (get-in doc ["data" "total"])
                      "rows" (mapv walk-row items)}
-              judgment (assoc "judgment" (judgment-block judgment)))))))))
+              judgment (assoc "judgment" (judgment-block judgment))
+              (seq withheld) (assoc "withheld" withheld))))))))
 
 (def ^:private walk-note
   "What a sitter holding its rows does next — and what it must not do.
@@ -2407,7 +2423,7 @@
         held (get-in sitting [:data :walked_rows])
         ;; read once for the sit: the tickets beside a stuck change
         ;; are out of the walk whichever try claims (ticket 6bdaf6fe)
-        stuck (seats/stuck-walk-rows eng (get-in seat [:data :walk]))
+        stuck (seats/stuck-walk-reasons eng (get-in seat [:data :walk]))
         walk-past (fn [taken only]
                     (walk-of eng call sitter-sees seat taken held only stuck))]
     (loop [n 1
