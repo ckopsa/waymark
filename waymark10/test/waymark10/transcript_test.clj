@@ -681,3 +681,89 @@
     (testing "the key dies when the sitting ends"
       (is (= 200 (:status (close! h))))
       (is (nil? (seats/inbox-sitting-by-key eng second-key))))))
+
+;; ── the inbox door (spec-seat.md R-12.38) ───────────────────────────
+
+(def ^:private a-tail
+  "Meals accepted, and every move of a model, which the seat's grant
+  (meal only) cannot read."
+  {:only {:meal ["accept"] :model []}})
+
+(defn- tail!
+  ([h key] (tail! h key {}))
+  ([h key params]
+   (h {:request-method :get :uri "/api/-/sittings/inbox"
+       :query-string (str/join "&" (map (fn [[k v]] (str (name k) "=" v)) params))
+       :headers (cond-> {} key (assoc "waymark-inbox-key" key))})))
+
+(defn- lines-of [resp]
+  (mapv wire/read-json (remove str/blank? (str/split-lines (str (:body resp))))))
+
+(defn- meal! [eng name']
+  (:row (inv/create! eng :meal {:name name' :themes []} {:principal person})))
+
+(defn- move! [eng meal action]
+  (inv/invoke! eng :meal (str (:id meal)) action {} {:principal person}))
+
+(defn- tailing! []
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:inbox a-tail})]
+    [eng h (get-in (sit! h) [:inbox :key])]))
+
+(deftest the-inbox-door-serves-what-the-inbox-names
+  (let [[eng h key] (tailing!)
+        soup (meal! eng "Soup")
+        _ (move! eng soup :accept)
+        _ (move! eng soup :retire)
+        _ (inv/create! eng :model
+                       {:name "t-model-2" :display "T 2"
+                        :vendor "anthropic" :tier "strong"
+                        :price_input_per_mtok 3M :price_output_per_mtok 15M
+                        :price_cache_read_per_mtok 0.3M :price_cache_write_per_mtok 3.75M}
+                       {:principal person})
+        resp (tail! h key)
+        lines (lines-of resp)]
+    (testing "exactly the accepted meal: no create, no retire, no model"
+      (is (= 200 (:status resp)))
+      (is (= [{:kind "meal" :id (str (:id soup)) :action "accept"
+               :from "suggested" :to "on_list"}]
+             (mapv #(select-keys % [:kind :id :action :from :to]) lines)))
+      (is (integer? (:event (first lines))))
+      (is (string? (:at (first lines)))))
+    (testing "`after` resumes past the events already read"
+      (let [after (:event (first lines))]
+        (is (empty? (lines-of (tail! h key {:after after}))))
+        (let [stew (meal! eng "Stew")
+              _ (move! eng stew :accept)
+              more (lines-of (tail! h key {:after after}))]
+          (is (= [(str (:id stew))] (mapv :id more))))))
+    (testing "an unreadable `after` or `wait` is refused"
+      (is (= 422 (:status (tail! h key {:after "soon"}))))
+      (is (= 422 (:status (tail! h key {:wait 26})))))))
+
+(deftest the-inbox-door-waits-for-an-event
+  (let [[eng h key] (tailing!)
+        soup (meal! eng "Soup")
+        started (System/nanoTime)
+        _ (future (Thread/sleep 300) (move! eng soup :accept))
+        lines (lines-of (tail! h key {:wait 10}))]
+    (testing "an event ends the wait early"
+      (is (= ["accept"] (mapv :action lines)))
+      (is (< (- (System/nanoTime) started) 8000000000)))
+    (testing "the wait runs out empty"
+      (let [started (System/nanoTime)
+            resp (tail! h key {:after (:event (first lines)) :wait 1})]
+        (is (= 200 (:status resp)))
+        (is (empty? (lines-of resp)))
+        (is (>= (- (System/nanoTime) started) 900000000))))))
+
+(deftest the-inbox-door-refuses-a-key-it-cannot-place
+  (let [[_ h key] (tailing!)]
+    (is (= 401 (:status (tail! h nil))))
+    (is (= 401 (:status (tail! h "bm9ib2R5LWhvbGRzLXRoaXM"))))
+    (is (= 200 (:status (tail! h key))))
+    (is (= 200 (:status (close! h))))
+    (let [resp (tail! h key)]
+      (is (= 401 (:status resp)))
+      (is (str/includes? (str (:body resp)) "No open sitting answers this inbox key.")))))

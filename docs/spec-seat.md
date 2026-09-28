@@ -842,6 +842,33 @@ alike; the refusal is uniform, as R-12.14 makes it. It answers 409 with ``The se
 sitting.`` when a second report comes in, or when nothing sat. It
 answers 422 when the body is malformed.
 
+**R-12.38** The engine must serve a seat's inbox at
+`GET /api/-/sittings/inbox?after=<event>&wait=<seconds>`, beside the
+transcript's door. The key is the sitting's inbox key, which the sit
+answers in `inbox {url, key}`, in the header `Waymark-Inbox-Key`. The
+key finds its sitting among the open sittings, by hash. The door is
+outside the require-auth gate for a GET, as the transcript door is for
+a POST.
+
+- The door reads the transition log after the event `after` names.
+  With no `after`, it reads from the sitting's start.
+- It keeps only the transitions whose kind the seat's `inbox.only`
+  names, with an action that kind lists; an empty list is every
+  action. It keeps only the kinds the sitting's grant can read. It
+  never serves this sitting's own `sitting` row, and never a
+  `transcript` or a `transcript_entry`.
+- It answers 200 with newline-delimited JSON, one line for each event:
+  `kind`, `id`, `action`, `from`, `to`, `summary`, `at` and `event`.
+  `event` is the log's own id, the value the next `after` names. The
+  header `Waymark-Inbox-After` names the last event the door read,
+  matched or not, so a tail whose answer was empty can go on from it.
+- `wait`, from 0 to 25, holds the request. The door answers as soon
+  as a matching event lands, or answers empty when the wait runs out.
+- It answers 401 with `No open sitting answers this inbox key.` when
+  the key is absent or wrong, when a later sit replaced it, or when
+  its sitting has ended. It answers 422 when `after` or `wait` is not
+  a whole number in its range.
+
 The key is a header, and not a bearer. The identity layer reads a
 bearer as an OIDC token, so a key in that place is refused before
 the door sees it. A header is also what an environment's stored
