@@ -150,7 +150,7 @@
                       :x-display {:label "Which batch"
                                   :help "The run of rows this one belongs to."}}
               [:string {:min 1 :max 40}]]]
-    :filterable {:state #{:eq :in} :batch #{:eq}}
+    :filterable {:state #{:eq :in} :batch #{:eq :in}}
     :default-filters {:state "open"}
     :actions
     {:complete {:from #{:open} :to :complete
@@ -1004,6 +1004,31 @@
     (seat-do! (:seat picky) :retire)
     (seat-do! (:seat anyone) :retire)))
 
+;; ── 10b · a comma value is any of on a field that declares :in ──────
+
+(deftest a-comma-filter-on-an-in-field-reads-as-any-of
+  (let [a "anyof-a" b "anyof-b" c "anyof-c"
+        a-id (item! a) b-id (item! b) c-id (item! c)
+        f {:batch (str a "," b)}]
+    (testing "a transition wake's filter judges a row of either batch in,
+              and a third batch's row out"
+      (is (true? (wakes/moved-under? *eng* :wake_item a-id f)))
+      (is (true? (wakes/moved-under? *eng* :wake_item b-id f)))
+      (is (false? (wakes/moved-under? *eng* :wake_item c-id f))))
+    (testing "a count wake with that filter counts both batches"
+      (is (= 2 (wakes/count-under *eng* :wake_item f))))))
+
+(deftest a-comma-wake-filter-on-a-field-without-in-is-refused-at-restate
+  (let [seat (seat! "wakecomma"
+                    {:wake_on [{:kind "wake_task" :actions ["complete"]}]})
+        p (refusal #(restate! seat {:wake_on [{:kind "wake_task"
+                                               :actions ["complete"]
+                                               :filter {:title "a,b"}}]}))]
+    (is (= :wake-on-any-of-needs-in (:guard p)))
+    (is (str/includes? (str (:detail p)) "title")
+        "the refusal names the field, not 'invalid wake_on'")
+    (seat-do! seat :retire)))
+
 ;; ── 11 · a count entry with no actions counts on every action ───────
 
 (deftest an-empty-actions-list-reads-differently-on-the-two-entries
@@ -1834,6 +1859,35 @@
           (is (nil? (get-in (first ts) [:inputs :text]))
               "a release names no row, so the session walks the queue"))
         (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+    (seat-do! seat :retire)))
+
+;; ── a wake the fire door refuses waits ───────────────────────────────
+;;
+;; A halt line other than the budget's is judged by the `fire` door
+;; itself. Its refusal used to drop the match: nothing set
+;; `wake_pending`, so when a person lifted the line the rows that came
+;; in meanwhile never woke the seat.
+
+(deftest a-wake-the-fire-door-refuses-is-left-pending
+  (let [wn :wake-halt-wall
+        fn' :wake-halt-wall-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "haltclerk"
+                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]}
+                      fn')]
+    (is (true? (seats/seat-halt! *eng* seat "model_not_held"
+                                 "This session declares nothing and haltclerk is held for 1 model(s).")))
+
+    (testing "a matching transition fires nothing, and the wake waits"
+      (task-do! (task! "a thing behind the halt") :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (drain-fires! fn')
+      (is (empty? (fires-of token))))
 
     (seat-do! seat :retire)))
 

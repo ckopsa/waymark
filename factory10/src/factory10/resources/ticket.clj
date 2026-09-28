@@ -695,7 +695,7 @@
                 :priority #{:eq :range}
                 :parent #{:eq :set}
                 :found_in #{:eq}
-                :repo #{:eq}
+                :repo #{:eq :in}
                 :bead_id #{:eq :set}}
    ;; THE QUEUE IS THE COLLECTION UNDER ITS DEFAULT FILTER: a walker
    ;; opens /api/tickets and gets the work that is READY — groomed,
