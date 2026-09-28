@@ -240,6 +240,17 @@
       (is (= asked (get-in kept [:data :expires_at]))
           "a leash the asker named is left exactly as asked"))))
 
+(deftest an-unconfigured-ask-defaults-to-the-24-hour-cap
+  ;; waymark-h6y: the grant copies the ask's expires_at, so a short
+  ;; default made the offer window the grant's whole life
+  (let [now (java.time.Instant/parse "2026-08-24T18:00:00Z")
+        ctx (t/ctx {:principal (t/principal {:id "agent-ari" :type :agent})
+                    :now now})
+        stamped ((:on-create grants/approval-request)
+                 {:data {:task "read the pantry"}} ctx)]
+    (is (= (.plusSeconds now 86400) (get-in stamped [:data :expires_at]))
+        "with no configured TTL, a blank leash runs 24 hours from filing")))
+
 (def ^:private the-canonical-hash
   ;; The hash approval_request carried BEFORE the :decision key
   ;; existed — recomputed from the pre-sugar source at waymark-442.5
