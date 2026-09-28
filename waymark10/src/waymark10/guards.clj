@@ -1018,12 +1018,15 @@
   before it is stored: the body arrives AFTER READ, so a `#(…)`
   inside it is already `(fn* [p1__10794#] …)` and that counter is
   global to the load. Storing the raw shape made the guard's identity
-  a function of everything compiled before it (waymark-j82)."
+  a function of everything compiled before it (waymark-j82).
+
+  The guard's :name is the var's name unless opts names one: two vars
+  may carry one law under two faces (a door's shown and :hide twins)."
   [name opts params & body]
   `(def ~name
-     (guard (merge ~opts
-                   {:name ~(keyword name)
-                    :check (with-meta (fn ~params ~@body)
+     (guard (merge {:name ~(keyword name)}
+                   ~opts
+                   {:check (with-meta (fn ~params ~@body)
                              {:waymark10/form
                               '~(expr/canonical-gensyms
                                  (list* 'fn params body))})}))))
