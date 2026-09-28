@@ -60,7 +60,11 @@ cannot work (spec-seat.md R-12.9).
 
 **D-6** Reopen is a person's door. A reopen corrects an ending, and a
 seat that could reopen tickets could refill its own queue. The guard
-is not grantable.
+is not grantable; it is a hold. A person's lever is approval-required,
+never person-only (spec-seat.md R-14.9): an agent's reopen waits as a
+`held_call` for the person's tap, and the person's Allow replays it.
+The CI check `workqueue10.agent-walls-test` fails any guard here that
+refuses an agent outright without holding.
 
 **D-7** The code seat walks `ticket`. `task` stays the household's.
 A change minted for a ticket carries `ticket:<id>` in `born_from`,
@@ -141,7 +145,8 @@ or resumed first. The guard
 `blocked` or `deferred`, and names how many.
 
 **R-4.7** `reopen` (done or dropped → draft) clears `close_reason`.
-`only-a-person-reopens` refuses every agent hand and is not grantable.
+`only-a-person-reopens` holds every agent hand for the person's tap
+(`:hold true`) and is not grantable.
 It reads nothing else, so its scenarios are check-tier; a child
 reopened under an ended parent is the person's next tap (§ 8).
 

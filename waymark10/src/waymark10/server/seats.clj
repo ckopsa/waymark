@@ -851,6 +851,36 @@
                 (t/allow)
                 (t/deny {:vars {:into into-id}}))))))
 
+(g/defguard author-can-take-it
+  {:judges [:author]
+   :reads [:seat]
+   :vars [:detail]
+   :explain "A seat is handed only to a seat that delegates, and only when it fits under that seat's ceiling: {detail}."}
+  [row inp ctx]
+  ;; hand_to (invariant 3 and 4 of server/delegation): the person's
+  ;; tap writes the author AND the approval, so the seat must already
+  ;; be one the author could have authored — R-14.3 whole, the ceiling
+  ;; judged by the same `misfit` the create and restate doors read.
+  (let [author-id (some-> (:author inp) str not-empty)]
+    (cond
+      (nil? author-id) (t/allow)          ; the schema refuses the blank
+      (= author-id (str (:id row)))
+      (t/deny {:vars {:detail "a seat does not author itself"}})
+      (delegation/delegating? row)
+      (t/deny {:vars {:detail (str "this seat carries a ceiling of its own"
+                                   " (delegates), and an authored seat may not")}})
+      (nil? (:read ctx)) (t/allow)      ; probe ctx — decline to guess
+      :else
+      (let [author ((:read ctx) :seat author-id)]
+        (cond
+          (not (and author (delegation/delegating? author)))
+          (t/deny {:vars {:detail (str author-id " is not a seat that"
+                                       " delegates: it carries no ceiling")}})
+          :else
+          (if-some [m (delegation/misfit author (:data row))]
+            (t/deny {:vars {:detail m}})
+            (t/allow)))))))
+
 (g/defguard the-engines-own-hand
   {:reads [:principal]
    :hide true
@@ -1099,6 +1129,33 @@
       (update :data dissoc :halt)
       first-approval?
       (update :data assoc :approved_by approver :approved_at (:now ctx)))))
+
+(defhandler hand-seat-to [row inp ctx]
+  ;; INVARIANT 3 and 4: the person's hand writes the author, and the
+  ;; same tap IS the approval — the seat is live already, so there is
+  ;; no first unpark to carry it. The person is the one who decided a
+  ;; held call when this replays one, else the hand at the door.
+  (let [person (or (some-> (delegation/allowed-hold ctx :seat (:id row))
+                           (get-in [:data :decided_by]) str not-empty)
+                   (delegation/owner-of ctx)
+                   (str (get-in ctx [:principal :id])))]
+    (update row :data assoc
+            :authored_by (str (:author inp))
+            :owner person
+            :approved_by person
+            :approved_at (:now ctx))))
+
+(defhandler take-seat-back [row _inp _ctx]
+  ;; hand_to undone: the author and the approval go, and the author's
+  ;; restates are held again under invariant 4.
+  (update row :data dissoc :authored_by :approved_by :approved_at))
+
+(defn- parked-says
+  "hand_to and take_back run from `active` alone, like restate; a
+  parked seat is told the way back."
+  [row _ctx]
+  (when (= :parked (:state row))
+    "The seat is parked. Unpark it first — unpark is the person's own lever."))
 
 (defn seat-born
   "The seat's on-create (invariant 3 and 4 of server/delegation): a
@@ -2454,6 +2511,36 @@
      :safety {:idempotent true :reversible false :confirm true
               :consequence "The office closes for good. Its sittings and its whole history stay on record; its grants scope to nothing and expire on their own clocks. Opening the work again is a new seat."}
      :display {:label "Retire" :style :danger :order 9}}
+
+    ;; ── the person's hand-off (invariant 3 and 4) ───────────────────
+    ;; A person gives a live seat to a delegating seat to author, and
+    ;; takes it back. Both are the person's levers: from an author they
+    ;; are held, like unpark, merge and retire.
+    :hand_to
+    {:from #{:active} :to :active
+     :input [:map
+             [:author {:kind :seat
+                       :x-display
+                       {:label "Hand to which seat"
+                        :help "A seat that delegates. It restates this seat within its ceiling from now on, with no new tap; this tap is the approval."}}
+              :waymark/ref]]
+     :record true
+     :guards [a-person not-a-sitter author-can-take-it
+              delegation/the-persons-lever]
+     :safety {:idempotent true :reversible true :confirm false}
+     :out-of-state-says parked-says
+     :handler hand-seat-to
+     :display {:label "Hand to" :order 14
+               :description "A delegating seat authors this one within its ceiling; take_back undoes it"}}
+
+    :take_back
+    {:from #{:active} :to :active
+     :guards [a-person not-a-sitter delegation/the-persons-lever]
+     :safety {:idempotent true :reversible true :confirm false}
+     :out-of-state-says parked-says
+     :handler take-seat-back
+     :display {:label "Take back" :order 15
+               :description "The author and its approval go; its restates wait on you again"}}
 
     ;; ── the concealed three (R-7.2, R-7.7) ──────────────────────────
     ;; System actor, logged, hidden from every envelope — members'
