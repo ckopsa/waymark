@@ -2940,7 +2940,14 @@
   walk leaves them out as it leaves a claimed row out, so a queue of
   only such tickets answers an empty walk and no wake spends a sitting
   on saying it is stuck. A groom after the stall puts the ticket back,
-  and the sit then unsticks its change (`regroomed-change`).
+  and the sit then unsticks its change (`regroomed-change`). A stuck
+  change is one whatever state it was stuck from: `open`, `submitted`
+  or `failing` (ticket 60c2ec22).
+
+  A ticket whose change is `submitted` is left out too (ticket
+  60c2ec22): its round is in review and its landing may still run, so
+  a second run of the seat has nothing to build on it, and a submit
+  there only finds a clean worktree.
 
   Empty for any other walk and for an engine that serves no change."
   [eng walk]
@@ -2948,23 +2955,28 @@
            (get (inv/resources eng) :change))
     (let [rdef (get (inv/resources eng) :change)
           st (:storage eng)
-          stuck (->> (store/with-tx st
-                       (fn [tx]
-                         (store/query-rows st tx :change {:state "stuck"}
-                                           {:limit stuck-scan-limit})))
-                     (map #(inv/decode-row rdef %)))]
-      (into #{}
+          scan (fn [state]
+                 (->> (store/with-tx st
+                        (fn [tx]
+                          (store/query-rows st tx :change {:state state}
+                                            {:limit stuck-scan-limit})))
+                      (map #(inv/decode-row rdef %))))
+          ticket-of (fn [change]
+                      (when (str/starts-with?
+                             (str (get-in change [:data :born_from]))
+                             groomed-walk-prefix)
+                        (born-row-id change)))]
+      (into (into #{} (keep ticket-of) (scan "submitted"))
             (keep (fn [change]
                     (let [born (str (get-in change [:data :born_from]))]
-                      (when (str/starts-with? born groomed-walk-prefix)
-                        (when-some [ticket-id (born-row-id change)]
-                          (when (and (nil? (change-in-state
-                                            eng {:born_from born}
-                                            [:open :submitted :failing]))
-                                     (nil? (groom-after-stall eng change
-                                                              ticket-id)))
-                            ticket-id))))))
-            stuck))
+                      (when-some [ticket-id (ticket-of change)]
+                        (when (and (nil? (change-in-state
+                                          eng {:born_from born}
+                                          [:open :submitted :failing]))
+                                   (nil? (groom-after-stall eng change
+                                                            ticket-id)))
+                          ticket-id)))))
+            (scan "stuck")))
     #{}))
 
 (defn- regroomed-change
