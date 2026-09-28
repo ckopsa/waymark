@@ -984,14 +984,20 @@
   attention; a kind whose rows merely contend for attention wants a
   rank, never :pacing."
   [kind by offered {:keys [limit per open-cap]}]
-  (let [window (long (case (or per :hour) :hour 3600 :day 86400 :minute 60))]
+  (let [per (or per :hour)
+        window (long (case per :hour 3600 :day 86400 :minute 60))
+        ;; The unit is folded into the sentence, not a :var, so an
+        ;; hourly kind's :explain keeps its bytes and its pinned
+        ;; fingerprint (waymark-iqa.19).
+        unit (case per :hour "an hour" :day "a day" :minute "a minute")]
     (cond-> []
       limit
       (conj (g/guard
              {:name :asks-are-paced
               :reads [:principal :now kind]
               :vars [:limit :retry_at]
-              :explain "Asks are paced to {limit} an hour; the window reopens at {retry_at}."
+              :explain (str "Asks are paced to {limit} " unit
+                            "; the window reopens at {retry_at}.")
               :check (fn [_row _inp ctx]
                        (if (nil? (:find ctx))
                          (t/allow)

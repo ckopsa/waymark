@@ -1111,6 +1111,7 @@
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
+   :release_grace_seconds
    :delegates])
 
 (def ^:private wall-inputs
@@ -1989,6 +1990,16 @@
                          {:label "Sittings at once"
                           :help max-open-sittings-help}}
      [:int {:min 1 :max 10}]]
+    ;; HOW LONG A RELEASED ROW RESTS (ticket f6c8d5ce). A close can land
+    ;; while the run that sat is still mid-call, so the rows it walked
+    ;; are handed to no other sitting of the seat until this lifts
+    ;; (`graced-rows`).
+    [:release_grace_seconds {:default 120
+                             :examples [120]
+                             :x-display
+                             {:label "Grace before a closed sitting's rows are handed on, in seconds"
+                              :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them, so a run whose close came early is not overtaken mid-call. Zero hands them on at once."}}
+     [:int {:min 0 :max 3600}]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2223,6 +2234,12 @@
                          {:label "Sittings at once"
                           :help max-open-sittings-help}}
      [:int {:min 1 :max 10}]]
+    [:release_grace_seconds {:default 120
+                             :examples [120]
+                             :x-display
+                             {:label "Grace before a closed sitting's rows are handed on, in seconds"
+                              :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Two minutes is the default."}}
+     [:int {:min 0 :max 3600}]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2395,6 +2412,12 @@
                                   {:label "Sittings at once"
                                    :help max-open-sittings-help}}
               [:int {:min 1 :max 10}]]
+             [:release_grace_seconds {:default 120
+                                      :examples [120]
+                                      :x-display
+                                      {:label "Grace before a closed sitting's rows are handed on, in seconds"
+                                       :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Raise it when a run's close can come before its last call does."}}
+              [:int {:min 0 :max 3600}]]
              [:delegates {:optional true
                           :x-display
                           {:label "What it may author"
@@ -2433,7 +2456,8 @@
                       :budget_usd_per_week :sitting_budget_tokens
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
-                      :fire_interval_seconds :max_open_sittings :delegates]
+                      :fire_interval_seconds :max_open_sittings
+                      :release_grace_seconds :delegates]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
@@ -4001,26 +4025,77 @@
                           (.getBytes ^String held StandardCharsets/UTF_8)))))
              first)))))
 
+(def ^:private release-grace-default
+  "The grace, in seconds, a seat that names no `release_grace_seconds`
+  gives the rows of a sitting that closed."
+  120)
+
+(defn- walked-rdef
+  "The rdef of the kind this seat walks, or nil."
+  [eng seat-row]
+  (some->> (get-in seat-row [:data :walk]) str not-empty keyword
+           (get (inv/resources eng))))
+
+(defn- graced-rows
+  "The walk rows a sitting of this seat CLOSED within the seat's
+  `release_grace_seconds` walked (ticket f6c8d5ce). A close can land
+  while the run that sat is still mid-call — its hook fired early, or
+  its last answer is in flight — and a fire a minute later must not
+  take its ticket out from under it. An abandoned sitting was swept,
+  not closed, and holds nothing; the sitting `sitting-id` names is
+  left out, as `claimed-rows` leaves it. A row whose work is over
+  (`machine/work-over?` under the walked kind's `rdef`) was finished,
+  not released, and is not held. → a set of ids."
+  [st tx seat-row rdef sitting-id now]
+  (let [grace (long (or (get-in seat-row [:data :release_grace_seconds])
+                        release-grace-default))
+        now (instant-of now)]
+    (if-not (and seat-row now (pos? grace))
+      #{}
+      (let [since (.minusSeconds ^Instant now grace)]
+        (into #{}
+              (comp (remove #(= (str sitting-id) (str (:id %))))
+                    (filter #(when-some [ended (instant-of
+                                                (get-in % [:data :ended_at]))]
+                               (.isAfter ^Instant ended since)))
+                    (mapcat #(get-in % [:data :walked_rows]))
+                    (keep #(some-> % str not-empty))
+                    (remove #(when rdef
+                               (when-some [r (store/load-row
+                                              st tx (keyword (str (get-in seat-row [:data :walk])))
+                                              % {})]
+                                 (machine/work-over?
+                                  rdef (inv/decode-row rdef r))))))
+              (store/query-rows st tx :sitting
+                                {:seat (str (:id seat-row)) :state :closed}
+                                {:limit open-sitting-page
+                                 :newest-first true}))))))
+
 (defn claimed-rows
   "The walk row ids the OTHER open sittings of this seat were handed:
   the rows a second run of the seat must not walk again. A fire and a
   wake that land together start two runs, and without this both sits
   answer the same first row, so both work one branch and the next row
-  waits. The claim ends with the sitting — a closed, abandoned or swept
-  sitting holds nothing — and the sitting `sitting-id` names is left
-  out, so a re-sit is handed its own rows again. → a set of ids."
+  waits. The claim ends with the sitting — an abandoned or swept
+  sitting holds nothing, and a closed one holds its rows only through
+  the seat's grace (`graced-rows`) — and the sitting `sitting-id`
+  names is left out, so a re-sit is handed its own rows again. → a
+  set of ids."
   [eng seat-id sitting-id]
   (if (and seat-id (get (inv/resources eng) :sitting))
-    (into #{}
-          (comp (remove #(= (str sitting-id) (str (:id %))))
-                (mapcat #(get-in % [:data :walked_rows]))
-                (keep #(some-> % str not-empty)))
-          (store/with-tx (:storage eng)
-            (fn [tx]
-              (store/query-rows (:storage eng) tx :sitting
-                                {:seat (str seat-id) :state :open}
-                                {:limit open-sitting-page
-                                 :newest-first true}))))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (into (let [seat-row (store/load-row st tx :seat (str seat-id) {})]
+                  (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                               sitting-id ((:now-fn eng))))
+                (comp (remove #(= (str sitting-id) (str (:id %))))
+                      (mapcat #(get-in % [:data :walked_rows]))
+                      (keep #(some-> % str not-empty)))
+                (store/query-rows st tx :sitting
+                                  {:seat (str seat-id) :state :open}
+                                  {:limit open-sitting-page
+                                   :newest-first true})))))
     #{}))
 
 ;; ── the rows a sit leaves out of its walk ───────────────────────────
@@ -4059,8 +4134,8 @@
     (when (and groom stall (> (long (:id groom)) (long (:id stall))))
       groom)))
 
-(defn stuck-walk-rows
-  "The ids of the tickets in a ticket walk whose change is stuck and
+(defn stuck-walk-reasons
+  "The tickets in a ticket walk whose change is stuck and
   waits for a person (ticket 6bdaf6fe): a `stuck` change born from the
   ticket, no live change beside it, and no groom since its stall. The
   walk leaves them out as it leaves a claimed row out, so a queue of
@@ -4075,7 +4150,10 @@
   a second run of the seat has nothing to build on it, and a submit
   there only finds a clean worktree.
 
-  Empty for any other walk and for an engine that serves no change."
+  → {ticket-id reason}: each withheld ticket with the sentence the sit
+  answers for it (ticket 87c928e9), so a seat handed an empty walk
+  can say which row was held back and why. Empty for any other walk
+  and for an engine that serves no change."
   [eng walk]
   (if-some [rdef (when (= "ticket" (str walk))
                    (get (inv/resources eng) :change))]
@@ -4094,7 +4172,10 @@
                       (let [born (str (get-in change [:data :born_from]))]
                         (when (str/starts-with? born groomed-walk-prefix)
                           (not-empty (subs born (count groomed-walk-prefix))))))]
-      (into (into #{} (keep ticket-of)
+      (into (into {} (keep (fn [change]
+                             (when-some [ticket-id (ticket-of change)]
+                               [ticket-id (str "change " (:id change)
+                                               " is submitted and in review")])))
                   (changes {:state "submitted"} stuck-scan-limit))
             (keep (fn [change]
                     (let [born (str (get-in change [:data :born_from]))]
@@ -4104,9 +4185,15 @@
                           (when (and (not (live? born))
                                      (nil? (groom-after-stall eng change
                                                               ticket-id)))
-                            ticket-id))))))
+                            [ticket-id (str "change " (:id change)
+                                            " is stuck and waits for a person")]))))))
             (changes {:state "stuck"} stuck-scan-limit)))
-    #{}))
+    {}))
+
+(defn stuck-walk-rows
+  "The ids of `stuck-walk-reasons`, as a set."
+  [eng walk]
+  (set (keys (stuck-walk-reasons eng walk))))
 
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows
@@ -4153,12 +4240,13 @@
       {:claimed? true :taken #{}}
       (store/with-tx st
         (fn [tx]
-          (store/load-row st tx :seat (str seat-id) {:for-update true})
-          (let [open (store/query-rows st tx :sitting
+          (let [seat-row (store/load-row st tx :seat (str seat-id) {:for-update true})
+                open (store/query-rows st tx :sitting
                                        {:seat (str seat-id) :state :open}
                                        {:limit open-sitting-page
                                         :newest-first true})
-                taken (into #{}
+                taken (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                                         sitting-id ((:now-fn eng)))
                             (comp (remove #(= (str sitting-id) (str (:id %))))
                                   (mapcat #(get-in % [:data :walked_rows]))
                                   (keep #(some-> % str not-empty)))

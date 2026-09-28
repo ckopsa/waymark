@@ -82,23 +82,24 @@
 (defn- system? [ctx]
   (= :system (get-in ctx [:principal :type])))
 
-(def ^:private deliverer-only
-  (g/guard {:name :deliverer-marks-failure
-            :explain "Failure is the deliverer's record, never a client's claim — pause instead."
-            :reads [:principal]
-            :check (fn [_ _ ctx] (if (system? ctx) (t/allow) (t/deny)))}))
+(g/defguard ^:private deliverer-only
+  {:name :deliverer-marks-failure
+   :explain "Failure is the deliverer's record, never a client's claim — pause instead."
+   :reads [:principal]}
+  [_ _ ctx]
+  (if (system? ctx) (t/allow) (t/deny)))
 
 (defhandler record-failure [row inp _ctx]
   (assoc-in row [:data :failure_reason] (:reason inp)))
 
-(def ^:private owner-only
-  (g/guard {:name :owner-revokes
-            :explain "Only the subscription's owner may revoke it — pause it instead."
-            :reads [:principal]
-            :check (fn [row _ ctx]
-                     (if (and (some? (:owner row))
-                              (= (:owner row) (get-in ctx [:principal :id])))
-                       (t/allow) (t/deny)))}))
+(g/defguard ^:private owner-only
+  {:name :owner-revokes
+   :explain "Only the subscription's owner may revoke it — pause it instead."
+   :reads [:principal]}
+  [row _ ctx]
+  (if (and (some? (:owner row))
+           (= (:owner row) (get-in ctx [:principal :id])))
+    (t/allow) (t/deny)))
 
 (defresource subscription
   {:kind :subscription
