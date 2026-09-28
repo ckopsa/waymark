@@ -1291,14 +1291,20 @@
   (`house-pass-merges?` is false), that GitHub calls `clean` and is not
   a draft, is timed from the first pass that saw it clean at this head.
   Once it has waited the policy's `merge_wait_seconds`, it raises one
-  merge ask unless `asked-already?`. `waiting` is an atom of change id
+  merge ask unless `asked-already?`. A change whose ticket still waits
+  on another to merge (`merge-holds`) is not timed and not asked; its
+  wait starts once nothing holds it. `waiting` is an atom of change id
   → {:head :since}. Throws nothing. → the number of asks raised."
   [eng waiting ^Instant now]
   (let [by-repo (policies-by-repo eng)
         asks (merge-asks eng)
+        changes (submitted-changes eng)
+        person? #(some-> (get by-repo (str (get-in % [:data :repository])))
+                         house-pass-merges? not)
+        holds (merge-holds eng (filter person? changes))
         raised (volatile! 0)
         clean (volatile! {})]
-    (doseq [change (submitted-changes eng)
+    (doseq [change changes
             :let [id (str (:id change))
                   number (get-in change [:data :number])
                   head (some-> (get-in change [:data :head_sha]) str not-empty)
@@ -1306,7 +1312,8 @@
             :when (and number head policy
                        (not (house-pass-merges? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))
-                       (not (true? (get-in change [:data :draft]))))]
+                       (not (true? (get-in change [:data :draft])))
+                       (not (get holds (born-ticket change))))]
       (let [prior (get @waiting id)
             ^Instant since (if (= head (:head prior)) (:since prior) now)
             seconds (.getSeconds (Duration/between since now))]
