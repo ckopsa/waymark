@@ -273,11 +273,11 @@
                   " transition's stored `inputs` are not served, having no"
                   " field projection of their own.")
              (str "The log records what happened, not what the row looked"
-                  " like. " (name (:kind rdef)) " declares no :retain"
-                  " {:data true}, so `data` as of a past instant is not"
-                  " recoverable here, and a transition's stored `inputs`"
-                  " are not served, having no field projection of their"
-                  " own."))
+                  " like, so `data` as of a past instant is not recoverable"
+                  " for " (name (:kind rdef)) " — it did not opt into"
+                  " docs/spec-time-travel.md tier 3 — and a transition's"
+                  " stored `inputs` are not served, having no field"
+                  " projection of their own."))
            (when truncated
              (str "The newest " cap " transitions only (the page's cap);"
                   " older ones are unread. Ask for fewer with `limit` — never"
@@ -400,8 +400,14 @@
                                          " its log was severed from it by a"
                                          " hard DROP, the spec's other"
                                          " recorded punt.")])
-                                 (notes rdef (if e [e] []) (some? visible?)
-                                        false (count rows)))}
+                                 (cond-> (notes rdef (if e [e] [])
+                                                (some? visible?) false
+                                                (count rows))
+                                   (not (decision/retains-data? rdef))
+                                   (conj (str (name (:kind rdef))
+                                              " declares no :retain {:data"
+                                              " true}, so this as-of read"
+                                              " answers no `data`."))))}
              e (assoc :put_there_by e)
              ;; tier 3: the retained copy, through the same closure the
              ;; row read narrows with — never unprojected
