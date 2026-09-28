@@ -27,7 +27,9 @@
      the sentence names the ceiling entry that would have admitted it.
   3. Every authored seat records `authored_by` (the author seat) and
      `owner` (the person the author acts for). The seat's on-create
-     stamps both; no door takes them from a hand.
+     stamps both, or the person's `hand_to` writes them with the
+     approval; the person's `take_back` clears the author and the
+     approval. No door takes them from an author alone.
   4. An authored seat is born PARKED, and the person's first unpark
      is the approval. After it, the author restates its own child
      within the ceiling with no new tap. Unpark, merge and retire are
