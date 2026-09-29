@@ -1490,8 +1490,8 @@
   action it is the door signing its work, so `actions-from-mcp` can
   count what came through here. A fenced action carries the If-Match
   of the row we READ, so the write lands on the row the agent saw or
-  not at all — and `fenced?` is the caller's answer to "is this door
-  fenced", read off the envelope's entry when it has one and off the
+  not at all — and `fenced?` is the caller's answer to 'is this door
+  fenced', read off the envelope's entry when it has one and off the
   DECLARATION when a guard shut the door (ticket ec814cac)."
   [session fenced? etag warnings]
   (cond-> {"idempotency-key" (origin-key (get-in session [:principal :id])
