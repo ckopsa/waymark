@@ -2276,7 +2276,9 @@
 
   `only` is the one row a fire's text named (`seats/fire-key-row`):
   when it is given, the page holds that row alone, or nothing when the
-  row is not in the queue or is claimed.
+  row is not in the queue or is claimed. A named OPEN ticket whose
+  change is submitted is withheld as the plain walk withholds it
+  (ticket 6ca380da).
 
   `stuck` is the tickets whose change waits for a person, each with
   its reason (`seats/stuck-walk-reasons`, ticket 6bdaf6fe). They are
@@ -2302,7 +2304,13 @@
                                   (seats/named-beside-a-live-change?
                                    eng walk only))
                          (some-> (row-of eng (keyword walk) only) :state name))
-            stuck (cond-> stuck only (dissoc (str only)))
+            ;; save an open ticket whose round is already submitted:
+            ;; the named walk withholds it as the plain one does
+            ;; (ticket 6ca380da)
+            stuck (cond-> stuck
+                    (and only (not (seats/named-open-beside-a-submitted-change?
+                                    eng walk only)))
+                    (dissoc (str only)))
             subtract? (or judgment (seq claimed) (seq stuck))
             asked (if (or subtract? (seq held) only) coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))

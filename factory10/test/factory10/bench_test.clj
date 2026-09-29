@@ -3270,6 +3270,40 @@
     (person-moves-ticket! w :resume)
     (back-under-review-and-red? w)))
 
+(deftest a-groomed-ticket-whose-pull-request-is-back-under-review-is-not-walked
+  ;; ticket 6ca380da: the groom leaves the ticket open beside a submitted
+  ;; change, and neither the plain walk nor the fire naming it hands it
+  (let [w (ticket-world)
+        ticket-id (str (:id (:ticket w)))
+        url (do (stalled-with-a-pull-request! w 95)
+                (person-moves-ticket! w :groom)
+                (str "https://github.com/ckopsa/waymark/pull/" 95))
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        sit-fired! (fn []
+                     (let [k (seats/hold-fire-key!
+                              (:eng w) seat-row ((:now-fn (:eng w)))
+                              (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id
+                                   "\",\"action\":\"groom\"}"))]
+                       (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                                      {:key k :seat "bench-seat"}))))]
+    (is (= "submitted" (change-state w)))
+    (is (= "open" (ticket-state w)))
+    (testing "the plain walk leaves it out"
+      (is (empty? (get-in (sit-again! w) [:walk :rows]))))
+    (testing "the fire naming it leaves it out too"
+      (is (empty? (get-in (sit-fired!) [:walk :rows]))))
+    (testing "a red head hands it back with its feedback"
+      (mirror-moves-change! w :fail a-conflict)
+      (let [answer (sit-again! w)]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= "failing" (get-in answer [:change :state])))
+        (is (seq (calls-of (:state w) "bench__feedback")))))
+    (testing "the merge completes the ticket"
+      (mirror-moves-change! w :merge nil)
+      (is (= "done" (ticket-state w)))
+      (is (= (str "Merged: " url ".")
+             (get-in (ticket-row w) [:data :close_reason]))))))
+
 (deftest a-groom-leaves-a-closed-pull-request-alone
   (let [w (ticket-world)]
     (stalled-with-a-pull-request! w 94)
