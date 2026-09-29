@@ -1457,6 +1457,44 @@
            (:test (sent 1)))
         "the restate carries the pattern to the rig's enrollment")))
 
+(deftest a-select-pattern-keeps-to-what-the-python-rig-compiles
+  ;; ticket 3052cdf2: the rig compiles select_pattern with Python's re
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:test {:workflow "tests.yml" :input "only"}})
+        restate (fn [pattern]
+                  (let [current (policy-row eng (:id row))]
+                    (try (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                      (assoc (select-keys (:data current)
+                                                          [:repository :branch_pattern :base
+                                                           :max_lines :opens_pr :auto_merge
+                                                           :rounds_per_change :formatter
+                                                           :deny :orientation])
+                                             :test {:workflow "tests.yml" :input "only"
+                                                    :select_pattern pattern})
+                                      {:principal person
+                                       :if-match (inv/etag :repo_policy (:id row)
+                                                           (:version current))})
+                         nil
+                         (catch clojure.lang.ExceptionInfo e (ex-data e)))))]
+    (is (nil? (restate "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"))
+        "the waymark-bench pattern is in the common subset")
+    ;; ticket d92a9bf4: the rig runs Python 3.11, which compiles both
+    (doseq [pattern ["^a++$" "^(?>ab)$"]]
+      (is (nil? (restate pattern))
+          (str pattern " is in Python 3.11's re")))
+    (doseq [[pattern named] [["^\\p{L}+$" "Unicode property class"]
+                             ["^a+\\z" "end-of-input anchor"]]]
+      (let [refusal (restate pattern)]
+        (is (= :the-test-selection-pattern-compiles
+               (some-> (:guard refusal) name keyword))
+            (pr-str refusal))
+        (is (str/includes? (pr-str refusal) named)
+            (str "the refusal names the construct: " (pr-str refusal)))))
+    (is (str/includes? (pr-str (:schema (get (inv/resources eng) :repo_policy)))
+                       "Python 3.11 re")
+        "the help names the rig's dialect")))
+
 ;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
 
 (def ^:private house-policy
@@ -1518,6 +1556,21 @@
     (bench/merge-green! (:eng w) seen)
     (is (= 1 (count (calls-of st "bench__merge")))
         "the rig refused this head once, and the pass remembers it")))
+
+(deftest a-not-mergeable-refusal-writes-the-conflict-on-the-row
+  ;; ticket 0b564d2d: the mirror's own read can stay `unknown`, and that
+  ;; one field is where the forge's failing pass finds a conflict
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (is (= "unknown" (get-in (change-row w) [:data :mergeable]))
+        "the submit cleared the last head's merge state")
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (bench/merge-green! (:eng w) seen)
+    (is (= "conflicted" (get-in (change-row w) [:data :mergeable]))
+        "the parked head's conflict is on the row, so the failing pass
+         moves the change instead of leaving it submitted")))
 
 (deftest a-moved-head-is-not-parked
   ;; ticket a95c3d63: only a refusal a new pass cannot fix parks a head

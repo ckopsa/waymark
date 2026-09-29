@@ -249,6 +249,38 @@
       (is (some #{merge-guard} (:guards (get (:actions ticket) :restate))))
       (is (some #{merge-guard} (:create-guards ticket))))))
 
+(deftest a-ticket-never-waits-on-its-parent-or-any-ancestor
+  ;; ticket 59b4912d: a parent ends after its children, so the wait never would
+  (let [rows {"G" (at :open {} "G")
+              "P" (at :open {:parent "G"} "P")
+              "C" (at :open {:parent "P"} "C")
+              "U" (at :open {} "U")}
+        block-guard (first (:guards (get (:actions ticket) :block)))
+        judge (fn [named]
+                (first (g/evaluate block-guard (get rows "C") {:blocked_by named}
+                                   (ctx the-person rows))))]
+    (testing "blocking a child on its parent refuses, and names merge_after"
+      (let [v (judge ["P"])]
+        (is (= :deny (:verdict v)))
+        (is (re-find #"P is this ticket's parent" (pr-str v)))
+        (is (re-find #"merge_after" (pr-str v)))))
+    (testing "blocking on a grandparent refuses"
+      (let [v (judge ["U" "G"])]
+        (is (= :deny (:verdict v)))
+        (is (re-find #"G is an ancestor of this ticket" (pr-str v)))))
+    (testing "blocking on an unrelated open ticket still works"
+      (is (= :allow (:verdict (judge ["U"])))))
+    (testing "setting a parent the ticket already waits on refuses"
+      (let [guard (last (:create-guards ticket))
+            row (at :blocked {:blocked_by ["G"]} "C")
+            judge-parent (fn [parent]
+                           (:verdict (first (g/evaluate guard row {:parent parent}
+                                                        (ctx the-person rows)))))]
+        (is (= :deny (judge-parent "G")) "the parent it waits on")
+        (is (= :deny (judge-parent "P")) "a parent below the ticket it waits on")
+        (is (= :allow (judge-parent "U")))
+        (is (= :allow (judge-parent nil)))))))
+
 (deftest a-child-is-born-under-an-open-parent
   (let [rows {"P-open" (at :open {} "P-open")
               "P-done" (at :done {:close_reason "done"} "P-done")}
