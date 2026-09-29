@@ -66,6 +66,11 @@
     (waymark10.server.decision/after-record), nil everywhere else.")
   (transitions [st tx where opts]
     "Log rows: where {:kind … :resource-id … :since id}, newest-last.")
+  (transitions-under-grant [st tx grant-id since until opts]
+    "Log rows whose actor carries this grant (actor->>'grant') and
+    whose `at` lies in [since, until] — a nil bound is open. A
+    sitting's transitions are these, over its grant and its window
+    (ticket 39b2c934). Oldest first; opts {:limit n}, default 500.")
   (transition-stats [st tx since include-system?]
     "Weekly rhythm buckets over the log — the seasons door's one
     aggregate read: rows {:week-start inst :kind str :action str
