@@ -16,12 +16,14 @@ on:
     paths:
       - 'localfire/**'
       - 'seat/**'
+      - '.claude/hooks/sitting-close.sh'
       - 'Dockerfile.localfire'
       - '.github/workflows/localfire.yml'
   pull_request:
     paths:
       - 'localfire/**'
       - 'seat/**'
+      - '.claude/hooks/sitting-close.sh'
       - 'Dockerfile.localfire'
       - '.github/workflows/localfire.yml'
   workflow_dispatch:
