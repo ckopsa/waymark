@@ -38,6 +38,10 @@
      against the declared prediction — a divergence is attached to
      the result (:waymark10.client/diverged), surfaced, never
      improvised around.
+  8. A refusal's remedies are a route too (pursue!): the goal door is
+     tried, each remedy a refusing guard names is pursued in turn, and
+     the door it unblocked is retried — rehearsed by dry-run first,
+     bounded, cycle-checked, and only genuine choices come back.
 
   Refusals are DATA, never exceptions swallowed into nil:
   - {:problem … :status …}   the server refused (RFC 9457 body)
@@ -524,6 +528,213 @@
                      :else (reduced (assoc res :at step)))))
                doc
                route)))))
+
+;; ── pursue (rule 8: GRAIL — a refusal's remedies are the route) ─────
+
+(defn- door-of
+  "kind.action, the remedy token's own wire spelling; a collection's
+  create is its kind's door."
+  [doc action]
+  (str (str/replace (str (:kind doc)) #"_collection$" "") "." (name action)))
+
+(defn- door-kind [door] (first (str/split (str door) #"\." 2)))
+
+(defn- door-action [door] (second (str/split (str door) #"\." 2)))
+
+(defn- trail
+  "The stack as a person reads it: which door waits on which row."
+  [stack]
+  (mapv (fn [f] {:door (:door f) :row (get-in f [:doc :self])}) stack))
+
+(defn- missing-inputs
+  "The required fields of a door's declared input this input leaves
+  unset — a choice only a person (or :resolve) can make."
+  [entry input]
+  (into []
+        (comp (map keyword) (remove #(some? (get input %))))
+        (get-in entry [:input :required])))
+
+(defn- remedy-doc
+  "The row a :resolve pick names — a doc, an href, or an id read
+  through the index's collection href; a create acts on the collection."
+  [session kind action {:keys [doc href id]}]
+  (let [coll (delay (get-in (index session) [:resources (keyword kind) :href]))]
+    (cond
+      doc doc
+      href (get-doc session href)
+      (and id @coll) (get-doc session (str @coll "/" id))
+      (and (= "create" action) @coll) (get-doc session @coll))))
+
+(defn- remedy-call
+  "Where remedy `door` acts for the `refused` call: :resolve's pick, or,
+  with no :resolve, the refused call's own row when the remedy is on its
+  kind. nil means nobody said — a choice for a person."
+  [session door refused resolve]
+  (let [same-kind? (= (door-kind door) (door-kind (:door refused)))
+        pick (if resolve (resolve door refused) (when same-kind? {}))
+        target (when pick
+                 (let [d (remedy-doc session (door-kind door) (door-action door) pick)]
+                   (if (and (nil? d) same-kind?) (:doc refused) d)))]
+    (when (doc? target)
+      {:door door :doc target :input (:input pick)})))
+
+(defn- attempt
+  "Try one call once — rehearsed (dry-run) or real (act!) — on a fresh
+  read of its row. → {:landed doc} · {:refused [remedy …] :doc :reason}
+  · {:blocked entry} · {:stop res} (a wire failure or a divergence)."
+  [session {:keys [door doc input retry] :as call} rehearse? opts]
+  (let [doc (if (:self doc) (get-doc session (:self doc)) doc)
+        action (keyword (door-action door))
+        entry (get-in doc [:actions action])
+        blocked (fn [m] {:blocked (merge {:door door :row (:self doc) :needs []
+                                          :or (:or call [])}
+                                         m)})
+        needs (when entry (missing-inputs entry input))]
+    (cond
+      (not (doc? doc)) {:stop doc}
+
+      ;; not afforded: a guard the render probe could judge says why,
+      ;; and its remedies ride the unavailable entry
+      (nil? entry)
+      (if-some [remedies (not-empty (vec (get-in doc [:unavailable action :remedies])))]
+        {:refused remedies :doc doc :reason (why-not doc action)}
+        (blocked {:reason (or (why-not doc action)
+                              (str door " is not afforded on " (:self doc) "."))}))
+
+      (seq needs) (blocked {:needs needs})
+
+      :else
+      (let [_ (when (and retry (not rehearse?))
+                ;; the refused attempt wrote nothing; once its remedy
+                ;; landed, the retry is a new logical attempt (rule 3)
+                (swap! (:key-store session) dissoc (attempt-key (:href entry) input)))
+            res (if rehearse?
+                  (dry-run session doc action input)
+                  (act! session doc action input opts))]
+        (cond
+          (or (transport? res) (diverged res)) {:stop res}
+          (warnings? res) (blocked {:warnings (:warnings res)})
+          (seq (get-in res [:problem :remedies]))
+          {:refused (vec (get-in res [:problem :remedies])) :doc doc
+           :reason (get-in res [:problem :detail])}
+          (or (problem? res) (refused? res))
+          (blocked {:reason (or (get-in res [:problem :detail])
+                                (get-in res [:refused :reason])
+                                (get-in res [:problem :title]))})
+          :else {:landed (if rehearse? doc res)})))))
+
+(defn- walk
+  "One pass of the pursuit over an explicit stack. rehearse? dry-runs
+  every door, and a remedy that would land counts every door waiting
+  above it as landing too — a rehearsal cannot see an effect it did not
+  write. A real pass (:expect, the rehearsal's writes) re-checks each
+  landing against the rehearsal and stops where the two part."
+  [session call rehearse? {:keys [resolve max-depth expect] :or {max-depth 8} :as opts}]
+  (let [act-opts (select-keys opts [:confirm! :acknowledge])
+        write-of (fn [f] {:door (:door f) :row (get-in f [:doc :self]) :input (:input f)})]
+    (loop [stack [call] writes [] blocked [] at nil]
+      (let [top (peek stack)]
+        (cond
+          ;; a fresh (or retried) door: try it
+          (not (contains? top :remedies))
+          (let [out (attempt session top rehearse? act-opts)]
+            (cond
+              (:stop out)
+              {:stopped (:stop out) :writes writes :stack (trail stack)}
+
+              (:refused out)
+              (recur (conj (pop stack)
+                           (assoc top :doc (:doc out) :reason (:reason out)
+                                  :remedies (seq (:refused out)) :all (:refused out)))
+                     writes blocked at)
+
+              (:blocked out)
+              (let [stack' (pop stack)
+                    blocked' (conj blocked (:blocked out))
+                    at' (or at (trail stack'))]
+                (if (empty? stack')
+                  {:blocked-on blocked' :stack at' :writes writes}
+                  (recur stack' writes blocked' at')))
+
+              :else
+              (let [w (write-of top)
+                    writes' (conj writes w)
+                    expected (when expect (get expect (count writes)))
+                    stack' (pop stack)]
+                (cond
+                  (and expect (not= (select-keys expected [:door :row])
+                                    (select-keys w [:door :row])))
+                  {:stopped {:diverged {:expected expected :actual w}}
+                   :writes writes' :stack (trail stack)}
+
+                  (empty? stack') {:done (:landed out) :writes writes'}
+
+                  rehearse? {:done nil :writes (into writes' (map write-of) (rseq stack'))}
+
+                  :else
+                  (recur (conj (pop stack') (-> (peek stack')
+                                                (dissoc :remedies :all :reason)
+                                                (assoc :retry true)))
+                         writes' [] nil)))))
+
+          ;; a refused door with a remedy left to try
+          (seq (:remedies top))
+          (let [door (first (:remedies top))
+                stack (conj (pop stack) (update top :remedies next))
+                others (vec (remove #{door} (:all top)))
+                call' (remedy-call session door
+                                   (select-keys top [:door :doc :input :reason])
+                                   resolve)
+                block (fn [m] (merge {:door door :row (get-in call' [:doc :self])
+                                      :needs [] :or others}
+                                     m))
+                entry (cond
+                        (nil? call')
+                        (block {:reason "No row was chosen for this remedy."})
+                        (some #(and (= door (:door %))
+                                    (= (get-in call' [:doc :self]) (get-in % [:doc :self])))
+                              stack)
+                        (block {:reason :cycle})
+                        (>= (count stack) max-depth)
+                        (block {:reason :depth}))]
+            (if entry
+              (recur stack writes (conj blocked entry) (or at (trail stack)))
+              (recur (conj stack (assoc call' :or others)) writes blocked at)))
+
+          ;; every remedy refused or blocked: this door fails, and the
+          ;; choices that stopped it are already in `blocked`
+          :else
+          (let [stack' (pop stack)]
+            (if (empty? stack')
+              {:blocked-on blocked :stack (or at []) :writes writes}
+              (recur stack' writes blocked at))))))))
+
+(defn pursue!
+  "Reach a goal by following refusal remedies (Amundsen's GRAIL). Try
+  the goal door; on a refusal whose guard names :remedies, push it and
+  try each remedy in order — a refused remedy's own remedies in turn —
+  and when one lands, pop and retry the door below it. The whole chain
+  is rehearsed by dry-run first; the real run then re-checks each
+  landing against the rehearsal and stops on divergence. opts:
+    :resolve    (fn [remedy-door refused-call] → {:id row-id :input {…}}
+                or nil) — which row a remedy acts on (also :href or
+                :doc). With no :resolve, a remedy on the refused call's
+                own kind acts on its row; any other is a choice.
+    :max-depth  stack bound (default 8); the same door on the same row
+                twice in the stack stops that branch (the cycle check)
+    :dry-run    rehearse only: the writes it would make, every choice
+    :confirm! :acknowledge  ride every act! (rules 2 and 6)
+  → {:done doc :writes […]}, or {:blocked-on [{:door :row :needs
+  [input …] :or [alternative remedy …] (:reason)}] :stack […] :writes
+  […]} — only genuine choices come back — or {:stopped res …} on a wire
+  failure or a divergence. A rehearsal answers :rehearsal true."
+  ([session doc action input] (pursue! session doc action input {}))
+  ([session doc action input opts]
+   (let [call {:door (door-of doc action) :doc doc :input input}
+         rehearsal (walk session call true opts)]
+     (if (or (:dry-run opts) (not (contains? rehearsal :done)))
+       (-> rehearsal (dissoc :done) (assoc :rehearsal true))
+       (walk session call false (assoc opts :expect (:writes rehearsal)))))))
 
 ;; ── the MCP tool projection ─────────────────────────────────────────
 
