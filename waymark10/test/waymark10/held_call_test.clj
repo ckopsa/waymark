@@ -865,10 +865,12 @@
 (defn- notice-member! [{:keys [eng notifier-id]} display notify?]
   (let [m (:row (inv/create! eng :member {:display display :actor_type "human"}
                              {:principal colton}))]
+    ;; how a member is reached is their own hand: the member sets it
     (when notify?
       (inv/invoke! eng :member (str (:id m)) :set_notify
                    {:notify {:notifier notifier-id :input {:chat_id "42"}}}
-                   {:principal colton
+                   {:principal (t/principal {:id (str (:id m))
+                                             :display display})
                     :if-match (inv/etag :member (:id m) (:version m))}))
     (str (:id m))))
 

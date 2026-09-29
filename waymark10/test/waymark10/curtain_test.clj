@@ -146,6 +146,47 @@
                    {:principal (t/principal {:id "bound-pid" :type :agent})})
       (is (true? (get-in (row-of eng "row-x") [:data :curtain]))))))
 
+;; ── the same wall on how a member is reached ────────────────────────
+
+(deftest set-notify-is-your-own-hand
+  (let [eng (eng!)
+        chat (fn [id] {:notify {:notifier "tg" :input {:chat_id id}}})
+        ;; set_notify is an :edit door: the fence rides along
+        as (fn [p] {:principal p
+                    :if-match (inv/etag :member "elena"
+                                        (:version (row-of eng "elena")))})]
+    (inv/create! eng :role {:name "recovery-admin"}
+                 {:principal members/registrar})
+    (member! eng "elena" "Elena" "human")
+    (member! eng "stranger" "Stranger" "human")
+    (member! eng "colton" "Colton" "human" {:roles ["recovery-admin"]})
+
+    (testing "the member themself sets how they are reached"
+      (inv/invoke! eng :member "elena" :set_notify (chat "42") (as elena))
+      (is (= "42" (get-in (row-of eng "elena")
+                          [:data :notify :input :chat_id]))))
+
+    (testing "a stranger cannot point elena's notices at their own chat"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! eng :member "elena" :set_notify (chat "666")
+                                (as (t/principal {:id "stranger"})))))
+      (is (= "42" (get-in (row-of eng "elena")
+                          [:data :notify :input :chat_id]))))
+
+    (testing "a system principal is refused even wearing the role"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! eng :member "elena" :set_notify (chat "7")
+                                (as (t/principal
+                                     {:id "sys" :type :system
+                                      :roles ["recovery-admin"]}))))))
+
+    (testing "the recovery-admin human may set it — the household valve"
+      (inv/invoke! eng :member "elena" :set_notify (chat "43")
+                   (as (t/principal {:id "colton"
+                                     :roles ["recovery-admin"]})))
+      (is (= "43" (get-in (row-of eng "elena")
+                          [:data :notify :input :chat_id]))))))
+
 ;; ── suppression: the three doors, the sweep, the reopening ──────────
 
 (deftest the-curtain-suppresses-every-door
