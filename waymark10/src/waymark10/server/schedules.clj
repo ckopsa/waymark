@@ -2109,6 +2109,21 @@
           (warn! "seat " (:id seat-row)
                  " fired but its halt line stands — " (ex-message e)))))))
 
+(defn- relink-chaired!
+  "Every broken schedule that fires through this model's link, sent
+  back through `relink_model` now that the model is linked again
+  (waymark ticket 6e407ca7); that transition releases its held wake. A
+  row with a link or a runner list of its own did not break on the
+  chair, and is left to its own doors."
+  [eng model-id]
+  (doseq [row (rows-where eng :schedule {:state :broken} 1000)
+          :when (and (nil? (own-link-of row))
+                     (nil? (runners-of-row row))
+                     (= model-id (some->> (get-in row [:data :seat]) str not-empty
+                                          (raw-row eng :seat)
+                                          seats/chair-of)))]
+    (try-act! eng row :relink_model nil)))
+
 (defn handle-transition!
   "One transition → the push it implies, or nothing.
 
@@ -2122,6 +2137,8 @@
       seat fire             start the linked Routine's run (R-12.19)
       schedule restate      push again (the model a person restated)
       schedule link         release the wake a broken row held
+      schedule set_runners  the same, once the pool has a live runner
+      model link            relink every broken row that chairs on it
 
   Everything else — including every transition this namespace itself
   writes — is ignored, which is what keeps the consumer from feeding
@@ -2225,9 +2242,18 @@
       (when-some [row (raw-row eng :schedule (:resource-id t))]
         (push! eng adapters row))
 
+      ;; A CHAIR LINKED AGAIN MENDS THE ROWS THAT BROKE ON IT (waymark
+      ;; ticket 6e407ca7): each goes back through `relink_model`, and
+      ;; the branch below hears that and releases its wake.
+      (and (= :model kind) (= :link action))
+      (relink-chaired! eng (str (:resource-id t)))
+
       ;; A LINK RELEASES THE WAKE A BROKEN ROW HELD (waymark ticket
-      ;; bb19404d), once: the release is keyed by this transition.
-      (and (= :schedule kind) (contains? #{:link :link_like :relink_model} action))
+      ;; bb19404d), once: the release is keyed by this transition. A
+      ;; restated pool is a link too (6e407ca7): `release!` still asks
+      ;; `held?`, so a list with no live runner releases nothing.
+      (and (= :schedule kind)
+           (contains? #{:link :link_like :relink_model :set_runners} action))
       (when-some [row (raw-row eng :schedule (:resource-id t))]
         (when (get-in row [:data :wake_pending])
           ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t))))))
