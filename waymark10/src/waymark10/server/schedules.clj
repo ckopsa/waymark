@@ -2124,6 +2124,17 @@
                                           seats/chair-of)))]
     (try-act! eng row :relink_model nil)))
 
+(defn- relink-pooled!
+  "The same mend, on a model's `set_runners` (waymark ticket 13d01ec3):
+  a row that fires through this model's pool broke when every runner
+  in it did, so once the list names a live runner each such row goes
+  back through `relink_model`. A list with no live runner mends
+  nothing: the row would only break again at its next fire."
+  [eng model-id]
+  (when (some #(= "live" (some-> (raw-row eng :runner_link %) :state name))
+              (some->> (raw-row eng :model model-id) runners-of-row))
+    (relink-chaired! eng model-id)))
+
 (defn handle-transition!
   "One transition → the push it implies, or nothing.
 
@@ -2139,6 +2150,7 @@
       schedule link         release the wake a broken row held
       schedule set_runners  the same, once the pool has a live runner
       model link            relink every broken row that chairs on it
+      model set_runners     the same, once the pool has a live runner
 
   Everything else — including every transition this namespace itself
   writes — is ignored, which is what keeps the consumer from feeding
@@ -2247,6 +2259,11 @@
       ;; the branch below hears that and releases its wake.
       (and (= :model kind) (= :link action))
       (relink-chaired! eng (str (:resource-id t)))
+
+      ;; AND A CHAIR'S POOL RESTATED (waymark ticket 13d01ec3): a row
+      ;; held because every runner in it broke is mended the same way.
+      (and (= :model kind) (= :set_runners action))
+      (relink-pooled! eng (str (:resource-id t)))
 
       ;; A LINK RELEASES THE WAKE A BROKEN ROW HELD (waymark ticket
       ;; bb19404d), once: the release is keyed by this transition. A

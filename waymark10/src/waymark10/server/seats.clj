@@ -3770,7 +3770,7 @@
 
   A SEAT THAT SAYS A JUDGMENT HAS A THIRD WAY IN. Its queue is the
   judgment's subjects minus the ones with a standing verdict
-  (`mcp/judged-subjects`), so a subject re-enters it when its verdict
+  (`judgments/judged-subjects`), so a subject re-enters it when its verdict
   is REOPENED — a transition on kind verdict, not on the walked kind.
   The computed default therefore carries a second entry, `verdict`
   `reopen` under this seat's own judgment, and a reopen wakes the
