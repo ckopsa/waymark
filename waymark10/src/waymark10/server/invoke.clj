@@ -727,7 +727,7 @@
   conceals; anything else refuses with the guard's own sentence.
   Reasons render over the secret-concealed row (waymark-kyg); id,
   state and the gate-safe summary keep the full row."
-  [acc v d row acknowledged defn rdef]
+  [acc v d row inp acknowledged defn rdef]
   (let [nrow (narration-row rdef row)]
     (cond
       (= :warning (:severity d))
@@ -736,7 +736,7 @@
         (update acc :warned conj
                 {:name (:name d)
                  :reason (g/render-reason d v nrow)
-                 :remedies (:remedies d)}))
+                 :remedies (g/remedy-doors d)}))
 
       (:hide d)
       (throw (p/not-found (:kind rdef) (:id row)))
@@ -746,7 +746,8 @@
               (:name defn) (:state row)
               (g/render-reason d v nrow)
               {:guard (:name d)
-               :remedies (:remedies d)
+               :remedies (g/remedy-doors d)
+               :resolved-remedies (g/resolve-remedies d nrow inp)
                :open (:open d)
                :becomes-available (g/becomes-available d v nrow)}
               {:kind (:kind rdef) :id (:id row)
@@ -776,7 +777,7 @@
                                                  scope)))]
          (if-not deny?
            acc
-           (deny-outcome acc v d row acknowledged defn rdef))))
+           (deny-outcome acc v d row inp acknowledged defn rdef))))
      ;; nil, not [] — "this kind retains nothing" and "this action
      ;; declares no guards" are different sentences and the column
      ;; must be able to tell them apart
@@ -824,7 +825,7 @@
            (let [[v d] (g/evaluate leaf row inp ctx)]
              (if-not (t/deny? v)
                acc
-               (deny-outcome acc v d row acknowledged defn rdef))))
+               (deny-outcome acc v d row inp acknowledged defn rdef))))
          {:warned [] :overridden []}
          judged)]
     {:valid? true
@@ -1867,11 +1868,12 @@
               (update acc :overridden conj (:name d))
               (update acc :warned conj {:name (:name d)
                                         :reason (g/render-reason d v nil)
-                                        :remedies (:remedies d)}))
+                                        :remedies (g/remedy-doors d)}))
             (throw (p/guard-refused :create nil
                                     (g/render-reason d v nil)
                                     {:guard (:name d)
-                                     :remedies (:remedies d)
+                                     :remedies (g/remedy-doors d)
+                                     :resolved-remedies (g/resolve-remedies d nil inp)
                                      :open (:open d)}
                                     nil))))))
     {:warned [] :overridden [] :basis (when scope [])}
