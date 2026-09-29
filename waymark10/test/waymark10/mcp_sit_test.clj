@@ -1618,3 +1618,38 @@
             e (sit! s2 {})]
         (is (not (contains? #{b c} d)))
         (is (not= d e))))))
+
+(deftest a-session-less-re-sit-after-a-drop-reuses-its-claimed-sitting
+  ;; Ticket 7496403e: the sit claims its sitting for its connector
+  ;; session. A run that passes no `session` and reconnects on a NEW
+  ;; connector session finds the claim held by the dropped one, which
+  ;; lives until the session TTL; once that session is unheard past the
+  ;; seat's idle limit the claim is free, and exactly one sit takes it.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:max_open_sittings 3})
+        sit! (fn [sid]
+               (let [r (tool h (with-session sid) "waymark_sit" {:key walk-key})]
+                 (is (false? (:isError r)) (text-of r))
+                 (str (:sitting (doc-of r)))))
+        unheard! (fn [sid]
+                   (swap! (:mcp-sessions eng) update sid assoc :touched
+                          (.minusSeconds (java.time.Instant/now) 7200)))
+        [dropped _] (initialize! h)
+        a (sit! dropped)]
+    (testing "while the first session is heard from, a new one gets a fresh sitting"
+      (let [[s1 _] (initialize! h)]
+        (is (not= a (sit! s1)))))
+    (unheard! dropped)
+    (testing "once the dropped session is unheard past the idle limit, the re-sit gets the same sitting"
+      (let [[s2 _] (initialize! h)]
+        (is (= a (sit! s2)))
+        (unheard! s2)))
+    (testing "two concurrent session-less sits get that sitting once and one fresh sitting"
+      (let [[s3 _] (initialize! h)
+            [s4 _] (initialize! h)
+            f3 (future (sit! s3))
+            f4 (future (sit! s4))
+            got [@f3 @f4]]
+        (is (not= (first got) (second got)))
+        (is (= 1 (count (filter #{a} got))))))))

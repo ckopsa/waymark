@@ -207,6 +207,20 @@
                                                              :branch branch}))
                              h]))))))
 
+(defn live-hashes
+  "The id hashes of every session touched since `since`, as a set. A
+  plain read: no touch, no eviction."
+  [storage ^Instant since]
+  (store/with-tx storage
+    (fn [tx]
+      (ensure! storage tx)
+      (into #{}
+            (keep :id_hash)
+            (jdbc/execute!
+             tx ["SELECT id_hash FROM waymark10_mcp_sessions WHERE touched >= ?"
+                 (ts since)]
+             jdbc-opts)))))
+
 (defn bound-elsewhere
   "Which of `sitting-ids` a session OTHER than `id` is bound to, as a
   set. Only sessions touched since `cutoff` count: an older row is one

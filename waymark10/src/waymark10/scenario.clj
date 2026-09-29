@@ -399,7 +399,7 @@
            (reduced (assoc acc
                            :refused (:name d)
                            :reason (g/render-reason d v row)
-                           :remedies (vec (:remedies d))
+                           :remedies (g/remedy-doors d)
                            :hidden (boolean (:hide d))))))))
    {:warned []}
    guards))

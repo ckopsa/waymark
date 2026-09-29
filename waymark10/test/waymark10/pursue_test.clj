@@ -1,5 +1,6 @@
 (ns waymark10.pursue-test
-  "GRAIL 1/3: pursue! reaches a goal by following refusal remedies,
+  "GRAIL 1/3 and 2/3: pursue! reaches a goal by following refusal
+  remedies — a bound one acting on the row its refusal names —
   proven over the ring handler against a trimmed copy of mealplan10's
   chain — grocery_list.create → plan-is-planned → plan.finalize →
   day-is-covered → plan_day.assign_meal → meal-is-listed → meal.accept
@@ -33,7 +34,7 @@
 (g/defguard plan-is-planned
   {:reads [:plan]
    :explain "Finalize the meal plan first — the grocery list follows from it."
-   :remedies [:plan/finalize]}
+   :remedies [{:door :plan/finalize :id '(input :plan_id)}]}
   [row inp ctx]
   (if-some [read (:read ctx)]
     (let [plan (read :plan (or (:plan_id inp) (get-in row [:data :plan_id])))]
@@ -56,7 +57,7 @@
   {:judges [:meal_id] :reads [:meal]
    :explain "That meal is not on the meal list yet."
    :open "Any meal on the list."
-   :remedies [:meal/accept]}
+   :remedies [{:door :meal/accept :id '(input :meal_id)}]}
   [_row inp ctx]
   (if-some [read (:read ctx)]
     (let [meal (read :meal (:meal_id inp))]
@@ -244,13 +245,64 @@
       (is (= "undecided" (state-of day)))
       (is (= "draft" (state-of plan))))))
 
-(deftest without-resolve-a-cross-kind-remedy-is-a-choice
+(deftest without-resolve-a-bare-cross-kind-remedy-is-a-choice
+  ;; plan.finalize is bound by the refusal; plan_day.assign_meal is a
+  ;; bare remedy, so nobody said which day
   (let [{:keys [plan] :as rows} (chain!)
         res (pursue-list! rows {})
         choice (first (:blocked-on res))]
-    (is (= ["plan.finalize"] (mapv :door (:blocked-on res))) (pr-str res))
-    (is (nil? (:row choice)) "nobody said which plan")
+    (is (= ["plan_day.assign_meal"] (mapv :door (:blocked-on res))) (pr-str res))
+    (is (nil? (:row choice)) "nobody said which day")
+    (is (= ["grocery_list.create" "plan.finalize"] (mapv :door (:stack res))))
     (is (= "draft" (state-of plan)))))
+
+(deftest bound-remedies-leave-resolve-only-the-day
+  (let [{:keys [meal day plan] :as rows} (chain!)
+        asked (atom [])
+        res (pursue-list! rows
+                          {:resolve (fn [door _refused]
+                                      (swap! asked conj door)
+                                      (when (= "plan_day.assign_meal" door)
+                                        {:id (id-of day)
+                                         :input {:meal_id (id-of meal)}}))})]
+    (is (c/doc? (:done res)) (pr-str res))
+    (is (= chain-doors (mapv :door (:writes res))))
+    (is (= #{"plan_day.assign_meal"} (set @asked))
+        ":resolve is asked only where no remedy was bound")
+    (is (= "on_list" (state-of meal)))
+    (is (= "planned" (state-of day)))
+    (is (= "planned" (state-of plan)))))
+
+(deftest the-refusal-carries-its-resolved-remedies
+  (let [{:keys [plan]} (chain!)
+        res (c/create! *session* (coll :grocery_list) {:plan_id (id-of plan)})]
+    (is (= ["plan.finalize"] (get-in res [:problem :remedies])) (pr-str res))
+    (is (= [{:door "plan.finalize" :id (id-of plan)}]
+           (get-in res [:problem :resolved_remedies])))))
+
+(deftest a-bare-remedy-carries-no-resolved-remedies
+  (let [lt (make! :latch {:free false})
+        res (c/act! *session* (c/get-doc *session* (:self lt)) :lift nil)]
+    (is (nil? (get-in res [:problem :resolved_remedies])) (pr-str res))))
+
+(deftest a-binding-naming-no-input-field-fails-the-battery
+  (is (thrown-with-msg?
+       Exception #"remedy-bindings"
+       (r/resource
+        {:kind :bad_latch
+         :states [:shut :open]
+         :initial :shut
+         :summary "Latch · {state}"
+         :schema [:map [:free {:optional true} [:maybe :boolean]]]
+         :actions
+         {:lift {:from #{:shut} :to :open
+                 :guards [(g/expr {:name :bad-latch-free
+                                   :when '(= (data :free) true)
+                                   :explain "The latch is stuck."
+                                   :remedies [{:door :bad_latch/lift
+                                               :id '(input :latch_id)}]})]
+                 :safety fx/routine}
+          :lower {:from #{:open} :to :shut :safety fx/routine}}}))))
 
 (deftest the-depth-bound-stops-a-branch
   (let [{:keys [meal plan] :as rows} (chain!)

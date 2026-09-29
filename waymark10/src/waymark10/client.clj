@@ -567,14 +567,18 @@
       (and (= "create" action) @coll) (get-doc session @coll))))
 
 (defn- remedy-call
-  "Where remedy `door` acts for the `refused` call: :resolve's pick, or,
-  when :resolve names none, the refused call's own row when the remedy
+  "Where remedy `door` acts for the `refused` call: the row the refusal
+  itself bound (its resolved remedies), else :resolve's pick, or, when
+  :resolve names none, the refused call's own row when the remedy
   is on its kind. nil means nobody said — a choice for a person;
   {:unseen reason} means the pick did not read back (gone, or outside
   the caller's grant), so the remedy is blocked, never attempted."
   [session door refused resolve]
   (let [same-kind? (= (door-kind door) (door-kind (:door refused)))
-        pick (or (when resolve (resolve door refused)) (when same-kind? {}))
+        bound (some #(when (= door (:door %)) %) (:bound refused))
+        pick (or (when (some? (:id bound)) (select-keys bound [:id :input]))
+                 (when resolve (resolve door refused))
+                 (when same-kind? (select-keys bound [:input])))
         target (when pick
                  (let [d (remedy-doc session (door-kind door) (door-action door) pick)]
                    (if (and (nil? d) same-kind?) (:doc refused) d)))]
@@ -587,7 +591,8 @@
 
 (defn- attempt
   "Try one call once — rehearsed (dry-run) or real (act!) — on a fresh
-  read of its row. → {:landed doc} · {:refused [remedy …] :doc :reason}
+  read of its row. → {:landed doc} · {:refused [remedy …] :bound
+  [resolved remedy …] :doc :reason}
   · {:blocked entry} · {:stop res} (a wire failure or a divergence)."
   [session {:keys [door doc input retry] :as call} rehearse? opts]
   (let [doc (if (:self doc) (get-doc session (:self doc)) doc)
@@ -640,6 +645,7 @@
           (warnings? res) (blocked {:warnings (:warnings res)})
           (seq (get-in res [:problem :remedies]))
           {:refused (vec (get-in res [:problem :remedies])) :doc doc
+           :bound (vec (get-in res [:problem :resolved_remedies]))
            :reason (get-in res [:problem :detail])}
           (or (problem? res) (refused? res))
           (blocked {:reason (or (get-in res [:problem :detail])
@@ -682,7 +688,8 @@
               (:refused out)
               (recur (conj (pop stack)
                            (assoc top :doc (:doc out) :reason (:reason out)
-                                  :remedies (seq (:refused out)) :all (:refused out)))
+                                  :remedies (seq (:refused out)) :all (:refused out)
+                                  :bound (:bound out)))
                      writes blocked at expect steps)
 
               (:blocked out)
@@ -710,7 +717,7 @@
 
                   :else
                   (let [stack'' (conj (pop stack') (-> (peek stack')
-                                                       (dissoc :remedies :all :reason)
+                                                       (dissoc :remedies :all :reason :bound)
                                                        (assoc :retry true)))
                         again (walk session stack'' true (dissoc opts :expect))]
                     (if (contains? again :done)
@@ -723,7 +730,7 @@
                 stack (conj (pop stack) (update top :remedies next))
                 others (vec (remove #{door} (:all top)))
                 call' (remedy-call session door
-                                   (select-keys top [:door :doc :input :reason])
+                                   (select-keys top [:door :doc :input :reason :bound])
                                    resolve)
                 block (fn [m] (merge {:door door :row (get-in call' [:doc :self])
                                       :needs [] :or others}
@@ -763,8 +770,9 @@
   same remedy several times lands in one call. opts:
     :resolve    (fn [remedy-door refused-call] → {:id row-id :input {…}}
                 or nil) — which row a remedy acts on (also :href or
-                :doc). With no :resolve, a remedy on the refused call's
-                own kind acts on its row; any other is a choice.
+                :doc), asked only where the refusal's resolved remedies
+                bound no row. With neither, a remedy on the refused
+                call's own kind acts on its row; any other is a choice.
     :max-depth  stack bound (default 8); the same door on the same row
                 twice in the stack stops that branch (the cycle check)
     :max-steps  attempts one real run may make across its re-rehearsals

@@ -41,6 +41,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.transcripts :as transcripts]
             [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -479,6 +480,125 @@
                (seats/effective-wake-on written expense))
             "it names verdict.reopen itself if it wants the reopen too")))))
 
+;; ── 4b · a count over sealed transcripts leaves out the judged ───────
+
+(def ^:private seal-count
+  {:kind "transcript" :actions ["seal"] :at_least 5})
+
+(def ^:private worker-sitter (t/principal {:id "worker-sitter" :type :agent}))
+
+(defn- sitting-judgment!
+  "A judgment over closed sittings, promoted: sitting-judge's shape."
+  [eng]
+  (let [row (:row (inv/create!
+                   eng :judgment
+                   {:name "fired-sittings"
+                    :subject_kind "sitting"
+                    :queue {:state "closed"}
+                    :verdicts [{:name "keep" :sentence keep-sentence}
+                               {:name "query" :sentence query-sentence}]
+                    :remedy_max 200
+                    :notes "The count wake's own judgment."}
+                   {:principal person}))]
+    (inv/invoke! eng :judgment (str (:id row)) :promote {} {:principal person})
+    row))
+
+(defn- raw-of [eng kind id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx kind (str id) {}))))
+
+(defn- sealed-sitting!
+  "One fired sitting of `worker`, closed, and its transcript sealed —
+  the seal a count entry over `transcript` hears. → the sitting's id."
+  [eng worker model grant]
+  (let [sid (str (:id (:row (inv/create! eng :sitting
+                                         {:seat (str worker)
+                                          :model (str model)
+                                          :grant (str grant)}
+                                         {:principal worker-sitter}))))]
+    (transcripts/issue-key! eng (raw-of eng :seat worker) (raw-of eng :sitting sid))
+    (inv/invoke! eng :sitting sid :close
+                 {:input_tokens 1000 :output_tokens 100
+                  :cache_read_tokens 0 :cache_write_tokens 0 :turns 1}
+                 {:principal worker-sitter})
+    (transcripts/seal! eng (transcripts/transcript-for-sitting eng sid) nil)
+    sid))
+
+(defn- judge-sitting! [eng judgment sid]
+  (inv/create! eng :verdict
+               {:judgment (str (:id judgment))
+                :subject_kind "sitting"
+                :subject_id (str sid)
+                :verdict "keep"
+                :remedy "Nothing to do: the sitting did its work."}
+               {:principal (t/principal {:id "expense-sitter" :type :agent})}))
+
+(deftest a-judges-count-over-sealed-transcripts-counts-only-the-unjudged
+  (let [eng (fresh-engine)
+        judgment (sitting-judgment! eng)
+        judge (open-judge-seat!
+               eng judgment
+               {:name "sitting-judge"
+                :walk "sitting"
+                :scope [{:kind "sitting" :actions []}
+                        {:kind "transcript" :actions []}
+                        {:kind "verdict" :actions ["judge"]}]
+                :wake_on [seal-count]})
+        model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
+        worker (:id (:row (inv/create!
+                           eng :seat
+                           {:name "worker"
+                            :charter charter
+                            :scope [{:kind "expense" :actions []}]
+                            :walk "expense"
+                            :held_for [(str model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           {:principal person})))
+        grant (:id (:row (inv/create! eng :grant
+                                      {:audience "worker"
+                                       :scope [{:kind "expense" :actions []}]}
+                                      {:principal person})))
+        cursor :judge-count-wakes-test
+        drain! #(consumers/drain-consumer! eng cursor (wakes/consumer-fn eng))
+        fires #(count (filterv (fn [t] (= :fire (:action t)))
+                               (store/with-tx (:storage eng)
+                                 (fn [tx] (store/transitions
+                                           (:storage eng) tx
+                                           {:kind :seat :resource-id (str (:id judge))}
+                                           {})))))
+        n #(#'wakes/entry-count eng (raw-of eng :seat (:id judge)) seal-count)
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng (:id judge))))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_sitting_judge/fire")
+                        :token "rk-test-sitting-judge-0123456789abcdef"}
+                       {:principal person})
+        _ (drain!)]
+
+    (testing "four unjudged beside many judged wake nobody"
+      (dotimes [_ 6]
+        (judge-sitting! eng judgment (sealed-sitting! eng worker model grant))
+        (drain!))
+      (let [unjudged (vec (repeatedly 4 #(let [sid (sealed-sitting! eng worker model grant)]
+                                           (drain!)
+                                           sid)))]
+        (is (= 4 (n)))
+        (is (= 0 (fires)))
+
+        (testing "the fifth unjudged seal wakes the seat once"
+          (let [fifth (sealed-sitting! eng worker model grant)]
+            (drain!)
+            (is (= 5 (n)))
+            (is (= 1 (fires)))
+
+            (testing "judging one of the five drops the count to four"
+              (judge-sitting! eng judgment (or (first unjudged) fifth))
+              (is (= 4 (n))))))))))
+
 ;; ── 5 · a listed verdict files one draft ticket ───────────────────────
 
 (def ^:private groomers-ticket
@@ -602,3 +722,121 @@
                                  "fc5faac6-74c4-437d-a35c-fdbed565aa25")))
   (is (= "cut_off on expense 01234567"
          (judgments/ticket-title "cut_off" nil "expense" "0123456789"))))
+
+;; ── 6 · a supersede takes the seats with it (ticket 86514746) ───────
+;;
+;; A judgment superseded with a successor re-points every seat that
+;; says it, in the supersede's own transaction and through the seat's
+;; own door, so the seat's log says it moved. A verdict is a row: it
+;; stays cited to the judgment it was said under.
+
+(defn- second-judge-seat!
+  "A second office saying the same judgment — no key and no model of
+  its own, because the first seat already minted both."
+  [eng judgment first-seat]
+  (:row (inv/create! eng :seat
+                     {:name "expense-judge-too"
+                      :charter charter
+                      :scope [{:kind "expense" :actions []}
+                              {:kind "verdict" :actions ["judge"]}]
+                      :walk "expense"
+                      :judgment (str (:id judgment))
+                      :held_for (vec (get-in first-seat [:data :held_for]))
+                      :standing_ttl_seconds 604800
+                      :cadence_seconds 3600
+                      :budget_usd_per_week 5M
+                      :sitting_budget_tokens 60000}
+                     {:principal person})))
+
+(defn- raw-row [eng kind id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx kind (str id) {}))))
+
+(defn- seat-log [eng seat]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (store/transitions (:storage eng) tx
+                         {:kind :seat :resource-id (str (:id seat))} {}))))
+
+(defn- supersede! [eng judgment successor]
+  (inv/invoke! eng :judgment (str (:id judgment)) :supersede
+               {:successor (some-> successor :id str)} {:principal person}))
+
+(deftest a-supersede-re-points-every-seat-that-says-the-judgment
+  (let [eng (fresh-engine)
+        old (promoted-judgment! eng {})
+        successor (promoted-judgment! eng {:name "kitchen-spend-2"})
+        one (open-judge-seat! eng old {})
+        two (second-judge-seat! eng old one)
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        said (say! eng old knives "query" ask-remedy)]
+    (supersede! eng old successor)
+    (doseq [seat [one two]]
+      (testing (str "seat " (get-in seat [:data :name]))
+        (is (= (str (:id successor))
+               (str (get-in (raw-row eng :seat (:id seat)) [:data :judgment])))
+            "the seat says the successor now")
+        (let [moves (filter #(#{:follow_successor :follow_successor_parked}
+                               (:action %))
+                            (seat-log eng seat))]
+          (is (= 1 (count moves)) "the seat's own log carries the re-point")
+          (is (str/includes? (pr-str moves) (str (:id old)))
+              "and names the judgment it stood down from"))))
+    (testing "a verdict said under the old judgment stays cited to it"
+      (is (= (str (:id old))
+             (str (get-in (raw-row eng :verdict (:id said)) [:data :judgment])))))))
+
+(deftest a-seat-restated-to-a-superseded-judgment-is-refused-naming-the-successor
+  (let [eng (fresh-engine)
+        old (promoted-judgment! eng {})
+        successor (promoted-judgment! eng {:name "kitchen-spend-2"})
+        seat (open-judge-seat! eng old {})
+        _ (supersede! eng old successor)
+        raw (raw-row eng :seat (:id seat))
+        refused (try
+                  (inv/invoke! eng :seat (str (:id seat)) :restate
+                               {:charter charter
+                                :scope [{:kind "expense" :actions []}
+                                        {:kind "verdict" :actions ["judge"]}]
+                                :substitute_drop []
+                                :held_for (vec (get-in raw [:data :held_for]))
+                                :substitute_for []
+                                :standing_ttl_seconds 604800
+                                :cadence_seconds 3600
+                                :budget_usd_per_week 5M
+                                :sitting_budget_tokens 60000
+                                :rows_per_firing 20
+                                :walk "expense"
+                                :judgment (str (:id old))}
+                               {:principal person
+                                :if-match (inv/etag :seat (str (:id seat))
+                                                    (:version raw))})
+                  nil
+                  (catch Exception e e))]
+    (is (some? refused) "the restate is refused")
+    (is (str/includes? (pr-str (ex-data refused)) (str (:id successor)))
+        "and the refusal names the successor")
+    (is (= (str (:id successor))
+           (str (get-in (raw-row eng :seat (:id seat)) [:data :judgment]))))))
+
+(deftest a-seat-still-saying-a-superseded-judgment-is-refused-at-the-sit
+  ;; a row written before the supersede re-pointed seats, or by a path
+  ;; that skipped it: the seat is put back on the old judgment in the
+  ;; store, by hand
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        old (promoted-judgment! eng {})
+        successor (promoted-judgment! eng {:name "kitchen-spend-2"})
+        seat (open-judge-seat! eng old {})
+        _ (supersede! eng old successor)
+        raw (raw-row eng :seat (:id seat))
+        _ (store/with-tx (:storage eng)
+            (fn [tx]
+              (store/save-row! (:storage eng) tx :seat
+                               (assoc-in raw [:data :judgment] (str (:id old)))
+                               (:version raw))))
+        ;; the refusal is a sentence, not a document: `sit!` would parse it
+        r (call! h (with-session (initialize! h)) "waymark_sit" {:key seat-key})]
+    (is (true? (:isError r)) (text-of r))
+    (is (str/includes? (str (text-of r)) (str (:id successor)))
+        "the refusal names the successor")))

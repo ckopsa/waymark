@@ -436,6 +436,18 @@
                     (filter wanted))
               (some-> (:mcp-sessions eng) deref (evict ((:now-fn eng)))))))))
 
+(defn- live-sessions
+  "The hashes of every connector session heard from since `since`, as
+  a set: the sessions whose claim on a sitting still stands (ticket
+  7496403e). A plain read — no touch."
+  [eng ^Instant since]
+  (if (session-table? eng)
+    (sessions/live-hashes (:storage eng) since)
+    (into #{}
+          (comp (remove (fn [[_ e]] (neg? (compare (:touched e) since))))
+                (map (comp sessions/id-hash key)))
+          (some-> (:mcp-sessions eng) deref))))
+
 (defn- bound-seat
   "The seat this session is bound to, or nil. Read from the BINDING
   and not from the sitting row: `waymark_sit` writes the seat and the
@@ -2126,6 +2138,23 @@
                  (fn [tx] (store/load-row (:storage eng) tx kind id {})))
                (inv/decode-row rdef)))))
 
+(defn- sit-superseded-judgment
+  "The refusal for a seat that still says a superseded judgment
+  (ticket 86514746), or nil. A supersede re-points the seats that say
+  it; this covers rows written before that, and any path that skipped
+  it. It names the successor, which is what the restate should say."
+  [eng seat]
+  (when-some [j (row-of eng :judgment (get-in seat [:data :judgment]))]
+    (when (= :superseded (:state j))
+      (let [successor (some-> (get-in j [:data :successor]) str not-empty)]
+        (str "The seat `" (get-in seat [:data :name]) "` says the judgment "
+             (:id j) ", which is superseded"
+             (if successor
+               (str " by " successor ". Restate the seat to say " successor
+                    ", then sit again.")
+               (str " with no successor. Restate the seat to say a promoted"
+                    " judgment, then sit again.")))))))
+
 (defn- seat-model
   "The model row the sitter claims (R-12.8). For a schedule this engine
   pushes, the schedule's `model` is the declaration and the copy
@@ -2174,29 +2203,59 @@
        sitting stamped with it — the pairing `open-sitting-for-seat`
        makes at the close;
     3. only then the grant's newest UNCLAIMED open sitting: no stamp,
-       and — when the seat lets more than one sitting run at once — no
-       other live connector session bound to it. At one, an open
-       sitting holds every wake (`max-open-sittings-help`), so a second
-       session's sit re-keys it rather than opening another."
+       and — when the seat lets more than one sitting run at once — a
+       connector-session claim that is this session's own, or whose
+       session is gone: closed, or unheard for longer than the seat's
+       `sitting_idle_seconds` (ticket 7496403e). A row no sit has
+       claimed yet is free when no other live session is bound to it.
+       At one, an open sitting holds every wake
+       (`max-open-sittings-help`), so a second session's sit re-keys it
+       rather than opening another.
+
+  The row answered is CLAIMED for this session (`seats/claim-sitting!`)
+  in the transaction that judges it, so two session-less sits racing
+  for one sibling serialise on its lock and exactly one takes it."
   [eng sid grant seat harness-session]
   (let [gid (str (:id grant))
         many? (< 1 (long (or (get-in seat [:data :max_open_sittings]) 1)))
         stamp-of #(some-> (get-in % [:data :harness_session]) str not-empty)
+        claim-of #(some-> (:connector_session %) str not-empty)
         wanted (some-> harness-session str not-empty)
+        mine (some-> sid str not-empty sessions/id-hash)
+        claim! (fn [row free?] (seats/claim-sitting! eng (:id row) mine free?))
         bound (some->> (bound-sitting eng sid) str not-empty (row-of eng :sitting))]
     (or (when (and bound
                    (= "open" (some-> (:state bound) name))
                    (= gid (str (get-in bound [:data :grant])))
                    (let [held (stamp-of bound)]
                      (or (nil? held) (nil? wanted) (= held wanted))))
-          bound)
+          (claim! bound (constantly true)))
         (let [rows (seats/open-sittings-for-grant eng gid)]
-          (or (when wanted (first (filter #(= wanted (stamp-of %)) rows)))
+          (or (when wanted
+                (some-> (first (filter #(= wanted (stamp-of %)) rows))
+                        (claim! (constantly true))))
               (let [free (remove stamp-of rows)
+                    now ^Instant ((:now-fn eng))
+                    idle (long (or (get-in seat [:data :sitting_idle_seconds])
+                                   seats/default-idle-seconds))
+                    since (let [quiet (.minusSeconds now idle)
+                                ttl (ttl-cutoff now)]
+                            (if (.isAfter quiet ttl) quiet ttl))
+                    live (if many? (disj (live-sessions eng since) mine) #{})
                     taken (if many?
-                            (bound-elsewhere eng sid (map (comp str :id) free))
-                            #{})]
-                (first (remove #(contains? taken (str (:id %))) free))))))))
+                            (bound-elsewhere eng sid
+                                             (map (comp str :id)
+                                                  (remove (comp claim-of :data) free)))
+                            #{})
+                    free? (fn [row]
+                            (fn [data]
+                              (let [held (claim-of data)]
+                                (cond
+                                  (not many?) true
+                                  (nil? held) (not (contains? taken (str (:id row))))
+                                  (= held mine) true
+                                  :else (not (contains? live held))))))]
+                (some #(claim! % (free? %)) free)))))))
 
 (defn- open-sitting!
   "The sitting this bound session is counted against (R-12.15): the
@@ -2220,20 +2279,23 @@
   A REUSED SITTING IS STAMPED as it is handed back (ticket e2b55a0c):
   the sit is a call, and a sitting idle past `sitting_idle_seconds`
   would otherwise be abandoned by the next sweep under the caller it
-  was just given to. A candidate the stamp finds closed is no answer;
-  a fresh sitting is born instead."
+  was just given to. The stamp is the claim (ticket 7496403e), and a
+  candidate the claim finds closed is no answer; a fresh sitting is
+  born instead, and claimed for this session at birth."
   [eng sid sitter grant seat model harness-session]
   (when model
-    (or (when-some [row (reusable-sitting eng sid grant seat harness-session)]
-          (when (seats/stamp-call! eng (:id row))
-            row))
-        (:row (inv/create! eng :sitting
-                           (cond-> {:seat (str (:id seat))
-                                    :model (str (:id model))
-                                    :grant (str (:id grant))}
-                             harness-session
-                             (assoc :harness_session harness-session))
-                           {:principal sitter})))))
+    (or (reusable-sitting eng sid grant seat harness-session)
+        (let [row (:row (inv/create! eng :sitting
+                                     (cond-> {:seat (str (:id seat))
+                                              :model (str (:id model))
+                                              :grant (str (:id grant))}
+                                       harness-session
+                                       (assoc :harness_session harness-session))
+                                     {:principal sitter}))]
+          (or (seats/claim-sitting! eng (:id row)
+                                    (some-> sid str not-empty sessions/id-hash)
+                                    (constantly true))
+              row)))))
 
 (defn- standing-seat-grant
   "The grant this sitter already holds FOR THIS SEAT, or nil.
@@ -2292,10 +2354,14 @@
   line here (`router/mind-the-wall!`, R-7.7). This does not. The wall
   is judged all the same — a seat behind one scopes to nothing and
   the walk comes back empty — and the first call the bound session
-  makes after the sit is the request that records it."
-  [eng sitter]
+  makes after the sit is the request that records it.
+
+  `sitting-id` is the sitting being opened, passed on exactly as the
+  transport passes the bound one: the per-sitting wall judges ITS
+  fuel, not the newest sibling's (ticket 8358b658)."
+  [eng sitter sitting-id]
   {:principal sitter
-   :visibility (or (grants/worn-visibility eng sitter)
+   :visibility (or (grants/worn-visibility eng sitter sitting-id)
                    (grants/bootstrap-visibility eng sitter))})
 
 (defn- walk-door
@@ -3838,7 +3904,8 @@
                     (seats/fire-key-row eng keyed (:key args)))
         fired? (and keyed person (not standing?)
                     (true? (seats/spend-fire-key! eng keyed (:key args))))
-        spent? (and seat person (or standing? fired? (some? resit)))]
+        spent? (and seat person (or standing? fired? (some? resit)))
+        stood-down (when (and seat spent?) (sit-superseded-judgment eng seat))]
     (cond
       ;; a · a session to bind to
       (nil? sid) (result sit-no-session true)
@@ -3856,6 +3923,9 @@
       ;; c' · and a key still worth something: a firing's key that a
       ;; second session took first says what an unknown key says
       (not spent?) (result sit-no-seat true)
+      ;; c'' · a seat whose judgment was superseded walks no law in
+      ;; force, and the refusal names the successor (ticket 86514746)
+      stood-down (result stood-down true)
       :else
       (let [seat-id (str (:id seat))
             named (str (get-in seat [:data :name]))
@@ -3915,7 +3985,8 @@
             ;; i · the walk, read as the sitter under the seat's grant
             ;; and through the query path — the rows this firing works
             ;; through, with the doors each one affords
-            sitter-sees (sitter-session eng sitter)
+            sitter-sees (sitter-session eng sitter
+                                        (some-> (:id sitting) str not-empty))
             ;; … past the rows another open sitting of this seat was
             ;; handed: a fire and a wake that land together are two
             ;; runs, and the second walks the next row, not the first's.

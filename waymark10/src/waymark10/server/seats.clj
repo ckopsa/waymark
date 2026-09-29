@@ -690,6 +690,17 @@
                            (some? (delegation/authoring-seat ctx :seat nil)))
                       nil
 
+                      ;; a superseded judgment names where the house
+                      ;; went next (ticket 86514746), so say it
+                      (= :superseded (:state j))
+                      (if-some [s (some-> (get-in j [:data :successor]) str not-empty)]
+                        (str "that judgment is superseded by " s
+                             ", and only a promoted one is walked — name " s
+                             " instead")
+                        (str "that judgment is superseded with no successor"
+                             ", and only a promoted one is walked — name one"
+                             " that is promoted"))
+
                       (not= :promoted (:state j))
                       (str "that judgment is " (name (:state j))
                            ", and only a promoted one is walked — promote it,"
@@ -949,7 +960,7 @@
     :else (t/deny {:vars {:seat (str (get-in row [:data :seat]))
                           :started_at (str (get-in row [:data :started_at]))}})))
 
-(def ^:private default-idle-seconds
+(def default-idle-seconds
   "The seat schema's own default for `sitting_idle_seconds`, for a row
   written before that field existed. One hour."
   3600)
@@ -995,6 +1006,18 @@
   ;; `merge`'s own handler it names that write, and the door opens.
   (let [{:keys [kind action]} (:within ctx)]
     (if (and (= :seat kind) (= :merge action))
+      (t/allow)
+      (t/deny))))
+
+(g/defguard followed-by-a-supersede
+  {:reads [:within]
+   :hide true
+   :explain "A seat follows a judgment's successor when that judgment is superseded, and by nothing else: POST supersede on the judgment, and every seat that says it follows in the same transaction."}
+  [_row _inp ctx]
+  ;; `folded-by-a-merge`'s posture (ticket 86514746): concealed at the
+  ;; wire, open only inside the judgment's own `supersede` handler
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :judgment kind) (= :supersede action))
       (t/allow)
       (t/deny))))
 
@@ -1344,6 +1367,22 @@
       (assoc-in [:data :substitute_drop] (:substitute_drop inp))
       (assoc-in [:data :standing_ttl_seconds] (:standing_ttl_seconds inp))
       (assoc-in [:data :budget_usd_per_week] (:budget_usd_per_week inp))))
+
+(def ^:private follow-successor-input
+  [:map
+   [:judgment {:kind :judgment
+               :x-display
+               {:label "The successor"
+                :spelled-by-hand "The judgment the superseded one named as its successor, written by the supersede."}}
+    :waymark/ref]
+   [:superseded {:kind :judgment
+                 :x-display
+                 {:label "The judgment superseded"
+                  :spelled-by-hand "The judgment this seat said until it was superseded, written by the supersede."}}
+    :waymark/ref]])
+
+(defhandler follow-successor [row inp _ctx]
+  (assoc-in row [:data :judgment] (:judgment inp)))
 
 (defhandler merge-seat [row inp ctx]
   ;; § 6, in order: fold the two scopes per kind (waymark-ycp's
@@ -2805,7 +2844,32 @@
               grants/scope-omits-private-kinds]
      :safety {:idempotent true :reversible false :confirm false}
      :handler absorb-fold
-     :display {:label "Absorb" :order 13}}}
+     :display {:label "Absorb" :order 13}}
+
+    ;; ── the supersede's landing (ticket 86514746) ───────────────────
+    ;; A judgment's `supersede` re-points every seat that says it to the
+    ;; successor through these doors, in its own transaction, so the
+    ;; seat's history says it moved and why. A v10 action declares ONE
+    ;; `:to`, so a parked seat has its own door.
+    :follow_successor
+    {:from #{:active} :to :active
+     :input follow-successor-input
+     :record true
+     :waives #{:edit-shape}
+     :guards [followed-by-a-supersede]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler follow-successor
+     :display {:label "Follow the successor" :order 16}}
+
+    :follow_successor_parked
+    {:from #{:parked} :to :parked
+     :input follow-successor-input
+     :record true
+     :waives #{:edit-shape}
+     :guards [followed-by-a-supersede]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler follow-successor
+     :display {:label "Follow the successor" :order 17}}}
    :scenarios [an-agent-does-not-park-its-own-seat
                the-person-parks-the-seat
                an-agent-does-not-hand-itself-the-seats-key
@@ -3423,6 +3487,22 @@
                                  :label "The firing key's hash"
                                  :spelled-by-hand "The SHA-256 of the firing key that opened this sitting. The sit writes it; it answers only while the sitting is open; the engine never shows a key."}}
      [:maybe [:string {:max 64}]]]
+    ;; THE CONNECTOR SESSION'S CLAIM (ticket 7496403e). The sit that
+    ;; picks this sitting stamps the hash of its connector session and
+    ;; the moment, in the same transaction that holds the row, so a
+    ;; session-less re-sit after a drop can tell a claim whose session
+    ;; is gone from one a live run still holds (mcp/reusable-sitting).
+    [:connector_session {:optional true
+                         :x-display
+                         {:raw true
+                          :label "The claiming connector session"
+                          :help "The SHA-256 of the connector session that last sat in this sitting. The sit writes it; the engine never shows a session id."}}
+     [:maybe [:string {:max 64}]]]
+    [:claimed_at {:optional true
+                  :x-display
+                  {:label "Claimed"
+                   :spelled-by-hand "Stamped by the sit that last claimed this sitting for its connector session."}}
+     [:maybe :waymark/instant]]
     ;; THE INBOX'S KEY. A seat that declares an `inbox` is answered a
     ;; fresh key at each sit (`issue-inbox-key!`), and its hash is kept
     ;; here, on the sitting, so the key answers only while the sitting
@@ -3840,6 +3920,31 @@
                                   (assoc (:data row) :last_call_at at)
                                   nil)
               at)))))))
+
+(defn claim-sitting!
+  "Claim an open sitting for the connector session whose hash is
+  `claimant` (ticket 7496403e): `connector_session`, `claimed_at` and
+  `last_call_at` move together, when `free?` — handed the row's data
+  as this transaction holds it for update — says the row may be taken.
+  The same MAINTENANCE write as `stamp-call!`. Two sits racing for one
+  row serialise on its lock, and the second reads the first's claim.
+  A nil `claimant` stamps the call alone. → the row as claimed, or
+  nil: no id, an unknown id, a closed sitting, or a claim `free?`
+  refuses."
+  [eng sitting-id claimant free?]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (and (= :open (:state row)) (free? (:data row)))
+            (let [at (call-stamp eng)
+                  data (cond-> (assoc (:data row) :last_call_at at)
+                         claimant (assoc :connector_session (str claimant)
+                                         :claimed_at at))]
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  data nil)
+              (assoc row :data data))))))))
 
 (defn add-cancelled-run!
   "Count one cancelled bench.test run on an open sitting (ticket
