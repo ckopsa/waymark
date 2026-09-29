@@ -66,6 +66,39 @@
 
 (defn- serves? [eng kind] (contains? (inv/resources eng) kind))
 
+(def judged-page
+  "The most standing verdicts one walk subtracts by. A judgment whose
+  said verdicts outrun this in a single queue has more decided
+  subjects than one page can hold, and the honest fix there is a
+  narrower `queue`, not a longer read. The count wake reads the same
+  bound for its sealed transcripts (`wakes/unjudged-transcripts`)."
+  500)
+
+(defn judged-subjects
+  "The subject ids this judgment has already spoken on: every verdict
+  of it still `said`. An `overruled` row is not here on purpose — a
+  correction overrules the first and the second verdict is the one
+  standing, so a subject leaves the queue once and stays gone.
+
+  …until its verdict is REOPENED. `verdict.reopen` moves the standing
+  row to `overruled` and writes nothing in its place, so this set no
+  longer holds the subject and the next walk hands it back. That is
+  the whole of the reopen's queue mechanism: this one rule, read the
+  same way, and no second list of subjects to re-admit.
+
+  One home for the sit's walk (`mcp/walk-of`) and the count wake
+  (`wakes/unjudged-transcripts`), so the two cannot drift."
+  [eng judgment-id]
+  (if (serves? eng :verdict)
+    (into #{}
+          (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
+          (store/with-tx (:storage eng)
+            (fn [tx] (store/query-rows (:storage eng) tx :verdict
+                                       {:judgment (str judgment-id)
+                                        :state "said"}
+                                       {:limit judged-page}))))
+    #{}))
+
 (defn serving?
   "Does this engine have the two kinds to hear at all? The module's
   hook asks it, `schedules/serving?`'s precedent: a consumer thread
