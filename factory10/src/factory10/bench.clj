@@ -723,6 +723,18 @@
                "); the next pass asks again")
         nil))))
 
+(defn stale-waiting?
+  "Does a front wait on a required check its head will never run while
+  its base has moved (ticket 498a089e)? The rig answers `waiting`, and
+  the forge pass wrote `missing_checks` (checks with no run at all, not
+  merely running) and `behind_base` on the row. Bringing the branch up
+  to date makes CI run on the new head."
+  [change answer]
+  (boolean
+   (and (= "waiting" (answer-state answer))
+        (seq (get-in change [:data :missing_checks]))
+        (true? (get-in change [:data :behind_base])))))
+
 ;; THE MERGE TRAIN (ticket 47519515, slice 2 of 3deb06ed). With
 ;; `merge_strategy: train` the front and up to train_size-1 changes
 ;; behind it that are green on their own heads ride ONE branch,
@@ -1033,7 +1045,8 @@
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
   hand; then only a line's front is brought up to date when it is
-  behind. The front is chosen after the answers, so a change that went
+  behind, or when it waits on a required check its head never ran
+  while its base moved (`stale-waiting?`). The front is chosen after the answers, so a change that went
   red or was parked this pass does not hold the line. `answers`, when
   given, is an atom the pass fills with change id → the rig's answer.
   A repository whose policy says `merge_strategy: train` sends its
@@ -1078,7 +1091,8 @@
                         (advance-train! (assoc ctx :answers answers)
                                         seen repo policy train))
            built (swap! trains assoc repo built)
-           (and front (behind? (get @answers id)))
+           (and front (or (behind? (get @answers id))
+                          (stale-waiting? front (get @answers id))))
            (update-behind! ctx seen front id
                            (str (get-in front [:data :head_sha]))))))
      ;; a standing train is read whatever its line: a repository with
