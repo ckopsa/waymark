@@ -2386,6 +2386,36 @@
         "and the seat reads the new repository on the change beside its
          walk")))
 
+(deftest a-change-with-a-pull-request-on-another-repository-stays-and-the-sit-says-so
+  ;; ticket c8ed268e: the other path of ticket 1ebcd19f — the change
+  ;; already has a pull request there, so the forge holds it and the
+  ;; house leaves it where it is
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        _ (inv/invoke! (:eng w) :change (str change-id) :rebranch
+                       {:head_branch (str "elsewhere/" ask-id)
+                        :repository "ckopsa/elsewhere"}
+                       {:principal mirror/source-principal})
+        _ (inv/invoke! (:eng w) :change (str change-id) :adopt
+                       {:change_id (str (get-in (:answer w)
+                                                [:change :data :change_id]))
+                        :number 7
+                        :url "https://github.com/ckopsa/elsewhere/pull/7"}
+                       {:principal mirror/source-principal})
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (= "ckopsa/elsewhere" (get-in row [:data :repository]))
+        "a change with a pull request keeps its repository")
+    (is (= (str "elsewhere/" ask-id) (get-in row [:data :head_branch]))
+        "and its branch")
+    (is (= 7 (get-in row [:data :number])))
+    (is (= 1 (count (changes-of (:eng w))))
+        "and no second change is born on the seat's repository")
+    (is (= @#'mcp/elsewhere-change-note
+           (or (:change_note answer) (:bench_note answer)))
+        "the sit tells the seat why its bench cannot reach the change")))
+
 (deftest an-open-seat-born-change-on-the-old-pattern-is-rebranched-too
   ;; Prod's own row was at `open`, not at `stuck`: the sit minted it,
   ;; the prepare refused, and the seat stalled nothing.
