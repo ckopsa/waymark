@@ -497,6 +497,23 @@
                  {:label "How many changes ride one train"
                   :help "How many green changes the house tests and merges together as one train, from 2 to 10. It applies only to the train strategy; the line reads none of it."}}
     [:int {:min 2 :max 10}]]
+   ;; the groom floor (ticket eb515931). Both OPTIONAL for the reason
+   ;; merge_wait_seconds is: a row that predates them reads as 0, which
+   ;; is off, and 3600 (forge's `floor-move!`)
+   [:groom_floor {:optional true
+                  :default 0
+                  :examples [4]
+                  :x-display
+                  {:label "The open queue's floor"
+                   :help "When fewer tickets than this are open for this repository, the engine files one draft ticket that asks for the next batch to be groomed. 0 turns it off."}}
+    [:int {:min 0 :max 1000}]]
+   [:groom_floor_settle_seconds {:optional true
+                                 :default 3600
+                                 :examples [3600]
+                                 :x-display
+                                 {:label "How often the floor may ask"
+                                  :help "The engine files at most one floor ticket in this many seconds, and none while the last one is still draft or open."}}
+    [:int {:min 60 :max 604800}]]
    [:formatter {:default "runner"
                 :x-display
                 {:label "What formats the code"
@@ -546,7 +563,21 @@
   schema and on no door's input, so no form offers them and the
   restate prefills neither (mcp_server's `engine-fields`, one module
   over)."
-  [[:enrolled_at {:optional true
+  [;; the groom floor (ticket eb515931): written by the forge pass when
+   ;; it files a floor ticket
+   [:floor_noted_at {:optional true
+                     :examples ["2026-09-29T14:00:00Z"]
+                     :x-display
+                     {:label "Floor last noted at"
+                      :help "When the engine last filed a ticket because the open queue fell below the floor."}}
+    [:maybe :waymark/instant]]
+   [:floor_count {:optional true
+                  :examples [3]
+                  :x-display
+                  {:label "Open at the floor"
+                   :help "How many tickets were open when the engine last filed a floor ticket."}}
+    [:maybe [:int {:min 0}]]]
+   [:enrolled_at {:optional true
                   :examples ["2026-09-19T14:00:00Z"]
                   :x-display
                   {:label "Enrolled at"

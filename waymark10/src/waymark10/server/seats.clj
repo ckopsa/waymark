@@ -3769,6 +3769,27 @@
                                    nil)
                n))))))))
 
+(defn stamp-call!
+  "Move an open sitting's `last_call_at` to now and nothing else
+  (ticket 900764ce): a READ through the router is activity the idle
+  sweep must see, but it is neither a transition nor a refusal, and
+  `served` is the MCP door's per-tool ledger. The same MAINTENANCE
+  write as `bump-counter!` — document only, version untouched. → the
+  stamp, or nil when there was nothing to stamp: no id, an unknown
+  id, a sitting already closed, or a kind this engine does not serve."
+  [eng sitting-id]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (= :open (:state row))
+            (let [at (call-stamp eng)]
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  (assoc (:data row) :last_call_at at)
+                                  nil)
+              at)))))))
+
 (defn add-cancelled-run!
   "Count one cancelled bench.test run on an open sitting (ticket
   39b2c934). A run with an id is counted once: its id joins
@@ -4584,6 +4605,36 @@
                                         {:born_from (str groomed-walk-prefix
                                                          id)}
                                         {:limit live-change-scan-limit})))))))))
+
+(defn named-open-beside-a-submitted-change?
+  "Is the ticket a fire named `open` while a change born from it is
+  `submitted` (ticket 6ca380da)? A groom, unblock or resume that puts a
+  stuck pull request back under review leaves its ticket open, and the
+  fire that follows names it; the round is in the house's hands, so the
+  named walk withholds it as the plain walk does (ticket 60c2ec22). A
+  ticket in review is still handed by name (ticket 7af7d506). False for
+  any other walk."
+  [eng walk id]
+  (boolean
+   (when-some [rdef (when (= "ticket" (str walk))
+                      (get (inv/resources eng) :change))]
+     (when-some [tdef (get (inv/resources eng) :ticket)]
+       (let [st (:storage eng)
+             ticket (try
+                      (some->> (store/with-tx st
+                                 (fn [tx]
+                                   (store/load-row st tx :ticket (str id) {})))
+                               (inv/decode-row tdef))
+                      (catch Exception _ nil))]
+         (when (= "open" (some-> (:state ticket) name))
+           (some #(= "submitted" (some-> (:state %) name))
+                 (map #(inv/decode-row rdef %)
+                      (store/with-tx st
+                        (fn [tx]
+                          (store/query-rows st tx :change
+                                            {:born_from (str groomed-walk-prefix
+                                                             id)}
+                                            {:limit live-change-scan-limit})))))))))))
 
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows

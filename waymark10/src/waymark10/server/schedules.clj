@@ -200,8 +200,10 @@
        :client-token \"<schedule row id>\"}      ; create only, the dedupe
 
   Every operation throws on unreachable, refused, or missing
-  credential; the caller lands the throw as `broken` with the
-  exception's message as the row's note."
+  credential; the PUSH lands the throw as `broken` with the
+  exception's message as the row's note. A FIRE is not one of these
+  operations: `fire!` breaks a row only on a link refusal (401, 403,
+  404 — no such Routine), and keeps it live with a note otherwise."
   (create-copy [a spec]
     "Create the provider's copy → {:external-id id}. `:client-token`
     is the schedule row's id: a provider that honours it answers the
@@ -476,7 +478,11 @@
 
 (defhandler record-break
   [row inp _ctx]
-  (assoc-in row [:data :note] (:note inp)))
+  ;; a broken row waits on a person, not on a time: a throttle's
+  ;; `retry_after` would be stale the moment the row breaks
+  (-> row
+      (assoc-in [:data :note] (:note inp))
+      (update :data dissoc :retry_after)))
 
 (defhandler restate-model
   [row inp _ctx]
@@ -960,8 +966,11 @@
     ;; the provider's throttle (waymark ticket 48dc648c): a 429, or any
     ;; answer naming a retry time, is not a bad link. The row stays
     ;; live, says so, and keeps its wake pending until `retry_after`.
+    ;; A paused row is fired too, so a throttle must land on it as well;
+    ;; the provider answering anything but 400 is the evidence that
+    ;; heals it, as it is for `fired`.
     :throttle
-    {:from #{:pending :live :broken} :to :live
+    {:from #{:pending :live :paused :broken} :to :live
      :input [:map
              [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]
              [:retry_after {:x-display {:hidden true}} :waymark/instant]]
@@ -1516,17 +1525,20 @@
   "Keep the row live through `throttle`, saying the provider's sentence
   and the instant it named. The wake stays pending, and the wake loop
   sends it once, at or after that instant. A throttle that names no
-  time waits a minute."
-  [eng row retry-after body]
+  time waits a minute. `said`, when given, is the sentence instead —
+  a transient refusal that is not a 429 says its own."
+  ([eng row retry-after body] (throttle! eng row retry-after body nil))
+  ([eng row retry-after body said]
   (let [from (or (instant-of (now eng)) (Instant/now))
         secs (retry-seconds retry-after body)
         until (retry-instant from retry-after body)
-        sentence (or (provider-note 429 (or (some-> retry-after str not-empty)
+        sentence (or (some-> said str not-empty)
+                     (provider-note 429 (or (some-> retry-after str not-empty)
                                             (some-> secs str)))
                      "The Routine has no free run.")]
     (try-act! eng row :throttle {:note (clip sentence)
                                  :retry_after (str until)})
-    nil))
+    nil)))
 
 (defn own-link-of
   "The link a person put on THIS row (R-12.18), or nil. A map of the
@@ -1839,9 +1851,12 @@
   names a retry time, is a throttle: the row stays live through
   `throttle`, records `retry_after`, and keeps its wake pending for the
   wake loop to send after that time. A 400 is the provider saying the
-  Routine is paused: the row pauses where it can, and says the sentence
-  where it cannot. A 401, a 403, a 404 and anything else land as a note
-  on a broken row.
+  Routine is paused: a live row pauses, a paused row stays as it is,
+  and any other row says the sentence and stays live to try again. Only
+  a link refusal — a 401, a 403 or a 404, the last also an unknown
+  Routine — lands as a note on a broken row. Anything else (a 5xx, an
+  unreachable provider, another 4xx) is transient: the row stays live
+  with the provider's sentence and tries again in a minute.
 
   Nothing here re-throws and nothing here retries. A throwing consumer
   parks its cursor, and a retry inside a drain is a second run of a
@@ -1863,7 +1878,8 @@
    (fire! eng adapter schedule-row text at (link-of eng schedule-row)))
   ([eng adapter schedule-row text at link]
    (when (some-> (:fire_url link) str not-empty)
-     (let [answer (fire (claude-routine adapter) link text)]
+     (let [answer (fire (claude-routine adapter) link text)
+           status (some-> (:status answer) long)]
        (cond
          (contains? answer :started)
          (try-act! eng schedule-row :fired
@@ -1875,11 +1891,21 @@
          (contains? answer :throttled)
          (throttle! eng schedule-row (:throttled answer) (:body answer))
 
-         ;; a paused Routine, where the row can say so as a state
-         (and (= 400 (some-> (:status answer) long)) (= :live (:state schedule-row)))
-         (try-act! eng schedule-row :pause nil)
+         ;; a paused Routine is not a bad link: a live row says so as a
+         ;; state, a paused row already does, and any other row keeps
+         ;; trying until it is live enough to pause
+         (= 400 status)
+         (case (:state schedule-row)
+           :live (try-act! eng schedule-row :pause nil)
+           :paused nil
+           (throttle! eng schedule-row nil nil (:bad-link answer)))
 
-         :else (note! eng schedule-row (:bad-link answer)))))))
+         ;; only the link itself breaks the row
+         (contains? link-refusals status)
+         (note! eng schedule-row (:bad-link answer))
+
+         ;; a transient refusal: the row stays live and tries again
+         :else (throttle! eng schedule-row nil nil (:bad-link answer)))))))
 
 ;; ── the runner pool (waymark ticket d16b71bf) ──────────────────────
 

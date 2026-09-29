@@ -668,6 +668,54 @@
         (is (nil? (get-in row [:data :cost_usd]))
             "R-7.6's posture: the absence of a bill")))))
 
+(deftest a-sitting-that-only-reads-over-the-router-is-not-swept
+  ;; ticket 900764ce: a GET through the router under the seat's grant
+  ;; is activity, so a sitter that only reads over HTTP keeps its
+  ;; sitting open past sitting_idle_seconds while each read is inside
+  ;; the window
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model {:name "reader" :sitting_idle_seconds 600})
+        sid (initialize! h)
+        sat (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))
+        sitting (str (:sitting sat))
+        headers (assoc (bearer colton)
+                       "x-waymark-grant" (str (:grant sat))
+                       "x-waymark-model" "chair-test-model")
+        ;; the calling sitting rides the request, as the owner's
+        ;; decision names it: `:waymark10/sitting`
+        read! #(h {:request-method :get :uri "/api/meals" :headers headers
+                   :waymark10/sitting sitting})
+        last-call #(str (get-in (row-of eng :sitting sitting)
+                                [:data :last_call_at]))
+        at! (fn [s] (reset! at (Instant/parse s)))]
+
+    (testing "each read moves last_call_at"
+      (doseq [s ["2026-09-17T09:08:00Z" "2026-09-17T09:16:00Z"
+                 "2026-09-17T09:24:00Z"]]
+        (at! s)
+        ;; the stamp judges the calling sitting, not the answer: a read
+        ;; the law narrows is still the sitter at work
+        (read!)
+        (is (= s (last-call)))))
+
+    (testing "reads past the idle limit, each inside the window, keep it open"
+      (at! "2026-09-17T09:34:00Z")
+      (is (= 0 (:abandoned (defs/sweep-seats! eng))))
+      (let [row (row-of eng :sitting sitting)]
+        (is (= :open (:state row)))
+        (is (zero? (long (or (get-in row [:data :transitions]) 0)))
+            "a read is not a transition")
+        (is (zero? (long (or (get-in row [:data :refusals]) 0)))
+            "a read is not a refusal")))
+
+    (testing "a sitting that stops reading is swept as today"
+      (at! "2026-09-17T09:34:01Z")
+      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
+      (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
+
 ;; ── 9 · nothing fires an interactive seat ───────────────────────────
 
 (deftest the-fire-door-refuses-an-interactive-seat-by-name
