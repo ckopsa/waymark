@@ -1004,9 +1004,9 @@
   "Read a standing train's run once → the train that stands after it:
   the same one while its run is pending or the rig does not answer,
   and what `train-finished!` says once it finished or was refused. A
-  train read by its branch keeps the run the answer names; an answer
-  naming the run a retry left behind (`stale_run_id`) is read as
-  pending, since the retry's own run has not shown yet. A train tested
+  train read by its branch keeps the run the answer names; the run a
+  retry left behind (`stale_run_id`) is the rig's to skip, through
+  `status-args`' `skip_run_id`. A train tested
   by its pull request's run that showed none in `pr-run-grace-seconds`
   has its checks dispatched instead, once."
   [ctx seen repo policy train]
@@ -1022,7 +1022,6 @@
       why (do (warn! "the rig refused the status of " (:branch train) " ("
                      (reason-of answer) ")")
               (train-finished! ctx seen repo policy train "cancelled"))
-      (and run (= run (:stale_run_id train))) train
       (or (nil? st) (= "pending" st))
       (if (pr-run-overdue? ctx known)
         (do (warn! repo ": no run showed on the pull request of " (:branch train)
