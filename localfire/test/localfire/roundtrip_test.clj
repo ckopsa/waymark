@@ -202,3 +202,44 @@
         (is (w/wait-for #(zero? (server/running-count st "sonnet")))))
       (finally
         (server/stop! st)))))
+
+(deftest a-failed-check-is-rechecked-on-a-backoff
+  (let [pass?  (atom false)
+        calls  (atom [])
+        probes (atom [])
+        port   (w/free-port)
+        cfg    (w/make-config {:port port :place (w/make-place!)
+                               :runs-dir (w/tmpdir "lf-runs-backoff")})
+        cs     (:check-seconds cfg)
+        st     (server/start! {:config cfg :token "the-token" :check? true
+                               :spawner (probe-spawner pass? calls probes)})
+        url    (str "http://127.0.0.1:" port "/fire/sonnet")]
+    (try
+      (testing "a failed probe schedules the next one 30 s out"
+        (is (= (min 30 cs) (:next-in @(:credential st))))
+        (let [r (w/POST url "the-token")
+              s (some-> (:retry-after r) parse-long)]
+          (is (= 429 (:status r)))
+          (is (some? s))
+          (is (<= 1 s 30))))
+
+      (testing "a second failure doubles it"
+        (is (= (min 60 cs) (:next-in (server/check-credential! st {:scheduled? true})))))
+
+      (testing "a pass restores check-seconds"
+        (reset! pass? true)
+        (let [c (server/check-credential! st {:scheduled? true})]
+          (is (true? (:ok c)))
+          (is (zero? (:failures c)))
+          (is (= cs (:next-in c)))))
+
+      (testing "the backoff caps at check-seconds"
+        (is (= [600 30 60 120 240 480 600 600]
+               (mapv #(server/next-check-seconds 600 %) [0 1 2 3 4 5 6 30]))))
+
+      (testing "the log names a transient failure apart from a refused one"
+        (is (= "transient" (server/failure-kind "The MCP server waymark answered 503: no available server")))
+        (is (= "transient" (server/failure-kind "The probe did not end within two minutes.")))
+        (is (= "refused" (server/failure-kind "The MCP server waymark answered 401: the credential expired."))))
+      (finally
+        (server/stop! st)))))

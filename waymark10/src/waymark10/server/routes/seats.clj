@@ -572,46 +572,57 @@
   recorded, and the two numbers the engine counted and has now frozen
   (R-10.6). `cost_usd` is the close's own arithmetic over the model's
   prices at that moment (R-10.4) — the hook reports tokens and learns
-  what they cost."
+  what they cost.
+
+  `last_refusal` rides beside the count when the sitting was refused
+  at least once: the problem type, the guard that refused when one
+  did, and the moment. The count says how many; this says WHICH law
+  the newest one was, so the close can tell whether the last invoke or
+  bench write was refused. A sitting nothing refused carries no such
+  key, so absence and silence read the same."
   [seat row]
   (let [d (:data row)]
-    {:waymark "10"
-     :kind "sitting_close"
-     :sitting (str (:id row))
-     :seat (str (:id seat))
-     :state (name (:state row))
-     :closed_by (:closed_by d)
-     :cost_usd (:cost_usd d)
-     :input_tokens (:input_tokens d)
-     :output_tokens (:output_tokens d)
-     :cache_read_tokens (:cache_read_tokens d)
-     :cache_write_tokens (:cache_write_tokens d)
-     :turns (:turns d)
-     :transitions (:transitions d)
-     :refusals (:refusals d)}))
+    (cond-> {:waymark "10"
+             :kind "sitting_close"
+             :sitting (str (:id row))
+             :seat (str (:id seat))
+             :state (name (:state row))
+             :closed_by (:closed_by d)
+             :cost_usd (:cost_usd d)
+             :input_tokens (:input_tokens d)
+             :output_tokens (:output_tokens d)
+             :cache_read_tokens (:cache_read_tokens d)
+             :cache_write_tokens (:cache_write_tokens d)
+             :turns (:turns d)
+             :transitions (:transitions d)
+             :refusals (:refusals d)}
+      (:last_refusal d) (assoc :last_refusal (:last_refusal d)))))
 
 (defn- tally-doc
   "What the Stop hook reads back: the row it tallied, the counts as
   recorded, the running cost at this moment (R-12.27) and the stamp
   the sweep measures idleness from. `state` is there and says `open`,
   because the one thing a hook must be able to tell from this answer
-  is that the sitting is still going."
+  is that the sitting is still going. `last_refusal` rides beside the
+  count the same way the close's does — which law the newest refusal
+  was, absent when there was none."
   [seat row]
   (let [d (:data row)]
-    {:waymark "10"
-     :kind "sitting_tally"
-     :sitting (str (:id row))
-     :seat (str (:id seat))
-     :state (name (:state row))
-     :cost_usd (:cost_usd d)
-     :input_tokens (:input_tokens d)
-     :output_tokens (:output_tokens d)
-     :cache_read_tokens (:cache_read_tokens d)
-     :cache_write_tokens (:cache_write_tokens d)
-     :turns (:turns d)
-     :transitions (:transitions d)
-     :refusals (:refusals d)
-     :tallied_at (some-> (:tallied_at d) str)}))
+    (cond-> {:waymark "10"
+             :kind "sitting_tally"
+             :sitting (str (:id row))
+             :seat (str (:id seat))
+             :state (name (:state row))
+             :cost_usd (:cost_usd d)
+             :input_tokens (:input_tokens d)
+             :output_tokens (:output_tokens d)
+             :cache_read_tokens (:cache_read_tokens d)
+             :cache_write_tokens (:cache_write_tokens d)
+             :turns (:turns d)
+             :transitions (:transitions d)
+             :refusals (:refusals d)
+             :tallied_at (some-> (:tallied_at d) str)}
+      (:last_refusal d) (assoc :last_refusal (:last_refusal d)))))
 
 (defn- paired
   "The three refusals in the order of what they cost, and the row they

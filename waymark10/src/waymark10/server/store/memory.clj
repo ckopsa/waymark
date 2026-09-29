@@ -295,6 +295,17 @@
           rows (if (:newest-first opts) (reverse rows) rows)]
       (into [] (take (:limit opts 500)) rows)))
 
+  (transitions-under-grant [_ _tx grant-id since until opts]
+    (into []
+          (comp (filter #(= (str grant-id)
+                            (some-> (get-in % [:actor :grant]) str)))
+                (filter #(or (nil? since)
+                             (not (.isBefore ^Instant (:at %) ^Instant since))))
+                (filter #(or (nil? until)
+                             (not (.isAfter ^Instant (:at %) ^Instant until))))
+                (take (:limit opts 500)))
+          (:transitions @state [])))
+
   (transition-stats [_ _tx since include-system?]
     ;; the same buckets Postgres's date_trunc-at-UTC answers: the one
     ;; truncation lives in store/utc-week-start
@@ -310,6 +321,20 @@
          (map (fn [[k n]] (assoc k :n n)))
          (sort-by (juxt :week-start :kind :action :actor-type))
          vec))
+
+  (transition-times [_ _tx kind action since until conds limit]
+    (let [rows (get-in @state [:tables kind])]
+      (into []
+            (comp (filter #(= (name kind) (name (:kind %))))
+                  (filter #(= (name action) (name (:action %))))
+                  (filter #(let [^Instant t (:at %)]
+                             (and (not (.isBefore t ^Instant since))
+                                  (.isBefore t ^Instant until))))
+                  (filter #(some-> (get rows (:resource-id %))
+                                   (matches-all? conds)))
+                  (map :at)
+                  (take limit))
+            (:transitions @state []))))
 
   (corrections-by-model [_ _tx actor-ids since excluded-kinds]
     ;; the same walk Postgres does with lag(): partition the log by
