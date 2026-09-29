@@ -541,3 +541,62 @@
         (is (= {:transitions 1 :refusals 1} (counts (:sitting a))))
         (is (= {:transitions 0 :refusals 0} (counts (:sitting b)))
             "R-10.6: a sitting pays for the fuel it spent and no other's")))))
+
+;; ── cancelled test runs, and transitions by sitting (39b2c934) ──────
+
+(deftest a-cancelled-test-run-counts-once-by-its-run-id
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model)
+        {:keys [sitting]} (sit! h)
+        cancelled-run @#'mcp/cancelled-run
+        answer (fn [status run]
+                 {:structuredContent {:result {:status status :run_id run}}})]
+
+    (testing "the door reads a cancelled answer off bench.test and its result"
+      (is (= "r1" (cancelled-run "bench__test_result" (answer "cancelled" "r1"))))
+      (is (= "r1" (cancelled-run "bench__test" (answer "cancelled" "r1"))))
+      (is (nil? (cancelled-run "bench__test_result" (answer "pending" "r1"))))
+      (is (nil? (cancelled-run "bench__read" (answer "cancelled" "r1"))))
+      (is (= "3" (cancelled-run "bench__test_result"
+                                 {:structuredContent
+                                  {:result {:conclusion "cancelled" :run_id 3}}}))
+          "the rig says it as `conclusion`, and a numeric id reads as text"))
+
+    (testing "a fresh sitting has cancelled nothing"
+      (is (= 0 (long (or (:cancelled_runs (:data (row-of eng :sitting sitting))) 0)))))
+
+    (testing "each run counts once, however often it is polled"
+      (is (= 1 (seats/add-cancelled-run! eng sitting "r1")))
+      (is (= 1 (seats/add-cancelled-run! eng sitting "r1")))
+      (is (= 2 (seats/add-cancelled-run! eng sitting "r2")))
+      (is (= 2 (:cancelled_runs (:data (row-of eng :sitting sitting))))))))
+
+(deftest a-sittings-transitions-are-the-ones-under-its-grant-in-its-window
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model)
+        {:keys [sid sitting grant]} (sit! h)
+        soup (:id (meal! eng "Soup"))
+        stew (:id (meal! eng "Stew"))
+        a1 (tool h (with-session sid) "waymark_invoke"
+                 {:kind "meal" :id (str soup) :action "accept"})
+        _ (inv/invoke! eng :meal stew :accept {} {:principal person})]
+    (is (false? (:isError a1)) (text-of a1))
+
+    (testing "the sitter's transition is found by its sitting, the person's is not"
+      (let [found (seats/sitting-transitions eng sitting)]
+        (is (= #{(str soup)} (set (map (comp str :resource-id) found))))
+        (is (every? #(= grant (str (get-in % [:actor :grant]))) found))))
+
+    (testing "a window that closes before the transitions holds none"
+      (is (= [] (store/with-tx (:storage eng)
+                  (fn [tx]
+                    (store/transitions-under-grant
+                     (:storage eng) tx grant nil
+                     (.minusSeconds (Instant/now) 3600) {}))))))
+
+    (testing "an unknown sitting answers nil"
+      (is (nil? (seats/sitting-transitions eng "no-such-sitting"))))))

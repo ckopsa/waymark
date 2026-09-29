@@ -66,6 +66,11 @@
     (waymark10.server.decision/after-record), nil everywhere else.")
   (transitions [st tx where opts]
     "Log rows: where {:kind … :resource-id … :since id}, newest-last.")
+  (transitions-under-grant [st tx grant-id since until opts]
+    "Log rows whose actor carries this grant (actor->>'grant') and
+    whose `at` lies in [since, until] — a nil bound is open. A
+    sitting's transitions are these, over its grant and its window
+    (ticket 39b2c934). Oldest first; opts {:limit n}, default 500.")
   (transition-stats [st tx since include-system?]
     "Weekly rhythm buckets over the log — the seasons door's one
     aggregate read: rows {:week-start inst :kind str :action str
@@ -73,6 +78,14 @@
     × kind × action × actor type, at >= since only. include-system?
     false drops rows whose actor type is system — the mirror-sync
     beat would otherwise dominate every count.")
+  (transition-times [st tx kind action since until conds limit]
+    "The `at` of each logged transition of `action` on `kind` whose at
+    lies in [since, until) and whose row still matches every cond
+    (count-matching's grammar) — a dashboard measure's
+    transition:<action> read (dashboard measures 2/3). ONE query for
+    the kind however many rows or buckets: ix_wm10_t_at bounds the
+    window, and the conds narrow the kind's table as one semi-join.
+    Oldest first, at most `limit` Instants.")
   (corrections-by-model [st tx actor-ids since excluded-kinds]
     "The correction count over the log, grouped by the model that was
     corrected — the ladder's one new query (spec-seat.md R-11.3).

@@ -101,6 +101,22 @@
     (is (str/includes? page ".slot-grid"))
     (is (str/includes? page "html[data-ui=\"mobile\"] .slot-grid"))))
 
+(deftest a-measured-panel-rides-the-page
+  ;; dashboard measures 3/3: a slot with a :measure forks to
+  ;; fillMeasurePanel (its /-/measure read: value, previous, one SVG
+  ;; path over the buckets); a list slot keeps the rows fetch
+  (let [page (sut/assemble)]
+    (is (str/includes? page "if (f.measure) return fillMeasurePanel(")
+        "the fork sits in fillSlotPanel")
+    (is (str/includes? page "/-/measure`"))
+    (is (str/includes? page "dashNumber(m.value)"))
+    (is (str/includes? page "previous ${dashNumber(m.previous)}"))
+    (is (= 1 (count (re-seq #"createElementNS\(ns, \"path\"\)" page)))
+        "one path element: the one series")
+    (is (str/includes? page "fetchParams[\"page[size]\"] = \"5\"")
+        "a list slot still fetches its top rows")
+    (is (str/includes? page ".slot-spark-line"))))
+
 ;; ── addresses and hands in a field cell (waymark-tx8n) ────────────
 ;; Fields that hold a row's address rendered as dead strings: "What is
 ;; it about" on a hypothesis screen listed /api/people/01H… and left
