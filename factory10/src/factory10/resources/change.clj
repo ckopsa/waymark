@@ -1146,6 +1146,10 @@
      [:maybe :boolean]]
     [:base_compared_at {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 40}]]]
+    ;; the head the two facts above were read at (ticket 716d12ba): the
+    ;; merge line trusts them only while it is still the row's head_sha
+    [:missing_checks_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
     ;; ── the bench's three (waymark-fp62.6.3.2, R-4) ──────────────
     [:branch {:optional true
               :x-display
@@ -1368,7 +1372,9 @@
              [:missing_checks {:optional true}
               [:maybe [:vector [:string {:max 200}]]]]
              [:behind_base {:optional true} [:maybe :boolean]]
-             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]]
+             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
+             [:missing_checks_head {:optional true}
+              [:maybe [:string {:max 64}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Observe" :order 10
@@ -1402,7 +1408,9 @@
              [:missing_checks {:optional true}
               [:maybe [:vector [:string {:max 200}]]]]
              [:behind_base {:optional true} [:maybe :boolean]]
-             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]]
+             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
+             [:missing_checks_head {:optional true}
+              [:maybe [:string {:max 64}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Observe" :order 14

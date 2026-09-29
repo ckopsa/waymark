@@ -55,6 +55,7 @@
   swaps in a ring handler as the transport — the tests drive the
   full contract against a real engine without a socket."
   (:require [clojure.string :as str]
+            [waymark10.holds :as holds]
             [waymark10.wire :as wire])
   (:import (java.net URI)
            (java.net.http HttpClient HttpRequest HttpRequest$Builder
@@ -567,16 +568,22 @@
 
 (defn- remedy-call
   "Where remedy `door` acts for the `refused` call: :resolve's pick, or,
-  with no :resolve, the refused call's own row when the remedy is on its
-  kind. nil means nobody said — a choice for a person."
+  when :resolve names none, the refused call's own row when the remedy
+  is on its kind. nil means nobody said — a choice for a person;
+  {:unseen reason} means the pick did not read back (gone, or outside
+  the caller's grant), so the remedy is blocked, never attempted."
   [session door refused resolve]
   (let [same-kind? (= (door-kind door) (door-kind (:door refused)))
-        pick (if resolve (resolve door refused) (when same-kind? {}))
+        pick (or (when resolve (resolve door refused)) (when same-kind? {}))
         target (when pick
                  (let [d (remedy-doc session (door-kind door) (door-action door) pick)]
                    (if (and (nil? d) same-kind?) (:doc refused) d)))]
-    (when (doc? target)
-      {:door door :doc target :input (:input pick)})))
+    (cond
+      (doc? target) {:door door :doc target :input (:input pick)}
+      (problem? target)
+      {:door door :unseen (or (get-in target [:problem :detail])
+                              (get-in target [:problem :title])
+                              "That row did not answer.")})))
 
 (defn- attempt
   "Try one call once — rehearsed (dry-run) or real (act!) — on a fresh
@@ -601,6 +608,15 @@
         (blocked {:reason (or (why-not doc action)
                               (str door " is not afforded on " (:self doc) "."))}))
 
+      ;; a confirm door is a person's to open: with no :confirm! seam
+      ;; the pursuit stops here, rehearsed or real, and names the
+      ;; sentence — it is never acknowledged on anyone's behalf
+      (and (get-in entry [:safety :confirm]) (not (:confirm! opts)))
+      (blocked {:confirm true
+                :consequence (consequence-of entry)
+                :reason (str "safety.confirm is true — a person must approve: "
+                             (consequence-of entry))})
+
       (seq needs) (blocked {:needs needs})
 
       :else
@@ -613,6 +629,14 @@
                   (act! session doc action input opts))]
         (cond
           (or (transport? res) (diverged res)) {:stop res}
+          ;; a hold: the call now waits on a person's tap, and waiting
+          ;; is not landing — the pursuit stops here and never retries
+          (:held res)
+          (blocked {:held true :held_call (:held_call res) :reason (:why res)})
+          ;; a rehearsal cannot mint the held call: it counts the door
+          ;; as landing, marked, so the real run reaches it and holds
+          (and rehearse? (holds/hold? (get-in res [:problem :guard])))
+          {:landed doc :hold true}
           (warnings? res) (blocked {:warnings (:warnings res)})
           (seq (get-in res [:problem :remedies]))
           {:refused (vec (get-in res [:problem :remedies])) :doc doc
@@ -670,7 +694,7 @@
                   (recur stack' writes blocked' at' expect steps)))
 
               :else
-              (let [w (write-of top)
+              (let [w (cond-> (write-of top) (:hold out) (assoc :hold true))
                     writes' (conj writes w)
                     expected (first expect)
                     stack' (pop stack)]
@@ -707,6 +731,8 @@
                 entry (cond
                         (nil? call')
                         (block {:reason "No row was chosen for this remedy."})
+                        (contains? call' :unseen)
+                        (block {:reason (:unseen call')})
                         (some #(and (= door (:door %))
                                     (= (get-in call' [:doc :self]) (get-in % [:doc :self])))
                               stack)
@@ -751,7 +777,10 @@
   […]} — only genuine choices come back — or {:stopped res …} on a wire
   failure or a divergence. A rehearsal answers :rehearsal true and
   :first-estimate true: its writes are what it could see before any
-  write, not a promise."
+  write, not a promise. A confirm door with no :confirm! blocks with
+  :confirm true and its :consequence; a hold guard's door is a
+  rehearsal write marked :hold, and in the real run blocks with :held
+  true and the :held_call id."
   ([session doc action input] (pursue! session doc action input {}))
   ([session doc action input opts]
    (let [call {:door (door-of doc action) :doc doc :input input}

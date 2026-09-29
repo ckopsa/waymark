@@ -135,6 +135,7 @@
   (:require [clojure.string :as str]
             [jsonista.core :as j]
             [reitit.ring :as ring]
+            [waymark10.client :as client]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as coll]
@@ -194,6 +195,14 @@
        "call waymark_discover to learn which kinds you may see, "
        "waymark_schema for one kind's fields and doors, then "
        "waymark_query / waymark_get to read and waymark_invoke to act. "
+       "When a refusal's remedies name other doors, waymark_pursue walks "
+       "them for you in one call: it tries the goal, follows each "
+       "refusal's remedies (name the rows they act on in `choices`), and "
+       "answers done or what blocks it — a choice only you can make, a "
+       "confirm door with the consequence sentence for you to "
+       "acknowledge through waymark_invoke, or a call held for a "
+       "person's tap. It rehearses unless dry_run is false, and every "
+       "step is an ordinary invoke under your grant. "
        "\n\n"
        "You see exactly what your grant admits. A kind you were not "
        "granted is absent — not forbidden, absent — so 'it isn't there' "
@@ -989,6 +998,50 @@
                   :required ["kind" "action"]
                   :additionalProperties false}})
 
+(def ^:private pursue-tool
+  {:name "waymark_pursue"
+   :title "Pursue a goal through its remedies"
+   :description
+   (str "Reach a goal in one call (GRAIL): try one action — or a "
+        "create, with no id — and when a guard refuses it naming "
+        "remedies, try each remedy in turn, a refused remedy's own "
+        "remedies first, then retry the door it unblocked. Every step "
+        "is an ordinary invoke judged by YOUR grant and guards and "
+        "counted on your sitting; it can do nothing you could not do by "
+        "hand. A remedy on the refused row's own kind acts on that row; "
+        "any other needs its row named in `choices`. It stops, never "
+        "guessing, at a confirm door (blocked_on carries the "
+        "consequence sentence: acknowledge it through waymark_invoke), "
+        "at a call held for a person's tap (held, not retried), at an "
+        "input only you can choose, and at a door your grant does not "
+        "admit. dry_run (default true) answers the plan and writes "
+        "nothing. The answer is {done, steps_taken} or {blocked_on, "
+        "stack, steps_taken}, plus `plan` for a rehearsal.")
+   :input-schema {:type "object"
+                  :properties {:kind {:type "string"
+                                      :description "A kind name from waymark_discover."}
+                               :action {:type "string"
+                                        :description "The goal: an action this row (or, with no id, the kind's collection) advertises."}
+                               :id {:type "string"
+                                    :description "The row the goal acts on. Omit for the kind's create verb."}
+                               :input {:type "object"
+                                       :description "The goal action's input, per its declared input schema."}
+                               :choices {:type "object"
+                                         :additionalProperties {:type "object"
+                                                                :properties {:id {:type "string"}
+                                                                             :input {:type "object"}}
+                                                                :additionalProperties false}
+                                         :description (str "Remedy door (kind.action, as a refusal "
+                                                           "names it) → {id, input}: the row that "
+                                                           "remedy acts on and what it is given — "
+                                                           "the answers to an earlier blocked_on.")}
+                               :max_depth {:type "integer" :minimum 1 :maximum 16
+                                           :description "How many doors may wait on one another (default 8)."}
+                               :dry_run {:type "boolean" :default true
+                                         :description "Rehearse (the default): answer the plan, write nothing. false walks it."}}
+                  :required ["kind" "action"]
+                  :additionalProperties false}})
+
 (def ^:private history-tool
   {:name "waymark_history"
    :title "One row's transitions"
@@ -1184,8 +1237,8 @@
   that holds no key simply never calls it, and a tool list that
   advertised the key would be a tool list that leaked which seats
   exist."
-  [discover-tool schema-tool query-tool get-tool invoke-tool history-tool
-   resolve-tool sit-tool powers-tool power-tool])
+  [discover-tool schema-tool query-tool get-tool invoke-tool pursue-tool
+   history-tool resolve-tool sit-tool powers-tool power-tool])
 
 (defn listing
   "The `tools/list` payload — the MCP spelling of the fixed tools,
@@ -1745,6 +1798,71 @@
                ;; the same read the gate and the ETag came from
                #(when (row-doc? %)
                   (invoke-summary aname (verbatim-json env-resp) %))))))))))
+
+;; ── waymark_pursue (GRAIL 3/3): a goal in one call ──────────────────
+
+(defn- pursue-session
+  "A waymark10.client session whose transport is this door, wearing the
+  caller's identity exactly as `invoke` does: the resolved principal
+  and visibility, the bound sitting on every request, and
+  `origin-key`'s signature on every POST. So each step the pursuit
+  takes is an ordinary invoke — judged by the caller's grant, counted
+  on the caller's sitting — and nothing the caller could not do by
+  hand."
+  [eng call session]
+  (let [ident (-> (request session :get "/" {})
+                  (assoc :waymark10/sitting
+                         (bound-sitting eng (:mcp-session-id session)))
+                  (select-keys [:waymark10/principal :waymark10/visibility
+                                :waymark10/sitting]))
+        pid (get-in session [:principal :id])]
+    (client/connect
+     "mcp:"
+     {:presence false
+      :handler (fn [req]
+                 (call (cond-> (merge req ident)
+                         (= :post (:request-method req))
+                         (update :headers assoc "idempotency-key"
+                                 (origin-key pid (or (get-in req [:headers "idempotency-key"])
+                                                     (random-uuid)))))))})))
+
+(defn- pursue
+  "waymark_pursue: waymark10.client/pursue! over this door. `choices`
+  (remedy door → {id, input}) is its :resolve; a door it does not name
+  falls back to the refused row when the remedy is on that row's kind.
+  dry_run defaults TRUE — a pursuit writes only when asked to. The
+  answer is written without `wire-value`: `done` is the route's own
+  envelope and its keys pass through as the route spelled them."
+  [eng call session {:keys [kind id action input choices max_depth dry_run]}]
+  (let [rdef (rdef-of eng kind)
+        aname (or (declared-action rdef action) (keyword action))
+        cs (pursue-session eng call session)
+        start (client/get-doc cs (cond-> (str "/api/" (:plural rdef))
+                                   id (str "/" id)))]
+    (if-not (client/doc? start)
+      ;; concealed, gone, or never here — the engine's own refusal
+      (result (wire/write-json (:problem start)) true (:status start))
+      (let [pick-of (when (seq choices)
+                      (fn [door _refused]
+                        (when-some [c (or (get choices (keyword door))
+                                          (get choices door))]
+                          (cond-> {}
+                            (some? (:id c)) (assoc :id (str (:id c)))
+                            (some? (:input c)) (assoc :input (:input c))))))
+            res (client/pursue! cs start (wire-action aname) input
+                                (cond-> {:dry-run (not (false? dry_run))}
+                                  max_depth (assoc :max-depth max_depth)
+                                  pick-of (assoc :resolve pick-of)))
+            rehearsal? (boolean (:rehearsal res))]
+        (result
+         (wire/write-json
+          (cond-> {:steps_taken (if rehearsal? [] (:writes res))}
+            rehearsal? (assoc :plan (:writes res))
+            (some? (:done res)) (assoc :done (:done res))
+            (contains? res :blocked-on) (assoc :blocked_on (:blocked-on res)
+                                               :stack (:stack res))
+            (:stopped res) (assoc :stopped (:stopped res))))
+         (boolean (:stopped res)))))))
 
 (defn- history
   "The row's transitions, newest first — now a call onto the route,
@@ -2353,8 +2471,11 @@
             ;; a named ticket beside a live change is read under its
             ;; own state, in review as well as open, and is not left
             ;; out as stuck: the fire sent the run to it (ticket
-            ;; 7af7d506)
-            only-state (when (and only (not judgment)
+            ;; 7af7d506). A JUDGMENT SEAT TOO: its queue names `state`,
+            ;; and the state named here stands in for it, while the
+            ;; judged subjects are still subtracted - so an unjudged
+            ;; ticket in review is handed, and a judged one is not
+            only-state (when (and only
                                   (seats/named-beside-a-live-change?
                                    eng walk only))
                          (some-> (row-of eng (keyword walk) only) :state name))
@@ -2497,6 +2618,16 @@
   (str "Every open row of your walk is held by another open sitting of "
        "this seat, so there is nothing for you to walk. Say so and stop."))
 
+(defn- named-row-withheld-note
+  "What a sit is told when the row its fire text named is not in its
+  walk at all - judged already, ended, or out of the queue - so the
+  queue's next rows stand in for it. Said, so a firing that missed its
+  row is seen to have missed it."
+  [row-id]
+  (str " The row your fire text names, " row-id ", is not in your walk"
+       " (already judged, ended, or outside the queue), so the rows below"
+       " are the queue's instead. Do not walk it; say so if it mattered."))
+
 (defn- named-row-held-note
   "What a sit is told when the row its fire text named is held by
   another open sitting of the seat: it is handed the next free row
@@ -2520,7 +2651,7 @@
   `named` is the row the fire's text named (`seats/fire-key-row`): it
   is handed alone while no other open sitting holds it, and when one
   does the sit hands the queue's next free rows and says so.
-  → {:walk w :named-held? bool :all-held? bool}."
+  → {:walk w :named-held? bool :named-withheld? bool :all-held? bool}."
   [eng call sitter-sees seat sitting named]
   (let [seat-id (str (:id seat))
         ;; a named change is read back to its ticket (ticket 7af7d506)
@@ -2534,10 +2665,10 @@
     (loop [n 1
            taken (seats/claimed-rows eng seat-id (:id sitting))]
       (let [only (when (and named (not (contains? taken named))) named)
-            walk (or (when only
-                       (let [w (walk-past taken only)]
-                         (when (seq (get w "rows")) w)))
-                     (walk-past taken nil))
+            named-walk (when only
+                         (let [w (walk-past taken only)]
+                           (when (seq (get w "rows")) w)))
+            walk (or named-walk (walk-past taken nil))
             ids (mapv #(get % "id") (get walk "rows"))
             claim (if sitting
                     (seats/claim-rows-atomically! eng seat-id (:id sitting) ids)
@@ -2546,6 +2677,9 @@
             said (fn [w]
                    {:walk w
                     :named-held? (boolean (and named (contains? seen named)))
+                    ;; named, held by nobody, and still not handed: the
+                    ;; walk withheld it and the queue's rows stand in
+                    :named-withheld? (boolean (and only (nil? named-walk)))
                     :all-held? (boolean (and w (empty? (get w "rows"))
                                              (seq seen)))})]
         (cond
@@ -3783,7 +3917,8 @@
             ;; connector drop is handed back the row it was walking.
             ;; The rows this sitting was handed are its own until it
             ;; closes, claimed in the transaction that found them free
-            {walk :walk named-held? :named-held? all-held? :all-held?}
+            {walk :walk named-held? :named-held? named-withheld? :named-withheld?
+             all-held? :all-held?}
             (when-not halted
               (claimed-walk! eng call sitter-sees seat sitting named-row))
             ;; … and a sitting the walk handed nothing is stamped as
@@ -3842,6 +3977,8 @@
                                      :else no-walk-note)
                                (when named-held?
                                  (named-row-held-note named-row))
+                               (when named-withheld?
+                                 (named-row-withheld-note named-row))
                                (when (get walk "judgment")
                                  judgment-walk-note)
                                (when said change-beside-the-walk-note)
@@ -3876,6 +4013,7 @@
    "waymark_query" query
    "waymark_get" get-row
    "waymark_invoke" invoke
+   "waymark_pursue" pursue
    "waymark_history" history
    "waymark_resolve" resolve-rows})
 
