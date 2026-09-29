@@ -858,6 +858,16 @@
                                  {})]
                (contains? #{"ahead" "identical"} (word (:status answer)))))))))
 
+  forge/ForgeCompare
+  (forge-behind? [this repository base head-sha]
+    ;; GitHub's compare of the base branch with the head: `behind_by`
+    ;; counts the base's commits the head lacks (ticket 498a089e)
+    (let [answer (call! this "GET"
+                        (str "/repos/" repository "/compare/" base "..." head-sha)
+                        {})]
+      (or (pos? (long (or (:behind_by answer) 0)))
+          (contains? #{"behind" "diverged"} (word (:status answer))))))
+
   forge/ForgeRerun
   (forge-runs [this repository head-sha]
     (latest-runs! this repository head-sha))

@@ -209,3 +209,28 @@
         "a moved count is written")
     (is (nil? (bench/moved-marks {} {:line_place nil :line_why nil} #{}))
         "clearing what is already clear writes nothing")))
+
+;; ── a front that waits on a check its head never ran (ticket 498a089e)
+
+(deftest a-waiting-front-missing-a-check-on-a-moved-base-is-updated-once
+  (let [r (rig (atom {1 {:state "waiting"}}))
+        seen (atom {})
+        a (a-change "ckopsa/waymark" 1 0
+                    :missing_checks ["gate"] :behind_base true)]
+    (pass! r seen [a] {})
+    (is (= [1] (numbers-of r "bench__update_branch")))
+    (pass! r seen [a] {})
+    (is (= [1] (numbers-of r "bench__update_branch"))
+        "not again for the same head")))
+
+(deftest a-waiting-front-whose-check-is-running-is-left-alone
+  (let [r (rig (atom {1 {:state "waiting"}}))]
+    (pass! r (atom {}) [(a-change "ckopsa/waymark" 1 0
+                                  :missing_checks [] :behind_base true)] {})
+    (is (= [] (numbers-of r "bench__update_branch")))))
+
+(deftest a-waiting-front-missing-a-check-but-not-behind-is-left-alone
+  (let [r (rig (atom {1 {:state "waiting"}}))]
+    (pass! r (atom {}) [(a-change "ckopsa/waymark" 1 0
+                                  :missing_checks ["gate"] :behind_base false)] {})
+    (is (= [] (numbers-of r "bench__update_branch")))))
