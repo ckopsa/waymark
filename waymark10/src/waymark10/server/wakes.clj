@@ -834,6 +834,22 @@
         (at-the-fuel-wall? eng (raw-row eng :seat (:id seat)) at)
         (hold-at-the-wall! eng row at)
 
+        ;; the row the wake names is withheld by name (ticket 80a8e60b):
+        ;; a groom that leaves a ticket open beside its submitted change
+        ;; names a row the sit will not hand
+        ;; (`seats/named-open-beside-a-submitted-change?`), so its fire
+        ;; would start a run that walks nothing
+        (let [walk (some-> (raw-row eng :seat (:id seat))
+                           (get-in [:data :walk]) str not-empty)]
+          (and (some? text)
+               (= walk (name (:kind t)))
+               (seats/named-open-beside-a-submitted-change?
+                eng walk (:resource-id t))))
+        (do (warn! "seat " (:id seat) " was woken on " (:resource-id t)
+                   ", which is open beside a submitted change — its wake"
+                   " fires nothing")
+            nil)
+
         ;; the walk would hand nothing (ticket 87c928e9): a transition
         ;; wake asks the same question `release!` does, so a row the
         ;; walk withholds never fires a run that sits and finds nothing

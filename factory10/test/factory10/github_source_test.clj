@@ -1837,3 +1837,66 @@
       (is (= (str (:id (the-change engine)))
              (str (get-in (one-row engine :ci_run {:run_id run-id})
                           [:data :change])))))))
+
+;; ── a head that lacks a required check (ticket 498a089e) ────────────
+
+(defn- missing-world
+  "One change at `submitted` under a policy that requires `gate`, with
+  `checks` seeded on its head."
+  [checks]
+  (let [state (gh/fake-state)
+        engine (boot)
+        r {:state state :source (gh/fake-source state) :engine engine}]
+    (gh/seed-pull! state repo a-pull-request
+                   {:files the-files :reviews the-reviews})
+    (doseq [check checks]
+      (gh/seed-check! state repo the-head check))
+    (inv/create! engine :repo_policy
+                 {:repository repo :required_checks ["gate"]}
+                 {:principal a-person})
+    (pass! r)
+    (let [id (str (:id (the-change engine)))
+          st (:storage engine)]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (-> row
+                                 (assoc :state :submitted
+                                        :version (inc (long (:version row))))
+                                 (assoc-in [:data :rounds] 1))
+                             (:version row))))))
+    r))
+
+(deftest a-missing-check-and-a-moved-base-are-written-on-the-change
+  (let [{:keys [engine] :as r} (missing-world [])
+        census (pass! r)
+        row (the-change engine)]
+    (is (= ["gate"] (get-in row [:data :missing_checks])))
+    (is (true? (get-in row [:data :behind_base])))
+    (is (some? (get-in row [:data :base_compared_at])))
+    (is (= 1 (:stale-noted census)))
+    (testing "an unchanged read writes nothing"
+      (is (= 0 (:stale-noted (pass! r)))))))
+
+(deftest a-missing-check-on-a-head-that-holds-its-base-is-not-behind
+  (let [{:keys [state engine] :as r} (missing-world [])]
+    (gh/seed-ancestor! state repo the-head "main")
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (= ["gate"] (get-in row [:data :missing_checks])))
+      (is (false? (get-in row [:data :behind_base]))))))
+
+(deftest a-running-required-check-is-not-missing
+  (let [{:keys [engine] :as r}
+        (missing-world [{:id 41752098800 :name "gate" :status "in_progress"
+                         :head_sha the-head}])]
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (= [] (get-in row [:data :missing_checks])))
+      (is (nil? (get-in row [:data :behind_base]))
+          "no compare is made when nothing is missing"))))
+
+(deftest missing-checks-counts-only-checks-with-no-run
+  (is (= ["tests"] (forge/missing-checks ["gate" "tests" "gate"]
+                                         [{:check_name "gate" :status "queued"}]))))

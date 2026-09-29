@@ -1026,6 +1026,23 @@
   [^java.time.Instant at ^java.time.Instant now seconds]
   (boolean (and at (.isBefore at (.minusSeconds now (long seconds))))))
 
+(defn- quiet?
+  "Has this sitting made no call inside `seconds` before `now`, read
+  off the row as it stands NOW rather than as the sweep's pass found
+  it (ticket e2b55a0c)? A re-sit that reuses an idle sitting stamps
+  its `last_call_at` in its own write, and a sit that lands between
+  the pass's read and its end must win: the sweep never closes a
+  sitting out from under the caller it was just handed to."
+  [eng rdef row now seconds]
+  (let [st (:storage eng)
+        fresh (some->> (store/with-tx st
+                         (fn [tx] (store/load-row st tx :sitting
+                                                  (str (:id row)) {})))
+                       (inv/decode-row rdef))
+        at (get-in fresh [:data :last_call_at])]
+    (and (= :open (:state fresh))
+         (or (nil? at) (stale-since? at now seconds)))))
+
 (defn- end-sitting!
   "One sitting, ended through its own door under the seats actor, so
   the ending is in the log like every other ending. A door that
@@ -1145,7 +1162,8 @@
 
              interactive?
              (cond
-               (stale-since? tallied now idle)
+               (and (stale-since? tallied now idle)
+                    (quiet? eng rdef row now idle))
                (if (end-sitting! eng row :close
                                  (assoc (last-tally row)
                                         :note (str "Closed by the sweep after "
@@ -1153,14 +1171,16 @@
                  (update acc :closed inc)
                  acc)
 
-               (and (nil? tallied) (stale-since? started now idle))
+               (and (nil? tallied) (stale-since? started now idle)
+                    (quiet? eng rdef row now idle))
                (if (end-sitting! eng row :abandon nil)
                  (update acc :abandoned inc)
                  acc)
 
                :else acc)
 
-             (stale-since? last-call now idle)
+             (and (stale-since? last-call now idle)
+                  (quiet? eng rdef row now idle))
              (if (end-sitting! eng (mark-silent! eng row last-call) :abandon nil)
                (update acc :abandoned inc)
                acc)
