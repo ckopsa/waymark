@@ -153,6 +153,20 @@
         (when (re-matches #"[A-Za-z0-9_]+" s)
           {:field (keyword s)})))))
 
+(def transition-prefix
+  "A measure's :at spelling that counts the history log instead of a
+  time field: transition:<action> (dashboard measures 2/3)."
+  "transition:")
+
+(defn transition-action
+  "The action a measure's :at names as transition:<action> — the text
+  after the prefix, blank when none is given — or nil when :at names a
+  time field."
+  [at]
+  (let [s (str at)]
+    (when (str/starts-with? s transition-prefix)
+      (str/trim (subs s (count transition-prefix))))))
+
 (defn- field-head [trdef f]
   (some-> (schema/field-schema (:schema trdef) f) schema/leaf-head))
 
@@ -160,13 +174,15 @@
 
 (defn measure-problems
   "One slot's :measure judged against the resolved target rdef: :at a
-  time field, :field a number field or duration(<time>,<time>) —
-  required by every stat but count — and the window and bucket
-  ceilings. Returns problem strings."
+  time field or transition:<action> naming a declared action — which
+  counts, so its stat is count and it reads no field — :field a number
+  field or duration(<time>,<time>) — required by every stat but count
+  — and the window and bucket ceilings. Returns problem strings."
   [trdef m]
   (let [kname (name (:kind trdef))
         stat (str (:stat m))
         time? (fn [f] (= :waymark/instant (field-head trdef f)))
+        action (transition-action (:at m))
         raw (:field m)
         parsed (parse-measure-field raw)]
     (cond-> []
@@ -174,9 +190,22 @@
       (conj (str "measure stat " (pr-str stat) " is not one of "
                  (str/join ", " measure-stats)))
 
-      (not (time? (keyword (str (:at m)))))
+      (and (nil? action) (not (time? (keyword (str (:at m))))))
       (conj (str "measure at " (pr-str (:at m))
-                 " is not a time field of " kname))
+                 " is not a time field of " kname
+                 " (nor " transition-prefix "<action>)"))
+
+      (and action (not (contains? (:actions trdef) (keyword action))))
+      (conj (str "measure at " (pr-str (:at m))
+                 " names no action of " kname))
+
+      (and action (not= "count" stat))
+      (conj (str "measure at " (pr-str (:at m))
+                 " counts transitions: its stat must be count"))
+
+      (and action (not (str/blank? (str raw))))
+      (conj (str "measure at " (pr-str (:at m))
+                 " counts transitions and reads no field"))
 
       (and (not (str/blank? (str raw))) (nil? parsed))
       (conj (str "measure field " (pr-str raw)
@@ -385,7 +414,7 @@
                          :help "A number field of the target, or duration(<time-field>,<time-field>). count needs none."}}
      [:maybe [:string {:max 120}]]]
     [:at {:x-display {:label "Counted at"
-                      :help "The target's time field that places a row in the window."}}
+                      :help "The target's time field that places a row in the window — or transition:<action>, which counts that action's transitions from the history log."}}
      [:string {:min 1 :max 60}]]
     [:window_seconds {:x-display {:label "Window, in seconds"
                                   :help "How far back the number reads; at most thirty days."}}
