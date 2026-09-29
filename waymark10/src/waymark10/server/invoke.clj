@@ -1203,7 +1203,9 @@
                                   (into {} (map (fn [[k _]] [k ["unexpected field"]])) body)))
                           nil))]
               ;; 8. natural replay before guards
-              (or (when (and (not dry-run) (get-in defn [:safety :idempotent]))
+              (or (when (and (not dry-run)
+                             (get-in defn [:safety :idempotent])
+                             (not (false? (:replay defn))))
                     (natural-replay engine tx rdef row defn digest within))
                   ;; 9. the guard loop — partial judges only the
                   ;; leaves whose every judged field arrived

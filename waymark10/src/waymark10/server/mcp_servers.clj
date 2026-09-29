@@ -1101,8 +1101,8 @@
   replay and the handler never runs; the list that moved in between
   would then stay on the row for good. The hash moves whenever the
   list moves, so the digest does too, and the mirror lands. A person's
-  tap carries no hash, so the door is also declared not idempotent:
-  in state, invoke replays only an idempotent door, and a discover
+  tap carries no hash, so the door also declares `:replay false`:
+  invoke never answers it from the last transition, and a discover
   asks the server every time."
   [:map
    [:seen_hash {:optional true
@@ -1177,10 +1177,11 @@
     {:from #{:live} :to :live
      :input discover-input
      :guards [a-person-or-the-engine]
-     ;; not :idempotent — invoke's natural replay answers an
-     ;; idempotent in-state door from its last transition without
-     ;; running the handler, and discover must ask the server
-     :safety {:idempotent false :reversible true :confirm false}
+     ;; :replay false — invoke's natural replay answers an in-state
+     ;; door from its last transition without running the handler,
+     ;; and discover must ask the server
+     :replay false
+     :safety {:idempotent true :reversible true :confirm false}
      :handler discover-server
      :display {:label "Discover" :order 2
                :description "Ask the server for its tool list every time and mirror what it answers onto the row"}}
