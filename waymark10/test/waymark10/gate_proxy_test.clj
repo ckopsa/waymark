@@ -448,7 +448,10 @@
 
 (def ^:private the-fixed
   ["waymark_discover" "waymark_schema" "waymark_query"
-   "waymark_get" "waymark_invoke" "waymark_history"
+   "waymark_get" "waymark_invoke"
+   ;; the pursuit tool (GRAIL 3/3), beside waymark_invoke
+   "waymark_pursue"
+   "waymark_history"
    ;; the seventh fixed tool (waymark-pywy.3)
    "waymark_resolve"
    ;; the eighth (spec-seat.md R-12.14): the keyed sitter session's
