@@ -836,7 +836,10 @@
   (`build-train!`), and a standing train (`line_train`) is read once
   (`advance-train!`) while its front waits. `trains`, when given, is an
   atom the pass fills with repository → the train that stands now, nil
-  for none, for each repository whose train it built or read.
+  for none, for each repository whose train it built or read. A
+  standing train whose repository has no line this pass — every rider
+  merged or left, or the repository is deploy-held — is read as well,
+  so it still finishes and leaves the policy.
   → the number of `merge` calls made."
   ([ctx seen lines by-repo] (work-lines! ctx seen lines by-repo (atom {})))
   ([ctx seen lines by-repo answers]
@@ -871,6 +874,13 @@
            (and front (behind? (get @answers id)))
            (update-behind! ctx seen front id
                            (str (get-in front [:data :head_sha]))))))
+     ;; a standing train is read whatever its line: a repository with
+     ;; no line this pass would otherwise keep it on the policy for good
+     (doseq [[repo policy] by-repo
+             :when (not (contains? lines repo))
+             :let [train (get-in policy [:data :line_train])]
+             :when train]
+       (swap! trains assoc repo (advance-train! ctx seen repo train)))
      @asked)))
 
 ;; ── the line, written on the rows (ticket b85aded5) ─────────────────
