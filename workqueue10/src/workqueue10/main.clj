@@ -1072,7 +1072,14 @@
                                                  (calendar-adapter)
                                                  nil))
             steps (migrate/plan storage (vals (:kinds reg)))
-            code  (print-plan! (map migrate/describe steps))]
+            code  (print-plan! (map migrate/describe steps))
+            ;; machine-readable: dispatch-migrate.sh routes the deploy on it
+            class-line (str "plan-class: "
+                            (if (empty? steps) "empty" (name (migrate/plan-class steps)))
+                            "\n")]
+        (doseq [^java.io.Writer w [*out* *err*]]
+          (.write w class-line)
+          (.flush w))
         (if (= "1" (System/getenv "APPLY"))
           (when (seq steps)
             (let [destructive? (= "1" (System/getenv "DESTRUCTIVE"))

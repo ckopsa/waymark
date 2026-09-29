@@ -1164,14 +1164,21 @@
   "One change at `submitted` with `rounds` spent, whose pull request
   GitHub reads with `mergeable-state` and whose one check is green. The
   bench behind the engine answers `conflicts` with `paths`, and
-  `:asked` holds every tool it was called with."
-  [mergeable-state paths policy rounds]
+  `:asked` holds every tool it was called with. A `landing` is what the
+  bench's feedback answers for the branch."
+  ([mergeable-state paths policy rounds]
+   (conflict-world mergeable-state paths policy rounds nil))
+  ([mergeable-state paths policy rounds landing]
   (let [state (gh/fake-state)
         asked (atom [])
         rpc (fn [_method params]
               (swap! asked conj params)
-              (when (and paths (= "bench__conflicts" (str (:name params))))
-                {:structuredContent {:result {:paths paths}}}))
+              (cond
+                (and paths (= "bench__conflicts" (str (:name params))))
+                {:structuredContent {:result {:paths paths}}}
+
+                (and landing (= "bench__feedback" (str (:name params))))
+                {:structuredContent {:result {:landing landing}}}))
         engine (engine/engine {:storage (memory/storage)
                                :resources (vec (main/resources))
                                :services {:bench-rpc rpc}})
@@ -1196,10 +1203,23 @@
                                         :version (inc (long (:version row))))
                                  (assoc-in [:data :rounds] rounds))
                              (:version row))))))
-    r))
+    r)))
 
 (defn- conflict-asks [{:keys [asked]}]
   (filterv #(= "bench__conflicts" (str (:name %))) @asked))
+
+(deftest a-conflicted-change-goes-failing-while-its-landing-still-runs
+  ;; ticket 7af7d506: a landing that never said it finished held a
+  ;; conflicted pull request at `submitted`, parked, and nothing woke
+  ;; the seat
+  (let [{:keys [engine] :as r} (conflict-world "dirty" the-conflicts {} 1
+                                               {:state "running"})
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :failing (:state row)))
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+    (is (= the-conflicts (get-in row [:data :conflicts])))
+    (is (= 1 (:failing census)))))
 
 (deftest a-conflicted-submitted-change-goes-failing-with-its-paths
   (let [{:keys [engine] :as r} (conflict-world "dirty" the-conflicts {} 1)

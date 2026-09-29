@@ -84,7 +84,10 @@
                                       :branch {:type "string"}}
                          :required ["repo" "branch"]}})
         ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"
-         "enroll" "repos" "unenroll" "feedback" "rerun"]))
+         "enroll" "repos" "unenroll" "feedback" "rerun"
+         ;; the merge train's five (ticket 47519515)
+         "train_build" "train_checks" "train_status" "train_land"
+         "train_delete"]))
 
 (def ^:private bench-powers
   "The bench row's powers (waymark-fp62.6.3.3): the four the model may
@@ -157,7 +160,15 @@
                        :message "Name the rule in the comment."}]
            :unavailable ["statuses: the forge answered 403"]}
           "bench__repos" {:repos ["ckopsa/waymark"]}
-          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}}}))
+          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}
+          ;; the merge train (ticket 47519515), in the rig's own shapes
+          "bench__train_build" {:branch "train/ckopsa/waymark/31" :base_head a-head
+                                :head a-commit :merged [31] :conflicted []}
+          "bench__train_checks" {:run_id "7" :head a-commit}
+          "bench__train_status" {:state "pending" :head a-commit
+                                 :url "https://github.com/ckopsa/waymark/actions/runs/7"}
+          "bench__train_land" {:landed true}
+          "bench__train_delete" {:repo "ckopsa/waymark" :branch "train/ckopsa/waymark/31"}}}))
 
 (defn- answer!
   "Script one tool's answer — a result map, or a refusal map with
@@ -1300,6 +1311,51 @@
       (is (thrown? clojure.lang.ExceptionInfo (restated clerk 4000)))
       (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
           "a seat's sitter could otherwise raise its own ceiling"))))
+
+(deftest a-policy-states-its-merge-strategy-and-never-its-train
+  ;; the merge train, slice a (ticket 394d0602): data only
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        strategy #(get-in (policy-row eng (:id row)) [:data :merge_strategy])
+        train-size #(get-in (policy-row eng (:id row)) [:data :train_size])
+        restated (fn [extra]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (merge (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         extra)
+                                  {:principal person
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))]
+    (testing "a row without either reads as line / 4"
+      (is (= "line" (bench/merge-strategy-of {:data {}})))
+      (is (= 4 (bench/train-size-of {:data {}}))))
+    (testing "a restate states line and train"
+      (doseq [s ["train" "line"]]
+        (restated {:merge_strategy s})
+        (is (= s (strategy)))
+        (is (= s (bench/merge-strategy-of (policy-row eng (:id row)))))))
+    (testing "and refuses another word"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (restated {:merge_strategy "convoy"})))
+      (is (= "line" (strategy))))
+    (testing "a restate states 2 to 10"
+      (doseq [n [2 10]]
+        (restated {:train_size n})
+        (is (= n (train-size)))))
+    (testing "and refuses 1 and 11"
+      (doseq [n [1 11]]
+        (is (thrown? clojure.lang.ExceptionInfo (restated {:train_size n})))
+        (is (= 10 (train-size)))))
+    (testing "the train is the engine's to write, and no input carries it"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (restated {:line_train {:branch "train/1" :changes [] :prs []
+                                           :started_at "2026-09-29T12:00:00Z"}})))
+      (is (nil? (get-in (policy-row eng (:id row)) [:data :line_train]))))))
 
 (deftest a-policy-that-opens-no-pull-request-lands-without-one
   (let [st (state)
@@ -2978,6 +3034,33 @@
     (is (contains? (into #{} (map :action) (get-in answer [:change :doors]))
                    "submit")
         "and submit on it is the next round")))
+
+(deftest a-fire-naming-a-ticket-in-review-hands-it-and-its-change
+  ;; ticket 7af7d506: the walk hands open tickets, and a fire that names
+  ;; one in review, or the change beside it, hands both
+  (let [w (ticket-world)
+        change-id (str (get-in (:answer w) [:change :id]))
+        ticket-id (str (:id (:ticket w)))
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        sit-fired! (fn [text]
+                     (let [k (seats/hold-fire-key! (:eng w) seat-row
+                                                   ((:now-fn (:eng w))) text)]
+                       (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                                      {:key k :seat "bench-seat"}))))]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "in_review" (ticket-state w)))
+    (testing "a wake naming the ticket hands it and its submitted change"
+      (let [answer (sit-fired! (str "{\"kind\":\"ticket\",\"id\":\""
+                                    ticket-id "\"}"))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))
+        (is (= "submitted" (get-in answer [:change :state])))))
+    (testing "a person's prose naming the change hands the same"
+      (let [answer (sit-fired! (str "Resolve the conflict on change "
+                                    change-id " and stop."))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))))))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 

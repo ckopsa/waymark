@@ -2280,6 +2280,15 @@
             walk-filter (when-not judgment (seats/walk-filter seat))
             n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
                    coll/page-size-max)
+            ;; a named ticket beside a live change is read under its
+            ;; own state, in review as well as open, and is not left
+            ;; out as stuck: the fire sent the run to it (ticket
+            ;; 7af7d506)
+            only-state (when (and only (not judgment)
+                                  (seats/named-beside-a-live-change?
+                                   eng walk only))
+                         (some-> (row-of eng (keyword walk) only) :state name))
+            stuck (cond-> stuck only (dissoc (str only)))
             subtract? (or judgment (seq claimed) (seq stuck))
             asked (if (or subtract? (seq held) only) coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))
@@ -2289,7 +2298,9 @@
                                                             judgment))
                                            walk-filter (merge
                                                         (filter-params
-                                                         walk-filter))))}))
+                                                         walk-filter))
+                                           only-state (assoc "state"
+                                                             only-state)))}))
             doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
         (when (collection-doc? doc)
           (let [id-of #(id-of-self (get % "self"))
@@ -2436,6 +2447,8 @@
   → {:walk w :named-held? bool :all-held? bool}."
   [eng call sitter-sees seat sitting named]
   (let [seat-id (str (:id seat))
+        ;; a named change is read back to its ticket (ticket 7af7d506)
+        named (seats/named-walk-row eng (get-in seat [:data :walk]) named)
         held (get-in sitting [:data :walked_rows])
         ;; read once for the sit: the tickets beside a stuck change
         ;; are out of the walk whichever try claims (ticket 6bdaf6fe)
@@ -3905,6 +3918,17 @@
       (if (gate/bench-tool? inner) inner tool-name))
     tool-name))
 
+(defn- cancelled-run
+  "The run id of a bench.test run this answer says was cancelled — \"\"
+  when the rig named no id — or nil when the answer says no such
+  thing (ticket 39b2c934). Read off the rig's own result map, the one
+  `bench-result` reads, for `bench__test` and `bench__test_result`."
+  [served-tool out]
+  (when (contains? #{"bench__test" "bench__test_result"} (str served-tool))
+    (when-some [r (bench-result out)]
+      (when (= "cancelled" (some-> (or (:conclusion r) (:status r)) name))
+        (str (or (:run_id r) ""))))))
+
 (defn- count-served!
   "R-10.6a: the bytes this tool answered, on the open sitting of the
   session's grant.
@@ -3933,7 +3957,9 @@
   (try
     (when-some [sitting-id (calling-sitting eng session)]
       (seats/add-served! eng sitting-id tool-name (result-bytes result)
-                         (dropped-bytes result)))
+                         (dropped-bytes result))
+      (when-some [run (cancelled-run tool-name result)]
+        (seats/add-cancelled-run! eng sitting-id run)))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 mcp served counter" tool-name "failed -"
