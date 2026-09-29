@@ -198,6 +198,16 @@
     (is (= "conflicted" (get-in after [:data :mergeable])))
     (is (= "pending" (get-in after [:data :review_state])))))
 
+(deftest mergeable-false-outranks-the-state-word
+  (testing "GitHub's own mergeable: false is a conflict, whatever the policy word"
+    (is (= "conflicted" (gh/mergeable-of {:mergeable_state "blocked" :mergeable false})))
+    (is (= "conflicted" (gh/mergeable-of {:mergeable_state "behind" :mergeable false})))
+    (is (= "conflicted" (gh/mergeable-of {:mergeable false}))))
+  (testing "without it the state word still speaks"
+    (is (= "blocked" (gh/mergeable-of {:mergeable_state "blocked" :mergeable true})))
+    (is (= "blocked" (gh/mergeable-of {:mergeable_state "blocked" :mergeable nil})))
+    (is (= "unknown" (gh/mergeable-of {})))))
+
 (deftest a-merged-pull-request-moves-the-row-to-merged
   (let [{:keys [state engine] :as r} (rig)
         _ (pass! r)
