@@ -650,7 +650,16 @@
       (is (= 1 (seats/bump-counter! *eng* (:id sitting) :refusals)))
       (let [row (row-of :sitting (:id sitting))]
         (is (= 2 (get-in row [:data :transitions])))
-        (is (= 1 (get-in row [:data :refusals]))))
+        (is (= 1 (get-in row [:data :refusals])))
+        (is (nil? (get-in row [:data :last_refusal]))
+            "a bare count stamps no refusal"))
+      (is (= 2 (seats/bump-counter! *eng* (:id sitting) :refusals
+                                    {:type "https://waymark.dev/problems/guard-refused"
+                                     :guard :not-yours})))
+      (let [last-one (get-in (row-of :sitting (:id sitting)) [:data :last_refusal])]
+        (is (= "https://waymark.dev/problems/guard-refused" (:type last-one)))
+        (is (= "not-yours" (:guard last-one)))
+        (is (string? (:at last-one))))
       (is (= 1 (count (log-of :sitting (:id sitting))))
           "the create, and no transition per count — the counter must not
            cost more log than the thing it counts"))

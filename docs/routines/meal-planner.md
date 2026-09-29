@@ -43,7 +43,7 @@ It does not change the Routine.
 | cadence_seconds | 86400 | one day. The week is decided in the family chat, and the conversation moves at the pace of replies. The daily cadence is the floor that reads them. The wake below fires the seat sooner when a week begins |
 | fire_interval_seconds | 300 | the damper. A count wake is a level and not an edge, so each transition of a `plan` is evaluated again. Five minutes holds a burst of them to one firing, and a second mention of the bot inside that gap waits at most five minutes |
 | wake_on | the two entries under "The wake" | the seat wakes when no planned week is waiting (waymark-fp62.13), and when the family speaks to the house in the chat (waymark-fp62.18.2) |
-| held_for | Opus 5 for the discovery run, then the model the rules fit | the seat's place on the ladder. See "What the discovery run taught" below |
+| held_for | the row id of Opus 5 for the discovery run, then of the model the rules fit (`waymark_query` kind `model`) | the seat's place on the ladder. See "What the discovery run taught" below |
 | standing_ttl_seconds | 604800 | the ceiling the engine enforces, and one cadence of this seat |
 | sitting_idle_seconds | 3600 | a sitting that says nothing for an hour is abandoned by the sweep |
 | substitute_for | `[]` | this seat stands in for no other |
@@ -313,7 +313,7 @@ close notes said four things, and each became a rule:
   the seat says in the chat that the rest come next time.
 
 On 2026-09-28 the seat was restated with the charter and the
-instructions above: `held_for` back to Sonnet 5, `budget_usd_per_week`
+instructions above: `held_for` back to Sonnet 5's row id, `budget_usd_per_week`
 10, and `rows_per_firing` 2.
 
 The bot rig does not record its sends yet (ckopsa/tgram ticket
@@ -353,7 +353,7 @@ one the seat's own work clears.
 2. Meals stand in `on_list`, with themes on them. A week cannot be
    covered from an empty list.
 3. The seat exists and is active, with the scope above, the two wake
-   entries above, and `held_for` naming the model the Routine runs.
+   entries above, and `held_for` holding the row id of the model the Routine runs.
    A Telegram chat titled `Meal plans` exists, with everyone who
    decides the week in it.
    The house's bot is a member of that chat, and it can read it: a

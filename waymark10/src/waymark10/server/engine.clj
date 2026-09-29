@@ -217,6 +217,9 @@
                     ;; router seam asks for it again at handler time
                     ;; (nil = the whole inventory, every caller today)
                     :modules modules
+                    ;; what that selection lends core kinds' envelopes
+                    ;; (seams/Linking) — render asks these per row
+                    :link-doors (modules/link-doors modules)
                     :services services
                     :now-fn (or now-fn (fn [] (java.time.Instant/now)))
                     :deploy-mode (or deploy-mode :promote)

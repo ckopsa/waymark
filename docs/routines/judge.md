@@ -87,7 +87,7 @@ with no change to the Routine.
 | walk | `ci_run` | the judgment's subject kind. A seat that names a judgment must walk that kind (R-13.4) |
 | judgment | the id of the `ci-verdict` row | the queue, the vocabulary and the ceiling come from that row, and not from this one |
 | rows_per_firing | 5 | one verdict is one log tail and one sentence. Five of them is a small sitting |
-| held_for | the model the Routine runs | the seat's place on the ladder. The sit frames the whole question, and the vocabulary is the whole answer |
+| held_for | the row id of the model the Routine runs (`waymark_query` kind `model`) | the seat's place on the ladder. The sit frames the whole question, and the vocabulary is the whole answer |
 | cadence_seconds | 3600 | the wake on `ci_run` create fires it sooner (R-12.22) |
 | fire_interval_seconds | 300 | a red pipeline mints many runs in one minute; the damper holds them to one firing |
 | sitting_budget_tokens | 200000 | five log tails, at 20,000 characters each |
@@ -288,7 +288,7 @@ on one kind, and each holds its own verdict on one row (R-13.6).
 2. The queue holds rows: the subject kind has rows under the
    judgment's filter that carry no standing verdict.
 3. The seat exists and is active, with the scope above, the judgment
-   in its `judgment` field, and `held_for` naming the model the
+   in its `judgment` field, and `held_for` holding the row id of the model the
    Routine runs.
 4. `link` has been invoked on the model row (ci-classifier.md, "One
    Routine for each model"), and the seat

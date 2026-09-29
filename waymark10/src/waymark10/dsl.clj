@@ -11,6 +11,7 @@
     ref-to     — waymark10.declare/ref (the cross-resource reference)
     defguardfn — waymark10.guards/defguard (the residual code guard;
                  defguard here is declare's sentence-first macro)
+    defacceptsfn — waymark10.guards/defaccepts (its :accepts twin)
 
   and the guard builders wear unshadowed names: all-of (guards/and),
   any-of (guards/or), require-fact (guards/require), expr-guard
@@ -95,6 +96,9 @@
 (defmacro defguardfn [name opts params & body]
   `(g/defguard ~name ~opts ~params ~@body))
 
+(defmacro defacceptsfn [name opts params & body]
+  `(g/defaccepts ~name ~opts ~params ~@body))
+
 ;; the wrappers answer doc lookups with the originals' own words
 (doseq [[w o] {#'defresource #'r/defresource
                #'defhandler  #'r/defhandler
@@ -102,5 +106,6 @@
                #'defderived  #'d/defderived
                #'defguard    #'d/defguard
                #'defscenario #'d/defscenario
-               #'defguardfn  #'g/defguard}]
+               #'defguardfn  #'g/defguard
+               #'defacceptsfn #'g/defaccepts}]
   (alter-meta! w merge (select-keys (meta o) [:doc :arglists])))

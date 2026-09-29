@@ -455,6 +455,16 @@
            (re-find #"\"(ux_[a-z0-9_]+)\"")
            second))
 
+(defn- table-for
+  "The table kind lives in on this storage, or a problem naming the
+  kind — never a nil spliced into SQL (\"SELECT * FROM  WHERE …\", a
+  syntax error every pass, waymark-c631)."
+  ^String [tables kind]
+  (or (get @tables kind)
+      (throw (ex-info (str "unknown kind: " (pr-str kind)
+                           " has no table on this storage (never ensured here)")
+                      {:waymark10/unknown-kind true :kind kind}))))
+
 (defrecord PostgresStorage [^HikariDataSource ds tables]
   store/Storage
   (with-tx* [_ f]
@@ -470,13 +480,13 @@
     nil)
 
   (load-row [_ tx kind id opts]
-    (let [table (get @tables kind)
+    (let [table (table-for tables kind)
           sql (str "SELECT * FROM " table " WHERE id = ?"
                    (when (:for-update opts) " FOR UPDATE"))]
       (row->map (jdbc/execute-one! tx [sql id] jdbc-opts))))
 
   (insert-row! [_ tx kind row]
-    (let [table (get @tables kind)]
+    (let [table (table-for tables kind)]
       (try
         (jdbc/execute-one!
          tx
@@ -495,7 +505,7 @@
       row))
 
   (save-row! [_ tx kind row expected-version]
-    (let [table (get @tables kind)
+    (let [table (table-for tables kind)
           res (try
                 (jdbc/execute-one!
                  tx
@@ -524,7 +534,7 @@
       (assoc row :updated-at (->inst (:updated_at res)))))
 
   (query-rows [_ tx kind where opts]
-    (let [table (get @tables kind)
+    (let [table (table-for tables kind)
           clauses (map (fn [[f _]]
                          (if (= f :state)
                            "state = ?"
@@ -548,7 +558,7 @@
       (mapv row->map (jdbc/execute! tx (into [sql] params) jdbc-opts))))
 
   (external-ids [_ tx kind]
-    (let [table (get @tables kind)]
+    (let [table (table-for tables kind)]
       (into []
             (keep :xid)
             (jdbc/execute! tx [(str "SELECT data->>'external_id' AS xid FROM "
@@ -678,7 +688,7 @@
     nil)
 
   (law-count [_ tx kind revision]
-    (let [table (get @tables kind)]
+    (let [table (table-for tables kind)]
       (:n (jdbc/execute-one!
            tx [(str "SELECT count(*) AS n FROM " table
                     " WHERE law_revision = ?")
@@ -688,7 +698,7 @@
   ;; ── phase 6: the maintainer's reads and the maintenance write ──────
 
   (count-matching [_ tx kind conds]
-    (let [table (get @tables kind)
+    (let [table (table-for tables kind)
           parts (map cond-sql conds)
           sql (str "SELECT count(*) AS n FROM " table
                    (when (seq parts)
@@ -696,7 +706,7 @@
       (:n (jdbc/execute-one! tx (into [sql] (mapcat second parts)) jdbc-opts))))
 
   (sum-matching [_ tx kind of conds]
-    (let [table (get @tables kind)
+    (let [table (table-for tables kind)
           fname (store/definition-checked-name of)
           parts (map cond-sql conds)
           ;; un-coalesced deliberately: SUM over no contributions is
@@ -709,7 +719,7 @@
       (:s (jdbc/execute-one! tx (into [sql] (mapcat second parts)) jdbc-opts))))
 
   (ids-matching [_ tx kind conds limit]
-    (let [table (get @tables kind)
+    (let [table (table-for tables kind)
           parts (map cond-sql conds)
           sql (str "SELECT id FROM " table
                    (when (seq parts)
@@ -718,7 +728,7 @@
       (mapv :id (jdbc/execute! tx (into [sql] (mapcat second parts)) jdbc-opts))))
 
   (update-data! [_ tx kind id data next-flip-at]
-    (let [table (get @tables kind)]
+    (let [table (table-for tables kind)]
       (jdbc/execute-one!
        tx
        [(str "UPDATE " table
@@ -730,7 +740,7 @@
       nil))
 
   (delete-rows! [_ tx kind ids]
-    (let [table (get @tables kind)]
+    (let [table (table-for tables kind)]
       ;; chunked, so a long purge never builds one statement with more
       ;; parameters than the wire takes
       (reduce (fn [n chunk]
@@ -747,7 +757,7 @@
               (partition-all 1000 (map str ids)))))
 
   (due-flips [_ tx kind now limit]
-    (let [table (get @tables kind)]
+    (let [table (table-for tables kind)]
       (mapv row->map
             (jdbc/execute!
              tx
@@ -761,7 +771,7 @@
   ;; ── phase 7: the collection surface and the draft rows ─────────────
 
   (search-rows [_ tx kind conds {:keys [order-by desc limit offset]}]
-    (let [table (get @tables kind)
+    (let [table (table-for tables kind)
           parts (map cond-sql conds)
           order (cond
                   (nil? order-by) "created_at"
@@ -781,7 +791,7 @@
                                     jdbc-opts))))
 
   (facet-counts [_ tx kind field conds array?]
-    (let [table (get @tables kind)
+    (let [table (table-for tables kind)
           parts (map cond-sql conds)
           expr (cond
                  (= :state field) "state"
@@ -885,7 +895,7 @@
     nil)
 
   (restamp-law! [_ tx kind where to-revision]
-    (let [table (get @tables kind)
+    (let [table (table-for tables kind)
           clauses (map (fn [[f _]]
                          (case f
                            :state "state = ?"

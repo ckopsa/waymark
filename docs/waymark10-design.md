@@ -3427,10 +3427,11 @@ lands outside every ending); where it is a field value it cannot, so the
 kind spells `:over :ways-back` and the def-site gate refuses an exception
 that names no door. The sync machine's own bookkeeping is marked
 `:engine true` by the mirror weave and is never shut — a mirror must keep
-recording what its authority says about a finished row. `:over` still
-rides no fingerprint facet, which is a debt this records rather than
-pays: a household that re-spells its endings changes which doors open,
-and mints no revision saying so.
+recording what its authority says about a finished row. `:over` is
+fingerprinted: a kind that declares it carries an `over` facet (its
+endings, its `:field`, its `:ways-back`), so a household that re-spells
+its endings changes which doors open and mints a revision saying so
+(waymark-fp62.4.1.2).
 
 **The dangling-ref wall.** Every input entry whose properties carry
 `:kind` resolves at the door, on the create model and on every action's

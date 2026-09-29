@@ -282,8 +282,11 @@
   (when (and (not= :sitting kind)
              (:transition result)
              (nil? (:replayed? result)))
-    (when-some [sitting (open-sitting eng req)]
-      (seats/bump-counter! eng (:id sitting) :transitions))
+    ;; the calling session's own sitting first (ticket f6c8d5ce): a
+    ;; bound session is never counted on a sibling under the grant
+    (when-some [sitting-id (or (some-> (:waymark10/sitting req) str not-empty)
+                               (:id (open-sitting eng req)))]
+      (seats/bump-counter! eng sitting-id :transitions))
     ;; the corrections line: a person's write on a row a closed sitting
     ;; last moved counts against THAT sitting, found by the previous
     ;; transition's grant — this request wears none of it
@@ -340,7 +343,13 @@
      ;; a wall can refuse an agent UNLESS its own scope admits the
      ;; door. Nil for everybody who presented no live grant, which is
      ;; the posture those walls had before there was a door at all.
-     :grant (:grant (visibility-of req))
+     ;; with the calling sitting on it as `:sitting` when the request
+     ;; came from a session bound to one (mcp's waymark_invoke): every
+     ;; sitting of a seat shares the seat's grant, so the grant alone
+     ;; cannot say which sitting is calling (ticket 51dfd10b)
+     :grant (let [g (:grant (visibility-of req))
+                  sid (some-> (:waymark10/sitting req) str not-empty)]
+              (cond-> g (and (map? g) sid) (assoc :sitting sid)))
      :acknowledged (into #{} (map keyword) (csv (get headers "waymark-acknowledge")))
      ;; dry_run=1 is the full rehearsal; dry_run=partial judges only
      ;; what the caller provided (design §23) — anything else is a
@@ -382,7 +391,10 @@
            :now ((:now-fn eng))
            :services (:services eng)
            :visibility (visibility-of req)
-           :resources (inv/resources eng)}
+           :resources (inv/resources eng)
+           ;; the links assembled modules lend core kinds
+           ;; (seams/Linking), gathered once at boot
+           :link-doors (:link-doors eng)}
     (:probe-reads eng) (merge (inv/render-hooks eng))))
 
 (defn envelope-response
@@ -1218,7 +1230,14 @@
                                      action result))
             (dry-run-response result))
 
-        :else (report-response result)))))
+        :else
+        ;; R-10.6: a partial bulk's per-item 409s count on the
+        ;; sitting as a thrown one would (waymark-fp62.7.11)
+        (do (when (pos? (or (:conflicts result) 0))
+              (when-some [sitting (open-sitting eng req)]
+                (dotimes [_ (:conflicts result)]
+                  (seats/bump-counter! eng (:id sitting) :refusals))))
+            (report-response result))))))
 
 (defn- batch-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
@@ -1597,7 +1616,7 @@
                                                     "fresh one")}})))
           home (welcome-home eng principal)
           services (:services eng)
-          default-ttl (long (:grant-default-ttl-seconds services 3600))
+          default-ttl (long (:grant-default-ttl-seconds services 86400))
           max-ttl (long (:grant-max-ttl-seconds services 86400))]
       (json-response
        200
@@ -1997,12 +2016,14 @@
   middleware there: one refusal at either door counts once
   (waymark-fp62.7, item 2).
 
-  It counts a refusal the engine THREW. A bulk or batch call that
-  reports a per-item refusal in a 200 report counts nothing: the
-  report keeps the refusal's sentence and drops its status, so a
-  per-item 409 cannot be told from a per-item 404 or 422 here. An
-  atomic bulk, whose refusal leaves as one thrown 409, is counted like
-  any other."
+  It counts a refusal the engine THREW. An atomic bulk or batch, whose
+  refusal leaves as one thrown 409, is counted like any other. A
+  partial bulk reports its per-item refusals in a 200 report, which
+  keeps each refusal's sentence and drops its status; `bulk!` answers
+  the count of per-item 409s beside that report, and `bulk-action`
+  counts them on the sitting (waymark-fp62.7.11). A batch has no
+  partial mode, and a deferred bulk's items run in the job worker,
+  outside any sitting's request."
   [handler eng]
   (fn [req]
     (try
@@ -2011,7 +2032,8 @@
         (let [d (ex-data e)]
           (when (and (:waymark10/problem d) (= 409 (:status d)))
             (when-some [sitting (open-sitting eng req)]
-              (seats/bump-counter! eng (:id sitting) :refusals)))
+              (seats/bump-counter! eng (:id sitting) :refusals
+                                   {:type (:type d) :guard (:guard d)})))
           (throw e))))))
 
 (defn core-static
