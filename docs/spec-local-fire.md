@@ -288,6 +288,24 @@ the OAuth flow the door advertises. Headless runs reuse the stored
 credential. The sitter the sit makes is then the same delegate the cloud
 connector resolves to, and the firing key works unchanged.
 
+Where the door's realm refuses dynamic client registration, the person
+signs in with a fixed public client (PKCE S256, redirect
+`http://localhost:8765/callback`), which needs Claude Code 2.1.284 or
+later. Inside the allocation:
+
+```
+claude mcp add --scope user --transport http --client-id localfire-claude --callback-port 8765 Waymark https://work.kopsa.info/api/-/mcp
+claude mcp login Waymark
+```
+
+The person opens the printed URL. The callback is localhost inside the
+container, so the browser fails to load it; the person curls that URL
+from inside the allocation. The config's `:mcp` then names the same
+client, `:oauth {:client-id "localfire-claude" :callback-port 8765}`,
+and every run's and the probe's `--strict-mcp-config` entry carries
+`"oauth" {"clientId" … "callbackPort" …}`: an entry that differs from
+the one signed in with does not find the stored token.
+
 **R-8.3** The Stop hook takes its second path on that machine: no
 `WAYMARK_SEAT_URL` is set, the hook holds the stop one time, and the
 session closes its own sitting through the connector (seat spec
