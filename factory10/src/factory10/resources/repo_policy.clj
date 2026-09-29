@@ -270,6 +270,12 @@
    "squash" "One squashed commit"
    "rebase" "The commits, rebased onto the base"})
 
+;; the merge train (ticket 394d0602, slice a of 3deb06ed). A later
+;; strategy is one more member here, and the enum follows the keys.
+(def ^:private merge-strategy-choices
+  {"line" "The line: one change at a time, each brought up to date and re-checked before it merges"
+   "train" "The merge train: the front and up to train_size-1 green changes behind it are tested together and land together"})
+
 (def ^:private policy-fields
   "The whole policy, as schema entries. The create door and the
   restate door collect the same fields, because a restatement is the
@@ -374,16 +380,25 @@
                         {:label "Rounds for one change"
                          :help "How many times a seat may submit one change before the house stops. At the ceiling the change moves to stuck and waits for a person."}}
     [:int {:min 1 :max 20}]]
-   ;; the merge train (ticket 394d0602, slice a of 3deb06ed). OPTIONAL
-   ;; for the reason merge_wait_seconds is: a row that predates it
-   ;; reads as 1 (bench's `train-size-of`)
+   ;; the merge train (ticket 394d0602, slice a of 3deb06ed). Both
+   ;; OPTIONAL for the reason merge_wait_seconds is: a row that
+   ;; predates them reads as line / 4 (bench's `merge-strategy-of` and
+   ;; `train-size-of`). Nothing reads them yet
+   [:merge_strategy {:optional true
+                     :default "line"
+                     :examples ["line"]
+                     :x-display
+                     {:label "How the house merges"
+                      :choices merge-strategy-choices
+                      :help "line merges one change at a time, each brought up to date and re-checked first. train tests the front and the green changes behind it together, and lands them together. Switching is safe at any time: a train that is running finishes, or is discarded, before the line changes shape."}}
+    (into [:enum] (sort (keys merge-strategy-choices)))]
    [:train_size {:optional true
-                 :default 1
-                 :examples [1]
+                 :default 4
+                 :examples [4]
                  :x-display
                  {:label "How many changes ride one train"
-                  :help "How many green changes the house tests and merges together as one train. 1 is today's line: one change at a time, each brought up to date and merged alone."}}
-    [:int {:min 1 :max 10}]]
+                  :help "How many green changes the house tests and merges together as one train, from 2 to 10. It applies only to the train strategy; the line reads none of it."}}
+    [:int {:min 2 :max 10}]]
    [:formatter {:default "runner"
                 :x-display
                 {:label "What formats the code"
@@ -634,7 +649,7 @@
                       :opens_pr :auto_merge :merge_by :required_checks
                       :merge_method :merge_wait_seconds
                       :deploy_check :deploy_wait_seconds
-                      :rounds_per_change :train_size :formatter
+                      :rounds_per_change :merge_strategy :train_size :formatter
                       :deny :test :orientation]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
