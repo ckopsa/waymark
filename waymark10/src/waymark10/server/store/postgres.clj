@@ -609,6 +609,18 @@
       (mapv transition->map
             (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))
 
+  (transitions-under-grant [_ tx grant-id since until opts]
+    ;; the window bounds `at`, which ix_wm10_t_at serves; the grant is
+    ;; then a filter over that slice of the log
+    (let [clauses (cond-> [["actor->>'grant' = ?" (str grant-id)]]
+                    since (conj ["at >= ?" (Timestamp/from ^java.time.Instant since)])
+                    until (conj ["at <= ?" (Timestamp/from ^java.time.Instant until)]))
+          sql (str "SELECT * FROM waymark10_transitions WHERE "
+                   (str/join " AND " (map first clauses))
+                   " ORDER BY id LIMIT " (long (:limit opts 500)))]
+      (mapv transition->map
+            (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))
+
   (transition-stats [_ tx since include-system?]
     ;; the double AT TIME ZONE round-trip pins the bucket to the UTC
     ;; ISO week (store/utc-week-start's truncation) whatever the
