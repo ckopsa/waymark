@@ -383,6 +383,22 @@
         "all four merge in one go, and the pass writes them as house merges")
     (is (= 1 (count (args-of r "bench__train_checks"))))))
 
+(deftest a-green-train-with-no-line-lands-whole
+  (let [answers (atom {"train_status" {:state "success" :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)
+        by-repo {wm (train-policy :line_train train)}
+        merged (atom {})
+        trains (atom {})]
+    (bench/work-lines! (:ctx r) seen {} by-repo merged trains)
+    (is (= 1 (count (args-of r "bench__train_land")))
+        "a standing train whose repository has no line still lands")
+    (is (nil? (get @trains wm)) "no train stands after it")
+    (is (= (repeat 4 "merged")
+           (map #(:state (get @merged %)) ["change-1" "change-2" "change-3" "change-4"]))
+        "the pass writes its riders as house merges")))
+
 (deftest a-base-moved-outside-the-house-builds-the-train-again
   (let [answers (atom {"train_status" {:state "success" :head "train-head"}
                        "train_land" {:refused "base_moved"}})
