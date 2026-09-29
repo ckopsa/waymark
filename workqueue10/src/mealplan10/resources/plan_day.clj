@@ -135,7 +135,7 @@
 (defguardfn meal-is-listed
   {:judges [:meal_id] :reads [:meal]
    :explain "That meal is not on the family meal list yet. Accept a suggestion (or ask the AI for one) first."
-   :remedies [:meal/accept]}
+   :remedies [{:door :meal/accept :id '(input :meal_id)}]}
   [_row inp ctx]
   (if-some [read (:read ctx)]
     (let [meal (read :meal (:meal_id inp))]

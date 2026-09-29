@@ -1562,7 +1562,7 @@
                     rdefs)]
     (into []
           (for [{:keys [kind door guard]} (mapcat guard-sites rdefs)
-                tok (:remedies guard)
+                tok (map g/remedy-door (:remedies guard))
                 :let [tk (when (qualified-keyword? tok)
                            (keyword (namespace tok)))
                       ta (when (qualified-keyword? tok)
@@ -1585,6 +1585,30 @@
 
 ;; ── the battery ─────────────────────────────────────────────────────
 
+(defn- check-remedy-bindings
+  "A remedy binding reads a field the refused call has: (input :f) a
+  field of the guarded door's input (the create schema at the create
+  door), (data :f) a field of the row. An ERROR — a binding naming no
+  field resolves to nothing on every refusal, so its remedy points
+  nowhere while claiming to point somewhere."
+  [r]
+  (doseq [{:keys [door guard]} (guard-sites r)
+          rmd (:remedies guard)
+          :when (map? rmd)
+          :let [inputs (if (= :create door)
+                         (set (schema/entry-keys (or (:create-schema r) (:schema r))))
+                         (or (input-keys (some #(when (= door (:name %)) %)
+                                               (machine/actions-seq r)))
+                             #{}))]
+          [op k] (g/remedy-bindings rmd)
+          :when (not (contains? (if (= 'input op) inputs (data-keys r)) k))]
+    (err r :remedy-bindings
+         (str "guard " (name (:name guard)) " at "
+              (if (= :create door) "the create door" (str "action " (name door)))
+              ": remedy " (pr-str (g/remedy-door rmd)) " binds (" op " " k
+              "), but " (if (= 'input op) "that door's input" "the row")
+              " has no field " (name k)))))
+
 (defn run-all
   "The full battery in waymark9 order; throws the first error, returns
   {:warnings [str …]}."
@@ -1603,4 +1627,4 @@
           check-filterable check-sortable check-default-filters
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
-          check-defaults check-answered-at-a-door])})
+          check-defaults check-answered-at-a-door check-remedy-bindings])})

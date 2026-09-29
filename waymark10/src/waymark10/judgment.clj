@@ -285,9 +285,28 @@
   (update row :data
           (fn [d] (into d (map (fn [k] [k (get inp k)])) authored-fields))))
 
+(def ^:private follow-door
+  "The seat door a supersede walks, by the state the seat stands in: a
+  v10 action declares ONE `:to`, so a parked seat has its own."
+  {:active :follow_successor :parked :follow_successor_parked})
+
 (defhandler name-the-successor
-  [row inp _ctx]
-  (assoc-in row [:data :successor] (:successor inp)))
+  [row inp ctx]
+  ;; THE SEATS FOLLOW (ticket 86514746). Every seat that says this
+  ;; judgment is re-pointed to the successor in this same transaction,
+  ;; through the seat's own door, so the seat's history says it moved
+  ;; and why. The person's tap on supersede is the approval. Verdicts
+  ;; are rows and stay cited to the judgment they were said under.
+  (let [id (str (:id row))
+        successor (some-> (:successor inp) str not-empty)]
+    (when (and successor (:find ctx) (:invoke ctx))
+      (doseq [seat ((:find ctx) :seat {} {:limit 1000})
+              :when (= id (some-> (get-in seat [:data :judgment]) str))
+              :let [door (get follow-door (:state seat))]
+              :when door]
+        ((:invoke ctx) :seat (str (:id seat)) door
+         {:judgment successor :superseded id})))
+    (assoc-in row [:data :successor] (:successor inp))))
 
 ;; ── :judgment — one row, one judge ──────────────────────────────────
 
@@ -440,6 +459,10 @@
      ;; a supersede takes the judgment out from under every seat that
      ;; says it, so from a delegating seat it waits on the person
      :guards [delegation/the-persons-judgment]
+     ;; every seat that says this judgment follows it to the successor,
+     ;; through its own concealed door, in this transaction
+     :touches [{:kind :seat :action :follow_successor}
+               {:kind :seat :action :follow_successor_parked}]
      :handler name-the-successor
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The judgment stops being in force and stays on the record with every verdict written under it. There is no way back to draft; a judge the house wants again is a new row."}

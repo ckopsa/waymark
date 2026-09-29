@@ -128,7 +128,7 @@
 (defguardfn plan-is-planned
   {:reads [:plan]
    :explain "Finalize the meal plan first — the grocery list follows from it."
-   :remedies [:plan/finalize]}
+   :remedies [{:door :plan/finalize :id '(data :plan_id)}]}
   [row _inp ctx]
   (if-some [read (:read ctx)]
     (let [plan (read :plan (get-in row [:data :plan_id]))]

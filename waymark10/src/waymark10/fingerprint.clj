@@ -78,6 +78,19 @@
             (wire/sha256-hex (pr-str form))
             (wire/sha256-hex (str opaque-address address)))))
 
+(defn- remedy-fp
+  "A remedy's stored spelling: a bare token as \"kind.action\", a
+  bound remedy as {door, id, input} with each binding printed."
+  [r]
+  (cond
+    (map? r) (cond-> (sorted-map "door" (remedy-fp (:door r)))
+               (:id r) (assoc "id" (pr-str (:id r)))
+               (:input r) (assoc "input" (into (sorted-map)
+                                               (map (fn [[k f]] [(name k) (pr-str f)]))
+                                               (:input r))))
+    (qualified-keyword? r) (str (namespace r) "." (name r))
+    :else (name r)))
+
 (defn- guard-fp [address g]
   (if-some [w (:when g)]
     ;; expression guard: the stored tree IS the law; check is nil
@@ -87,11 +100,7 @@
                             (map (fn [[k f]] [(name k) (form-tree f)]))
                             (:vars g))
      "explain"        (:explain g)
-     "remedies"       (mapv (fn [r]
-                              (if (qualified-keyword? r)
-                                (str (namespace r) "." (name r))
-                                (name r)))
-                            (:remedies g []))
+     "remedies"       (mapv remedy-fp (:remedies g []))
      "hide"           (boolean (:hide g))
      "severity"       (name (:severity g :refuse))
      "requires_token" (:requires-token g)
@@ -100,11 +109,7 @@
      "check"          (callable-hash (str address ".check")
                                      (or (:check g) (:accepts g)))
      "explain"        (:explain g)
-     "remedies"       (mapv (fn [r]
-                              (if (qualified-keyword? r)
-                                (str (namespace r) "." (name r))
-                                (name r)))
-                            (:remedies g []))
+     "remedies"       (mapv remedy-fp (:remedies g []))
      "hide"           (boolean (:hide g))
      "severity"       (name (:severity g :refuse))
      "requires_token" (:requires-token g)}))

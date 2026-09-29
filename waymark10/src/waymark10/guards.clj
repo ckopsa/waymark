@@ -25,7 +25,10 @@
                      advertised (the closure-rule escape hatch)
     :hide            conceal the refusal (404, absent from unavailable)
     :remedies        affordance tokens (:kind/action) that would
-                     change the verdict
+                     change the verdict — or maps {:door :kind/action
+                     :id binding :input {field binding}}, a binding
+                     being (input :f) or (data :f) over the refused
+                     call, so the refusal names the row it acts on
     :becomes-available-at  (fn [row] → Instant/LocalDate)
     :requires-token  capability token (\"role:manager\")
     :needs-input     probe override; defaults to (check ∧ judges)
@@ -50,6 +53,81 @@
 
 ;; ── construction ────────────────────────────────────────────────────
 
+;; a remedy may name the row and input it acts on, read off the
+;; refused call: {:door :plan/finalize :id (input :plan_id)}
+
+(defn- binding-form?
+  "(input :f) or (data :f): the two reads a remedy binding may make —
+  the refused call's input, a field of the refused call's row."
+  [f]
+  (clojure.core/and (seq? f) (= 2 (count f))
+                    (contains? '#{input data} (first f))
+                    (keyword? (second f))))
+
+(defn- remedy-problem
+  "Why a remedy map is malformed, nil when it is not. A bare token is
+  the registry check's (R-6) to judge."
+  [r]
+  (when (map? r)
+    (cond
+      (not (qualified-keyword? (:door r)))
+      (str (pr-str r) " names no :door :kind/action")
+
+      (seq (dissoc r :door :id :input))
+      (str (pr-str r) " carries keys beyond :door, :id and :input")
+
+      (clojure.core/and (contains? r :id) (not (binding-form? (:id r))))
+      (str "the :id of " (pr-str r) " is not (input :f) or (data :f)")
+
+      (clojure.core/and (contains? r :input)
+                        (not (clojure.core/and
+                              (map? (:input r))
+                              (every? keyword? (keys (:input r)))
+                              (every? binding-form? (vals (:input r))))))
+      (str "the :input of " (pr-str r)
+           " is not a map of field to (input :f) or (data :f)"))))
+
+(defn remedy-door
+  "A remedy's door: the bare :kind/action token, or a map's :door."
+  [r]
+  (if (map? r) (:door r) r))
+
+(defn remedy-doors
+  "The doors of a guard's remedies, as the wire's :remedies names them."
+  [g]
+  (mapv remedy-door (:remedies g)))
+
+(defn remedy-bindings
+  "Every binding form one remedy map carries."
+  [r]
+  (cond-> (vec (vals (:input r))) (:id r) (conj (:id r))))
+
+(defn- bound-value [[op k] row inp]
+  (case op
+    input (get inp k)
+    data (get-in row [:data k])))
+
+(defn resolve-remedies
+  "The refusal's remedies resolved against the refused call: each
+  {:door} plus the :id and :input its bindings read, where they
+  resolve. nil when no remedy binds anything, so a refusal with bare
+  remedies reads as it always did."
+  [g row inp]
+  (when (some map? (:remedies g))
+    (mapv (fn [r]
+            (if-not (map? r)
+              {:door r}
+              (let [id (when-some [f (:id r)] (bound-value f row inp))
+                    in (into {}
+                             (keep (fn [[k f]]
+                                     (when-some [v (bound-value f row inp)]
+                                       [k v])))
+                             (:input r))]
+                (cond-> {:door (:door r)}
+                  (some? id) (assoc :id (str id))
+                  (seq in) (assoc :input in)))))
+          (:remedies g))))
+
 (defn guard
   "Validate and default a guard map. Every invariant here is an
   import-time refusal."
@@ -71,6 +149,11 @@
       (throw (t/definition-error ":vars-fn must be accompanied by the :vars names it supplies")))
     (clojure.core/when (fn? vars)
       (throw (t/definition-error "a callable belongs in :vars-fn; :vars declares the names")))
+    (doseq [r (:remedies g)
+            :let [p (remedy-problem r)]
+            :when p]
+      (throw (t/definition-error
+              (str "guard " (pr-str (clojure.core/or name :guard)) ": remedy " p))))
     ;; a hold is registered when its module loads, so the router's one
     ;; question (holds/hold?) knows it without a list kept by hand
     (clojure.core/when (true? (:hold g))
