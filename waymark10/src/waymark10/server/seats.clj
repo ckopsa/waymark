@@ -3407,6 +3407,18 @@
                     :label "The rows it was handed"
                     :spelled-by-hand "The ids of the walk rows the sit handed this sitting. The sit writes it, and a second open sitting of the same seat is not handed them."}}
      [:maybe [:vector [:string {:max 128}]]]]
+    ;; A WAKE THAT WALKED NOTHING. The sit stamps this when the walk it
+    ;; hands has no rows at all — an empty queue, a queue whose every
+    ;; row another open sitting or a stuck change holds, a seat at a
+    ;; wall — so seat health can count an idle wake. An absent
+    ;; `walked_rows` cannot: it is also what a sitting the claim never
+    ;; wrote to carries. Plain :boolean, `missed`'s spelling, so the
+    ;; field promotes to a column and filters.
+    [:walked_nothing {:optional true
+                      :x-display
+                      {:label "Walked nothing"
+                       :spelled-by-hand "Written by the sit when the walk it handed had no rows at all: the queue was empty, every row in it was held, or the seat was at a wall. A sitting that was handed a row does not carry it."}}
+     :boolean]
     ;; A FIRE NOBODY SAT IN. The clock sweep writes this row, already
     ;; closed, when a firing's key is still unspent past the sit
     ;; deadline (`wakes/sweep-missed!`), so an audit that reads the
@@ -4639,6 +4651,31 @@
                   {:claimed? true :taken taken})
 
               :else {:claimed? true :taken taken})))))))
+
+(defn stamp-walked-nothing!
+  "Stamp the sitting whose sit handed it NO rows — an empty queue, a
+  queue whose every row another open sitting or a stuck change holds, a
+  seat at a wall — so seat health counts a wake that had nothing to do
+  rather than reading an absent `walked_rows`, which a sitting the
+  claim never wrote to carries too. A re-sit that IS handed a row takes
+  the stamp back off. A MAINTENANCE write, `claim-rows!`'s spelling:
+  only an OPEN sitting takes it, and only a change is written.
+  → true when it was written."
+  [eng sitting-id nothing?]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (and (= :open (:state row))
+                     (not= (boolean nothing?)
+                           (boolean (get-in row [:data :walked_nothing]))))
+            (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                (if nothing?
+                                  (assoc (:data row) :walked_nothing true)
+                                  (dissoc (:data row) :walked_nothing))
+                                nil)
+            true))))))
 
 (defn open-sitting-count
   "How many sittings of this seat are OPEN now: the runs the seat's

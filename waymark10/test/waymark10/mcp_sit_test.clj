@@ -653,6 +653,12 @@
         r (tool h (with-session sid) "waymark_sit" {:key walk-key})]
     [r (doc-of r)]))
 
+(defn- sitting-row
+  "One sitting as the store holds it — the stamps no answer carries."
+  [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx :sitting (str id) {}))))
+
 (defn- utf8-length [^String s]
   (alength (.getBytes s "UTF-8")))
 
@@ -853,6 +859,31 @@
             r (tool h (with-session other) "waymark_sit" {:key a-key})]
         (is (true? (:isError r)))
         (is (= "No seat answers this key." (text-of r)))))))
+
+(deftest a-sitting-handed-no-rows-is-stamped-as-having-walked-nothing
+  ;; An empty walk shows today only as an absent `walked_rows`, which a
+  ;; sitting that walked nothing and a sitting the claim never wrote to
+  ;; both carry — so a reader cannot count the idle wakes. The stamp
+  ;; says which. Every row of this queue is held by the first run's open
+  ;; sitting, the cheapest queue with nothing free in it.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:rows_per_firing 1})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        sit-as! (fn [run]
+                  (let [[sid _] (initialize! h)]
+                    (doc-of (tool h (with-session sid) "waymark_sit"
+                                  {:key walk-key :session run}))))
+        walked (sit-as! "run-wake")
+        handed-nothing (sit-as! "run-fire")]
+    (testing "the sitting handed the queue's row carries no stamp"
+      (is (= [(str (:id gas))] (mapv :id (get-in walked [:walk :rows]))))
+      (is (nil? (get-in (sitting-row eng (:sitting walked))
+                        [:data :walked_nothing]))))
+    (testing "the sitting whose every row was held is stamped"
+      (is (empty? (get-in handed-nothing [:walk :rows])))
+      (is (true? (get-in (sitting-row eng (:sitting handed-nothing))
+                         [:data :walked_nothing]))))))
 
 (deftest a-seat-at-a-wall-answers-no-rows
   ;; R-5.2's third wall, and the cheapest one to stand up: a seat

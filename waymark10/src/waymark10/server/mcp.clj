@@ -3580,6 +3580,16 @@
             {walk :walk named-held? :named-held? all-held? :all-held?}
             (when-not halted
               (claimed-walk! eng call sitter-sees seat sitting named-row))
+            ;; … and a sitting the walk handed nothing is stamped as
+            ;; such — no rows free, an empty queue, or a seat at a wall
+            ;; — so seat health counts an idle wake without reading an
+            ;; absent `walked_rows`. The rows this sitting already
+            ;; holds count: a re-sit of a sitting that walked is not it.
+            _ (when sitting
+                (seats/stamp-walked-nothing!
+                 eng (:id sitting)
+                 (and (empty? (get walk "rows"))
+                      (empty? (get-in sitting [:data :walked_rows])))))
             ;; i' · the change this firing submits: the walk's own
             ;; first row for a code seat (R-12.29), and the row the
             ;; engine finds or mints for a seat that walks a queue of
