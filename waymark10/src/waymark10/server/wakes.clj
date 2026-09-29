@@ -884,8 +884,59 @@
         (count-under eng walk f)
         (some->> (ids-under eng walk f) (remove skip) count)))))
 
+(def ^:private judged-page
+  "The most standing verdicts, and the most sealed transcripts, one
+  count of the unjudged transcripts reads: the sit's own bound
+  (`mcp/judged-page`)."
+  500)
+
+(defn- judged-subjects
+  "The subject ids this judgment has a standing (`said`) verdict on —
+  `mcp/judged-subjects`'s read, which this namespace cannot require."
+  [eng judgment-id]
+  (if (serves? eng :verdict)
+    (into #{}
+          (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
+          (store/with-tx (:storage eng)
+            (fn [tx] (store/query-rows (:storage eng) tx :verdict
+                                       {:judgment (str judgment-id)
+                                        :state "said"}
+                                       {:limit judged-page}))))
+    #{}))
+
+(defn- unjudged-transcripts
+  "How many sealed transcripts under the entry's filter record a
+  sitting this judgment has not judged (ticket c9edc5bd), or nil when
+  they cannot be read. Only fired sittings keep a transcript
+  (`keep_transcripts` fired), so this is the fired sittings still
+  waiting on the judge. The newest `judged-page` sealed transcripts
+  are read, the unjudged being the fresh end of the table; the entry's
+  filter is read as equality, and its own `state` replaces `sealed`."
+  [eng judgment-id filter-map]
+  (when (serves? eng :transcript)
+    (try
+      (let [where (merge {:state "sealed"}
+                         (into {} (map (fn [[f v]] [(keyword (name f)) (str v)]))
+                               filter-map))
+            judged (judged-subjects eng judgment-id)
+            st (:storage eng)]
+        (->> (store/with-tx st
+               (fn [tx] (store/query-rows st tx :transcript where
+                                          {:limit judged-page
+                                           :newest-first true})))
+             (remove #(contains? judged (str (get-in % [:data :sitting]))))
+             count))
+      (catch Exception e
+        (warn! "the unjudged transcripts could not be counted — "
+               (ex-message e))
+        nil))))
+
 (defn- entry-count
-  "The number a COUNT entry is judged by. An entry over the seat's own
+  "The number a COUNT entry is judged by. An entry of a JUDGMENT seat
+  over `transcript` counts the sealed transcripts whose sitting that
+  judgment has not judged (`unjudged-transcripts`, ticket c9edc5bd), so
+  a judge wakes on the sittings still waiting for it and not on every
+  seal. An entry over the seat's own
   walk (its walk kind, under the walk's own filter) counts the walk
   the sit would hand (`walk-count`), so a wake never fires a run whose
   sit walks nothing (ticket e031e479). An entry over the walk's kind
@@ -896,8 +947,15 @@
   (`count-under`), as it always has."
   [eng seat-row e]
   (let [kind (keyword (name (:kind e)))
+        judgment (when seat-row
+                   (raw-row eng :judgment
+                            (some-> (get-in seat-row [:data :judgment])
+                                    str not-empty)))
         [walk f] (when seat-row (walk-query eng seat-row))]
     (cond
+      (and judgment (= :transcript kind))
+      (unjudged-transcripts eng (:id judgment) (:filter e))
+
       (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
       (walk-count eng seat-row)
 

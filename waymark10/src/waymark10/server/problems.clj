@@ -68,16 +68,22 @@
   (problem :schema-invalid 422 "Input failed validation"
            {:action-attempted action :errors errors}))
 
-(defn guard-refused [action state reason denier resource]
+(defn guard-refused
+  "The guard's refusal. :resolved-remedies rides only when a remedy
+  bound its row or input off the refused call: each door with the
+  :id and :input it acts on, so any client knows where to go."
+  [action state reason denier resource]
   (problem :guard-refused 409 "Refused"
-           {:detail reason
-            :action-attempted action
-            :state state
-            :guard (:guard denier)
-            :remedies (:remedies denier)
-            :open (:open denier)
-            :becomes-available (:becomes-available denier)
-            :resource resource}))
+           (cond-> {:detail reason
+                    :action-attempted action
+                    :state state
+                    :guard (:guard denier)
+                    :remedies (:remedies denier)
+                    :open (:open denier)
+                    :becomes-available (:becomes-available denier)
+                    :resource resource}
+             (seq (:resolved-remedies denier))
+             (assoc :resolved-remedies (:resolved-remedies denier)))))
 
 (defn warning-refused
   "The E1 acknowledge protocol: one problem carries every warning; the
