@@ -3106,3 +3106,206 @@ room a row is born in. CI enforces this:
 every module declares as a bare agent and as a bare person, and fails
 on a wall only the agent's type closes unless it holds or is named,
 with its reason, in that test's `flat-walls`.
+
+## 15. The house merge line
+
+This section gives the requirements for the house merge line in
+factory10: how the house's merge pass orders the submitted changes of
+one repository, which change it brings up to date, which change it
+merges, and what it writes on the rows so that a person can see the
+line without a log. Before this section the line was described only
+in `factory10/src/factory10/bench.clj`,
+`factory10/src/factory10/resources/repo_policy.clj` and the tests
+(`merge_line_test`, `deploy_line_test`, `ticket_hold_test`,
+`ticket_release_test`). The merge train (ticket ddbfc405, slice d)
+grows from this section.
+
+### 15.1 The problem on record
+
+*Every behind change was brought forward at once.* Main's protection
+wants a branch up to date before it merges (ticket a95c3d63). When the
+pass brought every behind change up to date in one pass, each update
+started one CI run, and the first merge made all the other changes
+stale again (ticket d82d649a).
+
+*The line lived only in memory.* The pass rebuilds the line each time.
+Without a record on the rows, only a log line said which pull request
+was at the front, or why a green change did not merge (ticket
+b85aded5).
+
+*Merges outran deploys.* A repository that deploys each merge could
+get a second merge before the first one was deployed (ticket
+47217098).
+
+*Some work must land in order.* A ticket can need other tickets done
+before its change merges (ticket d069bc3b).
+
+### 15.2 Which repositories have a line
+
+**R-15.1** The house merges a repository's changes only when its
+active `repo_policy` says all three of these (`house-pass-merges?`):
+
+- `auto_merge` is not `false`;
+- `merge_by` is `house` (an absent `merge_by` means GitHub merges);
+- `required_checks` names at least one check. The guard
+  `the-house-merges-only-what-a-check-tested` refuses a policy that
+  says `merge_by: house` with no check.
+
+Every other policy leaves the merge to somebody else, and a green
+change there waits on its person (the person's merge, ticket
+4d59b22d). Such a repository has no line.
+
+### 15.3 Who stands in the line, and in which order
+
+**R-15.2** A change is in its repository's line (`merge-lines`) when
+it is `submitted`, has a pull request `number` and a `head_sha`, its
+repository passes R-15.1, the rig did not park its current head
+(R-15.5), and its ticket is not held by `merge_after` (R-15.7).
+
+**R-15.3** The line is sorted by `line-key`, in this order:
+
+1. the priority of the ticket the change was born from (`born_from`
+   `ticket:<id>`). A lower number is first. A change with no ticket,
+   or a ticket with no priority, is last;
+2. the change's `created_at`. The older change is first;
+3. the change's id, so the order is total.
+
+The pass rebuilds the line from the rows each time. A restart loses
+only the memory of which heads were already updated or parked.
+
+### 15.4 One pass over a line
+
+**R-15.4** Each pass (`merge-green!`, then `work-lines!`) must do
+these steps for each repository:
+
+1. **Offer every change one merge.** A merge call costs no CI, so each
+   change in the line gets ONE `merge` call with the engine's own
+   hand, whatever its place. The call carries the pull request, the
+   head it may merge, the policy's `required_checks` and its
+   `merge_method` (default `merge`) (`merge-args`). A change that is
+   green and up to date merges at once.
+2. **Stop after one merge when the policy names a `deploy_check`.**
+   The next change then waits on the deploy (R-15.6).
+3. **Choose the front after the answers.** The front is the first
+   change of the line that still stands in it (`front-of`,
+   `out-of-line`). A change steps out of the line for one of these
+   reasons:
+   - `conflicted`: its `mergeable` is `conflicted`. The failing path
+     has it (ticket 5f12e772);
+   - `draft`: a draft is not brought forward;
+   - `red`: the rig said `red`. The seat's feedback already carries
+     the red checks;
+   - `parked`: the rig refused this head for good (R-15.5);
+   - `merged`: the rig merged it this pass.
+4. **Bring only the front up to date.** When the rig's answer for the
+   front says it is behind (`behind?`: state `behind`, or a
+   `merge_refused` whose reason says out of date or a status is
+   expected), the pass asks the rig's `update_branch` for that head.
+   The pass must ask one time per head (`seen` keeps `[:updated id]`),
+   so a busy main cannot make the pass loop. A behind change that is
+   not the front must stay as it is until it is the front.
+
+The front leaves the line when it merges, when it goes red (in both
+cases it is no longer `submitted`), or when its head is parked.
+
+**R-15.5** The pass must answer the rig's merge answers so:
+
+| Answer | What the pass does |
+|---|---|
+| no answer, or an exception | log it; the next pass asks again |
+| a missing power | log it; the next pass asks again |
+| behind | nothing now; step 4 updates it if it is the front |
+| `draft`, `no_required_checks`, `not_mergeable` (`parked-refusals`) | park the head: remember it in `seen` with its reason; that head is not offered again |
+| any other refusal (`head_moved` too) | log it; the next pass asks again |
+| `merged` | nothing; the mirror moves the row |
+| `waiting` | nothing; the next pass asks again |
+| `red` | nothing; the seat's feedback carries it |
+
+A new head is a new offer: parking holds only the head that was
+refused.
+
+### 15.5 One deploy at a time
+
+**R-15.6** A policy can name a `deploy_check`: the check on the base
+whose success means that a commit is deployed. When it names none, a
+merge counts as deployed. When a policy names a `deploy_check`:
+
+- The merge pass must write each house merge on the policy's
+  `deploy_waits_on`, as `"<change> <ticket or -> <number or ->"`, and
+  set `deploy_waiting_since` when it is empty (`note-merges!`).
+- While `deploy_waits_on` is not empty, the pass must offer the
+  repository nothing (`deploy-held`). It writes on `deploy_note` the
+  sentence "The line waits on the deploy of #N, since T."
+- The forge pass reads the base (`note-deploy!`). When the
+  `deploy_check` is `success` on the base head, it records
+  `deployed_head`, `deploy_state` `green`, `deployed_at` (when the
+  head moved), and takes off every wait whose pull request that head
+  holds. When no wait is left, it clears `deploy_waiting_since` and
+  `deploy_note`.
+- When the check finishes `failure`, `timed_out`, `cancelled`,
+  `action_required` or `startup_failure`, the forge pass writes
+  `deploy_state` `red` and a `deploy_note`. A red deploy holds the
+  line until the check is green again.
+- A check that is still running writes nothing.
+- A deploy that does not report holds the line for
+  `deploy_wait_seconds` at most (default 1800). After that, and only
+  when the deploy is not red, the pass clears the waits and writes on
+  `deploy_note` that the line went on.
+
+### 15.6 A merge that waits on other tickets
+
+**R-15.7** A ticket's `merge_after` names the tickets that must be
+done before its change merges. The pass must HOLD such a change
+(`merge-holds`): no merge call, no update, and no place in the line.
+The change behind it becomes the front.
+
+- Only `done` releases a hold. A `dropped` dependency does not release
+  it: the work it waited on will never land, so a person must restate
+  `merge_after`.
+- A `done` ticket whose merge is still in a policy's `deploy_waits_on`
+  does not release a hold yet. Its state reads
+  "done, not deployed in <repo>".
+- A dependency that is gone reads `missing`.
+- The hold is written on the change (`line_why` `held`, with
+  `line_reason` from `held-reason`) and on its ticket (`merge_waits`).
+  When nothing holds the ticket, the next pass clears `merge_waits`.
+
+### 15.7 The line, written on the rows
+
+**R-15.8** Each pass must write the line on the rows (`line-marks`,
+`mark-lines!`). It is a MAINTENANCE write (`store/update-data!`): the
+document moves, the version does not, and no transition is logged,
+because a place in a line is not a thing that happened to the row. A
+value that did not move is not written, so a quiet line writes
+nothing.
+
+On the active `repo_policy` of each repository with a line:
+
+| Field | Value |
+|---|---|
+| `line_front` | the id of the front change |
+| `line_front_pr` | the front's pull request number |
+| `line_front_waiting` | `update` (it was brought up to date and CI runs), `checks` (its checks run), or `merge` (it was offered and GitHub has not merged it yet); see `front-waits-on` |
+| `line_waiting` | how many other changes stand in the line |
+| `line_at` | when the pass last wrote the line; it rides a write and never causes one |
+
+When no change stands in the line, all five fields are cleared.
+
+On each change:
+
+| Field | Value |
+|---|---|
+| `line_place` | its place: 1 for the front, then in order; empty out of the line |
+| `line_why` | one of `front`, `behind`, `red`, `conflicted`, `draft`, `parked`, `held` (`line-whys`) |
+| `line_reason` | for `parked`, the rig's refusal; for `held`, what it waits on; at most 500 characters |
+
+A change the rig merged this pass has its marks cleared. A change that
+left `submitted` but still carries a `line_why` has its marks cleared
+on the next pass. When the write fails, the pass logs it and the next
+pass writes the line again.
+
+### 15.8 Not yet specified
+
+The merge train (ticket ddbfc405, slice d) tests more than the front
+together. It must keep R-15.4 to R-15.8: one update per head, one
+deploy at a time, and the holds from `merge_after`.

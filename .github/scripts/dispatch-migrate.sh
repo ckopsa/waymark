@@ -4,6 +4,15 @@
 #
 #   dispatch-migrate.sh <image_tag>          # dry run: print the plan
 #   dispatch-migrate.sh <image_tag> apply    # execute the plan
+#   dispatch-migrate.sh <image_tag> apply additive
+#                                            # re-plan; execute only while
+#                                            # the plan is still additive
+#   dispatch-migrate.sh --classify < output  # migrate!'s output → its class
+#
+# The dry run also writes plan_class=empty|additive|reviewed|destructive
+# to GITHUB_OUTPUT, read from migrate!'s `plan-class:` line. A step list
+# without that line is `reviewed`, never `additive`: not knowing costs a
+# tap, not an unattended migration.
 #
 # Needs NOMAD_ADDR and NOMAD_TOKEN in the environment, and the CI token
 # must carry waymark-ci-deploy (dispatch-job, read-job, read-logs).
@@ -20,9 +29,51 @@
 # A dry run with a waiting plan is NOT a CI failure. It is the gate.
 set -euo pipefail
 
-TAG="${1:?usage: dispatch-migrate.sh <image_tag> [apply]}"
+# migrate!'s output on stdin → one of empty|additive|reviewed|destructive.
+plan_class_of() {
+  local logs class
+  logs="$(cat)"
+  class="$(printf '%s\n' "$logs" | sed -n 's/^[[:space:]]*plan-class:[[:space:]]*\([a-z]*\).*$/\1/p' | tail -n 1)"
+  case "$class" in
+    empty | additive | reviewed | destructive) echo "$class" ;;
+    *)
+      if grep -q 'empty plan\.' <<< "$logs"; then echo empty; else echo reviewed; fi
+      ;;
+  esac
+}
+
+if [ "${1:-}" = "--classify" ]; then
+  plan_class_of
+  exit 0
+fi
+
+TAG="${1:?usage: dispatch-migrate.sh <image_tag> [apply [additive]]}"
 MODE="${2:-dry}"
+EXPECT="${3:-}"
 JOB="workqueue10-migrate"
+
+# THE UNGATED APPLY RE-PLANS FIRST. The class the `plan` job read may be
+# stale: another merge's run can migrate between that dry run and this
+# apply. So plan again, and apply without a tap only while the plan is
+# still additive; anything else refuses, and image.yml hands the run to
+# the gated `apply` job.
+if [ "$MODE" = "apply" ] && [ "$EXPECT" = "additive" ]; then
+  echo "re-planning before an ungated apply"
+  replan="$(GITHUB_OUTPUT='' "$0" "$TAG")"
+  printf '%s\n' "$replan"
+  now="$(printf '%s\n' "$replan" | sed -n 's/^plan_class=//p' | tail -n 1)"
+  case "$now" in
+    additive) ;;
+    empty)
+      echo "the plan is empty now — another run applied it; nothing to do."
+      exit 0
+      ;;
+    *)
+      echo "the plan is ${now:-unknown} now, not additive — refusing the ungated apply; the gated \`apply\` job takes it."
+      exit 1
+      ;;
+  esac
+fi
 
 args=(-detach -meta "image_tag=${TAG}")
 [ "$MODE" = "apply" ] && args+=(-meta "apply=1")
@@ -143,6 +194,18 @@ if [ "$MODE" = "apply" ]; then
   exit 0
 fi
 
+if [ "$empty" = true ]; then
+  class=empty
+else
+  class="$(printf '%s\n' "$logs" | plan_class_of)"
+  # steps remain by the exit code, whatever the text said
+  [ "$class" = empty ] && class=reviewed
+fi
+
 echo "plan_empty=${empty}"
-[ -n "${GITHUB_OUTPUT:-}" ] && echo "plan_empty=${empty}" >> "$GITHUB_OUTPUT"
+echo "plan_class=${class}"
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  echo "plan_empty=${empty}" >> "$GITHUB_OUTPUT"
+  echo "plan_class=${class}" >> "$GITHUB_OUTPUT"
+fi
 exit 0
