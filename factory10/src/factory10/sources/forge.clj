@@ -1296,10 +1296,20 @@
 
 (defn- blank->nil [v] (some-> v str not-empty))
 
+(defn- note-base!
+  "The base's own facts on the policy, written only when they moved."
+  [eng policy input stored]
+  (when (not= input stored)
+    (inv/invoke! eng :repo_policy (str (:id policy)) :note_base input
+                 (as-opts))))
+
 (defn- base-move!
-  "One policy's base, read and judged, and at most one ticket move.
+  "One policy's base, read and judged, written, and then at most one
+  ticket move. The base is recorded from the read BEFORE any ticket
+  door is opened, so a door that refuses costs the ticket move and not
+  the base write (ticket 806e9185).
   → the census."
-  [eng source policy census]
+  [eng source policy census log-fn]
   (let [repo (str (get-in policy [:data :repository]))
         base (bench/base-of policy)
         base-read (forge-base source repo base)
@@ -1326,44 +1336,53 @@
                                       (contains? red-conclusions
                                                  (str (:conclusion %))))
                                 (:checks base-read))
-            [census ticket-id]
-            (cond
-              (not (and (= "red" now) (= "red" was)))
-              (if (and (= "green" now) live)
-                (do (inv/invoke! eng :ticket (str (:id live)) :mend
-                                 {:close_reason (str base " is green again at "
-                                                     head ".")}
-                                 (base-opts))
-                    [(update census :base-closed inc) stored-ticket])
-                [census stored-ticket])
-
-              ;; red twice, on a head the known ticket already carries:
-              ;; nothing new, and a ticket a person ended on this very
-              ;; head is not minted again
-              (and known (seen-head? known head))
-              [census stored-ticket]
-
-              live
-              (if-some [door (red-head-doors (state-of live))]
-                (do (inv/invoke! eng :ticket stored-ticket door
-                                 {:red_head (red-head-line head names)}
-                                 (base-opts))
-                    [(update census :base-noted inc) stored-ticket])
-                [census stored-ticket])
-
-              :else
-              [(update census :base-opened inc)
-               (open-red-ticket! eng source repo base head red-from
-                                 red-checks names)])
-            input {:verdict now :head head :red_from red-from
-                   :ticket ticket-id}
             stored {:verdict (blank->nil (:base_state data))
                     :head (blank->nil (:base_head data))
                     :red_from (blank->nil (:base_red_from data))
-                    :ticket stored-ticket}]
-        (when (not= input stored)
-          (inv/invoke! eng :repo_policy (str (:id policy)) :note_base input
-                       (as-opts)))
+                    :ticket stored-ticket}
+            base-facts {:verdict now :head head :red_from red-from
+                        :ticket stored-ticket}
+            ;; the read is written first: what the base is, and on
+            ;; which head, is known here and must not ride on a ticket
+            ;; door answering
+            _ (note-base! eng policy base-facts stored)
+            [census ticket-id]
+            (try
+              (cond
+                (not (and (= "red" now) (= "red" was)))
+                (if (and (= "green" now) live)
+                  (do (inv/invoke! eng :ticket (str (:id live)) :mend
+                                   {:close_reason (str base " is green again at "
+                                                       head ".")}
+                                   (base-opts))
+                      [(update census :base-closed inc) stored-ticket])
+                  [census stored-ticket])
+
+                ;; red twice, on a head the known ticket already carries:
+                ;; nothing new, and a ticket a person ended on this very
+                ;; head is not minted again
+                (and known (seen-head? known head))
+                [census stored-ticket]
+
+                live
+                (if-some [door (red-head-doors (state-of live))]
+                  (do (inv/invoke! eng :ticket stored-ticket door
+                                   {:red_head (red-head-line head names)}
+                                   (base-opts))
+                      [(update census :base-noted inc) stored-ticket])
+                  [census stored-ticket])
+
+                :else
+                [(update census :base-opened inc)
+                 (open-red-ticket! eng source repo base head red-from
+                                   red-checks names)])
+              (catch Exception e
+                (log-fn "the base of " repo " was read and written, but its "
+                        "ticket did not move (" (ex-message e) ")")
+                [census stored-ticket]))]
+        ;; the ticket the move minted, once it is minted and not before
+        (note-base! eng policy (assoc base-facts :ticket ticket-id)
+                    base-facts)
         ;; the deploy the merge line waits on, from the same read
         ;; (ticket 47217098)
         (bench/note-deploy! eng policy base-read
@@ -1380,7 +1399,7 @@
   (reduce
    (fn [census policy]
      (try
-       (base-move! eng source policy census)
+       (base-move! eng source policy census log-fn)
        (catch Exception e
          (log-fn "the base of " (get-in policy [:data :repository])
                  " was not read (" (ex-message e) ")")
