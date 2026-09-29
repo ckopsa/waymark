@@ -526,6 +526,23 @@
     (is (= "planned" (mcp-state eng "plan_day" day)))
     (is (= "planned" (mcp-state eng "plan" plan)))))
 
+(deftest waymark-pursue-follows-the-refusal's-resolved-remedies
+  ;; the refusals bind plan.finalize and meal.accept to their rows;
+  ;; choices names only the day nobody could bind
+  (let [eng (mcp-boot)
+        {:keys [meal day plan choices]} (mcp-chain! eng)
+        out (mcp-pursue eng {:kind "grocery_list" :action "create"
+                             :input {:plan_id plan}
+                             :choices (select-keys choices ["plan_day.assign_meal"])
+                             :dry_run false})
+        a (answer out)]
+    (is (not (:isError out)) (pr-str a))
+    (is (= "grocery_list" (:kind (:done a))))
+    (is (= chain-doors (mapv :door (:steps_taken a))))
+    (is (= "on_list" (mcp-state eng "meal" meal)))
+    (is (= "planned" (mcp-state eng "plan_day" day)))
+    (is (= "planned" (mcp-state eng "plan" plan)))))
+
 (deftest waymark-pursue-stops-at-a-confirm-step-with-its-sentence
   (let [eng (mcp-boot)
         seal-id (mcp-make! eng :pt_seal {})
