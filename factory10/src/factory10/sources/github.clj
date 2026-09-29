@@ -321,10 +321,13 @@
 
 (defn mergeable-of
   "What the pull request says about merging. `unknown` when GitHub has
-  not computed it yet, which is the honest answer and not a guess."
+  not computed it yet, which is the honest answer and not a guess.
+  `mergeable: false` is GitHub's own word for a conflict and is read
+  first: `mergeable_state` is policy talk (blocked, behind, draft), and a
+  pull request both blocked and conflicted is conflicted."
   [pull]
-  (or (get mergeable-states (word (:mergeable_state pull)))
-      (when (false? (:mergeable pull)) "conflicted")
+  (or (when (false? (:mergeable pull)) "conflicted")
+      (get mergeable-states (word (:mergeable_state pull)))
       "unknown"))
 
 (defn forge-state-of

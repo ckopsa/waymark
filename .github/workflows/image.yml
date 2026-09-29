@@ -31,14 +31,20 @@
 # workqueue10-migrate.hcl in ckopsa/home-infrastructure).
 #
 # waymark-yqs says reading the plan and running it deserve different
-# friction. That still holds here. The read is free and automatic. The
-# apply costs a human tap in the `production-migrate` environment. The
-# difference is you now pay that only when the schema actually moves,
-# instead of on every deploy.
+# friction. That still holds here. The read is free and automatic. An
+# apply that only ADDS runs unattended; an apply that drops or rewrites
+# costs a human tap in the `production-migrate` environment. The dry
+# run names the plan's class (migrate.clj's plan-class) and the deploy
+# routes on it:
 #
-#   plan empty  → deploy, nobody woken
-#   plan waiting → hold at `apply` until a reviewer approves
-#   destructive  → migrate refuses; a person runs those from the LAN
+#   empty       → deploy, nobody woken
+#   additive    → `apply-additive` re-plans, applies, deploys — no tap
+#                 (create-table, add-column, add-index only; a plan that
+#                 stopped being additive falls back to `apply`)
+#   reviewed    → hold at `apply` until a reviewer approves (a drop, a
+#                 recreate, or any step kind not named additive)
+#   destructive → held at `apply` too, where migrate refuses the state
+#                 renames; a person runs those from the LAN
 #
 # !! The `apply` job's gate IS the `production-migrate` environment. An
 # !! environment with no required reviewer approves instantly and the
@@ -150,6 +156,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     outputs:
       empty: ${{ steps.plan.outputs.plan_empty }}
+      class: ${{ steps.plan.outputs.plan_class }}
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-nomad@v1.0.0
@@ -160,12 +167,36 @@ jobs:
           NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
         run: .github/scripts/dispatch-migrate.sh '${{ needs.build.outputs.tag }}'
 
-  # Only runs when the plan is NOT empty. The environment is the gate:
-  # give `production-migrate` a required reviewer, or this approves
-  # itself and the point is lost.
-  apply:
+  # An additive plan applies with NO environment: nobody is woken to
+  # approve an ADD. The script re-plans first and refuses when the plan
+  # is no longer additive (another merge migrated in between); that
+  # failure hands the run to the gated `apply` below.
+  apply-additive:
     needs: [build, plan]
-    if: needs.plan.outputs.empty == 'false'
+    if: needs.plan.outputs.class == 'additive'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-nomad@v1.0.0
+      - name: Apply the additive schema plan
+        env:
+          NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
+          NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
+        run: .github/scripts/dispatch-migrate.sh '${{ needs.build.outputs.tag }}' apply additive
+
+  # Runs for a plan that is neither empty nor additive (reviewed,
+  # destructive, or no class line at all), and for an additive plan the
+  # ungated apply refused. The environment is the gate: give
+  # `production-migrate` a required reviewer, or this approves itself
+  # and the point is lost.
+  apply:
+    needs: [build, plan, apply-additive]
+    if: >-
+      always()
+      && needs.build.result == 'success'
+      && needs.plan.result == 'success'
+      && ((needs.plan.outputs.empty == 'false' && needs.plan.outputs.class != 'additive')
+          || needs.apply-additive.result == 'failure')
     runs-on: ubuntu-24.04-arm
     environment: production-migrate
     steps:
@@ -186,15 +217,24 @@ jobs:
   # itself, after the promotion; nothing here writes it any more, and a
   # bare `nomad var put` deploys NOTHING since 2026-09-18.
   #
-  # `always()` plus explicit results, because `apply` is SKIPPED on the
-  # common path (empty plan) and a plain `needs:` would skip this too.
+  # `always()` plus explicit results, because the apply jobs are SKIPPED
+  # on the common path (empty plan) and a plain `needs:` would skip this
+  # too. Exactly one apply succeeded, or the plan was empty and both
+  # were skipped:
+  #   empty    → both skipped → deploy
+  #   additive → apply-additive succeeded, apply skipped → deploy
+  #   reviewed → apply-additive skipped (or refused), apply succeeded → deploy
   deploy:
-    needs: [build, plan, apply]
+    needs: [build, plan, apply-additive, apply]
     if: >-
       always()
       && needs.build.result == 'success'
       && needs.plan.result == 'success'
-      && (needs.apply.result == 'success' || needs.apply.result == 'skipped')
+      && ((needs.plan.outputs.empty == 'true'
+           && needs.apply-additive.result == 'skipped'
+           && needs.apply.result == 'skipped')
+          || (needs.apply-additive.result == 'success' && needs.apply.result == 'skipped')
+          || needs.apply.result == 'success')
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4

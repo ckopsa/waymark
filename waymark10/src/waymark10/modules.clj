@@ -160,6 +160,7 @@
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
+            [waymark10.server.routes.dashboard :as dashboard-routes]
             [waymark10.server.routes.gate :as gate-routes]
             [waymark10.server.routes.law-sweep :as law-sweep-routes]
             [waymark10.server.routes.mcp :as mcp-routes]
@@ -421,6 +422,7 @@
     :enrols [{:kind :saved_view :enroll :app-opt-in}
              {:kind :dashboard :enroll :app-opt-in}
              {:kind :dashboard_slot :enroll :app-opt-in}]
+    :routes dashboard-routes/routes
     :pack packs/dashboard}
 
    ;; the seat's schedule (spec-seat.md §12): the means by which a
