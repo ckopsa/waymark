@@ -2471,8 +2471,11 @@
             ;; a named ticket beside a live change is read under its
             ;; own state, in review as well as open, and is not left
             ;; out as stuck: the fire sent the run to it (ticket
-            ;; 7af7d506)
-            only-state (when (and only (not judgment)
+            ;; 7af7d506). A JUDGMENT SEAT TOO: its queue names `state`,
+            ;; and the state named here stands in for it, while the
+            ;; judged subjects are still subtracted - so an unjudged
+            ;; ticket in review is handed, and a judged one is not
+            only-state (when (and only
                                   (seats/named-beside-a-live-change?
                                    eng walk only))
                          (some-> (row-of eng (keyword walk) only) :state name))
@@ -2615,6 +2618,16 @@
   (str "Every open row of your walk is held by another open sitting of "
        "this seat, so there is nothing for you to walk. Say so and stop."))
 
+(defn- named-row-withheld-note
+  "What a sit is told when the row its fire text named is not in its
+  walk at all - judged already, ended, or out of the queue - so the
+  queue's next rows stand in for it. Said, so a firing that missed its
+  row is seen to have missed it."
+  [row-id]
+  (str " The row your fire text names, " row-id ", is not in your walk"
+       " (already judged, ended, or outside the queue), so the rows below"
+       " are the queue's instead. Do not walk it; say so if it mattered."))
+
 (defn- named-row-held-note
   "What a sit is told when the row its fire text named is held by
   another open sitting of the seat: it is handed the next free row
@@ -2638,7 +2651,7 @@
   `named` is the row the fire's text named (`seats/fire-key-row`): it
   is handed alone while no other open sitting holds it, and when one
   does the sit hands the queue's next free rows and says so.
-  → {:walk w :named-held? bool :all-held? bool}."
+  → {:walk w :named-held? bool :named-withheld? bool :all-held? bool}."
   [eng call sitter-sees seat sitting named]
   (let [seat-id (str (:id seat))
         ;; a named change is read back to its ticket (ticket 7af7d506)
@@ -2652,10 +2665,10 @@
     (loop [n 1
            taken (seats/claimed-rows eng seat-id (:id sitting))]
       (let [only (when (and named (not (contains? taken named))) named)
-            walk (or (when only
-                       (let [w (walk-past taken only)]
-                         (when (seq (get w "rows")) w)))
-                     (walk-past taken nil))
+            named-walk (when only
+                         (let [w (walk-past taken only)]
+                           (when (seq (get w "rows")) w)))
+            walk (or named-walk (walk-past taken nil))
             ids (mapv #(get % "id") (get walk "rows"))
             claim (if sitting
                     (seats/claim-rows-atomically! eng seat-id (:id sitting) ids)
@@ -2664,6 +2677,9 @@
             said (fn [w]
                    {:walk w
                     :named-held? (boolean (and named (contains? seen named)))
+                    ;; named, held by nobody, and still not handed: the
+                    ;; walk withheld it and the queue's rows stand in
+                    :named-withheld? (boolean (and only (nil? named-walk)))
                     :all-held? (boolean (and w (empty? (get w "rows"))
                                              (seq seen)))})]
         (cond
@@ -3901,7 +3917,8 @@
             ;; connector drop is handed back the row it was walking.
             ;; The rows this sitting was handed are its own until it
             ;; closes, claimed in the transaction that found them free
-            {walk :walk named-held? :named-held? all-held? :all-held?}
+            {walk :walk named-held? :named-held? named-withheld? :named-withheld?
+             all-held? :all-held?}
             (when-not halted
               (claimed-walk! eng call sitter-sees seat sitting named-row))
             ;; … and a sitting the walk handed nothing is stamped as
@@ -3960,6 +3977,8 @@
                                      :else no-walk-note)
                                (when named-held?
                                  (named-row-held-note named-row))
+                               (when named-withheld?
+                                 (named-row-withheld-note named-row))
                                (when (get walk "judgment")
                                  judgment-walk-note)
                                (when said change-beside-the-walk-note)
