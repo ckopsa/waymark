@@ -135,6 +135,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.judgments :as judgments]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -884,32 +885,12 @@
         (count-under eng walk f)
         (some->> (ids-under eng walk f) (remove skip) count)))))
 
-(def ^:private judged-page
-  "The most standing verdicts, and the most sealed transcripts, one
-  count of the unjudged transcripts reads: the sit's own bound
-  (`mcp/judged-page`)."
-  500)
-
-(defn- judged-subjects
-  "The subject ids this judgment has a standing (`said`) verdict on —
-  `mcp/judged-subjects`'s read, which this namespace cannot require."
-  [eng judgment-id]
-  (if (serves? eng :verdict)
-    (into #{}
-          (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
-          (store/with-tx (:storage eng)
-            (fn [tx] (store/query-rows (:storage eng) tx :verdict
-                                       {:judgment (str judgment-id)
-                                        :state "said"}
-                                       {:limit judged-page}))))
-    #{}))
-
 (defn- unjudged-transcripts
   "How many sealed transcripts under the entry's filter record a
   sitting this judgment has not judged (ticket c9edc5bd), or nil when
   they cannot be read. Only fired sittings keep a transcript
   (`keep_transcripts` fired), so this is the fired sittings still
-  waiting on the judge. The newest `judged-page` sealed transcripts
+  waiting on the judge. The newest `judgments/judged-page` sealed transcripts
   are read, the unjudged being the fresh end of the table; the entry's
   filter is read as equality, and its own `state` replaces `sealed`."
   [eng judgment-id filter-map]
@@ -918,11 +899,11 @@
       (let [where (merge {:state "sealed"}
                          (into {} (map (fn [[f v]] [(keyword (name f)) (str v)]))
                                filter-map))
-            judged (judged-subjects eng judgment-id)
+            judged (judgments/judged-subjects eng judgment-id)
             st (:storage eng)]
         (->> (store/with-tx st
                (fn [tx] (store/query-rows st tx :transcript where
-                                          {:limit judged-page
+                                          {:limit judgments/judged-page
                                            :newest-first true})))
              (remove #(contains? judged (str (get-in % [:data :sitting]))))
              count))

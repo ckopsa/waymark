@@ -142,6 +142,7 @@
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.judgments :as judgments]
             [waymark10.server.mcp-sessions :as sessions]
             [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
@@ -2413,13 +2414,6 @@
 ;; which SUBJECTS reach the page, and the law those subjects are
 ;; judged under is the seat's own declaration, already on its row.
 
-(def ^:private judged-page
-  "The most standing verdicts one walk subtracts by. A judgment whose
-  said verdicts outrun this in a single queue has more decided
-  subjects than one page can hold, and the honest fix there is a
-  narrower `queue`, not a longer read."
-  500)
-
 (defn- filter-params
   "One filter map as query parameters — a plain-equality filter in the
   collection's own vocabulary. `name` reads a stored key whether it
@@ -2437,28 +2431,6 @@
   filter on the subject kind."
   [judgment]
   (filter-params (get-in judgment [:data :queue])))
-
-(defn- judged-subjects
-  "The subject ids this judgment has already spoken on: every verdict
-  of it still `said`. An `overruled` row is not here on purpose — a
-  correction overrules the first and the second verdict is the one
-  standing, so a subject leaves the queue once and stays gone.
-
-  …until its verdict is REOPENED. `verdict.reopen` moves the standing
-  row to `overruled` and writes nothing in its place, so this set no
-  longer holds the subject and the next walk hands it back. That is
-  the whole of the reopen's queue mechanism: this one rule, read the
-  same way, and no second list of subjects to re-admit."
-  [eng judgment-id]
-  (if (get (inv/resources eng) :verdict)
-    (into #{}
-          (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
-          (store/with-tx (:storage eng)
-            (fn [tx] (store/query-rows (:storage eng) tx :verdict
-                                       {:judgment (str judgment-id)
-                                        :state "said"}
-                                       {:limit judged-page}))))
-    #{}))
 
 (defn- judgment-block
   "What the sitter is told about the law it is saying: which judgment,
@@ -2580,7 +2552,7 @@
                 skip (if subtract?
                        (into (into (set claimed) (keys stuck))
                              (when judgment
-                               (judged-subjects eng (:id judgment))))
+                               (judgments/judged-subjects eng (:id judgment))))
                        #{})
                 items (cond->> (remove #(contains? skip (id-of %))
                                        (get-in doc ["data" "items"]))
