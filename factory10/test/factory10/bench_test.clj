@@ -2731,6 +2731,57 @@
       (is (= :complete (:action (last-ticket-move w)))
           "and the merge walked no door on it"))))
 
+;; ── a train's lone red, end to end (ticket e84e9317) ─────────────────
+;;
+;; merge_line_test.clj watches the bisect with a recording `:train-red!`.
+;; Here the engine's own hand takes the door: a train of two goes red,
+;; its front half rides alone and goes red again, and that change is
+;; `failing` with its ticket back in the queue.
+
+(deftest a-trains-lone-red-change-fails-and-returns-its-ticket
+  (let [w (ticket-world (assoc house-policy :merge_strategy "train"))
+        st (:state w)
+        seen (atom {})
+        _ (submitted-and-adopted! w 31)
+        red-id (get-in (:answer w) [:change :id])
+        other (:row (inv/create! (:eng w) :ticket
+                                 {:title "Name the ceiling on the form"
+                                  :type "feature" :repo a-repository}
+                                 {:principal person}))
+        _ (inv/invoke! (:eng w) :ticket (str (:id other)) :groom {}
+                       {:principal person})
+        w2 (assoc w :answer (sit-again! w))
+        _ (submitted-and-adopted! w2 32)
+        other-id (get-in (:answer w2) [:change :id])
+        row-of #(change-row {:eng (:eng w) :change {:id %}})
+        train (fn [prs] {:branch "train/ckopsa/waymark/31" :base_head a-head
+                         :head a-commit :merged prs :conflicted []})]
+    (is (not= red-id other-id) "two changes, one for each ticket")
+    (is (= "submitted" (name (:state (row-of other-id)))))
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__train_build" (train [31 32]))
+    (bench/merge-green! (:eng w) seen)
+    (answer! st "bench__train_status" {:state "failure" :head a-commit})
+    (answer! st "bench__train_build" (train [31]))
+    (bench/merge-green! (:eng w) seen)
+    (is (= [[31 32] [31]]
+           (mapv #(get-in % [:arguments :prs]) (calls-of st "bench__train_build")))
+        "a train of two, then its front half alone")
+    (bench/merge-green! (:eng w) seen)
+    (let [red (row-of red-id)]
+      (is (= "failing" (name (:state red))))
+      (is (= ["merge-train"] (get-in red [:data :failing_checks])))
+      (is (= (str (get-in red [:data :head_sha]))
+             (get-in red [:data :train_red_head]))
+          "the red names the head the train judged")
+      (is (str/includes? (str (get-in red [:data :train_red])) "alone")))
+    (is (= "open" (ticket-state w)) "its ticket is back in the queue")
+    (is (= :return (:action (last-ticket-move w))))
+    (is (= "submitted" (name (:state (row-of other-id))))
+        "the change that rode with it is not judged by its red")
+    (is (nil? (get-in (the-policy w) [:data :line_train]))
+        "and no train stands")))
+
 ;; ── a merge that waits on other tickets (ticket d069bc3b) ────────────
 
 (defn- a-groomed-ticket!
