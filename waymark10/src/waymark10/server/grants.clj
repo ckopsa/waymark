@@ -2058,23 +2058,30 @@
   [:input_tokens :output_tokens :cache_read_tokens :cache_write_tokens])
 
 (defn- tallied-tokens
-  "How many tokens the OPEN sitting under this grant has reported so
-  far (R-12.27), or nil when there is no open sitting to ask.
+  "How many tokens the CALLING sitting has reported so far (R-12.27),
+  or nil when there is no sitting to ask.
 
-  ONE query, by the promoted `grant` column and state — the shape
+  The calling sitting is `sitting-id` when the request names one (the
+  MCP session's binding): every sitting of a seat shares the seat's
+  grant, so the newest open one under it is usually a sibling, and
+  the wall would judge this sitting by another's fuel (ticket
+  8358b658). Only a request that names none falls back to ONE query,
+  by the promoted `grant` column and state — the shape
   `seats/open-sitting-for-grant` uses, spelled here because seats.clj
   requires THIS namespace and not the other way round. A sitting
   nobody has tallied carries the zeroes its birth wrote, which is the
   honest answer: nothing reported, nothing spent."
-  [eng grant-id]
+  [eng grant-id sitting-id]
   (when (and grant-id (get (inv/resources eng) :sitting))
-    (when-some [row (first (store/with-tx (:storage eng)
-                             (fn [tx]
-                               (store/query-rows (:storage eng) tx :sitting
-                                                 {:grant (str grant-id)
-                                                  :state :open}
-                                                 {:limit 1
-                                                  :newest-first true}))))]
+    (when-some [row (or (when-some [sid (some-> sitting-id str not-empty)]
+                          (load-decoded eng :sitting sid))
+                        (first (store/with-tx (:storage eng)
+                                 (fn [tx]
+                                   (store/query-rows (:storage eng) tx :sitting
+                                                     {:grant (str grant-id)
+                                                      :state :open}
+                                                     {:limit 1
+                                                      :newest-first true})))))]
       (reduce (fn [n f] (+ n (long (or (get-in row [:data f]) 0))))
               0 sitting-count-fields))))
 
@@ -2082,8 +2089,10 @@
   "R-5.2, whole. → {:id, :halt (the reason the seat row carries right
   now, or nil), :reason (the wall this request met, or nil), :detail,
   :scope}. `:scope` is the effective scope — empty at a wall — and the
-  caller writes it onto the grant row it hands to `surface-of`."
-  [eng row principal ^java.time.Instant now]
+  caller writes it onto the grant row it hands to `surface-of`.
+  `sitting-id` is the calling sitting, or nil; only the per-sitting
+  wall reads it."
+  [eng row principal ^java.time.Instant now sitting-id]
   (let [seat-id (seat-cited row)
         substitute? (true? (get-in row [:data :substitute]))
         seat (load-decoded eng :seat seat-id)
@@ -2143,7 +2152,7 @@
             burnt (when (and (pos? ceiling)
                              (= "interactive"
                                 (some-> (get-in seat [:data :mode]) str)))
-                    (tallied-tokens eng (:id row)))]
+                    (tallied-tokens eng (:id row) sitting-id))]
         (cond
           (not (under-budget? spent budget))
           (wall "budget_reached"
@@ -2190,8 +2199,11 @@
   the guard's-eye view, the collection's ids — reads one kind of
   scope and never learns where it came from. The walls ride out on
   `:seat` for the router to write the halt from (R-7.7); this
-  namespace reads rows and writes none."
-  [eng grant-id principal]
+  namespace reads rows and writes none. The fourth arity names the
+  calling sitting, which the per-sitting wall judges instead of the
+  newest open sitting under the grant."
+  ([eng grant-id principal] (visibility eng grant-id principal nil))
+  ([eng grant-id principal sitting-id]
   (let [pid (:id principal)
         row0 (when grant-id (load-decoded eng :grant grant-id))
         own? (boolean (and row0 (= (get-in row0 [:data :audience]) pid)))
@@ -2199,7 +2211,7 @@
         now ((:now-fn eng))
         live? (boolean (and own? (active? row0 now)))
         seat (when (and live? (seat-cited row0))
-               (resolve-seat eng row0 principal now))
+               (resolve-seat eng row0 principal now sitting-id))
         row (if seat (assoc-in row0 [:data :scope] (:scope seat)) row0)
         surface (if live? (prune-unusable eng (surface-of row)) dead)
         ;; whole-kind sight is a PER-ENTRY question, judged on the
@@ -2387,7 +2399,7 @@
                    ;; query, unioned. nil (the :all posture) is
                    ;; unrestricted — the whole registry lists
                    (when-some [os (own-of k)]
-                     (own-ids eng (keyword k) os pid)))))}))
+                     (own-ids eng (keyword k) os pid)))))})))
 
 (defn worn-visibility
   "The visibility a principal that can present NO grant header arrives
@@ -2407,13 +2419,15 @@
   was not granted, and the asking loop would close after its first
   grant. So the flag bootstrap-visibility sets rides here too — names
   are schema, not data; rows outside the grant stay concealed exactly
-  as before, because every other check reads the grant, not the flag."
-  [eng principal]
-  (when-some [row (standing-grant-for eng (:id principal))]
-    (when-some [row (accept-as-audience! eng row principal)]
-      (when (= :accepted (:state row))
-        (assoc (visibility eng (:id row) principal)
-               :vocabulary-open? true)))))
+  as before, because every other check reads the grant, not the flag.
+  `sitting-id`, when given, is the calling sitting (see `visibility`)."
+  ([eng principal] (worn-visibility eng principal nil))
+  ([eng principal sitting-id]
+   (when-some [row (standing-grant-for eng (:id principal))]
+     (when-some [row (accept-as-audience! eng row principal)]
+       (when (= :accepted (:state row))
+         (assoc (visibility eng (:id row) principal sitting-id)
+                :vocabulary-open? true))))))
 
 (defn bootstrap-visibility
   "The agent default (waymark-rci): a named agent that presents NO

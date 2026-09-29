@@ -1994,7 +1994,10 @@
                                 ;; the session (oidc-rp); the header,
                                 ;; deliberately presented, still wins
                                 (:session-grant principal))]
-                (grants/visibility eng gid principal)
+                ;; with the calling sitting, when the request names
+                ;; one, for the per-sitting wall (ticket 8358b658)
+                (grants/visibility eng gid principal
+                                   (some-> (:waymark10/sitting req) str not-empty))
                 ;; the agent default (waymark-rci): a named agent
                 ;; NEVER runs unscoped — no grant presented means the
                 ;; bootstrap surface (the asking door and the
