@@ -3447,6 +3447,70 @@
         (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
         (is (= change-id (str (get-in answer [:change :id]))))))))
 
+;; A JUDGMENT SEAT, FIRED ON A TICKET IN REVIEW. Its walk is the
+;; judgment's queue (state open), so the rule above was off for it: the
+;; named ticket was never handed, the queue's next row stood in, and the
+;; verdict the seat owed that ticket could not be written (colton-tools'
+;; navigate-engineer, pull request #81).
+
+(defn- judged-ticket-world
+  "`ticket-world`, but the seat walks tickets through a promoted
+  judgment whose queue is the open tickets."
+  []
+  (let [st (state)
+        eng (fresh-engine st)
+        policy (a-policy! eng {})
+        ticket (:row (inv/create! eng :ticket
+                                  {:title "Put the size ceiling on the policy form"
+                                   :type "feature" :repo a-repository}
+                                  {:principal person}))
+        _ (inv/invoke! eng :ticket (str (:id ticket)) :groom {} {:principal person})
+        judgment (:row (inv/create! eng :judgment
+                                    {:name "engineering" :subject_kind "ticket"
+                                     :queue {:state "open"}
+                                     :verdicts [{:name "pr_opened" :sentence "A pull request is open for the ticket, and the remedy carries its address."}
+                                                {:name "needs_info" :sentence "The ticket cannot be built as written, and the remedy says what is missing."}]
+                                     :remedy_max 400}
+                                    {:principal person}))
+        _ (inv/invoke! eng :judgment (str (:id judgment)) :promote {} {:principal person})
+        seat (open-seat! eng {:scope (conj ticket-scope {:kind "verdict" :actions ["judge"]})
+                              :walk "ticket" :judgment (str (:id judgment))})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})]
+    {:eng eng :state st :h h :sid sid :seat seat :ticket ticket :judgment judgment
+     :policy policy :sat sat :answer (doc-of sat)}))
+
+(deftest a-judgment-seat-fired-on-its-ticket-in-review-is-handed-it
+  (let [w (judged-ticket-world)
+        ticket-id (str (:id (:ticket w)))
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        sit-fired! (fn [text]
+                     (let [k (seats/hold-fire-key! (:eng w) seat-row
+                                                   ((:now-fn (:eng w))) text)]
+                       (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                                      {:key k :seat "bench-seat"}))))]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "in_review" (ticket-state w)) "out of the judgment's queue")
+    (testing "unjudged, the named ticket is handed in its own state"
+      (let [answer (sit-fired! (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id "\"}"))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (not (str/includes? (str (:note answer)) "is not in your walk")))))
+    (testing "judged, it is not handed again, and the sit says so"
+      (inv/create! (:eng w) :verdict
+                   {:judgment (str (:id (:judgment w))) :subject_kind "ticket" :subject_id ticket-id
+                    :verdict "pr_opened" :remedy "https://example.test/pull/31"}
+                   {:principal person})
+      (let [answer (sit-fired! (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id "\"}"))]
+        (is (not= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (str/includes? (str (:note answer)) "is not in your walk")
+            "a firing that missed its row is seen to have missed it")))))
+
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 
 (deftest the-branch-pattern-is-a-glob-with-one-star
