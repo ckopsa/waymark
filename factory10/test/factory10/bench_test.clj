@@ -3831,3 +3831,16 @@
         (is (nil? (:bench_note (:answer w))) (str (:bench_note (:answer w))))
         (is (some #(= "nav/NAV-1-thing" (get-in % [:data :head_branch]))
                   (changes-of (:eng w))))))))
+
+(deftest a-seat-that-only-reads-the-bench-is-minted-nothing-and-told-nothing
+  ;; triage and prep: they read code in every repository with their own
+  ;; bench calls, name no `change` and hold no writing power
+  (let [w (ask-world [{:kind "ask" :actions ["complete"]}
+                      {:kind "bench.read" :actions []}])
+        answer (:answer w)]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (nil? (:bench answer)))
+    (is (nil? (:bench_note answer))
+        "no sentence says the bench did not open to a seat that never builds")
+    (is (empty? (changes-of (:eng w))))
+    (is (empty? (calls-of (:state w) "bench__prepare")))))

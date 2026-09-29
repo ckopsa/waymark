@@ -2779,6 +2779,16 @@
   (boolean (some #(str/starts-with? (str (:kind %)) bench-power-prefix)
                  (get-in seat [:data :scope]))))
 
+(defn- code-seat?
+  "Does this seat BUILD, and not only read? Its scope names the `change`
+  kind (the doors a round ends with), or it holds a bench power that
+  writes its worktree (`bench-write-tokens`). A seat with neither reads
+  code with its own calls and has no change to work."
+  [seat]
+  (let [scope (get-in seat [:data :scope])]
+    (boolean (or (some #(= "change" (str (:kind %))) scope)
+                 (some #(contains? bench-write-tokens (str (:kind %))) scope)))))
+
 (defn- bench-tokens
   "Every bench power this seat's scope names, sorted and without
   repeats. It is the seat's own list: a power the scope does not name
@@ -3263,6 +3273,12 @@
     ;; that declares no `change` kind serves no bench at all: neither
     ;; is told anything about one
     (not (bench-seat? seat)) [nil nil]
+    ;; A SEAT THAT ONLY READS THE BENCH IS NOT A CODE SEAT. Triage and
+    ;; prep read code across every repository with their own bench
+    ;; calls and change none; a seat whose scope names no `change` and
+    ;; holds no writing bench power is minted nothing and told nothing,
+    ;; so no note tells it the bench "did not open" while its reads work
+    (not (code-seat? seat)) [nil nil]
     (nil? (get (inv/resources eng) :change)) [nil nil]
     (str/blank? (str (get-in walk ["rows" 0 "id"]))) [nil nil]
     ;; a change stalled before its ticket was groomed again goes back
