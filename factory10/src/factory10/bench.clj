@@ -998,7 +998,7 @@
              :when (not (contains? lines repo))
              :let [train (get-in policy [:data :line_train])]
              :when train]
-       (swap! trains assoc repo (advance-train! ctx seen repo train)))
+       (swap! trains assoc repo (advance-train! ctx seen repo policy train)))
      @asked)))
 
 ;; ── the line, written on the rows (ticket b85aded5) ─────────────────
