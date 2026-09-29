@@ -2891,22 +2891,31 @@
                   [nil no-change-note])))))
         [nil seat-repo-note]))))
 
-(def ^:private forge-change-prefix
-  "What a `change_id` the FORGE owns starts with. A change this house
-  minted for a walk row starts with the walk kind's own name and a
-  colon instead (R-12.32), so this prefix is what tells the two
-  apart."
-  "github:")
+(def ^:private forge-change-prefixes
+  "What a `change_id` the FORGE owns starts with, one per forge an app
+  mirrors: factory10's GitHub source writes `github:<repo>#<n>`, and an
+  app over Bitbucket Cloud writes `bitbucket:<repo>#<n>`. A change this
+  house minted for a walk row starts with the walk kind's own name and
+  a colon instead (R-12.32), so these prefixes are what tell the two
+  apart. A forge missing here reads as a walk kind: its `repo#n` would
+  be taken for a walk row's id."
+  #{"github:" "bitbucket:"})
+
+(defn- forge-owned?
+  "Whether this `change_id` or `born_from` is the forge's own id."
+  [said]
+  (let [s (str said)]
+    (boolean (some #(str/starts-with? s %) forge-change-prefixes))))
 
 (defn- born-row-id
   "The walk row this change was minted for, or nil. `born_from` says
   `<kind>:<id>`, and `change_id` says the same until an adoption
-  writes GitHub's own id over it (waymark-fp62.6.3.14)."
+  writes the forge's own id over it (waymark-fp62.6.3.14)."
   [change]
   (let [said (or (some-> (get-in change [:data :born_from]) str not-empty)
                  (some-> (get-in change [:data :change_id]) str not-empty))]
     (when (and said
-               (not (str/starts-with? said forge-change-prefix))
+               (not (forge-owned? said))
                (str/includes? said ":"))
       (not-empty (subs said (inc (str/index-of said ":")))))))
 
@@ -2921,8 +2930,7 @@
         (contains? #{:open :stuck} (some-> (:state change) name keyword))
         (nil? (get-in change [:data :number]))
         (zero? (long (or (get-in change [:data :rounds]) 0)))
-        (not (str/starts-with? (str (get-in change [:data :change_id]))
-                               forge-change-prefix)))))
+        (not (forge-owned? (get-in change [:data :change_id]))))))
 
 (defn- rebranched-change
   "The change this firing works, with its branch minted again from the
