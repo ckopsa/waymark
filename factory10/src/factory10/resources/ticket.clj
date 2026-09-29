@@ -132,9 +132,13 @@
   (ticket 9ace68fb). The sit hands no ticket whose change is stuck, so
   a groom, unblock or resume that left the change stuck left the
   ticket idle until a person unstuck the change by hand. Every stuck
-  change still known by this ticket's own id — one with no pull
-  request, since the adoption writes GitHub's id over it — walks the
-  change's `rework` door in the same transaction.
+  change born from this ticket walks, in the same transaction, the
+  change's `rework` door when it has no pull request, and its
+  `rework_submitted` door when it has one (ticket 4363c63b), so the
+  forge pass reads that pull request's head again. The adoption writes
+  GitHub's id over `change_id`, so a change with a pull request is
+  found by its repository and read by its `born_from`. A pull request
+  that closed or merged took its change out of `stuck` with it.
 
   BEST-EFFORT, as `release-the-waiters!` is: a change that refuses is
   said in the log, and the ticket's move stands. A probe or a
@@ -142,13 +146,24 @@
   [row ctx]
   (let [find' (:find ctx)
         invoke' (:invoke ctx)
-        born (str "ticket:" (:id row))]
+        born (str "ticket:" (:id row))
+        repo (some-> (get-in row [:data :repo]) str not-empty)]
     (when (and find' invoke')
-      (doseq [change (find' :change {:state "stuck" :change_id born} {:limit 50})
-              :when (and (= born (str (get-in change [:data :born_from])))
-                         (nil? (get-in change [:data :number])))]
+      (doseq [change (vals (into {}
+                                 (map (juxt :id identity))
+                                 (concat
+                                  (find' :change {:state "stuck" :change_id born}
+                                         {:limit 50})
+                                  (when repo
+                                    (find' :change {:state "stuck" :repository repo}
+                                           {:limit 200})))))
+              :when (= born (str (get-in change [:data :born_from])))]
         (try
-          (invoke' :change (:id change) :rework nil)
+          (invoke' :change (:id change)
+                   (if (nil? (get-in change [:data :number]))
+                     :rework
+                     :rework_submitted)
+                   nil)
           (catch Exception e
             (binding [*out* *err*]
               (println "factory10 ticket: the change" (:id change)
