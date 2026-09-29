@@ -256,6 +256,11 @@
              ;; which is core's already.
              {:kind :held_call :enroll :always
               :kinds (fn [_] [held-calls/held-call])}
+             ;; the notifier (bead waymark-fp62.10.3): the engine tells
+             ;; a person through an mcp_server power it holds itself.
+             ;; Core's beside the held call, the first thing it tells.
+             {:kind :notifier :enroll :always
+              :kinds (fn [_] [held-calls/notifier])}
              ;; the transcript of a sitting and its lines
              ;; (docs/spec-transcript.md): core's beside the sitting
              ;; for the sitting's own reason. The sit answers the key
@@ -334,6 +339,18 @@
                             (get-in eng [:services :held-calls :sweep-ms]
                                     300000)}))
              :stop held-calls/stop-expiry-sweeper!}
+            ;; the notifier's consumer (waymark-fp62.10.3 R-2): one
+            ;; send per matching transition. Elected, because two
+            ;; engines draining the same log would tell a person twice.
+            {:hook :notifier
+             :after [:dispatcher]
+             :elected :notifier
+             :when held-calls/notifying?
+             :start (fn [eng running]
+                      (held-calls/start-notifiers!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop held-calls/stop-notifiers!}
             ;; the seat's clock (spec-seat.md R-7.6, R-12.25;
             ;; spec-transcript.md R-9): the sittings nobody ended and
             ;; the transcripts past their grace, swept on a cadence
