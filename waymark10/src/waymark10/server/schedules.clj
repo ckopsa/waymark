@@ -1973,6 +1973,21 @@
                         (pool-order-of eng schedule-row seat-row))
     (fire! eng adapter schedule-row text at (link-of eng schedule-row seat-row))))
 
+(defn held?
+  "Does this row hold its wakes rather than fire them (waymark ticket
+  bb19404d)? A row the provider broke — a 401, 403 or 404 — fires
+  nothing until a person links it again, so a known-bad token is not
+  sent at every wake and cadence tick. A row that fires through a pool
+  holds only when no runner in it is live: a broken runner is passed
+  over and the next live one fires."
+  ([eng schedule-row]
+   (held? eng schedule-row
+          (raw-row eng :seat (get-in schedule-row [:data :seat]))))
+  ([eng schedule-row seat-row]
+   (if-some [ids (pool-of eng schedule-row seat-row)]
+     (not-any? #(= "live" (some-> (raw-row eng :runner_link %) :state name)) ids)
+     (= "broken" (some-> (:state schedule-row) name)))))
+
 ;; ── the read-back (R-12.3) ──────────────────────────────────────────
 
 (defn- stamp-seen!
@@ -2106,6 +2121,7 @@
       seat merge, retire    delete
       seat fire             start the linked Routine's run (R-12.19)
       schedule restate      push again (the model a person restated)
+      schedule link         release the wake a broken row held
 
   Everything else — including every transition this namespace itself
   writes — is ignored, which is what keeps the consumer from feeding
@@ -2207,7 +2223,14 @@
 
       (and (= :schedule kind) (= :restate action))
       (when-some [row (raw-row eng :schedule (:resource-id t))]
-        (push! eng adapters row)))))
+        (push! eng adapters row))
+
+      ;; A LINK RELEASES THE WAKE A BROKEN ROW HELD (waymark ticket
+      ;; bb19404d), once: the release is keyed by this transition.
+      (and (= :schedule kind) (contains? #{:link :link_like :relink_model} action))
+      (when-some [row (raw-row eng :schedule (:resource-id t))]
+        (when (get-in row [:data :wake_pending])
+          ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t))))))
 
 (defn consumer-fn
   "The consumer's function of one transition, with the adapters read
