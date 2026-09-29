@@ -267,6 +267,22 @@
   (when-some [gid (get-in (visibility-of req) [:grant :id])]
     (seats/open-sitting-for-grant eng gid)))
 
+(defn- counted-sitting-id
+  "The id of the sitting a request is counted against, or nil: the
+  CALLING sitting when the request carries one, and the open sitting
+  under the live grant only when it does not.
+
+  Every sitting of a seat shares the seat's grant, so once a seat runs
+  more than one at a time `open-sitting` names the NEWEST open sitting
+  and not the one that called — a write and a refusal would land on a
+  sibling's row. The connector stamps `:waymark10/sitting` on every
+  door call a bound session makes (ticket 51dfd10b), which is the
+  request saying which sitting it is; this reads that first so the
+  guess is only ever the fallback."
+  [eng req]
+  (or (some-> (:waymark10/sitting req) str not-empty)
+      (:id (open-sitting eng req))))
+
 (defn- count-committed!
   "R-10.6, the transitions half: a committed, non-replayed transition
   under a live grant adds one to the open sitting's count. Returns the
@@ -284,8 +300,7 @@
              (nil? (:replayed? result)))
     ;; the calling session's own sitting first (ticket f6c8d5ce): a
     ;; bound session is never counted on a sibling under the grant
-    (when-some [sitting-id (or (some-> (:waymark10/sitting req) str not-empty)
-                               (:id (open-sitting eng req)))]
+    (when-some [sitting-id (counted-sitting-id eng req)]
       (seats/bump-counter! eng sitting-id :transitions))
     ;; the corrections line: a person's write on a row a closed sitting
     ;; last moved counts against THAT sitting, found by the previous
@@ -1234,9 +1249,9 @@
         ;; R-10.6: a partial bulk's per-item 409s count on the
         ;; sitting as a thrown one would (waymark-fp62.7.11)
         (do (when (pos? (or (:conflicts result) 0))
-              (when-some [sitting (open-sitting eng req)]
+              (when-some [sitting-id (counted-sitting-id eng req)]
                 (dotimes [_ (:conflicts result)]
-                  (seats/bump-counter! eng (:id sitting) :refusals))))
+                  (seats/bump-counter! eng sitting-id :refusals))))
             (report-response result))))))
 
 (defn- batch-action [eng]
@@ -1996,7 +2011,9 @@
 (defn wrap-refusals-counted
   "R-10.6, the refusals half: a 409 served under a live grant is fuel
   the sitting spent on law the model did not know ahead of time, so
-  the open sitting for that grant counts one. A refusal is the first
+  the CALLING sitting counts one — the request names it whenever a
+  connector session is bound to one, and the open sitting under the
+  grant answers only when it names none. A refusal is the first
   thing this codebase has ever counted, and the reason it is counted
   at all is that it is waymark's OWN backlog — a seat that spends its
   week on refused doors is a place where the law was not spoken at the
@@ -2031,8 +2048,8 @@
       (catch Exception e
         (let [d (ex-data e)]
           (when (and (:waymark10/problem d) (= 409 (:status d)))
-            (when-some [sitting (open-sitting eng req)]
-              (seats/bump-counter! eng (:id sitting) :refusals
+            (when-some [sitting-id (counted-sitting-id eng req)]
+              (seats/bump-counter! eng sitting-id :refusals
                                    {:type (:type d) :guard (:guard d)})))
           (throw e))))))
 

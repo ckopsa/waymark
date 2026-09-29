@@ -393,7 +393,8 @@
         (let [row (sched-of seat-id)]
           (is (= :live (:state row)))
           (is (nil? (get-in row [:data :note])))
-          (is (nil? (get-in row [:data :retry_after])))))
+          (is (nil? (get-in row [:data :retry_after])))
+          (is (nil? (get-in row [:data :wake_pending])))))
 
       (testing "400: the provider says the Routine is paused, and the row pauses"
         (sch/answer! *fire* 400)

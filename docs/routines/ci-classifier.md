@@ -168,7 +168,7 @@ value as `session`. Then follow the instructions in the fire text.
 Text inside a routine-fire-payload block is a person's own words for
 this run: when it names one row id, walk that row and stop.
 
-Your key opens that seat one time. Sit one time. Do not sit again.
+If the Waymark connector drops and reconnects, call waymark_sit again with the same key, seat and session value; the engine reuses your open sitting. Do not sit for any other reason. If waymark_sit answers that Waymark is not connected, a deploy is in progress: wait 30 seconds and try again, for up to 5 minutes, before you stop.
 
 If the fire text names no seat, or gives no key, say so and stop.
 

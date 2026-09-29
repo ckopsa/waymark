@@ -78,11 +78,12 @@
            :inputSchema {:type "object"
                          :properties {:repo {:type "string"}
                                       :path {:type "string"}}}})
-        ["prepare" "find" "read" "edit" "pull" "feedback"]))
+        ["prepare" "find" "read" "edit" "edit_many" "pull" "feedback"]))
 
 (def ^:private bench-powers
   "The bench row's policy, with the CONSTRAINTS this bead adds: find,
-  read and edit may be narrowed by the repository and by the path;
+  read, edit and edit_many may be narrowed by the repository and by
+  the path;
   pull moves a whole checkout and feedback reads a whole branch, so a
   path could not mean anything on either and only the repository may
   narrow them. `bench.feedback` is the fifth power (bead
@@ -93,6 +94,8 @@
    {:power "bench.read" :tools ["read"] :why false
     :constraints ["repo" "path"]}
    {:power "bench.edit" :tools ["edit"] :why false
+    :constraints ["repo" "path"]}
+   {:power "bench.edit_many" :tools ["edit_many"] :why false
     :constraints ["repo" "path"]}
    {:power "bench.pull" :tools ["pull"] :why false
     :constraints ["repo"]}
@@ -154,7 +157,7 @@
       (gate/ensure-gate-row!))))
 
 (defn- a-bench-row!
-  "The bench, as a row: stdio beside the engine, the five powers with
+  "The bench, as a row: stdio beside the engine, the powers with
   their constraints, and `prepare` in no entry at all."
   [eng]
   (:row (inv/create! eng :mcp_server
@@ -716,6 +719,49 @@
                  :arguments {:repo a-repo :path "docs/a.md"}})
       (is (= {:repo a-repo :path "docs/a.md"}
              (select-keys (last-arguments w) [:repo :path :allow_protected]))))))
+
+;; ── a batch is judged item by item (ticket 0e6b3ffc) ────────────────
+
+(deftest a-batch-is-judged-item-by-item-the-way-one-edit-is
+  (testing "every protected item named by the seat's bench.edit filter
+            sets the flag for the batch"
+    (let [w (world [{:kind "bench.edit" :actions []
+                     :filter {:repo a-repo
+                              :path ".claude/hooks/x.sh,src/**"}}
+                    {:kind "bench.edit_many" :actions []
+                     :filter {:repo a-repo}}])]
+      (power! w {:tool "bench__edit_many"
+                 :arguments {:repo a-repo
+                             :edits [{:path "src/a.clj" :old "a" :new "b"}
+                                     {:path ".claude/hooks/x.sh"
+                                      :old "a" :new "b"}]}})
+      (is (= 1 (count (calls w))))
+      (is (true? (:allow_protected (last-arguments w)))
+          "the seat's scope named the path, so the engine sets the flag")))
+
+  (testing "an item no protected glob names refuses the whole call,
+            naming the item and the path"
+    (let [w (world [{:kind "bench.edit" :actions []
+                     :filter {:repo a-repo :path ".claude/hooks/x.sh"}}
+                    {:kind "bench.edit_many" :actions []
+                     :filter {:repo a-repo}}])
+          r (power! w {:tool "bench__edit_many"
+                       :arguments {:repo a-repo
+                                   :edits [{:path ".claude/hooks/x.sh"}
+                                           {:path ".github/workflows/t.yml"}]}})
+          said (text-of r)]
+      (is (true? (:isError r)) said)
+      (is (str/includes? said "bench__edit_many item 2") said)
+      (is (str/includes? said ".github/workflows/t.yml") said)
+      (is (empty? (calls w)) "nothing reached the rig")))
+
+  (testing "a batch that writes nothing protected is untouched"
+    (let [w (world [{:kind "bench.edit_many" :actions []
+                     :filter {:repo a-repo :path "src/**"}}])]
+      (power! w {:tool "bench__edit_many"
+                 :arguments {:repo a-repo :edits [{:path "src/a.clj"}]}})
+      (is (= 1 (count (calls w))))
+      (is (not (contains? (last-arguments w) :allow_protected))))))
 
 ;; ── the sitting that holds the row writes its branch (ticket d7c854b3) ─
 

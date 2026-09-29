@@ -540,6 +540,10 @@
                              ;; submit is a landing of its own (ticket
                              ;; 92871afb)
                              :landing_error nil
+                             ;; nor is a train's red: it named the old
+                             ;; head (ticket 6566d32f)
+                             :train_red_head nil
+                             :train_red nil
                              ;; nor is the last merge state: the forge
                              ;; computes it again for the new head, and
                              ;; a stale `conflicted` would fail the
@@ -576,6 +580,13 @@
   (move-the-ticket! row ctx #{:in_review} :return)
   (assoc-in row [:data :rounds] 0))
 
+(defhandler rework-the-change [row _inp _ctx]
+  ;; `unstick`'s count, walked by the TICKET (ticket 9ace68fb): a groom,
+  ;; an unblock or a resume is a person's reading of the ask, so the
+  ;; rounds start again. The ticket is already on its way to `open`,
+  ;; so nothing here moves it.
+  (assoc-in row [:data :rounds] 0))
+
 (defhandler unstick-the-pull-request [row _inp ctx]
   ;; A STUCK CHANGE WITH A PULL REQUEST GOES BACK WHERE THE PULL REQUEST
   ;; IS (ticket 6bdaf6fe). An `open` change is read by neither the
@@ -591,7 +602,9 @@
           ;; the forge computes these again for the head it reads next
           :failing_checks nil
           :conflicts nil
-          :landing_error nil))
+          :landing_error nil
+          :train_red_head nil
+          :train_red nil))
 
 ;; ── the checks went red, or green again (ticket d1742908) ───────────
 
@@ -601,12 +614,16 @@
   ;; A conflict rides as `merge-conflict` among the names, and its
   ;; paths, when the bench could name them, beside (ticket 5f12e772).
   ;; A landing that failed rides as `landing:<step>`, and the step's
-  ;; output beside it (ticket 92871afb).
+  ;; output beside it (ticket 92871afb). A merge train that found the
+  ;; change red rides as the head it judged and the train's reason
+  ;; beside the train's red names (ticket 6566d32f).
   [row inp]
   (update row :data assoc
           :failing_checks (vec (:failing_checks inp))
           :conflicts (some-> (:conflicts inp) seq vec)
-          :landing_error (some-> (:landing_error inp) str not-empty)))
+          :landing_error (some-> (:landing_error inp) str not-empty)
+          :train_red_head (some-> (:train_red_head inp) str not-empty)
+          :train_red (some-> (:train_red inp) str not-empty)))
 
 (defhandler write-the-failing-checks [row inp _ctx]
   ;; the ceiling's red: the ticket stays in review, and the stuck
@@ -626,7 +643,7 @@
   ;; the red sent back goes out for review again (ticket 2e869934).
   (move-the-ticket! row ctx #{:open} :review)
   (update row :data assoc :failing_checks nil :conflicts nil
-          :landing_error nil))
+          :landing_error nil :train_red_head nil :train_red nil))
 
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
@@ -726,6 +743,20 @@
     (if (and (= :agent type) (str/blank? (str acts-for)))
       (t/deny)
       (t/allow))))
+
+(defguardfn only-its-ticket-reworks-it
+  {:reads [:within]
+   :open "No door clears this one. A stuck change goes back to work when a person grooms, unblocks or resumes the ticket it was built for; the ticket moves it then, and a person who wants it sooner taps unstick."
+   :explain "A stuck change is put back to work by its ticket's groom, unblock or resume, in the same transaction, and by no hand: a person's own door is unstick."}
+  [_row _inp ctx]
+  ;; ticket's `only-its-change-moves-it`, the other way round: the door
+  ;; opens inside a `ticket` door's own transaction and for nobody's
+  ;; hand. The wire, the render probe and every rehearsal answer nil,
+  ;; so it renders refused, which is true.
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :ticket kind) (contains? #{:groom :unblock :resume} action))
+      (t/allow)
+      (t/deny))))
 
 (defn- has-a-pull-request? [row]
   (some? (get-in row [:data :number])))
@@ -1134,6 +1165,19 @@
                       :label "Why the push did not land"
                       :help "The end of the output of the step the bench's landing failed at, when a submit never reached GitHub. The house writes it when it moves the change to failing, and clears it when the seat submits again."}}
      [:maybe [:string {:max 4000}]]]
+    ;; written by a merge train that found this change red though its
+    ;; own head is green (ticket 6566d32f): the head the train judged,
+    ;; and the train's branch and run url. While `head_sha` still is
+    ;; that head the forge pass does not recover the change; a new
+    ;; head, or the seat's next submit, clears both.
+    [:train_red_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:train_red {:optional true
+                 :x-display
+                 {:widget "prose"
+                  :label "Why a merge train found it red"
+                  :help "This change's own checks are green, and the merge train that carried it with others went red with it: the train's branch and the url of its run. `failing_checks` names the train's red checks. The change stays failing until its head moves."}}
+     [:maybe [:string {:max 1000}]]]
     ;; a submit whose landing opened a pull request the forge never
     ;; adopted (ticket 58e706d6): the first time the forge pass saw it,
     ;; and the note it writes once the window has passed. The adoption
@@ -1536,7 +1580,16 @@
      :handler observe-the-pull-request
      :input [:map
              [:head_branch {:x-display {:raw true}}
-              [:string {:min 1 :max 200}]]]
+              [:string {:min 1 :max 200}]]
+             ;; THE REPOSITORY MOVES WITH IT (ticket 1ebcd19f). A walk
+             ;; row restated to another repository keeps its
+             ;; `change_id`, so the sit writes the new repository and
+             ;; its policy's base here too, on a change that never
+             ;; opened: the old repository holds nothing of it.
+             [:repository {:optional true :x-display {:raw true}}
+              [:string {:min 1 :max 140}]]
+             [:base_branch {:optional true :x-display {:raw true}}
+              [:maybe [:string {:max 200}]]]]
      ;; :edit-shape — the input restates a field of the document, as
      ;; the adoptions do; a prefill for a hidden door is scaffolding
      ;; for nobody.
@@ -1567,7 +1620,14 @@
              [:landing_error {:optional true
                               :x-display {:widget "prose"
                                           :label "Why the push did not land"}}
-              [:maybe [:string {:max 4000}]]]]
+              [:maybe [:string {:max 4000}]]]
+             ;; a merge train's red (ticket 6566d32f): the head it
+             ;; judged, and its branch and run url
+             [:train_red_head {:optional true} [:maybe [:string {:max 64}]]]
+             [:train_red {:optional true
+                          :x-display {:widget "prose"
+                                      :label "Why a merge train found it red"}}
+              [:maybe [:string {:max 1000}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The required checks finished red on this head, and the ticket this change was built for goes back to the queue, so the seat that wrote it walks it again. The way back is a green head, which the house reads on its next pass, or the seat's next submit."}
@@ -1712,6 +1772,22 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Back to work" :style :primary :order 1
                :description "Put this change back in the queue — the rounds start again"}}
+
+    ;; THE TICKET'S WAY BACK FOR ITS CHANGE (ticket 9ace68fb). A stall
+    ;; sends the ticket to draft, and a block takes it out of the queue;
+    ;; the groom, unblock or resume that puts it back in `open` puts a
+    ;; stuck change with no pull request back to work with it, or the
+    ;; sit would leave the ticket out beside its stuck change forever.
+    ;; A change WITH a pull request stays stuck for a person's
+    ;; unstick_submitted.
+    :rework
+    {:from #{:stuck} :to :open
+     :guards [only-its-ticket-reworks-it
+              the-change-has-no-pull-request]
+     :handler rework-the-change
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Reworked" :order 21
+               :description "Its ticket was groomed, unblocked or resumed — the change goes back to work"}}
 
     ;; the same door for a change with a pull request (ticket 6bdaf6fe):
     ;; it lands where the pull request is, so the forge pass reads its
