@@ -887,16 +887,22 @@
                             (subvec riders 0 (quot (count riders) 2)))
               (assoc :tries tries :size size)))))
 
+(defn- run-of [x] (some-> (:run_id x) str not-empty))
+
 (defn- retry-train!
   "A train whose run was cancelled or timed out runs its checks once
   more, and that counts as one of its trains; the second time, the line
-  goes one at a time. → the train that stands after it."
+  goes one at a time. The cancelled run stays on the train as
+  `stale_run_id`, so a retry read by its branch never reads that run
+  again. → the train that stands after it."
   [ctx seen repo train verdict]
   (if (:retried train)
     (one-at-a-time! ctx seen repo train (str "finished " verdict " twice"))
     (do (warn! repo ": the train " (:branch train) " finished " verdict
                "; its checks run once more")
-        (assoc (dispatch-checks! ctx repo train)
+        (assoc (dispatch-checks! ctx repo
+                                 (cond-> train
+                                   (run-of train) (assoc :stale_run_id (run-of train))))
                :retried true :tries (inc (long (or (:tries train) 1)))))))
 
 (defn train-finished!
@@ -920,26 +926,33 @@
     :else (retry-train! ctx seen repo train verdict)))
 
 (defn- status-args [repo train]
-  (if-some [run (some-> (:run_id train) str not-empty)]
+  (if-some [run (run-of train)]
     {:repo repo :run_id run}
     {:repo repo :branch (:branch train) :head (:head train)}))
 
 (defn advance-train!
   "Read a standing train's run once → the train that stands after it:
   the same one while its run is pending or the rig does not answer,
-  and what `train-finished!` says once it finished or was refused."
+  and what `train-finished!` says once it finished or was refused. A
+  train read by its branch keeps the run the answer names; an answer
+  naming the run a retry left behind (`stale_run_id`) is read as
+  pending, since the retry's own run has not shown yet."
   [ctx seen repo policy train]
   (let [answer (ask ctx :train_status (status-args repo train))
         why (refused answer)
-        st (some-> (:state answer) name)]
+        st (some-> (:state answer) name)
+        run (run-of answer)
+        known (cond-> train
+               (and run (nil? (run-of train))) (assoc :run_id run))]
     (cond
       (nil? answer) train
       (contains? missing-power-refusals why) train
       why (do (warn! "the rig refused the status of " (:branch train) " ("
                      (reason-of answer) ")")
               (train-finished! ctx seen repo policy train "cancelled"))
-      (or (nil? st) (= "pending" st)) train
-      :else (train-finished! ctx seen repo policy train st))))
+      (and run (= run (:stale_run_id train))) train
+      (or (nil? st) (= "pending" st)) known
+      :else (train-finished! ctx seen repo policy known st))))
 
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own

@@ -478,3 +478,26 @@
       (train-pass! r seen (four) (train-policy))
       (is (= 1 (count (args-of r "bench__train_build"))) "no train is built again")
       (is (= [1] (mapv :number (args-of r "bench__update_branch")))))))
+
+(deftest a-retried-train-read-by-its-branch-skips-the-cancelled-run
+  (let [answers (atom {"train_checks" {:run_id nil :head "train-head"}
+                       "train_status" {:state "cancelled" :run_id "77" :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        t1 (get (train-pass! r seen (four) (train-policy)) wm)
+        [t2] (finish-pass! r seen t1)]
+    (is (true? (:retried t2)))
+    (is (= "77" (:stale_run_id t2)) "the cancelled run stays on the train")
+    (is (nil? (:run_id t2)) "the retry showed no run yet")
+    (testing "the old cancelled run is read as the retry not shown yet"
+      (let [[t3] (finish-pass! r seen t2)]
+        (is (= t2 t3))
+        (is (= {:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"}
+               (last (args-of r "bench__train_status"))))
+        (is (not (get @seen [:train-done wm])) "the line is not sent one at a time")
+        (is (empty? (args-of r "bench__train_delete")))))
+    (testing "the retry's own run is read, and lands green"
+      (swap! answers assoc "train_status" {:state "success" :run_id "78" :head "train-head"})
+      (let [[t4] (finish-pass! r seen t2)]
+        (is (nil? t4))
+        (is (= 1 (count (args-of r "bench__train_land"))))))))
