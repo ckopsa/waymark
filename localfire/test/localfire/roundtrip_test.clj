@@ -111,6 +111,17 @@
           r (server/judge-probe 0 (probe-out (str server/probe-pass-word " " human)) "")]
       (is (false? (:ok r)))
       (is (= server/probe-not-delegate (:detail r)))))
+  (testing "an agent a proxy states as acting for a person passes by acts_for"
+    (let [proxied (json/write-value-as-string {"id" "localfire-runner" "type" "agent"
+                                               "display" "" "roles" []
+                                               "acts_for" "colton"})]
+      (is (true? (:ok (server/judge-probe 0 (probe-out (str server/probe-pass-word " " proxied)) ""))))))
+  (testing "an agent holding its own key, acting for nobody, does not"
+    (let [bare (json/write-value-as-string {"id" "localfire-runner" "type" "agent"
+                                            "display" "" "roles" []})
+          r (server/judge-probe 0 (probe-out (str server/probe-pass-word " " bare)) "")]
+      (is (false? (:ok r)))
+      (is (= server/probe-not-delegate (:detail r)))))
   (testing "no principal, or the bare pass word, is not a delegate"
     (is (false? (:ok (server/judge-probe 0 (probe-out (str server/probe-pass-word " null")) ""))))
     (is (false? (:ok (server/judge-probe 0 (probe-out server/probe-pass-word) "")))))

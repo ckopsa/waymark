@@ -145,24 +145,32 @@
 ;; as success, so a second close is harmless.
 
 (defn claude-home
-  "Where Claude Code keeps its transcripts: the HOME the runs inherit."
-  []
-  (or (System/getenv "HOME") (System/getProperty "user.home")))
+  "Where Claude Code keeps its transcripts, as the hook sees them: the
+  config's `:claude-home` when a `:claude` wrapper runs the sessions
+  somewhere else, or else the HOME the runs inherit from this process."
+  ([] (claude-home nil))
+  ([cfg]
+   (or (:claude-home cfg)
+       (System/getenv "HOME") (System/getProperty "user.home"))))
 
 (defn close-sitting!
   "Run the place's `sitting-close.sh close-run` for run `id` with `note`,
   record its answer in `run.edn`, and log one line. → the hook's status
   line."
   [state id note]
-  (let [runs-dir (:runs-dir (:config state))
+  (let [cfg      (:config state)
+        runs-dir (:runs-dir cfg)
         hook     (runs/hook-file runs-dir id)
         input    (json/write-value-as-string
                   {:session_id      (str id)
-                   :transcript_path (.getPath (runs/transcript-file (claude-home) runs-dir id))})
+                   :transcript_path (.getPath (runs/transcript-file (claude-home cfg) runs-dir id))})
         {:keys [exit out]}
         (if-not (.isFile hook)
           {:exit nil :out "failed (none): the run's place has no sitting-close.sh"}
-          (try ((:closer state) [(.getPath hook) "close-run" note]
+          ;; :hook-via prefixes the argv, as :claude does for a run, so
+          ;; the hook runs on the side of the wrapper the run ran on
+          (try ((:closer state) (into (vec (:hook-via cfg))
+                                      [(.getPath hook) "close-run" note])
                                 (runs/place-dir runs-dir id) input)
                (catch Exception e
                  {:exit nil :out (str "failed (none): " (ex-message e))})))
@@ -262,7 +270,8 @@
 (def probe-not-delegate
   "The detail when the door answered, but not to a delegate's token."
   (str "The door answered, but not as a person's tool: "
-       "add this client to WAYMARK10_OIDC_DELEGATE_CLIENTS."))
+       "add this client to WAYMARK10_OIDC_DELEGATE_CLIENTS, or, behind "
+       "a proxy that states the principal, send X-Waymark-Acts-For."))
 
 (def ^:private probe-timeout-ms 120000)
 
@@ -296,14 +305,19 @@
     (if (> (count s) 300) (str (subs s 0 300) "…") s)))
 
 (defn delegate-principal?
-  "Whether discover's `principal` is a delegate's: a person's token
-  minted through a tool (waymark10.server.oidc, THE DELEGATE). Discover
-  shows no acts-for, so this reads what it does show: the type `agent`
-  and the id `delegate-id` makes, `<client>:<sub>`."
+  "Whether discover's `principal` is a delegate's: an agent acting for a
+  person, which is what `waymark_sit` asks of a seat key's session. An
+  engine that shows `acts_for` answers it outright — the token a tool
+  mints for a person (waymark10.server.oidc, THE DELEGATE) and the
+  `X-Waymark-Acts-For` a proxy in front of a local engine states alike.
+  An engine older than that field shows no acts-for, so for it this
+  reads what the OIDC delegate's id shows: `delegate-id`'s
+  `<client>:<sub>`."
   [p]
   (and (map? p)
        (= "agent" (:type p))
-       (str/includes? (str (:id p)) ":")))
+       (or (not (str/blank? (str (:acts_for p ""))))
+           (str/includes? (str (:id p)) ":"))))
 
 (defn- said-principal
   "The principal after the pass word → a value, or ::none when the

@@ -120,6 +120,8 @@ in the working directory. The file holds no secret.
 | `:mcp` | map `{:name :url}` | the engine's MCP door for the session. Default name `Waymark`, the cloud connector's, so the tools are `mcp__Waymark__…` as the seats' instructions spell them |
 | `:allowed-tools` | list of strings | passed to `--allowedTools`. Default `["mcp__Waymark__*"]` |
 | `:check-seconds` | positive integer | how often the credential check of R-4.6 runs. Default 600 |
+| `:hook-via` | list of strings | the command the sitting-close hook of R-5.6 runs through, ahead of the hook's own path, as `:claude` is for a run. Default none: the hook runs on this machine |
+| `:claude-home` | path | the HOME the runs' Claude Code writes transcripts under, as the hook sees it. Default this process's HOME |
 | `:routines` | map name → routine | the routines below |
 
 A routine has `:model` (required, the CLI model id), `:max-concurrent`
@@ -153,7 +155,10 @@ browser.
 then every `:check-seconds`. The check is a headless probe that starts
 claude with a run's `mcp.json` shape and asks it to call one cheap
 Waymark read (`waymark_discover`) and exit; it passes when that call
-answers. The server records `{ok, checked_at, detail}`, which
+answers with a delegate's `principal`: type `agent` with an `acts_for`,
+which both an OIDC delegate and a proxy's `X-Waymark-Acts-For` give.
+Against an engine that shows no `acts_for`, an id of the delegate's
+`<client>:<sub>` shape passes instead. The server records `{ok, checked_at, detail}`, which
 `/healthz` answers. While the check fails, a fire answers 429 (R-5.1)
 with `Retry-After` set to the seconds until the next check, and the
 engine reads 429 as throttled: its runner pool skips this link until
@@ -237,6 +242,15 @@ spec).
 engine's `already-fired?` dedupes replays on its side, and the server
 holds no queue. Runs in flight at a restart are recorded as `lost` at
 the next start, from the records that say `running` with no end.
+
+A run's Stop hook closes its sitting, and a run that ended without
+reaching it did not. So when a run's process exits, and at start for
+each `lost` run not yet closed, the server runs the copied place's
+`sitting-close.sh close-run` itself, with the session id and the
+transcript path under `:claude-home` on its stdin, and notes the answer
+in `run.edn`. When `:claude` runs the sessions somewhere else (a
+container), `:hook-via` runs the hook there too, where the transcript
+and the shell the hook needs are.
 
 ## 6. Requirements: the prompt
 
