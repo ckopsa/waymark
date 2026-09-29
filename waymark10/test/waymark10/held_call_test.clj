@@ -17,6 +17,7 @@
   suite free of a transport it is not about."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.resource :refer [defresource]]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
@@ -803,3 +804,140 @@
     (testing "a fresh consumer function, as a restarted engine builds, reads the cursor"
       (drain-notices! eng)
       (is (= 1 (count (chat-sends log)))))))
+
+;; ── the addressed notice (docs/spec-addressed-notice.md) ───────────
+;;
+;; A notice_rule tells the member a row's ref field names, over the
+;; notifier: a small chore kind whose assignee is a ref to member, the
+;; same fake chat, and the notifier's own consumer drained by hand.
+
+(defresource notice-chore
+  {:kind :chore
+   :plural "chores"
+   :states [:backlog :active]
+   :initial :backlog
+   :terminal #{:active}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name {:x-display {:label "Name"}} [:string {:min 1 :max 120}]]
+            [:assignee {:optional true :kind :member
+                        :x-display {:label "Assigned to"}}
+             [:maybe :waymark/ref]]]
+   :actions {:queue {:from #{:backlog} :to :active
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "A queued chore stays queued in this rig."}
+                     :display {:label "Queue"}}}})
+
+(defn- notice-world []
+  (let [log (atom [])
+        fake (fake-chat log (atom false))
+        eng (engine/engine {:storage (memory/storage)
+                            :resources [caps/capability notice-chore]
+                            :services {:mcp-servers
+                                       {:client-fn (fn [row]
+                                                     (when (= "tgrambot"
+                                                              (get-in row [:data :name]))
+                                                       fake))}}})
+        _ (inv/create! eng :capability
+                       {:token "chat.send"
+                        :description "chat.send through a server row."
+                        :enforced_by "this engine's own power door"}
+                       {:principal colton})
+        server (:row (inv/create! eng :mcp_server
+                                  {:name "tgrambot" :transport "http"
+                                   :url "http://fake.invalid/mcp/"
+                                   :powers [{:power "chat.send"
+                                             :tools ["send_message"]
+                                             :approval "person"}]}
+                                  {:principal colton}))
+        notifier (:row (inv/create! eng :notifier
+                                    {:name "the house chat"
+                                     :server (str (:id server))
+                                     :tool "tgrambot__send_message"
+                                     :input_template {:chat_id "0"
+                                                      :text "{kind} {action}: {summary}"}
+                                     :on [{:kind "nothing_here"}]
+                                     :audience "colton"
+                                     :link_base "https://work.example.org/"}
+                                    {:principal colton}))]
+    {:eng eng :log log :notifier-id (str (:id notifier))}))
+
+(defn- notice-member! [{:keys [eng notifier-id]} display notify?]
+  (let [m (:row (inv/create! eng :member {:display display :actor_type "human"}
+                             {:principal colton}))]
+    (when notify?
+      (inv/invoke! eng :member (str (:id m)) :set_notify
+                   {:notify {:notifier notifier-id :input {:chat_id "42"}}}
+                   {:principal colton
+                    :if-match (inv/etag :member (:id m) (:version m))}))
+    (str (:id m))))
+
+(defn- notice-rule! [{:keys [eng notifier-id]} field]
+  (:row (inv/create! eng :notice_rule
+                     {:name "tell the assignee"
+                      :kind "chore"
+                      :when {:to_state "active"}
+                      :address {:field field}
+                      :notifier notifier-id}
+                     {:principal colton})))
+
+(defn- notice-rule-data [eng id]
+  (:data (store/with-tx (:storage eng)
+           #(store/load-row (:storage eng) % :notice_rule (str id) {}))))
+
+(defn- notice-chore! [eng assignee]
+  (:row (inv/create! eng :chore (cond-> {:name "the dishes"}
+                                  assignee (assoc :assignee assignee))
+                     {:principal colton})))
+
+(defn- queue-chore! [eng chore who]
+  (inv/invoke! eng :chore (str (:id chore)) :queue {} {:principal who}))
+
+(deftest a-notice-rule-tells-the-assignee-through-their-channel-with-the-link
+  (let [{:keys [eng log] :as w} (notice-world)
+        jack (notice-member! w "Jack" true)
+        r (notice-rule! w "assignee")
+        c (notice-chore! eng jack)]
+    (drain-notices! eng)
+    (queue-chore! eng c colton)
+    (drain-notices! eng)
+    (let [s (chat-sends log)
+          args (get-in (first s) [:params :arguments])]
+      (is (= 1 (count s)))
+      (is (= "send_message" (get-in (first s) [:params :name])))
+      (is (= "42" (str (:chat_id args))) "the member says where")
+      (is (str/includes? (str (:text args))
+                         (str "https://work.example.org/api/chores/" (:id c))))
+      (is (= 1 (:sent (notice-rule-data eng (:id r))))))))
+
+(deftest the-assignee-who-moved-the-row-is-told-nothing
+  (let [{:keys [eng log] :as w} (notice-world)
+        jack (notice-member! w "Jack" true)
+        _ (notice-rule! w "assignee")
+        c (notice-chore! eng jack)]
+    (drain-notices! eng)
+    (queue-chore! eng c (t/principal {:id jack :display "Jack"}))
+    (drain-notices! eng)
+    (is (= [] (chat-sends log)))))
+
+(deftest a-notice-rule-naming-a-non-ref-or-unknown-field-refuses-with-a-sentence
+  (let [w (notice-world)]
+    (doseq [field ["name" "nowhere"]]
+      (testing field
+        (let [e (refused #(notice-rule! w field))]
+          (is (some? e))
+          (is (re-find #"not a ref field|address-names-a-member"
+                       (str (ex-message e) " " (pr-str (ex-data e))))))))))
+
+(deftest a-member-without-notify-is-skipped-and-counted
+  (let [{:keys [eng log] :as w} (notice-world)
+        jill (notice-member! w "Jill" false)
+        r (notice-rule! w "assignee")]
+    (drain-notices! eng)
+    (queue-chore! eng (notice-chore! eng jill) colton)
+    (queue-chore! eng (notice-chore! eng nil) colton)
+    (drain-notices! eng)
+    (is (= [] (chat-sends log)))
+    (let [data (notice-rule-data eng (:id r))]
+      (is (= 1 (:skipped data)))
+      (is (= 1 (:unaddressed data)) "an unassigned chore notifies nobody"))))

@@ -529,6 +529,26 @@
 (defhandler set-handle [row inp _ctx]
   (assoc-in row [:data :handle] (:handle inp)))
 
+(defhandler set-notify [row inp _ctx]
+  (if-some [n (:notify inp)]
+    (assoc-in row [:data :notify] n)
+    (update row :data dissoc :notify)))
+
+;; how to reach this member (docs/spec-addressed-notice.md R-2): a
+;; notice_rule says WHO is told, this says HOW — the notifier that
+;; carries the send and the tool's own input for this person (a
+;; chat_id). One person's contact in one place, out of N rules.
+(def ^:private notify-schema
+  [:maybe
+   [:map
+    [:notifier {:x-display {:label "Notifier"
+                            :help "The id of the notifier row whose server and tool carry the send."}}
+     [:string {:min 1 :max 64}]]
+    [:input {:optional true
+             :x-display {:label "Where"
+                         :help "The tool's arguments for this person, laid over the rule's text, e.g. {\"chat_id\": \"42\"}."}}
+     [:maybe [:map-of :keyword :any]]]]])
+
 (defresource member
   {:kind :member
    :plural "members"
@@ -653,6 +673,13 @@
                                     :label "Acts for"
                                     :help "The person this agent acts for — the identity a connector's token named when the gate first saw it. Written by the identity gate, never by hand; empty for people and for agents holding their own key."}}
              [:maybe [:string {:max 256}]]]
+            ;; how a notice_rule reaches this member (R-2). Absent =
+            ;; never told: a rule skips and counts. Set by :set_notify.
+            [:notify {:optional true
+                      :x-display {:raw true
+                                  :label "How to reach them"
+                                  :help "The notifier and the tool's input a notice rule sends through. Empty: a rule addressing this member skips them."}}
+             notify-schema]
             [:invited_by {:optional true
                           :x-display {:raw true
                                       :label "Invited by"
@@ -773,6 +800,16 @@
                  :safety {:idempotent true :reversible true :confirm false}
                  :handler set-handle
                  :display {:label "Set handle" :order 3}}
+    :set_notify {:from #{:active} :to :active
+                 :input [:map
+                         [:notify {:x-display {:label "How to reach them"
+                                               :help "The notifier and the tool's input a notice rule sends through; empty clears it."}}
+                          notify-schema]]
+                 :record true
+                 :edit {:prefill [:notify]}
+                 :safety {:idempotent true :reversible true :confirm false}
+                 :handler set-notify
+                 :display {:label "Set how to reach them" :order 4}}
     ;; the presence curtain's two touches (waymark-tti.4):
     ;; self-service, durable, one press each way. No :input on
     ;; purpose — and therefore no :record (resource.clj refuses
