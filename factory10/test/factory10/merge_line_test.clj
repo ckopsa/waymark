@@ -351,6 +351,22 @@
       (is (= {wm nil} (train-pass! r seen (four) (train-policy :line_train train))))
       (is (= 1 (count (args-of r "bench__train_land")))))))
 
+(deftest a-train-names-the-policy-s-test-workflow
+  (let [answers (atom {"train_checks" {:run_id nil :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        pol (train-policy :test {:workflow "tests.yml" :input "only"})
+        train (get (train-pass! r seen (four) pol) wm)]
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1" :workflow "tests.yml"}]
+           (args-of r "bench__train_checks"))
+        "the checks dispatch the policy's workflow")
+    (is (= "tests.yml" (:workflow train)) "the train records it")
+    (train-pass! r seen (four) (assoc-in pol [:data :line_train] train))
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"
+             :workflow "tests.yml"}]
+           (args-of r "bench__train_status"))
+        "with no run yet, the status reads the same workflow")))
+
 ;; ── a finished train (ticket 6033c287, slice 3 of 3deb06ed) ──────────
 
 (defn- finish-pass!

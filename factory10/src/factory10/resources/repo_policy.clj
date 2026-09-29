@@ -584,6 +584,7 @@
                              :head "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"
                              :base_head "0e1d2c3b4a5968778695a4b3c2d1e0f912345678"
                              :run_id "123456789"
+                             :workflow "tests.yml"
                              :started_at "2026-09-29T12:00:00Z"}]
                  :x-display
                  {:raw true
@@ -597,6 +598,9 @@
       [:head {:optional true} [:maybe [:string {:max 64}]]]
       [:base_head {:optional true} [:maybe [:string {:max 64}]]]
       [:run_id {:optional true} [:maybe [:string {:max 64}]]]
+      ;; the policy's test workflow the checks ran (90ce5c73), so a
+      ;; train with no run yet is read by the same workflow
+      [:workflow {:optional true} [:maybe [:string {:max 200}]]]
       ;; a red train's halves count their trains against the train
       ;; they look in, and a cancelled run is run once more (6033c287)
       [:tries {:optional true} [:maybe [:int {:min 1}]]]
