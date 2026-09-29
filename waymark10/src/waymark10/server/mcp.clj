@@ -3985,7 +3985,11 @@
   (try
     (when (power-refusal? tool-name out)
       (when-some [sitting-id (calling-sitting eng session)]
-        (seats/bump-counter! eng sitting-id :refusals)))
+        (let [doc (body-json {:body (-> out :content first :text)})
+              field (fn [k] (when (map? doc) (or (get doc k) (get doc (name k)))))]
+          (seats/bump-counter! eng sitting-id :refusals
+                               {:type (or (field :type) "power-refused")
+                                :guard (field :guard)}))))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 mcp refusal counter" tool-name "failed -"

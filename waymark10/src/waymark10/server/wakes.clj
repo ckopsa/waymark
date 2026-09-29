@@ -1148,6 +1148,7 @@
                            :turns 0 :transitions 0 :refusals 0
                            :served {}
                            :missed true
+                           :closed_by "missed"
                            :note (missed-note fired deadline schedule)}
                     model (assoc :model model))
                   {:principal seats/seats-actor :state :closed})

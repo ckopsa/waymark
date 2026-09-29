@@ -239,6 +239,7 @@
           (is (= "Walked one meal; it belonged." (:note d)))
           (is (= "session_01LxQRrdgCKxm6" (:harness_session d)))
           (is (some? (:ended_at d)) "stamped by the close")
+          (is (= "hook" (:closed_by d)) "the hook's close, not the door's")
           (is (== (seats/cost-of counts prices) (:cost_usd d)))
           (is (= 1 (:transitions d)) "frozen")
           (is (= 0 (:refusals d)) "frozen")

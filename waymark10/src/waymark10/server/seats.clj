@@ -170,6 +170,25 @@
   definitions `deploy` and members `registrar` precedent."
   (t/principal {:id "waymark10-seats" :type :system :display "Seats"}))
 
+(def hook-role
+  "The role the close hook's hand wears (routes/seats `sitting-close`).
+  The hook acts as the sitter, so its principal is the sitter's — this
+  role is the one mark that tells its close from the sitter's own
+  `close` through the door, and only the route puts it there."
+  :sitting-close-hook)
+
+(def closed-by-paths
+  "The four ways a sitting ends closed: through the `close` DOOR, by
+  the run's own stop HOOK, by the idle SWEEP (`sweep-sittings!`), or
+  born closed as a MISSED fire (`wakes/sweep-missed!`)."
+  ["door" "hook" "sweep" "missed"])
+
+(def ^:private closed-by-choices
+  {"door" "Door — closed through the sitting's own close action"
+   "hook" "Hook — closed by the run's stop hook"
+   "sweep" "Sweep — closed by the engine after the sitting went idle"
+   "missed" "Missed — a fire nobody sat in, born closed"})
+
 (def halt-reasons
   "The walls of R-5.2, and the only reasons a seat halts. Each is HARD
   (the grant scopes to nothing) and each must reach a person, which is
@@ -1251,6 +1270,24 @@
 (defhandler clear-chair-link [row _inp _ctx]
   (update row :data dissoc :fire_url :fire_token))
 
+;; the runner pool (waymark ticket d16b71bf): the list is restated
+;; whole, so adding a link and taking one off are each one restate.
+(defhandler set-runners [row inp _ctx]
+  (-> row
+      (assoc-in [:data :runners] (vec (:runners inp)))
+      (update :data #(if-some [o (:runner_order inp)]
+                       (assoc % :runner_order o)
+                       (dissoc % :runner_order)))))
+
+;; the pool order (waymark ticket 529deb73): `least_used` spreads the
+;; fires; `prefer` sends each to the first link that may fire, so a
+;; later link takes only the overflow.
+(def runner-orders ["least_used" "prefer"])
+
+(def runner-order-choices
+  {"least_used" "The least-used link that may fire; list order breaks a tie."
+   "prefer" "The first link in list order that may fire; a later link takes only the overflow."})
+
 ;; R-12.19: a fire moves nothing on the seat. The row is returned as
 ;; it stands, and the transition IS the record — `:record true` puts
 ;; the text in the log's inputs, the ledger counts the move, and the
@@ -1357,6 +1394,17 @@
   (select-keys inp [:input_tokens :output_tokens
                     :cache_read_tokens :cache_write_tokens]))
 
+(defn- closed-by
+  "Which path this close came down, from the hand that closes it: the
+  engine's own actor is the sweep, the hook's hand wears `hook-role`,
+  and every other hand came through the door."
+  [ctx]
+  (let [p (:principal ctx)]
+    (cond
+      (= (:id seats-actor) (:id p)) "sweep"
+      (contains? (set (:roles p)) hook-role) "hook"
+      :else "door")))
+
 (defhandler close-sitting [row inp ctx]
   ;; R-10.4: the model's prices are read AT THIS MOMENT, the cost is
   ;; computed from them, and the prices used are written beside it —
@@ -1378,6 +1426,7 @@
                      (nil? (get-in row [:data :harness_session])))
           (assoc-in [:data :harness_session] (:harness_session inp)))
         (assoc-in [:data :ended_at] (:now ctx))
+        (assoc-in [:data :closed_by] (closed-by ctx))
         (assoc-in [:data :prices] prices)
         (assoc-in [:data :cost_usd] (cost-of counts prices)))))
 
@@ -2830,7 +2879,21 @@
                   {:hidden true
                    :label "The Routine's token"
                    :spelled-by-hand "Written by Link and cleared by Unlink; never shown again, and never asked for by a form that already holds it."}}
-     [:maybe [:string {:min 16 :max 400}]]]]
+     [:maybe [:string {:min 16 :max 400}]]]
+    ;; the runner pool (waymark ticket d16b71bf): the links every seat
+    ;; this model is the chair of fires through, unless its schedule
+    ;; names its own list or its own link.
+    [:runners {:optional true
+               :x-display
+               {:label "Runner links"
+                :help "The runner links this model's seats fire through, in order. A fire skips a link that is waiting and takes the rest as the pool order says."}}
+     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+    [:runner_order {:optional true
+                    :x-display
+                    {:label "Pool order"
+                     :help "How a fire picks among the runner links that may fire. Empty is least used."
+                     :choices runner-order-choices}}
+     [:maybe (into [:enum] runner-orders)]]]
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :tier #{:eq :in}}
@@ -2947,7 +3010,30 @@
               :one-way "The fire URL and the token leave this model; linking again means pasting both once more."}
      :handler clear-chair-link
      :display {:label "Unlink the Routine" :style :danger :order 6
-               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}}
+               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}
+
+    ;; the runner pool (waymark ticket d16b71bf). A list names links,
+    ;; never a credential, so this door records.
+    :set_runners
+    {:from #{:active} :to :active
+     :input [:map
+             [:runners {:x-display
+                        {:label "Runner links"
+                         :help "The runner link ids this model's seats fire through, in order. An empty list hands the fire back to the one link."}}
+              [:vector {:max 20} [:string {:min 1 :max 200}]]]
+             [:runner_order {:optional true
+                             :x-display
+                             {:label "Pool order"
+                              :help "How a fire picks among the links that may fire. Empty is least used."
+                              :choices runner-order-choices}}
+              [:maybe (into [:enum] runner-orders)]]]
+     :record true
+     :guards [a-person-at-the-chair]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The new list replaces the one this model held; another restate puts it back."}
+     :handler set-runners
+     :display {:label "Runner links" :order 7
+               :description "Name the runner links this model's seats fire through, in order"}}}
    :deviations
    ["THE CHAIR'S TWO WRITE FENCES ARE BOTH GUARDS, where the schedule fences its link by omission. `sitter_key`, `fire_url` and `fire_token` are declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry all three. `key-not-written-by-hand` and `link-not-written-by-hand` are what refuse them, and each refusal names the door that writes the field instead. Both secrets stay `{:secret true}`, so the advertised create body drops them, no form asks, and the usability policies skip them; what a caller gains over silent omission is the sentence."
     "R-9.2 calls `name` unique and R-4.7's precedent (roles.clj's `one-spelling`) judges only ACTIVE rows. The two disagree about a retired model, so this kind takes the index's reading: `one_model_spelling` refuses any spelling already on record, active or retired, and its sentence sends the reader to `reactivate`. A second row for one identifier would split its prices, and a closed sitting costed against the wrong half would be wrong forever."]})
@@ -3147,6 +3233,18 @@
                                      :label "Cancelled run ids"
                                      :help "The run ids already counted in cancelled_runs, so a second poll of one run does not count it again."}}
      [:vector :string]]
+    ;; WHICH LAW THE LAST REFUSAL WAS. The count says how many; this
+    ;; says what the newest one was, so the close can tell whether the
+    ;; last invoke or bench write was refused, and on which guard.
+    [:last_refusal {:optional true
+                    :x-display
+                    {:raw true
+                     :label "The last refusal"
+                     :help "The newest 409 served under this sitting's grant: its problem type, the guard that refused when one did, and when. Stamped by the engine beside the count, frozen at the close."}}
+     [:maybe [:map
+              [:type [:maybe [:string {:max 200}]]]
+              [:guard {:optional true} [:maybe [:string {:max 200}]]]
+              [:at [:string {:max 64}]]]]]
     ;; THE THIRD THE ENGINE COUNTS (R-10.6a). The transcript is the
     ;; larger part of the bill, and the transcript is what the MCP
     ;; door answered. `served` is the record of it: tool name → the
@@ -3256,7 +3354,18 @@
               :x-display
               {:label "Fired, and nobody sat"
                :spelled-by-hand "Written by the engine's sweep when a firing's key went unspent past the sit deadline. The sitting is born closed, with every count at zero."}}
-     :boolean]]
+     :boolean]
+    ;; HOW IT WAS CLOSED. Written at every path that ends a sitting
+    ;; closed — the close handler for the door, the hook and the idle
+    ;; sweep, and `wakes/record-missed!` for a missed fire — so seat
+    ;; health reads a cut-short or never-sat run without parsing the
+    ;; note. Absent while open; not :maybe, so it promotes and filters.
+    [:closed_by {:optional true
+                 :x-display
+                 {:label "How it was closed"
+                  :choices closed-by-choices
+                  :spelled-by-hand "Written by the engine at the close: door, hook, sweep, or missed for a fire nobody sat in."}}
+     (into [:enum] closed-by-paths)]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -3322,6 +3431,7 @@
                 :model #{:eq}
                 :grant #{:eq}
                 :missed #{:eq}
+                :closed_by #{:eq :in}
                 :started_at #{:after :before :range}}
    :sortable {:fields [:started_at] :default "-started_at"}
    :links [{:rel "seat" :kind :seat
@@ -3547,20 +3657,34 @@
   MAINTENANCE write — document only, version untouched, no transition
   (see the ns docstring). → the new count, or nil when there was
   nothing to count: an unknown id, a sitting already closed, or a
-  counter this kind does not keep."
-  [eng sitting-id counter]
-  (when (and sitting-id
-             (contains? #{:transitions :refusals} counter)
-             (get (inv/resources eng) :sitting))
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (when-some [row (store/load-row (:storage eng) tx :sitting
-                                        (str sitting-id) {:for-update true})]
-          (when (= :open (:state row))
-            (let [n (inc (long (or (get (:data row) counter) 0)))]
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                  (assoc (:data row) counter n) nil)
-              n)))))))
+  counter this kind does not keep.
+
+  With a `refusal` ({:type :guard}) on a `:refusals` count, the same
+  write stamps `:last_refusal` — the problem type, the guard name when
+  one refused, and the moment — so the close can read which law the
+  newest refusal was, not only how many there were."
+  ([eng sitting-id counter] (bump-counter! eng sitting-id counter nil))
+  ([eng sitting-id counter refusal]
+   (when (and sitting-id
+              (contains? #{:transitions :refusals} counter)
+              (get (inv/resources eng) :sitting))
+     (store/with-tx (:storage eng)
+       (fn [tx]
+         (when-some [row (store/load-row (:storage eng) tx :sitting
+                                         (str sitting-id) {:for-update true})]
+           (when (= :open (:state row))
+             (let [n (inc (long (or (get (:data row) counter) 0)))
+                   stamp (when (and refusal (= :refusals counter))
+                           (cond-> {:type (some-> (:type refusal) str not-empty)
+                                    :at (str (java.time.Instant/now))}
+                             (some? (:guard refusal))
+                             (assoc :guard (let [g (:guard refusal)]
+                                             (if (keyword? g) (name g) (str g))))))]
+               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                   (cond-> (assoc (:data row) counter n)
+                                     stamp (assoc :last_refusal stamp))
+                                   nil)
+               n))))))))
 
 (defn add-cancelled-run!
   "Count one cancelled bench.test run on an open sitting (ticket

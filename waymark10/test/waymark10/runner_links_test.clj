@@ -22,7 +22,7 @@
 (def ^:dynamic *eng* nil)
 
 (def ^:private tables
-  ["runner_links" "waymark10_transitions" "waymark10_idempotency"
+  ["runner_links" "runner_providers" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts"])
 
 (use-fixtures :once
@@ -34,6 +34,7 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (binding [*eng* (engine/engine {:storage st :resources []})]
+          (rl/ensure-providers! *eng*)
           (f))
         (finally (pg/close! st))))))
 
@@ -72,6 +73,13 @@
 (defn- make-link! [principal]
   (:row (inv/create! *eng* :runner_link
                      {:provider "claude_routine"
+                      :fire_url a-url
+                      :fire_token a-token}
+                     {:principal principal})))
+
+(defn- make-localfire-link! [principal]
+  (:row (inv/create! *eng* :runner_link
+                     {:provider "localfire"
                       :fire_url a-url
                       :fire_token a-token}
                      {:principal principal})))
@@ -178,3 +186,164 @@
 (deftest an-agent-does-not-make-a-link
   (is (= :a-person-makes-the-link
          (:guard (refusal #(make-link! clerk))))))
+
+(defn- counting
+  "A provider that answers `answer` to every fire and counts them in `n`."
+  [n answer]
+  (reify sch/Provider
+    (fire [_ _link _text] (swap! n inc) answer)))
+
+(defn- link-id! [] (str (:id (make-link! colton))))
+
+(defn- provider-row
+  "The claude_routine provider row, as the store holds it now."
+  []
+  (let [id (str (:id (rl/provider-row *eng* "claude_routine")))
+        rdef (get (inv/resources *eng*) :runner_provider)]
+    (some->> (store/with-tx (:storage *eng*)
+               (fn [tx]
+                 (store/load-row (:storage *eng*) tx :runner_provider id {})))
+             (inv/decode-row rdef))))
+
+(defn- set-provider-cap! [cap]
+  (let [row (provider-row)
+        id (str (:id row))]
+    (inv/invoke! *eng* :runner_provider id :restate {:cap cap}
+                 {:principal colton
+                  :if-match (inv/etag :runner_provider id (:version row))})))
+
+(defn- open-provider-window!
+  "The provider's window opened now with no runs and no throttle held,
+  written through the engine's own door as a landing fire writes it."
+  []
+  (inv/invoke! *eng* :runner_provider (str (:id (provider-row))) :fired
+               {:window_started_at (str (java.time.Instant/now))
+                :runs_in_window 0}
+               {:principal sch/system-actor}))
+
+(deftest a-provider-cap-holds-every-pool-of-its-links
+  (testing "a cap of 3 across two seats' pools: the 4th fire is held until the window closes"
+    (open-provider-window!)
+    (set-provider-cap! {:runs 3 :window_seconds 18000})
+    (try
+      (let [a (link-id!) b (link-id!) c (link-id!) d (link-id!)
+            n (atom 0)
+            go #(rl/fire-pool! *eng* (constantly (counting n {:started nil})) % nil)
+            fired (mapv go [[a b] [c d] [a b]])
+            held (go [c d])
+            p (provider-row)
+            closes (.plusSeconds (java.time.Instant/parse
+                                  (str (get-in p [:data :window_started_at])))
+                                 18000)]
+        (is (every? :runner fired))
+        (is (= 3 @n (get-in p [:data :runs_in_window])))
+        (is (nil? (:runner held)))
+        (is (= closes (:retry-at held))))
+      (finally
+        (set-provider-cap! nil)
+        (open-provider-window!))))
+  (testing "a throttle that names the account holds every link of it"
+    (try
+      (let [a (link-id!) b (link-id!) c (link-id!)
+            n (atom 0)
+            out (rl/fire-pool! *eng* (constantly (stub {:throttled "30" :scope :account}))
+                               [a b] nil)]
+        (is (nil? (:runner out)))
+        (is (some? (:retry-at out)))
+        (is (some? (get-in (provider-row) [:data :retry_after])))
+        (is (nil? (get-in (row-of a) [:data :retry_after])))
+        (is (nil? (get-in (row-of b) [:data :last_fired_at])))
+        (testing "and another seat's pool sends nothing either"
+          (is (nil? (:runner (rl/fire-pool! *eng* (constantly (counting n {:started nil}))
+                                            [c] nil))))
+          (is (zero? @n))))
+      (finally (open-provider-window!))))
+  (testing "a throttle that names no account holds only its link"
+    (let [a (link-id!) b (link-id!)
+          providers {a (stub {:throttled "30"}) b (stub {:started nil})}]
+      (is (= b (:runner (rl/fire-pool! *eng* #(providers (str (:id %))) [a b] nil))))
+      (is (some? (get-in (row-of a) [:data :retry_after])))
+      (is (nil? (get-in (provider-row) [:data :retry_after]))))))
+
+(deftest a-pool-skips-a-waiting-link-and-takes-the-least-used
+  (testing "the first link throttles, so the wake goes out once, through the second"
+    (let [a (link-id!) b (link-id!)
+          fires {a (atom 0) b (atom 0)}
+          providers {a (counting (fires a) {:throttled "30"})
+                     b (counting (fires b) {:started nil})}
+          provider-of #(providers (str (:id %)))]
+      (is (= b (:runner (rl/fire-pool! *eng* provider-of [a b] "go"))))
+      (is (= [1 1] [@(fires a) @(fires b)]))
+      (is (some? (get-in (row-of a) [:data :retry_after])))
+      (testing "and the next fire skips the waiting link"
+        (is (= b (:runner (rl/fire-pool! *eng* provider-of [a b] nil))))
+        (is (= 1 @(fires a))))))
+  (testing "with every link throttled nothing starts, and the pool names the earlier time"
+    (let [a (link-id!) b (link-id!)
+          out (rl/fire-pool! *eng*
+                             #(stub {:throttled (if (= a (str (:id %))) "30" "90")})
+                             [a b] nil)
+          later (java.time.Instant/parse
+                 (str (get-in (row-of b) [:data :retry_after])))]
+      (is (nil? (:runner out)))
+      (is (some? (:retry-at out)))
+      (is (.isBefore ^java.time.Instant (:retry-at out) later))
+      (testing "and a second fire before that time sends nothing"
+        (let [n (atom 0)]
+          (is (nil? (:runner (rl/fire-pool! *eng* (constantly (counting n {:started nil}))
+                                            [a b] nil))))
+          (is (zero? @n))))))
+  (testing "least-used selection alternates two links over four fires"
+    (let [a (link-id!) b (link-id!)]
+      (is (= [a b a b]
+             (vec (repeatedly 4 #(:runner (rl/fire-pool! *eng* (constantly (stub {:started nil}))
+                                                         [a b] nil))))))))
+  (testing "a link whose cap is spent is skipped until its window closes"
+    (let [a (link-id!) b (link-id!)]
+      (restate! a {:cap {:runs 1 :window_seconds 18000}} colton)
+      (is (= [a b b]
+             (vec (repeatedly 3 #(:runner (rl/fire-pool! *eng* (constantly (stub {:started nil}))
+                                                         [a b] nil))))))))
+  (testing "a broken or missing link is skipped, and a pool with none to fire names no time"
+    (let [a (link-id!)]
+      (rl/fire-link! *eng* (stub {:bad-link "no"}) (row-of a) nil)
+      (is (= {:retry-at nil}
+             (rl/fire-pool! *eng* (constantly (stub {:started nil}))
+                            [a "no-such-link"] nil))))))
+
+(deftest a-prefer-pool-sends-only-the-overflow-to-a-capped-cloud-link
+  (let [lf (str (:id (make-localfire-link! colton)))
+        cloud (link-id!)
+        busy (atom false)
+        fires {lf (atom 0) cloud (atom 0)}
+        provider-of (fn [row]
+                      (let [id (str (:id row))]
+                        (reify sch/Provider
+                          (fire [_ _link _text]
+                            (swap! (fires id) inc)
+                            (if (and (= id lf) @busy)
+                              {:throttled "600"}
+                              {:started nil})))))
+        fire! #(:runner (rl/fire-pool! *eng* provider-of [lf cloud] nil "prefer"))]
+    (restate! cloud {:cap {:runs 1 :window_seconds 18000}} colton)
+    (is (= "localfire" (str (get-in (row-of lf) [:data :provider]))))
+    (testing "localfire takes every fire it can"
+      (is (= [lf lf lf] (vec (repeatedly 3 fire!))))
+      (is (zero? @(fires cloud))))
+    (testing "when localfire answers throttled, the next fire goes to the cloud link"
+      (reset! busy true)
+      (is (= cloud (fire!)))
+      (is (= [4 1] [@(fires lf) @(fires cloud)])))
+    (testing "once the cloud cap is spent, the wake waits for the earlier retry_after"
+      (let [out (rl/fire-pool! *eng* provider-of [lf cloud] nil "prefer")
+            lf-free (java.time.Instant/parse
+                     (str (get-in (row-of lf) [:data :retry_after])))]
+        (is (nil? (:runner out)))
+        (is (= lf-free (:retry-at out)))
+        (is (= [4 1] [@(fires lf) @(fires cloud)]))))))
+
+(deftest a-least-used-pool-keeps-its-rule-when-named
+  (let [a (link-id!) b (link-id!)]
+    (is (= [a b a b]
+           (vec (repeatedly 4 #(:runner (rl/fire-pool! *eng* (constantly (stub {:started nil}))
+                                                       [a b] nil "least_used"))))))))

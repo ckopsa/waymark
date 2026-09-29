@@ -545,6 +545,7 @@
         (is (= 12000 (:input_tokens d)) "the counts the last tally reported")
         (is (= 7 (:turns d)))
         (is (= "Closed by the sweep after 600 seconds idle." (:note d)))
+        (is (= "sweep" (:closed_by d)))
         (is (== (seats/cost-of counts prices) (:cost_usd d))
             "costed like every other bill, at the close's own prices")
         (is (some? (:prices d)))

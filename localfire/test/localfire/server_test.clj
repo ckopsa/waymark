@@ -347,3 +347,53 @@
         (is (string? (:ended-at rec))))
       (is (zero? (runs/mark-lost! runs))))
     (deliver gate true)))
+
+;; ── a fixed OAuth client at the door (R-8.2) ─────────────────────────
+
+(def ^:private door "https://work.kopsa.info/api/-/mcp")
+
+(defn- oauth-config [oauth]
+  (cond-> {:port       8112
+           :public-url "http://127.0.0.1:8112"
+           :place      (str (tmpdir "lf-oauth-place"))
+           :runs-dir   (str (tmpdir "lf-oauth-runs"))
+           :mcp        {:url door}
+           :routines   {"sonnet" {:model "claude-sonnet-4-5"}}}
+    (some? oauth) (assoc-in [:mcp :oauth] oauth)))
+
+(deftest the-config-takes-an-optional-oauth-client
+  (testing "absent means no :oauth, today's behaviour"
+    (is (= {:name "Waymark" :url door}
+           (:mcp (config/normalize (oauth-config nil))))))
+  (testing "a client id and a callback port are kept"
+    (is (= {:name "Waymark" :url door
+            :oauth {:client-id "localfire-claude" :callback-port 8765}}
+           (:mcp (config/normalize
+                  (oauth-config {:client-id "localfire-claude"
+                                 :callback-port 8765}))))))
+  (testing "each bad shape is refused with one sentence"
+    (doseq [o ["localfire-claude"
+               {:callback-port 8765}
+               {:client-id "" :callback-port 8765}
+               {:client-id :localfire :callback-port 8765}
+               {:client-id "localfire-claude"}
+               {:client-id "localfire-claude" :callback-port 0}
+               {:client-id "localfire-claude" :callback-port "8765"}]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":oauth"
+                            (config/normalize (oauth-config o)))
+          (pr-str o)))))
+
+(deftest write-mcp-carries-the-oauth-client
+  (let [f (io/file (tmpdir "lf-oauth-mcp") "mcp.json")]
+    (testing "with :oauth, the shape `claude mcp add --client-id` writes"
+      (runs/write-mcp! f {:name "Waymark" :url door
+                          :oauth {:client-id "localfire-claude" :callback-port 8765}})
+      (is (= {"mcpServers"
+              {"Waymark" {"type" "http" "url" door
+                          "oauth" {"clientId" "localfire-claude"
+                                   "callbackPort" 8765}}}}
+             (json/read-value (slurp f)))))
+    (testing "without :oauth, no oauth block"
+      (runs/write-mcp! f {:name "Waymark" :url door})
+      (is (= {"mcpServers" {"Waymark" {"type" "http" "url" door}}}
+             (json/read-value (slurp f)))))))
