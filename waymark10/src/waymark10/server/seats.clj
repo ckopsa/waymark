@@ -4627,8 +4627,9 @@
   stuck pull request back under review leaves its ticket open, and the
   fire that follows names it; the round is in the house's hands, so the
   named walk withholds it as the plain walk does (ticket 60c2ec22). A
-  ticket in review is still handed by name (ticket 7af7d506). False for
-  any other walk."
+  ticket in review is still handed by name (ticket 7af7d506). Only a
+  change in the ticket's own repository counts, when the ticket names
+  one (ticket 80a8e60b). False for any other walk."
   [eng walk id]
   (boolean
    (when-some [rdef (when (= "ticket" (str walk))
@@ -4642,7 +4643,10 @@
                                (inv/decode-row tdef))
                       (catch Exception _ nil))]
          (when (= "open" (some-> (:state ticket) name))
-           (some #(= "submitted" (some-> (:state %) name))
+           (some (let [repo (some-> (get-in ticket [:data :repo]) str not-empty)]
+                   #(and (= "submitted" (some-> (:state %) name))
+                         (or (nil? repo)
+                             (= repo (some-> (get-in % [:data :repository]) str)))))
                  (map #(inv/decode-row rdef %)
                       (store/with-tx st
                         (fn [tx]
