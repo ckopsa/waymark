@@ -81,7 +81,7 @@
            ;; core's for the same reason: a `powers` entry that says
            ;; `approval person` is policy on a core kind, and the row
            ;; it waits in cannot be a module an engine leaves out.
-           :mcp_server :held_call :notifier
+           :mcp_server :held_call :notifier :notice_rule
            ;; …and the transcript of a sitting and its lines
            ;; (docs/spec-transcript.md): the sit answers the key the
            ;; hook uploads with, and the seat carries the policy
@@ -115,7 +115,7 @@
     ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
-             :transcript :transcript_entry :runner_link :runner_provider
+             :notice_rule :transcript :transcript_entry :runner_link :runner_provider
              :judgment :verdict}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"

@@ -261,6 +261,12 @@
              ;; Core's beside the held call, the first thing it tells.
              {:kind :notifier :enroll :always
               :kinds (fn [_] [held-calls/notifier])}
+             ;; the addressed notice (docs/spec-addressed-notice.md):
+             ;; the notifier's sibling, telling the member a row's ref
+             ;; names. Core's beside the notifier, whose consumer it
+             ;; rides.
+             {:kind :notice_rule :enroll :always
+              :kinds (fn [_] [held-calls/notice-rule])}
              ;; the transcript of a sitting and its lines
              ;; (docs/spec-transcript.md): core's beside the sitting
              ;; for the sitting's own reason. The sit answers the key
