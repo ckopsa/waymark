@@ -36,8 +36,10 @@
    :remedies [:plan_day/assign_meal]}
   [row _inp ctx]
   (if-some [read (:read ctx)]
-    (let [day (read :plan_day (get-in row [:data :day_id]))]
-      (if (= "planned" (some-> day :state name)) (t/allow) (t/deny)))
+    (if (every? #(= "planned" (some-> (read :plan_day %) :state name))
+                (keep #(get-in row [:data %]) [:day_id :day2_id]))
+      (t/allow)
+      (t/deny))
     (t/allow)))
 
 (g/defguard meal-is-listed
@@ -58,6 +60,13 @@
            :when '(= (data :free) true)
            :explain "The latch is stuck."
            :remedies [:latch/lift]}))
+
+;; a remedy that lands and changes nothing: the step bound's loop
+(def hatch-heard
+  (g/expr {:name :hatch-heard
+           :when '(= (data :heard) true)
+           :explain "Nobody answers the knock."
+           :remedies [:hatch/knock]}))
 
 (r/defhandler assign-meal-handler [row inp _ctx]
   (assoc-in row [:data :meal_id] (:meal_id inp)))
@@ -86,7 +95,9 @@
     :states [:draft :planned]
     :initial :draft
     :summary "Plan · {state}"
-    :schema [:map [:day_id [:string {:max 80}]]]
+    :schema [:map
+             [:day_id [:string {:max 80}]]
+             [:day2_id {:optional true} [:maybe [:string {:max 80}]]]]
     :actions
     {:finalize {:from #{:draft} :to :planned
                 :guards [day-is-covered]
@@ -119,7 +130,21 @@
             :safety fx/routine}
      :lower {:from #{:open} :to :shut :safety fx/routine}}}))
 
-(def resources [fx/meal plan-day plan grocery-list latch])
+(def hatch
+  (r/resource
+   {:kind :hatch
+    :states [:shut :open]
+    :initial :shut
+    :summary "Hatch · {state}"
+    :schema [:map [:heard {:optional true} [:maybe :boolean]]]
+    :actions
+    {:swing {:from #{:shut} :to :open
+             :guards [hatch-heard]
+             :safety fx/routine}
+     :knock {:from #{:shut} :to :shut :safety fx/routine}
+     :close {:from #{:open} :to :shut :safety fx/routine}}}))
+
+(def resources [fx/meal plan-day plan grocery-list latch hatch])
 
 (def ^:dynamic *session* nil)
 
@@ -244,6 +269,70 @@
     (is (= chain-doors (mapv :door (:writes res)))
         "the rehearsal reports every write it would make")
     (is (empty? (:blocked-on res)))
+    (is (:first-estimate res) "a rehearsal before any write is an estimate")
     (is (= "suggested" (state-of meal)))
     (is (= "undecided" (state-of day)))
     (is (= "draft" (state-of plan)))))
+
+;; ── re-rehearsal: a door that needs one remedy on several rows
+
+(defn- week!
+  "A suggested meal, two undecided days, a draft plan over both."
+  []
+  (let [n (subs (str (random-uuid)) 0 8)
+        meal (make! :meal {:name (str "Soup " n) :themes ["test"]})
+        d1 (make! :plan_day {:label (str "Monday " n)})
+        d2 (make! :plan_day {:label (str "Tuesday " n)})]
+    {:meal meal :days [d1 d2]
+     :plan (make! :plan {:day_id (id-of d1) :day2_id (id-of d2)})}))
+
+(defn- week-resolver
+  "assign_meal acts on the first day still undecided, with the meal
+  `meals` (day self → meal id) chose for it, if any."
+  [{:keys [meal days]} meals]
+  (fn [door _refused]
+    (case door
+      "plan_day.assign_meal"
+      (when-some [d (first (filter #(= "undecided" (state-of %)) days))]
+        (cond-> {:id (id-of d)}
+          (get meals (:self d)) (assoc :input {:meal_id (get meals (:self d))})))
+      "meal.accept" {:id (id-of meal)}
+      nil)))
+
+(deftest a-remedy-needed-twice-lands-in-one-call
+  (let [{:keys [meal days plan] :as rows} (week!)
+        m (id-of meal)
+        res (c/pursue! *session* plan :finalize nil
+                       {:resolve (week-resolver rows (zipmap (map :self days) [m m]))})]
+    (is (c/doc? (:done res)) (pr-str res))
+    (is (= ["meal.accept" "plan_day.assign_meal" "plan_day.assign_meal" "plan.finalize"]
+           (mapv :door (:writes res))))
+    (is (= (mapv :self days)
+           (mapv :row (filter #(= "plan_day.assign_meal" (:door %)) (:writes res))))
+        "one assign_meal per day, each found by a re-rehearsal")
+    (is (= ["planned" "planned"] (mapv state-of days)))
+    (is (= "planned" (state-of plan)))))
+
+(deftest a-choice-found-mid-run-comes-back-with-the-steps-taken
+  (let [{:keys [meal days plan] :as rows} (week!)
+        [d1 d2] days
+        res (c/pursue! *session* plan :finalize nil
+                       {:resolve (week-resolver rows {(:self d1) (id-of meal)})})
+        choice (first (:blocked-on res))]
+    (is (nil? (:done res)) (pr-str res))
+    (is (not (:rehearsal res)) "the first rehearsal reached the goal, so the run began")
+    (is (= ["meal.accept" "plan_day.assign_meal"] (mapv :door (:writes res))))
+    (is (= "plan_day.assign_meal" (:door choice)))
+    (is (= [:meal_id] (:needs choice)))
+    (is (= (:self d2) (:row choice)))
+    (is (= ["plan.finalize"] (mapv :door (:stack res))))
+    (is (= ["planned" "undecided"] (mapv state-of [d1 d2])))
+    (is (= "draft" (state-of plan)))))
+
+(deftest the-step-bound-stops-a-loop-that-lands-without-progress
+  (let [hx (make! :hatch {:heard false})
+        res (c/pursue! *session* hx :swing nil {:max-depth 2})]
+    (is (= {:step-bound 8} (:stopped res)) (pr-str res))
+    (is (seq (:writes res)))
+    (is (every? #{"hatch.knock"} (map :door (:writes res))))
+    (is (= "shut" (state-of hx)))))

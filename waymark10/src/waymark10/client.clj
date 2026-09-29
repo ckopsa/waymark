@@ -627,17 +627,30 @@
   "One pass of the pursuit over an explicit stack. rehearse? dry-runs
   every door, and a remedy that would land counts every door waiting
   above it as landing too — a rehearsal cannot see an effect it did not
-  write. A real pass (:expect, the rehearsal's writes) re-checks each
-  landing against the rehearsal and stops where the two part."
-  [session call rehearse? {:keys [resolve max-depth expect] :or {max-depth 8} :as opts}]
+  write, so its writes are an estimate. A real pass (:expect, the
+  rehearsal's writes) re-checks each landing against the latest
+  rehearsal, then re-rehearses what is left of the stack from the state
+  that landing made: it goes on while the new rehearsal still reaches
+  the goal, and answers its :blocked-on, with the writes already made,
+  when it does not. The stack, and with it the depth bound and the
+  cycle check, carries across re-rehearsals; :max-steps (default 4 ×
+  :max-depth) bounds the attempts one real pass makes."
+  [session stack rehearse? {:keys [resolve max-depth max-steps expect] :or {max-depth 8} :as opts}]
   (let [act-opts (select-keys opts [:confirm! :acknowledge])
+        max-steps (or max-steps (* 4 max-depth))
         write-of (fn [f] {:door (:door f) :row (get-in f [:doc :self]) :input (:input f)})]
-    (loop [stack [call] writes [] blocked [] at nil]
+    (loop [stack stack writes [] blocked [] at nil expect expect steps 0]
       (let [top (peek stack)]
         (cond
+          ;; the step bound: a real pass that keeps landing without
+          ;; reaching the goal stops here
+          (and (not rehearse?) (not (contains? top :remedies)) (>= steps max-steps))
+          {:stopped {:step-bound max-steps} :writes writes :stack (trail stack)}
+
           ;; a fresh (or retried) door: try it
           (not (contains? top :remedies))
-          (let [out (attempt session top rehearse? act-opts)]
+          (let [out (attempt session top rehearse? act-opts)
+                steps (inc steps)]
             (cond
               (:stop out)
               {:stopped (:stop out) :writes writes :stack (trail stack)}
@@ -646,7 +659,7 @@
               (recur (conj (pop stack)
                            (assoc top :doc (:doc out) :reason (:reason out)
                                   :remedies (seq (:refused out)) :all (:refused out)))
-                     writes blocked at)
+                     writes blocked at expect steps)
 
               (:blocked out)
               (let [stack' (pop stack)
@@ -654,12 +667,12 @@
                     at' (or at (trail stack'))]
                 (if (empty? stack')
                   {:blocked-on blocked' :stack at' :writes writes}
-                  (recur stack' writes blocked' at')))
+                  (recur stack' writes blocked' at' expect steps)))
 
               :else
               (let [w (write-of top)
                     writes' (conj writes w)
-                    expected (when expect (get expect (count writes)))
+                    expected (first expect)
                     stack' (pop stack)]
                 (cond
                   (and expect (not= (select-keys expected [:door :row])
@@ -672,10 +685,13 @@
                   rehearse? {:done nil :writes (into writes' (map write-of) (rseq stack'))}
 
                   :else
-                  (recur (conj (pop stack') (-> (peek stack')
-                                                (dissoc :remedies :all :reason)
-                                                (assoc :retry true)))
-                         writes' [] nil)))))
+                  (let [stack'' (conj (pop stack') (-> (peek stack')
+                                                       (dissoc :remedies :all :reason)
+                                                       (assoc :retry true)))
+                        again (walk session stack'' true (dissoc opts :expect))]
+                    (if (contains? again :done)
+                      (recur stack'' writes' [] nil (:writes again) steps)
+                      (-> again (dissoc :done) (assoc :writes writes'))))))))
 
           ;; a refused door with a remedy left to try
           (seq (:remedies top))
@@ -698,8 +714,8 @@
                         (>= (count stack) max-depth)
                         (block {:reason :depth}))]
             (if entry
-              (recur stack writes (conj blocked entry) (or at (trail stack)))
-              (recur (conj stack (assoc call' :or others)) writes blocked at)))
+              (recur stack writes (conj blocked entry) (or at (trail stack)) expect steps)
+              (recur (conj stack (assoc call' :or others)) writes blocked at expect steps)))
 
           ;; every remedy refused or blocked: this door fails, and the
           ;; choices that stopped it are already in `blocked`
@@ -707,34 +723,42 @@
           (let [stack' (pop stack)]
             (if (empty? stack')
               {:blocked-on blocked :stack (or at []) :writes writes}
-              (recur stack' writes blocked at))))))))
+              (recur stack' writes blocked at expect steps))))))))
 
 (defn pursue!
   "Reach a goal by following refusal remedies (Amundsen's GRAIL). Try
   the goal door; on a refusal whose guard names :remedies, push it and
   try each remedy in order — a refused remedy's own remedies in turn —
   and when one lands, pop and retry the door below it. The whole chain
-  is rehearsed by dry-run first; the real run then re-checks each
-  landing against the rehearsal and stops on divergence. opts:
+  is rehearsed by dry-run first — a first estimate, since a dry-run
+  cannot see its own effects — and the real run re-checks each landing
+  against the latest rehearsal, stops on divergence, and re-rehearses
+  the rest of the stack after each landing, so a door that needs the
+  same remedy several times lands in one call. opts:
     :resolve    (fn [remedy-door refused-call] → {:id row-id :input {…}}
                 or nil) — which row a remedy acts on (also :href or
                 :doc). With no :resolve, a remedy on the refused call's
                 own kind acts on its row; any other is a choice.
     :max-depth  stack bound (default 8); the same door on the same row
                 twice in the stack stops that branch (the cycle check)
+    :max-steps  attempts one real run may make across its re-rehearsals
+                (default 4 × :max-depth); past it the run answers
+                {:stopped {:step-bound n} …}
     :dry-run    rehearse only: the writes it would make, every choice
     :confirm! :acknowledge  ride every act! (rules 2 and 6)
   → {:done doc :writes […]}, or {:blocked-on [{:door :row :needs
   [input …] :or [alternative remedy …] (:reason)}] :stack […] :writes
   […]} — only genuine choices come back — or {:stopped res …} on a wire
-  failure or a divergence. A rehearsal answers :rehearsal true."
+  failure or a divergence. A rehearsal answers :rehearsal true and
+  :first-estimate true: its writes are what it could see before any
+  write, not a promise."
   ([session doc action input] (pursue! session doc action input {}))
   ([session doc action input opts]
    (let [call {:door (door-of doc action) :doc doc :input input}
-         rehearsal (walk session call true opts)]
+         rehearsal (walk session [call] true opts)]
      (if (or (:dry-run opts) (not (contains? rehearsal :done)))
-       (-> rehearsal (dissoc :done) (assoc :rehearsal true))
-       (walk session call false (assoc opts :expect (:writes rehearsal)))))))
+       (-> rehearsal (dissoc :done) (assoc :rehearsal true :first-estimate true))
+       (walk session [call] false (assoc opts :expect (:writes rehearsal)))))))
 
 ;; ── the MCP tool projection ─────────────────────────────────────────
 
