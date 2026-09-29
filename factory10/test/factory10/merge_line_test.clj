@@ -525,8 +525,10 @@
     (testing "the old cancelled run is read as the retry not shown yet"
       (let [[t3] (finish-pass! r seen t2)]
         (is (= t2 t3))
-        (is (= {:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"}
-               (last (args-of r "bench__train_status"))))
+        (is (= {:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"
+                :skip_run_id "77"}
+               (last (args-of r "bench__train_status")))
+            "the rig is told to skip the cancelled run")
         (is (not (get @seen [:train-done wm])) "the line is not sent one at a time")
         (is (empty? (args-of r "bench__train_delete")))))
     (testing "the retry's own run is read, and lands green"

@@ -982,14 +982,18 @@
 
 (defn- status-args
   "A train with no run yet is read by its branch and head, and by the
-  workflow it dispatched: the train's own, else the policy's test block."
+  workflow it dispatched: the train's own, else the policy's test block.
+  A train a retry left a cancelled run behind on names it as
+  `skip_run_id`, so the rig answers past it (ticket a4890118)."
   [repo policy train]
   (if-some [run (run-of train)]
     {:repo repo :run_id run}
     (let [workflow (or (some-> (:workflow train) str not-empty)
-                       (test-workflow-of policy))]
+                       (test-workflow-of policy))
+          stale (:stale_run_id train)]
       (cond-> {:repo repo :branch (:branch train) :head (:head train)}
-        workflow (assoc :workflow workflow)))))
+        workflow (assoc :workflow workflow)
+        (some? stale) (assoc :skip_run_id stale)))))
 
 (defn advance-train!
   "Read a standing train's run once → the train that stands after it:
