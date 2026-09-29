@@ -549,6 +549,59 @@
         (is (nil? (get-in (row-of eng :seat (:id chair)) [:data :halt]))
             "the first request that passes clears it")))))
 
+(deftest two-open-sittings-of-one-seat-each-meet-their-own-token-wall
+  ;; ticket 8358b658: every sitting of a seat shares the seat's grant,
+  ;; and the wall once judged the caller by the NEWEST open sitting's
+  ;; fuel. Each direction is asked: the older past its ceiling, then
+  ;; the newer.
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        chair (open-seat! eng model {:name "chair"
+                                     :mode "interactive"
+                                     :budget_usd_per_week 1000M
+                                     :sitting_budget_tokens 20000
+                                     :max_open_sittings 2})
+        sit! (fn [run]
+               (let [sid (initialize! h)]
+                 [sid (str (:sitting (doc-of (tool h (with-session sid)
+                                                   "waymark_sit"
+                                                   {:key a-key :session run}))))]))
+        burn {:input_tokens 12000 :output_tokens 2000
+              :cache_read_tokens 8000 :cache_write_tokens 500 :turns 21}
+        accept! (fn [sid name']
+                  (:isError (tool h (with-session sid) "waymark_invoke"
+                                  {:kind "meal" :id (:id (meal! eng name'))
+                                   :action "accept"})))
+        halt-reason #(str (get-in (row-of eng :seat (:id chair))
+                                  [:data :halt :reason]))
+        [a-sid a] (sit! "run-a")
+        [b-sid b] (sit! "run-b")]
+
+    (testing "two runs sit in two sittings under the one seat grant"
+      (is (not= a b))
+      (is (= (get-in (row-of eng :sitting a) [:data :grant])
+             (get-in (row-of eng :sitting b) [:data :grant]))))
+
+    (testing "the OLDER sitting past its ceiling meets the wall"
+      (is (= 200 (:status (tally! h (assoc burn :harness_session "run-a")))))
+      (is (true? (accept! a-sid "Broth")))
+      (is (= "sitting_budget_reached" (halt-reason))))
+
+    (testing "while the newer one, under its own, works on"
+      (is (false? (accept! b-sid "Pie"))))
+
+    (testing "the other way round: the NEWER sitting past its ceiling"
+      (is (= 200 (:status (close! h (assoc counts :harness_session "run-a")))))
+      (let [[c-sid c] (sit! "run-c")]
+        (is (not= b c))
+        (is (= 200 (:status (tally! h (assoc burn :harness_session "run-c")))))
+        (is (true? (accept! c-sid "Stew")))
+        (is (= "sitting_budget_reached" (halt-reason)))
+        (is (false? (accept! b-sid "Toast"))
+            "the older sitting is judged by its own fuel, not the newest's")))))
+
 ;; ── 8 · the sweep under the wait (R-12.25, R-7.6) ───────────────────
 
 (deftest the-sweep-closes-the-sitting-somebody-walked-away-from
