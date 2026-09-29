@@ -645,6 +645,25 @@
             (jdbc/execute! tx [sql (Timestamp/from ^java.time.Instant since)]
                            jdbc-opts))))
 
+  (transition-times [_ tx kind action since until conds limit]
+    ;; the window walks ix_wm10_t_at; the where and the grant's
+    ;; narrowing ride in as one semi-join over the kind's table, never
+    ;; a query per row
+    (let [table (table-for tables kind)
+          parts (map cond-sql conds)
+          sql (str "SELECT at FROM waymark10_transitions"
+                   " WHERE kind = ? AND action = ? AND at >= ? AND at < ?"
+                   " AND resource_id IN (SELECT id FROM " table
+                   (when (seq parts)
+                     (str " WHERE " (str/join " AND " (map first parts))))
+                   ") ORDER BY at LIMIT " (long limit))]
+      (mapv (comp ->inst :at)
+            (jdbc/execute! tx (-> [sql (name kind) (name action)
+                                   (Timestamp/from ^java.time.Instant since)
+                                   (Timestamp/from ^java.time.Instant until)]
+                                  (into (mapcat second parts)))
+                           jdbc-opts))))
+
   (corrections-by-model [_ tx actor-ids since excluded-kinds]
     ;; the lag is computed over the WHOLE log and filtered afterwards:
     ;; the transition a person corrects is routinely older than the
