@@ -84,7 +84,10 @@
                                       :branch {:type "string"}}
                          :required ["repo" "branch"]}})
         ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"
-         "enroll" "repos" "unenroll" "feedback" "rerun"]))
+         "enroll" "repos" "unenroll" "feedback" "rerun"
+         ;; the merge train's five (ticket 47519515)
+         "train_build" "train_checks" "train_status" "train_land"
+         "train_delete"]))
 
 (def ^:private bench-powers
   "The bench row's powers (waymark-fp62.6.3.3): the four the model may
@@ -157,7 +160,15 @@
                        :message "Name the rule in the comment."}]
            :unavailable ["statuses: the forge answered 403"]}
           "bench__repos" {:repos ["ckopsa/waymark"]}
-          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}}}))
+          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}
+          ;; the merge train (ticket 47519515), in the rig's own shapes
+          "bench__train_build" {:branch "train/ckopsa/waymark/31" :base_head a-head
+                                :head a-commit :merged [31] :conflicted []}
+          "bench__train_checks" {:run_id "7" :head a-commit}
+          "bench__train_status" {:state "pending" :head a-commit
+                                 :url "https://github.com/ckopsa/waymark/actions/runs/7"}
+          "bench__train_land" {:landed true}
+          "bench__train_delete" {:repo "ckopsa/waymark" :branch "train/ckopsa/waymark/31"}}}))
 
 (defn- answer!
   "Script one tool's answer — a result map, or a refusal map with

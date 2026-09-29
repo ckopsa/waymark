@@ -209,3 +209,145 @@
         "a moved count is written")
     (is (nil? (bench/moved-marks {} {:line_place nil :line_why nil} #{}))
         "clearing what is already clear writes nothing")))
+
+;; ── the merge train (ticket 47519515, slice 2 of 3deb06ed) ───────────
+
+(def ^:private wm "ckopsa/waymark")
+
+(defn- train-policy [& {:as extra}]
+  (update (policy wm) :data merge {:merge_strategy "train" :train_size 4} extra))
+
+(defn- train-rig
+  "A fake rig: every merge says behind (green on its own head), every
+  update_branch says updated, and each train tool answers what
+  `answers` holds under its bare name — train_build merging every pull
+  request it is given unless told otherwise."
+  [answers]
+  (let [calls (atom [])]
+    {:calls calls
+     :ctx {:now-fn (constantly t0)
+           :services
+           {:bench-rpc
+            (fn [_ {tool :name args :arguments}]
+              (swap! calls conj [tool args])
+              {:structuredContent
+               {:result
+                (case tool
+                  "bench__merge" {:state "behind"}
+                  "bench__update_branch" {:state "updated"}
+                  "bench__train_build"
+                  (get @answers "train_build"
+                       {:branch (:branch args) :base_head "base-0" :head "train-head"
+                        :merged (:prs args) :conflicted []})
+                  "bench__train_checks"
+                  (get @answers "train_checks" {:run_id "77" :head "train-head"})
+                  "bench__train_status"
+                  (get @answers "train_status" {:state "pending" :head "train-head"})
+                  "bench__train_delete" {:repo wm :branch (:branch args)}
+                  {:refused "unknown_tool"})}})}}}))
+
+(defn- args-of [{:keys [calls]} tool]
+  (into [] (keep (fn [[t args]] (when (= t tool) args))) @calls))
+
+(defn- train-pass!
+  "One pass over `changes` under `pol` → the trains it built or read."
+  [{:keys [ctx]} seen changes pol]
+  (let [by-repo {wm pol}
+        trains (atom {})]
+    (bench/work-lines! ctx seen
+                       (bench/merge-lines changes by-repo (constantly nil) @seen)
+                       by-repo (atom {}) trains)
+    @trains))
+
+(defn- four [] (mapv #(a-change wm % %) [1 2 3 4]))
+
+(deftest four-green-changes-ride-one-train
+  (let [r (train-rig (atom {}))
+        trains (train-pass! r (atom {}) (conj (four) (a-change wm 5 5)) (train-policy))]
+    (is (= [{:repo wm :base "main" :branch "train/ckopsa/waymark/1" :prs [1 2 3 4]}]
+           (args-of r "bench__train_build"))
+        "the front and the three behind it, in line order, and not a fifth")
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1"}]
+           (args-of r "bench__train_checks"))
+        "its checks are dispatched once")
+    (is (empty? (args-of r "bench__update_branch"))
+        "no change is brought up to date on its own")
+    (is (= {:branch "train/ckopsa/waymark/1"
+            :changes ["change-1" "change-2" "change-3" "change-4"]
+            :prs [1 2 3 4] :head "train-head" :base_head "base-0"
+            :run_id "77" :started_at t0}
+           (get trains wm)))
+    (testing "the policy says the front waits on the train"
+      (is (= "train" (get-in (bench/line-marks
+                              (bench/merge-lines (four) {wm (train-policy)}
+                                                 (constantly nil) {})
+                              {} {} [] trains)
+                             [:policies wm :line_front_waiting]))))))
+
+(deftest a-conflicting-change-is-left-in-line
+  (let [r (train-rig (atom {"train_build" {:branch "train/ckopsa/waymark/1"
+                                           :base_head "base-0" :head "train-head"
+                                           :merged [1 2 4] :conflicted [3]}}))
+        train (get (train-pass! r (atom {}) (four) (train-policy)) wm)]
+    (is (= [1 2 4] (:prs train)))
+    (is (= ["change-1" "change-2" "change-4"] (:changes train))
+        "the conflicted change does not ride, and stays in the line")))
+
+(deftest the-line-strategy-is-unchanged
+  (let [r (train-rig (atom {}))
+        trains (train-pass! r (atom {}) (four) (train-policy :merge_strategy "line"))]
+    (is (empty? (args-of r "bench__train_build")))
+    (is (= [1] (mapv :number (args-of r "bench__update_branch")))
+        "only the front is brought up to date")
+    (is (empty? trains)))
+  (testing "a train of only the front behaves as the line"
+    (let [r (train-rig (atom {}))]
+      (train-pass! r (atom {}) [(a-change wm 1 1)] (train-policy))
+      (is (empty? (args-of r "bench__train_build")))
+      (is (= [1] (mapv :number (args-of r "bench__update_branch")))))))
+
+(deftest a-change-whose-merge-after-is-unmet-does-not-ride
+  (let [r (train-rig (atom {}))
+        changes (four)
+        held (bench/held-changes changes {wm (train-policy)}
+                                 {"t2" [{:id "394d0602" :state "open"}]})
+        offered (remove (set held) changes)]
+    (is (= ["change-2"] (mapv :id held)))
+    (train-pass! r (atom {}) offered (train-policy))
+    (is (= [[1 3 4]] (mapv :prs (args-of r "bench__train_build"))))))
+
+(deftest switching-to-line-mid-train-finishes-the-train-first
+  (let [answers (atom {})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)
+        line-policy (train-policy :merge_strategy "line" :line_train train)]
+    (testing "a pending train holds the line under the restated policy"
+      (is (= {wm train} (train-pass! r seen (four) line-policy)))
+      (is (= [{:repo wm :run_id "77"}] (args-of r "bench__train_status")))
+      (is (empty? (args-of r "bench__update_branch")))
+      (is (= 1 (count (args-of r "bench__train_build")))))
+    (testing "the finished train is deleted, and the line goes one at a time"
+      (swap! answers assoc "train_status" {:state "success" :head "train-head"})
+      (is (= {wm nil} (train-pass! r seen (four) line-policy)))
+      (is (= [{:repo wm :branch "train/ckopsa/waymark/1"}]
+             (args-of r "bench__train_delete")))
+      (train-pass! r seen (four) (train-policy :merge_strategy "line"))
+      (is (= [1] (mapv :number (args-of r "bench__update_branch"))))
+      (is (= 1 (count (args-of r "bench__train_build")))))))
+
+(deftest a-train-with-no-run-yet-is-read-by-its-branch
+  (let [answers (atom {"train_checks" {:run_id nil :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)]
+    (is (nil? (:run_id train)))
+    (train-pass! r seen (four) (train-policy :line_train train))
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"}]
+           (args-of r "bench__train_status")))
+    (testing "until slice 3, a finished train is not built again"
+      (swap! answers assoc "train_status" {:state "failure" :head "train-head"})
+      (train-pass! r seen (four) (train-policy :line_train train))
+      (train-pass! r seen (four) (train-policy))
+      (is (= 1 (count (args-of r "bench__train_build"))))
+      (is (= [1] (mapv :number (args-of r "bench__update_branch")))))))
