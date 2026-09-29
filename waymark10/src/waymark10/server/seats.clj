@@ -960,8 +960,7 @@
         (some-> v str not-empty) (java.time.Instant/parse (str v))))
 
 (g/defguard still-quiet-for-the-sweep
-  {:reads [:principal :seat]
-   :hide true
+  {:reads [:within]
    :vars [:last_call_at]
    :explain "The sweep ends only a quiet sitting, and this one made a call at {last_call_at}, inside its seat's idle limit."}
   [row _inp ctx]
@@ -970,20 +969,20 @@
   ;; stamping in between was closed under its caller. Judged HERE, the
   ;; reading is the row the ending itself holds for update — the stamp
   ;; writes lock the same row — so the stamp and the end are ordered.
-  ;; Every hand but the sweep's passes; a row with no stamp is judged
-  ;; by the sweep's other clocks alone.
-  (let [at (->instant (get-in row [:data :last_call_at]))
+  ;; Only the sweep's own ending carries `:within` {:action :sweep},
+  ;; with the idle limit it judged by — every other hand passes, the
+  ;; seats actor's own endings at a sit included. A row with no stamp
+  ;; is judged by the sweep's other clocks alone.
+  (let [{:keys [action idle-seconds]} (:within ctx)
+        at (->instant (get-in row [:data :last_call_at]))
         now (->instant (:now ctx))]
-    (if (or (not= (:id seats-actor) (:id (:principal ctx)))
-            (nil? at) (nil? now) (nil? (:read ctx)))
+    (if (or (not= :sweep action) (nil? idle-seconds) (nil? at) (nil? now))
       (t/allow)
-      (let [seat ((:read ctx) :seat (str (get-in row [:data :seat])))
-            idle (long (or (get-in seat [:data :sitting_idle_seconds])
-                           default-idle-seconds))]
-        (if (.isBefore ^java.time.Instant at
-                       (.minusSeconds ^java.time.Instant now idle))
-          (t/allow)
-          (t/deny {:vars {:last_call_at (str at)}}))))))
+      (if (.isBefore ^java.time.Instant at
+                     (.minusSeconds ^java.time.Instant now
+                                    (long idle-seconds)))
+        (t/allow)
+        (t/deny {:vars {:last_call_at (str at)}})))))
 
 (g/defguard folded-by-a-merge
   {:reads [:within]
