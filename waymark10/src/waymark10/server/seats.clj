@@ -140,6 +140,7 @@
   (:require [clojure.string :as str]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             ;; the walked kind's own doors, read out of its rdef: the
             ;; filter guard asks whether one of them LEAVES the state
             ;; the walk filters by (bead waymark-fp62.12, R-2), and
@@ -168,6 +169,25 @@
   "The system actor the sweep and the router write seats as — the
   definitions `deploy` and members `registrar` precedent."
   (t/principal {:id "waymark10-seats" :type :system :display "Seats"}))
+
+(def hook-role
+  "The role the close hook's hand wears (routes/seats `sitting-close`).
+  The hook acts as the sitter, so its principal is the sitter's — this
+  role is the one mark that tells its close from the sitter's own
+  `close` through the door, and only the route puts it there."
+  :sitting-close-hook)
+
+(def closed-by-paths
+  "The four ways a sitting ends closed: through the `close` DOOR, by
+  the run's own stop HOOK, by the idle SWEEP (`sweep-sittings!`), or
+  born closed as a MISSED fire (`wakes/sweep-missed!`)."
+  ["door" "hook" "sweep" "missed"])
+
+(def ^:private closed-by-choices
+  {"door" "Door — closed through the sitting's own close action"
+   "hook" "Hook — closed by the run's stop hook"
+   "sweep" "Sweep — closed by the engine after the sitting went idle"
+   "missed" "Missed — a fire nobody sat in, born closed"})
 
 (def halt-reasons
   "The walls of R-5.2, and the only reasons a seat halts. Each is HARD
@@ -754,6 +774,28 @@
     (t/deny {:vars {:kind bad}})
     (t/allow)))
 
+(g/defguard wake-on-any-of-needs-in
+  {:judges [:wake_on]
+   :reads [:services]
+   :vars [:kind :field]
+   :open "A kind's filterable fields and their ops are its collection grammar, one GET away; a field that declares in reads a comma-separated value as any of."
+   :explain "The wake_on filter on {kind} gives {field} a comma-separated value, and {field} does not admit any of (in): the value would match as one literal text and wake this seat for nothing. Name one value, or filter by a field the kind declares filterable with in."}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (if-some [bad (first (for [e (:wake_on inp)
+                               :let [rdef (rdef-of (:kind e))]
+                               :when rdef
+                               [f v] (:filter e)
+                               :let [fname (name f)]
+                               :when (and (str/includes? (str v) ",")
+                                          (not= "state" fname)
+                                          (not (contains? (get (:filterable rdef) (keyword fname)) :in)))]
+                           {:kind (str (:kind e)) :field fname}))]
+      (t/deny {:vars bad})
+      (t/allow))
+    ;; the pure render probe carries no registry — decline to guess
+    (t/allow)))
+
 (g/defguard wake-on-names-real-actions
   {:judges [:wake_on]
    :reads [:services]
@@ -889,6 +931,23 @@
   (if (= :system (:type (:principal ctx)))
     (t/allow)
     (t/deny)))
+
+(g/defguard the-engine-or-the-persons-tap
+  {:reads [:principal :within]
+   :hold true
+   :vars [:seat :started_at]
+   :explain "Abandoning seat {seat}'s sitting, open since {started_at}, is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written."}
+  [row _inp ctx]
+  ;; NOT hidden (ticket be2c2c16): a door the grant admits must never
+  ;; answer not-found. The sweep and a person pass; an agent's abandon,
+  ;; the mayor's of another seat's sitting included, waits for the
+  ;; person, and the one agent abandon this admits is the engine's
+  ;; replay of the held call that person allowed.
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :sitting :abandon (:id row)) (t/allow)
+    :else (t/deny {:vars {:seat (str (get-in row [:data :seat]))
+                          :started_at (str (get-in row [:data :started_at]))}})))
 
 (g/defguard folded-by-a-merge
   {:reads [:within]
@@ -1051,10 +1110,13 @@
    :reads [:model]
    :open "The registered identifiers are the models collection, one query away; enumerating them into the create form would offer exactly the tokens the guard is about to refuse."
    :explain "A model named {name} is already on record — one row per API identifier. If it was retired, reactivate that row rather than minting a second one: its prices are the history a closed sitting was costed against."}
-  [_row inp ctx]
+  [row inp ctx]
+  ;; on `restate` the row is the model itself, and its own name is no
+  ;; collision; on create there is no row, so nothing is set aside
   (if-some [find' (:find ctx)]
     (if (and (some? (:name inp))
-             (seq (find' :model {:name (str (:name inp))} {:limit 1})))
+             (seq (remove #(= (str (:id %)) (some-> row :id str))
+                          (find' :model {:name (str (:name inp))} {:limit 2}))))
       (t/deny {:vars {:name (str (:name inp))}})
       (t/allow))
     (t/allow)))
@@ -1071,6 +1133,7 @@
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
+   :release_grace_seconds
    :delegates])
 
 (def ^:private wall-inputs
@@ -1210,6 +1273,24 @@
 (defhandler clear-chair-link [row _inp _ctx]
   (update row :data dissoc :fire_url :fire_token))
 
+;; the runner pool (waymark ticket d16b71bf): the list is restated
+;; whole, so adding a link and taking one off are each one restate.
+(defhandler set-runners [row inp _ctx]
+  (-> row
+      (assoc-in [:data :runners] (vec (:runners inp)))
+      (update :data #(if-some [o (:runner_order inp)]
+                       (assoc % :runner_order o)
+                       (dissoc % :runner_order)))))
+
+;; the pool order (waymark ticket 529deb73): `least_used` spreads the
+;; fires; `prefer` sends each to the first link that may fire, so a
+;; later link takes only the overflow.
+(def runner-orders ["least_used" "prefer"])
+
+(def runner-order-choices
+  {"least_used" "The least-used link that may fire; list order breaks a tie."
+   "prefer" "The first link in list order that may fire; a later link takes only the overflow."})
+
 ;; R-12.19: a fire moves nothing on the seat. The row is returned as
 ;; it stands, and the transition IS the record — `:record true` puts
 ;; the text in the log's inputs, the ledger counts the move, and the
@@ -1259,6 +1340,11 @@
           row
           [:price_input_per_mtok :price_output_per_mtok
            :price_cache_read_per_mtok :price_cache_write_per_mtok]))
+
+(defhandler restate-model [row inp _ctx]
+  (reduce (fn [r f] (if (contains? inp f) (assoc-in r [:data f] (get inp f)) r))
+          row
+          [:name :display :notes]))
 
 (def ^:private cost-pairs
   "Which token count is priced by which field — the four halves of a
@@ -1316,6 +1402,17 @@
   (select-keys inp [:input_tokens :output_tokens
                     :cache_read_tokens :cache_write_tokens]))
 
+(defn- closed-by
+  "Which path this close came down, from the hand that closes it: the
+  engine's own actor is the sweep, the hook's hand wears `hook-role`,
+  and every other hand came through the door."
+  [ctx]
+  (let [p (:principal ctx)]
+    (cond
+      (= (:id seats-actor) (:id p)) "sweep"
+      (contains? (set (:roles p)) hook-role) "hook"
+      :else "door")))
+
 (defhandler close-sitting [row inp ctx]
   ;; R-10.4: the model's prices are read AT THIS MOMENT, the cost is
   ;; computed from them, and the prices used are written beside it —
@@ -1337,6 +1434,7 @@
                      (nil? (get-in row [:data :harness_session])))
           (assoc-in [:data :harness_session] (:harness_session inp)))
         (assoc-in [:data :ended_at] (:now ctx))
+        (assoc-in [:data :closed_by] (closed-by ctx))
         (assoc-in [:data :prices] prices)
         (assoc-in [:data :cost_usd] (cost-of counts prices)))))
 
@@ -1404,6 +1502,30 @@
    ;; #{:human :agent :system}), and a wall that also answered to a
    ;; word only scenarios spell would be two vocabularies for one fact
    :as      {:id "colton" :type :human}
+   :expect  {:allowed true}})
+
+(def ^:private an-open-sitting
+  {:seat "02eee915-354f-4010-a36f-7adfbd532395"
+   :model "claude-sonnet"
+   :started_at "2026-09-28T10:00:00Z"})
+
+(defscenario another-hand-abandons-a-sitting-at-the-persons-tap
+  "A seat whose grant admits `sitting.abandon` asks to end another
+   seat's sitting, and the ask waits for the person's tap: a held
+   call, never a not-found."
+  {:kind    :sitting
+   :attempt :abandon
+   :row     {:state :open :data an-open-sitting}
+   :as      {:id "mayor" :type :agent}
+   :expect  {:refused :the-engine-or-the-persons-tap
+             :because "held for the person's tap"}})
+
+(defscenario the-sweep-abandons-a-lost-sitting
+  "And the sweep still ends a lost sitting by its own hand."
+  {:kind    :sitting
+   :attempt :abandon
+   :row     {:state :open :data an-open-sitting}
+   :as      {:id "waymark10-seats" :type :system}
    :expect  {:allowed true}})
 
 (def ^:private a-minted-key
@@ -1906,7 +2028,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -1925,6 +2047,16 @@
                          {:label "Sittings at once"
                           :help max-open-sittings-help}}
      [:int {:min 1 :max 10}]]
+    ;; HOW LONG A RELEASED ROW RESTS (ticket f6c8d5ce). A close can land
+    ;; while the run that sat is still mid-call, so the rows it walked
+    ;; are handed to no other sitting of the seat until this lifts
+    ;; (`graced-rows`).
+    [:release_grace_seconds {:default 120
+                             :examples [120]
+                             :x-display
+                             {:label "Grace before a closed sitting's rows are handed on, in seconds"
+                              :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them, so a run whose close came early is not overtaken mid-call. Zero hands them on at once."}}
+     [:int {:min 0 :max 3600}]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2145,7 +2277,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
+                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -2159,6 +2291,12 @@
                          {:label "Sittings at once"
                           :help max-open-sittings-help}}
      [:int {:min 1 :max 10}]]
+    [:release_grace_seconds {:default 120
+                             :examples [120]
+                             :x-display
+                             {:label "Grace before a closed sitting's rows are handed on, in seconds"
+                              :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Two minutes is the default."}}
+     [:int {:min 0 :max 3600}]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2210,6 +2348,7 @@
                    wake-on-names-real-kinds
                    wake-on-names-real-actions
                    wake-on-names-no-engine-kind
+                   wake-on-any-of-needs-in
                    inbox-names-real-kinds
                    inbox-names-real-actions
                    ;; LAST, so a hold is a call every other wall passed
@@ -2330,6 +2469,12 @@
                                   {:label "Sittings at once"
                                    :help max-open-sittings-help}}
               [:int {:min 1 :max 10}]]
+             [:release_grace_seconds {:default 120
+                                      :examples [120]
+                                      :x-display
+                                      {:label "Grace before a closed sitting's rows are handed on, in seconds"
+                                       :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Raise it when a run's close can come before its last call does."}}
+              [:int {:min 0 :max 3600}]]
              [:delegates {:optional true
                           :x-display
                           {:label "What it may author"
@@ -2368,7 +2513,8 @@
                       :budget_usd_per_week :sitting_budget_tokens
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
-                      :fire_interval_seconds :max_open_sittings :delegates]
+                      :fire_interval_seconds :max_open_sittings
+                      :release_grace_seconds :delegates]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
@@ -2386,6 +2532,7 @@
               wake-on-names-real-kinds
               wake-on-names-real-actions
               wake-on-names-no-engine-kind
+              wake-on-any-of-needs-in
               inbox-names-real-kinds
               inbox-names-real-actions
               step-carries-a-note
@@ -2740,7 +2887,21 @@
                   {:hidden true
                    :label "The Routine's token"
                    :spelled-by-hand "Written by Link and cleared by Unlink; never shown again, and never asked for by a form that already holds it."}}
-     [:maybe [:string {:min 16 :max 400}]]]]
+     [:maybe [:string {:min 16 :max 400}]]]
+    ;; the runner pool (waymark ticket d16b71bf): the links every seat
+    ;; this model is the chair of fires through, unless its schedule
+    ;; names its own list or its own link.
+    [:runners {:optional true
+               :x-display
+               {:label "Runner links"
+                :help "The runner links this model's seats fire through, in order. A fire skips a link that is waiting and takes the rest as the pool order says."}}
+     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+    [:runner_order {:optional true
+                    :x-display
+                    {:label "Pool order"
+                     :help "How a fire picks among the runner links that may fire. Empty is least used."
+                     :choices runner-order-choices}}
+     [:maybe (into [:enum] runner-orders)]]]
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :tier #{:eq :in}}
@@ -2796,6 +2957,33 @@
               :handler reprice-model
               :display {:label "Reprice" :order 2
                         :description "The vendor moved its prices — record the new four; nothing already closed changes"}}
+    ;; The Routine behind a row can move to another model; the row
+    ;; follows it here and keeps its id, its history and its seats.
+    ;; Prices stay with `reprice`. An omitted field keeps its value.
+    :restate {:from #{:active} :to :active
+              :input [:map
+                      [:name {:optional true
+                              :examples ["claude-sonnet-5"]
+                              :x-display {:raw true
+                                          :label "API identifier"
+                                          :help "The identifier the Routine's model now answers to, spelled exactly."}}
+                       [:string {:min 1 :max 64}]]
+                      [:display {:optional true
+                                 :examples ["Sonnet 5"]
+                                 :x-display {:label "What a person reads"
+                                             :help "The short name for a card, a ledger line and a ladder step."}}
+                       [:string {:min 1 :max 120}]]
+                      [:notes {:optional true
+                               :x-display {:label "Anything else worth knowing"
+                                           :help "A line for whoever reads the ladder later."}}
+                       [:maybe [:string {:max 240}]]]]
+              :guards [one-model-spelling]
+              :record true
+              :edit {:prefill [:name :display :notes]}
+              :safety {:idempotent true :reversible true :confirm false}
+              :handler restate-model
+              :display {:label "Restate" :order 3
+                        :description "The Routine now runs another model — rename this row; its seats, sittings and prices stay"}}
 
     ;; ── the chair's four doors (waymark-fp62.7.23) ──────────────────
     ;; The seat's `offer_key`/`revoke_key` and the schedule's
@@ -2816,7 +3004,7 @@
      :guards [a-person-at-the-chair]
      :safety {:idempotent true :reversible true :confirm false}
      :handler set-sitter-key
-     :display {:label "Offer key" :order 3
+     :display {:label "Offer key" :order 4
                :description "Hand this model a secret to paste into its Routine — a session presenting it may sit in any seat this model is the chair of"}}
 
     :revoke_key
@@ -2824,7 +3012,7 @@
      :guards [a-person-at-the-chair]
      :safety {:idempotent true :reversible true :confirm false}
      :handler clear-sitter-key
-     :display {:label "Revoke key" :order 4
+     :display {:label "Revoke key" :order 5
                :description "The key answers for nothing; a session presenting it is told no seat answers, and the seats themselves are untouched"}}
 
     :link
@@ -2847,7 +3035,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The link replaces whatever this model held; Unlink takes it off again."}
      :handler set-chair-link
-     :display {:label "Link the Routine" :style :primary :order 5
+     :display {:label "Link the Routine" :style :primary :order 6
                :description "Paste the fire URL and the token of the Routine you made for this model — its seats fire through it from then on"}}
 
     :unlink
@@ -2856,8 +3044,31 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The fire URL and the token leave this model; linking again means pasting both once more."}
      :handler clear-chair-link
-     :display {:label "Unlink the Routine" :style :danger :order 6
-               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}}
+     :display {:label "Unlink the Routine" :style :danger :order 7
+               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}
+
+    ;; the runner pool (waymark ticket d16b71bf). A list names links,
+    ;; never a credential, so this door records.
+    :set_runners
+    {:from #{:active} :to :active
+     :input [:map
+             [:runners {:x-display
+                        {:label "Runner links"
+                         :help "The runner link ids this model's seats fire through, in order. An empty list hands the fire back to the one link."}}
+              [:vector {:max 20} [:string {:min 1 :max 200}]]]
+             [:runner_order {:optional true
+                             :x-display
+                             {:label "Pool order"
+                              :help "How a fire picks among the links that may fire. Empty is least used."
+                              :choices runner-order-choices}}
+              [:maybe (into [:enum] runner-orders)]]]
+     :record true
+     :guards [a-person-at-the-chair]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The new list replaces the one this model held; another restate puts it back."}
+     :handler set-runners
+     :display {:label "Runner links" :order 8
+               :description "Name the runner links this model's seats fire through, in order"}}}
    :deviations
    ["THE CHAIR'S TWO WRITE FENCES ARE BOTH GUARDS, where the schedule fences its link by omission. `sitter_key`, `fire_url` and `fire_token` are declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry all three. `key-not-written-by-hand` and `link-not-written-by-hand` are what refuse them, and each refusal names the door that writes the field instead. Both secrets stay `{:secret true}`, so the advertised create body drops them, no form asks, and the usability policies skip them; what a caller gains over silent omission is the sentence."
     "R-9.2 calls `name` unique and R-4.7's precedent (roles.clj's `one-spelling`) judges only ACTIVE rows. The two disagree about a retired model, so this kind takes the index's reading: `one_model_spelling` refuses any spelling already on record, active or retired, and its sentence sends the reader to `reactivate`. A second row for one identifier would split its prices, and a closed sitting costed against the wrong half would be wrong forever."]})
@@ -3044,6 +3255,46 @@
                 :x-display {:label "Refusals served"
                             :help "409s served under this sitting's grant — fuel spent on law the model did not know ahead of time. Counted by the engine, frozen at the close, and read as waymark's own backlog rather than as the model's fault."}}
      [:int {:min 0}]]
+    ;; CANCELLED TEST RUNS (ticket 39b2c934). A bench.test run the rig
+    ;; answers `cancelled` is a run the sitter started and threw away —
+    ;; the seat-health `test_thrash` signal. The door counts each run
+    ;; once, by its run id, however many times the sitter polls it.
+    [:cancelled_runs {:default 0
+                      :x-display {:label "Test runs cancelled"
+                                  :help "bench.test runs the rig answered cancelled while this sitting was open, each counted once by its run id. Counted by the engine and frozen at the close."}}
+     [:int {:min 0}]]
+    [:cancelled_run_ids {:default []
+                         :x-display {:raw true
+                                     :label "Cancelled run ids"
+                                     :help "The run ids already counted in cancelled_runs, so a second poll of one run does not count it again."}}
+     [:vector :string]]
+    ;; THE CORRECTIONS LINE. Written by the router AFTER the close: a
+    ;; person's transition on a row whose previous transition was this
+    ;; sitting's (found by that transition's grant) adds one here and
+    ;; the row's id to `corrected_rows`. Data beside the audit, not a
+    ;; verdict (R-11.4) — the rows say what to read. Absent reads zero.
+    [:corrections {:optional true
+                   :x-display {:label "Verdicts a person reversed"
+                               :help "Counted by the engine after the close: each person's transition on a row whose last transition was this sitting's."}}
+     [:maybe [:int {:min 0}]]]
+    [:corrected_rows {:optional true
+                      :x-display
+                      {:raw true
+                       :label "The rows a person reversed"
+                       :spelled-by-hand "The ids of the rows whose verdict from this sitting a person later changed. The engine writes it beside `corrections`."}}
+     [:maybe [:vector [:string {:max 128}]]]]
+    ;; WHICH LAW THE LAST REFUSAL WAS. The count says how many; this
+    ;; says what the newest one was, so the close can tell whether the
+    ;; last invoke or bench write was refused, and on which guard.
+    [:last_refusal {:optional true
+                    :x-display
+                    {:raw true
+                     :label "The last refusal"
+                     :help "The newest 409 served under this sitting's grant: its problem type, the guard that refused when one did, and when. Stamped by the engine beside the count, frozen at the close."}}
+     [:maybe [:map
+              [:type [:maybe [:string {:max 200}]]]
+              [:guard {:optional true} [:maybe [:string {:max 200}]]]
+              [:at [:string {:max 64}]]]]]
     ;; THE THIRD THE ENGINE COUNTS (R-10.6a). The transcript is the
     ;; larger part of the bill, and the transcript is what the MCP
     ;; door answered. `served` is the record of it: tool name → the
@@ -3153,7 +3404,18 @@
               :x-display
               {:label "Fired, and nobody sat"
                :spelled-by-hand "Written by the engine's sweep when a firing's key went unspent past the sit deadline. The sitting is born closed, with every count at zero."}}
-     :boolean]]
+     :boolean]
+    ;; HOW IT WAS CLOSED. Written at every path that ends a sitting
+    ;; closed — the close handler for the door, the hook and the idle
+    ;; sweep, and `wakes/record-missed!` for a missed fire — so seat
+    ;; health reads a cut-short or never-sat run without parsing the
+    ;; note. Absent while open; not :maybe, so it promotes and filters.
+    [:closed_by {:optional true
+                 :x-display
+                 {:label "How it was closed"
+                  :choices closed-by-choices
+                  :spelled-by-hand "Written by the engine at the close: door, hook, sweep, or missed for a fire nobody sat in."}}
+     (into [:enum] closed-by-paths)]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -3219,6 +3481,7 @@
                 :model #{:eq}
                 :grant #{:eq}
                 :missed #{:eq}
+                :closed_by #{:eq :in}
                 :started_at #{:after :before :range}}
    :sortable {:fields [:started_at] :default "-started_at"}
    :links [{:rel "seat" :kind :seat
@@ -3275,20 +3538,26 @@
     ;; not a zero one.
     :abandon
     {:from #{:open} :to :abandoned
-     :guards [the-engines-own-hand]
+     :guards [the-engine-or-the-persons-tap]
      ;; no handler: nothing is written. The ending of a sitting
      ;; nobody closed is the ABSENCE of a bill, not a zero one, and
      ;; the counts it already carries are what it did before it was
      ;; lost.
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "A sitting nobody closed is over with no cost recorded; the session that would have reported its tokens is gone."}
+              :one-way "A sitting nobody closed is over with no cost recorded; the session that would have reported its tokens is gone."
+              ;; the door is visible now (ticket be2c2c16), so the
+              ;; cheap-reverse battery reads it: the cost is the world's,
+              ;; not the row's, and :final is where that is spelled
+              :final "The session that sat is gone and nothing will report its tokens; its seat's next firing opens a new sitting."}
      :display {:label "Abandon" :order 9}}}
    :deviations
    ["R-10.2 lets a sitting's `model` be null (R-9.4: a token with no claim has model null), and R-10.7 wants the collection filterable by model. A promoted column is generated only for a non-`:maybe` entry, so those two cannot both be had: `model` is required at the create door, and the session's claim wins over it when there is one. A harness with nothing to declare names the row it is running as."
     "R-10.6 has the engine count transitions and refusals. `bump-counter!` is a maintenance write (`store/update-data!`, jobs.clj's progress precedent) rather than a transition: a logged transition per counted transition would double the log — the counter would cost more log than the thing it counts. The `close` is a real transition and freezes both numbers."
     "`tally` writes a `cost_usd` and NO `prices` map, where the close writes both. The prices are copied down beside a bill a reprice must not be able to move, and the only bill is the close's; a tally's cost is a reading of the row at that moment, re-read at the next turn, and a prices map beside it would say a running figure was final. A sitting closed by the sweep from its last tally is costed by the close, at the close's prices, like every other."
     "`close` and `tally` share ONE input (`report-input`) rather than declaring the five counts twice. The two doors take the same report from the same hook — one ends the sitting, the other writes the running total — and two spellings would be two shapes for a harness to keep in step, which is exactly the drift § 3 of the spec is about."
-    "`harness_session` is on the BIRTH door as well as the close's (R-12.15, R-12.17), which no other count-bearing field is. The reason is that it is not a count: it is the only fact a session knows at the sit that the engine cannot derive, and the pairing it makes is what lets two overlapping wakes of one seat each end their own sitting. It is `:maybe`, so it is not filterable and the pairing reads one page of the seat's open sittings rather than querying — `model`'s recorded wall, one field over. The close writes it only onto a row that carries none: a report naming another run's id must not move a bill."]})
+    "`harness_session` is on the BIRTH door as well as the close's (R-12.15, R-12.17), which no other count-bearing field is. The reason is that it is not a count: it is the only fact a session knows at the sit that the engine cannot derive, and the pairing it makes is what lets two overlapping wakes of one seat each end their own sitting. It is `:maybe`, so it is not filterable and the pairing reads one page of the seat's open sittings rather than querying — `model`'s recorded wall, one field over. The close writes it only onto a row that carries none: a report naming another run's id must not move a bill."]
+   :scenarios [another-hand-abandons-a-sitting-at-the-persons-tap
+               the-sweep-abandons-a-lost-sitting]})
 
 ;; ── the seam wave two calls ─────────────────────────────────────────
 
@@ -3438,20 +3707,143 @@
   MAINTENANCE write — document only, version untouched, no transition
   (see the ns docstring). → the new count, or nil when there was
   nothing to count: an unknown id, a sitting already closed, or a
-  counter this kind does not keep."
-  [eng sitting-id counter]
-  (when (and sitting-id
-             (contains? #{:transitions :refusals} counter)
-             (get (inv/resources eng) :sitting))
+  counter this kind does not keep.
+
+  With a `refusal` ({:type :guard}) on a `:refusals` count, the same
+  write stamps `:last_refusal` — the problem type, the guard name when
+  one refused, and the moment — so the close can read which law the
+  newest refusal was, not only how many there were."
+  ([eng sitting-id counter] (bump-counter! eng sitting-id counter nil))
+  ([eng sitting-id counter refusal]
+   (when (and sitting-id
+              (contains? #{:transitions :refusals} counter)
+              (get (inv/resources eng) :sitting))
+     (store/with-tx (:storage eng)
+       (fn [tx]
+         (when-some [row (store/load-row (:storage eng) tx :sitting
+                                         (str sitting-id) {:for-update true})]
+           (when (= :open (:state row))
+             (let [n (inc (long (or (get (:data row) counter) 0)))
+                   stamp (when (and refusal (= :refusals counter))
+                           (cond-> {:type (some-> (:type refusal) str not-empty)
+                                    :at (str (java.time.Instant/now))}
+                             (some? (:guard refusal))
+                             (assoc :guard (let [g (:guard refusal)]
+                                             (if (keyword? g) (name g) (str g))))))]
+               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                   (cond-> (assoc (:data row) counter n)
+                                     stamp (assoc :last_refusal stamp))
+                                   nil)
+               n))))))))
+
+(defn add-cancelled-run!
+  "Count one cancelled bench.test run on an open sitting (ticket
+  39b2c934). A run with an id is counted once: its id joins
+  `cancelled_run_ids`, and a later answer naming the same run leaves
+  the count where it is. A run with no id is counted each time, which
+  is the most an unnamed run can say. `bump-counter!`'s maintenance
+  write. → the count, or nil when there was nothing to count on."
+  [eng sitting-id run-id]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
     (store/with-tx (:storage eng)
       (fn [tx]
         (when-some [row (store/load-row (:storage eng) tx :sitting
                                         (str sitting-id) {:for-update true})]
           (when (= :open (:state row))
-            (let [n (inc (long (or (get (:data row) counter) 0)))]
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                  (assoc (:data row) counter n) nil)
-              n)))))))
+            (let [run (some-> run-id str not-empty)
+                  seen (vec (:cancelled_run_ids (:data row)))
+                  n (long (or (:cancelled_runs (:data row)) 0))]
+              (if (and run (some #{run} seen))
+                n
+                (let [n (inc n)]
+                  (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                      (cond-> (assoc (:data row) :cancelled_runs n)
+                                        run (assoc :cancelled_run_ids (conj seen run)))
+                                      nil)
+                  n)))))))))
+
+(defn- ->instant [v]
+  (cond (instance? java.time.Instant v) v
+        (inst? v) (.toInstant ^java.util.Date v)
+        (some-> v str not-empty) (java.time.Instant/parse (str v))))
+
+(defn sitting-transitions
+  "The transitions made under a sitting (ticket 39b2c934): the log rows
+  whose actor carries the sitting's grant and whose `at` falls in its
+  window, `started_at` to `ended_at` (to now, while it is open). The
+  log has no sitting column; the grant and the window are the link.
+  → a vector, oldest first, or nil for an unknown sitting."
+  ([eng sitting-id] (sitting-transitions eng sitting-id {}))
+  ([eng sitting-id opts]
+   (store/with-tx (:storage eng)
+     (fn [tx]
+       (when-some [row (store/load-row (:storage eng) tx :sitting
+                                       (str sitting-id) {})]
+         (let [data (:data row)]
+           (when-some [grant (some-> (:grant data) str not-empty)]
+             (store/transitions-under-grant
+              (:storage eng) tx grant
+              (->instant (:started_at data))
+              (->instant (:ended_at data))
+              opts))))))))
+
+(defn- a-persons-write?
+  "A logged actor a person answers for: a human, or a held call a person
+  allowed (`allowed_by`) — the ledger's own reading (R-11.3)."
+  [actor]
+  (or (= "human" (some-> (:type actor) name))
+      (some? (:allowed_by actor))))
+
+(defn count-correction!
+  "R-11.3 on the sitting's own row: when the transition just committed on
+  `kind`/`resource-id` is a person's and the one before it was a
+  sitter's, the CLOSED sitting that wore that transition's grant gains
+  one `corrections` and the row's id in `corrected_rows`. The same
+  MAINTENANCE write as `bump-counter!` — document only, no transition.
+  A second person's transition reads a person before it and adds
+  nothing; a row no sitter touched has no grant to find. Framework
+  kinds (`:nav :system`) are left out, as the ledger leaves them out.
+  → the new count, or nil when nothing was corrected."
+  [eng kind resource-id]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) kind)]
+    (when (and resource-id rdef
+               ;; a sitting's own doors are not the seat's work, as
+               ;; count-committed! reads them
+               (not= :sitting kind)
+               (not= :system (:nav rdef))
+               (get (inv/resources eng) :sitting))
+      (let [[after before] (store/with-tx st
+                             (fn [tx]
+                               (store/transitions st tx {:kind kind
+                                                         :resource-id (str resource-id)}
+                                                  {:newest-first true :limit 2})))
+            gid (get-in before [:actor :grant])]
+        (when (and before gid
+                   (a-persons-write? (:actor after))
+                   (not (a-persons-write? (:actor before))))
+          (store/with-tx st
+            (fn [tx]
+              ;; the grant's newest sitting, whatever its state: one still
+              ;; open is not credited, and an older closed one is not either
+              (when-some [s (some-> (store/query-rows st tx :sitting
+                                                      {:grant (str gid)}
+                                                      {:limit 1 :newest-first true})
+                                    first
+                                    (as-> s (when (= "closed" (some-> (:state s) name)) s)))]
+                (when-some [row (store/load-row st tx :sitting (str (:id s))
+                                                {:for-update true})]
+                  (let [n (inc (long (or (get-in row [:data :corrections]) 0)))
+                        rid (str resource-id)
+                        ids (vec (get-in row [:data :corrected_rows]))]
+                    (store/update-data! st tx :sitting (str (:id s))
+                                        (assoc (:data row)
+                                               :corrections n
+                                               :corrected_rows (if (some #{rid} ids)
+                                                                 ids
+                                                                 (conj ids rid)))
+                                        nil)
+                    n))))))))))
 
 (defn add-served!
   "Add one call and `bytes` bytes to an open sitting's `served`, under
@@ -3929,26 +4321,77 @@
                           (.getBytes ^String held StandardCharsets/UTF_8)))))
              first)))))
 
+(def ^:private release-grace-default
+  "The grace, in seconds, a seat that names no `release_grace_seconds`
+  gives the rows of a sitting that closed."
+  120)
+
+(defn- walked-rdef
+  "The rdef of the kind this seat walks, or nil."
+  [eng seat-row]
+  (some->> (get-in seat-row [:data :walk]) str not-empty keyword
+           (get (inv/resources eng))))
+
+(defn- graced-rows
+  "The walk rows a sitting of this seat CLOSED within the seat's
+  `release_grace_seconds` walked (ticket f6c8d5ce). A close can land
+  while the run that sat is still mid-call — its hook fired early, or
+  its last answer is in flight — and a fire a minute later must not
+  take its ticket out from under it. An abandoned sitting was swept,
+  not closed, and holds nothing; the sitting `sitting-id` names is
+  left out, as `claimed-rows` leaves it. A row whose work is over
+  (`machine/work-over?` under the walked kind's `rdef`) was finished,
+  not released, and is not held. → a set of ids."
+  [st tx seat-row rdef sitting-id now]
+  (let [grace (long (or (get-in seat-row [:data :release_grace_seconds])
+                        release-grace-default))
+        now (instant-of now)]
+    (if-not (and seat-row now (pos? grace))
+      #{}
+      (let [since (.minusSeconds ^Instant now grace)]
+        (into #{}
+              (comp (remove #(= (str sitting-id) (str (:id %))))
+                    (filter #(when-some [ended (instant-of
+                                                (get-in % [:data :ended_at]))]
+                               (.isAfter ^Instant ended since)))
+                    (mapcat #(get-in % [:data :walked_rows]))
+                    (keep #(some-> % str not-empty))
+                    (remove #(when rdef
+                               (when-some [r (store/load-row
+                                              st tx (keyword (str (get-in seat-row [:data :walk])))
+                                              % {})]
+                                 (machine/work-over?
+                                  rdef (inv/decode-row rdef r))))))
+              (store/query-rows st tx :sitting
+                                {:seat (str (:id seat-row)) :state :closed}
+                                {:limit open-sitting-page
+                                 :newest-first true}))))))
+
 (defn claimed-rows
   "The walk row ids the OTHER open sittings of this seat were handed:
   the rows a second run of the seat must not walk again. A fire and a
   wake that land together start two runs, and without this both sits
   answer the same first row, so both work one branch and the next row
-  waits. The claim ends with the sitting — a closed, abandoned or swept
-  sitting holds nothing — and the sitting `sitting-id` names is left
-  out, so a re-sit is handed its own rows again. → a set of ids."
+  waits. The claim ends with the sitting — an abandoned or swept
+  sitting holds nothing, and a closed one holds its rows only through
+  the seat's grace (`graced-rows`) — and the sitting `sitting-id`
+  names is left out, so a re-sit is handed its own rows again. → a
+  set of ids."
   [eng seat-id sitting-id]
   (if (and seat-id (get (inv/resources eng) :sitting))
-    (into #{}
-          (comp (remove #(= (str sitting-id) (str (:id %))))
-                (mapcat #(get-in % [:data :walked_rows]))
-                (keep #(some-> % str not-empty)))
-          (store/with-tx (:storage eng)
-            (fn [tx]
-              (store/query-rows (:storage eng) tx :sitting
-                                {:seat (str seat-id) :state :open}
-                                {:limit open-sitting-page
-                                 :newest-first true}))))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (into (let [seat-row (store/load-row st tx :seat (str seat-id) {})]
+                  (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                               sitting-id ((:now-fn eng))))
+                (comp (remove #(= (str sitting-id) (str (:id %))))
+                      (mapcat #(get-in % [:data :walked_rows]))
+                      (keep #(some-> % str not-empty)))
+                (store/query-rows st tx :sitting
+                                  {:seat (str seat-id) :state :open}
+                                  {:limit open-sitting-page
+                                   :newest-first true})))))
     #{}))
 
 ;; ── the rows a sit leaves out of its walk ───────────────────────────
@@ -3987,8 +4430,8 @@
     (when (and groom stall (> (long (:id groom)) (long (:id stall))))
       groom)))
 
-(defn stuck-walk-rows
-  "The ids of the tickets in a ticket walk whose change is stuck and
+(defn stuck-walk-reasons
+  "The tickets in a ticket walk whose change is stuck and
   waits for a person (ticket 6bdaf6fe): a `stuck` change born from the
   ticket, no live change beside it, and no groom since its stall. The
   walk leaves them out as it leaves a claimed row out, so a queue of
@@ -4003,7 +4446,10 @@
   a second run of the seat has nothing to build on it, and a submit
   there only finds a clean worktree.
 
-  Empty for any other walk and for an engine that serves no change."
+  → {ticket-id reason}: each withheld ticket with the sentence the sit
+  answers for it (ticket 87c928e9), so a seat handed an empty walk
+  can say which row was held back and why. Empty for any other walk
+  and for an engine that serves no change."
   [eng walk]
   (if-some [rdef (when (= "ticket" (str walk))
                    (get (inv/resources eng) :change))]
@@ -4022,7 +4468,10 @@
                       (let [born (str (get-in change [:data :born_from]))]
                         (when (str/starts-with? born groomed-walk-prefix)
                           (not-empty (subs born (count groomed-walk-prefix))))))]
-      (into (into #{} (keep ticket-of)
+      (into (into {} (keep (fn [change]
+                             (when-some [ticket-id (ticket-of change)]
+                               [ticket-id (str "change " (:id change)
+                                               " is submitted and in review")])))
                   (changes {:state "submitted"} stuck-scan-limit))
             (keep (fn [change]
                     (let [born (str (get-in change [:data :born_from]))]
@@ -4032,9 +4481,15 @@
                           (when (and (not (live? born))
                                      (nil? (groom-after-stall eng change
                                                               ticket-id)))
-                            ticket-id))))))
+                            [ticket-id (str "change " (:id change)
+                                            " is stuck and waits for a person")]))))))
             (changes {:state "stuck"} stuck-scan-limit)))
-    #{}))
+    {}))
+
+(defn stuck-walk-rows
+  "The ids of `stuck-walk-reasons`, as a set."
+  [eng walk]
+  (set (keys (stuck-walk-reasons eng walk))))
 
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows
@@ -4081,12 +4536,13 @@
       {:claimed? true :taken #{}}
       (store/with-tx st
         (fn [tx]
-          (store/load-row st tx :seat (str seat-id) {:for-update true})
-          (let [open (store/query-rows st tx :sitting
+          (let [seat-row (store/load-row st tx :seat (str seat-id) {:for-update true})
+                open (store/query-rows st tx :sitting
                                        {:seat (str seat-id) :state :open}
                                        {:limit open-sitting-page
                                         :newest-first true})
-                taken (into #{}
+                taken (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                                         sitting-id ((:now-fn eng)))
                             (comp (remove #(= (str sitting-id) (str (:id %))))
                                   (mapcat #(get-in % [:data :walked_rows]))
                                   (keep #(some-> % str not-empty)))

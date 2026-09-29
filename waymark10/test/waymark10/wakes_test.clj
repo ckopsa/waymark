@@ -150,7 +150,7 @@
                       :x-display {:label "Which batch"
                                   :help "The run of rows this one belongs to."}}
               [:string {:min 1 :max 40}]]]
-    :filterable {:state #{:eq :in} :batch #{:eq}}
+    :filterable {:state #{:eq :in} :batch #{:eq :in}}
     :default-filters {:state "open"}
     :actions
     {:complete {:from #{:open} :to :complete
@@ -620,6 +620,99 @@
 
     (seat-do! seat :retire)))
 
+(deftest a-damped-match-delivered-twice-fires-the-seat-once
+  ;; waymark-fp62.21: the drain re-delivered a damped match while the
+  ;; released run's sitting was open, and the next release fired again
+  (let [wn :wake-replay-damped
+        fn' :wake-replay-damped-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "damperclerk"
+                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
+                       :fire_interval_seconds 1}
+                      fn')
+        open-one (sitting! seat)
+        task (task! "one mention")]
+    (task-do! task :complete)
+    (drain-wakes! wn)
+    (is (empty? (seat-fires seat)) "the open sitting damps the match")
+    (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+
+    (close-sitting! open-one)
+    (drain-wakes! wn)
+    (is (= 1 (count (seat-fires seat))) "the close releases the wake")
+
+    (testing "the same transition delivered again while the released run sits"
+      ;; `sitting!` registers one model per seat; the second sitting
+      ;; names a model of its own
+      (let [open-two (:id (:row (inv/create! *eng* :sitting
+                                             {:seat (str seat)
+                                              :model (str (model! (str "model-two-for-" seat)))
+                                              :grant (str (grant!))}
+                                             {:principal clerk})))
+            t (last (filter #(= :complete (:action %)) (log-of :wake_task task)))]
+        (is (some? t))
+        (wakes/handle-transition! *eng* (atom nil) t)
+        (is (not (get-in (sched-of seat) [:data :wake_pending]))
+            "a replay sets nothing pending")
+        (Thread/sleep 1200)
+        (close-sitting! open-two)
+        (drain-wakes! wn)
+        (wakes/sweep-pending! *eng*)
+        (is (= 1 (count (seat-fires seat))) "one match, one fire")))
+
+    (seat-do! seat :retire)))
+
+(deftest a-throttled-routine-stays-live-and-its-wake-goes-out-after-the-time-it-named
+  (let [wn :wake-throttle
+        fn' :wake-throttle-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "throttleclerk"
+                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
+                       :fire_interval_seconds 1}
+                      fn')]
+    (try
+      (sch/answer! *fire* 429 {:retry-after "2"})
+      (task-do! (task! "the one the provider throttles") :complete)
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (sch/answer! *fire* nil)
+      (is (= 1 (count (fires-of token))) "the throttled POST went out once")
+      (let [row (sched-of seat)]
+        (is (= :live (:state row)) "a throttle is not a broken link")
+        (is (true? (get-in row [:data :wake_pending])))
+        (is (some? (get-in row [:data :retry_after])))
+        (is (= "The Routine has no free run. Try again after 2."
+               (get-in row [:data :note]))))
+
+      (testing "before the time it named nothing goes out, and a new match folds in"
+        (task-do! (task! "a second match, inside the throttle") :complete)
+        (drain-wakes! wn)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (seat-fires seat))))
+        (is (= 1 (count (fires-of token))))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+      (testing "after it, the sweep sends the waiting wake exactly once"
+        (Thread/sleep 2200)
+        (wakes/sweep-pending! *eng*)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 2 (count (seat-fires seat))))
+        (is (= 2 (count (fires-of token))))
+        (let [row (sched-of seat)]
+          (is (= :live (:state row)))
+          (is (nil? (get-in row [:data :retry_after])))
+          (is (nil? (get-in row [:data :note])))
+          (is (not (get-in row [:data :wake_pending])))))
+      (finally
+        (sch/answer! *fire* nil)
+        (seat-do! seat :retire)))))
+
 ;; ── 4 · the walk seat's computed default ────────────────────────────
 
 (deftest a-walk-seat-with-no-wake-on-wakes-on-its-own-queue
@@ -1003,6 +1096,31 @@
 
     (seat-do! (:seat picky) :retire)
     (seat-do! (:seat anyone) :retire)))
+
+;; ── 10b · a comma value is any of on a field that declares :in ──────
+
+(deftest a-comma-filter-on-an-in-field-reads-as-any-of
+  (let [a "anyof-a" b "anyof-b" c "anyof-c"
+        a-id (item! a) b-id (item! b) c-id (item! c)
+        f {:batch (str a "," b)}]
+    (testing "a transition wake's filter judges a row of either batch in,
+              and a third batch's row out"
+      (is (true? (wakes/moved-under? *eng* :wake_item a-id f)))
+      (is (true? (wakes/moved-under? *eng* :wake_item b-id f)))
+      (is (false? (wakes/moved-under? *eng* :wake_item c-id f))))
+    (testing "a count wake with that filter counts both batches"
+      (is (= 2 (wakes/count-under *eng* :wake_item f))))))
+
+(deftest a-comma-wake-filter-on-a-field-without-in-is-refused-at-restate
+  (let [seat (seat! "wakecomma"
+                    {:wake_on [{:kind "wake_task" :actions ["complete"]}]})
+        p (refusal #(restate! seat {:wake_on [{:kind "wake_task"
+                                               :actions ["complete"]
+                                               :filter {:title "a,b"}}]}))]
+    (is (= :wake-on-any-of-needs-in (:guard p)))
+    (is (str/includes? (str (:detail p)) "title")
+        "the refusal names the field, not 'invalid wake_on'")
+    (seat-do! seat :retire)))
 
 ;; ── 11 · a count entry with no actions counts on every action ───────
 
@@ -1834,6 +1952,35 @@
           (is (nil? (get-in (first ts) [:inputs :text]))
               "a release names no row, so the session walks the queue"))
         (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+    (seat-do! seat :retire)))
+
+;; ── a wake the fire door refuses waits ───────────────────────────────
+;;
+;; A halt line other than the budget's is judged by the `fire` door
+;; itself. Its refusal used to drop the match: nothing set
+;; `wake_pending`, so when a person lifted the line the rows that came
+;; in meanwhile never woke the seat.
+
+(deftest a-wake-the-fire-door-refuses-is-left-pending
+  (let [wn :wake-halt-wall
+        fn' :wake-halt-wall-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "haltclerk"
+                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]}
+                      fn')]
+    (is (true? (seats/seat-halt! *eng* seat "model_not_held"
+                                 "This session declares nothing and haltclerk is held for 1 model(s).")))
+
+    (testing "a matching transition fires nothing, and the wake waits"
+      (task-do! (task! "a thing behind the halt") :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (drain-fires! fn')
+      (is (empty? (fires-of token))))
 
     (seat-do! seat :retire)))
 

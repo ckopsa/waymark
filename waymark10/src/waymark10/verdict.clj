@@ -73,6 +73,7 @@
   (:require [clojure.string :as str]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             [waymark10.judgment :as judgment]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.types :as t]))
@@ -226,57 +227,76 @@
           (t/allow)
           :else (t/deny {:vars {:subject (str (:subject_kind inp) " " sid)}}))))))
 
-(g/defguard a-person-corrects
+(g/defguard a-correction-cites-what-stands
   {:judges [:corrects :judgment :subject_id]
-   :reads [:principal :verdict]
+   :reads [:verdict]
    :vars [:problem]
-   :open "Correcting is a person's act and stays one, and it is bound to the answer it corrects: the same judgment, the same row, and an answer that still stands. An agent that could overrule a verdict — its own or another agent's — would be writing its own measurement, and the count of corrections is precisely what R-3 measures a seat by. What an agent may do about a verdict it disagrees with is say so where an agent may say things."
+   :open "A correction is bound to the answer it corrects: the same judgment, the same row, and an answer that still stands. Cite the verdict that stands on this subject under this judgment, or judge afresh with no corrects."
    :explain "{problem}"}
-  ;; ONE WALL, TWO HALVES, and they are one law: who may correct, and
-  ;; what a correction may cite. Splitting them would have the door
-  ;; refuse an agent's wandering citation for the citation, which is
-  ;; the smaller of the two things wrong with it.
+  ;; WHAT a correction may cite, for every hand. It stands apart from
+  ;; `a-person-corrects` because that wall is a HOLD, and a hold's
+  ;; refusal becomes a held_call: a wandering citation is wrong
+  ;; whoever sends it, and it is refused here, flat, before any
+  ;; person's tap could be spent on it.
   [_row inp ctx]
   (let [cited (some-> (:corrects inp) str str/trim not-empty)
-        p (:principal ctx)
         read' (:read ctx)]
-    (if (nil? cited)
-      (t/allow)
+    ;; the storage-free probe carries no read and advertises
+    ;; optimistically; the write path always carries it
+    (if-some [prior (when (and cited read') (read' verdict-kind cited))]
+      (if-some [problem
+                (cond
+                  (and (not= standing-state (name (:state prior)))
+                       (some? (get-in prior [:data :reopened_by])))
+                  (str "The verdict this cites was reopened — nothing"
+                       " stands on this subject under this judgment, so"
+                       " there is nothing to correct. Judge it afresh:"
+                       " the same verdict, with no corrects.")
+                  (not= standing-state (name (:state prior)))
+                  (str "The verdict this cites has already been corrected"
+                       " — it is " (name (:state prior)) ", and only the"
+                       " answer that stands can be the one a correction"
+                       " replaces.")
+                  (not= (str (get-in prior [:data :judgment]))
+                        (str (:judgment inp)))
+                  "The verdict this cites was written under a different judgment."
+                  (not= (str (get-in prior [:data :subject_id]))
+                        (str (:subject_id inp)))
+                  "The verdict this cites is about a different row.")]
+        (t/deny {:vars {:problem problem}})
+        (t/allow))
+      (t/allow))))
+
+(g/defguard a-person-corrects
+  {:judges [:corrects]
+   :reads [:principal :within]
+   :hold true
+   :vars [:problem]
+   :open "No door clears this one. An agent's correction waits as a held_call for its person's tap, and the person's Allow writes it under the person's name: an agent that could overrule a verdict alone would be writing its own measurement, and the count of corrections is precisely what R-3 measures a seat by."
+   :explain "{problem}"}
+  ;; WHO may correct: a person, and an agent only through its person.
+  ;; ticket's `only-a-person-reopens`, one kind over: every hand but an
+  ;; agent's passes, the engine's own actor included. An agent's
+  ;; correction is HELD (waymark10.holds), and the one agent call this
+  ;; admits is the engine's replay of the held call its person allowed
+  ;; — which `stamp-and-overrule` records as the person's.
+  [_row inp ctx]
+  (let [cited (some-> (:corrects inp) str str/trim not-empty)
+        p (:principal ctx)]
+    (cond
+      (nil? cited) (t/allow)
       ;; "a person" is `(not= :agent …)` everywhere in this tree
       ;; (`remark/words-do-not-answer`, `guards/unless-granted`): the
       ;; actor types are human, agent and system, and the one this law
       ;; is about is the agent.
-      (if (= :agent (:type p))
-        (t/deny {:vars {:problem
-                        (str "A correction is a person's answer and you are "
-                             (or (not-empty (str (:display p))) (:id p) "an agent")
-                             ". The verdict that stands stays where it is "
-                             "until somebody in this house says otherwise.")}})
-        ;; the storage-free probe carries no read and advertises
-        ;; optimistically; the write path always carries it
-        (if-some [prior (when read' (read' verdict-kind cited))]
-          (if-some [problem
-                    (cond
-                      (and (not= standing-state (name (:state prior)))
-                           (some? (get-in prior [:data :reopened_by])))
-                      (str "The verdict this cites was reopened — nothing"
-                           " stands on this subject under this judgment, so"
-                           " there is nothing to correct. Judge it afresh:"
-                           " the same verdict, with no corrects.")
-                      (not= standing-state (name (:state prior)))
-                      (str "The verdict this cites has already been corrected"
-                           " — it is " (name (:state prior)) ", and only the"
-                           " answer that stands can be the one a correction"
-                           " replaces.")
-                      (not= (str (get-in prior [:data :judgment]))
-                            (str (:judgment inp)))
-                      "The verdict this cites was written under a different judgment."
-                      (not= (str (get-in prior [:data :subject_id]))
-                            (str (:subject_id inp)))
-                      "The verdict this cites is about a different row.")]
-            (t/deny {:vars {:problem problem}})
-            (t/allow))
-          (t/allow))))))
+      (not= :agent (:type p)) (t/allow)
+      (holds/approved-hold? ctx verdict-kind :judge nil) (t/allow)
+      :else
+      (t/deny {:vars {:problem
+                      (str "A correction is a person's answer and you are "
+                           (or (not-empty (str (:display p))) (:id p) "an agent")
+                           ", so it waits for your person's tap. The verdict"
+                           " that stands stays where it is until they allow it.")}}))))
 
 ;; ── the engine's own door ───────────────────────────────────────────
 
@@ -407,7 +427,13 @@
   ;; The overrule rides `ctx :invoke` inside this create's own
   ;; transaction, so the pair lands or neither does: there is no moment
   ;; in which two answers to one question both stand.
-  (let [row (assoc-in row [:data :said_by] (:id (:principal ctx)))
+  ;; A correction an agent's person allowed is the PERSON's: the replay
+  ;; runs as the agent, and the held call names who tapped Allow, so
+  ;; R-3's count of corrections keeps measuring what it measured.
+  (let [allowed (holds/allowed-hold ctx verdict-kind :judge nil)
+        row (assoc-in row [:data :said_by]
+                      (or (some-> (get-in allowed [:data :decided_by]) str not-empty)
+                          (:id (:principal ctx))))
         cited (some-> (get-in row [:data :corrects]) str str/trim not-empty)]
     (when (and cited (:invoke ctx))
       ((:invoke ctx) verdict-kind cited :overrule nil))
@@ -585,18 +611,20 @@
    ;; judgment that is not in force hears that and nothing else. Then
    ;; the body against the judgment, then the house.
    ;;
-   ;; `a-person-corrects` stands BEFORE `one-standing-verdict-per-
-   ;; subject` and not after it, though it is the narrower law: the
+   ;; The two correction walls stand BEFORE `one-standing-verdict-per-
+   ;; subject` and not after it, though they are the narrower law: the
    ;; standing-answer wall READS the citation (a correction is its one
    ;; exception), so a citation that is not a person's, or that wanders
    ;; to another row, has to be answered as the wrong CITATION rather
    ;; than as "this was already answered" — which is true, and is not
-   ;; what is wrong.
+   ;; what is wrong. The citation wall stands before the hold, so a
+   ;; wandering citation is refused flat and never waits on a tap.
    :create-guards [judgment-is-promoted
                    verdict-is-in-the-vocabulary
                    remedy-within-the-ceiling
                    subject-kind-matches
                    subject-is-a-row
+                   a-correction-cites-what-stands
                    a-person-corrects
                    one-standing-verdict-per-subject]
    :actions

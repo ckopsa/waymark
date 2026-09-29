@@ -17,7 +17,8 @@
 
   The doors: set marks the plan decided; replan opens a set plan again
   while at least one window is still ahead and refuses, naming the
-  close door, once the day is spent; reshape names the other shape and
+  close door, once the day is spent; reshape names the other shape (or
+  the same one, when nothing is ahead to disturb) and
   re-materialises the windows still ahead — spans that have begun are
   history and are not touched, a block whose context survives into the
   new shape keeps its row (and, one slice on, its decisions) and gets
@@ -30,7 +31,7 @@
   shape optional — the create form asks only what a person decides."
   (:require [dayplan10.zone :as zone]
             [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario expr-guard]]
+                                   defscenario]]
             [waymark10.types :as t])
   (:import (java.time DayOfWeek Instant LocalDate)))
 
@@ -101,11 +102,20 @@
         (t/allow)
         (t/deny)))))
 
-(def a-different-shape
-  (expr-guard {:name :a-different-shape
-               :when '(not= (input :shape) (data :shape))
-               :explain "This is already a {shape} day; name the other shape to reshape it."
-               :vars {:shape '(data :shape)}}))
+(defguardfn a-different-shape
+  {:judges [:shape] :reads [:span :now]
+   :vars [:shape]
+   :explain "This is already a {shape} day with windows still ahead; name the other shape to reshape it. The same shape is let through only when nothing is ahead, so a day minted before its templates can be filled."}
+  [row inp ctx]
+  (let [shape (get-in row [:data :shape])]
+    (cond
+      (not= (:shape inp) shape) (t/allow)
+      ;; offline there is no day to read, so the same shape stays refused
+      (nil? (:find ctx)) (t/deny {:vars {:shape shape}})
+      (some #(ahead? (:data %) (:now ctx))
+            ((:find ctx) :span {:plan_id (:id row) :state "planned"} {:limit 500}))
+      (t/deny {:vars {:shape shape}})
+      :else (t/allow))))
 
 ;; ── reshape ─────────────────────────────────────────────────────────
 
@@ -154,29 +164,35 @@
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
-;; Reshape's wall reads the input against the row and nothing else, so
-;; its scenario is CHECK-tier; replan's reads the day's spans and the
-;; clock (:reads [:span :now]), so its scenario is CONFORMANCE-tier —
+;; Both walls read the day's spans and the clock (:reads [:span :now]) —
+;; reshape's because the same shape passes when nothing is ahead — so
+;; both scenarios are CONFORMANCE-tier —
 ;; the plan is staged through the real door (its blocks and spans
 ;; materialising from whatever workday templates the engine holds, all
 ;; of them in 2020 and so all of them passed), walked to set, and
 ;; replanned as a client would.
 ;;
-;; Which is why only ONE of them stages a member (waymark-fp62.4.1): a
+;; Which is why each of them stages a member (waymark-fp62.4.1): a
 ;; plan's :member is a ref and the engine resolves every ref at the
 ;; door, so the day the conformance tier actually creates needs a
 ;; member who stands — it stages one as a `:given` row and cites it by
-;; `{given/who}`. The check-tier scenario below creates nothing and
-;; resolves nothing; its member id names no row because offline there
-;; is no store for one to stand in.
+;; `{given/who}`. Reshape's also stages a workday template of its own,
+;; an evening window clear of the others, so the day it creates has a
+;; window ahead whatever else the store holds.
 
 (defscenario reshape-names-the-other-shape
   "Reshaping a workday into a workday would skip and re-mint every
    window ahead for nothing; the door asks for the other shape."
   {:kind    :day_plan
    :attempt :reshape
+   :given   [{:kind :member :handle :who :state :active
+              :data {:display "Scenario reshaped day" :actor_type "human"}}
+             {:kind :context :state :active
+              :data {:name "Scenario reshape" :default_shapes ["workday"]
+                     :default_spans [{:from "17:30" :to "18:00"}]
+                     :default_order 9}}]
    :row     {:state :set
-             :data {:date "2099-01-05" :member "01HZQ7Y7F2R3W4V5X6Y7Z8A9C1"
+             :data {:date "2099-01-05" :member "{given/who}"
                     :shape "workday"}}
    :input   {:shape "workday"}
    :as      {:id "colton" :type :person}

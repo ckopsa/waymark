@@ -482,8 +482,13 @@
         repo (str (get-in row [:data :repository]))
         branch (bench/branch-of row policy)
         title (title-of row)
-        status (bench/ask ctx :status {:repo repo :branch branch})]
+        ;; a sitting that no longer holds the ticket never writes its
+        ;; branch (ticket d7c854b3)
+        unheld (bench/unheld-detail row ctx)
+        status (when-not unheld
+                 (bench/ask ctx :status {:repo repo :branch branch}))]
     (cond
+      unheld (bench/refuse! unheld [bench/unheld-remedy])
       (nil? status) (bench/refuse! bench/dark-detail [bench/dark-remedy])
       (bench/refused status) (rig-refusal! "read the worktree" status)
       ;; A clean worktree on a change already in review is its own
@@ -739,6 +744,31 @@
   [row _inp _ctx]
   (if (has-a-pull-request? row) (t/allow) (t/deny)))
 
+(defguardfn no-pull-request-to-close
+  {:reads []
+   :open "No door here changes this verdict. A change with a pull request ends at GitHub: close the pull request there, and the mirror closes the row with its own close."
+   :explain "This change has a pull request, so GitHub owns its ending. Close the pull request at GitHub and the mirror follows; this door is for a change GitHub never saw."}
+  [row _inp _ctx]
+  (if (has-a-pull-request? row) (t/deny) (t/allow)))
+
+(defguardfn only-a-person-closes-a-change
+  {:reads [:principal :within]
+   :hold true
+   :vars [:title :branch]
+   :open "No door clears this one. The call waits as a held_call for the person's tap: ending a change a seat was building is the person's judgment, and the person's Allow runs it exactly as written."
+   :explain "Closing {title} on {branch} is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written."}
+  [row _inp ctx]
+  ;; `only-a-person-drops-the-branch`, one door over: every hand but an
+  ;; agent's passes, a delegate's included in the hold (the mayor asks,
+  ;; the person taps), and the one agent close this admits is the
+  ;; engine's replay of the held call its person allowed.
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :change :close_without_pr (:id row)) (t/allow)
+    :else (t/deny {:vars {:title (str (get-in row [:data :title]))
+                          :branch (str (or (get-in row [:data :branch])
+                                           (get-in row [:data :head_branch])))}})))
+
 ;; ── the law, written down as a scenario ─────────────────────────────
 ;;
 ;; Check-tier: no :given rows, and the one guard reads :principal and
@@ -795,6 +825,45 @@
    :input   {:drop_branch true}
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
+
+(def ^:private a-seat-branch
+  "A change a seat pushed and GitHub never opened a pull request for."
+  (-> a-pull-request
+      (dissoc :number)
+      (assoc :change_id "ticket:be2c2c16-4876-4807-939c-69729db36152"
+             :head_branch "bench/be2c2c16-4876-4807-939c-69729db36152")))
+
+(defscenario a-model-does-not-close-a-change-alone
+  "A change with no pull request has no ending GitHub will write. The
+   mayor may ask to close one, a duplicate whose ticket merged under
+   another row, and the ask waits for the person's tap."
+  {:kind    :change
+   :attempt :close_without_pr
+   :row     {:state :open :data a-seat-branch}
+   :input   {:why "A duplicate: its ticket merged under another row."}
+   :as      {:id "mayor" :type :agent}
+   :expect  {:refused :only-a-person-closes-a-change
+             :because "held for the person's tap"}})
+
+(defscenario the-person-closes-a-change-with-no-pull-request
+  "And the door is really there for the person, from `submitted` too:
+   a pushed branch no pull request adopted ends with one tap."
+  {:kind    :change
+   :attempt :close_without_pr
+   :row     {:state :submitted :data a-seat-branch}
+   :input   {:why "A duplicate: its ticket merged under another row."}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-change-with-a-pull-request-is-closed-at-github
+  "A change with a number is GitHub's to close, and this door is not
+   for it."
+  {:kind    :change
+   :attempt :close_without_pr
+   :row     {:state :open :data a-pull-request}
+   :input   {:why "No longer wanted."}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :no-pull-request-to-close}})
 
 (defscenario a-model-discards-its-own-edits
   "And the escape hatch itself is always open: the worktree goes back
@@ -1276,6 +1345,27 @@
      :display {:label "Closed" :order 3
                :description "GitHub closed the pull request and merged nothing"}}
 
+    ;; the ending of a change GitHub never saw (ticket be2c2c16): the
+    ;; mirror's `close` follows a pull request, so a row with no number
+    ;; had no door to its end. A person's, held when a model asks, and it
+    ;; leaves the ticket where it stands — see `:deviations`.
+    :close_without_pr
+    {:from #{:open :submitted} :to :closed
+     :input [:map
+             [:why {:examples ["A duplicate: its ticket merged under another row."]
+                    :x-display
+                    {:widget "prose"
+                     :label "Why it ends"
+                     :help "One sentence for the next reader: why this change is let go. It rides the log beside this move."}}
+              [:string {:min 1 :max 480}]]]
+     :edit {:draft {:shared true :live true}}
+     :guards [no-pull-request-to-close
+              only-a-person-closes-a-change]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open."}
+     :display {:label "Close" :style :danger :order 30
+               :description "Let go of a change that never opened a pull request — its ticket stays where it is"}}
+
     ;; the merge's close of a DUPLICATE (ticket 3ec37f66): another
     ;; change born from the same ask on the same branch merged, so this
     ;; one is let go with the merged one's address on it. Not `close`:
@@ -1642,7 +1732,8 @@
     "A self-loop that serves several states is spelled once for each: `observe` with `observe_submitted` and `observe_failing`, `discard` with `discard_submitted`, and `adopt` with `adopt_submitted`, `adopt_failing` and `adopt_stuck`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
     "The round ceiling REFUSES and names the way to `stuck`; it does not move the row itself. Bead waymark-fp62.6.3.2's R-5 reads \"the row moves to stuck and the door names it\", and one transition cannot do both: a handler's refusal rolls back its own transaction, and an action's `:to` is one state. So `under-the-round-ceiling` refuses with `:remedies [:change/stall]`, and `stall` — a real door, with the seat's own sentence on it — makes the move."
     "The clean-worktree check is the HANDLER's, not a guard's. The only honest reading of \"is there anything to submit\" is the rig's own `status`, and a guard that reached a wire would judge differently on a day Gate was dark. The handler asks, and refuses with a 409 that carries its remedy, so the refusal counts on the sitting exactly as a guard's does."
-    "A move into `failing` is counted against the round ceiling and does not add a round of its own (ticket d1742908). `submit` already adds one for each head a seat pushes, and each red head is one of those rounds; adding a second for the red would spend the ceiling twice as fast. So the forge pass reads `rounds` against the policy's ceiling at the red: under it the change goes to `failing`, at it the change goes to `stuck` through `stick`, with the red check names as its why."]
+    "A move into `failing` is counted against the round ceiling and does not add a round of its own (ticket d1742908). `submit` already adds one for each head a seat pushes, and each red head is one of those rounds; adding a second for the red would spend the ceiling twice as fast. So the forge pass reads `rounds` against the policy's ceiling at the red: under it the change goes to `failing`, at it the change goes to `stuck` through `stick`, with the red check names as its why."
+    "`close` is spelled twice, `close` and `close_without_pr` (ticket be2c2c16). The mirror's `close` follows GitHub's and sends the ticket back to the queue; a change GitHub never saw has no pull request to follow, and its ending is a person's judgment that leaves the ticket where it stands, so it is its own door with its own guards."]
    :scenarios [a-model-does-not-move-a-pull-request
                the-source-moves-the-pull-request
                a-model-does-not-drop-the-branch
@@ -1652,4 +1743,7 @@
                the-person-puts-a-stuck-change-back-to-work
                a-change-with-a-pull-request-is-not-put-back-in-open
                a-change-with-no-pull-request-goes-back-to-open
-               a-seat-does-not-say-its-own-change-is-red]})
+               a-seat-does-not-say-its-own-change-is-red
+               a-model-does-not-close-a-change-alone
+               the-person-closes-a-change-with-no-pull-request
+               a-change-with-a-pull-request-is-closed-at-github]})

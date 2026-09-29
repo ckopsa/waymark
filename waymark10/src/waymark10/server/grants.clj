@@ -422,7 +422,7 @@
    :reads [:services]
    :vars [:kind :field]
    :open "A grant filter narrows by a field the kind already declares filterable with eq, or — for a dotted power — by a field its server's entry lists in `constraints`; both vocabularies are one GET away."
-   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), and only ONE entry may filter a kind; a filter on a dotted power names a field the server's powers entry lists in `constraints`, and a power that lists none admits no filter at all."}
+   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), a comma-separated value (any of) only on a field it declares filterable with in, and only ONE entry may filter a kind; a filter on a dotted power names a field the server's powers entry lists in `constraints`, and a power that lists none admits no filter at all."}
   [_row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
     (let [entries (filter :filter (:scope inp))
@@ -453,7 +453,7 @@
                      :when (not (power? e))
                      :let [rdef (rdef-of (:kind e))]
                      :when rdef
-                     [f _] (:filter e)
+                     [f v] (:filter e)
                      :let [fname (name f)
                            ops (get (:filterable rdef) (keyword fname))]
                      ;; STATE IS FILTERABLE HERE (bead waymark-fp62.12).
@@ -469,8 +469,13 @@
                      ;; answers `state` (collections/param-map adds it
                      ;; whatever `:filterable` says), so no
                      ;; `:filterable` entry is owed for it.
+                     ;; a comma value is any of only where the field
+                     ;; declares :in; elsewhere it would match one
+                     ;; literal text, which is nothing, silently
                      :when (and (not= "state" fname)
-                                (not (contains? (or ops #{}) :eq)))]
+                                (or (not (contains? (or ops #{}) :eq))
+                                    (and (str/includes? (str v) ",")
+                                         (not (contains? ops :in)))))]
                  {:kind (:kind e) :field fname}))
           bad-power (first
                      (for [e entries
@@ -1334,12 +1339,14 @@
               :explain "The requester cannot judge its own ask; another principal decides."}
     :stamps  {:decided-by :approved_by}
     ;; short-lived is the DEFAULT, not an opt-in: an ask naming no
-    ;; expiry gets the engine's configured TTL (1h), stamped AT
-    ;; CREATE so the approver approves the leash that will actually
-    ;; exist. An agent proposes longer at will up to the cap; the
-    ;; approver sees the number either way.
+    ;; expiry gets the engine's configured TTL (24h, the leash's own
+    ;; cap — waymark-h6y: a shorter default killed the minted grant
+    ;; minutes after a late approval, because the offer window and
+    ;; the grant lifetime are one field), stamped AT CREATE so the
+    ;; approver approves the leash that will actually exist. An agent
+    ;; proposes shorter at will; the approver sees the number either way.
     :expires {:field :expires_at
-              :default {:service :grant-default-ttl-seconds :seconds 3600}
+              :default {:service :grant-default-ttl-seconds :seconds 86400}
               :x-display
               {:label "Good until"
                :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}
@@ -1640,25 +1647,42 @@
                  :args (args-of entries)}]))
         (group-by :kind (get-in row [:data :scope]))))
 
+(defn filter-values
+  "The values one filter pair names. A comma-separated value is any of
+  on a field that admits :in — `state` always does, as the collection's
+  grammar reads it — and one literal text otherwise: the split
+  `collections/parse-query` makes, so a grant's row check, its query
+  conds and a wake's count all read \"a,b\" alike."
+  [rdef f v]
+  (let [raw (str v)
+        fname (name f)
+        in? (or (= "state" fname)
+                (contains? (get (:filterable rdef) (keyword fname)) :in))
+        vs (when (and in? (str/includes? raw ","))
+             (into [] (comp (map str/trim) (remove str/blank?))
+                   (str/split raw #",")))]
+    (if (seq vs) vs [raw])))
+
 (defn- row-matches?
   "Does this decoded row sit inside one of the entry's filter maps?
   Exact text comparison against the data field — the same value the
   collection's :eq cond compares in SQL, so the row check and the
-  query check tell one story.
+  query check tell one story. A comma value on a field the kind
+  declares :in is any of its parts, as the SQL :in cond reads it.
 
   `state` is the one name that is not a data field: it is the row's
   own column, and it reads off the row rather than out of the
   document (bead waymark-fp62.12). `conds-of` addresses the same
   column, so the two halves stay one story here too."
-  [row filter-maps]
+  [row filter-maps rdef]
   (boolean
    (some (fn [fm]
            (every? (fn [[f v]]
-                     (let [fname (name f)]
-                       (= (str (if (= "state" fname)
-                                 (some-> (:state row) name)
-                                 (get-in row [:data (keyword fname)])))
-                          (str v))))
+                     (let [fname (name f)
+                           have (str (if (= "state" fname)
+                                       (some-> (:state row) name)
+                                       (get-in row [:data (keyword fname)])))]
+                       (boolean (some #(= have %) (filter-values rdef f v)))))
                    fm))
          filter-maps)))
 
@@ -1922,6 +1946,22 @@
   [seat-id]
   {:kind "seat" :ids [(str seat-id)] :actions []})
 
+(defn seat-window-conds
+  "The ONE reader of a seat's window (waymark-fp62.1.2): the three conds
+  that name this seat's sittings started at or after `since`, in
+  `states`. The wall sums over it with closed and open
+  (`week-spend-conds`); the ledger (routes/seats) reads its finished
+  bills with closed alone and its spend with both. One state is
+  spelled `:=`, more than one `:in`."
+  [seat-id ^java.time.Instant since states]
+  [(if (= 1 (count states))
+     {:target :state :op := :value (first states)}
+     {:target :state :op :in :values (vec states)})
+   {:target :data :field :seat :cast "text" :op :=
+    :value (str seat-id)}
+   {:target :data :field :started_at :cast "timestamptz" :op :>=
+    :value (str since)}])
+
 (defn week-spend-conds
   "The three conds that name a seat's fuel: this seat's sittings,
   started inside the rolling window, closed or open.
@@ -1938,11 +1978,8 @@
   of one arithmetic are two answers to R-5.2's third wall, correct on
   the day they were written."
   [seat-id ^java.time.Instant now]
-  [{:target :state :op :in :values ["closed" "open"]}
-   {:target :data :field :seat :cast "text" :op :=
-    :value (str seat-id)}
-   {:target :data :field :started_at :cast "timestamptz" :op :>=
-    :value (str (.minusSeconds now budget-window-seconds))}])
+  (seat-window-conds seat-id (.minusSeconds now budget-window-seconds)
+                     ["closed" "open"]))
 
 (defn spent-with
   "The week's spend, over a summing hand the caller holds: `sum` is
@@ -2207,7 +2244,8 @@
                           ;; same 404 as a row outside the ids
                           (or (nil? (:filters e))
                               (when-some [row (load-decoded eng (keyword k) id)]
-                                (row-matches? row (:filters e)))))
+                                (row-matches? row (:filters e)
+                                              (get (inv/resources eng) (keyword k))))))
                      (own-row? k id)))))
         action?* (fn [kind action]
                    (let [k (name kind) a (name action)]
@@ -2297,7 +2335,14 @@
      ;; this a conjunction instead of an OR machine
      :conds-of (fn [kind]
                  (when-some [fms (get-in surface [(name kind) :filters])]
-                   (vec (for [[f v] (first fms)]
+                   (let [rdef (get (inv/resources eng) (keyword (name kind)))]
+                    (vec (for [[f v] (first fms)
+                              ;; a comma value on an :in field is any
+                              ;; of — `row-matches?` reads it the same
+                              :let [vs (filter-values rdef f v)
+                                    one (if (next vs)
+                                          {:op :in :values vs}
+                                          {:op := :value (first vs)})]]
                           ;; :vis? marks the cond as the LEASH, never a
                           ;; client filter — facet counting strips a
                           ;; field's own client conds so options don't
@@ -2308,11 +2353,10 @@
                             ;; (bead waymark-fp62.12) — `row-matches?`
                             ;; reads the same column, and facet
                             ;; counting already knows a :state cond
-                            {:target :state :op := :value (str v)
-                             :vis? true}
-                            {:target :data :field (keyword (name f))
-                             :cast "text" :op := :value (str v)
-                             :vis? true})))))
+                            (merge {:target :state :vis? true} one)
+                            (merge {:target :data :field (keyword (name f))
+                                    :cast "text" :vis? true}
+                                   one)))))))
      :ids-of (fn [kind]
                (let [k (name kind)]
                  (if-some [e (get surface k)]

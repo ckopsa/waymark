@@ -11,13 +11,13 @@
 ;;
 ;; Then invoke `link` on the MODEL row with `{public-url}/fire/{routine}`
 ;; and that token, exactly as for a cloud Routine.
-{;; the rig table (docs/routines/rigs.md) gives 8111
- :port 8111
+{;; the rig table (docs/routines/rigs.md) gives 8112
+ :port 8112
 
  ;; where the engine and a person reach this server. It goes into every
  ;; run page URL, which the engine writes onto the schedule row as
  ;; `last_run_url`, so it must be reachable from both.
- :public-url "http://192.168.1.40:8111"
+ :public-url "http://192.168.1.231:8112" ; big-colt
 
  ;; a clone of ckopsa/waymark-seat (R-8.1): CLAUDE.md,
  ;; .claude/settings.json, .claude/hooks/sitting-close.sh, and nothing
@@ -36,17 +36,23 @@
  ;; with --strict-mcp-config. The session's bearer at that door is the
  ;; person's own stored credential (R-8.2), not anything this file
  ;; holds.
- :mcp {:name "waymark" :url "https://work.kopsa.info/api/-/mcp"}
+ ;; The name is the cloud connector's, `Waymark`, so the tools are
+ ;; `mcp__Waymark__…` as the seats' instructions spell them.
+ :mcp {:name "Waymark" :url "https://work.kopsa.info/api/-/mcp"}
 
  ;; passed to --allowedTools, one argument each. This is the default.
- :allowed-tools ["mcp__waymark__*" "Bash(echo *)"]
+ ;; Every built-in tool is off (--tools ""), whatever this says.
+ :allowed-tools ["mcp__Waymark__*"]
 
  ;; one routine per CLI model — the local copy of "one Routine for each
  ;; model" (docs/routines/ci-classifier.md). :model is required;
  ;; :max-concurrent defaults to 1, :max-run-seconds to 3600, and
  ;; :prompt to the fixed Routine prompt of R-6.1.
  :routines
- {"sonnet" {:model "claude-sonnet-5"
+ {"opus"   {:model "claude-opus-5"
+            :max-concurrent 1
+            :max-run-seconds 3600}
+  "sonnet" {:model "claude-sonnet-5"
             :max-concurrent 2
             :max-run-seconds 3600}
   "haiku"  {:model "claude-haiku-4-5"

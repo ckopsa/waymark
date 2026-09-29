@@ -443,3 +443,160 @@
         (is (nil? (:bytes_per_transition empty-doc))
             "zero transitions have no bytes apiece, and 0 would be a lie
              in the cheap direction")))))
+
+;; ── 6 · two sittings of one seat, each on its own session ─────────────
+
+(deftest each-sitting-of-one-seat-is-counted-on-its-own-session
+  ;; ticket f6c8d5ce: the seat's sittings share one grant, and a call
+  ;; was counted on the NEWEST open sitting under it
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        seat (open-seat! eng model)
+        sit-as (fn [harness]
+                 (let [sid (initialize! h)
+                       r (tool h (with-session sid) "waymark_sit"
+                               {:key a-key :session harness})]
+                   {:sid sid :sitting (str (:sitting (doc-of r)))}))
+        a (sit-as "run-a")
+        b (sit-as "run-b")
+        _ (meal! eng "Ramen")]
+    (is (not= (:sitting a) (:sitting b)) "two runs, two sittings")
+
+    (testing "the older sitting's call lands on its own served"
+      (let [r (tool h (with-session (:sid a)) "waymark_query" {:kind "meal"})]
+        (is (false? (:isError r)) (text-of r))
+        (is (= {:calls 1 :bytes (bytes-of r)}
+               (line-of eng (:sitting a) "waymark_query")))
+        (is (= {:calls 0 :bytes 0} (line-of eng (:sitting b) "waymark_query"))
+            "and not on the newer one")))
+
+    (seats/claim-rows! eng (:sitting a) ["ticket-a"])
+    (close! h (:sid a) (:sitting a))
+
+    (testing "a call from the closed sitting's session is refused"
+      (let [r (tool h (with-session (:sid a)) "waymark_query" {:kind "meal"})]
+        (is (true? (:isError r)))
+        (is (clojure.string/includes? (text-of r) "sitting_closed") (text-of r))
+        (is (clojure.string/includes? (text-of r) (:sitting a))))
+      (is (= {:calls 0 :bytes 0} (line-of eng (:sitting b) "waymark_query"))
+          "never re-attributed to the sibling"))
+
+    (testing "the closed sitting's rows rest through the grace"
+      (is (contains? (seats/claimed-rows eng (:id seat) (:sitting b)) "ticket-a")
+          "within it, no other sitting is handed them")
+      (is (not (contains? (seats/claimed-rows
+                           (assoc eng :now-fn
+                                  (constantly (.plusSeconds ^Instant clock 121)))
+                           (:id seat) (:sitting b))
+                          "ticket-a"))
+          "after it, they are free"))))
+
+;; ── 7 · the write and the refusal land on the CALLING sitting ────────
+
+(deftest a-write-and-a-refusal-count-on-the-sitting-that-made-them
+  ;; ticket d882c708: the seat's sittings share one grant, so the grant
+  ;; alone names the NEWEST open sitting. The older session's write and
+  ;; its 409 below must be counted on its own row, not on the sibling's.
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model)
+        sit-as (fn [harness]
+                 (let [sid (initialize! h)
+                       r (tool h (with-session sid) "waymark_sit"
+                               {:key a-key :session harness})
+                       answer (doc-of r)]
+                   {:sid sid
+                    :grant (str (:grant answer))
+                    :sitting (str (:sitting answer))}))
+        a (sit-as "run-a")
+        b (sit-as "run-b")
+        dinner (:id (meal! eng "Pho"))
+        counts (fn [sitting-id]
+                 (let [d (:data (row-of eng :sitting sitting-id))]
+                   {:transitions (long (or (:transitions d) 0))
+                    :refusals (long (or (:refusals d) 0))}))]
+    (is (not= (:sitting a) (:sitting b)) "two runs, two sittings")
+    (is (= (:grant a) (:grant b)) "and one grant behind both")
+    (is (= (:sitting b)
+           (str (:id (seats/open-sitting-for-grant eng (:grant a)))))
+        "so the shared grant answers the NEWER one")
+
+    (testing "the older session's write counts on its own sitting"
+      (let [ok (tool h (with-session (:sid a)) "waymark_invoke"
+                     {:kind "meal" :id (str dinner) :action "accept"})]
+        (is (false? (:isError ok)) (text-of ok))
+        (is (= {:transitions 1 :refusals 0} (counts (:sitting a))))
+        (is (= {:transitions 0 :refusals 0} (counts (:sitting b)))
+            "and not on the newer one")))
+
+    (testing "and so does the refusal that follows it"
+      ;; `decline` leaves `suggested` only, so on the accepted meal it
+      ;; is the engine's own wrong-state 409
+      (let [bad (tool h (with-session (:sid a)) "waymark_invoke"
+                      {:kind "meal" :id (str dinner) :action "decline"})]
+        (is (true? (:isError bad)))
+        (is (= 409 (:status (doc-of bad))))
+        (is (= {:transitions 1 :refusals 1} (counts (:sitting a))))
+        (is (= {:transitions 0 :refusals 0} (counts (:sitting b)))
+            "R-10.6: a sitting pays for the fuel it spent and no other's")))))
+
+;; ── cancelled test runs, and transitions by sitting (39b2c934) ──────
+
+(deftest a-cancelled-test-run-counts-once-by-its-run-id
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model)
+        {:keys [sitting]} (sit! h)
+        cancelled-run @#'mcp/cancelled-run
+        answer (fn [status run]
+                 {:structuredContent {:result {:status status :run_id run}}})]
+
+    (testing "the door reads a cancelled answer off bench.test and its result"
+      (is (= "r1" (cancelled-run "bench__test_result" (answer "cancelled" "r1"))))
+      (is (= "r1" (cancelled-run "bench__test" (answer "cancelled" "r1"))))
+      (is (nil? (cancelled-run "bench__test_result" (answer "pending" "r1"))))
+      (is (nil? (cancelled-run "bench__read" (answer "cancelled" "r1"))))
+      (is (= "3" (cancelled-run "bench__test_result"
+                                 {:structuredContent
+                                  {:result {:conclusion "cancelled" :run_id 3}}}))
+          "the rig says it as `conclusion`, and a numeric id reads as text"))
+
+    (testing "a fresh sitting has cancelled nothing"
+      (is (= 0 (long (or (:cancelled_runs (:data (row-of eng :sitting sitting))) 0)))))
+
+    (testing "each run counts once, however often it is polled"
+      (is (= 1 (seats/add-cancelled-run! eng sitting "r1")))
+      (is (= 1 (seats/add-cancelled-run! eng sitting "r1")))
+      (is (= 2 (seats/add-cancelled-run! eng sitting "r2")))
+      (is (= 2 (:cancelled_runs (:data (row-of eng :sitting sitting))))))))
+
+(deftest a-sittings-transitions-are-the-ones-under-its-grant-in-its-window
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model)
+        {:keys [sid sitting grant]} (sit! h)
+        soup (:id (meal! eng "Soup"))
+        stew (:id (meal! eng "Stew"))
+        a1 (tool h (with-session sid) "waymark_invoke"
+                 {:kind "meal" :id (str soup) :action "accept"})
+        _ (inv/invoke! eng :meal stew :accept {} {:principal person})]
+    (is (false? (:isError a1)) (text-of a1))
+
+    (testing "the sitter's transition is found by its sitting, the person's is not"
+      (let [found (seats/sitting-transitions eng sitting)]
+        (is (= #{(str soup)} (set (map (comp str :resource-id) found))))
+        (is (every? #(= grant (str (get-in % [:actor :grant]))) found))))
+
+    (testing "a window that closes before the transitions holds none"
+      (is (= [] (store/with-tx (:storage eng)
+                  (fn [tx]
+                    (store/transitions-under-grant
+                     (:storage eng) tx grant nil
+                     (.minusSeconds (Instant/now) 3600) {}))))))
+
+    (testing "an unknown sitting answers nil"
+      (is (nil? (seats/sitting-transitions eng "no-such-sitting"))))))

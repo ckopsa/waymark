@@ -650,7 +650,16 @@
       (is (= 1 (seats/bump-counter! *eng* (:id sitting) :refusals)))
       (let [row (row-of :sitting (:id sitting))]
         (is (= 2 (get-in row [:data :transitions])))
-        (is (= 1 (get-in row [:data :refusals]))))
+        (is (= 1 (get-in row [:data :refusals])))
+        (is (nil? (get-in row [:data :last_refusal]))
+            "a bare count stamps no refusal"))
+      (is (= 2 (seats/bump-counter! *eng* (:id sitting) :refusals
+                                    {:type "https://waymark.dev/problems/guard-refused"
+                                     :guard :not-yours})))
+      (let [last-one (get-in (row-of :sitting (:id sitting)) [:data :last_refusal])]
+        (is (= "https://waymark.dev/problems/guard-refused" (:type last-one)))
+        (is (= "not-yours" (:guard last-one)))
+        (is (string? (:at last-one))))
       (is (= 1 (count (log-of :sitting (:id sitting))))
           "the create, and no transition per count — the counter must not
            cost more log than the thing it counts"))
@@ -769,6 +778,51 @@
     (is (= :one-model-spelling (:guard p)))
     (is (str/includes? (str (:detail p)) "reactivate")
         "and the refusal names the door that exists instead")))
+
+(deftest a-model-row-is-restated-when-its-routine-moves
+  (let [model (add-model! "claude-old" "frontier")
+        _ (add-model! "claude-taken" "strong")
+        restate! (fn [inp]
+                   (inv/invoke! *eng* :model (:id model) :restate inp
+                                {:principal colton
+                                 :if-match (inv/etag :model (:id model)
+                                                     (:version (row-of :model (:id model))))}))
+        data-of #(:data (row-of :model (:id model)))]
+    (testing "name, display and notes move, and the summary line with them"
+      (restate! {:name "claude-new" :display "New" :notes "The Routine moved."})
+      (let [row (row-of :model (:id model))]
+        (is (= "claude-new" (get-in row [:data :name])))
+        (is (= "New" (get-in row [:data :display])))
+        (is (str/starts-with?
+             (str (get (render/envelope (get (inv/resources *eng*) :model) row
+                                        {:principal colton
+                                         :now (Instant/now)
+                                         :resources (inv/resources *eng*)})
+                       "summary"))
+             "claude-new"))))
+    (testing "an omitted field keeps its value, and prices are untouched"
+      (restate! {:display "Newer"})
+      (is (= "claude-new" (:name (data-of))))
+      (is (= "Newer" (:display (data-of))))
+      (is (= "The Routine moved." (:notes (data-of))))
+      (is (zero? (compare 3M (:price_input_per_mtok (data-of))))))
+    (testing "its own name is no collision"
+      (is (nil? (refusal #(restate! {:name "claude-new"})))))
+    (testing "a name another model holds is refused"
+      (is (= :one-model-spelling
+             (:guard (refusal #(restate! {:name "claude-taken"})))))
+      (is (= "claude-new" (:name (data-of)))))
+    (testing "a sitting opened after the restate names the new model"
+      (let [seat (open-seat! "restated")
+            grant (a-grant-for "clerk")
+            sitting (:row (inv/create! *eng* :sitting
+                                       {:seat (:id seat)
+                                        :model (:id model)
+                                        :grant (:id grant)}
+                                       {:principal clerk}))]
+        (is (= "claude-new"
+               (get-in (row-of :model (get-in sitting [:data :model]))
+                       [:data :name])))))))
 
 ;; ── R-12.12 · the sitter key, and the fence around it ───────────────
 

@@ -24,8 +24,8 @@
   weightless (latest_price_cents set, package_grams nil), so
   ?needs_weight=true sweeps the products whose spend can't pro-rate
   until a human records the package weight."
-  (:require [waymark10.dsl :refer [defaction defderived defresource
-                                   defhandler guard]])
+  (:require [waymark10.dsl :refer [defacceptsfn defaction defderived
+                                   defresource defhandler guard]])
   (:import (java.time LocalDate ZoneOffset)))
 
 (def overwrite
@@ -165,11 +165,11 @@
                (not (is-set (var :package_grams))))
    :explain "Priced but weightless — record the package weight and the unit math unlocks."})
 
-(def sighting-on-record
-  (guard {:name :sighting-on-record
-          :judges [:seen_on]
-          :accepts (fn [row] (mapv :seen_on (get-in row [:data :sightings])))
-          :explain "{seen_on} is not a recorded sighting of this product."}))
+(defacceptsfn sighting-on-record
+  {:judges [:seen_on]
+   :explain "{seen_on} is not a recorded sighting of this product."}
+  [row]
+  (mapv :seen_on (get-in row [:data :sightings])))
 
 (defhandler apply-rematch [row inp _ctx]
   ;; the label is the engine's — the handler sets the ref only

@@ -141,32 +141,29 @@
                            (filter (fn [[_ w]] (str/starts-with? w "[opaque-residue]")))
                            (map first))
                      (main/check-resources))]
-    (is (= #{"grocery_list" "meal_line" "plan_day" "product" "rotation"}
+    ;; empty since waymark ticket 5937bb50: the meal-plan :accepts
+    ;; guards now capture their form through defacceptsfn
+    (is (= #{}
            (set warned))
         (str "the formless residue is this census and no wider; when a kind "
              "leaves it, delete it from here — when one JOINS it, ask why"))))
 
-(deftest how-a-kinds-work-ends-is-read-side-and-mints-no-revision
+(deftest how-a-kinds-work-ends-is-law-and-mints-a-revision
   ;; waymark-iqa.24/.25: `:over` says which of a kind's endings the
-  ;; house STANDS BEHIND and which it let go — the sentence the feed
-  ;; needed and the machine could not infer. No door reads it, only
-  ;; the read side does, so it takes the `:nav` posture: not in
-  ;; fingerprint-of's projection, and therefore not a law revision on
-  ;; anybody's rows.
-  ;;
-  ;; That is a promise about a deployed engine, not a preference: four
-  ;; declarations gained the key at once, and had it been law, every
-  ;; task, movie, chore run and grocery list at work.kopsa.info would
-  ;; have woken up citing a revision minted by a sentence about the
-  ;; past. This is the assertion that keeps it that way.
+  ;; house STANDS BEHIND and which it let go. It began read-side, off
+  ;; fingerprint-of's projection, but the ending wall came to read it
+  ;; (its ended states and :ways-back) to shut a row's doors — so it is
+  ;; law. waymark-fp62.4.1.2 (owner's ruling 2026-09-28) put it in the
+  ;; fingerprint: re-spelling a kind's endings changes which doors
+  ;; open, and must mint a revision, a hold and a sweep. Kinds that
+  ;; declare :over took a one-time re-mint for it.
   (let [declaring (filter :over (main/check-resources))]
     (is (seq declaring) "no kind declares :over — this test has gone stale")
     (doseq [res declaring]
       (testing (name (:kind res))
-        (is (= (fp/fingerprint-hash (r/fingerprint (dissoc res :over)))
-               (fp/fingerprint-hash (r/fingerprint res)))
+        (is (not= (fp/fingerprint-hash (r/fingerprint (dissoc res :over)))
+                  (fp/fingerprint-hash (r/fingerprint res)))
             (str (name (:kind res))
-                 ": declaring how its work ENDS moved its fingerprint —"
-                 " either :over joined fingerprint-of's projection or"
-                 " something reads it as law; if that is deliberate, this"
-                 " test is the place to argue it"))))))
+                 ": declaring how its work ENDS left its fingerprint"
+                 " unmoved — :over is law the ending wall reads, and"
+                 " fingerprint-of must project it"))))))

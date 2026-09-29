@@ -140,6 +140,17 @@
                                                  (map (fn [[k f]] [(name k) (form-tree f)]))
                                                  (:vars d)))))
 
+(defn- over-fp
+  "The kind-level ending declaration (waymark-fp62.4.1.2): the ending
+  wall reads :over to shut a finished row's doors, so it is law. Sets
+  sort to vectors; `name` spells a state keyword and a field value
+  string alike. :field rides only when declared."
+  [o]
+  (cond-> {"accomplished" (vec (sort (map name (:accomplished o))))
+           "let_go"       (vec (sort (map name (:let-go o))))
+           "ways_back"    (vec (sort (map name (:ways-back o))))}
+    (:field o) (assoc "field" (name (:field o)))))
+
 (defn- safety-fp [s]
   {"idempotent" (boolean (:idempotent s))
    "reversible" (boolean (:reversible s))
@@ -280,7 +291,9 @@
   schema, owns, vocab, query, links — each facet landing with the
   feature that declares it. A mirror kind additionally projects its
   AUTHORITY facet (sync law: document contract, push-on-write,
-  external keys, adopts/frozen windows) — never its cadences.
+  external keys, adopts/frozen windows) — never its cadences. A kind
+  that declares :over projects its OVER facet (the endings the ending
+  wall reads).
 
   The kind's name roots the ADDRESS every opaque leaf hashes by (see
   callable-hash): `plan_day.machine.actions.assign_meal.guards.meal-
@@ -328,6 +341,17 @@
       (assoc "create" {"defaults" (schema-defaults
                                    (or (:create-schema rmap) (:schema rmap)))})
 
+      ;; create-door guards are judgment law exactly as an action's are
+      ;; (waymark-442.9): widening the create gate must move the hash,
+      ;; mint a revision and show in the diff. Non-empty-only, so every
+      ;; create-guard-free kind hashes byte-identical to before
+      (seq (:create-guards rmap))
+      (update "create" assoc "guards"
+              (mapv (fn [g]
+                      (guard-fp (str kind ".create.guards." (name (:name g)))
+                                g))
+                    (:create-guards rmap)))
+
       ;; recorded deviations are reviewable law (advertisement-class):
       ;; editing one shows in the diff and mints a revision. Projected
       ;; only when non-empty, so every deviation-free kind's hash is
@@ -336,7 +360,15 @@
       (assoc "deviations" (vec (:deviations rmap)))
 
       (and (:mirror rmap) (seq (authority-fp rmap)))
-      (assoc "authority" (authority-fp rmap)))))
+      (assoc "authority" (authority-fp rmap))
+
+      ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
+      ;; doors the ending wall shuts, so re-spelling it mints a revision.
+      ;; Present whenever declared (even empty — an empty :over still
+      ;; replaces :terminal as the ending set), absent otherwise, so
+      ;; every :over-free kind hashes byte-identical to before
+      (some? (:over rmap))
+      (assoc "over" (over-fp (:over rmap))))))
 
 (defn fingerprint-hash ^String [fp]
   (wire/digest fp))
@@ -349,7 +381,7 @@
 (def ^:private truth-family #{"derived" "machine" "authored" "owns" "compound"
                               "touches" "batch" "bulk" "handler" "renames"
                               "renamed_actions" "renamed_fields" "authority"
-                              "create"})
+                              "create" "over"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"
@@ -438,7 +470,7 @@
   #"^derived\.[^.]+\.(?:tolerance$|expr(?:\..+)?$|(?:count|sum)\.where(?:\..+)?$|over\.\d+\.(?:child|related)\.where(?:\..+)?$)")
 
 (def ^:private judgment-law-path
-  #"^machine\.actions\.[^.]+\.guards\.\d+\.(?:expr(?:\..+)?$|vars_exprs(?:\..+)?$|explain$|remedies(?:\.\d+)?$|hide$|severity$|requires_token$)")
+  #"^(?:machine\.actions\.[^.]+|create)\.guards\.\d+\.(?:expr(?:\..+)?$|vars_exprs(?:\..+)?$|explain$|remedies(?:\.\d+)?$|hide$|severity$|requires_token$)")
 
 (defn classify-diff
   ":data-law when every added/removed/changed path is overlayable —

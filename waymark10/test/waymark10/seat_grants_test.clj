@@ -560,3 +560,38 @@
       (req h :post "/api/seat_pantries" {:headers as :body {:name "salt"}})
       (req h :post "/api/seat_vaults" {:headers as :body {:name "chest"}})
       (is (= [3 1] (counts)) "the counts are frozen at the close"))))
+
+(deftest a-closed-sitting-shows-the-rows-a-person-reversed
+  (let [{:keys [h]} (world)
+        model (add-model! h "correct-model")
+        seat (open-seat! h "clerk-correct")
+        gid (sit! h (sitter "ari-correct") "clerk-correct" {})
+        as (sitter "ari-correct" {:grant gid})
+        sid (id-of (req h :post "/api/sittings"
+                        {:headers as :body {:seat seat :model model
+                                            :grant gid}}))
+        mine (id-of (req h :post "/api/seat_pantries"
+                         {:headers as :body {:name "flour"}}))
+        line (fn []
+               (let [d (:data (json (req h :get (str "/api/sittings/" sid)
+                                         {:headers human})))]
+                 [(or (:corrections d) 0) (vec (:corrected_rows d))]))]
+    (is (= 200 (:status (req h :post (str "/api/sittings/" sid "/-/close")
+                             {:headers as
+                              :body {:input_tokens 10 :output_tokens 10
+                                     :cache_read_tokens 0
+                                     :cache_write_tokens 0
+                                     :turns 1 :note "Done."}}))))
+    (is (= [0 []] (line)))
+
+    (testing "a person's change on a row the sitter never touched adds nothing"
+      (let [theirs (id-of (req h :post "/api/seat_pantries"
+                               {:headers human :body {:name "rice"}}))]
+        (req h :post (str "/api/seat_pantries/" theirs "/-/finish")
+             {:headers human})
+        (is (= [0 []] (line)))))
+
+    (testing "a person's transition on the sitter's row adds one and the id"
+      (is (= 200 (:status (req h :post (str "/api/seat_pantries/" mine "/-/finish")
+                               {:headers human}))))
+      (is (= [1 [mine]] (line))))))

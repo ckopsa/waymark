@@ -1291,14 +1291,20 @@
   (`house-pass-merges?` is false), that GitHub calls `clean` and is not
   a draft, is timed from the first pass that saw it clean at this head.
   Once it has waited the policy's `merge_wait_seconds`, it raises one
-  merge ask unless `asked-already?`. `waiting` is an atom of change id
+  merge ask unless `asked-already?`. A change whose ticket still waits
+  on another to merge (`merge-holds`) is not timed and not asked; its
+  wait starts once nothing holds it. `waiting` is an atom of change id
   → {:head :since}. Throws nothing. → the number of asks raised."
   [eng waiting ^Instant now]
   (let [by-repo (policies-by-repo eng)
         asks (merge-asks eng)
+        changes (submitted-changes eng)
+        person? #(some-> (get by-repo (str (get-in % [:data :repository])))
+                         house-pass-merges? not)
+        holds (merge-holds eng (filter person? changes))
         raised (volatile! 0)
         clean (volatile! {})]
-    (doseq [change (submitted-changes eng)
+    (doseq [change changes
             :let [id (str (:id change))
                   number (get-in change [:data :number])
                   head (some-> (get-in change [:data :head_sha]) str not-empty)
@@ -1306,7 +1312,8 @@
             :when (and number head policy
                        (not (house-pass-merges? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))
-                       (not (true? (get-in change [:data :draft]))))]
+                       (not (true? (get-in change [:data :draft])))
+                       (not (get holds (born-ticket change))))]
       (let [prior (get @waiting id)
             ^Instant since (if (= head (:head prior)) (:since prior) now)
             seconds (.getSeconds (Duration/between since now))]
@@ -1388,8 +1395,20 @@
     (when (str/starts-with? id "seat:")
       (not-empty (subs id (count "seat:"))))))
 
+(defn- own-sitting-id
+  "The sitting this request was made from, or nil: the one its MCP
+  session is bound to, carried on the grant as `:sitting` (mcp's
+  waymark_invoke, then the router's invoke-opts). Never the newest
+  sitting under the grant: every sitting of a seat shares the seat's
+  grant, so with several open the newest is usually another one
+  (ticket 51dfd10b)."
+  [ctx]
+  (some-> (get-in ctx [:grant :sitting]) str not-empty))
+
 (defn sitting-id
-  "The open sitting of the leash this request wears, or nil.
+  "The open sitting of the leash this request wears, or nil. The
+  request's own sitting when it names one (own-sitting-id); otherwise
+  the open sitting under its grant, as below.
 
   `(:grant ctx)` is the guard's-eye view of the grant presented with
   this request (invoke.clj's make-ctx), and the sitting is the row
@@ -1399,11 +1418,12 @@
   sitting, names none, and the commit carries one trailer instead of
   two."
   [ctx]
-  (when-some [find' (:find ctx)]
-    (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
-      (some-> (first (find' :sitting {:grant gid :state :open}
-                            {:limit 1 :newest-first true}))
-              :id str not-empty))))
+  (or (own-sitting-id ctx)
+      (when-some [find' (:find ctx)]
+        (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
+          (some-> (first (find' :sitting {:grant gid :state :open}
+                                {:limit 1 :newest-first true}))
+                  :id str not-empty)))))
 
 (defn trailers
   "The git trailers a bench commit carries: the seat and the sitting,
@@ -1417,3 +1437,48 @@
         (keep (fn [[k v]] (when v (str k ": " v))))
         [[seat-trailer (seat-id ctx)]
          [sitting-trailer (sitting-id ctx)]]))
+
+;; ── the sitting that holds the ticket (ticket d7c854b3) ──────────────
+
+(def unheld-remedy
+  "Stop: do not submit. The sitting that holds the ticket finishes it; close this one.")
+
+(defn unheld-detail
+  "Why a seat's submit on this change is not its sitting's to make, as
+  one sentence, or nil. The request's own sitting (own-sitting-id, never
+  the newest under the seat's shared grant) must be open, no OTHER open
+  sitting of the seat may hold the ticket the change was born from, and
+  a sitting whose walk handed it rows must hold that ticket among them.
+  A person's hand, a change born of no ticket, and a request that names
+  no sitting are not judged here.
+  The same wall stands on bench writes at the power door
+  (waymark10.server.gate-proxy)."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (when-some [seat (seat-id ctx)]
+      (when-some [ticket (born-ticket row)]
+        (when-some [sid (own-sitting-id ctx)]
+          (when-some [mine (when-some [read' (:read ctx)]
+                             (read' :sitting sid))]
+            (let [holds? (fn [s] (boolean (some #(= ticket (str %))
+                                                (get-in s [:data :walked_rows]))))
+                  holder (->> (find' :sitting {:seat seat :state :open}
+                                     {:limit 50 :newest-first true})
+                              (remove #(= sid (str (:id %))))
+                              (filter holds?)
+                              first)
+                  state (some-> (:state mine) name)
+                  walked (seq (get-in mine [:data :walked_rows]))]
+              (when (or holder
+                        (not= "open" state)
+                        (and walked (not (holds? mine))))
+                (str "This sitting no longer holds ticket " ticket " ("
+                     (cond
+                       holder (str "held by sitting " (:id holder))
+                       (not= "open" state)
+                       (str "sitting " (:id mine) " is " state
+                            (when-some [t (get-in mine [:data :ended_at])]
+                              (str ", closed at " t)))
+                       :else (str "sitting " (:id mine)
+                                  "'s walk never handed it that ticket"))
+                     "); stop, do not write.")))))))))

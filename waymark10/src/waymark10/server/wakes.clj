@@ -120,6 +120,14 @@
   it happens: `schedules/already-fired?` compares the row's stamp
   against the fire transition's own instant.
 
+  The key guards only the fire path. A DAMPED match fires nothing and
+  carries no key, so a replay of it while the released run's sitting
+  was open set `wake_pending` again, and the next release fired the
+  seat a second time for the one transition (waymark-fp62.21). So the
+  schedule row remembers the last transitions it heard
+  (`wake_heard`), and `wake-seat!` answers a replay of one of them
+  with silence, on every path.
+
   Nothing here re-throws. A throwing consumer parks its cursor, and a
   parked cursor stops every other seat in the house from being woken
   by anything."
@@ -300,7 +308,9 @@
 
   What the count does NOT wear is a grant's projection. The number is
   the engine's; what the woken session then sees is the sitting's,
-  through the seat's scope (R-12.24's punt). A filter the kind cannot
+  through the seat's scope (R-12.24: a count entry over another kind
+  counts every row the filter matches, whatever the seat's grant). A
+  filter the kind cannot
   answer is a warning and a nil — a seat that cannot be counted for
   is a seat that says nothing, rather than a consumer that parks."
   [eng kind filter-map]
@@ -495,6 +505,32 @@
     (write-pending! eng schedule-row true))
   nil)
 
+(def ^:private heard-cap
+  "How many transitions a schedule row remembers hearing. A replay is
+  the drain's last batch again, so a short tail is enough."
+  32)
+
+(defn- heard?
+  "Did this seat's wake already hear transition `t`? (the replay)"
+  [schedule-row t]
+  (boolean (some #{(str (:id t))} (get-in schedule-row [:data :wake_heard]))))
+
+(defn- remember-heard!
+  "Remember that the wake heard `t`, by the same maintenance write as
+  the pending flag. → the row as written, so the writes after this one
+  build on it and do not drop the mark."
+  [eng schedule-row t]
+  (let [heard (->> (conj (vec (get-in schedule-row [:data :wake_heard]))
+                         (str (:id t)))
+                   (take-last heard-cap)
+                   (vec))
+        row (assoc-in schedule-row [:data :wake_heard] heard)]
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/update-data! (:storage eng) tx :schedule (:id row)
+                            (:data row) (:next-flip-at row))))
+    row))
+
 (defn- due-at
   "The moment a settled wake is due, as the row should hold it after
   this match: the match's own instant plus the entry's quiet time, or
@@ -535,6 +571,15 @@
   (if-some [due (instant-of (get-in schedule-row [:data :wake_due_at]))]
     (not (.isBefore at ^Instant due))
     true))
+
+(defn- throttled?
+  "Is the provider's throttle still on? The row's `retry_after` is the
+  time the provider named; before it nothing is sent, and a wake that
+  matches in the meantime folds into the one already pending."
+  [schedule-row ^Instant at]
+  (if-some [until (instant-of (get-in schedule-row [:data :retry_after]))]
+    (.isBefore at ^Instant until)
+    false))
 
 ;; ── the fuel wall ────────────────────────────────────────────────────
 ;;
@@ -727,6 +772,8 @@
          (let [{:keys [busy free]} (slots eng seat-row at)]
            (and (< (long busy) max-open) (pos? (long free)))))))
 
+(declare empty-walk?)
+
 (defn- wake-seat!
   "One active seat, one transition it asked to be woken by, and the
   text that transition earned (`wake-for`: the row that moved,
@@ -750,11 +797,21 @@
   Damped — an open sitting, or a fire inside this seat's gap; for a
   seat of several slots, `damped?` — the match is REMEMBERED as
   `wake_pending` and nothing goes out.
+
+  A match the `fire` door refuses — a halt line, a parked seat — is
+  REMEMBERED the same way, as `release!` keeps its flag: a seat behind
+  a wall keeps its pending wake until the wall lifts.
+
+  A transition this seat's wake already heard (`heard?`) is the
+  drain's replay, and it is silence on every path, the damped one
+  included (waymark-fp62.21).
   → true when a fire went out."
   [eng seat t ^Instant at {:keys [text settle]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
-    (when (schedules/linked? eng row)
-      (cond
+    (when (and (schedules/linked? eng row)
+               (not (heard? row t)))
+      (let [row (remember-heard! eng row t)]
+       (cond
         settle
         (mark-settling! eng row (due-at row at settle))
 
@@ -764,15 +821,28 @@
               (fired-recently? row (:interval seat) at)))
         (mark-pending! eng row)
 
+        ;; a throttled Routine: the wake waits for the time it named
+        (throttled? row at)
+        (mark-pending! eng row)
+
         ;; the fuel wall: the wake waits, and says it was held
         (at-the-fuel-wall? eng (raw-row eng :seat (:id seat)) at)
         (hold-at-the-wall! eng row at)
 
+        ;; the walk would hand nothing (ticket 87c928e9): a transition
+        ;; wake asks the same question `release!` does, so a row the
+        ;; walk withholds never fires a run that sits and finds nothing
+        (empty-walk? eng (raw-row eng :seat (:id seat)))
+        (do (warn! "seat " (:id seat) " has an empty walk — its wake"
+                   " fires nothing")
+            nil)
+
         :else
-        (when (fire! eng (:id seat) text
-                     (str "wake:" (:id seat) ":" (:id t)))
-          (stamp-fired! eng row at false)
-          true)))))
+        (if (fire! eng (:id seat) text
+                   (str "wake:" (:id seat) ":" (:id t)))
+          (do (stamp-fired! eng row at false)
+              true)
+          (mark-pending! eng row)))))))
 
 (defn- walk-count
   "How many rows the seat's sit would hand it, or nil when the seat
@@ -797,13 +867,26 @@
   "The number a COUNT entry is judged by. An entry over the seat's own
   walk (its walk kind, under the walk's own filter) counts the walk
   the sit would hand (`walk-count`), so a wake never fires a run whose
-  sit walks nothing (ticket e031e479). Every other entry counts the
-  collection (`count-under`), as it always has."
+  sit walks nothing (ticket e031e479). An entry over the walk's kind
+  under a filter of its own counts that filter's rows less the ones the
+  sit would withhold (`seats/unwalkable-rows`, ticket 87c928e9), so a
+  row the walk holds back never fires the seat whatever filter its
+  entry writes. Every other entry counts the collection
+  (`count-under`), as it always has."
   [eng seat-row e]
   (let [kind (keyword (name (:kind e)))
         [walk f] (when seat-row (walk-query eng seat-row))]
-    (if (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
+    (cond
+      (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
       (walk-count eng seat-row)
+
+      (and walk (= walk kind))
+      (let [skip (seats/unwalkable-rows eng seat-row nil)]
+        (if (empty? skip)
+          (count-under eng kind (:filter e))
+          (some->> (ids-under eng kind (:filter e)) (remove skip) count)))
+
+      :else
       (count-under eng kind (:filter e)))))
 
 (defn- empty-walk?
@@ -849,6 +932,7 @@
                  (and slot? (free-slot? eng seat-row at)))
              (schedules/linked? eng schedule-row)
              (settled? schedule-row at)
+             (not (throttled? schedule-row at))
              (if (< 1 (max-open-of seat-row))
                (not (damped? eng seat-row schedule-row at))
                (and (not (fired-recently? schedule-row (interval-of seat-row) at))
@@ -1064,6 +1148,7 @@
                            :turns 0 :transitions 0 :refusals 0
                            :served {}
                            :missed true
+                           :closed_by "missed"
                            :note (missed-note fired deadline schedule)}
                     model (assoc :model model))
                   {:principal seats/seats-actor :state :closed})
