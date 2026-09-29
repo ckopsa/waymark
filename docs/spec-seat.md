@@ -1264,6 +1264,27 @@ say: after the submit, invoke `complete` on the task row, then stop.
 The two are one answer: the seat closes the task on the day, and the
 merge closes a task the seat left open.
 
+**R-12.32a** A walk row may name its own home. A seat may be built to
+work several repositories: every one of its writing entries names the
+same two or more after a comma. No one repository can be read off such
+a seat, so the row it walks says which one the work is in, in a field
+`repo` or `repository`, and it may say the branch, in a field `branch`.
+
+When the row names a repository, the engine mints the change there,
+but only when every bench entry of the seat names that repository. The
+engine prepares the worktree with its own hand, so a row never widens
+what the seat may touch. A row that names a repository the seat does
+not reach gets no change and no worktree, and the sit says which
+repository the row asked for. When the row names a branch other than
+that repository's base, the change is worked on the row's branch, and
+a later sit does not mint it again from the pattern. Otherwise the
+branch is the pattern with the row's id, as above.
+
+A row that names no repository leaves the choice to the seat, by the
+rules above. A seat of several repositories walking such a row gets no
+change and no worktree, and the sit says the row named none: the seat
+prepares the repository its work is in with its own bench call.
+
 ### 12.2 The fire door
 
 The owner's ruling of 2026-09-17: a seat must be fired on demand and

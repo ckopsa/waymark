@@ -2820,6 +2820,91 @@
                    default-branch-pattern)
                "*" (str row-id)))
 
+;; ── the walk row's own home (R-12.32a) ──────────────────────────────
+;;
+;; A WALK ROW MAY NAME ITS REPOSITORY AND ITS BRANCH. A seat whose
+;; scope reaches several repositories cannot have one read off it, so
+;; the row it walks says which one its work is in (`repo` or
+;; `repository`) and, when the house names branches by something
+;; other than the row's id, which branch (`branch`). The engine then
+;; prepares THERE, with its own hand, so a row names only a repository
+;; every bench entry of the seat already reaches: a row never widens
+;; what the seat may touch. A row that names nothing leaves the seat's
+;; own one repository to choose, as it always did.
+
+(defn- row-said
+  "One of the walk row's own values, trimmed, or nil."
+  [row k]
+  (let [values (or (get row "data") (get row "fields"))]
+    (some-> (get values k) str str/trim not-empty)))
+
+(defn- row-repository
+  "The repository the walk row says its work is in, or nil."
+  [row]
+  (or (row-said row "repo") (row-said row "repository")))
+
+(defn- seat-reaches-repo?
+  "Does every bench entry of this seat name `repo`? An entry with no
+  repo filter names none, so a seat with one reaches nothing by a row."
+  [seat repo]
+  (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
+                         (get-in seat [:data :scope]))]
+    (boolean (and (seq entries)
+                  (every? #(some #{repo} (entry-repos %)) entries)))))
+
+(defn- several-repositories?
+  "Does every writing entry of the seat name the SAME two or more
+  repositories? That is a seat built to work several, not a scope
+  written wrong: entries that disagree still get `seat-repo-note`."
+  [seat]
+  (let [writes (filterv #(contains? bench-write-tokens (str (:kind %)))
+                        (get-in seat [:data :scope]))
+        sets (mapv (comp set entry-repos) writes)]
+    (boolean (and (seq writes)
+                  (apply = sets)
+                  (< 1 (count (first sets)))))))
+
+(defn- row-elsewhere-note
+  "What the sit says when the row names a repository the seat's bench
+  powers do not all reach."
+  [repo]
+  (str "The row names the repository " repo ", which this seat's bench "
+       "powers do not all reach, so no worktree was prepared. Say so in "
+       "one sentence: a person corrects the row or the seat's scope."))
+
+(def ^:private several-repos-note
+  "What the sit says to a seat that works several repositories when the
+  row it walks names none of them. Nothing is wrong with the seat."
+  (str "This seat works several repositories and the row it walks names "
+       "none of them, so the engine prepared no worktree for it. Prepare "
+       "the repository the work is in with your own bench call, on the "
+       "branch the work should have."))
+
+(defn- walk-home
+  "Where the walk row's change lives → [repo nil], or [nil sentence]
+  when there is none: the row's own repository when the seat reaches
+  it, else the seat's one repository (R-12.32a)."
+  [seat row]
+  (if-some [said (row-repository row)]
+    (if (seat-reaches-repo? seat said)
+      [said nil]
+      [nil (row-elsewhere-note said)])
+    (if-some [repo (seat-repository seat)]
+      [repo nil]
+      [nil (if (several-repositories? seat) several-repos-note seat-repo-note)])))
+
+(defn- wanted-branch
+  "The branch the walk row's change is worked on: the row's own
+  `branch` when it names one other than the base, else the policy's
+  pattern with the row's id in place of the `*`."
+  [policy row row-id]
+  (let [said (row-said row "branch")
+        base (or (some-> (get-in policy [:data :base]) str not-empty)
+                 default-base)]
+    (if (and said (not= said base))
+      said
+      (pattern-branch policy row-id))))
+
 (defn- minted-change
   "The change row for one walk row: the one that is already here, or
   one minted now with the engine's own hand (R-12.32). The branch is
@@ -2854,11 +2939,14 @@
                         (change-in-state eng {:born_from change-id}
                                          [:stuck]))]
       [found nil]
-      (if-some [repo (seat-repository seat)]
-        (let [policy (repo-policy-of eng repo)]
+      (let [[repo note] (walk-home seat row)]
+       (if-not repo
+        [nil note]
+        (let [policy (repo-policy-of eng repo)
+              branch (wanted-branch policy row row-id)]
           (if-some [held (change-in-state
                           eng {:repository repo
-                               :head_branch (pattern-branch policy row-id)}
+                               :head_branch branch}
                           [:submitted :failing :open :stuck])]
             [held nil]
             (try
@@ -2874,7 +2962,7 @@
                        :born_from change-id
                        :repository repo
                        :title (walk-row-title row)
-                       :head_branch (pattern-branch policy row-id)
+                       :head_branch branch
                        :base_branch (or (some-> (get-in policy [:data :base])
                                                 str not-empty)
                                         default-base)
@@ -2888,8 +2976,7 @@
                 ;; is the ordinary cause, and its row is the answer
                 (if-some [raced (change-by-id eng change-id)]
                   [raced nil]
-                  [nil no-change-note])))))
-        [nil seat-repo-note]))))
+                  [nil no-change-note]))))))))))
 
 (def ^:private forge-change-prefixes
   "What a `change_id` the FORGE owns starts with, one per forge an app
@@ -2948,12 +3035,14 @@
   The write goes through `rebranch`, the mirror's own hidden door,
   with the same system hand the mint uses. A refusal costs the new
   branch and never the sit: the row stands as it was."
-  [eng change]
+  ([eng change] (rebranched-change eng nil change))
+  ([eng row change]
   (or (when (unpushed-change? change)
         (when-some [row-id (born-row-id change)]
           (let [policy (repo-policy-of
                         eng (str (get-in change [:data :repository])))
-                wanted (pattern-branch policy row-id)]
+                ;; the row's own branch wins over the pattern (R-12.32a)
+                wanted (wanted-branch policy row row-id)]
             (when-not (= wanted (str (get-in change [:data :head_branch])))
               (try
                 (:row (inv/invoke! eng :change (str (:id change)) :rebranch
@@ -2964,7 +3053,7 @@
                     (println "waymark10 seat change rebranch failed -"
                              (ex-message e)))
                   nil))))))
-      change))
+      change)))
 
 (defn- rehomed-change
   "The change this firing works, moved to the seat's repository when its
@@ -2981,8 +3070,9 @@
   because the forge holds it, and the sit says so instead.
 
   A refusal costs the move and never the sit: the row stands as it was."
-  [eng seat change]
-  (let [repo (seat-repository seat)]
+  ([eng seat change] (rehomed-change eng seat nil change))
+  ([eng seat row change]
+  (let [repo (first (walk-home seat row))]
     (or (when (and repo
                    (unpushed-change? change)
                    (not= repo (str (get-in change [:data :repository]))))
@@ -2991,7 +3081,7 @@
               (try
                 (:row (inv/invoke! eng :change (str (:id change)) :rebranch
                                    {:repository repo
-                                    :head_branch (pattern-branch policy row-id)
+                                    :head_branch (wanted-branch policy row row-id)
                                     :base_branch (or (some-> (get-in policy [:data :base])
                                                              str not-empty)
                                                      default-base)}
@@ -3001,7 +3091,7 @@
                     (println "waymark10 seat change rehome failed -"
                              (ex-message e)))
                   nil)))))
-        change)))
+        change))))
 
 (def ^:private elsewhere-change-note
   "What the sit says when the change this firing works lives in another
@@ -3117,12 +3207,13 @@
     (str/blank? (str (get-in walk ["rows" 0 "id"]))) [nil nil]
     ;; a change stalled before its ticket was groomed again goes back
     ;; to work first, and the branch is minted again after that
-    :else (let [[change note] (minted-change eng seat walk)
+    :else (let [row (get-in walk ["rows" 0])
+                [change note] (minted-change eng seat walk)
                 change (some->> change
                                 (regroomed-change eng)
-                                (rehomed-change eng seat)
-                                (rebranched-change eng))
-                repo (seat-repository seat)]
+                                (rehomed-change eng seat row)
+                                (rebranched-change eng row))
+                repo (first (walk-home seat row))]
             [change
              (or note
                  (when (and change repo

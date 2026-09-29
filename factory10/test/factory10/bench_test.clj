@@ -235,7 +235,10 @@
               [:string {:min 1 :max 200}]]
              [:status {:optional true :filter #{:eq :in}
                        :x-display {:label "Where it stands"}}
-              [:maybe [:enum "open" "done"]]]]
+              [:maybe [:enum "open" "done"]]]
+             ;; a row may name its own home (R-12.32a)
+             [:repo {:optional true} [:maybe [:string {:max 200}]]]
+             [:branch {:optional true} [:maybe [:string {:max 200}]]]]
     :filterable {:state #{:eq :in}}
     :default-filters {:status "open"}
     :actions
@@ -2286,13 +2289,15 @@
             "a reference is for reading only")))))
 
 (deftest a-reference-scope-the-engine-cannot-read-one-repository-from-opens-no-bench
-  (testing "a bench.edit with a comma still opens no bench"
+  (testing "a bench.edit with a comma still opens no bench for a row that names none"
     (let [w (ask-world (reference-scope (str a-repository "," a-reference)
                                         (str a-repository "," a-reference)))
           answer (:answer w)]
       (is (false? (:isError (:sat w))) (text-of (:sat w)))
       (is (nil? (:bench answer)))
-      (is (str/includes? (str (:bench_note answer)) "one repository"))
+      (is (= @#'mcp/several-repos-note (:bench_note answer))
+          "every entry names the same two: a seat of several repositories,
+           told that its row named none (R-12.32a)")
       (is (empty? (changes-of (:eng w))))))
   (testing "a bench.read that leaves out the edit repository opens no bench"
     (let [w (ask-world (reference-scope a-repository a-reference))
@@ -3623,3 +3628,99 @@
       (swap! rows assoc-in ["A" :state] :closed)
       (is (str/includes? (str (bench/unheld-detail change (ctx "A")))
                          "sitting A is closed")))))
+
+;; ── the row names its own home (R-12.32a) ───────────────────────────
+;;
+;; A SEAT MAY WORK SEVERAL REPOSITORIES. Its scope names them all, so no
+;; one repository can be read off it; the row it walks says which one
+;; the work is in, and may say the branch. The engine prepares there,
+;; and only in a repository every bench entry of the seat already names.
+
+(def ^:private another-repository "ckopsa/other")
+
+(def ^:private two-repo-scope
+  "A seat that works two repositories: every bench entry names both."
+  (into [{:kind "ask" :actions ["complete"]}
+         {:kind "change" :actions ["submit" "stall" "discard"]}]
+        (map (fn [token] {:kind token :actions []
+                          :filter {:repo (str a-repository "," another-repository)}}))
+        ["bench.find" "bench.read" "bench.edit" "bench.pull"]))
+
+(defn- home-world
+  "An engine with two policies, ONE ask that names `home` (its repo and
+  branch), and a session of a seat with `scope` sat in it."
+  [scope home]
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        _ (a-policy! eng {:repository another-repository
+                          :branch_pattern "other/*"
+                          :base "dev"})
+        asked (:row (inv/create! eng :ask (merge {:title "Fix the report timestamps"
+                                                  :status "open"}
+                                                 home)
+                                 {:principal person}))
+        seat (open-seat! eng {:scope scope :walk "ask"})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})]
+    {:eng eng :state st :h h :sid sid :seat seat :ask asked
+     :sat sat :answer (doc-of sat)}))
+
+(deftest a-seat-of-several-repositories-walking-a-row-that-names-none-is-told-so
+  (let [w (home-world two-repo-scope {})
+        answer (:answer w)]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (nil? (:bench answer)))
+    (is (= @#'mcp/several-repos-note (:bench_note answer))
+        "a seat built to work several repositories is not a scope written
+         wrong: the sentence says the ROW named none, and what the seat
+         does instead")
+    (is (empty? (changes-of (:eng w))))))
+
+(deftest a-row-that-names-its-repository-and-branch-opens-the-bench-there
+  (let [branch "navigate/NAVIGATE-5428-reports-run-errors"
+        w (home-world two-repo-scope {:repo another-repository :branch branch})
+        answer (:answer w)
+        mine (first (filter #(= (str "ask:" (:id (:ask w)))
+                                (get-in % [:data :change_id]))
+                            (changes-of (:eng w))))]
+    (is (some? mine) "one change was minted for the row")
+    (is (= another-repository (get-in mine [:data :repository]))
+        "on the repository the ROW names, which the seat's scope reaches")
+    (is (= branch (get-in mine [:data :head_branch]))
+        "on the row's own branch, not the pattern with the row's id")
+    (is (= "dev" (get-in mine [:data :base_branch]))
+        "against that repository's policy's base")
+    (is (nil? (:bench_note answer)) (str (:bench_note answer)))
+    (is (= branch (:branch (:arguments (last (calls-of (:state w) "bench__prepare")))))
+        "the worktree is asked for on the row's branch")
+    (testing "and the next sit does not mint the branch again from the pattern"
+      (sit-again! w)
+      (let [row (first (filter #(= (:id mine) (:id %)) (changes-of (:eng w))))]
+        (is (= branch (get-in row [:data :head_branch])))))))
+
+(deftest a-row-that-names-a-repository-the-seat-does-not-reach-opens-nothing
+  (let [w (home-world two-repo-scope {:repo "ckopsa/secret"})
+        answer (:answer w)]
+    (is (nil? (:bench answer)))
+    (is (str/includes? (str (:bench_note answer)) "ckopsa/secret")
+        "the sentence names the repository the row asked for")
+    (is (not-any? #(= (str "ask:" (:id (:ask w))) (get-in % [:data :change_id]))
+                  (changes-of (:eng w)))
+        "a row never widens what the seat may touch: nothing is minted")
+    (is (not-any? #(= "ckopsa/secret" (:repo (:arguments %)))
+                  (calls-of (:state w) "bench__prepare"))
+        "and the rig is asked for nothing there")))
+
+(deftest a-row-branch-that-is-the-base-falls-back-to-the-pattern
+  (let [w (home-world two-repo-scope {:repo another-repository :branch "dev"})
+        mine (first (filter #(= (str "ask:" (:id (:ask w)))
+                                (get-in % [:data :change_id]))
+                            (changes-of (:eng w))))]
+    (is (= (str "other/" (:id (:ask w))) (get-in mine [:data :head_branch]))
+        "a change is never worked on its repository's base")))
