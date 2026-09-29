@@ -100,6 +100,13 @@
       (fail! "the config needs at least one routine under :routines."))
     (when-not (or (nil? (:check-seconds m)) (pos-int? (:check-seconds m)))
       (fail! "the config's :check-seconds must be a positive integer."))
+    (when-not (or (nil? (:hook-via m))
+                  (and (sequential? (:hook-via m))
+                       (every? #(and (string? %) (not (str/blank? %))) (:hook-via m))))
+      (fail! "the config's :hook-via must be a list of non-empty strings."))
+    (when-not (or (nil? (:claude-home m))
+                  (and (string? (:claude-home m)) (not (str/blank? (:claude-home m)))))
+      (fail! "the config's :claude-home must be a non-empty string."))
     {:port          (long port)
      ;; a trailing slash on the public URL would double in every run
      ;; page link, and the engine writes that link onto the row
@@ -115,6 +122,13 @@
                              default-allowed-tools))
      ;; R-4.6: how often the credential is probed
      :check-seconds (long (or (:check-seconds m) 600))
+     ;; R-5.6: the close runs the hook where the runs run. A :claude
+     ;; wrapper that moves a run into a container moves its transcript
+     ;; there too, so the hook goes through the same door (:hook-via)
+     ;; and looks under that side's HOME (:claude-home). Absent, the
+     ;; hook runs here, under this process's HOME.
+     :hook-via      (vec (:hook-via m))
+     :claude-home   (:claude-home m)
      :routines      (into {}
                           (map (fn [[k v]]
                                  (let [nm (routine-name k)]

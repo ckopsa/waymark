@@ -272,11 +272,21 @@
                                            (seats/sitter-id seat) {})))]
         (is (= "colton" (get-in row [:data :acts_for])))))
 
+    (testing "discover shows the person it acts for, before any key is spent"
+      ;; localfire's credential check reads exactly this (R-4.6)
+      (let [sid3 (init-as h (delegate-headers))
+            d (tool h (delegate-headers sid3) "waymark_discover" {})]
+        (is (= "colton" (get-in (doc-of d) [:principal :acts_for])))))
+
     (testing "the same run WITHOUT that one header is refused"
       (let [bare (dissoc (delegate-headers) "x-waymark-acts-for")
             sid2 (init-as h bare)
+            d (tool h (assoc bare "mcp-session-id" sid2) "waymark_discover" {})
             r (tool h (assoc bare "mcp-session-id" sid2) "waymark_sit"
                     {:key a-key})]
+        (is (= "agent" (get-in (doc-of d) [:principal :type])))
+        (is (not (contains? (:principal (doc-of d)) :acts_for))
+            "an agent acting for nobody shows no acts_for")
         (is (true? (:isError r)))
         (is (str/includes? (text-of r) "A seat key binds a person's tool")
             "one header is the whole difference between a delegate and

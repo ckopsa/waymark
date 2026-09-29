@@ -87,14 +87,16 @@
   []
   (with-open [s (ServerSocket. 0)] (.getLocalPort s)))
 
-(defn make-config [{:keys [port place runs-dir routines]}]
+(defn make-config [{:keys [port place runs-dir routines hook-via claude-home]}]
   (config/normalize
-   {:port       port
-    :public-url (str "http://127.0.0.1:" port)
-    :place      (str place)
-    :runs-dir   (str runs-dir)
-    :mcp        {:url "http://127.0.0.1:9/mcp"}
-    :routines   (or routines {"sonnet" {:model "claude-sonnet-4-5"}})}))
+   (cond-> {:port       port
+            :public-url (str "http://127.0.0.1:" port)
+            :place      (str place)
+            :runs-dir   (str runs-dir)
+            :mcp        {:url "http://127.0.0.1:9/mcp"}
+            :routines   (or routines {"sonnet" {:model "claude-sonnet-4-5"}})}
+     hook-via    (assoc :hook-via hook-via)
+     claude-home (assoc :claude-home claude-home))))
 
 (defn world
   "A server on an ephemeral port with a fake spawner. → the state,
@@ -410,6 +412,52 @@
         (is (= id (get input "session_id"))))
       (is (= :done (:status (runs/read-run-edn (:runs w) id))))
       (finally (server/stop! w)))))
+
+(deftest a-close-runs-the-hook-where-the-runs-run
+  (let [runs   (tmpdir "lf-runs-via")
+        place  (make-place!)
+        id     (str (java.util.UUID/randomUUID))
+        closes (atom [])
+        st     (server/start! {:config  (make-config {:port (free-port) :place place
+                                                      :runs-dir runs
+                                                      :hook-via ["/opt/hook-in-cage" "--quiet"]
+                                                      :claude-home "/home/agent"})
+                               :token   "the-token"
+                               :spawner (fake-spawner {:calls (atom [])})
+                               :closer  (fake-closer closes)})]
+    (runs/copy-tree! place (runs/place-dir runs id))
+    (runs/write-run-edn! runs id {:id id :routine "sonnet" :status :done
+                                  :started-at (runs/now-iso) :ended-at (runs/now-iso) :exit 0})
+    (try
+      (server/close-sitting! st id "a note")
+      (let [{:keys [argv input]} (first @closes)]
+        (testing ":hook-via goes ahead of the hook, as :claude goes ahead of a run"
+          (is (= ["/opt/hook-in-cage" "--quiet" (.getPath (runs/hook-file runs id))
+                  "close-run" "a note"]
+                 argv)))
+        (testing ":claude-home is where the hook is told the transcript is"
+          (is (str/starts-with? (get input "transcript_path") "/home/agent/.claude/projects/"))
+          (is (str/ends-with? (get input "transcript_path") (str id ".jsonl")))))
+      (finally (server/stop! st)))))
+
+(deftest the-config-takes-an-optional-hook-door
+  (let [base {:port 8112 :public-url "http://127.0.0.1:8112"
+              :place (str (tmpdir "lf-via-place")) :runs-dir (str (tmpdir "lf-via-runs"))
+              :mcp {:url "http://127.0.0.1:8090/api/-/mcp"}
+              :routines {"sonnet" {:model "claude-sonnet-4-5"}}}]
+    (testing "absent means the hook runs here, under this process's HOME"
+      (let [c (config/normalize base)]
+        (is (= [] (:hook-via c)))
+        (is (nil? (:claude-home c)))))
+    (testing "present, both are kept as given"
+      (let [c (config/normalize (assoc base :hook-via ["/x/in-cage"] :claude-home "/home/agent"))]
+        (is (= ["/x/in-cage"] (:hook-via c)))
+        (is (= "/home/agent" (:claude-home c)))))
+    (testing "a malformed value is refused with a sentence"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":hook-via"
+                            (config/normalize (assoc base :hook-via "/x/in-cage"))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":claude-home"
+                            (config/normalize (assoc base :claude-home "")))))))
 
 ;; ── a fixed OAuth client at the door (R-8.2) ─────────────────────────
 

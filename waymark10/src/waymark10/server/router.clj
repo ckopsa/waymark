@@ -621,10 +621,18 @@
          ;; who the engine resolved this request to — the UI's
          ;; signed-in identity; absent when anonymous
          (not= t/anonymous principal)
-         (assoc :principal {:id (:id principal)
-                            :display (or (:display principal) (:id principal))
-                            :type (name (:type principal :human))
-                            :roles (vec (sort (:roles principal)))}))))))
+         (assoc :principal (cond-> {:id (:id principal)
+                                    :display (or (:display principal) (:id principal))
+                                    :type (name (:type principal :human))
+                                    :roles (vec (sort (:roles principal)))}
+                             ;; the person a tool acts for — what
+                             ;; waymark_sit asks of a seat key's session,
+                             ;; so a client (localfire's credential check)
+                             ;; can tell a delegate from an agent holding
+                             ;; its own key before it spends one. Absent
+                             ;; when the principal acts for nobody.
+                             (not (str/blank? (str (:acts-for principal ""))))
+                             (assoc :acts_for (str (:acts-for principal))))))))))
 
 (defn- kind-schema [eng]
   (fn [{{:keys [kind]} :path-params :as req}]
