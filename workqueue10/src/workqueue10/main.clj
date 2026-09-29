@@ -1037,10 +1037,13 @@
                                                  nil))
             steps (migrate/plan storage (vals (:kinds reg)))]
         (if (empty? steps)
-          (println "workqueue10: storage matches the declarations — empty plan.")
+          (do (println "workqueue10: storage matches the declarations — empty plan.")
+              (println "plan-class: empty"))
           (do
             (println (str "workqueue10: " (count steps) " migration step(s):"))
             (doseq [s steps] (println " " (migrate/describe s)))
+            ;; machine-readable: dispatch-migrate.sh routes the deploy on it
+            (println (str "plan-class: " (name (migrate/plan-class steps))))
             (if (= "1" (System/getenv "APPLY"))
               (let [destructive? (= "1" (System/getenv "DESTRUCTIVE"))
                     {:keys [applied skipped]}
