@@ -727,13 +727,18 @@
   "Does a front wait on a required check its head will never run while
   its base has moved (ticket 498a089e)? The rig answers `waiting`, and
   the forge pass wrote `missing_checks` (checks with no run at all, not
-  merely running) and `behind_base` on the row. Bringing the branch up
-  to date makes CI run on the new head."
+  merely running) and `behind_base` on the row, read at the head it
+  names in `missing_checks_head`: facts read at an older head than the
+  row's `head_sha` are not trusted (ticket 716d12ba). Bringing the
+  branch up to date makes CI run on the new head."
   [change answer]
-  (boolean
-   (and (= "waiting" (answer-state answer))
-        (seq (get-in change [:data :missing_checks]))
-        (true? (get-in change [:data :behind_base])))))
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean
+     (and (= "waiting" (answer-state answer))
+          head
+          (= head (some-> (get-in change [:data :missing_checks_head]) str))
+          (seq (get-in change [:data :missing_checks]))
+          (true? (get-in change [:data :behind_base]))))))
 
 ;; THE MERGE TRAIN (ticket 47519515, slice 2 of 3deb06ed). With
 ;; `merge_strategy: train` the front and up to train_size-1 changes
