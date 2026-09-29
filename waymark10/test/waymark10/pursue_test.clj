@@ -3,7 +3,12 @@
   proven over the ring handler against a trimmed copy of mealplan10's
   chain — grocery_list.create → plan-is-planned → plan.finalize →
   day-is-covered → plan_day.assign_meal → meal-is-listed → meal.accept
-  — plus a latch whose remedy names its own door (the cycle)."
+  — plus a latch whose remedy names its own door (the cycle).
+
+  GRAIL 3/3 at the bottom: the same chain through the MCP tool
+  waymark_pursue, on memory storage, and the three walls a pursuit
+  stops at rather than walks through — a confirm door, a hold guard's
+  door, and a door the caller's grant does not admit."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -12,10 +17,15 @@
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.grants :as grants]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store]
+            [waymark10.server.store.memory :as memory]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 ;; ── the chain's guards: cross-kind reads, so the render probe (no
 ;; :read) declines and the POST answers the refusal with its remedies
@@ -247,3 +257,208 @@
     (is (= "suggested" (state-of meal)))
     (is (= "undecided" (state-of day)))
     (is (= "draft" (state-of plan)))))
+
+;; ── GRAIL 3/3: waymark_pursue, the MCP tool ─────────────────────────────
+
+;; cross-kind read, so the render probe declines and the POST answers
+;; the refusal with its remedy: the seal's confirm door
+(g/defguard seal-is-broken
+  {:reads [:pt_seal]
+   :explain "Break the seal first."
+   :remedies [:pt_seal/break]}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [seal (read :pt_seal (get-in row [:data :seal_id]))]
+      (if (= "broken" (some-> seal :state name)) (t/allow) (t/deny)))
+    (t/allow)))
+
+;; a hold: the POST mints a held call instead of refusing
+(g/defguard grail_hold
+  {:hold true
+   :reads [:pt_turnstile]
+   :explain "A person taps before the turnstile turns."}
+  [_row _inp ctx]
+  (if (:read ctx) (t/deny) (t/allow)))
+
+(def seal
+  (r/resource
+   {:kind :pt_seal
+    :states [:intact :broken]
+    :initial :intact
+    :terminal #{:broken}
+    :summary "Seal · {state}"
+    :schema [:map [:label {:optional true} [:maybe [:string {:max 40}]]]]
+    :actions
+    {:break {:from #{:intact} :to :broken
+             :safety {:idempotent true :reversible false :confirm true
+                      :consequence "The seal cannot be made whole again."}}}}))
+
+(def vault
+  (r/resource
+   {:kind :pt_vault
+    :states [:shut :open]
+    :initial :shut
+    :summary "Vault · {state}"
+    :schema [:map [:seal_id [:string {:max 80}]]]
+    :actions
+    {:open {:from #{:shut} :to :open
+            :guards [seal-is-broken]
+            :safety fx/routine}
+     :close {:from #{:open} :to :shut :safety fx/routine}}}))
+
+(def turnstile
+  (r/resource
+   {:kind :pt_turnstile
+    :states [:locked :turned]
+    :initial :locked
+    :summary "Turnstile · {state}"
+    :schema [:map [:label {:optional true} [:maybe [:string {:max 40}]]]]
+    :actions
+    {:turn {:from #{:locked} :to :turned
+            :guards [grail_hold]
+            :safety fx/routine}
+     :reset {:from #{:turned} :to :locked :safety fx/routine}}}))
+
+(def ^:private elena (t/principal {:id "elena" :display "Elena"}))
+
+(defn- mcp-boot []
+  (engine/engine {:storage (memory/storage)
+                  :resources (into resources [seal vault turnstile])}))
+
+(defn- mcp-make! [eng kind data]
+  (str (:id (:row (inv/create! eng kind data {:principal elena})))))
+
+(defn- mcp-call [eng session tool-name args]
+  (mcp/call-tool eng (mcp/door eng) session tool-name args))
+
+(defn- answer [out] (wire/read-json (get-in out [:content 0 :text])))
+
+(defn- mcp-pursue
+  ([eng args] (mcp-pursue eng {:principal elena} args))
+  ([eng session args] (mcp-call eng session "waymark_pursue" args)))
+
+(defn- mcp-state [eng kind id]
+  (:state (answer (mcp-call eng {:principal elena} "waymark_get"
+                            {:kind kind :id id :return "summary"}))))
+
+(defn- mcp-chain!
+  "The chain's rows on a memory engine, and the choices that name the
+  row each remedy acts on."
+  [eng]
+  (let [meal (mcp-make! eng :meal {:name "Tacos" :themes ["test"]})
+        day (mcp-make! eng :plan_day {:label "Monday"})
+        plan (mcp-make! eng :plan {:day_id day})]
+    {:meal meal :day day :plan plan
+     :choices {"plan.finalize" {:id plan}
+               "plan_day.assign_meal" {:id day :input {:meal_id meal}}
+               "meal.accept" {:id meal}}}))
+
+(defn- mcp-untouched? [eng {:keys [meal day plan]}]
+  (and (= "suggested" (mcp-state eng "meal" meal))
+       (= "undecided" (mcp-state eng "plan_day" day))
+       (= "draft" (mcp-state eng "plan" plan))))
+
+(deftest waymark-pursue-dry-run-answers-the-plan-and-writes-nothing
+  (let [eng (mcp-boot)
+        {:keys [plan choices] :as rows} (mcp-chain! eng)
+        out (mcp-pursue eng {:kind "grocery_list" :action "create"
+                             :input {:plan_id plan} :choices choices})
+        a (answer out)]
+    (is (not (:isError out)) (pr-str a))
+    (is (= chain-doors (mapv :door (:plan a)))
+        "deepest remedy first, then each door it unblocks")
+    (is (= [] (:steps_taken a)))
+    (is (nil? (:done a)))
+    (is (mcp-untouched? eng rows) "dry_run is the default, and it writes nothing")))
+
+(deftest waymark-pursue-real-run-lands-the-chain
+  (let [eng (mcp-boot)
+        {:keys [meal day plan choices]} (mcp-chain! eng)
+        out (mcp-pursue eng {:kind "grocery_list" :action "create"
+                             :input {:plan_id plan} :choices choices
+                             :dry_run false})
+        a (answer out)]
+    (is (not (:isError out)) (pr-str a))
+    (is (= "grocery_list" (:kind (:done a))))
+    (is (= chain-doors (mapv :door (:steps_taken a))))
+    (is (= "on_list" (mcp-state eng "meal" meal)))
+    (is (= "planned" (mcp-state eng "plan_day" day)))
+    (is (= "planned" (mcp-state eng "plan" plan)))))
+
+(deftest waymark-pursue-stops-at-a-confirm-step-with-its-sentence
+  (let [eng (mcp-boot)
+        seal-id (mcp-make! eng :pt_seal {})
+        vault-id (mcp-make! eng :pt_vault {:seal_id seal-id})
+        out (mcp-pursue eng {:kind "pt_vault" :id vault-id :action "open"
+                             :choices {"pt_seal.break" {:id seal-id}}
+                             :dry_run false})
+        a (answer out)
+        choice (first (:blocked_on a))
+        entry (get-in (answer (mcp-call eng {:principal elena} "waymark_get"
+                                        {:kind "pt_seal" :id seal-id}))
+                      [:actions :break])]
+    (is (not (:isError out)) (pr-str a))
+    (is (= "pt_seal.break" (:door choice)))
+    (is (true? (:confirm choice)))
+    (is (= (or (get-in entry [:display :description])
+               (get-in entry [:display :label]))
+           (:consequence choice))
+        "the sentence to acknowledge, read off the row as waymark_invoke reads it")
+    (is (= ["pt_vault.open"] (mapv :door (:stack a))))
+    (is (= [] (:steps_taken a)))
+    (testing "never acknowledged on anyone's behalf"
+      (is (= "intact" (mcp-state eng "pt_seal" seal-id)))
+      (is (= "shut" (mcp-state eng "pt_vault" vault-id))))))
+
+(deftest waymark-pursue-stops-at-a-held-step-as-held
+  (let [eng (mcp-boot)
+        ts (mcp-make! eng :pt_turnstile {})
+        agent (assoc (t/principal {:id "agent-9" :type :agent}) :acts-for "elena")
+        out (mcp-pursue eng {:principal agent}
+                        {:kind "pt_turnstile" :id ts :action "turn" :dry_run false})
+        a (answer out)
+        choice (first (:blocked_on a))]
+    (is (not (:isError out)) (pr-str a))
+    (is (= "pt_turnstile.turn" (:door choice)))
+    (is (true? (:held choice)))
+    (is (string? (:held_call choice)) "the held call a person answers")
+    (is (= [] (:steps_taken a)) "a held call is not a step taken")
+    (is (= "locked" (mcp-state eng "pt_turnstile" ts)))))
+
+(deftest waymark-pursue-blocks-a-step-the-grant-does-not-admit
+  (let [eng (mcp-boot)
+        h (engine/handler eng)
+        {:keys [plan choices] :as rows} (mcp-chain! eng)
+        agent {"x-waymark-principal" "agent-7" "x-waymark-actor-type" "agent"}]
+    (inv/create! eng :grant
+                 {:audience "agent-7"
+                  ;; everything the chain needs except meal.accept
+                  :scope [{:kind "meal" :actions []}
+                          {:kind "plan_day" :actions ["assign_meal"]}
+                          {:kind "plan" :actions ["finalize"]}
+                          {:kind "grocery_list" :actions ["create"]}]}
+                 {:principal grants/approvals-actor
+                  :id "grant-pursue-1"
+                  :mint? true})
+    (let [accepted (h {:request-method :post
+                       :uri "/api/grants/grant-pursue-1/-/accept"
+                       :headers (assoc agent "content-type" "application/json")
+                       :body "{}"})]
+      (is (= 200 (:status accepted)) (:body accepted)))
+    (let [resp (h {:request-method :post :uri "/api/-/mcp"
+                   :headers (assoc agent "x-waymark-grant" "grant-pursue-1")
+                   :body (wire/write-json
+                          {:jsonrpc "2.0" :id 1 :method "tools/call"
+                           :params {:name "waymark_pursue"
+                                    :arguments {:kind "grocery_list" :action "create"
+                                                :input {:plan_id plan}
+                                                :choices choices
+                                                :dry_run false}}})})
+          r (:result (wire/read-json (:body resp)))
+          a (wire/read-json (get-in r [:content 0 :text]))]
+      (is (= 200 (:status resp)) (:body resp))
+      (is (not (:isError r)) (pr-str a))
+      (is (seq (:blocked_on a)) "the pursuit comes back blocked")
+      (is (nil? (:done a)))
+      (is (= [] (:steps_taken a)))
+      (is (mcp-untouched? eng rows) "and nothing on the chain was written"))))
