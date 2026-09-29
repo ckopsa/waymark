@@ -2317,6 +2317,29 @@
          walk")
     (is (= "open" (get-in answer [:change :state])))))
 
+(deftest a-change-born-on-another-repository-moves-to-the-seats-at-the-next-sit
+  ;; ticket 1ebcd19f: the walk row moved to this seat's repository after
+  ;; its change was born on another one, and the change never opened
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        _ (inv/invoke! (:eng w) :change (str change-id) :rebranch
+                       {:head_branch (str "elsewhere/" ask-id)
+                        :repository "ckopsa/elsewhere"}
+                       {:principal mirror/source-principal})
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (= a-repository (get-in row [:data :repository]))
+        "the next sit hands a change on the seat's repository")
+    (is (not= (str "elsewhere/" ask-id) (get-in row [:data :head_branch]))
+        "and its branch is minted again from that repository's policy")
+    (is (= 1 (count (changes-of (:eng w))))
+        "on the row that is here: no second change is born")
+    (is (= "open" (name (:state row))))
+    (is (= a-repository (get-in answer [:change :data :repository]))
+        "and the seat reads the new repository on the change beside its
+         walk")))
+
 (deftest an-open-seat-born-change-on-the-old-pattern-is-rebranched-too
   ;; Prod's own row was at `open`, not at `stuck`: the sit minted it,
   ;; the prepare refused, and the seat stalled nothing.
