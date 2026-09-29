@@ -351,6 +351,14 @@
       (is (= {wm nil} (train-pass! r seen (four) (train-policy :line_train train))))
       (is (= 1 (count (args-of r "bench__train_land")))))))
 
+(deftest a-standing-train-with-no-line-is-read
+  (let [r (train-rig (atom {}))
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)]
+    (is (= {wm train} (train-pass! r seen [] (train-policy :line_train train)))
+        "a pending train with no change in its line stands, and nothing throws")
+    (is (= [{:repo wm :run_id "77"}] (args-of r "bench__train_status")))))
+
 ;; ── a finished train (ticket 6033c287, slice 3 of 3deb06ed) ──────────
 
 (defn- finish-pass!
