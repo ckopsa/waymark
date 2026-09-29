@@ -37,6 +37,16 @@
 (defn stdout-file ^File [runs-dir id] (io/file (run-dir runs-dir id) "stdout.json"))
 (defn stderr-file ^File [runs-dir id] (io/file (run-dir runs-dir id) "stderr.log"))
 (defn paused-file ^File [runs-dir routine] (io/file (str runs-dir) "paused" (str routine)))
+(defn hook-file ^File [runs-dir id] (io/file (place-dir runs-dir id) ".claude" "hooks" "sitting-close.sh"))
+
+(defn transcript-file
+  "Where Claude Code writes the run's transcript: under `home`, in the
+  project directory named for the run's working directory — the place,
+  its real path with every character not a letter or digit made `-`."
+  ^File [home runs-dir id]
+  (let [cwd (.getCanonicalPath (place-dir runs-dir id))]
+    (io/file (str home) ".claude" "projects"
+             (str/replace cwd #"[^A-Za-z0-9]" "-") (str id ".jsonl"))))
 
 ;; ── the place ───────────────────────────────────────────────────────
 
@@ -162,6 +172,27 @@
              :when (= :running (:status rec))]
          (write-run-edn! runs-dir id
                          (assoc rec :status :lost :ended-at (now-iso))))))))
+
+(defn lost-unclosed
+  "The records that say `lost` and whose sitting no close has closed
+  yet (R-5.6), each with its `:id`."
+  [runs-dir]
+  (let [dir (io/file (str runs-dir))]
+    (if-not (.isDirectory dir)
+      []
+      (vec (for [^File d (.listFiles dir)
+                 :when (and (.isDirectory d) (not= "paused" (.getName d)))
+                 :let  [rec (read-run-edn runs-dir (.getName d))]
+                 :when (and (= :lost (:status rec)) (not (:sitting-closed rec)))]
+             (assoc rec :id (.getName d)))))))
+
+(defn note-close!
+  "Write what the sitting's close answered into the record: the hook's
+  status line, and whether the sitting is closed now."
+  [runs-dir id line closed?]
+  (when-let [rec (read-run-edn runs-dir id)]
+    (write-run-edn! runs-dir id (assoc rec :sitting-close line
+                                       :sitting-closed (boolean closed?)))))
 
 ;; ── the pause (R-4.4) ───────────────────────────────────────────────
 

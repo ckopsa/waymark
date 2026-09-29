@@ -463,12 +463,13 @@
           form (into #{} (map first) (rest (:create-schema repo-policy)))]
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
-               :merge_wait_seconds :rounds_per_change :formatter :deny
+               :merge_wait_seconds :rounds_per_change :merge_strategy
+               :train_size :formatter :deny
                :test :orientation :enrolled_at :note :source_note
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
-               :line_waiting :line_at
+               :line_waiting :line_at :line_train
                :deploy_check :deploy_wait_seconds :deploy_waits_on
                :deploy_waiting_since :deployed_head :deployed_at
                :deploy_state :deploy_note}
@@ -483,7 +484,7 @@
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
-               :line_waiting :line_at
+               :line_waiting :line_at :line_train
                :deploy_waits_on :deploy_waiting_since :deployed_head
                :deployed_at :deploy_state :deploy_note}
              (into #{} (remove form) fields))

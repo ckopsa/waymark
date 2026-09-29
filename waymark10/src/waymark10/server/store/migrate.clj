@@ -206,6 +206,32 @@
   (str (when destructive? "[DESTRUCTIVE] ")
        (name kind) " " table ": " sql "  -- " reason))
 
+;; ── the plan's class: how much friction it deserves ─────────────────
+
+(def additive-kinds
+  "Step kinds that only ADD, applied without a person's tap (image.yml's
+  apply-additive job). Any kind not named here — including one added
+  tomorrow — is reviewed. :add-column adds a STORED generated column,
+  which rewrites the table under a lock: seconds at household size; if
+  a table ever grows large, move :add-column out of this set."
+  #{:create-table :add-column :add-index})
+
+(defn plan-class
+  "The friction a step list deserves, as one keyword — the dry run
+  prints it as `plan-class: <class>` and the deploy routes on it:
+  :empty — nothing to do; :additive — EVERY step is in additive-kinds,
+  applied unattended; :destructive — a step rewrites state tokens
+  (:rename-state), which migrate refuses and a person runs from the
+  LAN; :reviewed — anything else (a drop, a recreate, a kind this fn
+  does not know), held for a tap at production-migrate. One reviewed
+  step makes the whole plan reviewed."
+  [steps]
+  (cond
+    (empty? steps) :empty
+    (some #(or (:destructive? %) (= :rename-state (:kind %))) steps) :destructive
+    (every? (comp additive-kinds :kind) steps) :additive
+    :else :reviewed))
+
 ;; ── apply ───────────────────────────────────────────────────────────
 
 (defn apply!

@@ -25,6 +25,13 @@
                    collection envelope mints for an active saved_view
                    row targeting the same kind
     :seat          optional ordering int; the client sorts by it
+    :measure       optional {stat field at window_seconds buckets}: the
+                   panel reads ONE number over a time window instead
+                   of a list — count, sum, median or p90 of the target
+                   rows whose :at time falls in the window
+                   (waymark10.server.measure serves it at
+                   /api/dashboard_slots/{id}/-/measure); absent, the
+                   panel is the list it always was
 
   :target, :where and :view are judged against a vocabulary only the
   RUNNING engine enumerates — the kinds it serves, one kind's filter
@@ -61,6 +68,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.saved-view :as sv]
+            [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -83,7 +91,7 @@
 (def slot-fields
   "The slot surface :revise overwrites wholesale. :dashboard_id stays
   out — a slot never moves between dashboards; clone copies instead."
-  [:label :target :where :view :seat])
+  [:label :target :where :view :seat :measure])
 
 ;; ── the write-time law (the guard both slot gates run) ─────────────
 
@@ -119,6 +127,110 @@
           [(str "view " (pr-str v) " is not a declared view of "
                 (name (:kind trdef)))])))))
 
+(def measure-stats
+  "The statistics a measure panel may ask for."
+  ["count" "sum" "median" "p90"])
+
+(def max-window-seconds
+  "A measure's window ceiling: thirty days."
+  (* 30 24 60 60))
+
+(def max-buckets
+  "A measure's bucket ceiling — the sparkline's widest."
+  60)
+
+(defn parse-measure-field
+  "A measure's :field as what it reads off each row: {:field k} for a
+  number field, {:duration [from to]} for duration(<from>,<to>) — the
+  seconds between two time fields. nil when blank or unparseable."
+  [s]
+  (let [s (str/trim (str s))]
+    (when-not (str/blank? s)
+      (if-some [[_ a b] (re-matches
+                         #"duration\(\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*\)"
+                         s)]
+        {:duration [(keyword a) (keyword b)]}
+        (when (re-matches #"[A-Za-z0-9_]+" s)
+          {:field (keyword s)})))))
+
+(def transition-prefix
+  "A measure's :at spelling that counts the history log instead of a
+  time field: transition:<action> (dashboard measures 2/3)."
+  "transition:")
+
+(defn transition-action
+  "The action a measure's :at names as transition:<action> — the text
+  after the prefix, blank when none is given — or nil when :at names a
+  time field."
+  [at]
+  (let [s (str at)]
+    (when (str/starts-with? s transition-prefix)
+      (str/trim (subs s (count transition-prefix))))))
+
+(defn- field-head [trdef f]
+  (some-> (schema/field-schema (:schema trdef) f) schema/leaf-head))
+
+(def ^:private number-heads #{:int :double :decimal})
+
+(defn measure-problems
+  "One slot's :measure judged against the resolved target rdef: :at a
+  time field or transition:<action> naming a declared action — which
+  counts, so its stat is count and it reads no field — :field a number
+  field or duration(<time>,<time>) — required by every stat but count
+  — and the window and bucket ceilings. Returns problem strings."
+  [trdef m]
+  (let [kname (name (:kind trdef))
+        stat (str (:stat m))
+        time? (fn [f] (= :waymark/instant (field-head trdef f)))
+        action (transition-action (:at m))
+        raw (:field m)
+        parsed (parse-measure-field raw)]
+    (cond-> []
+      (not (some #{stat} measure-stats))
+      (conj (str "measure stat " (pr-str stat) " is not one of "
+                 (str/join ", " measure-stats)))
+
+      (and (nil? action) (not (time? (keyword (str (:at m))))))
+      (conj (str "measure at " (pr-str (:at m))
+                 " is not a time field of " kname
+                 " (nor " transition-prefix "<action>)"))
+
+      (and action (not (contains? (:actions trdef) (keyword action))))
+      (conj (str "measure at " (pr-str (:at m))
+                 " names no action of " kname))
+
+      (and action (not= "count" stat))
+      (conj (str "measure at " (pr-str (:at m))
+                 " counts transitions: its stat must be count"))
+
+      (and action (not (str/blank? (str raw))))
+      (conj (str "measure at " (pr-str (:at m))
+                 " counts transitions and reads no field"))
+
+      (and (not (str/blank? (str raw))) (nil? parsed))
+      (conj (str "measure field " (pr-str raw)
+                 " is neither a field name nor duration(<time-field>,<time-field>)"))
+
+      (and (str/blank? (str raw)) (not= "count" stat))
+      (conj (str "measure stat " stat " needs a field to read"))
+
+      (and (:field parsed)
+           (not (number-heads (field-head trdef (:field parsed)))))
+      (conj (str "measure field " (pr-str (name (:field parsed)))
+                 " is not a number field of " kname))
+
+      (and (:duration parsed) (not-every? time? (:duration parsed)))
+      (conj (str "measure field " (pr-str raw)
+                 " reads a duration between fields that are not both time fields of "
+                 kname))
+
+      (not (<= 1 (or (:window_seconds m) 0) max-window-seconds))
+      (conj (str "measure window_seconds must be between 1 and "
+                 max-window-seconds))
+
+      (not (<= 1 (or (:buckets m) 0) max-buckets))
+      (conj (str "measure buckets must be between 1 and " max-buckets)))))
+
 (defn slot-problems
   "Every violation of one slot's field set against the live registry:
   rdef-of is the ctx :rdef-of consult, read' the ctx :read hook. An
@@ -131,15 +243,16 @@
     (-> []
         (into (when-some [w (sv/parse-where (:where data))]
                 (checks/view-where-problems trdef w)))
-        (into (view-ref-problems rdef-of read' trdef (:view data))))
+        (into (view-ref-problems rdef-of read' trdef (:view data)))
+        (into (when-some [m (:measure data)] (measure-problems trdef m))))
     [(str "target " (pr-str (:target data))
           " names no kind this engine serves")]))
 
 (g/defguard slot-composes-declared-primitives
-  {:judges [:target :where :view]
+  {:judges [:target :where :view :measure]
    :reads [:storage]
    :vars [:problems]
-   :open "The law is the target kind's own declaration — a known kind, its filterable fields, its declared or saved views; a refusal names each violation."
+   :open "The law is the target kind's own declaration — a known kind, its filterable fields, its declared or saved views, and for a measure its time and number fields; a refusal names each violation."
    :explain "This slot does not compose declared primitives: {problems}"}
   [_row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
@@ -284,7 +397,31 @@
           :x-display {:label "View"
                       :help "Optional deep link: a view the target kind declares, or sv-<id> naming an active saved view aimed at the same kind."}}
    :seat {:x-display {:label "Order"
-                      :help "Where the panel sits on the page; lower numbers come first."}}})
+                      :help "Where the panel sits on the page; lower numbers come first."}}
+   :measure {:x-display {:label "Measure"
+                         :help "Optional: show one number over a time window instead of a list. Leave it empty for a list panel."}}})
+
+(def ^:private measure-form
+  "The :measure map, one shape for all three slot forms. The window and
+  bucket ceilings are the guard's to judge, so a refusal names them."
+  [:maybe
+   [:map
+    [:stat {:x-display {:label "Statistic"
+                        :help "count, sum, median or p90 of the rows in the window."}}
+     (into [:enum] measure-stats)]
+    [:field {:optional true
+             :x-display {:label "Reads"
+                         :help "A number field of the target, or duration(<time-field>,<time-field>). count needs none."}}
+     [:maybe [:string {:max 120}]]]
+    [:at {:x-display {:label "Counted at"
+                      :help "The target's time field that places a row in the window — or transition:<action>, which counts that action's transitions from the history log."}}
+     [:string {:min 1 :max 60}]]
+    [:window_seconds {:x-display {:label "Window, in seconds"
+                                  :help "How far back the number reads; at most thirty days."}}
+     [:int {:min 1}]]
+    [:buckets {:x-display {:label "Buckets"
+                           :help "How many equal pieces the window splits into for the sparkline; at most 60."}}
+     [:int {:min 1}]]]])
 
 (defn- slot-entry
   "One [:key props schema] entry of a slot form: the shared prose,
@@ -299,7 +436,8 @@
    (slot-entry :target {} [:string {:min 1 :max 60}])
    (slot-entry :where {:optional true} [:maybe [:string {:max 500}]])
    (slot-entry :view {:optional true} [:maybe [:string {:max 80}]])
-   (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])])
+   (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])
+   (slot-entry :measure {:optional true} measure-form)])
 
 (defresource dashboard-slot
   {:kind :dashboard_slot
@@ -321,7 +459,8 @@
             (slot-entry :target {:filter #{:eq}} [:string {:min 1 :max 60}])
             (slot-entry :where {:optional true} [:maybe [:string {:max 500}]])
             (slot-entry :view {:optional true} [:maybe [:string {:max 80}]])
-            (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])]
+            (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])
+            (slot-entry :measure {:optional true} measure-form)]
    ;; the client states the ask; the dashboard label is the engine's
    ;; ref-label pass
    :create-schema [:map
@@ -332,13 +471,14 @@
                    (slot-entry :target {} [:string {:min 1 :max 60}])
                    (slot-entry :where {:optional true} [:maybe [:string {:max 500}]])
                    (slot-entry :view {:optional true} [:maybe [:string {:max 80}]])
-                   (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])]
+                   (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])
+                   (slot-entry :measure {:optional true} measure-form)]
    :filterable {:state #{:eq :in}}
    :create-guards [slot-composes-declared-primitives]
    :actions
    {:revise {:from #{:active} :to :active
              :input slot-input
-             :edit {:prefill [:label :target :where :view :seat]}
+             :edit {:prefill [:label :target :where :view :seat :measure]}
              :record true
              :guards [slot-composes-declared-primitives]
              :safety {:idempotent true :reversible false :confirm false}
