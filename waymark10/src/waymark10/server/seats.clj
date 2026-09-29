@@ -3233,6 +3233,21 @@
                                      :label "Cancelled run ids"
                                      :help "The run ids already counted in cancelled_runs, so a second poll of one run does not count it again."}}
      [:vector :string]]
+    ;; THE CORRECTIONS LINE. Written by the router AFTER the close: a
+    ;; person's transition on a row whose previous transition was this
+    ;; sitting's (found by that transition's grant) adds one here and
+    ;; the row's id to `corrected_rows`. Data beside the audit, not a
+    ;; verdict (R-11.4) — the rows say what to read. Absent reads zero.
+    [:corrections {:optional true
+                   :x-display {:label "Verdicts a person reversed"
+                               :help "Counted by the engine after the close: each person's transition on a row whose last transition was this sitting's."}}
+     [:maybe [:int {:min 0}]]]
+    [:corrected_rows {:optional true
+                      :x-display
+                      {:raw true
+                       :label "The rows a person reversed"
+                       :spelled-by-hand "The ids of the rows whose verdict from this sitting a person later changed. The engine writes it beside `corrections`."}}
+     [:maybe [:vector [:string {:max 128}]]]]
     ;; WHICH LAW THE LAST REFUSAL WAS. The count says how many; this
     ;; says what the newest one was, so the close can tell whether the
     ;; last invoke or bench write was refused, and on which guard.
@@ -3736,6 +3751,64 @@
               (->instant (:started_at data))
               (->instant (:ended_at data))
               opts))))))))
+
+(defn- a-persons-write?
+  "A logged actor a person answers for: a human, or a held call a person
+  allowed (`allowed_by`) — the ledger's own reading (R-11.3)."
+  [actor]
+  (or (= "human" (some-> (:type actor) name))
+      (some? (:allowed_by actor))))
+
+(defn count-correction!
+  "R-11.3 on the sitting's own row: when the transition just committed on
+  `kind`/`resource-id` is a person's and the one before it was a
+  sitter's, the CLOSED sitting that wore that transition's grant gains
+  one `corrections` and the row's id in `corrected_rows`. The same
+  MAINTENANCE write as `bump-counter!` — document only, no transition.
+  A second person's transition reads a person before it and adds
+  nothing; a row no sitter touched has no grant to find. Framework
+  kinds (`:nav :system`) are left out, as the ledger leaves them out.
+  → the new count, or nil when nothing was corrected."
+  [eng kind resource-id]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) kind)]
+    (when (and resource-id rdef
+               ;; a sitting's own doors are not the seat's work, as
+               ;; count-committed! reads them
+               (not= :sitting kind)
+               (not= :system (:nav rdef))
+               (get (inv/resources eng) :sitting))
+      (let [[after before] (store/with-tx st
+                             (fn [tx]
+                               (store/transitions st tx {:kind kind
+                                                         :resource-id (str resource-id)}
+                                                  {:newest-first true :limit 2})))
+            gid (get-in before [:actor :grant])]
+        (when (and before gid
+                   (a-persons-write? (:actor after))
+                   (not (a-persons-write? (:actor before))))
+          (store/with-tx st
+            (fn [tx]
+              ;; the grant's newest sitting, whatever its state: one still
+              ;; open is not credited, and an older closed one is not either
+              (when-some [s (some-> (store/query-rows st tx :sitting
+                                                      {:grant (str gid)}
+                                                      {:limit 1 :newest-first true})
+                                    first
+                                    (as-> s (when (= "closed" (some-> (:state s) name)) s)))]
+                (when-some [row (store/load-row st tx :sitting (str (:id s))
+                                                {:for-update true})]
+                  (let [n (inc (long (or (get-in row [:data :corrections]) 0)))
+                        rid (str resource-id)
+                        ids (vec (get-in row [:data :corrected_rows]))]
+                    (store/update-data! st tx :sitting (str (:id s))
+                                        (assoc (:data row)
+                                               :corrections n
+                                               :corrected_rows (if (some #{rid} ids)
+                                                                 ids
+                                                                 (conj ids rid)))
+                                        nil)
+                    n))))))))))
 
 (defn add-served!
   "Add one call and `bytes` bytes to an open sitting's `served`, under

@@ -286,7 +286,13 @@
     ;; bound session is never counted on a sibling under the grant
     (when-some [sitting-id (or (some-> (:waymark10/sitting req) str not-empty)
                                (:id (open-sitting eng req)))]
-      (seats/bump-counter! eng sitting-id :transitions)))
+      (seats/bump-counter! eng sitting-id :transitions))
+    ;; the corrections line: a person's write on a row a closed sitting
+    ;; last moved counts against THAT sitting, found by the previous
+    ;; transition's grant — this request wears none of it
+    (seats/count-correction! eng kind
+                             (or (get-in result [:transition :resource-id])
+                                 (get-in result [:row :id]))))
   result)
 
 ;; ── the visibility checks (phase 9a, concealment) ───────────────────
