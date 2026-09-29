@@ -2228,6 +2228,71 @@
         (sch/answer! *fire* nil)
         (seat-do! seat :retire)))))
 
+(deftest a-held-schedule-is-released-when-its-chairs-runners-are-set
+  ;; waymark ticket 13d01ec3
+  (let [wn :wake-chair-runners-set
+        fn' :wake-chair-runners-set-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        token "rk-test-chairpoollink-0123456789abcdef"
+        dead-token "rk-test-chairpooldead-0123456789abcdef"
+        live-token "rk-test-chairpoollive-0123456789abcdef"
+        runner! #(str (:id (:row (inv/create! *eng* :runner_link
+                                              {:provider "claude_routine"
+                                               :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                              "/routines/trig_" %1 "/fire")
+                                               :fire_token %2}
+                                              {:principal elena}))))
+        set-runners! #(inv/invoke! *eng* :model (str %1) :set_runners
+                                   {:runners %2}
+                                   {:principal elena})
+        model (model! "chair-pool-chair")
+        _ (inv/invoke! *eng* :model (str model) :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_chairpoollink/fire")
+                        :token token}
+                       {:principal elena})
+        dead (runner! "chairpooldead" dead-token)
+        _ (set-runners! model [dead])
+        seat (seat! "chairpoolclerk"
+                    {:held_for [(str model)]
+                     :wake_on [{:kind "wake_task" :actions ["complete"]}]
+                     :fire_interval_seconds 1})
+        _ (drain-fires! fn')]
+    (try
+      (sch/answer! *fire* 401)
+      (task-do! (task! "the one the pool's only runner refuses") :complete)
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (sch/answer! *fire* nil)
+      (is (= 1 (count (fires-of dead-token))) "the refused POST went out once")
+      (is (= :broken (:state (sched-of seat))))
+
+      (testing "a wake on the held row stays pending"
+        (Thread/sleep 1100)
+        (task-do! (task! "a match while the pool is broken") :complete)
+        (drain-wakes! wn)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (fires-of dead-token))))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+      (testing "naming a live runner on the model releases the held wake once"
+        (let [live (runner! "chairpoollive" live-token)]
+          (set-runners! model [dead live])
+          (drain-fires! fn')
+          (drain-fires! fn')
+          (drain-fires! fn')
+          (is (= 1 (count (fires-of live-token))) "the held wake went out through the live runner, with no sweep")
+          (is (= 1 (count (fires-of dead-token))) "the broken runner was not tried again")
+          (is (zero? (count (fires-of token))) "the model's own link was not used")
+          (let [row (sched-of seat)]
+            (is (= :live (:state row)))
+            (is (not (get-in row [:data :wake_pending]))))))
+      (finally
+        (sch/answer! *fire* nil)
+        (seat-do! seat :retire)))))
+
 ;; ── several sittings at once (max_open_sittings) ───────────────────────
 ;;
 ;; A seat of three slots runs three sittings at once, each on its own
