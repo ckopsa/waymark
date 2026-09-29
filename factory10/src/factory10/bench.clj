@@ -808,7 +808,11 @@
   it writes a house merge's (`note-merges!`), and the mirror ends each
   change and its ticket as it does any merge. A base that moved outside
   the house (`base_moved`) throws the train away and the next pass
-  builds another; a rig that does not answer is asked again next pass."
+  builds another; a rig that does not answer is asked again next pass.
+  Only `landed: true` is a landing: an answer neither landed nor refused
+  (`state: waiting`, while GitHub computes mergeability or a check is
+  pending) keeps the train standing, its pull request noted as `:pr`,
+  and the next pass asks again (ticket c3f0f094)."
   [ctx seen repo policy train]
   (let [answer (ask ctx :train_land {:repo repo :base (base-of policy)
                                       :branch (:branch train)
@@ -828,13 +832,17 @@
       (one-at-a-time! ctx seen repo train
                       (str "was refused its landing (" (reason-of answer) ")"))
 
-      :else
+      (true? (:landed answer))
       (do (when-some [answers (:answers ctx)]
             (swap! answers into
                    (map (fn [id] [id {:state "merged" :head (:head train)}]))
                    (:changes train)))
           (ask ctx :train_delete {:repo repo :branch (:branch train)})
-          nil))))
+          nil)
+
+      :else
+      (let [n (:number answer)]
+        (if (pos-int? n) (assoc train :pr n) train)))))
 
 (defn- train-cap
   "How many trains one train of `n` changes may run, its own and the
