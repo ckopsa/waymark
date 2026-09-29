@@ -18,10 +18,12 @@
             [waymark10.resource :as r]
             [waymark10.saved-view :as sv]
             [waymark10.server.engine :as engine]
+            [waymark10.server.measure :as measure]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.wire :as wire]))
+            [waymark10.wire :as wire])
+  (:import (java.time Instant)))
 
 ;; ── the target kind: saved_view_test's ticket, declared views and
 ;;    all — the primitives a slot may compose ────────────────────────
@@ -33,7 +35,10 @@
     :initial :pending
     :terminal #{}
     :summary "{data.title} · {state}"
-    :schema [:map [:title [:string {:min 1 :max 100}]]]
+    :schema [:map [:title [:string {:min 1 :max 100}]]
+             [:opened_at {:optional true} [:maybe :waymark/instant]]
+             [:closed_at {:optional true} [:maybe :waymark/instant]]
+             [:points {:optional true} [:maybe :int]]]
     :filterable {:state #{:eq :in}}
     :flow [[:pending :approve :approved {:undo :unapprove
                                          :display {:label "Approve"}}]
@@ -55,7 +60,10 @@
     :terminal #{}
     :allow-dead #{:flagged}
     :summary "{data.title} · {state}"
-    :schema [:map [:title [:string {:min 1 :max 100}]]]
+    :schema [:map [:title [:string {:min 1 :max 100}]]
+             [:opened_at {:optional true} [:maybe :waymark/instant]]
+             [:closed_at {:optional true} [:maybe :waymark/instant]]
+             [:points {:optional true} [:maybe :int]]]
     :filterable {:state #{:eq :in}}
     :flow [[:pending :approve :approved {:undo :unapprove}]
            [:approved :unapprove :pending {:undo :approve}]]}))
@@ -119,10 +127,39 @@
               (dash/slot-problems rdef-of-stub read-stub
                                   {:target "ticket" :view "sv-99"})))))
 
+(deftest slot-problems-judges-a-measure
+  (let [ok {:stat "count" :at "opened_at" :window_seconds 86400 :buckets 24}
+        probs (fn [m] (dash/slot-problems rdef-of-stub read-stub
+                                          {:target "ticket" :measure m}))
+        names? (fn [s m] (some #(str/includes? % s) (probs m)))]
+    (is (= [] (probs ok)))
+    (is (= [] (probs (assoc ok :stat "sum" :field "points"))))
+    (is (= [] (probs (assoc ok :stat "median"
+                            :field "duration(opened_at, closed_at)"))))
+    (testing "at must be a time field of the target"
+      (is (names? "is not a time field" (assoc ok :at "title")))
+      (is (names? "is not a time field" (assoc ok :at "nowhere"))))
+    (testing "a summed field must be a number field"
+      (is (names? "is not a number field"
+                  (assoc ok :stat "sum" :field "title"))))
+    (testing "a duration reads two time fields"
+      (is (names? "not both time fields"
+                  (assoc ok :stat "median" :field "duration(opened_at,points)"))))
+    (testing "a field that is neither a name nor a duration"
+      (is (names? "is neither a field name"
+                  (assoc ok :stat "sum" :field "points + 1"))))
+    (testing "every stat but count needs a field"
+      (is (names? "needs a field" (assoc ok :stat "p90"))))
+    (testing "the window and bucket ceilings"
+      (is (names? "window_seconds"
+                  (assoc ok :window_seconds (inc dash/max-window-seconds))))
+      (is (names? "buckets" (assoc ok :buckets (inc dash/max-buckets)))))))
+
 ;; ── the store-backed acceptance: the real handler ───────────────────
 
 (def ^:dynamic *h* nil)
 (def ^:dynamic *st* nil)
+(def ^:dynamic *eng* nil)
 
 (use-fixtures :once
   (fn [f]
@@ -135,13 +172,14 @@
                            "waymark10_transitions" "waymark10_idempotency"
                            "waymark10_drafts"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
-        (binding [*h* (engine/handler
-                       (engine/engine
-                        {:storage st
-                         :resources (into [ticket sv/saved-view]
-                                          dash/resources)}))
-                  *st* st]
-          (f))
+        (let [eng (engine/engine
+                   {:storage st
+                    :resources (into [ticket sv/saved-view]
+                                     dash/resources)})]
+          (binding [*h* (engine/handler eng)
+                    *eng* eng
+                    *st* st]
+            (f)))
         (finally (pg/close! st))))))
 
 (defn- req
@@ -338,4 +376,96 @@
                                nil h2)))))
     ;; tidy for the neighbors
     (req :post (str "/api/dashboard_slots/" sid "/-/remove"))
+    (req :post (str "/api/dashboards/" did "/-/retire"))))
+
+(deftest a-measure-reads-a-number-over-its-window
+  (let [now (Instant/now)
+        ago (fn [secs] (str (.minusSeconds now (long secs))))
+        mk (fn [body]
+             (let [resp (req :post "/api/tickets" body)]
+               (is (= 201 (:status resp)) (:body resp))
+               (id-of resp)))
+        ;; three pending tickets this day: 1200, 3600 and 5400 seconds
+        ;; open; one flagged; one pending the day before. A sits off a
+        ;; bucket edge: the route reads the live clock, a moment later
+        a (mk {:title "A" :opened_at (ago 3000) :closed_at (ago 1800) :points 3})
+        b (mk {:title "B" :opened_at (ago 7200) :closed_at (ago 3600) :points 5})
+        _ (mk {:title "C" :opened_at (ago 10800) :closed_at (ago 5400) :points 7})
+        d (mk {:title "D" :opened_at (ago 14400) :points 100})
+        _ (mk {:title "E" :opened_at (ago (* 30 3600)) :points 11})
+        _ (is (= 200 (:status (req :post (str "/api/tickets/" d "/-/flag")))))
+        did (id-of (req :post "/api/dashboards" {:label "Numbers"}))
+        day {:at "opened_at" :window_seconds 86400 :buckets 24}
+        slot (fn [label where m]
+               (let [resp (req :post "/api/dashboard_slots"
+                               (cond-> {:dashboard_id did :label label
+                                        :target "ticket" :measure m}
+                                 where (assoc :where where)))]
+                 (is (= 201 (:status resp)) (:body resp))
+                 (id-of resp)))
+        measured (fn [sid]
+                   (let [resp (req :get (str "/api/dashboard_slots/" sid
+                                             "/-/measure"))]
+                     (is (= 200 (:status resp)) (:body resp))
+                     (json resp)))]
+    (testing "count over the window, and the window before it"
+      (let [m (measured (slot "Opened" "state=pending"
+                              (assoc day :stat "count")))]
+        (is (= 3 (:value m)))
+        (is (= 1 (:previous m)))
+        (is (= 24 (count (:buckets m))))
+        (is (= 3 (reduce + (map :value (:buckets m))))
+            "every row of the window lands in one bucket")
+        (is (= 1 (:value (peek (:buckets m))))
+            "the newest bucket holds the hour-old ticket")))
+    (testing "where narrows first"
+      (is (= 4 (:value (measured (slot "All opened" nil
+                                       (assoc day :stat "count"))))))
+      (is (= 3 (:value (measured (slot "Pending opened" "state=pending"
+                                       (assoc day :stat "count")))))))
+    (testing "sum of a number field"
+      (let [m (measured (slot "Points" "state=pending"
+                              (assoc day :stat "sum" :field "points")))]
+        (is (== 15 (:value m)))
+        (is (== 11 (:previous m)))))
+    (testing "median of a duration between two time fields"
+      (let [m (measured (slot "Time open" "state=pending"
+                              (assoc day :stat "median"
+                                     :field "duration(opened_at,closed_at)")))]
+        (is (== 3600 (:value m)))
+        (is (nil? (:previous m)) "the day before has no closed ticket")))
+    (testing "a row the grant hides is not counted"
+      (let [sid (slot "Seen" "state=pending" (assoc day :stat "count"))
+            row (store/with-tx *st*
+                  #(store/load-row *st* % :dashboard_slot sid {}))
+            vis {:kind? (constantly true)
+                 :row? (constantly true)
+                 :ids-of (fn [k] (when (= :ticket k) #{a b}))
+                 :conds-of (constantly nil)
+                 :field? (constantly true)
+                 :hashed? (constantly false)}]
+        (is (= 2 (:value (measure/report (assoc *eng* :now-fn (constantly now))
+                                         row vis))))))
+    (testing "a bad field or bound is refused at save"
+      (let [refused (fn [m]
+                      (let [resp (req :post "/api/dashboard_slots"
+                                      {:dashboard_id did :label "Bad"
+                                       :target "ticket" :measure m})]
+                        (is (= 409 (:status resp)) (:body resp))
+                        (:detail (json resp))))]
+        (is (str/includes? (refused (assoc day :stat "count" :at "title"))
+                           "is not a time field"))
+        (is (str/includes? (refused (assoc day :stat "sum" :field "title"))
+                           "is not a number field"))
+        (is (str/includes? (refused (assoc day :stat "count"
+                                           :window_seconds (* 31 86400)))
+                           "window_seconds"))
+        (is (str/includes? (refused (assoc day :stat "count" :buckets 61))
+                           "buckets"))))
+    (testing "a list panel has no measure to read"
+      (let [resp (req :post "/api/dashboard_slots"
+                      {:dashboard_id did :label "List" :target "ticket"})]
+        (is (= 404 (:status (req :get (str "/api/dashboard_slots/"
+                                           (id-of resp) "/-/measure")))))))
+    ;; tidy for the neighbors
     (req :post (str "/api/dashboards/" did "/-/retire"))))
