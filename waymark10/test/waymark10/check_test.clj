@@ -8,7 +8,8 @@
   import gate's own warnings, so a probe that wanted a label or a
   hint sentence would make this namespace's zero-warning assertion a
   test of the battery instead of a test of the tally."
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
             [waymark10.check :as check]
             [waymark10.modules :as modules]
             [waymark10.resource :as r]))
@@ -46,6 +47,23 @@
            {:one-way "Closing records completion; nothing external changes."
             :display {:label "Close"}}]]})
 
+(defn- warning-rows
+  "Only the report's warning rows: each kind line that tallies a
+  warning, with the indented lines under it. A failing assertion
+  prints these rather than the whole report, because the log tail a
+  bench reads elides the middle of a long message — and the middle is
+  where the one warning sat."
+  [out]
+  (->> (str/split-lines out)
+       (reduce (fn [blocks line]
+                 (if (and (str/starts-with? line "      ") (seq blocks))
+                   (conj (pop blocks) (conj (peek blocks) line))
+                   (conj blocks [line])))
+               [])
+       (filter #(re-find #" — \d+ warnings?$" (first %)))
+       (map #(str/join "\n" %))
+       (str/join "\n")))
+
 (deftest only-gate-passed-values-are-declarations
   (is (check/declaration? probe))
   (is (not (check/declaration? {:kind :raw :states [:a] :actions {}}))))
@@ -72,15 +90,19 @@
   ;; nowhere — so the silence this asserts is the WARNING kind of
   ;; silence, read off the tally, and the rows that appear are the
   ;; framework kinds that wrote their law down.
-  (let [out (with-out-str
-              (let [{:keys [kinds warnings broken]} (check/report [probe])]
-                (is (= 1 kinds))
-                (is (zero? warnings))
-                (is (zero? broken))))]
+  (let [tally (atom nil)
+        out (with-out-str (reset! tally (check/report [probe])))
+        {:keys [kinds warnings broken]} @tally]
+    (is (= 1 kinds))
+    (is (zero? warnings)
+        (str "the warning rows, so a red run names the warning:\n"
+             (warning-rows out)))
+    (is (zero? broken))
     (is (re-find #"check_probe ✓" out))
     (is (not (re-find #"\(enrolled\) — " out))
         (str "every enrolled kind is silent, so none of them takes a WARNING"
-             " row — the report, so a red run names the warning:\n" out))
+             " row — the warning rows, so a red run names the warning:\n"
+             (warning-rows out)))
     (is (re-find #"approval_request \(enrolled\) ✓" out)
         "and core's own four-eyes scenario is judged where the author looks")))
 
