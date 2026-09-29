@@ -135,6 +135,54 @@
   (println (str "localfire run routine=" routine " id=" id
                 " status=" (name status))))
 
+;; ── the sitting's close (R-5.6) ───────────────────────────────────────
+;;
+;; A run's own Stop hook closes its sitting. A run the server marks lost
+;; never reached that Stop, and a run whose process ended may not have —
+;; killed, crashed, out of turns. So for both the server runs the copied
+;; place's hook in its `close-run` mode, from outside the run. The hook
+;; finds the sitting in the transcript and takes a sitting already closed
+;; as success, so a second close is harmless.
+
+(defn claude-home
+  "Where Claude Code keeps its transcripts: the HOME the runs inherit."
+  []
+  (or (System/getenv "HOME") (System/getProperty "user.home")))
+
+(defn close-sitting!
+  "Run the place's `sitting-close.sh close-run` for run `id` with `note`,
+  record its answer in `run.edn`, and log one line. → the hook's status
+  line."
+  [state id note]
+  (let [runs-dir (:runs-dir (:config state))
+        hook     (runs/hook-file runs-dir id)
+        input    (json/write-value-as-string
+                  {:session_id      (str id)
+                   :transcript_path (.getPath (runs/transcript-file (claude-home) runs-dir id))})
+        {:keys [exit out]}
+        (if-not (.isFile hook)
+          {:exit nil :out "failed (none): the run's place has no sitting-close.sh"}
+          (try ((:closer state) [(.getPath hook) "close-run" note]
+                                (runs/place-dir runs-dir id) input)
+               (catch Exception e
+                 {:exit nil :out (str "failed (none): " (ex-message e))})))
+        line     (if (str/blank? out)
+                   (str "failed (none): the hook answered nothing, exit " exit)
+                   out)]
+    (runs/note-close! runs-dir id line (= 0 exit))
+    (println (str "localfire close id=" id " " line))
+    line))
+
+(defn close-lost!
+  "At startup: close the sitting of every `lost` run whose close has not
+  succeeded yet. → the number of closes it tried."
+  [state]
+  (count (mapv (fn [rec]
+                 (close-sitting! state (:id rec)
+                                 (str "localfire lost this run at " (:ended-at rec)
+                                      " (restart)")))
+               (runs/lost-unclosed (:runs-dir (:config state))))))
+
 (defn execute-run!
   "Start the process, drain it, wait for it, record it.
 
@@ -180,7 +228,11 @@
                                   :env run-env
                                   :dir (runs/place-dir (:runs-dir cfg) id)
                                   :max-run-seconds (:max-run-seconds routine)})]
-          (log-run! nm id (:status rec)))
+          (log-run! nm id (:status rec))
+          (try (close-sitting! state id "localfire saw the run exit")
+               (catch Exception e
+                 (binding [*out* *err*]
+                   (println (str "localfire close id=" id " failed: " (ex-message e)))))))
         (catch Throwable t
           (runs/finish! cfg id :failed nil)
           (binding [*out* *err*]
@@ -534,20 +586,32 @@
   "Stand the server up. `:spawner` is the seam (R-9.1): the tests give
   a fake, and `main` gives the real one. `:check?` runs the credential
   check (R-4.6) once now and then on its timer. → the state, with
-  `:port`, which is the bound port even when the config asked for 0."
-  [{:keys [config token spawner check?]}]
+  `:port`, which is the bound port even when the config asked for 0.
+  `:closer` is the sitting's close seam, `spawn/run-to-end` by default;
+  the lost runs' sittings are closed on a thread of their own, and
+  `:closing` is that thread's future → the number it tried (R-5.6)."
+  [{:keys [config token spawner closer check?]}]
   (let [state {:config     config
                :token      token
                :spawner    (or spawner (spawn/process-spawner))
+               :closer     (or closer spawn/run-to-end)
                :running    (atom {})
                :credential (credential-initial)}
+        closing (future
+                  (try (close-lost! state)
+                       (catch Throwable t
+                         (binding [*out* *err*]
+                           (println (str "localfire close of the lost runs failed: "
+                                         (ex-message t))))
+                         0)))
         timer (when check?
                 (start-check-timer! state
                                     (:next-in (check-credential! state {:scheduled? true}))))
         srv   (hk/run-server (handler state)
                              {:port (:port config)
                               :legacy-return-value? false})]
-    (assoc state :http srv :port (hk/server-port srv) :check-timer timer)))
+    (assoc state :http srv :port (hk/server-port srv) :check-timer timer
+                 :closing closing)))
 
 (defn stop!
   "Stop the server. The runs in flight are not waited on; the next

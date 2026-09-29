@@ -606,6 +606,8 @@
       [:tries {:optional true} [:maybe [:int {:min 1}]]]
       [:size {:optional true} [:maybe [:int {:min 1}]]]
       [:retried {:optional true} [:maybe :boolean]]
+      ;; the pull request a waiting landing answered (c3f0f094)
+      [:pr {:optional true} [:maybe [:int {:min 1}]]]
       [:started_at :waymark/instant]]]]])
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────

@@ -2339,6 +2339,29 @@
          walk")
     (is (= "open" (get-in answer [:change :state])))))
 
+(deftest a-change-born-on-another-repository-moves-to-the-seats-at-the-next-sit
+  ;; ticket 1ebcd19f: the walk row moved to this seat's repository after
+  ;; its change was born on another one, and the change never opened
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        _ (inv/invoke! (:eng w) :change (str change-id) :rebranch
+                       {:head_branch (str "elsewhere/" ask-id)
+                        :repository "ckopsa/elsewhere"}
+                       {:principal mirror/source-principal})
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (= a-repository (get-in row [:data :repository]))
+        "the next sit hands a change on the seat's repository")
+    (is (not= (str "elsewhere/" ask-id) (get-in row [:data :head_branch]))
+        "and its branch is minted again from that repository's policy")
+    (is (= 1 (count (changes-of (:eng w))))
+        "on the row that is here: no second change is born")
+    (is (= "open" (name (:state row))))
+    (is (= a-repository (get-in answer [:change :data :repository]))
+        "and the seat reads the new repository on the change beside its
+         walk")))
+
 (deftest an-open-seat-born-change-on-the-old-pattern-is-rebranched-too
   ;; Prod's own row was at `open`, not at `stuck`: the sit minted it,
   ;; the prepare refused, and the seat stalled nothing.
@@ -2457,6 +2480,46 @@
                    "submit")
         "and the seat is offered submit on the change beside its walk")
     (is (nil? (:change_note answer)))))
+
+(deftest the-groom-itself-puts-a-stalled-change-back-to-work
+  ;; ticket 9ace68fb: the wakes leave out a ticket beside a stuck
+  ;; change, so the change must be open BEFORE any sit, or no seat
+  ;; fires to walk it
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (person-moves-ticket! w :groom)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the groom moved the change, not a sit")
+    (is (zero? (long (get-in row [:data :rounds]))))
+    (is (not (contains? (seats/stuck-walk-rows (:eng w) "ticket")
+                        (str (:id (:ticket w)))))
+        "so the wakes count the ticket again")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows])))
+        "and the next sit hands it")))
+
+(deftest the-unblock-puts-a-stalled-change-back-to-work
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        blocker (:row (inv/create! (:eng w) :ticket
+                                   {:title "The blocker" :type "task"
+                                    :repo a-repository}
+                                   {:principal person}))
+        tid (str (:id (:ticket w)))
+        drafted (store/with-tx (:storage (:eng w))
+                  (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket tid {})))
+        ;; `block` is fenced: name the version the stall left
+        _ (inv/invoke! (:eng w) :ticket tid :block
+                       {:blocked_by [(str (:id blocker))]}
+                       {:principal person
+                        :if-match (inv/etag :ticket tid (:version drafted))})
+        _ (person-moves-ticket! w :unblock)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the unblock moved the change")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows]))))))
 
 (deftest a-stall-with-no-groom-after-it-stays-stuck
   (let [w (ticket-world)

@@ -78,6 +78,14 @@
     × kind × action × actor type, at >= since only. include-system?
     false drops rows whose actor type is system — the mirror-sync
     beat would otherwise dominate every count.")
+  (transition-times [st tx kind action since until conds limit]
+    "The `at` of each logged transition of `action` on `kind` whose at
+    lies in [since, until) and whose row still matches every cond
+    (count-matching's grammar) — a dashboard measure's
+    transition:<action> read (dashboard measures 2/3). ONE query for
+    the kind however many rows or buckets: ix_wm10_t_at bounds the
+    window, and the conds narrow the kind's table as one semi-join.
+    Oldest first, at most `limit` Instants.")
   (corrections-by-model [st tx actor-ids since excluded-kinds]
     "The correction count over the log, grouped by the model that was
     corrected — the ladder's one new query (spec-seat.md R-11.3).

@@ -383,6 +383,38 @@
         (is (= "closed" (:state doc)))
         (is (some? (get-in (row-of eng :sitting sitting-id) [:data :prices])))))))
 
+(deftest both-answers-name-which-law-the-newest-refusal-was
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model {:name "chair" :mode "interactive"})
+        sat (doc-of (tool h (with-session (initialize! h)) "waymark_sit"
+                          {:key a-key}))
+        sitting-id (str (:sitting sat))]
+
+    (testing "a sitting nothing refused carries no such key"
+      (let [doc (json (tally! h counts))]
+        (is (= 0 (:refusals doc)))
+        (is (not (contains? doc :last_refusal))
+            "absent, so a hook can tell silence from a refusal")))
+
+    (testing "after a refusal the tally says which law it was"
+      (is (= 1 (seats/bump-counter! eng sitting-id :refusals
+                                    {:type "https://waymark.dev/problems/conflict"
+                                     :guard :state-allows})))
+      (let [doc (json (tally! h counts))]
+        (is (= 1 (:refusals doc)))
+        (is (= "https://waymark.dev/problems/conflict"
+               (get-in doc [:last_refusal :type])))
+        (is (= "state-allows" (get-in doc [:last_refusal :guard])))
+        (is (some? (get-in doc [:last_refusal :at])))))
+
+    (testing "and the close answers the newest one, frozen with the bill"
+      (let [doc (json (close! h counts))]
+        (is (= "sitting_close" (:kind doc)))
+        (is (= 1 (:refusals doc)))
+        (is (= "state-allows" (get-in doc [:last_refusal :guard])))))))
+
 ;; ── 5 · the tally door's four answers ───────────────────────────────
 
 (deftest the-tally-door-refuses-what-the-close-door-refuses

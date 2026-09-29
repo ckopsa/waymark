@@ -153,7 +153,14 @@
     (testing "the window and bucket ceilings"
       (is (names? "window_seconds"
                   (assoc ok :window_seconds (inc dash/max-window-seconds))))
-      (is (names? "buckets" (assoc ok :buckets (inc dash/max-buckets)))))))
+      (is (names? "buckets" (assoc ok :buckets (inc dash/max-buckets)))))
+    (testing "at may name transition:<action>, which counts and reads nothing"
+      (is (= [] (probs (assoc ok :at "transition:flag"))))
+      (is (names? "names no action" (assoc ok :at "transition:merge")))
+      (is (names? "its stat must be count"
+                  (assoc ok :at "transition:flag" :stat "sum" :field "points")))
+      (is (names? "reads no field"
+                  (assoc ok :at "transition:flag" :field "points"))))))
 
 ;; ── the store-backed acceptance: the real handler ───────────────────
 
@@ -468,4 +475,62 @@
         (is (= 404 (:status (req :get (str "/api/dashboard_slots/"
                                            (id-of resp) "/-/measure")))))))
     ;; tidy for the neighbors
+    (req :post (str "/api/dashboards/" did "/-/retire"))))
+
+(deftest a-measure-counts-transitions-from-the-log
+  (let [mk (fn [title]
+             (let [resp (req :post "/api/tickets" {:title title})]
+               (is (= 201 (:status resp)) (:body resp))
+               (id-of resp)))
+        act! (fn [id action]
+               (is (= 200 (:status (req :post (str "/api/tickets/" id
+                                                   "/-/" action))))))
+        did (id-of (req :post "/api/dashboards" {:label "Transitions"}))
+        day {:stat "count" :at "transition:flag"
+             :window_seconds 86400 :buckets 24}
+        slot (fn [label where]
+               (let [resp (req :post "/api/dashboard_slots"
+                               (cond-> {:dashboard_id did :label label
+                                        :target "ticket" :measure day}
+                                 where (assoc :where where)))]
+                 (is (= 201 (:status resp)) (:body resp))
+                 (id-of resp)))
+        measured (fn [sid]
+                   (let [resp (req :get (str "/api/dashboard_slots/" sid
+                                             "/-/measure"))]
+                     (is (= 200 (:status resp)) (:body resp))
+                     (json resp)))
+        ;; the log is the fixture's, shared with the neighbors: the HTTP
+        ;; read is judged by what THIS test adds to it, the exact counts
+        ;; through a grant that sees only this test's rows
+        seen (fn [sid ids]
+               (let [row (store/with-tx *st*
+                           #(store/load-row *st* % :dashboard_slot sid {}))]
+                 (:value (measure/report
+                          *eng* row
+                          {:kind? (constantly true)
+                           :row? (constantly true)
+                           :ids-of (fn [k] (when (= :ticket k) (set ids)))
+                           :conds-of (constantly nil)
+                           :field? (constantly true)
+                           :hashed? (constantly false)}))))
+        flags (slot "Flags" nil)
+        was (measured flags)
+        a (mk "TA") b (mk "TB") c (mk "TC") d (mk "TD")
+        _ (doseq [t [a b c]] (act! t "flag"))
+        _ (act! c "unflag")
+        _ (act! d "approve")
+        now (measured flags)]
+    (testing "flags per hour over a day"
+      (is (= 24 (count (:buckets now))))
+      (is (= 3 (- (:value now) (:value was))))
+      (is (= 3 (- (:value (peek (:buckets now)))
+                  (:value (peek (:buckets was)))))
+          "this test's flags all land in the newest hour")
+      (is (= 3 (seen flags [a b c d])) "unflag and approve are other actions"))
+    (testing "a transition on a hidden row is not counted"
+      (is (= 2 (seen flags [a b]))))
+    (testing "where narrows first"
+      (is (= 2 (seen (slot "Flagged flags" "state=flagged") [a b c d])))
+      (is (= 1 (seen (slot "Pending flags" "state=pending") [a b c d]))))
     (req :post (str "/api/dashboards/" did "/-/retire"))))
