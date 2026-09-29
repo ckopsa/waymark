@@ -74,6 +74,7 @@
    :summary "{data.name} · {state}"
    :schema [:map [:name [:string {:min 1 :max 80}]]]
    :actions {:seal {:from #{:open} :to :sealed
+                    :bulk {:max-items 5}
                     :guards [sealed-for-good]
                     :safety {:idempotent true :reversible false :confirm false
                              :one-way "Sealing is for good."}
@@ -560,6 +561,37 @@
       (req h :post "/api/seat_pantries" {:headers as :body {:name "salt"}})
       (req h :post "/api/seat_vaults" {:headers as :body {:name "chest"}})
       (is (= [3 1] (counts)) "the counts are frozen at the close"))))
+
+(deftest a-partial-bulks-per-item-409-counts-one-refusal-on-the-sitting
+  (let [{:keys [h]} (world)
+        model (add-model! h "bulk-count-model")
+        seat (open-seat! h "clerk-bulk-count")
+        gid (sit! h (sitter "ari-bulk") "clerk-bulk-count" {})
+        as (sitter "ari-bulk" {:grant gid})
+        made (req h :post "/api/sittings"
+                  {:headers as :body {:seat seat :model model
+                                      :grant gid}})
+        sid (id-of made)
+        refusals (fn []
+                   (:refusals (:data (json (req h :get (str "/api/sittings/" sid)
+                                                {:headers human})))))
+        v (req h :post "/api/seat_vaults" {:headers as :body {:name "strongbox"}})
+        _ (is (= 201 (:status v)))
+        before (refusals)
+        ;; one row the guard refuses (409) and one row that is not there
+        ;; (404): the bulk door answers its report, and only the 409 is a
+        ;; refusal the sitting counts
+        bulk (req h :post "/api/seat_vaults/-/seal"
+                  {:headers as
+                   :body {:ids [(id-of v) (str (random-uuid))]}})]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (is (= 0 before))
+    (is (< (:status bulk) 300) (pr-str (json bulk)))
+    (is (= (inc before) (refusals))
+        "the per-item 409 counts exactly one refusal; the 404 counts none")
+    (is (= "open" (:state (json (req h :get (str "/api/seat_vaults/" (id-of v))
+                                     {:headers as}))))
+        "the refused row stays untouched")))
 
 (deftest a-closed-sitting-shows-the-rows-a-person-reversed
   (let [{:keys [h]} (world)
