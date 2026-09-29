@@ -735,3 +735,11 @@
   .slot-problem .slot-foot { display: flex; gap: 10px; align-items: center;
                              margin-top: 8px; }
   .slot-problem button { font-size: 12px; padding: 2px 10px; }
+  /* a measured panel (dashboard measures 3/3): the number large, the
+     previous window and its change quiet beside it, the sparkline */
+  .slot-previous { display: flex; gap: 8px; align-items: baseline;
+                   font-size: 12.5px; }
+  .slot-delta { font-family: var(--mono); color: var(--ink); }
+  .slot-spark { display: block; margin-top: auto; }
+  .slot-spark-line { fill: none; stroke: var(--verdigris); stroke-width: 1.5;
+                     stroke-linejoin: round; stroke-linecap: round; }

@@ -3189,6 +3189,32 @@
        "stop the sitting. Do not stall the ticket on dead CI, and do not "
        "change code for it."))
 
+(defn- train-red-finding
+  "The finding a merge train's red makes, or nil (ticket 238f45b3). A
+  change whose own checks are green and that a train found red carries
+  `train_red` (the train's branch and run url) and the train's red
+  check names in `failing_checks`; the rig's feedback reads only the
+  change's own branch, which is green, so without this the seat sees
+  nothing that says why it was sent back."
+  [change]
+  (when-some [said (some-> (get-in change [:data :train_red]) str not-empty)]
+    (let [checks (seq (map str (get-in change [:data :failing_checks])))]
+      {"source" "merge-train"
+       "severity" "failure"
+       "message" (str "merge train red: " said
+                      (when checks
+                        (str "; failing checks: " (str/join ", " checks))))})))
+
+(defn- with-train-red
+  "The sit's `feedback` with the change's own train red first among its
+  findings; the train's red alone when the rig answered nothing."
+  [feedback change]
+  (if-some [finding (train-red-finding change)]
+    (if feedback
+      (update feedback "findings" #(into [finding] %))
+      {"findings" [finding] "unavailable" []})
+    feedback))
+
 (defn- feedback-of
   "What the submit caused, or nil. ONE `feedback` of the rig, with the
   engine's own hand and through the same caller the prepare rides
@@ -3371,15 +3397,19 @@
           ;; pull request at all, so a head branch alone is not a
           ;; submit here: such a row carries no `number` until a round
           ;; pushes it and the source adopts it.
-          feedback (when (and made
-                              (or (>= (long (or (get-in change [:data :rounds])
-                                                0))
-                                      1)
-                                  (and (some-> (get-in change [:data :head_branch])
-                                               str not-empty)
-                                       (some? (get-in change [:data :number])))))
-                     (feedback-of gate-rpc (str (or (:repo made) repo))
-                                  (str (or (:branch made) branch))))
+          ;; a merge train's red rides on the change row, not on the
+          ;; branch the rig reads, so it is added here (ticket 238f45b3)
+          feedback (with-train-red
+                     (when (and made
+                                (or (>= (long (or (get-in change [:data :rounds])
+                                                  0))
+                                        1)
+                                    (and (some-> (get-in change [:data :head_branch])
+                                                 str not-empty)
+                                         (some? (get-in change [:data :number])))))
+                       (feedback-of gate-rpc (str (or (:repo made) repo))
+                                    (str (or (:branch made) branch))))
+                     change)
           ;; the path the policy names, answered only when the file
           ;; is really there (R-6); a worktree that was never made
           ;; holds nothing, so a dark rig is asked for no read

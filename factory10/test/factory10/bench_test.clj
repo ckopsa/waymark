@@ -921,6 +921,28 @@
     (is (str/includes? note "Do not stall the ticket")
         "and not by stalling a ticket the code did not fail")))
 
+(deftest feedback-names-a-merge-trains-red-first
+  ;; ticket 238f45b3: the change's own branch is green, so the rig's
+  ;; feedback says nothing; the train's red rides on the change row
+  (let [with-train-red #'mcp/with-train-red
+        change {:data {:train_red "train/7 https://ci.example/run/9"
+                       :failing_checks ["gate" "test10"]}}
+        rig {"findings" [{"source" "review" "message" "nit"}]
+             "unavailable" []}
+        [first-finding :as findings] (get (with-train-red rig change)
+                                          "findings")]
+    (is (= 2 (count findings)))
+    (is (= "merge-train" (get first-finding "source")))
+    (is (str/includes? (get first-finding "message") "train/7"))
+    (is (str/includes? (get first-finding "message") "gate, test10"))
+    (is (= ["merge-train"]
+           (mapv #(get % "source")
+                 (get (with-train-red nil change) "findings")))
+        "a rig that answered nothing still leaves the train's red")
+    (is (= rig (with-train-red rig {:data {:failing_checks ["gate"]}}))
+        "a change no train found red is left as the rig said it")
+    (is (nil? (with-train-red nil {:data {}})))))
+
 (deftest feedback-with-no-interrupted-finding-carries-no-rerun-note
   (let [w (world)]
     (is (some? (:feedback (:answer w))))
