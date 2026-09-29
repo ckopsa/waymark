@@ -1229,7 +1229,8 @@ Last, the source must adopt that row, and it must mint no second one.
 The source reads a pull request. It asks for a change row by the pull
 request's own id. When no row answers, the source looks for a row of
 the same repository, on the same head branch, whose `change_id` is not
-the forge's. A `change_id` the forge owns starts with `github:`. When
+the forge's. A `change_id` the forge owns starts with the forge's name
+and a colon: `github:` or `bitbucket:`. When
 such a row is there, the source writes the pull request's identity
 onto it: the `change_id`, the number and the url. The write goes
 through the door `adopt`, which is the mirror's and is hidden. A row
