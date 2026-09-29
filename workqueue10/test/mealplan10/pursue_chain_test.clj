@@ -3,7 +3,7 @@
   proves pursue! against a trimmed copy, so this pins the declared
   remedies where they live — grocery_list.finalize → plan-is-planned →
   plan.finalize → all-days-covered-gate → plan_day.assign_meal (→
-  meal-fits-day → assign_off_theme → meal-is-listed → meal.accept).
+  meal-fits-day → assign_off_theme, a confirm door pursue stops at).
   A change to any of those guards' :remedies breaks the walk here.
   Needs the waymark10_test database."
   (:require [clojure.string :as str]
@@ -111,16 +111,26 @@
     (is (= "planned" (state-of plan)))
     (is (= "ready" (state-of glist)))))
 
-(deftest an-unlisted-meal-routes-through-meal-accept
+;; meal-fits-day accepts only on-list meals, and its remedies are
+;; set_sunday_theme (refused off Sunday) and assign_off_theme — whose
+;; confirm a person must give, so the walk halts there, not at
+;; meal.accept
+(deftest an-unlisted-meal-stops-at-the-off-theme-confirm
   (let [{:keys [meal day plan glist] :as rows} (chain! "2026-01-13" false)
         res (c/pursue! *session* glist :finalize nil
-                       {:resolve (resolver rows) :dry-run true})]
+                       {:resolve (resolver rows) :dry-run true})
+        off (some #(when (= "plan_day.assign_off_theme" (:door %)) %)
+                  (:blocked-on res))]
     (is (:rehearsal res))
-    (is (= ["meal.accept" "plan_day.assign_off_theme" "plan_day.assign_meal"
-            "plan.finalize" "grocery_list.finalize"]
-           (mapv :door (:writes res)))
-        (str "meal-fits-day → assign_off_theme; meal-is-listed → "
-             "meal.accept: " (pr-str res)))
+    (is (nil? (:done res)) (pr-str res))
+    (is (= ["grocery_list.finalize" "plan.finalize" "plan_day.assign_meal"]
+           (mapv :door (:stack res)))
+        (str "plan-is-planned → plan.finalize; all-days-covered → "
+             "assign_meal: " (pr-str res)))
+    (is (:confirm off) (pr-str res))
+    (is (= "The day gets a meal that does not match its theme night."
+           (:consequence off)))
+    (is (empty? (:writes res)))
     (is (= "suggested" (state-of meal)) "the rehearsal writes nothing")
     (is (= "undecided" (state-of day)))
     (is (= "draft" (state-of plan)))
