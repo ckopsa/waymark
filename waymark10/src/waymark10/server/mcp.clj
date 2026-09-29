@@ -408,6 +408,25 @@
     (when-some [gid (get-in session [:visibility :grant :id])]
       (some-> (seats/open-sitting-for-grant eng gid) :id str))))
 
+(defn- bound-elsewhere
+  "Which of `sitting-ids` another live connector session is bound to,
+  as a set: a sitting some run is using, even one its harness never
+  stamped (ticket 5d4bbab6)."
+  [eng id sitting-ids]
+  (let [id (some-> id str not-empty)]
+    (cond
+      (empty? sitting-ids) #{}
+      (session-table? eng)
+      (sessions/bound-elsewhere (:storage eng) id sitting-ids
+                                (ttl-cutoff ((:now-fn eng))))
+      :else
+      (let [wanted (set (map str sitting-ids))]
+        (into #{}
+              (comp (remove (fn [[k _]] (= k id)))
+                    (keep (fn [[_ e]] (some-> e :bound :sitting str)))
+                    (filter wanted))
+              (some-> (:mcp-sessions eng) deref (evict ((:now-fn eng)))))))))
+
 (defn- bound-seat
   "The seat this session is bound to, or nil. Read from the BINDING
   and not from the sitting row: `waymark_sit` writes the seat and the
@@ -1490,11 +1509,13 @@
   action it is the door signing its work, so `actions-from-mcp` can
   count what came through here. A fenced action carries the If-Match
   of the row we READ, so the write lands on the row the agent saw or
-  not at all."
-  [session entry etag warnings]
+  not at all — and `fenced?` is the caller's answer to 'is this door
+  fenced', read off the envelope's entry when it has one and off the
+  DECLARATION when a guard shut the door (ticket ec814cac)."
+  [session fenced? etag warnings]
   (cond-> {"idempotency-key" (origin-key (get-in session [:principal :id])
                                          (random-uuid))}
-    (and (get-in entry [:safety :fence]) etag)
+    (and fenced? etag)
     (assoc "if-match" etag)
     (seq warnings)
     (assoc "waymark-acknowledge" (str/join "," (map name warnings)))))
@@ -1689,6 +1710,18 @@
           (pass-through env-resp)
           (let [env (body-json env-resp)
                 entry (get-in env [:actions (wire-action aname)])
+                ;; A door a GUARD shut is not in `actions` at all — it
+                ;; is in `unavailable`, which carries a reason and its
+                ;; remedies and no `safety` — so the fence flag falls
+                ;; back to the DECLARATION here. Read off `entry`
+                ;; alone, a guard-refused fenced door went out with no
+                ;; If-Match, and invoke's fence (step 6, ahead of the
+                ;; guard loop) answered 412 "Version conflict" on a row
+                ;; that had not changed, where the guard's own 409
+                ;; belonged (ticket ec814cac).
+                fenced? (boolean
+                         (or (get-in entry [:safety :fence])
+                             (get-in rdef [:actions aname :safety :fence])))
                 sentence (consequence-of entry)]
             (if (and (get-in entry [:safety :confirm])
                      (not= acknowledge sentence))
@@ -1702,7 +1735,7 @@
                                      {:body (or input {})
                                       :query (when dry_run "dry_run=1")
                                       :headers (invoke-headers
-                                                session entry
+                                                session fenced?
                                                 (get-in env-resp [:headers "ETag"])
                                                 acknowledge_warnings)})
                             :waymark10/sitting
@@ -2006,13 +2039,40 @@
   scheduled hour — and the second run reusing the first's sitting
   would put both wakes' tokens on one row and leave the first run's
   hook with nothing to close. So the reuse holds only when the row is
-  THIS run's: no harness session stamped on it (nobody has claimed
-  it), or the same one this session just declared."
-  [eng grant harness-session]
-  (when-some [open (seats/open-sitting-for-grant eng (:id grant))]
-    (let [held (some-> (get-in open [:data :harness_session]) str not-empty)]
-      (when (or (nil? held) (= held harness-session))
-        open))))
+  THIS run's, and every sitting of a seat shares the seat's grant, so
+  the grant's NEWEST open sitting is not the answer (tickets 8c72fd3a,
+  5d4bbab6). Read in this order:
+
+    1. the open sitting this connector session is already bound to,
+       under this grant — unless it is stamped with another run's
+       harness session than the one just declared;
+    2. when a harness session is declared, the grant's newest open
+       sitting stamped with it — the pairing `open-sitting-for-seat`
+       makes at the close;
+    3. only then the grant's newest UNCLAIMED open sitting: no stamp,
+       and — when the seat lets more than one sitting run at once — no
+       other live connector session bound to it. At one, an open
+       sitting holds every wake (`max-open-sittings-help`), so a second
+       session's sit re-keys it rather than opening another."
+  [eng sid grant seat harness-session]
+  (let [gid (str (:id grant))
+        many? (< 1 (long (or (get-in seat [:data :max_open_sittings]) 1)))
+        stamp-of #(some-> (get-in % [:data :harness_session]) str not-empty)
+        wanted (some-> harness-session str not-empty)
+        bound (some->> (bound-sitting eng sid) str not-empty (row-of eng :sitting))]
+    (or (when (and bound
+                   (= "open" (some-> (:state bound) name))
+                   (= gid (str (get-in bound [:data :grant])))
+                   (let [held (stamp-of bound)]
+                     (or (nil? held) (nil? wanted) (= held wanted))))
+          bound)
+        (let [rows (seats/open-sittings-for-grant eng gid)]
+          (or (when wanted (first (filter #(= wanted (stamp-of %)) rows)))
+              (let [free (remove stamp-of rows)
+                    taken (if many?
+                            (bound-elsewhere eng sid (map (comp str :id) free))
+                            #{})]
+                (first (remove #(contains? taken (str (:id %))) free))))))))
 
 (defn- open-sitting!
   "The sitting this bound session is counted against (R-12.15): the
@@ -2032,9 +2092,9 @@
   cannot derive which run this is, the harness can, and a pairing made
   here is one the session-end door (R-12.17) reads rather than
   reconstructs."
-  [eng sitter grant seat model harness-session]
+  [eng sid sitter grant seat model harness-session]
   (when model
-    (or (reusable-sitting eng grant harness-session)
+    (or (reusable-sitting eng sid grant seat harness-session)
         (:row (inv/create! eng :sitting
                            (cond-> {:seat (str (:id seat))
                                     :model (str (:id model))
@@ -2262,7 +2322,9 @@
 
   `only` is the one row a fire's text named (`seats/fire-key-row`):
   when it is given, the page holds that row alone, or nothing when the
-  row is not in the queue or is claimed.
+  row is not in the queue or is claimed. A named OPEN ticket whose
+  change is submitted is withheld as the plain walk withholds it
+  (ticket 6ca380da).
 
   `stuck` is the tickets whose change waits for a person, each with
   its reason (`seats/stuck-walk-reasons`, ticket 6bdaf6fe). They are
@@ -2280,6 +2342,21 @@
             walk-filter (when-not judgment (seats/walk-filter seat))
             n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
                    coll/page-size-max)
+            ;; a named ticket beside a live change is read under its
+            ;; own state, in review as well as open, and is not left
+            ;; out as stuck: the fire sent the run to it (ticket
+            ;; 7af7d506)
+            only-state (when (and only (not judgment)
+                                  (seats/named-beside-a-live-change?
+                                   eng walk only))
+                         (some-> (row-of eng (keyword walk) only) :state name))
+            ;; save an open ticket whose round is already submitted:
+            ;; the named walk withholds it as the plain one does
+            ;; (ticket 6ca380da)
+            stuck (cond-> stuck
+                    (and only (not (seats/named-open-beside-a-submitted-change?
+                                    eng walk only)))
+                    (dissoc (str only)))
             subtract? (or judgment (seq claimed) (seq stuck))
             asked (if (or subtract? (seq held) only) coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))
@@ -2289,7 +2366,9 @@
                                                             judgment))
                                            walk-filter (merge
                                                         (filter-params
-                                                         walk-filter))))}))
+                                                         walk-filter))
+                                           only-state (assoc "state"
+                                                             only-state)))}))
             doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
         (when (collection-doc? doc)
           (let [id-of #(id-of-self (get % "self"))
@@ -2436,6 +2515,8 @@
   → {:walk w :named-held? bool :all-held? bool}."
   [eng call sitter-sees seat sitting named]
   (let [seat-id (str (:id seat))
+        ;; a named change is read back to its ticket (ticket 7af7d506)
+        named (seats/named-walk-row eng (get-in seat [:data :walk]) named)
         held (get-in sitting [:data :walked_rows])
         ;; read once for the sit: the tickets beside a stuck change
         ;; are out of the walk whichever try claims (ticket 6bdaf6fe)
@@ -2793,6 +2874,97 @@
                    default-branch-pattern)
                "*" (str row-id)))
 
+;; ── the walk row's own home (R-12.32a) ──────────────────────────────
+;;
+;; A WALK ROW MAY NAME ITS REPOSITORY AND ITS BRANCH. A seat whose
+;; scope reaches several repositories cannot have one read off it, so
+;; the row it walks says which one its work is in (`repo` or
+;; `repository`) and, when the house names branches by something
+;; other than the row's id, which branch (`branch`). The engine then
+;; prepares THERE, with its own hand, so a row names only a repository
+;; every bench entry of the seat already reaches: a row never widens
+;; what the seat may touch. A row that names nothing leaves the seat's
+;; own one repository to choose, as it always did.
+
+(defn- row-said
+  "One of the walk row's own values, trimmed, or nil."
+  [row k]
+  (let [values (or (get row "data") (get row "fields"))]
+    (some-> (get values k) str str/trim not-empty)))
+
+(defn- row-repository
+  "The repository the walk row says its work is in, or nil."
+  [row]
+  (or (row-said row "repo") (row-said row "repository")))
+
+(defn- seat-reaches-repo?
+  "Does every bench entry of this seat name `repo`? An entry with no
+  repo filter names none, so a seat with one reaches nothing by a row."
+  [seat repo]
+  (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
+                         (get-in seat [:data :scope]))]
+    (boolean (and (seq entries)
+                  (every? #(some #{repo} (entry-repos %)) entries)))))
+
+(defn- several-repositories?
+  "Does every CHOOSING entry of the seat name the SAME two or more
+  repositories? That is a seat built to work several, not a scope
+  written wrong: entries that disagree still get `seat-repo-note`.
+  The choosers are `seat-repositories`' own: the writing entries, or
+  every bench entry when the scope names no writing token - a rig
+  whose powers group its tools under other tokens (bench.write for
+  edit and pull) names none of `bench-write-tokens`."
+  [seat]
+  (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
+                         (get-in seat [:data :scope]))
+        writes (filterv #(contains? bench-write-tokens (str (:kind %))) entries)
+        choosers (or (not-empty writes) entries)
+        sets (mapv (comp set entry-repos) choosers)]
+    (boolean (and (seq choosers)
+                  (apply = sets)
+                  (< 1 (count (first sets)))))))
+
+(defn- row-elsewhere-note
+  "What the sit says when the row names a repository the seat's bench
+  powers do not all reach."
+  [repo]
+  (str "The row names the repository " repo ", which this seat's bench "
+       "powers do not all reach, so no worktree was prepared. Say so in "
+       "one sentence: a person corrects the row or the seat's scope."))
+
+(def ^:private several-repos-note
+  "What the sit says to a seat that works several repositories when the
+  row it walks names none of them. Nothing is wrong with the seat."
+  (str "This seat works several repositories and the row it walks names "
+       "none of them, so the engine prepared no worktree for it. Prepare "
+       "the repository the work is in with your own bench call, on the "
+       "branch the work should have."))
+
+(defn- walk-home
+  "Where the walk row's change lives → [repo nil], or [nil sentence]
+  when there is none: the row's own repository when the seat reaches
+  it, else the seat's one repository (R-12.32a)."
+  [seat row]
+  (if-some [said (row-repository row)]
+    (if (seat-reaches-repo? seat said)
+      [said nil]
+      [nil (row-elsewhere-note said)])
+    (if-some [repo (seat-repository seat)]
+      [repo nil]
+      [nil (if (several-repositories? seat) several-repos-note seat-repo-note)])))
+
+(defn- wanted-branch
+  "The branch the walk row's change is worked on: the row's own
+  `branch` when it names one other than the base, else the policy's
+  pattern with the row's id in place of the `*`."
+  [policy row row-id]
+  (let [said (row-said row "branch")
+        base (or (some-> (get-in policy [:data :base]) str not-empty)
+                 default-base)]
+    (if (and said (not= said base))
+      said
+      (pattern-branch policy row-id))))
+
 (defn- minted-change
   "The change row for one walk row: the one that is already here, or
   one minted now with the engine's own hand (R-12.32). The branch is
@@ -2827,11 +2999,14 @@
                         (change-in-state eng {:born_from change-id}
                                          [:stuck]))]
       [found nil]
-      (if-some [repo (seat-repository seat)]
-        (let [policy (repo-policy-of eng repo)]
+      (let [[repo note] (walk-home seat row)]
+       (if-not repo
+        [nil note]
+        (let [policy (repo-policy-of eng repo)
+              branch (wanted-branch policy row row-id)]
           (if-some [held (change-in-state
                           eng {:repository repo
-                               :head_branch (pattern-branch policy row-id)}
+                               :head_branch branch}
                           [:submitted :failing :open :stuck])]
             [held nil]
             (try
@@ -2847,7 +3022,7 @@
                        :born_from change-id
                        :repository repo
                        :title (walk-row-title row)
-                       :head_branch (pattern-branch policy row-id)
+                       :head_branch branch
                        :base_branch (or (some-> (get-in policy [:data :base])
                                                 str not-empty)
                                         default-base)
@@ -2861,27 +3036,48 @@
                 ;; is the ordinary cause, and its row is the answer
                 (if-some [raced (change-by-id eng change-id)]
                   [raced nil]
-                  [nil no-change-note])))))
-        [nil seat-repo-note]))))
+                  [nil no-change-note]))))))))))
 
-(def ^:private forge-change-prefix
-  "What a `change_id` the FORGE owns starts with. A change this house
-  minted for a walk row starts with the walk kind's own name and a
-  colon instead (R-12.32), so this prefix is what tells the two
-  apart."
-  "github:")
+(def ^:private forge-change-prefixes
+  "What a `change_id` the FORGE owns starts with, one per forge an app
+  mirrors: factory10's GitHub source writes `github:<repo>#<n>`, and an
+  app over Bitbucket Cloud writes `bitbucket:<repo>#<n>`. A change this
+  house minted for a walk row starts with the walk kind's own name and
+  a colon instead (R-12.32), so these prefixes are what tell the two
+  apart. A forge missing here reads as a walk kind: its `repo#n` would
+  be taken for a walk row's id."
+  #{"github:" "bitbucket:"})
+
+(defn- forge-owned?
+  "Whether this `change_id` or `born_from` is the forge's own id."
+  [said]
+  (let [s (str said)]
+    (boolean (some #(str/starts-with? s %) forge-change-prefixes))))
 
 (defn- born-row-id
   "The walk row this change was minted for, or nil. `born_from` says
   `<kind>:<id>`, and `change_id` says the same until an adoption
-  writes GitHub's own id over it (waymark-fp62.6.3.14)."
+  writes the forge's own id over it (waymark-fp62.6.3.14)."
   [change]
   (let [said (or (some-> (get-in change [:data :born_from]) str not-empty)
                  (some-> (get-in change [:data :change_id]) str not-empty))]
     (when (and said
-               (not (str/starts-with? said forge-change-prefix))
+               (not (forge-owned? said))
                (str/includes? said ":"))
       (not-empty (subs said (inc (str/index-of said ":")))))))
+
+(defn- unpushed-change?
+  "True when the change was born here and never pushed: open or stuck,
+  no pull request number, no round, and a `change_id` that is still the
+  walk row's. Only such a change is minted again — its branch or its
+  repository — because the forge holds nothing of it."
+  [change]
+  (boolean
+   (and change
+        (contains? #{:open :stuck} (some-> (:state change) name keyword))
+        (nil? (get-in change [:data :number]))
+        (zero? (long (or (get-in change [:data :rounds]) 0)))
+        (not (forge-owned? (get-in change [:data :change_id]))))))
 
 (defn- rebranched-change
   "The change this firing works, with its branch minted again from the
@@ -2899,19 +3095,14 @@
   The write goes through `rebranch`, the mirror's own hidden door,
   with the same system hand the mint uses. A refusal costs the new
   branch and never the sit: the row stands as it was."
-  [eng change]
-  (or (when (and change
-                 (contains? #{:open :stuck}
-                            (some-> (:state change) name keyword))
-                 (nil? (get-in change [:data :number]))
-                 (zero? (long (or (get-in change [:data :rounds]) 0)))
-                 (not (str/starts-with?
-                       (str (get-in change [:data :change_id]))
-                       forge-change-prefix)))
+  ([eng change] (rebranched-change eng nil change))
+  ([eng row change]
+  (or (when (unpushed-change? change)
         (when-some [row-id (born-row-id change)]
           (let [policy (repo-policy-of
                         eng (str (get-in change [:data :repository])))
-                wanted (pattern-branch policy row-id)]
+                ;; the row's own branch wins over the pattern (R-12.32a)
+                wanted (wanted-branch policy row row-id)]
             (when-not (= wanted (str (get-in change [:data :head_branch])))
               (try
                 (:row (inv/invoke! eng :change (str (:id change)) :rebranch
@@ -2922,7 +3113,55 @@
                     (println "waymark10 seat change rebranch failed -"
                              (ex-message e)))
                   nil))))))
-      change))
+      change)))
+
+(defn- rehomed-change
+  "The change this firing works, moved to the seat's repository when its
+  walk row moved there after the change was born (ticket 1ebcd19f) —
+  else the row as it stands.
+
+  A TICKET RESTATED TO ANOTHER REPOSITORY KEEPS ITS `change_id`, so the
+  lookup finds the change born on the old one, and every bench call of
+  the seat that walks it now refuses: its grant admits its own
+  repository only. A change that was never pushed has nothing on the
+  old repository to keep, so the house writes the seat's repository and
+  that policy's branch and base over it through `rebranch`, on the row
+  that is here. A change with a pull request keeps its repository,
+  because the forge holds it, and the sit says so instead.
+
+  A refusal costs the move and never the sit: the row stands as it was."
+  ([eng seat change] (rehomed-change eng seat nil change))
+  ([eng seat row change]
+  (let [repo (first (walk-home seat row))]
+    (or (when (and repo
+                   (unpushed-change? change)
+                   (not= repo (str (get-in change [:data :repository]))))
+          (when-some [row-id (born-row-id change)]
+            (let [policy (repo-policy-of eng repo)]
+              (try
+                (:row (inv/invoke! eng :change (str (:id change)) :rebranch
+                                   {:repository repo
+                                    :head_branch (wanted-branch policy row row-id)
+                                    :base_branch (or (some-> (get-in policy [:data :base])
+                                                             str not-empty)
+                                                     default-base)}
+                                   {:principal seat-change-principal}))
+                (catch Exception e
+                  (binding [*out* *err*]
+                    (println "waymark10 seat change rehome failed -"
+                             (ex-message e)))
+                  nil)))))
+        change))))
+
+(def ^:private elsewhere-change-note
+  "What the sit says when the change this firing works lives in another
+  repository than the seat's and could not be moved: it has a pull
+  request there, which the house does not move (ticket 1ebcd19f)."
+  (str "The change for this row lives in another repository than this "
+       "seat's, and it already has a pull request there, so it was not "
+       "moved and this seat's bench cannot reach it. Stall it with one "
+       "sentence that says so, so a person closes that pull request or "
+       "moves the row back."))
 
 (def ^:private stuck-change-note
   "What the sit says when the change this firing works is still
@@ -2936,8 +3175,9 @@
        "its ticket in review, and grooming does not serve it: unstick puts "
        "back a change with no pull request, and unstick_submitted one that "
        "has a pull request. A seat's stall sent the ticket to draft, and "
-       "grooming it again puts the change back to work at the next sit. "
-       "Say that it is stuck, and stop."))
+       "grooming it again puts the change back itself, at the groom: to "
+       "work when it has no pull request, and back under review when it "
+       "has one. Say that it is stuck, and stop."))
 
 (def ^:private groomed-walk-prefix
   "What `born_from` starts with for a change built for a ticket. A
@@ -2956,6 +3196,14 @@
   behind: the rounds start from zero and the seat is offered submit.
   The change's `change_id` is `ticket:<id>` and unique, so without this
   the sit would hand the seat the same stuck change forever.
+
+  THE BACKSTOP, SINCE TICKETS 9ace68fb AND 4363c63b. A groom, unblock or
+  resume now walks the change's `rework` door in the same transaction,
+  or `rework_submitted` for a change WITH a pull request, so a stuck
+  change is already `open` or `submitted` when the sit reads it. This
+  path is kept only as the fallback for rows stalled and groomed before
+  those doors existed; it unsticks a change with a pull request with
+  `unstick_submitted`.
 
   ONLY A GROOM AFTER THE STALL ANSWERS IT. When the ticket's newest
   `groom` is not newer than the change's newest `stall` — or the change
@@ -3019,12 +3267,18 @@
     (str/blank? (str (get-in walk ["rows" 0 "id"]))) [nil nil]
     ;; a change stalled before its ticket was groomed again goes back
     ;; to work first, and the branch is minted again after that
-    :else (let [[change note] (minted-change eng seat walk)
+    :else (let [row (get-in walk ["rows" 0])
+                [change note] (minted-change eng seat walk)
                 change (some->> change
                                 (regroomed-change eng)
-                                (rebranched-change eng))]
+                                (rehomed-change eng seat row)
+                                (rebranched-change eng row))
+                repo (first (walk-home seat row))]
             [change
              (or note
+                 (when (and change repo
+                            (not= repo (str (get-in change [:data :repository]))))
+                   elsewhere-change-note)
                  (when (= :stuck (some-> (:state change) name keyword))
                    stuck-change-note))])))
 
@@ -3116,6 +3370,32 @@
        "tool (bench.rerun in bench.tools) with this repo and branch, then "
        "stop the sitting. Do not stall the ticket on dead CI, and do not "
        "change code for it."))
+
+(defn- train-red-finding
+  "The finding a merge train's red makes, or nil (ticket 238f45b3). A
+  change whose own checks are green and that a train found red carries
+  `train_red` (the train's branch and run url) and the train's red
+  check names in `failing_checks`; the rig's feedback reads only the
+  change's own branch, which is green, so without this the seat sees
+  nothing that says why it was sent back."
+  [change]
+  (when-some [said (some-> (get-in change [:data :train_red]) str not-empty)]
+    (let [checks (seq (map str (get-in change [:data :failing_checks])))]
+      {"source" "merge-train"
+       "severity" "failure"
+       "message" (str "merge train red: " said
+                      (when checks
+                        (str "; failing checks: " (str/join ", " checks))))})))
+
+(defn- with-train-red
+  "The sit's `feedback` with the change's own train red first among its
+  findings; the train's red alone when the rig answered nothing."
+  [feedback change]
+  (if-some [finding (train-red-finding change)]
+    (if feedback
+      (update feedback "findings" #(into [finding] %))
+      {"findings" [finding] "unavailable" []})
+    feedback))
 
 (defn- feedback-of
   "What the submit caused, or nil. ONE `feedback` of the rig, with the
@@ -3299,15 +3579,19 @@
           ;; pull request at all, so a head branch alone is not a
           ;; submit here: such a row carries no `number` until a round
           ;; pushes it and the source adopts it.
-          feedback (when (and made
-                              (or (>= (long (or (get-in change [:data :rounds])
-                                                0))
-                                      1)
-                                  (and (some-> (get-in change [:data :head_branch])
-                                               str not-empty)
-                                       (some? (get-in change [:data :number])))))
-                     (feedback-of gate-rpc (str (or (:repo made) repo))
-                                  (str (or (:branch made) branch))))
+          ;; a merge train's red rides on the change row, not on the
+          ;; branch the rig reads, so it is added here (ticket 238f45b3)
+          feedback (with-train-red
+                     (when (and made
+                                (or (>= (long (or (get-in change [:data :rounds])
+                                                  0))
+                                        1)
+                                    (and (some-> (get-in change [:data :head_branch])
+                                                 str not-empty)
+                                         (some? (get-in change [:data :number])))))
+                       (feedback-of gate-rpc (str (or (:repo made) repo))
+                                    (str (or (:branch made) branch))))
+                     change)
           ;; the path the policy names, answered only when the file
           ;; is really there (R-6); a worktree that was never made
           ;; holds nothing, so a dark rig is asked for no read
@@ -3437,7 +3721,7 @@
             ;; g' · the sitting the router counts against, opened here
             ;; because nobody else opens one for a keyed session
             sitting (or (second resit)
-                        (open-sitting! eng sitter grant seat model-row harness))
+                        (open-sitting! eng sid sitter grant seat model-row harness))
             ;; … and the spent firing's key leaves its trace on the
             ;; sitting it opened, so a lost bind can find its way back
             _ (when (and fired? sitting)
@@ -3478,6 +3762,16 @@
             {walk :walk named-held? :named-held? all-held? :all-held?}
             (when-not halted
               (claimed-walk! eng call sitter-sees seat sitting named-row))
+            ;; … and a sitting the walk handed nothing is stamped as
+            ;; such — no rows free, an empty queue, or a seat at a wall
+            ;; — so seat health counts an idle wake without reading an
+            ;; absent `walked_rows`. The rows this sitting already
+            ;; holds count: a re-sit of a sitting that walked is not it.
+            _ (when sitting
+                (seats/stamp-walked-nothing!
+                 eng (:id sitting)
+                 (and (empty? (get walk "rows"))
+                      (empty? (get-in sitting [:data :walked_rows])))))
             ;; i' · the change this firing submits: the walk's own
             ;; first row for a code seat (R-12.29), and the row the
             ;; engine finds or mints for a seat that walks a queue of

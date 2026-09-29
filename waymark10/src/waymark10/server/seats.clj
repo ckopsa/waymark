@@ -1462,6 +1462,8 @@
                    (nil? (get-in row [:data :harness_session])))
         (assoc-in [:data :harness_session] (:harness_session inp)))
       (assoc-in [:data :tallied_at] (:now ctx))
+      ;; a hook tallying through a long wait is a run still there
+      (assoc-in [:data :last_call_at] (:now ctx))
       (assoc-in [:data :cost_usd] (cost-of (token-counts inp)
                                            (prices-now row ctx)))))
 
@@ -3367,6 +3369,16 @@
                   {:label "Last tallied"
                    :spelled-by-hand "Stamped by each tally of an open sitting; absent on a sitting nobody has tallied."}}
      [:maybe :waymark/instant]]
+    ;; THE LAST CALL (ticket 086307f2). Stamped by the sit at birth and
+    ;; by every call the doors count against the sitting — a tool
+    ;; answered, a transition, a refusal, a tally — so a FIRED sitting
+    ;; whose run was lost reads as silent, and the sweep ends it after
+    ;; the seat's `sitting_idle_seconds`.
+    [:last_call_at {:optional true
+                    :x-display
+                    {:label "Last call"
+                     :spelled-by-hand "Stamped by the engine on every call counted against an open sitting; the sweep ends a fired sitting silent past its seat's idle limit."}}
+     [:maybe :waymark/instant]]
     ;; THE TRACE OF THE FIRING'S KEY (R-12.37). The sit that spends a
     ;; firing's key keeps its hash here, on the sitting it opened and
     ;; not on the seat, so a run that loses its bind to a restart may
@@ -3395,6 +3407,18 @@
                     :label "The rows it was handed"
                     :spelled-by-hand "The ids of the walk rows the sit handed this sitting. The sit writes it, and a second open sitting of the same seat is not handed them."}}
      [:maybe [:vector [:string {:max 128}]]]]
+    ;; A WAKE THAT WALKED NOTHING. The sit stamps this when the walk it
+    ;; hands has no rows at all — an empty queue, a queue whose every
+    ;; row another open sitting or a stuck change holds, a seat at a
+    ;; wall — so seat health can count an idle wake. An absent
+    ;; `walked_rows` cannot: it is also what a sitting the claim never
+    ;; wrote to carries. Plain :boolean, `missed`'s spelling, so the
+    ;; field promotes to a column and filters.
+    [:walked_nothing {:optional true
+                      :x-display
+                      {:label "Walked nothing"
+                       :spelled-by-hand "Written by the sit when the walk it handed had no rows at all: the queue was empty, every row in it was held, or the seat was at a wall. A sitting that was handed a row does not carry it."}}
+     :boolean]
     ;; A FIRE NOBODY SAT IN. The clock sweep writes this row, already
     ;; closed, when a firing's key is still unspent past the sit
     ;; deadline (`wakes/sweep-missed!`), so an audit that reads the
@@ -3465,6 +3489,7 @@
                       ;; rewrites a sitting already under way
                       [:mode (seat-mode-of (:data row) ctx)]
                       [:started_at (:now ctx)]
+                      [:last_call_at (:now ctx)]
                       [:input_tokens 0] [:output_tokens 0]
                       [:cache_read_tokens 0] [:cache_write_tokens 0]
                       [:turns 0] [:transitions 0] [:refusals 0]
@@ -3664,6 +3689,21 @@
   the honest fix is the sweep, not a longer page."
   50)
 
+(defn open-sittings-for-grant
+  "Every open sitting under `grant-id`, newest first, one page of them:
+  `open-sitting-for-grant`'s query read past its first row. Every
+  sitting of a seat shares the seat's grant, so a sit that must find
+  THIS run's sitting among overlapping runs reads them all
+  (mcp/reusable-sitting)."
+  [eng grant-id]
+  (if (and grant-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/query-rows (:storage eng) tx :sitting
+                          {:grant (str grant-id) :state :open}
+                          {:limit open-sitting-page :newest-first true})))
+    []))
+
 (defn open-sitting-for-seat
   "The open sitting a SESSION-END REPORT belongs to (R-12.17), or nil.
 
@@ -3702,6 +3742,13 @@
            (first (remove stamp-of rows))
            (first rows))))))
 
+(defn- call-stamp
+  "The moment a counted call lands, as the maintenance writes store it
+  (ticket 086307f2): the engine's own clock, so a test that moves the
+  clock moves this stamp too."
+  [eng]
+  (str ((or (:now-fn eng) #(java.time.Instant/now)))))
+
 (defn bump-counter!
   "Add one to an open sitting's `:transitions` or `:refusals`. A
   MAINTENANCE write — document only, version untouched, no transition
@@ -3731,10 +3778,32 @@
                              (assoc :guard (let [g (:guard refusal)]
                                              (if (keyword? g) (name g) (str g))))))]
                (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                   (cond-> (assoc (:data row) counter n)
+                                   (cond-> (assoc (:data row) counter n
+                                                  :last_call_at (call-stamp eng))
                                      stamp (assoc :last_refusal stamp))
                                    nil)
                n))))))))
+
+(defn stamp-call!
+  "Move an open sitting's `last_call_at` to now and nothing else
+  (ticket 900764ce): a READ through the router is activity the idle
+  sweep must see, but it is neither a transition nor a refusal, and
+  `served` is the MCP door's per-tool ledger. The same MAINTENANCE
+  write as `bump-counter!` — document only, version untouched. → the
+  stamp, or nil when there was nothing to stamp: no id, an unknown
+  id, a sitting already closed, or a kind this engine does not serve."
+  [eng sitting-id]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (= :open (:state row))
+            (let [at (call-stamp eng)]
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  (assoc (:data row) :last_call_at at)
+                                  nil)
+              at)))))))
 
 (defn add-cancelled-run!
   "Count one cancelled bench.test run on an open sitting (ticket
@@ -3885,7 +3954,10 @@
                                    :bytes (+ (long (or (:bytes prior) 0)) bytes)}
                             (pos? total) (assoc :dropped total))]
                  (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                     (assoc-in (:data row) [:served k] line) nil)
+                                     (-> (:data row)
+                                         (assoc-in [:served k] line)
+                                         (assoc :last_call_at (call-stamp eng)))
+                                     nil)
                  line)))))))))
 
 (defn- seat-row [eng seat-id]
@@ -4127,18 +4199,28 @@
                         (.getBytes (str (:hash e)) StandardCharsets/UTF_8)))
                      (live-keys row now))))))
 
+(def ^:private uuid-in
+  #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
 (defn- named-row
   "The id of the walk row a fire's text names, or nil. A wake's text is
   the transition as JSON (`wakes/wake-text`): the kind and the row id.
-  Only a row of the kind this seat WALKS counts, and any other text — a
-  person's prose, a count wake's count — names nothing."
+  Only a row of the kind this seat WALKS counts, or, for a seat that
+  walks tickets, a change, which the sit reads back to the ticket it was
+  born from (`named-walk-row`). A person's prose names the first row id
+  it holds (ticket 7af7d506), and the sit hands that row only when it is
+  such a row. Any other text — prose with no id, a count wake's count —
+  names nothing."
   [seat-row text]
   (when-some [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
     (when-some [s (some-> text str str/trim not-empty)]
-      (when (str/starts-with? s "{")
-        (let [m (try (wire/read-json s) (catch Exception _ nil))]
-          (when (and (map? m) (= walk (str (:kind m))))
-            (some-> (:id m) str not-empty)))))))
+      (if (str/starts-with? s "{")
+        (let [m (try (wire/read-json s) (catch Exception _ nil))
+              kind (when (map? m) (str (:kind m)))]
+          (when (or (= walk kind)
+                    (and (= "ticket" walk) (= "change" kind)))
+            (some-> (:id m) str not-empty)))
+        (re-find uuid-in s)))))
 
 (defn hold-fire-key!
   "Mint the key ONE fire carries, and keep its hash on the seat row.
@@ -4491,6 +4573,84 @@
   [eng walk]
   (set (keys (stuck-walk-reasons eng walk))))
 
+(defn named-walk-row
+  "The walk row a fire's text named, as the sit reads it (ticket
+  7af7d506): the id itself when it is a row of the kind the seat walks,
+  and for a ticket walk the ticket a named CHANGE was born from, so a
+  fire that names either hands the ticket and the change beside it. Nil
+  for an id that is neither."
+  [eng walk id]
+  (when-some [id (some-> id str not-empty)]
+    (let [walk (str walk)
+          row-of (fn [kind]
+                   (when-some [rdef (get (inv/resources eng) kind)]
+                     (try
+                       (some->> (store/with-tx (:storage eng)
+                                  (fn [tx]
+                                    (store/load-row (:storage eng) tx kind id
+                                                    {})))
+                                (inv/decode-row rdef))
+                       (catch Exception _ nil))))]
+      (cond
+        (and (seq walk) (row-of (keyword walk))) id
+
+        (= "ticket" walk)
+        (when-some [change (row-of :change)]
+          (let [born (str (get-in change [:data :born_from]))]
+            (when (str/starts-with? born groomed-walk-prefix)
+              (not-empty (subs born (count groomed-walk-prefix))))))))))
+
+(defn named-beside-a-live-change?
+  "Does a live change — open, submitted, failing or stuck — stand beside
+  the ticket a fire named? Such a ticket is walked whatever its own
+  state (ticket 7af7d506): a seat fired on a ticket in review is handed
+  it and its change, and a ticket whose change merged or closed is not.
+  False for any other walk."
+  [eng walk id]
+  (boolean
+   (when-some [rdef (when (= "ticket" (str walk))
+                      (get (inv/resources eng) :change))]
+     (let [st (:storage eng)]
+       (some #(contains? #{:open :submitted :failing :stuck}
+                         (some-> (:state %) name keyword))
+             (map #(inv/decode-row rdef %)
+                  (store/with-tx st
+                    (fn [tx]
+                      (store/query-rows st tx :change
+                                        {:born_from (str groomed-walk-prefix
+                                                         id)}
+                                        {:limit live-change-scan-limit})))))))))
+
+(defn named-open-beside-a-submitted-change?
+  "Is the ticket a fire named `open` while a change born from it is
+  `submitted` (ticket 6ca380da)? A groom, unblock or resume that puts a
+  stuck pull request back under review leaves its ticket open, and the
+  fire that follows names it; the round is in the house's hands, so the
+  named walk withholds it as the plain walk does (ticket 60c2ec22). A
+  ticket in review is still handed by name (ticket 7af7d506). False for
+  any other walk."
+  [eng walk id]
+  (boolean
+   (when-some [rdef (when (= "ticket" (str walk))
+                      (get (inv/resources eng) :change))]
+     (when-some [tdef (get (inv/resources eng) :ticket)]
+       (let [st (:storage eng)
+             ticket (try
+                      (some->> (store/with-tx st
+                                 (fn [tx]
+                                   (store/load-row st tx :ticket (str id) {})))
+                               (inv/decode-row tdef))
+                      (catch Exception _ nil))]
+         (when (= "open" (some-> (:state ticket) name))
+           (some #(= "submitted" (some-> (:state %) name))
+                 (map #(inv/decode-row rdef %)
+                      (store/with-tx st
+                        (fn [tx]
+                          (store/query-rows st tx :change
+                                            {:born_from (str groomed-walk-prefix
+                                                             id)}
+                                            {:limit live-change-scan-limit})))))))))))
+
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows
   another open sitting holds (`claimed-rows`) and the tickets whose
@@ -4557,6 +4717,31 @@
                   {:claimed? true :taken taken})
 
               :else {:claimed? true :taken taken})))))))
+
+(defn stamp-walked-nothing!
+  "Stamp the sitting whose sit handed it NO rows — an empty queue, a
+  queue whose every row another open sitting or a stuck change holds, a
+  seat at a wall — so seat health counts a wake that had nothing to do
+  rather than reading an absent `walked_rows`, which a sitting the
+  claim never wrote to carries too. A re-sit that IS handed a row takes
+  the stamp back off. A MAINTENANCE write, `claim-rows!`'s spelling:
+  only an OPEN sitting takes it, and only a change is written.
+  → true when it was written."
+  [eng sitting-id nothing?]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (and (= :open (:state row))
+                     (not= (boolean nothing?)
+                           (boolean (get-in row [:data :walked_nothing]))))
+            (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                (if nothing?
+                                  (assoc (:data row) :walked_nothing true)
+                                  (dissoc (:data row) :walked_nothing))
+                                nil)
+            true))))))
 
 (defn open-sitting-count
   "How many sittings of this seat are OPEN now: the runs the seat's

@@ -127,6 +127,52 @@
   ;; one says the change merges when it is green.
   (assoc-in row [:data :merge_after] (vec (:merge_after inp))))
 
+(defn- put-its-change-back-to-work!
+  "A TICKET BACK IN THE QUEUE PUTS ITS STUCK CHANGE BACK TO WORK
+  (ticket 9ace68fb). The sit hands no ticket whose change is stuck, so
+  a groom, unblock or resume that left the change stuck left the
+  ticket idle until a person unstuck the change by hand. Every stuck
+  change born from this ticket walks, in the same transaction, the
+  change's `rework` door when it has no pull request, and its
+  `rework_submitted` door when it has one (ticket 4363c63b), so the
+  forge pass reads that pull request's head again. The adoption writes
+  GitHub's id over `change_id`, so a change with a pull request is
+  found by its repository and read by its `born_from`. A pull request
+  that closed or merged took its change out of `stuck` with it.
+
+  BEST-EFFORT, as `release-the-waiters!` is: a change that refuses is
+  said in the log, and the ticket's move stands. A probe or a
+  rehearsal carries no pen, and moves nothing."
+  [row ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)
+        born (str "ticket:" (:id row))
+        repo (some-> (get-in row [:data :repo]) str not-empty)]
+    (when (and find' invoke')
+      (doseq [change (vals (into {}
+                                 (map (juxt :id identity))
+                                 (concat
+                                  (find' :change {:state "stuck" :change_id born}
+                                         {:limit 50})
+                                  (when repo
+                                    (find' :change {:state "stuck" :repository repo}
+                                           {:limit 200})))))
+              :when (= born (str (get-in change [:data :born_from])))]
+        (try
+          (invoke' :change (:id change)
+                   (if (nil? (get-in change [:data :number]))
+                     :rework
+                     :rework_submitted)
+                   nil)
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factory10 ticket: the change" (:id change)
+                       "was not put back to work -" (ex-message e)))))))))
+
+(defhandler groom-the-ticket [row _inp ctx]
+  (put-its-change-back-to-work! row ctx)
+  row)
+
 (defhandler clear-the-blockers [row _inp _ctx]
   ;; The transition log keeps who blocked what; the row says what
   ;; holds NOW, and an unblocked ticket is blocked by nothing.
@@ -134,10 +180,16 @@
       (assoc-in [:data :blocked_by] [])
       (assoc-in [:data :blocked_from] nil)))
 
+(defhandler unblock-the-ticket [row inp ctx]
+  ;; `clear-the-blockers`, and the ticket is in the queue again
+  (put-its-change-back-to-work! row ctx)
+  (clear-the-blockers row inp ctx))
+
 (defhandler defer-the-ticket [row inp _ctx]
   (assoc-in row [:data :defer_until] (:defer_until inp)))
 
-(defhandler resume-the-ticket [row _inp _ctx]
+(defhandler resume-the-ticket [row _inp ctx]
+  (put-its-change-back-to-work! row ctx)
   (assoc-in row [:data :defer_until] nil))
 
 (defn- still-waits-on
@@ -293,6 +345,30 @@
 (defn- cycle-text [path]
   (str "a cycle: " (str/join " → " path)))
 
+;; NO TICKET WAITS ON ITS OWN ANCESTOR (ticket 59b4912d). A parent ends
+;; after its children (`children-are-finished`), so a child blocked by
+;; its parent, or by any ticket above it, waits for ever, and holds the
+;; parent with it. What such a child wants is its parent's MERGE, and
+;; `merge_after` says that.
+
+(defn- lineage
+  "`parent` and every ticket above it, nearest first, as ids — up the
+  parent chain until a ticket with no parent, a ticket already seen or
+  `walk-limit`. With no `read'` hook it is `parent` alone."
+  [parent read']
+  (loop [id (some-> parent str not-empty)
+         out []]
+    (if (or (nil? id) (some #{id} out) (>= (count out) walk-limit))
+      out
+      (recur (when read'
+               (some-> (read' :ticket id) (get-in [:data :parent]) str not-empty))
+             (conj out id)))))
+
+(defn- ancestor-text [id parent]
+  (str id (if (= id (some-> parent str)) " is this ticket's parent" " is an ancestor of this ticket")
+       ", and a parent ends only after its children, so the wait could never end;"
+       " to wait for its change to merge, use merge_after instead"))
+
 (defguardfn the-merge-order-makes-no-cycle
   {:judges [:merge_after]
    :reads [:ticket]
@@ -330,15 +406,21 @@
    ;; blockers are a list of refs, and no published constraint can say
    ;; which tickets are still open — the collection can, one GET away.
    :open "The blockers are tickets, and the open ones are the tickets collection under its default filter, one query away; no form can recite which of them have ended."
-   :explain "A ticket waits on open work: {which}. Name blockers that are still open, never the ticket itself, and none that waits on this one."}
+   :explain "A ticket waits on open work: {which}. Name blockers that are still open, never the ticket itself nor its parent or any ticket above it, and none that waits on this one."}
   [row inp ctx]
   (let [read' (:read ctx)
         self (str (:id row))
-        named (map str (:blocked_by inp))]
+        named (map str (:blocked_by inp))
+        parent (get-in row [:data :parent])
+        above (set (lineage parent read'))]
     (cond
       (some #(= self %) named)
       (t/deny {:vars {:which "this ticket names itself"}
                :errors {:blocked_by ["a ticket cannot block itself"]}})
+      (some above named)
+      (let [problem (ancestor-text (some above named) parent)]
+        (t/deny {:vars {:which problem}
+                 :errors {:blocked_by [problem]}}))
       (nil? read') (t/allow)
       :else
       (let [problem (some (fn [id]
@@ -355,6 +437,27 @@
           (t/deny {:vars {:which problem}
                    :errors {:blocked_by [problem]}})
           (t/allow))))))
+
+(defguardfn the-parent-is-not-waited-on
+  {:judges [:parent]
+   :reads [:ticket]
+   :vars [:which]
+   ;; the merge-order guard's acknowledgment, one field over: which
+   ;; tickets sit above the parent is read from their rows at the write
+   :open "The parent's own ancestors are read from their rows at the write, up the parent chain; no form can recite them. Name a parent this ticket does not wait on."
+   :explain "A ticket cannot wait on its own parent: {which}. Leave the parent empty, or state the blockers again without it first."}
+  [row inp ctx]
+  ;; the block door's ancestor wall, from the other side: a parent set
+  ;; on a ticket that already waits on it, or on a ticket above it
+  (let [parent (some-> (:parent inp) str not-empty)
+        waits (set (map str (concat (get-in row [:data :blocked_by])
+                                    (:blocked_by inp))))
+        hit (when parent (some waits (lineage parent (:read ctx))))]
+    (if hit
+      (let [problem (ancestor-text hit parent)]
+        (t/deny {:vars {:which problem}
+                 :errors {:parent [problem]}}))
+      (t/allow))))
 
 (defguardfn a-person-or-their-delegate-grooms
   {:reads [:principal]
@@ -707,7 +810,8 @@
    ;; date and the ending are on no birth: a ticket is born a draft,
    ;; and the doors below are how it becomes ready and stops being.
    :create-schema (into [:map] (concat stated-fields birth-fields))
-   :create-guards [the-parent-is-open-at-birth the-merge-order-makes-no-cycle]
+   :create-guards [the-parent-is-open-at-birth the-merge-order-makes-no-cycle
+                   the-parent-is-not-waited-on]
    :actions
    {:restate
     {:from #{:draft} :to :draft
@@ -727,6 +831,7 @@
     :groom
     {:from #{:draft} :to :open
      :guards [a-person-or-their-delegate-grooms]
+     :handler groom-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Groom" :style :primary :order 1
                :description "It is stated well enough to build as written — into the queue"}}
@@ -822,7 +927,7 @@
 
     :unblock
     {:from #{:blocked} :to :open
-     :handler clear-the-blockers
+     :handler unblock-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Unblock" :style :primary :order 1
                :description "Back into the queue — nothing holds this one now"}}
@@ -921,7 +1026,7 @@
     {:from #{:open :in_review} :to :draft
      :guards [only-its-change-moves-it]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and the next sit puts its change back to work."}
+              :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and puts its change back to work in the same move; a change with a pull request goes back under review at the next sit."}
      :display {:label "Stalled" :order 17
                :description "Its change stalled — back to draft, to be groomed again"}}
 

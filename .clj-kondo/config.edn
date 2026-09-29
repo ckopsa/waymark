@@ -1,0 +1,11 @@
+;; linting from the repo root (bench__check, editors opened at the top):
+;; waymark10's shipped kondo config, plus what waymark10/.clj-kondo adds
+{:config-paths ["../waymark10/resources/clj-kondo.exports/waymark10/waymark10"]
+ ;; test-suite property checks: defspec defines its name as a var
+ :lint-as {clojure.test.check.clojure-test/defspec clojure.core/def}
+ ;; mirrors waymark10/.clj-kondo/config.edn: these namespaces lock
+ ;; objects fetched off shared registries
+ :config-in-ns {waymark10.server.presence {:linters {:locking-suspicious-lock {:level :off}}}
+                waymark10.server.intents {:linters {:locking-suspicious-lock {:level :off}}}
+                waymark10.server.events {:linters {:locking-suspicious-lock {:level :off}}}
+                waymark10.server.collab {:linters {:locking-suspicious-lock {:level :off}}}}}

@@ -621,10 +621,18 @@
          ;; who the engine resolved this request to — the UI's
          ;; signed-in identity; absent when anonymous
          (not= t/anonymous principal)
-         (assoc :principal {:id (:id principal)
-                            :display (or (:display principal) (:id principal))
-                            :type (name (:type principal :human))
-                            :roles (vec (sort (:roles principal)))}))))))
+         (assoc :principal (cond-> {:id (:id principal)
+                                    :display (or (:display principal) (:id principal))
+                                    :type (name (:type principal :human))
+                                    :roles (vec (sort (:roles principal)))}
+                             ;; the person a tool acts for — what
+                             ;; waymark_sit asks of a seat key's session,
+                             ;; so a client (localfire's credential check)
+                             ;; can tell a delegate from an agent holding
+                             ;; its own key before it spends one. Absent
+                             ;; when the principal acts for nobody.
+                             (not (str/blank? (str (:acts-for principal ""))))
+                             (assoc :acts_for (str (:acts-for principal))))))))))
 
 (defn- kind-schema [eng]
   (fn [{{:keys [kind]} :path-params :as req}]
@@ -2053,6 +2061,26 @@
                                    {:type (:type d) :guard (:guard d)})))
           (throw e))))))
 
+(defn wrap-reads-stamped
+  "A sitting's READS are activity (ticket 900764ce): a GET under a
+  live grant stamps the calling sitting's `last_call_at`, so a sitter
+  that only reads over HTTP is not abandoned by the idle sweep while
+  it works. It counts no transition and no refusal. Mounted by
+  `handler` only: the MCP door already stamps every tools/call through
+  `seats/add-served!`. Best-effort, the mind-the-wall! posture — a
+  stamp that could fail a read would be worse than none."
+  [handler eng]
+  (fn [req]
+    (when (= :get (:request-method req))
+      (try
+        (when-some [sitting-id (counted-sitting-id eng req)]
+          (seats/stamp-call! eng sitting-id))
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "waymark10 router: could not stamp the sitting's read -"
+                     (ex-message e))))))
+    (handler req)))
+
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
   well-known document, the per-kind JSON schema, the SSE firehose, the
@@ -2156,5 +2184,8 @@
        ;; boundary resolves and re-throws into the problem boundary
        ;; that projects the refusal it just counted (R-10.6)
        (wrap-refusals-counted eng)
+       ;; beside it, for the same reason: it reads the resolved
+       ;; visibility to find the sitting a GET is activity for
+       (wrap-reads-stamped eng)
        (wrap-identity eng)
        wrap-problems)))

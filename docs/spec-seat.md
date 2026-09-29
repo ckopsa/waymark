@@ -124,7 +124,7 @@ work.
 | `mode` | enum `fired`, `interactive`, default `fired` | who opens a sitting here. A schedule, a person or a wake fires a fired seat. A person sits in an interactive seat, and nothing fires it. R-10.8. |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
-| `sitting_idle_seconds` | int, 60 to 86400, default 3600 | how long an open interactive sitting can wait with no new tally before the sweep ends it. R-7.6. |
+| `sitting_idle_seconds` | int, 60 to 86400, default 3600 | how long an open interactive sitting can wait with no new tally, or an open fired sitting with no call, before the sweep ends it. R-7.6. |
 | `walk` | kind name, optional | the queue this seat walks, one row at a time, in the order of its default sort. R-12.9. |
 | `rows_per_firing` | int, default 20 | the most rows one firing moves to a leaf. The walk's cap. |
 | `stale` | list of scope entries | written by the sweep. A person never writes it. |
@@ -132,6 +132,9 @@ work.
 | `fire_keys` | list, secret, optional | one entry for each unspent key of a firing: the hash of the key, and the moment it stops answering. No door writes it. The engine never answers it. R-12.37. |
 | `schedule` | schedule ref | the means by which a sitting is created for this seat. Engine-written. R-12.0. |
 | `merged_into` | seat ref | the seat this one merged into |
+| `wake_on` | list of entries `{kind, actions, filter, settle_seconds}`, optional | the transitions that fire the seat, each entry in the shape of a scope entry. A walk seat with no `wake_on` behaves as one computed entry: the walk's kind, with the action `create`. `settle_seconds`, a whole number from 1 to 604800, optional, makes an entry fire on the trailing edge. R-12.22. |
+| `fire_interval_seconds` | int, default 300 | the gap: the engine fires the seat at most once in this many seconds. R-12.22. |
+| `max_open_sittings` | int, 1 to 10, default 1 | the damper's count: the engine does not fire while the seat's open sittings plus its fires on their way have reached it. R-12.22. |
 
 There is no `must` list and no `never` list. The first draft had
 both. Each sentence the model must pre-load is fuel, and each rule
@@ -309,6 +312,14 @@ An open interactive sitting that has no tally, and that has waited
 longer than `sitting_idle_seconds` after `started_at`, is
 `abandoned`, as the rule above abandons a stale fired sitting. The
 sweep records the absence of a bill, and not a bill of zero.
+
+A fired sitting has a clock too. Every call the doors count against
+an open sitting (a tool answered, a transition, a refusal, a tally)
+stamps its `last_call_at`, and the sit stamps it at birth. The sweep
+must abandon an open fired sitting whose `last_call_at` is older than
+the seat's `sitting_idle_seconds`, with `closed_by` `sweep` and the
+note `silent since {last_call_at}`. The two cadences above stay as
+the outer bound.
 
 **R-7.7** A hard stop must raise an alert. The owner's ruling,
 2026-09-17: the three walls of R-5.2 (the seat not active, the model
@@ -1218,7 +1229,8 @@ Last, the source must adopt that row, and it must mint no second one.
 The source reads a pull request. It asks for a change row by the pull
 request's own id. When no row answers, the source looks for a row of
 the same repository, on the same head branch, whose `change_id` is not
-the forge's. A `change_id` the forge owns starts with `github:`. When
+the forge's. A `change_id` the forge owns starts with the forge's name
+and a colon: `github:` or `bitbucket:`. When
 such a row is there, the source writes the pull request's identity
 onto it: the `change_id`, the number and the url. The write goes
 through the door `adopt`, which is the mirror's and is hidden. A row
@@ -1251,6 +1263,27 @@ The seat must complete the task too. The instructions of the code seat
 say: after the submit, invoke `complete` on the task row, then stop.
 The two are one answer: the seat closes the task on the day, and the
 merge closes a task the seat left open.
+
+**R-12.32a** A walk row may name its own home. A seat may be built to
+work several repositories: every one of its writing entries names the
+same two or more after a comma. No one repository can be read off such
+a seat, so the row it walks says which one the work is in, in a field
+`repo` or `repository`, and it may say the branch, in a field `branch`.
+
+When the row names a repository, the engine mints the change there,
+but only when every bench entry of the seat names that repository. The
+engine prepares the worktree with its own hand, so a row never widens
+what the seat may touch. A row that names a repository the seat does
+not reach gets no change and no worktree, and the sit says which
+repository the row asked for. When the row names a branch other than
+that repository's base, the change is worked on the row's branch, and
+a later sit does not mint it again from the pattern. Otherwise the
+branch is the pattern with the row's id, as above.
+
+A row that names no repository leaves the choice to the seat, by the
+rules above. A seat of several repositories walking such a row gets no
+change and no worktree, and the sit says the row named none: the seat
+prepares the repository its work is in with its own bench call.
 
 ### 12.2 The fire door
 
@@ -3285,7 +3318,7 @@ On the active `repo_policy` of each repository with a line:
 |---|---|
 | `line_front` | the id of the front change |
 | `line_front_pr` | the front's pull request number |
-| `line_front_waiting` | `update` (it was brought up to date and CI runs), `checks` (its checks run), or `merge` (it was offered and GitHub has not merged it yet); see `front-waits-on` |
+| `line_front_waiting` | `update` (it was brought up to date and CI runs), `checks` (its checks run), `merge` (it was offered and GitHub has not merged it yet), or `train` (it rides a standing train, R-15.11); see `front-waits-on` |
 | `line_waiting` | how many other changes stand in the line |
 | `line_at` | when the pass last wrote the line; it rides a write and never causes one |
 
@@ -3304,8 +3337,110 @@ left `submitted` but still carries a `line_why` has its marks cleared
 on the next pass. When the write fails, the pass logs it and the next
 pass writes the line again.
 
-### 15.8 Not yet specified
+### 15.8 Merge strategies
 
-The merge train (ticket ddbfc405, slice d) tests more than the front
-together. It must keep R-15.4 to R-15.8: one update per head, one
-deploy at a time, and the holds from `merge_after`.
+The merge train is the epic 3deb06ed, in four slices: 394d0602 (the
+strategy fields, merged), 47519515 (the house builds a train and runs
+its checks, merged), 6033c287 (a green train lands, a red train
+bisects, PLANNED), and ddbfc405 (this section). Where this section
+says "planned", slice 3 is not merged yet and the code does not do
+it.
+
+**R-15.9** The active `repo_policy` must choose how its repository
+merges (`merge-strategy-of`, `train-size-of`).
+
+| Field | Value |
+|---|---|
+| `merge_strategy` | `line` or `train`. Empty reads as `line`. |
+| `train_size` | 2 to 10. Empty reads as 4. The pass reads it only when the strategy is `train`. |
+| `line_train` | the train that stands now: `branch`, `changes`, `prs`, `head`, `base_head`, `started_at`, `run_id`. Empty when no train stands. The pass writes it; a person does not. |
+
+- `line` is the default and the line of R-15.4 to R-15.8: one change at
+  a time. The pass brings the front up to date, its checks run again,
+  and it merges.
+- `train` tests the front and the green changes behind it together,
+  in one check run.
+- A restate of `merge_strategy` does not stop a standing train. The
+  train finishes first, and then the pass uses the new strategy. So a
+  restate from `train` to `line` waits for the train.
+
+**R-15.10** With `train`, when no train stands, the pass must choose
+the riders (`train-riders`): the front, and up to `train_size` - 1
+changes behind it, in line order. Each rider must:
+
+- stand in the line: not `red`, `conflicted`, `draft`, `parked` or
+  `held` (`out-of-line`), so its ticket's `merge_after` is met
+  (R-15.7);
+- be green on its own head and only behind its base.
+
+When the front is not green on its own head, there are no riders.
+When the riders are only the front, the pass works the line as `line`
+does.
+
+**R-15.11** With two or more riders, the pass must build one train
+(`build-train!`) and run its checks one time.
+
+1. `train_build` on the branch `train/<repo>/<front's number>`
+   (`train-branch`), with the riders' pull request numbers in line
+   order. The rig resets the branch at the base's head, merges each
+   pull request's head with a merge commit, and pushes.
+2. A pull request that does not merge cleanly is skipped. Its change
+   stays in the line and the pass does not touch it. When no pull
+   request merges, the pass deletes the branch (`train_delete`) and
+   the line goes one at a time for that pass.
+3. `train_checks` dispatches the check workflow on the branch, with no
+   narrowing. The pass writes `line_train` with the changes that rode
+   and the `run_id`. When no run showed yet, `run_id` is empty and
+   `train_status` reads the run by branch and head.
+4. While a train stands, the front's `line_front_waiting` is `train`.
+   Each pass reads the run once (`advance-train!`); `pending` waits.
+
+A refused `train_build` or a build with no answer is not an error:
+the line goes one at a time for that pass.
+
+**R-15.12** A finished train goes to one function
+(`train-finished!`), with its verdict: `success`, `failure` or
+`cancelled`. A refused `train_status` counts as `cancelled`.
+
+Today (slice 2), that function deletes the train branch, clears
+`line_train`, and the repository goes one at a time until the process
+restarts. Nothing lands from a train yet.
+
+PLANNED (slice 3, 6033c287):
+
+- **Green.** `train_land` fast-forwards the base to the train's `head`
+  when the base is still at `line_train.base_head`. Every change in the
+  train then merges as a house merge does today: its ticket completes,
+  and the deploy wait of R-15.6 uses the train's head as the merged
+  commit. Then `train_delete`, and `line_train` is cleared.
+- **Base moved.** When something merged outside the house, `train_land`
+  refuses `base_moved` and changes nothing. The pass deletes the train,
+  and the next pass builds it again on the new base.
+- **Red.** The pass bisects. It builds a train of the front half of the
+  pull requests (at least one) and runs the checks again, and halves
+  the failing half again, until one change fails alone. That change
+  goes `red` as a red front does today, and its ticket returns to its
+  seat. The others go back to the line, and the next train takes them.
+  A train gets at most log2(N)+1 runs. A `cancelled` or timed-out run
+  is retried one time; after that the line goes one at a time.
+
+**R-15.13** A train must keep R-15.4 to R-15.8.
+
+- One update per head: the pass does not bring a rider up to date. The
+  train branch holds the merge onto the base, and the rider's own head
+  does not move.
+- One deploy at a time: a train lands as one push to the base, so it is
+  one deploy for R-15.6.
+- `merge_after` holds: a held change is not in the line, so it never
+  rides (R-15.10).
+- The line is written on the rows (R-15.8) as for `line`; only
+  `line_front_waiting` says `train`.
+
+**R-15.14** The rig serves the train's tools: `train_build`,
+`train_checks`, `train_status`, `train_land` and `train_delete`
+(repository `ckopsa/waymark-bench`, README section "The merge train").
+Each names `repo` and a branch that starts with `train/`; another
+branch is refused `not_train`. None force-pushes a base. The house
+calls them as it calls `merge` and `update_branch`, and a missing
+power leaves the train standing for the next pass. The fake rig in
+`factory10/test/factory10/bench_test.clj` serves the same answers.

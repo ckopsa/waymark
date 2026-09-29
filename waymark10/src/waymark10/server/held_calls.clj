@@ -49,9 +49,12 @@
   left `allowed` past its expiry, because a call nobody finished must
   not look like one somebody is about to."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.store :as store]
@@ -935,4 +938,520 @@
 
 (defn stop-expiry-sweeper! [{:keys [^CountDownLatch stop]}]
   (some-> stop .countDown)
+  nil)
+
+;; ── the notifier (bead waymark-fp62.10.3) ───────────────────────────
+;;
+;; The engine tells a person that something waits, through an
+;; mcp_server power it holds itself. A `notifier` row names a server, a
+;; tool on it, an input template and the transitions it hears (`on`). A
+;; durable log consumer (`server/consumers`: a named cursor,
+;; at-least-once, park on throw, seeded at registration so history is
+;; not replayed) renders the template from the moved row and calls the
+;; tool AS THE ENGINE, through `mcp-servers/call!`, which never passes
+;; the power door's `invoke-for`: the notice's own send does not hold
+;; (R-5, this file's R-10). The text always carries the link to the
+;; row; the decision is a door on the row, never a reply in the chat
+;; (R-3). A failed send is counted on the notifier row and never stops
+;; the transition (R-2). The counts are written in place, not through
+;; a door, so a notifier never tells about its own tally. Nothing here
+;; re-throws: a throwing consumer parks its cursor for every notice.
+;; It lives beside the held call, the first thing it tells.
+
+(def notifier-consumer
+  "The durable cursor's name in waymark10_cursors (consumer:notifier)."
+  :notifier)
+
+(g/defguard a-person-tells
+  {:reads [:principal]
+   :open "No door opens a notifier to an agent on its own: the person who is told creates and restates it, in person or through a tool the person is signed in to."
+   :explain "A notifier is a person's row: a person creates it, restates it, pauses, resumes and retires it. An agent does not choose what a person hears."}
+  [_row _inp ctx]
+  (let [{:keys [type acts-for]} (:principal ctx)]
+    (if (or (= :human type)
+            (= :system type)
+            (and (= :agent type) (not (str/blank? (str acts-for)))))
+      (t/allow)
+      (t/deny))))
+
+(def ^:private notifier-on-entry
+  [:map
+   [:kind {:x-display {:label "Kind"
+                       :help "The kind whose transitions this entry hears, e.g. held_call or seat."}}
+    [:string {:min 1 :max 64}]]
+   [:actions {:optional true
+              :x-display {:label "Actions"
+                          :help "The actions it hears on that kind, e.g. create or mark_halted. Empty or omitted hears every action."}}
+    [:maybe [:vector [:string {:min 1 :max 64}]]]]])
+
+(def ^:private notifier-person-fields
+  [[:name {:x-display {:label "Name"
+                       :help "What a person calls this notifier."}}
+    [:string {:min 1 :max 120}]]
+   [:server {:kind :mcp_server
+             :x-display {:label "The server"
+                         :help "The mcp_server row whose client makes the send."}}
+    :waymark/ref]
+   [:tool {:x-display {:label "Tool"
+                       :help "The tool the engine calls, prefixed with the server's name (tgrambot__send_message) or bare (send_message)."}}
+    [:string {:min 1 :max 200}]]
+   [:input_template {:x-display {:label "Input"
+                                 :help "The tool's arguments. A string value may carry {kind}, {id}, {action}, {summary}, {caller}, {why}, {link} and {expires_at}; the engine fills them from the moved row. The text always carries the link."
+                                 :spelled-by-hand "The tool's own arguments as JSON, e.g. {\"chat_id\": \"42\", \"text\": \"{summary} {link}\"}"}}
+    [:map-of :keyword :any]]
+   [:on {:x-display {:label "Hears"
+                     :help "The transitions that send a notice: {kind, actions}."}}
+    [:vector notifier-on-entry]]
+   [:audience {:x-display {:label "Who is told"
+                           :help "The member's principal id. A transition this member made sends nothing."}}
+    [:string {:min 1 :max 200}]]
+   [:link_base {:optional true
+                :x-display {:label "Address"
+                            :help "The instance's address, e.g. https://work.example.org. The link is this address and the row's path; without it the link is the path alone."}}
+    [:maybe [:string {:max 500}]]]])
+
+(def ^:private notifier-engine-fields
+  [[:sent {:optional true :x-display {:label "Sent" :raw true}}
+    [:maybe :int]]
+   [:failed {:optional true :x-display {:label "Failed" :raw true}}
+    [:maybe :int]]
+   [:last_error {:optional true :x-display {:label "Last error" :raw true}}
+    [:maybe [:string {:max 500}]]]])
+
+(def ^:private notifier-restate-input
+  (into [:map] (map (fn [[k props schema]]
+                      [k (assoc props :optional true)
+                       (if (and (vector? schema) (= :maybe (first schema)))
+                         schema
+                         [:maybe schema])])
+                    notifier-person-fields)))
+
+(defhandler restate-notifier [row inp _ctx]
+  (update row :data merge
+          (into {} (remove (comp nil? val))
+                (select-keys inp (map first notifier-person-fields)))))
+
+(defresource notifier
+  {:kind :notifier
+   :plural "notifiers"
+   :nav :system
+   :states [:active :paused :retired]
+   :initial :active
+   :terminal #{:retired}
+   :summary "{data.name} · {data.tool} · {state}"
+   :label-template "{data.name}"
+   :schema (into [:map] (concat notifier-person-fields notifier-engine-fields))
+   :create-schema (into [:map] notifier-person-fields)
+   :filterable {:state #{:eq :in}}
+   :sortable {:fields [:created_at] :default "-created_at"}
+   :create-guards [a-person-tells]
+   :actions
+   {:restate
+    {:from #{:active :paused} :to :active
+     :input notifier-restate-input
+     :guards [a-person-tells]
+     :edit {:prefill [:name :server :tool :input_template :on :audience :link_base]}
+     :safety {:idempotent true :reversible true :confirm false}
+     :handler restate-notifier
+     :display {:label "Restate" :style :primary :order 1
+               :description "State the server, the tool, the template, what it hears or who is told again"}}
+    :pause
+    {:from #{:active} :to :paused
+     :guards [a-person-tells]
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Pause" :order 2
+               :description "Send nothing until a person resumes it; what moves meanwhile is not told later"}}
+    :resume
+    {:from #{:paused} :to :active
+     :guards [a-person-tells]
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Resume" :style :primary :order 1
+               :description "Send again, from the next transition on"}}
+    :retire
+    {:from #{:active :paused} :to :retired
+     :guards [a-person-tells]
+     :safety {:idempotent true :reversible false :confirm true
+              :consequence "This notifier sends nothing again; a person creates a new one to be told again."}
+     :display {:label "Retire" :style :danger :order 9}}}
+   :deviations
+   ["R-1 names `audience` a member ref. It is the member's principal id, the grant's own spelling of an audience, because R-4 compares it with the transition's actor and the actor is a principal id."
+    "R-3 names the link to the row. This engine has no absolute address of its own, so the row carries `link_base`, and the link is that address and the row's API path."
+    "R-2 counts sent and failed on the row. The counts are written in place, not through a door: a door per send would be a transition per notice, and a notifier on its own kind would tell about its own tally."]})
+
+(defn- serves-kind? [eng kind] (contains? (inv/resources eng) kind))
+
+(defn- stored-row [eng kind id]
+  (when (and id (serves-kind? eng kind))
+    (store/with-tx (:storage eng)
+      (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))))
+
+(defn- actor-id [actor]
+  (str (if (map? actor) (:id actor) actor)))
+
+(defn notice-link
+  "The address of the moved row: the notifier's `link_base` and the
+  row's API path."
+  [eng notifier-row t]
+  (let [plural (:plural (get (inv/resources eng) (:kind t)))
+        base (str/replace (str (get-in notifier-row [:data :link_base])) #"/+$" "")]
+    (str base "/api/" plural "/" (:resource-id t))))
+
+(defn- fill-notice [s values]
+  (str/replace (str s) #"\{(kind|id|action|summary|caller|why|link|expires_at)\}"
+               (fn [[_ k]] (str (get values (keyword k) "")))))
+
+(defn render-notice
+  "The notifier's input template, filled from the transition and the
+  moved row. R-3: when no string value carries the link, the link is
+  appended to `text`."
+  [template values]
+  (let [out (walk/postwalk #(if (string? %) (fill-notice % values) %) (or template {}))
+        link (str (:link values))
+        carries? (some #(and (string? %) (str/includes? % link)) (vals out))]
+    (if carries?
+      out
+      (update out :text #(str/trim (str % "\n" link))))))
+
+(defn- notice-values [eng notifier-row t]
+  (let [row (stored-row eng (:kind t) (:resource-id t))
+        data (:data row)]
+    {:kind (name (:kind t))
+     :id (str (:resource-id t))
+     :action (some-> (:action t) name)
+     :summary (or (:summary t) (:summary row) "")
+     :caller (or (some-> (:caller data) str not-empty) (actor-id (:actor t)))
+     :why (or (:why data) "")
+     :expires_at (or (:expires_at data) "")
+     :link (notice-link eng notifier-row t)}))
+
+(defn- active-rows [eng kind]
+  (if-some [rd (get (inv/resources eng) kind)]
+    (let [st (:storage eng)]
+      (->> (store/with-tx st
+             (fn [tx] (store/query-rows st tx kind {} {:limit 1000})))
+           (map #(inv/decode-row rd %))
+           (filter #(= :active (:state %)))
+           vec))
+    []))
+
+(defn- active-notifiers [eng] (active-rows eng :notifier))
+
+(defn hears?
+  "Does this notifier's `on` name the transition?"
+  [notifier-row t]
+  (boolean
+   (some (fn [{:keys [kind actions]}]
+           (and (= (str kind) (name (:kind t)))
+                (or (empty? actions)
+                    (some #(= (str %) (some-> (:action t) name)) actions))))
+         (get-in notifier-row [:data :on]))))
+
+(defn- notifier-tool [eng notifier-row]
+  (let [tool (str (get-in notifier-row [:data :tool]))]
+    (if (str/includes? tool "__")
+      tool
+      (str (get-in (stored-row eng :mcp_server (get-in notifier-row [:data :server]))
+                   [:data :name])
+           "__" tool))))
+
+(defn- tally-row!
+  "Count one outcome on a notifier or a notice rule row, in place."
+  [eng kind id outcome error]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [row (store/load-row st tx kind (str id)
+                                        {:for-update true})]
+          (store/update-data!
+           st tx kind (str id)
+           (cond-> (update (:data row) outcome (fnil inc 0))
+             error (assoc :last_error (let [s (str error)]
+                                        (subs s 0 (min 500 (count s))))))
+           (:next-flip-at row)))))))
+
+(defn- tally!
+  "Count one send on the notifier row, in place."
+  [eng notifier-id outcome error]
+  (tally-row! eng :notifier notifier-id outcome error))
+
+(defn- notify!
+  "One notice: the rendered input, through the server's tool, as the
+  engine. → :sent or :failed; never throws."
+  [eng notifier-row t]
+  (try
+    (let [args (render-notice (get-in notifier-row [:data :input_template])
+                              (notice-values eng notifier-row t))
+          answer (servers/call! eng (notifier-tool eng notifier-row) args)]
+      (if (:isError answer)
+        (let [msg (or (some-> answer :content first :text) "the tool answered an error")]
+          (tally! eng (:id notifier-row) :failed msg)
+          :failed)
+        (do (tally! eng (:id notifier-row) :sent nil)
+            :sent)))
+    (catch Exception e
+      (warn! "notifier " (get-in notifier-row [:data :name]) " could not send for "
+             "transition " (:id t) " — " (ex-message e))
+      (try (tally! eng (:id notifier-row) :failed (or (ex-message e) (str e)))
+           (catch Exception _ nil))
+      :failed)))
+
+(defn notice-transition!
+  "One transition → one notice per active notifier that hears it, or
+  nothing. A transition whose actor is the notifier's audience sends
+  nothing (R-4). Never throws."
+  [eng t]
+  (try
+    (doseq [n (active-notifiers eng)
+            :when (hears? n t)
+            :when (not= (actor-id (:actor t))
+                        (str (get-in n [:data :audience])))]
+      (notify! eng n t))
+    (catch Exception e
+      (warn! "transition " (:id t) " could not be noticed — " (ex-message e))
+      nil))
+  nil)
+
+;; ── the addressed notice (docs/spec-addressed-notice.md) ───────────
+;;
+;; A notifier tells the one person its own row names. A `notice_rule`
+;; tells whoever a ref field on the MOVED row names: the rule says who
+;; (`address.field`, a ref to member on the kind it hears), the member
+;; says how (`member.notify`: the notifier that carries the send and
+;; the tool's own input for that person, e.g. a chat_id). The rule's
+;; own `notifier` renders the text and gives the link. It rides the
+;; notifier's consumer, so its delivery is the notifier's: one cursor,
+;; at-least-once, never throws. An empty ref, a member with no
+;; `notify` and a failed send are counted on the rule, in place; the
+;; actor who caused the transition is told nothing.
+
+(g/defguard address-names-a-member
+  {:reads [:services]
+   :vars [:kind :field :why]
+   :open "The kinds and their ref fields are each kind's published schema, one GET away; enumerating them into this form would duplicate it."
+   :explain "A notice rule addresses the member a ref field on the kind it hears names; {kind}.{field} {why}."}
+  [row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (let [kind (str (or (:kind inp) (get-in row [:data :kind])))
+          field (str (or (get-in inp [:address :field])
+                         (get-in row [:data :address :field])))
+          rd (when-not (str/blank? kind) (rdef-of kind))
+          ref (when rd
+                (some #(when (= field (name (:field %))) %)
+                      (schema/ref-fields (:schema rd))))
+          why (cond
+                (nil? rd) "names no kind this engine serves"
+                (nil? ref) "is not a ref field of that kind"
+                (:listed ref) "is a list of refs, and a rule addresses one member"
+                (not= :member (keyword (:kind ref)))
+                (str "names a " (name (:kind ref)) ", not a member"))]
+      (if why
+        (t/deny {:vars {:kind kind :field field :why why}})
+        (t/allow)))
+    (t/allow)))
+
+(def ^:private notice-rule-when
+  [:map
+   [:action {:optional true
+             :x-display {:label "Action"
+                         :help "The action that moved the row, e.g. queue. Empty matches every action."}}
+    [:maybe [:string {:min 1 :max 64}]]]
+   [:from_state {:optional true
+                 :x-display {:label "From state"
+                             :help "The state the row left. Empty matches every state."}}
+    [:maybe [:string {:min 1 :max 64}]]]
+   [:to_state {:optional true
+               :x-display {:label "To state"
+                           :help "The state the row entered, e.g. active. Empty matches every state."}}
+    [:maybe [:string {:min 1 :max 64}]]]])
+
+(def ^:private notice-rule-person-fields
+  [[:name {:x-display {:label "Name"
+                       :help "What a person calls this rule."}}
+    [:string {:min 1 :max 120}]]
+   [:kind {:x-display {:label "Kind"
+                       :help "The kind whose transitions this rule hears, e.g. chore."}}
+    [:string {:min 1 :max 64}]]
+   [:when {:optional true
+           :x-display {:label "When"
+                       :help "The transition that sends a notice: equality on action, from_state and to_state. Omitted hears every transition of the kind."}}
+    [:maybe notice-rule-when]]
+   [:address {:x-display {:label "Who is told"
+                          :help "The ref field on the moved row that names the member, e.g. {\"field\": \"assignee\"}."}}
+    [:map
+     [:field {:x-display {:label "Field"
+                          :help "A ref field of the kind whose target is member."}}
+      [:string {:min 1 :max 64}]]]]
+   [:notifier {:kind :notifier
+               :x-display {:label "Notifier"
+                           :help "The notifier whose input template and address make the text and the link. The member's own notifier carries the send when the member names one."}}
+    :waymark/ref]])
+
+(def ^:private notice-rule-engine-fields
+  [[:sent {:optional true :x-display {:label "Sent" :raw true}}
+    [:maybe :int]]
+   [:failed {:optional true :x-display {:label "Failed" :raw true}}
+    [:maybe :int]]
+   [:skipped {:optional true :x-display {:label "Skipped: no way to reach them" :raw true}}
+    [:maybe :int]]
+   [:unaddressed {:optional true :x-display {:label "Unaddressed" :raw true}}
+    [:maybe :int]]
+   [:last_error {:optional true :x-display {:label "Last error" :raw true}}
+    [:maybe [:string {:max 500}]]]])
+
+(def ^:private notice-rule-restate-input
+  (into [:map] (map (fn [[k props s]]
+                      [k (assoc props :optional true)
+                       (if (and (vector? s) (= :maybe (first s)))
+                         s
+                         [:maybe s])])
+                    notice-rule-person-fields)))
+
+(defhandler restate-notice-rule [row inp _ctx]
+  (update row :data merge
+          (into {} (remove (comp nil? val))
+                (select-keys inp (map first notice-rule-person-fields)))))
+
+(defresource notice-rule
+  {:kind :notice_rule
+   :plural "notice_rules"
+   :nav :system
+   :states [:active :paused :retired]
+   :initial :active
+   :terminal #{:retired}
+   :summary "{data.name} · {data.kind} · {state}"
+   :label-template "{data.name}"
+   :schema (into [:map] (concat notice-rule-person-fields notice-rule-engine-fields))
+   :create-schema (into [:map] notice-rule-person-fields)
+   :filterable {:state #{:eq :in}}
+   :sortable {:fields [:created_at] :default "-created_at"}
+   :create-guards [a-person-tells address-names-a-member]
+   :actions
+   {:restate
+    {:from #{:active :paused} :to :active
+     :input notice-rule-restate-input
+     :guards [a-person-tells address-names-a-member]
+     :edit {:prefill [:name :kind :when :address :notifier]}
+     :safety {:idempotent true :reversible true :confirm false}
+     :handler restate-notice-rule
+     :display {:label "Restate" :style :primary :order 1
+               :description "State the kind, the transition, the field that names who is told or the notifier again"}}
+    :pause
+    {:from #{:active} :to :paused
+     :guards [a-person-tells]
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Pause" :order 2
+               :description "Tell nobody until a person resumes it; what moves meanwhile is not told later"}}
+    :resume
+    {:from #{:paused} :to :active
+     :guards [a-person-tells]
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Resume" :style :primary :order 1
+               :description "Tell again, from the next transition on"}}
+    :retire
+    {:from #{:active :paused} :to :retired
+     :guards [a-person-tells]
+     :safety {:idempotent true :reversible false :confirm true
+              :consequence "This rule tells nobody again; a person creates a new one to tell again."}
+     :display {:label "Retire" :style :danger :order 9}}}
+   :deviations
+   ["R-1 says a rule naming a non-ref or non-member field fails assembly. A rule is a row a person writes, not a declaration, so the check is the create and restate wall `address-names-a-member`, which refuses with the sentence."
+    "R-2 names `member.notify.notifier` a ref. It is the notifier row's id as a string: a ref inside a nested map is not a ref the framework resolves, so an id that names no notifier falls back to the rule's own notifier at send time."]})
+
+(defn- decoded-row [eng kind id]
+  (when-some [rd (get (inv/resources eng) kind)]
+    (some->> (stored-row eng kind id) (inv/decode-row rd))))
+
+(defn rule-matches?
+  "Does this notice rule's kind and `when` name the transition?
+  Equality only; an empty entry matches anything."
+  [rule t]
+  (let [{:keys [action from_state to_state]} (get-in rule [:data :when])
+        same? (fn [want got]
+                (or (str/blank? (str want))
+                    (= (str want) (some-> got name))))]
+    (and (= (str (get-in rule [:data :kind])) (name (:kind t)))
+         (same? action (:action t))
+         (same? from_state (:from-state t))
+         (same? to_state (:to-state t)))))
+
+(defn- tell!
+  "One addressed notice: the member the rule's field names, reached the
+  way the member's `notify` says, with the rule's notifier's text.
+  → :sent, :failed, :skipped, :unaddressed or :self; never throws."
+  [eng rule t]
+  (let [rule-id (:id rule)
+        count! (fn [outcome error]
+                 (tally-row! eng :notice_rule rule-id outcome error)
+                 outcome)]
+    (try
+      (let [row (decoded-row eng (:kind t) (:resource-id t))
+            field (keyword (str (get-in rule [:data :address :field])))
+            addressee (some-> (get-in row [:data field]) str not-empty)
+            member (when addressee (decoded-row eng :member addressee))
+            notify (get-in member [:data :notify])
+            texter (decoded-row eng :notifier (get-in rule [:data :notifier]))
+            carrier (or (some->> (:notifier notify) str not-empty
+                                 (decoded-row eng :notifier))
+                        texter)
+            actor (actor-id (:actor t))]
+        (cond
+          (nil? addressee) (count! :unaddressed nil)
+          (or (= actor addressee)
+              (= actor (some-> (get-in member [:data :subject]) str))) :self
+          (or (nil? member) (empty? notify)) (count! :skipped nil)
+          (nil? texter) (count! :failed "the rule's notifier is gone")
+          :else
+          (let [args (merge (render-notice (get-in texter [:data :input_template])
+                                           (notice-values eng texter t))
+                            (:input notify))
+                answer (servers/call! eng (notifier-tool eng carrier) args)]
+            (if (:isError answer)
+              (count! :failed (or (some-> answer :content first :text)
+                                  "the tool answered an error"))
+              (count! :sent nil)))))
+      (catch Exception e
+        (warn! "notice rule " (get-in rule [:data :name]) " could not tell for "
+               "transition " (:id t) " — " (ex-message e))
+        (try (count! :failed (or (ex-message e) (str e)))
+             (catch Exception _ :failed))))))
+
+(defn notice-rules-transition!
+  "One transition → one addressed notice per active notice rule that
+  matches it. Never throws."
+  [eng t]
+  (try
+    (doseq [r (active-rows eng :notice_rule)
+            :when (rule-matches? r t)]
+      (tell! eng r t))
+    (catch Exception e
+      (warn! "transition " (:id t) " could not be addressed — " (ex-message e))
+      nil))
+  nil)
+
+(defn notifier-consumer-fn
+  "The consumer's function of one transition: the notifiers, then the
+  notice rules. Public because a test drains it directly
+  (`consumers/drain-consumer!`)."
+  [eng]
+  (fn [t]
+    (notice-transition! eng t)
+    (notice-rules-transition! eng t)))
+
+(defn notifying?
+  "Does this engine serve the notifier at all?"
+  [eng]
+  (serves-kind? eng :notifier))
+
+(defn start-notifiers!
+  "Register the durable log consumer that sends the notices. Returns
+  the handle `stop-notifiers!` takes. opts: :dispatcher, :poll-ms,
+  :from-origin?."
+  ([eng] (start-notifiers! eng {}))
+  ([eng opts]
+   (consumers/register-consumer!
+    eng notifier-consumer (notifier-consumer-fn eng)
+    (select-keys opts [:dispatcher :poll-ms :from-origin?]))))
+
+(defn stop-notifiers! [consumer]
+  (some-> consumer consumers/stop-consumer!)
   nil)

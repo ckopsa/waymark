@@ -46,6 +46,7 @@
   not answer at all is nil, and a door that reads nil refuses with the
   sentence that says the bench is dark."
   (:require [clojure.string :as str]
+            [factory10.mirror :as mirror]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
@@ -187,6 +188,13 @@
   [policy]
   (long (or (get-in policy [:data :train_size]) 4)))
 
+(defn test-workflow-of
+  "The workflow the policy's test block names (ticket 90ce5c73), nil
+  when it names none: a train's checks dispatch it and its status reads
+  it, so a rig whose default workflow differs reads the right run."
+  [policy]
+  (some-> (get-in policy [:data :test :workflow]) str not-empty))
+
 (defn house-merges?
   "Does this policy say the house merges a green change (ticket
   4dfb00f6)? Only `merge_by: house`; an absent field is GitHub's."
@@ -315,15 +323,20 @@
   `test` rides only when the row has one (ticket bae401d5): the
   workflow the bench's `test` dispatches and the input that narrows
   it. A row without one sends no key, so a rig that does not know the
-  key still takes it."
+  key still takes it. `select_pattern` rides inside it the same way
+  (ticket efa54182): only when the row states one, so the rig keeps
+  its own Clojure default otherwise."
   [row]
-  (let [test-block (get-in row [:data :test])]
+  (let [test-block (get-in row [:data :test])
+        pattern (:select_pattern test-block)]
     (cond-> {:repo (str (get-in row [:data :repository]))
              :clone_url (clone-url-of row)
              :default_branch (base-of row)
              :deny (vec (get-in row [:data :deny]))
              :land (land-of row)}
-      (some? test-block) (assoc :test (select-keys test-block [:workflow :input])))))
+      (some? test-block) (assoc :test (cond-> (select-keys test-block [:workflow :input])
+                                        (not (str/blank? (str pattern)))
+                                        (assoc :select_pattern (str pattern)))))))
 
 (defn enrolled
   "The row after the engine offered this repository to the rig (R-2).
@@ -515,11 +528,16 @@
 ;; per head, so a busy main cannot make the pass loop; a conflicted
 ;; branch is left to the failing path (ticket 5f12e772).
 
+(def not-mergeable-refusal
+  "The merge refusal that means GitHub found a conflict between the
+  branch and its base."
+  "not_mergeable")
+
 (def parked-refusals
   "The merge refusals a new pass cannot fix: the head is remembered and
   not offered again. Any other refusal — `head_moved` among them — is
   asked again next pass, and a new head is a new offer anyway."
-  #{"draft" "no_required_checks" "not_mergeable"})
+  #{"draft" "no_required_checks" not-mergeable-refusal})
 
 (def ^:private behind-reason
   "What GitHub says when it refuses a merge because the branch is not
@@ -717,6 +735,313 @@
         (seq (get-in change [:data :missing_checks]))
         (true? (get-in change [:data :behind_base])))))
 
+;; THE MERGE TRAIN (ticket 47519515, slice 2 of 3deb06ed). With
+;; `merge_strategy: train` the front and up to train_size-1 changes
+;; behind it that are green on their own heads ride ONE branch,
+;; `train/<repo>/<the front's number>`: the rig merges each pull
+;; request's head onto the base's head (`train_build`) and the branch is
+;; tested once: by its own pull request's run when the rig opens one
+;; (`train_open`, ticket e2d485c2), else by a dispatched run
+;; (`train_checks`). The train stands on the policy
+;; (`line_train`), so a restart finds it, and each pass reads its run
+;; once (`train_status`). A standing train finishes whatever the
+;; strategy says now, so a restate back to `line` waits for it. What a
+;; finished train does is `train-finished!`'s.
+
+(defn train-branch
+  "The branch a repository's train rides, named for its front."
+  [repo front]
+  (str "train/" repo "/" (get-in front [:data :number])))
+
+(defn- green-behind?
+  "Does the rig's merge answer say the change is green on its own head
+  and only behind its base?"
+  [answer]
+  (= "behind" (answer-state answer)))
+
+(defn train-riders
+  "The changes one train would carry: the front and up to train_size-1
+  changes behind it in line order, each standing in the line
+  (`out-of-line`) and green on its own head. `line` already leaves out
+  a change whose ticket's merge_after is not met (`held-changes`).
+  Empty when the front is not green on its own head."
+  [line answers seen policy]
+  (let [answer-of #(get answers (str (:id %)))
+        in (remove #(out-of-line % (answer-of %) seen) line)]
+    (if (and (seq in) (green-behind? (answer-of (first in))))
+      (vec (take (train-size-of policy) (filter #(green-behind? (answer-of %)) in)))
+      [])))
+
+(defn- pass-now [ctx]
+  (if-some [f (:now-fn ctx)] (f) (Instant/now)))
+
+(defn- number-of [change] (get-in change [:data :number]))
+
+(defn- dispatch-checks!
+  "Dispatch a built train's checks → the train with its `run_id`, nil
+  when no run showed yet (`train_status` then reads it by branch)."
+  [ctx repo train]
+  (let [answer (ask ctx :train_checks
+                    (cond-> {:repo repo :branch (:branch train)}
+                      (:workflow train) (assoc :workflow (:workflow train))))]
+    (when (refused answer)
+      (warn! "the rig refused the checks of " (:branch train) " ("
+             (reason-of answer) ")"))
+    (assoc train :run_id (some-> (:run_id answer) str not-empty))))
+
+(def pr-run-grace-seconds
+  "How long a train whose pull request opened waits for that pull
+  request's own run to show before its checks are dispatched instead: a
+  repository whose pull requests run no CI still gets its train tested."
+  600)
+
+(defn- open-train!
+  "Open a built train's pull request (`train_open`, ticket e2d485c2) →
+  the train with its `:pr` and `:pr_run`: that pull request's own run
+  is the train's check, read by branch and head, and no second run is
+  dispatched. A rig with no `train_open`, or one that refused or did
+  not answer, gets the checks dispatched as before (`dispatch-checks!`)."
+  [ctx repo policy train]
+  (let [answer (ask ctx :train_open {:repo repo :base (base-of policy)
+                                     :branch (:branch train)
+                                     :head (:head train)})
+        why (refused answer)
+        n (:number answer)]
+    (if (and (nil? why) (pos-int? n))
+      (assoc train :pr n :pr_run true)
+      (do (when (and why (not (contains? missing-power-refusals why)))
+            (warn! "the rig refused to open the pull request of " (:branch train)
+                   " (" (reason-of answer) "); its checks are dispatched"))
+          (dispatch-checks! ctx repo train)))))
+
+(defn- pr-run-overdue?
+  "Has a train tested by its pull request's run waited
+  `pr-run-grace-seconds` since it was built with no run showing?"
+  [ctx train]
+  (let [started (:started_at train)]
+    (boolean
+     (and (:pr_run train) (nil? (some-> (:run_id train) str not-empty))
+          (instance? Instant started)
+          (not (.isBefore ^Instant (pass-now ctx)
+                          (.plusSeconds ^Instant started (long pr-run-grace-seconds))))))))
+
+(defn build-train!
+  "Build one train of `riders` with the rig and open its pull request
+  (`open-train!`), or dispatch its checks when the rig opens none →
+  the train as `line_train` records it, or nil when the rig built none
+  and the line goes one at a time this pass. A rider whose pull request
+  did not merge cleanly stays in the line untouched."
+  [ctx repo policy riders]
+  (let [branch (train-branch repo (first riders))
+        answer (ask ctx :train_build {:repo repo :base (base-of policy)
+                                      :branch branch
+                                      :prs (mapv number-of riders)})
+        merged (set (:merged answer))]
+    (cond
+      (nil? answer)
+      (warn! "the train " branch " had no answer; the line goes one at a time")
+
+      (refused answer)
+      (warn! "the rig refused the train " branch " (" (reason-of answer)
+             "); the line goes one at a time")
+
+      (empty? merged)
+      (do (ask ctx :train_delete {:repo repo :branch branch})
+          (warn! "no pull request of " branch
+                 " merged cleanly; the line goes one at a time"))
+
+      :else
+      (let [rode (filterv #(merged (number-of %)) riders)]
+        (open-train! ctx repo policy
+                          (cond-> {:branch branch
+                                   :changes (mapv #(str (:id %)) rode)
+                                   :prs (mapv number-of rode)
+                                   :head (some-> (:head answer) str)
+                                   :base_head (some-> (:base_head answer) str)
+                                   :started_at (pass-now ctx)}
+                            (test-workflow-of policy)
+                            (assoc :workflow (test-workflow-of policy))))))))
+
+(defn- one-at-a-time!
+  "Delete a train and send its repository one at a time for the rest of
+  this process (`seen` keeps that under `[:train-done repo]`), so no
+  train is built only to be thrown away again. → nil."
+  [ctx seen repo train why]
+  (warn! repo ": the train " (:branch train) " " why
+         "; it is deleted and the line goes one at a time")
+  (ask ctx :train_delete {:repo repo :branch (:branch train)})
+  (swap! seen assoc [:train-done repo] true)
+  nil)
+
+(defn- land-train!
+  "Fast-forward the base to a green train's head → the train that stands
+  after it. Landed, every change it carried is merged: its answer this
+  pass says so (`:answers` in `ctx`), so the pass writes those merges as
+  it writes a house merge's (`note-merges!`), and the mirror ends each
+  change and its ticket as it does any merge. A base that moved outside
+  the house (`base_moved`) throws the train away and the next pass
+  builds another; a rig that does not answer is asked again next pass.
+  Only `landed: true` is a landing: an answer neither landed nor refused
+  (`state: waiting`, while GitHub computes mergeability or a check is
+  pending) keeps the train standing, its pull request noted as `:pr`,
+  and the next pass asks again (ticket c3f0f094)."
+  [ctx seen repo policy train]
+  (let [answer (ask ctx :train_land {:repo repo :base (base-of policy)
+                                      :branch (:branch train)
+                                      :expect_base_head (:base_head train)
+                                      :head (:head train)})
+        why (refused answer)]
+    (cond
+      (or (nil? answer) (contains? missing-power-refusals why)) train
+
+      (= "base_moved" why)
+      (do (warn! repo ": the base moved under the train " (:branch train)
+                 "; it is deleted and the next pass builds another")
+          (ask ctx :train_delete {:repo repo :branch (:branch train)})
+          nil)
+
+      why
+      (one-at-a-time! ctx seen repo train
+                      (str "was refused its landing (" (reason-of answer) ")"))
+
+      (true? (:landed answer))
+      (do (when-some [answers (:answers ctx)]
+            (swap! answers into
+                   (map (fn [id] [id {:state "merged" :head (:head train)}]))
+                   (:changes train)))
+          (ask ctx :train_delete {:repo repo :branch (:branch train)})
+          nil)
+
+      :else
+      (let [n (:number answer)]
+        (if (pos-int? n) (assoc train :pr n) train)))))
+
+(defn- train-cap
+  "How many trains one train of `n` changes may run, its own and the
+  halves that look for its red: log2(n)+1."
+  [n]
+  (inc (long (Math/ceil (/ (Math/log (double (max 1 (long n))))
+                           (Math/log 2.0))))))
+
+(defn- riders-of
+  "The riders a standing train carries, as `build-train!` takes them."
+  [train]
+  (mapv (fn [id n] {:id id :data {:number n}}) (:changes train) (:prs train)))
+
+(defn- bisect-train!
+  "A red train looks for its red: the front half of its changes (at
+  least one) rides again, and the rest go back to the line for the next
+  train. A change red alone on a train goes back to its seat as a red
+  head does (`:train-red!` in `ctx`, change id and why). At most
+  log2(n)+1 trains per train of n, then the line goes one at a time.
+  → the train that stands after it."
+  [ctx seen repo policy train]
+  (let [riders (riders-of train)
+        size (or (:size train) (count riders))
+        tries (inc (long (or (:tries train) 1)))]
+    (cond
+      (= 1 (count riders))
+      (let [id (str (:id (first riders)))]
+        (warn! repo ": " id " is red alone on the train " (:branch train))
+        (if-some [red! (:train-red! ctx)]
+          (red! id (str "The merge train " (:branch train)
+                        " went red with this change alone on it."))
+          (warn! "no hand marks " id " red this pass"))
+        (ask ctx :train_delete {:repo repo :branch (:branch train)})
+        nil)
+
+      (> tries (train-cap size))
+      (one-at-a-time! ctx seen repo train
+                      (str "found no one red change in " (dec tries) " trains"))
+
+      :else
+      (some-> (build-train! ctx repo policy
+                            (subvec riders 0 (quot (count riders) 2)))
+              (assoc :tries tries :size size)))))
+
+(defn- run-of [x] (some-> (:run_id x) str not-empty))
+
+(defn- retry-train!
+  "A train whose run was cancelled or timed out runs its checks once
+  more, and that counts as one of its trains; the second time, the line
+  goes one at a time. The cancelled run stays on the train as
+  `stale_run_id`, so a retry read by its branch never reads that run
+  again. → the train that stands after it."
+  [ctx seen repo train verdict]
+  (if (:retried train)
+    (one-at-a-time! ctx seen repo train (str "finished " verdict " twice"))
+    (do (warn! repo ": the train " (:branch train) " finished " verdict
+               "; its checks run once more")
+        (assoc (dispatch-checks! ctx repo
+                                 (cond-> (dissoc train :pr_run)
+                                   (run-of train) (assoc :stale_run_id (run-of train))))
+               :retried true :tries (inc (long (or (:tries train) 1)))))))
+
+(defn train-finished!
+  "What a finished train does with its `verdict` (ticket 6033c287, slice
+  3 of 3deb06ed) → the train that stands after it, nil for none. A green
+  train lands whole (`land-train!`), a red one looks for its red
+  (`bisect-train!`), and a cancelled or timed-out run runs once more
+  (`retry-train!`). Under a policy restated back to `line` only a green
+  train lands; any other is deleted and the line goes one at a time."
+  [ctx seen repo policy train verdict]
+  (cond
+    (= "success" verdict) (land-train! ctx seen repo policy train)
+
+    (not= "train" (merge-strategy-of policy))
+    (do (warn! repo ": the train " (:branch train) " finished " verdict
+               "; it is deleted and the line goes one at a time")
+        (ask ctx :train_delete {:repo repo :branch (:branch train)})
+        nil)
+
+    (= "failure" verdict) (bisect-train! ctx seen repo policy train)
+    :else (retry-train! ctx seen repo train verdict)))
+
+(defn- status-args
+  "A train with no run yet is read by its branch and head, and by the
+  workflow it dispatched: the train's own, else the policy's test block.
+  A train a retry left a cancelled run behind on names it as
+  `skip_run_id`, so the rig answers past it (ticket a4890118)."
+  [repo policy train]
+  (if-some [run (run-of train)]
+    {:repo repo :run_id run}
+    (let [workflow (or (some-> (:workflow train) str not-empty)
+                       (test-workflow-of policy))
+          stale (:stale_run_id train)]
+      (cond-> {:repo repo :branch (:branch train) :head (:head train)}
+        workflow (assoc :workflow workflow)
+        (some? stale) (assoc :skip_run_id stale)))))
+
+(defn advance-train!
+  "Read a standing train's run once → the train that stands after it:
+  the same one while its run is pending or the rig does not answer,
+  and what `train-finished!` says once it finished or was refused. A
+  train read by its branch keeps the run the answer names; the run a
+  retry left behind (`stale_run_id`) is the rig's to skip, through
+  `status-args`' `skip_run_id`. A train tested
+  by its pull request's run that showed none in `pr-run-grace-seconds`
+  has its checks dispatched instead, once."
+  [ctx seen repo policy train]
+  (let [answer (ask ctx :train_status (status-args repo policy train))
+        why (refused answer)
+        st (some-> (:state answer) name)
+        run (run-of answer)
+        known (cond-> train
+               (and run (nil? (run-of train))) (assoc :run_id run))]
+    (cond
+      (nil? answer) train
+      (contains? missing-power-refusals why) train
+      why (do (warn! "the rig refused the status of " (:branch train) " ("
+                     (reason-of answer) ")")
+              (train-finished! ctx seen repo policy train "cancelled"))
+      (or (nil? st) (= "pending" st))
+      (if (pr-run-overdue? ctx known)
+        (do (warn! repo ": no run showed on the pull request of " (:branch train)
+                   " in " pr-run-grace-seconds " s; its checks are dispatched")
+            (dispatch-checks! ctx repo (dissoc known :pr_run)))
+        known)
+      :else (train-finished! ctx seen repo policy known st))))
+
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
   hand; then only a line's front is brought up to date when it is
@@ -724,9 +1049,20 @@
   while its base moved (`stale-waiting?`). The front is chosen after the answers, so a change that went
   red or was parked this pass does not hold the line. `answers`, when
   given, is an atom the pass fills with change id → the rig's answer.
+  A repository whose policy says `merge_strategy: train` sends its
+  front and the green changes behind it as one train instead
+  (`build-train!`), and a standing train (`line_train`) is read once
+  (`advance-train!`) while its front waits. `trains`, when given, is an
+  atom the pass fills with repository → the train that stands now, nil
+  for none, for each repository whose train it built or read. A
+  standing train whose repository has no line this pass — every rider
+  merged or left, or the repository is deploy-held — is read as well,
+  so it still finishes and leaves the policy.
   → the number of `merge` calls made."
   ([ctx seen lines by-repo] (work-lines! ctx seen lines by-repo (atom {})))
   ([ctx seen lines by-repo answers]
+   (work-lines! ctx seen lines by-repo answers (atom {})))
+  ([ctx seen lines by-repo answers trains]
    (let [asked (volatile! 0)]
      (doseq [[repo line] lines
              :let [policy (get by-repo repo)]]
@@ -741,13 +1077,33 @@
                             (= "merged" (answer-state answer)))
                (recur more)))))
        (let [front (front-of line @answers @seen)
-             id (some-> front :id str)]
+             id (some-> front :id str)
+             train (get-in policy [:data :line_train])
+             riders (when (and (nil? train)
+                               (= "train" (merge-strategy-of policy))
+                               (not (get @seen [:train-done repo])))
+                      (train-riders line @answers @seen policy))
+             built (when (next riders) (build-train! ctx repo policy riders))]
          (warn! repo ": " (or id "nothing") " is the front of the merge line, "
                 (count (remove #(= id (str (:id %))) line)) " wait")
-         (when (and front (or (behind? (get @answers id))
-                              (stale-waiting? front (get @answers id))))
+         (cond
+           train (swap! trains assoc repo
+                        (advance-train! (assoc ctx :answers answers)
+                                        seen repo policy train))
+           built (swap! trains assoc repo built)
+           (and front (or (behind? (get @answers id))
+                          (stale-waiting? front (get @answers id))))
            (update-behind! ctx seen front id
                            (str (get-in front [:data :head_sha]))))))
+     ;; a standing train is read whatever its line: a repository with
+     ;; no line this pass would otherwise keep it on the policy for good
+     (doseq [[repo policy] by-repo
+             :when (not (contains? lines repo))
+             :let [train (get-in policy [:data :line_train])]
+             :when train]
+       (swap! trains assoc repo
+              (advance-train! (assoc ctx :answers answers)
+                              seen repo policy train)))
      @asked)))
 
 ;; ── the line, written on the rows (ticket b85aded5) ─────────────────
@@ -806,8 +1162,11 @@
   the `parked` changes the lines left out. → {:policies {repo marks}
   :changes {id marks}}; a field a marks map leaves out is cleared. The
   front's place is 1 and the others in the line follow in order; a
-  change out of the line has no place and says why."
-  [lines answers seen parked]
+  change out of the line has no place and says why. A repository with
+  a train in `trains` (repository → its standing train) says its front
+  waits on the `train`."
+  ([lines answers seen parked] (line-marks lines answers seen parked {}))
+  ([lines answers seen parked trains]
   (let [answer-of #(get answers (str (:id %)))
         in-line (fn [line] (vec (remove #(out-of-line % (answer-of %) seen) line)))]
     {:policies
@@ -818,7 +1177,9 @@
                     [repo (if front
                             {:line_front (str (:id front))
                              :line_front_pr (get-in front [:data :number])
-                             :line_front_waiting (front-waits-on (answer-of front))
+                             :line_front_waiting (if (get trains repo)
+                                                   "train"
+                                                   (front-waits-on (answer-of front)))
                              :line_waiting (dec (count in))}
                             {})])))
            lines)
@@ -845,7 +1206,7 @@
                                               :line_why (if (= 1 (place id))
                                                           "front" "behind")})]))
                              line))))
-            lines))}))
+            lines))})))
 
 (defn moved-marks
   "The marks to write on a row whose data is `data`, or nil when none of
@@ -1128,6 +1489,72 @@
                {:merge_waits (some-> (get holds tid) held-reason)} #{}))
   (swap! seen assoc :held-tickets (set (keys holds))))
 
+;; ── a merge refused as not mergeable (ticket 0b564d2d) ───────────────
+;;
+;; The failing path finds a conflict in ONE field: the row's
+;; `mergeable`. The mirror fills that from GitHub, and GitHub computes
+;; mergeability after the push without touching the pull request's
+;; `updated_at` — so a row read too early keeps `unknown` (or `blocked`,
+;; when the state word outranks it) and no later poll corrects it. The
+;; merge call is the honest read: a rig refused `not_mergeable` has just
+;; been told the pull request conflicts. So the pass writes `conflicted`
+;; on the row, a maintenance write as the line is, and the forge's
+;; failing pass takes it from there — `failing` with its conflicted
+;; paths, and a `return` that wakes the seat. Without it the change sits
+;; submitted and parked, offered nothing and asked for nothing.
+
+(defn conflicted-ids
+  "The ids of the changes whose merge the rig refused this pass because
+  the pull request is not mergeable. `answers` is change id → answer."
+  [answers]
+  (into (sorted-set)
+        (keep (fn [[id answer]]
+                (when (= not-mergeable-refusal (refused answer)) (str id))))
+        answers))
+
+(defn- mark-conflicts!
+  "Write `mergeable: conflicted` on every change the rig refused as not
+  mergeable this pass. → how many rows were written."
+  [eng answers]
+  (let [wrote (volatile! 0)]
+    (doseq [id (conflicted-ids answers)]
+      (when (mark-row! eng :change id {:mergeable "conflicted"} #{})
+        (vswap! wrote inc)
+        (warn! "the rig says " id " conflicts with its base; the row says"
+               " conflicted, and the failing pass has it")))
+    @wrote))
+
+(defn held-changes
+  "The changes a house pass holds out of its lines: those of a house
+  repository whose ticket still waits on another to merge (`holds`, as
+  `merge-holds` answers it)."
+  [changes by-repo holds]
+  (filterv #(and (some-> (get by-repo (str (get-in % [:data :repository])))
+                         house-pass-merges?)
+                 (get holds (born-ticket %)))
+           changes))
+
+(defn- train-red!
+  "Send a change a merge train found red alone back to its seat, as the
+  forge sends a red head: `fail`, naming the head the train judged, or
+  `stick` on the policy's last round (ticket 6033c287)."
+  [eng changes by-repo id why]
+  (when-some [row (some #(when (= id (str (:id %))) %) changes)]
+    (let [policy (get by-repo (str (get-in row [:data :repository])))
+          last? (>= (long (or (get-in row [:data :rounds]) 0))
+                    (long (rounds-of policy)))]
+      (try
+        (inv/invoke! eng :change id (if last? :stick :fail)
+                     (if last?
+                       {:why (clip why) :failing_checks ["merge-train"]}
+                       {:failing_checks ["merge-train"]
+                        :train_red_head (str (get-in row [:data :head_sha]))
+                        :train_red (clip why)})
+                     {:principal mirror/source-principal})
+        (catch Exception e
+          (warn! "the train's red did not move " id " (" (ex-message e)
+                 "); it rides again"))))))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
@@ -1140,7 +1567,10 @@
   that under `[:updated id]`). `merged` needs nothing here, because the
   mirror moves the row; `waiting` and every other refusal are asked
   again next pass; `red` is left, because the seat's feedback already
-  carries the red checks. Then the line is written on the rows
+  carries the red checks; a refusal that says the pull request is not
+  mergeable writes `conflicted` on the row (`mark-conflicts!`), because
+  the mirror's own read may never say so. Then the line is written on
+  the rows
   (`mark-lines!`): the policy names its front and who waits, and each
   change its place and why it is not merging. A change whose ticket
   still waits on another to merge (`merge-holds`) is held out of all
@@ -1154,24 +1584,38 @@
         house? #(some-> (get by-repo (str (get-in % [:data :repository])))
                         house-pass-merges?)
         holds (merge-holds eng (filter house? changes))
-        held (filterv #(and (house? %) (get holds (born-ticket %))) changes)
+        held (held-changes changes by-repo holds)
         held-ids (into #{} (map #(str (:id %))) held)
         offered (remove #(held-ids (str (:id %))) changes)
         priorities (ticket-priorities eng offered)
         lines (merge-lines offered by-repo
                            #(get priorities (born-ticket %)) @seen)
         answers (atom {})
-        asked (work-lines! {:services (:services eng)} seen
+        trains (atom {})
+        asked (work-lines! {:services (:services eng) :now-fn (:now-fn eng)
+                            :train-red! #(train-red! eng changes by-repo %1 %2)}
+                           seen
                            (apply dissoc lines (keys deploy-holds)) by-repo
-                           answers)]
+                           answers trains)
+        standing (merge (into {}
+                              (keep (fn [[repo p]]
+                                      (when-some [t (get-in p [:data :line_train])]
+                                        [repo t])))
+                              by-repo)
+                        @trains)]
     (try
       (note-merges! eng by-repo lines @answers)
+      (mark-conflicts! eng @answers)
+      (doseq [[repo t] @trains]
+        (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
+                   {:line_train t} #{}))
       (doseq [[repo why] deploy-holds]
         (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
                    {:deploy_note why} #{}))
       (mark-lines! eng
                    (update (line-marks lines @answers @seen
-                                       (parked-changes offered by-repo @seen))
+                                       (parked-changes offered by-repo @seen)
+                                       standing)
                            :changes merge
                            (into {}
                                  (map (fn [c]
@@ -1363,6 +1807,91 @@
   can work, so the house asks again soon."
   300)
 
+;; ── the house pass, woken by the mirror (ticket 6e190062) ────────────
+;;
+;; On the clock alone, each step of a merge line (update the front, wait
+;; for its gate, merge, next front) can wait a whole beat after its
+;; check already finished. So the forge mirror WAKES the merge pass when
+;; it sees a required check finish on a house change, or the base move:
+;; it writes the repository on a board, and the sweeper reads the board
+;; every `house-tick-seconds`. A repository is woken at most once per
+;; `house-debounce-seconds`; the clock stays as the fallback.
+
+(def house-debounce-seconds
+  "The least time between two woken merge passes for one repository."
+  30)
+
+(def house-tick-seconds
+  "How often the sweeper reads the wake board between clock beats."
+  5)
+
+(def ^:private house-seen-cap
+  "How many observations the board remembers before it starts over."
+  4096)
+
+(defn house-board
+  "A fresh wake board: `:seen` the observations already woken on,
+  `:pending` the repositories waiting for a woken pass, `:last`
+  repository → the Instant of its last woken pass."
+  []
+  (atom {:seen #{} :pending #{} :last {}}))
+
+(defonce ^{:doc "The process's wake board: the mirror writes it, the
+  sweeper reads it. Both run in the one elected holder."}
+  house-wakes
+  (house-board))
+
+(defn nudge-house!
+  "The mirror saw something that can move `repo`'s merge line. `what`
+  names the observation (a change's head and its verdict, or a base
+  head), and the same observation twice wakes nothing, so a green change
+  that waits does not wake the pass every beat. → true when it woke."
+  ([repo what] (nudge-house! house-wakes repo what))
+  ([board repo what]
+   (let [repo (some-> repo str not-empty)
+         [old new] (swap-vals!
+                    board
+                    (fn [b]
+                      (if (or (nil? repo) (contains? (:seen b) what))
+                        b
+                        (-> b
+                            (update :seen #(if (< (count %) house-seen-cap)
+                                             (conj % what)
+                                             #{what}))
+                            (update :pending conj repo)))))]
+     (not= old new))))
+
+(defn due-wakes!
+  "The repositories whose woken pass is due at `now`: pending, and not
+  woken in the last `house-debounce-seconds`. They leave `:pending` and
+  are stamped `now`; one still inside its window stays pending, so a
+  wake is delayed and never lost. → the set, maybe empty."
+  [board ^Instant now]
+  (let [ready? (fn [b repo]
+                 (let [^Instant at (get-in b [:last repo])]
+                   (or (nil? at)
+                       (not (.isBefore now (.plusSeconds at (long house-debounce-seconds)))))))
+        [old _] (swap-vals!
+                 board
+                 (fn [b]
+                   (let [due (filterv #(ready? b %) (:pending b))]
+                     (-> b
+                         (update :pending #(reduce disj % due))
+                         (update :last into (map (fn [r] [r now])) due)))))]
+    (into #{} (filter #(ready? old %)) (:pending old))))
+
+(defn house-beat!
+  "One tick of the sweeper. When `clock?`, the clock's passes
+  (`clock-pass!`), which merge every line and so answer any wake due
+  now; otherwise the merge pass (`merge-pass!`) when a repository's wake
+  is due. → {:clock? … :woken #{repo}}."
+  [board ^Instant now clock? clock-pass! merge-pass!]
+  (let [woken (due-wakes! board now)]
+    (cond
+      clock? (clock-pass!)
+      (seq woken) (merge-pass!))
+    {:clock? (boolean clock?) :woken woken}))
+
 (defn start-enrol-sweeper!
   "The retry's daemon: one `enroll-unenrolled!` every `:every-seconds`,
   on a daemon thread (the forge pass's own shape). The first pass is
@@ -1374,29 +1903,40 @@
   same election, so one process per database asks the rig to merge,
   and its memory of refused heads lives as long as that holder. So does
   the person's merge ask (`ask-for-merges!`), and its memory of when a
-  change turned clean."
+  change turned clean. Between beats the merge pass also runs when the
+  mirror wakes it (`house-wakes`, `house-beat!`)."
   [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}}]
   (let [stop (CountDownLatch. 1)
         seen (atom {})
         waiting (atom {})
+        every-ms (* 1000 (long every-seconds))
+        tick (max 1 (min (long every-seconds) (long house-tick-seconds)))
+        merge-pass! #(try (merge-green! eng seen)
+                          (catch Exception e
+                            (warn! "the merge pass failed ("
+                                   (ex-message e) ")")))
+        clock-pass! (fn []
+                      (try (enroll-unenrolled! eng)
+                           (catch Exception e
+                             (warn! "the enrolment pass failed ("
+                                    (ex-message e) ")")))
+                      (merge-pass!)
+                      (try (ask-for-merges! eng waiting (Instant/now))
+                           (catch Exception e
+                             (warn! "the merge ask pass failed ("
+                                    (ex-message e) ")"))))
         t (Thread. ^Runnable
                    (fn []
-                     (loop []
-                       (when-not (.await stop (long every-seconds)
-                                         TimeUnit/SECONDS)
-                         (try (enroll-unenrolled! eng)
-                              (catch Exception e
-                                (warn! "the enrolment pass failed ("
-                                       (ex-message e) ")")))
-                         (try (merge-green! eng seen)
-                              (catch Exception e
-                                (warn! "the merge pass failed ("
-                                       (ex-message e) ")")))
-                         (try (ask-for-merges! eng waiting (Instant/now))
-                              (catch Exception e
-                                (warn! "the merge ask pass failed ("
-                                       (ex-message e) ")")))
-                         (recur))))
+                     (loop [next-clock (+ (System/currentTimeMillis) every-ms)]
+                       (when-not (.await stop tick TimeUnit/SECONDS)
+                         (let [ms (System/currentTimeMillis)
+                               clock? (>= ms next-clock)]
+                           (try (house-beat! house-wakes (Instant/now) clock?
+                                             clock-pass! merge-pass!)
+                                (catch Exception e
+                                  (warn! "the sweeper's beat failed ("
+                                         (ex-message e) ")")))
+                           (recur (if clock? (+ ms every-ms) next-clock))))))
                    "factory10-bench-enrol")]
     (doto ^Thread t (.setDaemon true) (.start))
     {:thread t :stop stop}))

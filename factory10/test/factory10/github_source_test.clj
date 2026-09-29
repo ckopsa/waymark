@@ -198,6 +198,16 @@
     (is (= "conflicted" (get-in after [:data :mergeable])))
     (is (= "pending" (get-in after [:data :review_state])))))
 
+(deftest mergeable-false-outranks-the-state-word
+  (testing "GitHub's own mergeable: false is a conflict, whatever the policy word"
+    (is (= "conflicted" (gh/mergeable-of {:mergeable_state "blocked" :mergeable false})))
+    (is (= "conflicted" (gh/mergeable-of {:mergeable_state "behind" :mergeable false})))
+    (is (= "conflicted" (gh/mergeable-of {:mergeable false}))))
+  (testing "without it the state word still speaks"
+    (is (= "blocked" (gh/mergeable-of {:mergeable_state "blocked" :mergeable true})))
+    (is (= "blocked" (gh/mergeable-of {:mergeable_state "blocked" :mergeable nil})))
+    (is (= "unknown" (gh/mergeable-of {})))))
+
 (deftest a-merged-pull-request-moves-the-row-to-merged
   (let [{:keys [state engine] :as r} (rig)
         _ (pass! r)
@@ -1075,6 +1085,45 @@
       (is (nil? (get-in row [:data :failing_checks])))
       (is (= 1 (:recovered census))))))
 
+(deftest a-train-red-head-is-not-recovered-by-its-own-green
+  ;; ticket 6566d32f: a merge train found this head red, so the head's
+  ;; own green checks do not bring it back; a new head does
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["check-queue"]} 1)
+        id (str (:id (the-change engine)))
+        head (get-in a-pull-request [:head :sha])]
+    (inv/invoke! engine :change id :fail
+                 {:failing_checks ["merge-train"]
+                  :train_red_head head
+                  :train_red "the train's test10 went red"}
+                 {:principal mirror/source-principal})
+    (is (= :failing (:state (the-change engine))))
+    (testing "a green pass on the train's red head leaves it failing"
+      (let [census (pass! r)
+            row (the-change engine)]
+        (is (= head (get-in row [:data :head_sha])))
+        (is (= :failing (:state row)))
+        (is (= head (get-in row [:data :train_red_head])))
+        (is (= "the train's test10 went red" (get-in row [:data :train_red])))
+        (is (= 0 (:recovered census)))))
+    (testing "a green new head recovers it and clears the train's red"
+      (gh/seed-pull! state repo
+                     (assoc a-pull-request
+                            :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                            :updated_at "2026-09-18T14:00:00Z")
+                     {:files the-files :reviews the-reviews})
+      (gh/seed-check! state repo a-new-head
+                      {:id 41752098500 :name "check-queue"
+                       :status "completed" :conclusion "success"
+                       :head_sha a-new-head})
+      (let [census (pass! r)
+            row (the-change engine)]
+        (is (= a-new-head (get-in row [:data :head_sha])))
+        (is (= :submitted (:state row)))
+        (is (nil? (get-in row [:data :train_red_head])))
+        (is (nil? (get-in row [:data :train_red])))
+        (is (= 1 (:recovered census)))))))
+
 (deftest the-red-head-on-the-last-round-sticks-the-change
   (let [{:keys [engine] :as r}
         (red-world {:required_checks ["test10 (shard 3)"] :rounds_per_change 2}
@@ -1154,14 +1203,21 @@
   "One change at `submitted` with `rounds` spent, whose pull request
   GitHub reads with `mergeable-state` and whose one check is green. The
   bench behind the engine answers `conflicts` with `paths`, and
-  `:asked` holds every tool it was called with."
-  [mergeable-state paths policy rounds]
+  `:asked` holds every tool it was called with. A `landing` is what the
+  bench's feedback answers for the branch."
+  ([mergeable-state paths policy rounds]
+   (conflict-world mergeable-state paths policy rounds nil))
+  ([mergeable-state paths policy rounds landing]
   (let [state (gh/fake-state)
         asked (atom [])
         rpc (fn [_method params]
               (swap! asked conj params)
-              (when (and paths (= "bench__conflicts" (str (:name params))))
-                {:structuredContent {:result {:paths paths}}}))
+              (cond
+                (and paths (= "bench__conflicts" (str (:name params))))
+                {:structuredContent {:result {:paths paths}}}
+
+                (and landing (= "bench__feedback" (str (:name params))))
+                {:structuredContent {:result {:landing landing}}}))
         engine (engine/engine {:storage (memory/storage)
                                :resources (vec (main/resources))
                                :services {:bench-rpc rpc}})
@@ -1186,10 +1242,23 @@
                                         :version (inc (long (:version row))))
                                  (assoc-in [:data :rounds] rounds))
                              (:version row))))))
-    r))
+    r)))
 
 (defn- conflict-asks [{:keys [asked]}]
   (filterv #(= "bench__conflicts" (str (:name %))) @asked))
+
+(deftest a-conflicted-change-goes-failing-while-its-landing-still-runs
+  ;; ticket 7af7d506: a landing that never said it finished held a
+  ;; conflicted pull request at `submitted`, parked, and nothing woke
+  ;; the seat
+  (let [{:keys [engine] :as r} (conflict-world "dirty" the-conflicts {} 1
+                                               {:state "running"})
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :failing (:state row)))
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+    (is (= the-conflicts (get-in row [:data :conflicts])))
+    (is (= 1 (:failing census)))))
 
 (deftest a-conflicted-submitted-change-goes-failing-with-its-paths
   (let [{:keys [engine] :as r} (conflict-world "dirty" the-conflicts {} 1)
