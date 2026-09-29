@@ -2309,10 +2309,14 @@
   line here (`router/mind-the-wall!`, R-7.7). This does not. The wall
   is judged all the same — a seat behind one scopes to nothing and
   the walk comes back empty — and the first call the bound session
-  makes after the sit is the request that records it."
-  [eng sitter]
+  makes after the sit is the request that records it.
+
+  `sitting-id` is the sitting being opened, passed on exactly as the
+  transport passes the bound one: the per-sitting wall judges ITS
+  fuel, not the newest sibling's (ticket 8358b658)."
+  [eng sitter sitting-id]
   {:principal sitter
-   :visibility (or (grants/worn-visibility eng sitter)
+   :visibility (or (grants/worn-visibility eng sitter sitting-id)
                    (grants/bootstrap-visibility eng sitter))})
 
 (defn- walk-door
@@ -3936,7 +3940,8 @@
             ;; i · the walk, read as the sitter under the seat's grant
             ;; and through the query path — the rows this firing works
             ;; through, with the doors each one affords
-            sitter-sees (sitter-session eng sitter)
+            sitter-sees (sitter-session eng sitter
+                                        (some-> (:id sitting) str not-empty))
             ;; … past the rows another open sitting of this seat was
             ;; handed: a fire and a wake that land together are two
             ;; runs, and the second walks the next row, not the first's.
