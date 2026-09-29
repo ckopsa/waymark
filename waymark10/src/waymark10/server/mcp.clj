@@ -2050,9 +2050,13 @@
        sitting stamped with it — the pairing `open-sitting-for-seat`
        makes at the close;
     3. only then the grant's newest UNCLAIMED open sitting: no stamp,
-       and no other live connector session bound to it."
-  [eng sid grant harness-session]
+       and — when the seat lets more than one sitting run at once — no
+       other live connector session bound to it. At one, an open
+       sitting holds every wake (`max-open-sittings-help`), so a second
+       session's sit re-keys it rather than opening another."
+  [eng sid grant seat harness-session]
   (let [gid (str (:id grant))
+        many? (< 1 (long (or (get-in seat [:data :max_open_sittings]) 1)))
         stamp-of #(some-> (get-in % [:data :harness_session]) str not-empty)
         wanted (some-> harness-session str not-empty)
         bound (some->> (bound-sitting eng sid) str not-empty (row-of eng :sitting))]
@@ -2065,7 +2069,9 @@
         (let [rows (seats/open-sittings-for-grant eng gid)]
           (or (when wanted (first (filter #(= wanted (stamp-of %)) rows)))
               (let [free (remove stamp-of rows)
-                    taken (bound-elsewhere eng sid (map (comp str :id) free))]
+                    taken (if many?
+                            (bound-elsewhere eng sid (map (comp str :id) free))
+                            #{})]
                 (first (remove #(contains? taken (str (:id %))) free))))))))
 
 (defn- open-sitting!
@@ -2088,7 +2094,7 @@
   reconstructs."
   [eng sid sitter grant seat model harness-session]
   (when model
-    (or (reusable-sitting eng sid grant harness-session)
+    (or (reusable-sitting eng sid grant seat harness-session)
         (:row (inv/create! eng :sitting
                            (cond-> {:seat (str (:id seat))
                                     :model (str (:id model))
