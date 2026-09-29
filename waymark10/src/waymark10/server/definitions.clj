@@ -1080,8 +1080,9 @@
   "The sweep's word on a fired sitting it abandons for silence (ticket
   086307f2), written onto the open row just before the abandon: a
   MAINTENANCE write, the counters' own spelling, because `abandon`
-  takes no input and writes nothing of its own. → the row, for
-  `end-sitting!`."
+  takes no input and writes nothing of its own. → the note and
+  closed_by the row carried before, for `unmark-silent!` when the
+  abandon is refused (ticket d8e4f00f)."
   [eng row last-call]
   (let [st (:storage eng)]
     (store/with-tx st
@@ -1092,8 +1093,28 @@
                               (assoc (:data raw)
                                      :note (str "silent since " last-call)
                                      :closed_by "sweep")
-                              nil))))
-    row))
+                              nil)
+          (select-keys (:data raw) [:note :closed_by]))))))
+
+(defn- unmark-silent!
+  "The sweep's word taken back: `still-quiet-for-the-sweep` refused
+  the abandon because a call stamped the row after `mark-silent!`, so
+  the row stays open and must not say it was closed by the sweep.
+  Only the words the sweep wrote are put back; a note someone else
+  wrote since is left alone."
+  [eng row last-call prior]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :sitting (str (:id row))
+                                        {:for-update true})]
+          (let [data (:data raw)]
+            (when (and (= "sweep" (:closed_by data))
+                       (= (str "silent since " last-call) (:note data)))
+              (store/update-data! st tx :sitting (str (:id row))
+                                  (merge (dissoc data :note :closed_by)
+                                         prior)
+                                  nil))))))))
 
 (defn- sweep-sittings!
   "The sittings nobody ended, ended — R-7.6 and R-12.25 in one pass
@@ -1190,9 +1211,11 @@
 
              (and (stale-since? last-call now idle)
                   (quiet? eng rdef row now idle))
-             (if (end-sitting! eng (mark-silent! eng row last-call) :abandon nil idle)
-               (update acc :abandoned inc)
-               acc)
+             (let [prior (mark-silent! eng row last-call)]
+               (if (end-sitting! eng row :abandon nil idle)
+                 (update acc :abandoned inc)
+                 (do (unmark-silent! eng row last-call prior)
+                     acc)))
 
              ;; the outer bound, but never over a fresh last call: a
              ;; fired sitting re-sat after two cadences is in use

@@ -690,6 +690,17 @@
                            (some? (delegation/authoring-seat ctx :seat nil)))
                       nil
 
+                      ;; a superseded judgment names where the house
+                      ;; went next (ticket 86514746), so say it
+                      (= :superseded (:state j))
+                      (if-some [s (some-> (get-in j [:data :successor]) str not-empty)]
+                        (str "that judgment is superseded by " s
+                             ", and only a promoted one is walked — name " s
+                             " instead")
+                        (str "that judgment is superseded with no successor"
+                             ", and only a promoted one is walked — name one"
+                             " that is promoted"))
+
                       (not= :promoted (:state j))
                       (str "that judgment is " (name (:state j))
                            ", and only a promoted one is walked — promote it,"
@@ -995,6 +1006,18 @@
   ;; `merge`'s own handler it names that write, and the door opens.
   (let [{:keys [kind action]} (:within ctx)]
     (if (and (= :seat kind) (= :merge action))
+      (t/allow)
+      (t/deny))))
+
+(g/defguard followed-by-a-supersede
+  {:reads [:within]
+   :hide true
+   :explain "A seat follows a judgment's successor when that judgment is superseded, and by nothing else: POST supersede on the judgment, and every seat that says it follows in the same transaction."}
+  [_row _inp ctx]
+  ;; `folded-by-a-merge`'s posture (ticket 86514746): concealed at the
+  ;; wire, open only inside the judgment's own `supersede` handler
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :judgment kind) (= :supersede action))
       (t/allow)
       (t/deny))))
 
@@ -1344,6 +1367,22 @@
       (assoc-in [:data :substitute_drop] (:substitute_drop inp))
       (assoc-in [:data :standing_ttl_seconds] (:standing_ttl_seconds inp))
       (assoc-in [:data :budget_usd_per_week] (:budget_usd_per_week inp))))
+
+(def ^:private follow-successor-input
+  [:map
+   [:judgment {:kind :judgment
+               :x-display
+               {:label "The successor"
+                :spelled-by-hand "The judgment the superseded one named as its successor, written by the supersede."}}
+    :waymark/ref]
+   [:superseded {:kind :judgment
+                 :x-display
+                 {:label "The judgment superseded"
+                  :spelled-by-hand "The judgment this seat said until it was superseded, written by the supersede."}}
+    :waymark/ref]])
+
+(defhandler follow-successor [row inp _ctx]
+  (assoc-in row [:data :judgment] (:judgment inp)))
 
 (defhandler merge-seat [row inp ctx]
   ;; § 6, in order: fold the two scopes per kind (waymark-ycp's
@@ -2805,7 +2844,32 @@
               grants/scope-omits-private-kinds]
      :safety {:idempotent true :reversible false :confirm false}
      :handler absorb-fold
-     :display {:label "Absorb" :order 13}}}
+     :display {:label "Absorb" :order 13}}
+
+    ;; ── the supersede's landing (ticket 86514746) ───────────────────
+    ;; A judgment's `supersede` re-points every seat that says it to the
+    ;; successor through these doors, in its own transaction, so the
+    ;; seat's history says it moved and why. A v10 action declares ONE
+    ;; `:to`, so a parked seat has its own door.
+    :follow_successor
+    {:from #{:active} :to :active
+     :input follow-successor-input
+     :record true
+     :waives #{:edit-shape}
+     :guards [followed-by-a-supersede]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler follow-successor
+     :display {:label "Follow the successor" :order 16}}
+
+    :follow_successor_parked
+    {:from #{:parked} :to :parked
+     :input follow-successor-input
+     :record true
+     :waives #{:edit-shape}
+     :guards [followed-by-a-supersede]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler follow-successor
+     :display {:label "Follow the successor" :order 17}}}
    :scenarios [an-agent-does-not-park-its-own-seat
                the-person-parks-the-seat
                an-agent-does-not-hand-itself-the-seats-key
