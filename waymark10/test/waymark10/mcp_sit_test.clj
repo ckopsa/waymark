@@ -1588,3 +1588,33 @@
           (is (not= (:sitting c) (:sitting d)))
           (is (empty? (rows-of d)))
           (is (contains? (withheld-of d) gas-id)))))))
+
+(deftest a-re-sit-reuses-its-own-sitting-not-the-grants-newest
+  ;; Tickets 8c72fd3a and 5d4bbab6: every sitting of a seat shares the
+  ;; seat's grant, so the grant's NEWEST open sitting is not this run's.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:max_open_sittings 3})
+        sit! (fn [sid args]
+               (let [r (tool h (with-session sid) "waymark_sit"
+                             (merge {:key walk-key} args))]
+                 (is (false? (:isError r)) (text-of r))
+                 (str (:sitting (doc-of r)))))
+        [sid-b _] (initialize! h)
+        [sid-a _] (initialize! h)
+        b (sit! sid-b {:session "run-b"})
+        c (sit! sid-a {:session "run-a"})]
+    (testing "B's re-sit reuses sitting b while a newer c is open"
+      (is (not= b c))
+      (let [[sid-b2 _] (initialize! h)]
+        (is (= b (sit! sid-b2 {:session "run-b"})))))
+    (testing "a bound session gets its own sitting back"
+      (is (= b (sit! sid-b {})))
+      (is (= c (sit! sid-a {}))))
+    (testing "two session-less re-sits do not both claim the same sibling"
+      (let [[s1 _] (initialize! h)
+            [s2 _] (initialize! h)
+            d (sit! s1 {})
+            e (sit! s2 {})]
+        (is (not (contains? #{b c} d)))
+        (is (not= d e))))))

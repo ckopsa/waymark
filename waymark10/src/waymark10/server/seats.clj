@@ -3689,6 +3689,21 @@
   the honest fix is the sweep, not a longer page."
   50)
 
+(defn open-sittings-for-grant
+  "Every open sitting under `grant-id`, newest first, one page of them:
+  `open-sitting-for-grant`'s query read past its first row. Every
+  sitting of a seat shares the seat's grant, so a sit that must find
+  THIS run's sitting among overlapping runs reads them all
+  (mcp/reusable-sitting)."
+  [eng grant-id]
+  (if (and grant-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/query-rows (:storage eng) tx :sitting
+                          {:grant (str grant-id) :state :open}
+                          {:limit open-sitting-page :newest-first true})))
+    []))
+
 (defn open-sitting-for-seat
   "The open sitting a SESSION-END REPORT belongs to (R-12.17), or nil.
 
