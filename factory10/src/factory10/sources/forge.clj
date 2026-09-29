@@ -998,9 +998,15 @@
                    checked (when-not landing
                              (check-verdict (bench/required-checks-of policy)
                                             (read-checks repo head)))
+                   ;; a conflicted row is red while its landing still
+                   ;; runs too: GitHub reads the pull request's own
+                   ;; head, and each submit resets `mergeable`, so a
+                   ;; landing that never says it finished does not hold
+                   ;; a conflict at `submitted` (ticket 7af7d506)
                    verdict (case (:verdict landing)
                              :red landing
-                             :running nil
+                             :running (when (conflicted? row)
+                                        (with-conflict nil row))
                              (with-conflict checked row))
                    ;; a head whose run died without a verdict is re-run
                    ;; once, and the re-run is its move for this pass
@@ -1014,7 +1020,7 @@
                                       [census false])
                    ;; the rig is asked only when a conflict will move
                    ;; the row, never for a row that stays where it is
-                   conflicts (when (and (nil? landing)
+                   conflicts (when (and (not= :red (:verdict landing))
                                         (conflicted? row)
                                         (= :submitted (state-of row)))
                                (conflict-paths eng row))]

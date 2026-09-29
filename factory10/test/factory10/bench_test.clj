@@ -2914,6 +2914,33 @@
                    "submit")
         "and submit on it is the next round")))
 
+(deftest a-fire-naming-a-ticket-in-review-hands-it-and-its-change
+  ;; ticket 7af7d506: the walk hands open tickets, and a fire that names
+  ;; one in review, or the change beside it, hands both
+  (let [w (ticket-world)
+        change-id (str (get-in (:answer w) [:change :id]))
+        ticket-id (str (:id (:ticket w)))
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        sit-fired! (fn [text]
+                     (let [k (seats/hold-fire-key! (:eng w) seat-row
+                                                   ((:now-fn (:eng w))) text)]
+                       (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                                      {:key k :seat "bench-seat"}))))]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "in_review" (ticket-state w)))
+    (testing "a wake naming the ticket hands it and its submitted change"
+      (let [answer (sit-fired! (str "{\"kind\":\"ticket\",\"id\":\""
+                                    ticket-id "\"}"))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))
+        (is (= "submitted" (get-in answer [:change :state])))))
+    (testing "a person's prose naming the change hands the same"
+      (let [answer (sit-fired! (str "Resolve the conflict on change "
+                                    change-id " and stop."))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))))))
+
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 
 (deftest the-branch-pattern-is-a-glob-with-one-star

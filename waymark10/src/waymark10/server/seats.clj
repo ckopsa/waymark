@@ -3759,18 +3759,28 @@
                         (.getBytes (str (:hash e)) StandardCharsets/UTF_8)))
                      (live-keys row now))))))
 
+(def ^:private uuid-in
+  #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
 (defn- named-row
   "The id of the walk row a fire's text names, or nil. A wake's text is
   the transition as JSON (`wakes/wake-text`): the kind and the row id.
-  Only a row of the kind this seat WALKS counts, and any other text — a
-  person's prose, a count wake's count — names nothing."
+  Only a row of the kind this seat WALKS counts, or, for a seat that
+  walks tickets, a change, which the sit reads back to the ticket it was
+  born from (`named-walk-row`). A person's prose names the first row id
+  it holds (ticket 7af7d506), and the sit hands that row only when it is
+  such a row. Any other text — prose with no id, a count wake's count —
+  names nothing."
   [seat-row text]
   (when-some [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
     (when-some [s (some-> text str str/trim not-empty)]
-      (when (str/starts-with? s "{")
-        (let [m (try (wire/read-json s) (catch Exception _ nil))]
-          (when (and (map? m) (= walk (str (:kind m))))
-            (some-> (:id m) str not-empty)))))))
+      (if (str/starts-with? s "{")
+        (let [m (try (wire/read-json s) (catch Exception _ nil))
+              kind (when (map? m) (str (:kind m)))]
+          (when (or (= walk kind)
+                    (and (= "ticket" walk) (= "change" kind)))
+            (some-> (:id m) str not-empty)))
+        (re-find uuid-in s)))))
 
 (defn hold-fire-key!
   "Mint the key ONE fire carries, and keep its hash on the seat row.
@@ -4059,6 +4069,54 @@
                             ticket-id))))))
             (changes {:state "stuck"} stuck-scan-limit)))
     #{}))
+
+(defn named-walk-row
+  "The walk row a fire's text named, as the sit reads it (ticket
+  7af7d506): the id itself when it is a row of the kind the seat walks,
+  and for a ticket walk the ticket a named CHANGE was born from, so a
+  fire that names either hands the ticket and the change beside it. Nil
+  for an id that is neither."
+  [eng walk id]
+  (when-some [id (some-> id str not-empty)]
+    (let [walk (str walk)
+          row-of (fn [kind]
+                   (when-some [rdef (get (inv/resources eng) kind)]
+                     (try
+                       (some->> (store/with-tx (:storage eng)
+                                  (fn [tx]
+                                    (store/load-row (:storage eng) tx kind id
+                                                    {})))
+                                (inv/decode-row rdef))
+                       (catch Exception _ nil))))]
+      (cond
+        (and (seq walk) (row-of (keyword walk))) id
+
+        (= "ticket" walk)
+        (when-some [change (row-of :change)]
+          (let [born (str (get-in change [:data :born_from]))]
+            (when (str/starts-with? born groomed-walk-prefix)
+              (not-empty (subs born (count groomed-walk-prefix))))))))))
+
+(defn named-beside-a-live-change?
+  "Does a live change — open, submitted, failing or stuck — stand beside
+  the ticket a fire named? Such a ticket is walked whatever its own
+  state (ticket 7af7d506): a seat fired on a ticket in review is handed
+  it and its change, and a ticket whose change merged or closed is not.
+  False for any other walk."
+  [eng walk id]
+  (boolean
+   (when-some [rdef (when (= "ticket" (str walk))
+                      (get (inv/resources eng) :change))]
+     (let [st (:storage eng)]
+       (some #(contains? #{:open :submitted :failing :stuck}
+                         (some-> (:state %) name keyword))
+             (map #(inv/decode-row rdef %)
+                  (store/with-tx st
+                    (fn [tx]
+                      (store/query-rows st tx :change
+                                        {:born_from (str groomed-walk-prefix
+                                                         id)}
+                                        {:limit live-change-scan-limit})))))))))
 
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows
