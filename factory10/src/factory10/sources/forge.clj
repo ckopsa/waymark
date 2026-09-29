@@ -942,7 +942,9 @@
   "The one door the verdict opens on this row, as [door input], or nil.
   A red head under the round ceiling goes to `failing`; a red head on
   the last round goes to `stuck` with the names as its why; a green
-  head brings a failing change back to `submitted`. `conflicts` is the
+  head brings a failing change back to `submitted`, unless a merge train
+  found that same head red (`train_red_head`, ticket 6566d32f): its own
+  green does not clear the train's red, and a new head does. `conflicts` is the
   list of conflicting paths, written beside the names when there is one;
   a failed landing's output rides as the verdict's `:error`."
   [row verdict policy conflicts]
@@ -961,7 +963,11 @@
         [:fail (cond-> {:failing_checks names}
                  (seq conflicts) (assoc :conflicts conflicts)
                  error (assoc :landing_error error))])
-      [:failing :green] [:recover {}]
+      [:failing :green]
+      (let [train-head (some-> (get-in row [:data :train_red_head]) str not-empty)]
+        (when-not (and train-head
+                       (= train-head (str (get-in row [:data :head_sha]))))
+          [:recover {}]))
       nil)))
 
 (def ^:private moved-counts
