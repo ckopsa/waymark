@@ -935,3 +935,29 @@
       (is (sch/held? *eng* (sched-of seat-id))))
 
     (seat-do! seat-id :retire)))
+
+(deftest a-seat-whose-only-link-is-a-live-runner-can-be-fired
+  ;; waymark ticket 1b6d1073
+  (let [cn :sched-runner-only
+        _ (drain! cn)
+        chair (model! "claude-chair-runner-only")
+        seat-id (seat! "runner-only-clerk" 3600 [chair] {:instructions the-instructions})
+        bare-id (seat! "no-link-clerk" 3600 [chair] {:instructions the-instructions})
+        _ (drain! cn)
+        a (runner-link!)
+        guard-of (fn [seat-id]
+                   (try (fire-seat! seat-id "Walk the pool.") nil
+                        (catch clojure.lang.ExceptionInfo e
+                          (:guard (ex-data e)))))]
+    (set-runners! :schedule (:id (sched-of seat-id)) {:runners [a]})
+
+    (testing "no fire_url on the schedule or the chair, and one live runner: the fire runs"
+      (is (nil? (get-in (sched-of seat-id) [:data :fire_url])))
+      (is (nil? (guard-of seat-id)))
+      (drain! cn)
+      (is (= a (get-in (sched-of seat-id) [:data :last_runner]))))
+
+    (testing "with neither a link nor a runner, the fire is still refused"
+      (is (= :linked-for-fire (guard-of bare-id))))
+
+    (doseq [s [seat-id bare-id]] (seat-do! s :retire))))
