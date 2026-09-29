@@ -982,10 +982,12 @@
         (let [tname (str tool)
               {:keys [row entry token]} (servers/resolve-tool eng tname)
               gentry (when token (grants/capability-entry vis token))
-              args (bench-protected tname gentry args)
+              protected (protected-verdict vis tname gentry args)
+              args (bench-protected tname args protected)
               verdict (when gentry (filter-verdict (:filters gentry) args))
               prepare-block (bench-prepare-block eng vis tname args)]
-          (when (and entry gentry (not (:miss verdict)) (not prepare-block))
+          (when (and entry gentry (not (:miss verdict)) (not prepare-block)
+                     (not (:refuse protected)))
             (try
               (servers/call! eng tname
                              (forward-args row (with-allow args (:allow verdict))))
