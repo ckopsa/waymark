@@ -188,6 +188,13 @@
   [policy]
   (long (or (get-in policy [:data :train_size]) 4)))
 
+(defn test-workflow-of
+  "The workflow the policy's test block names (ticket 90ce5c73), nil
+  when it names none: a train's checks dispatch it and its status reads
+  it, so a rig whose default workflow differs reads the right run."
+  [policy]
+  (some-> (get-in policy [:data :test :workflow]) str not-empty))
+
 (defn house-merges?
   "Does this policy say the house merges a green change (ticket
   4dfb00f6)? Only `merge_by: house`; an absent field is GitHub's."
@@ -750,7 +757,9 @@
   "Dispatch a built train's checks → the train with its `run_id`, nil
   when no run showed yet (`train_status` then reads it by branch)."
   [ctx repo train]
-  (let [answer (ask ctx :train_checks {:repo repo :branch (:branch train)})]
+  (let [answer (ask ctx :train_checks
+                    (cond-> {:repo repo :branch (:branch train)}
+                      (:workflow train) (assoc :workflow (:workflow train))))]
     (when (refused answer)
       (warn! "the rig refused the checks of " (:branch train) " ("
              (reason-of answer) ")"))
@@ -783,12 +792,14 @@
       :else
       (let [rode (filterv #(merged (number-of %)) riders)]
         (dispatch-checks! ctx repo
-                          {:branch branch
-                           :changes (mapv #(str (:id %)) rode)
-                           :prs (mapv number-of rode)
-                           :head (some-> (:head answer) str)
-                           :base_head (some-> (:base_head answer) str)
-                           :started_at (pass-now ctx)})))))
+                          (cond-> {:branch branch
+                                   :changes (mapv #(str (:id %)) rode)
+                                   :prs (mapv number-of rode)
+                                   :head (some-> (:head answer) str)
+                                   :base_head (some-> (:base_head answer) str)
+                                   :started_at (pass-now ctx)}
+                            (test-workflow-of policy)
+                            (assoc :workflow (test-workflow-of policy))))))))
 
 (defn- one-at-a-time!
   "Delete a train and send its repository one at a time for the rest of
@@ -925,10 +936,16 @@
     (= "failure" verdict) (bisect-train! ctx seen repo policy train)
     :else (retry-train! ctx seen repo train verdict)))
 
-(defn- status-args [repo train]
+(defn- status-args
+  "A train with no run yet is read by its branch and head, and by the
+  workflow it dispatched: the train's own, else the policy's test block."
+  [repo policy train]
   (if-some [run (run-of train)]
     {:repo repo :run_id run}
-    {:repo repo :branch (:branch train) :head (:head train)}))
+    (let [workflow (or (some-> (:workflow train) str not-empty)
+                       (test-workflow-of policy))]
+      (cond-> {:repo repo :branch (:branch train) :head (:head train)}
+        workflow (assoc :workflow workflow)))))
 
 (defn advance-train!
   "Read a standing train's run once → the train that stands after it:
@@ -938,7 +955,7 @@
   naming the run a retry left behind (`stale_run_id`) is read as
   pending, since the retry's own run has not shown yet."
   [ctx seen repo policy train]
-  (let [answer (ask ctx :train_status (status-args repo train))
+  (let [answer (ask ctx :train_status (status-args repo policy train))
         why (refused answer)
         st (some-> (:state answer) name)
         run (run-of answer)
