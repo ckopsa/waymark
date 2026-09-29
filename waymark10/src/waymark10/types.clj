@@ -31,11 +31,12 @@
 
 (defn deny
   ([] {:verdict :deny})
-  ([{:keys [vars errors retry-at]}]
+  ([{:keys [vars errors retry-at evidence]}]
    (cond-> {:verdict :deny}
      vars (assoc :vars vars)
      errors (assoc :errors errors)
-     retry-at (assoc :retry-at retry-at))))
+     retry-at (assoc :retry-at retry-at)
+     evidence (assoc :evidence evidence))))
 
 (defn allow? [v] (= :allow (:verdict v)))
 (defn deny? [v] (= :deny (:verdict v)))

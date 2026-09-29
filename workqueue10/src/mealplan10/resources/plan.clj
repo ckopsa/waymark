@@ -141,12 +141,29 @@
                :vars {:start '(data :start_date)}
                :becomes-available-at (fn [row] (get-in row [:data :start_date]))}))
 
+(defn- first-undecided-day
+  "The plan's earliest undecided day, by date — the day a finalize
+  refusal names. nil where no :find rides (the render probe)."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (some->> (find' :plan_day {:plan_id (:id row) :state :undecided}
+                    {:limit 500})
+             (sort-by #(str (get-in % [:data :date])))
+             first
+             :id
+             str)))
+
 ;; the gate judges the stored fact; the refusal reason is one
-;; declaration, never re-derived in a handler
+;; declaration, never re-derived in a handler. The refusal names the
+;; first undecided day as evidence, so assign_meal's remedy binds it;
+;; which meal stays the caller's choice
 (def all-days-covered-gate
   (require-fact :all_days_covered
                 {:explain "Every day needs a meal or an eating-out mark before finalizing."
-                 :remedies [:plan_day/assign_meal :plan_day/mark_eating_out]}))
+                 :evidence {:plan_day_id first-undecided-day}
+                 :remedies [{:door :plan_day/assign_meal
+                             :id '(evidence :plan_day_id)}
+                            :plan_day/mark_eating_out]}))
 
 ;; the open-task rollup gate: the phase-6 count fact (the v10 spelling
 ;; of waymark9's Owns rollup + rollup_is — recorded: the {:rollups …}

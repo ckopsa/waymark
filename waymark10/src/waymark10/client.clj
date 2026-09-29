@@ -568,17 +568,22 @@
 
 (defn- remedy-call
   "Where remedy `door` acts for the `refused` call: the row the refusal
-  itself bound (its resolved remedies), else :resolve's pick, or, when
-  :resolve names none, the refused call's own row when the remedy
-  is on its kind. nil means nobody said — a choice for a person;
+  itself bound (its resolved remedies), with the :input :choices gives
+  that door beneath the bound input; else the :choices pick, :resolve's
+  pick, or, when neither names one, the refused call's own row when the
+  remedy is on its kind. nil means nobody said — a choice for a person;
   {:unseen reason} means the pick did not read back (gone, or outside
   the caller's grant), so the remedy is blocked, never attempted."
-  [session door refused resolve]
+  [session door refused resolve choices]
   (let [same-kind? (= (door-kind door) (door-kind (:door refused)))
         bound (some #(when (= door (:door %)) %) (:bound refused))
-        pick (or (when (some? (:id bound)) (select-keys bound [:id :input]))
-                 (when resolve (resolve door refused))
-                 (when same-kind? (select-keys bound [:input])))
+        chosen (or (get choices door) (get choices (keyword door)))
+        pick (if (some? (:id bound))
+               (cond-> (select-keys bound [:id :input])
+                 (seq (:input chosen)) (update :input #(merge (:input chosen) %)))
+               (or chosen
+                   (when resolve (resolve door refused))
+                   (when same-kind? (select-keys bound [:input]))))
         target (when pick
                  (let [d (remedy-doc session (door-kind door) (door-action door) pick)]
                    (if (and (nil? d) same-kind?) (:doc refused) d)))]
@@ -609,7 +614,8 @@
       ;; and its remedies ride the unavailable entry
       (nil? entry)
       (if-some [remedies (not-empty (vec (get-in doc [:unavailable action :remedies])))]
-        {:refused remedies :doc doc :reason (why-not doc action)}
+        {:refused remedies :doc doc :reason (why-not doc action)
+         :bound (vec (get-in doc [:unavailable action :resolved_remedies]))}
         (blocked {:reason (or (why-not doc action)
                               (str door " is not afforded on " (:self doc) "."))}))
 
@@ -665,7 +671,7 @@
   when it does not. The stack, and with it the depth bound and the
   cycle check, carries across re-rehearsals; :max-steps (default 4 ×
   :max-depth) bounds the attempts one real pass makes."
-  [session stack rehearse? {:keys [resolve max-depth max-steps expect] :or {max-depth 8} :as opts}]
+  [session stack rehearse? {:keys [resolve choices max-depth max-steps expect] :or {max-depth 8} :as opts}]
   (let [act-opts (select-keys opts [:confirm! :acknowledge])
         max-steps (or max-steps (* 4 max-depth))
         write-of (fn [f] {:door (:door f) :row (get-in f [:doc :self]) :input (:input f)})]
@@ -731,7 +737,7 @@
                 others (vec (remove #{door} (:all top)))
                 call' (remedy-call session door
                                    (select-keys top [:door :doc :input :reason :bound])
-                                   resolve)
+                                   resolve choices)
                 block (fn [m] (merge {:door door :row (get-in call' [:doc :self])
                                       :needs [] :or others}
                                      m))
@@ -773,6 +779,10 @@
                 :doc), asked only where the refusal's resolved remedies
                 bound no row. With neither, a remedy on the refused
                 call's own kind acts on its row; any other is a choice.
+    :choices    {remedy-door {:id row-id :input {…}}} — as :resolve, and
+                asked first; where the refusal bound the row, its
+                :input still fills what the binding left unset (the
+                meal for the day a refusal named)
     :max-depth  stack bound (default 8); the same door on the same row
                 twice in the stack stops that branch (the cycle check)
     :max-steps  attempts one real run may make across its re-rehearsals

@@ -71,7 +71,8 @@
 (defn guard-refused
   "The guard's refusal. :resolved-remedies rides only when a remedy
   bound its row or input off the refused call: each door with the
-  :id and :input it acts on, so any client knows where to go."
+  :id and :input it acts on, so any client knows where to go.
+  :evidence rides only when the guard returned what it found."
   [action state reason denier resource]
   (problem :guard-refused 409 "Refused"
            (cond-> {:detail reason
@@ -83,7 +84,9 @@
                     :becomes-available (:becomes-available denier)
                     :resource resource}
              (seq (:resolved-remedies denier))
-             (assoc :resolved-remedies (:resolved-remedies denier)))))
+             (assoc :resolved-remedies (:resolved-remedies denier))
+             (seq (:evidence denier))
+             (assoc :evidence (:evidence denier)))))
 
 (defn warning-refused
   "The E1 acknowledge protocol: one problem carries every warning; the

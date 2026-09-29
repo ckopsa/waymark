@@ -348,6 +348,9 @@
         (filter (comp some? val))
         {:reason (g/render-reason denier deny row)
          :remedies (not-empty (g/remedy-doors denier))
+         :resolved-remedies (not-empty (g/resolve-remedies denier row nil
+                                                           (:evidence deny)))
+         :evidence (not-empty (:evidence deny))
          :becomes-available (g/becomes-available denier deny row)}))
 
 (defn- out-of-state-entry [defn' state]
@@ -834,6 +837,10 @@
                     ;; could not ask for the number would narrate a
                     ;; wall that has already lifted
                     :sum (:sum ctx-opts)
+                    ;; …and the reads a refusing guard's :evidence
+                    ;; fns alone may use, so an unavailable entry
+                    ;; names what the POST's refusal would
+                    :evidence-reads (:evidence-reads ctx-opts)
                     ;; …and the log's own hook (docs/spec-undo.md): an
                     ;; undo door's availability is a fact about the
                     ;; clock and about whose hand is asking, so a probe

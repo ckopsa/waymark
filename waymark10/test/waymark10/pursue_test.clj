@@ -304,6 +304,25 @@
                  :safety fx/routine}
           :lower {:from #{:open} :to :shut :safety fx/routine}}}))))
 
+(deftest a-binding-naming-no-returned-evidence-fails-the-battery
+  (is (thrown-with-msg?
+       Exception #"remedy-bindings"
+       (r/resource
+        {:kind :mute_latch
+         :states [:shut :open]
+         :initial :shut
+         :summary "Latch · {state}"
+         :schema [:map [:free {:optional true} [:maybe :boolean]]]
+         :actions
+         {:lift {:from #{:shut} :to :open
+                 :guards [(g/expr {:name :mute-latch-free
+                                   :when '(= (data :free) true)
+                                   :explain "The latch is stuck."
+                                   :remedies [{:door :mute_latch/lift
+                                               :id '(evidence :latch_id)}]})]
+                 :safety fx/routine}
+          :lower {:from #{:open} :to :shut :safety fx/routine}}}))))
+
 (deftest the-depth-bound-stops-a-branch
   (let [{:keys [meal plan] :as rows} (chain!)
         res (pursue-list! rows {:resolve (resolver rows (id-of meal))

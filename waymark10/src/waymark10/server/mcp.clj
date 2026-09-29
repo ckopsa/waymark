@@ -1846,7 +1846,7 @@
 
 (defn- pursue
   "waymark_pursue: waymark10.client/pursue! over this door. `choices`
-  (remedy door → {id, input}) is its :resolve; a door it does not name
+  (remedy door → {id, input}) is its :choices; a door it does not name
   falls back to the refused row when the remedy is on that row's kind.
   dry_run defaults TRUE — a pursuit writes only when asked to. The
   answer is written without `wire-value`: `done` is the route's own
@@ -1860,17 +1860,18 @@
     (if-not (client/doc? start)
       ;; concealed, gone, or never here — the engine's own refusal
       (result (wire/write-json (:problem start)) true (:status start))
-      (let [pick-of (when (seq choices)
-                      (fn [door _refused]
-                        (when-some [c (or (get choices (keyword door))
-                                          (get choices door))]
-                          (cond-> {}
-                            (some? (:id c)) (assoc :id (str (:id c)))
-                            (some? (:input c)) (assoc :input (:input c))))))
+      (let [picks (when (seq choices)
+                    (into {}
+                          (map (fn [[door c]]
+                                 [(name door)
+                                  (cond-> {}
+                                    (some? (:id c)) (assoc :id (str (:id c)))
+                                    (some? (:input c)) (assoc :input (:input c)))]))
+                          choices))
             res (client/pursue! cs start (wire-action aname) input
                                 (cond-> {:dry-run (not (false? dry_run))}
                                   max_depth (assoc :max-depth max_depth)
-                                  pick-of (assoc :resolve pick-of)))
+                                  picks (assoc :choices picks)))
             rehearsal? (boolean (:rehearsal res))]
         (result
          (wire/write-json

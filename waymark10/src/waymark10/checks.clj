@@ -1588,9 +1588,10 @@
 (defn- check-remedy-bindings
   "A remedy binding reads a field the refused call has: (input :f) a
   field of the guarded door's input (the create schema at the create
-  door), (data :f) a field of the row. An ERROR — a binding naming no
-  field resolves to nothing on every refusal, so its remedy points
-  nowhere while claiming to point somewhere."
+  door), (data :f) a field of the row, (evidence :f) a name the guard's
+  :evidence declares. An ERROR — a binding naming no field resolves to
+  nothing on every refusal, so its remedy points nowhere while
+  claiming to point somewhere."
   [r]
   (doseq [{:keys [door guard]} (guard-sites r)
           rmd (:remedies guard)
@@ -1601,13 +1602,21 @@
                                                (machine/actions-seq r)))
                              #{}))]
           [op k] (g/remedy-bindings rmd)
-          :when (not (contains? (if (= 'input op) inputs (data-keys r)) k))]
+          :when (not (contains? (case op
+                                  input inputs
+                                  evidence (g/evidence-names guard)
+                                  (data-keys r))
+                                k))]
     (err r :remedy-bindings
          (str "guard " (name (:name guard)) " at "
               (if (= :create door) "the create door" (str "action " (name door)))
               ": remedy " (pr-str (g/remedy-door rmd)) " binds (" op " " k
-              "), but " (if (= 'input op) "that door's input" "the row")
-              " has no field " (name k)))))
+              "), but "
+              (case op
+                input "that door's input has no field "
+                evidence "the guard returns no evidence named "
+                "the row has no field ")
+              (name k)))))
 
 (defn run-all
   "The full battery in waymark9 order; throws the first error, returns

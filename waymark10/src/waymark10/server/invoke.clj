@@ -747,7 +747,8 @@
               (g/render-reason d v nrow)
               {:guard (:name d)
                :remedies (g/remedy-doors d)
-               :resolved-remedies (g/resolve-remedies d nrow inp)
+               :resolved-remedies (g/resolve-remedies d nrow inp (:evidence v))
+               :evidence (:evidence v)
                :open (:open d)
                :becomes-available (g/becomes-available d v nrow)}
               {:kind (:kind rdef) :id (:id row)
@@ -1873,7 +1874,8 @@
                                     (g/render-reason d v nil)
                                     {:guard (:name d)
                                      :remedies (g/remedy-doors d)
-                                     :resolved-remedies (g/resolve-remedies d nil inp)
+                                     :resolved-remedies (g/resolve-remedies d nil inp (:evidence v))
+                                     :evidence (:evidence v)
                                      :open (:open d)}
                                     nil))))))
     {:warned [] :overridden [] :basis (when scope [])}
