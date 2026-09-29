@@ -591,8 +591,9 @@
 
 (defn- attempt
   "Try one call once — rehearsed (dry-run) or real (act!) — on a fresh
-  read of its row. → {:landed doc} · {:refused [remedy …] :bound
-  [resolved remedy …] :doc :reason}
+  read of its row. → {:landed doc :to state} (the state it landed the
+  row in; a rehearsal's is the door's effect.to) · {:refused [remedy …]
+  :bound [resolved remedy …] :doc :reason}
   · {:blocked entry} · {:stop res} (a wire failure or a divergence)."
   [session {:keys [door doc input retry] :as call} rehearse? opts]
   (let [doc (if (:self doc) (get-doc session (:self doc)) doc)
@@ -641,7 +642,7 @@
           ;; a rehearsal cannot mint the held call: it counts the door
           ;; as landing, marked, so the real run reaches it and holds
           (and rehearse? (holds/hold? (get-in res [:problem :guard])))
-          {:landed doc :hold true}
+          {:landed doc :hold true :to (get-in entry [:effect :to])}
           (warnings? res) (blocked {:warnings (:warnings res)})
           (seq (get-in res [:problem :remedies]))
           {:refused (vec (get-in res [:problem :remedies])) :doc doc
@@ -651,7 +652,38 @@
           (blocked {:reason (or (get-in res [:problem :detail])
                                 (get-in res [:refused :reason])
                                 (get-in res [:problem :title]))})
-          :else {:landed (if rehearse? doc res)})))))
+          :else {:landed (if rehearse? doc res)
+                 :to (if rehearse? (get-in entry [:effect :to]) (:state res))})))))
+
+(defn- door-to
+  "The state a door's declared effect lands its row in, read off the row
+  it was tried on — afforded there or not."
+  [{:keys [door doc]}]
+  (let [action (keyword (door-action door))]
+    (or (get-in doc [:actions action :effect :to])
+        (get-in doc [:unavailable action :effect :to]))))
+
+(defn- stands-in?
+  "A landing that put `row` in `to` stands in for `below`, the refused
+  door waiting on it, when that door would land the same row in the same
+  state — so it is popped, not retried. Judged on the state the landing
+  made (the one a rehearsal simulates), never on door names."
+  [row to below]
+  (boolean
+   (and to (contains? below :remedies)
+        (= row (get-in below [:doc :self]))
+        (= (name to) (some-> (door-to below) name)))))
+
+(defn- retried
+  "The doors a landing on `row` in `to` leaves to retry, top first: each
+  door waiting below it, less any one the landing beneath stood in for."
+  [row to stack]
+  (loop [row row to to stack stack out []]
+    (if-some [f (peek stack)]
+      (if (stands-in? row to f)
+        (recur row to (pop stack) out)
+        (recur (get-in f [:doc :self]) (door-to f) (pop stack) (conj out f)))
+      out)))
 
 (defn- walk
   "One pass of the pursuit over an explicit stack. rehearse? dry-runs
@@ -704,7 +736,11 @@
               (let [w (cond-> (write-of top) (:hold out) (assoc :hold true))
                     writes' (conj writes w)
                     expected (first expect)
-                    stack' (pop stack)]
+                    row (get-in top [:doc :self])
+                    ;; an alternative that already landed the row where
+                    ;; the refused door below would stands in for it
+                    stack' (cond-> (pop stack)
+                             (stands-in? row (:to out) (peek (pop stack))) pop)]
                 (cond
                   (and expect (not= (select-keys expected [:door :row])
                                     (select-keys w [:door :row])))
@@ -713,7 +749,8 @@
 
                   (empty? stack') {:done (:landed out) :writes writes'}
 
-                  rehearse? {:done nil :writes (into writes' (map write-of) (rseq stack'))}
+                  rehearse? {:done nil :writes (into writes' (map write-of)
+                                                     (retried row (:to out) stack'))}
 
                   :else
                   (let [stack'' (conj (pop stack') (-> (peek stack')
@@ -762,7 +799,9 @@
   "Reach a goal by following refusal remedies (Amundsen's GRAIL). Try
   the goal door; on a refusal whose guard names :remedies, push it and
   try each remedy in order — a refused remedy's own remedies in turn —
-  and when one lands, pop and retry the door below it. The whole chain
+  and when one lands, pop and retry the door below it — unless it landed
+  that door's row in that door's effect.to, which stands in for the
+  door: both pop and it is not retried. The whole chain
   is rehearsed by dry-run first — a first estimate, since a dry-run
   cannot see its own effects — and the real run re-checks each landing
   against the latest rehearsal, stops on divergence, and re-rehearses
