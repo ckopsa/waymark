@@ -1559,7 +1559,16 @@
      :handler observe-the-pull-request
      :input [:map
              [:head_branch {:x-display {:raw true}}
-              [:string {:min 1 :max 200}]]]
+              [:string {:min 1 :max 200}]]
+             ;; THE REPOSITORY MOVES WITH IT (ticket 1ebcd19f). A walk
+             ;; row restated to another repository keeps its
+             ;; `change_id`, so the sit writes the new repository and
+             ;; its policy's base here too, on a change that never
+             ;; opened: the old repository holds nothing of it.
+             [:repository {:optional true :x-display {:raw true}}
+              [:string {:min 1 :max 140}]]
+             [:base_branch {:optional true :x-display {:raw true}}
+              [:maybe [:string {:max 200}]]]]
      ;; :edit-shape — the input restates a field of the document, as
      ;; the adoptions do; a prefill for a hidden door is scaffolding
      ;; for nobody.
