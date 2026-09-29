@@ -491,3 +491,53 @@
                            (:id seat) (:sitting b))
                           "ticket-a"))
           "after it, they are free"))))
+
+;; ── 7 · the write and the refusal land on the CALLING sitting ────────
+
+(deftest a-write-and-a-refusal-count-on-the-sitting-that-made-them
+  ;; ticket d882c708: the seat's sittings share one grant, so the grant
+  ;; alone names the NEWEST open sitting. The older session's write and
+  ;; its 409 below must be counted on its own row, not on the sibling's.
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model)
+        sit-as (fn [harness]
+                 (let [sid (initialize! h)
+                       r (tool h (with-session sid) "waymark_sit"
+                               {:key a-key :session harness})
+                       answer (doc-of r)]
+                   {:sid sid
+                    :grant (str (:grant answer))
+                    :sitting (str (:sitting answer))}))
+        a (sit-as "run-a")
+        b (sit-as "run-b")
+        dinner (:id (meal! eng "Pho"))
+        counts (fn [sitting-id]
+                 (let [d (:data (row-of eng :sitting sitting-id))]
+                   {:transitions (long (or (:transitions d) 0))
+                    :refusals (long (or (:refusals d) 0))}))]
+    (is (not= (:sitting a) (:sitting b)) "two runs, two sittings")
+    (is (= (:grant a) (:grant b)) "and one grant behind both")
+    (is (= (:sitting b)
+           (str (:id (seats/open-sitting-for-grant eng (:grant a)))))
+        "so the shared grant answers the NEWER one")
+
+    (testing "the older session's write counts on its own sitting"
+      (let [ok (tool h (with-session (:sid a)) "waymark_invoke"
+                     {:kind "meal" :id (str dinner) :action "accept"})]
+        (is (false? (:isError ok)) (text-of ok))
+        (is (= {:transitions 1 :refusals 0} (counts (:sitting a))))
+        (is (= {:transitions 0 :refusals 0} (counts (:sitting b)))
+            "and not on the newer one")))
+
+    (testing "and so does the refusal that follows it"
+      ;; `decline` leaves `suggested` only, so on the accepted meal it
+      ;; is the engine's own wrong-state 409
+      (let [bad (tool h (with-session (:sid a)) "waymark_invoke"
+                      {:kind "meal" :id (str dinner) :action "decline"})]
+        (is (true? (:isError bad)))
+        (is (= 409 (:status (doc-of bad))))
+        (is (= {:transitions 1 :refusals 1} (counts (:sitting a))))
+        (is (= {:transitions 0 :refusals 0} (counts (:sitting b)))
+            "R-10.6: a sitting pays for the fuel it spent and no other's")))))
