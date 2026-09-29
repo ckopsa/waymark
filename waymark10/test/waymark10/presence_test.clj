@@ -587,7 +587,8 @@
                                 :events-poll-ms 200})
             server (engine/start! eng 0)
             port (http/server-port server)
-            h (engine/handler eng)]
+            h (engine/handler eng)
+            beating (atom nil)]
         (try
           (let [w1 (get-in (inv/create! eng :pres_widget {:name "w"}
                                         {:principal elena})
@@ -616,9 +617,17 @@
             ;; three gazes: the granted collection, an ungranted
             ;; kind's collection, a door self — distinct pids so
             ;; byte-level absence is assertable by name
-            (beat! "elena" "/api/pres_widgets")
-            (beat! "quinn" "/api/members")
-            (beat! "nadia" "/api/-/events")
+            ;; keep all three beating for the whole test: the 300ms
+            ;; heartbeat evicts a self after ~900ms, and a slow SSE
+            ;; connect could otherwise open onto an empty snapshot
+            (reset! beating
+                    (future
+                      (loop []
+                        (beat! "elena" "/api/pres_widgets")
+                        (beat! "quinn" "/api/members")
+                        (beat! "nadia" "/api/-/events")
+                        (Thread/sleep 100)
+                        (recur))))
             (Thread/sleep 300)
 
             (testing "whole-kind sight shows the collection frame;
@@ -659,12 +668,6 @@
 
             (testing "the unscoped viewer is unchanged — sees all
                       three (regression)"
-              ;; the 300ms test heartbeat evicted the opening beats
-              ;; (3 missed ≈ 900ms) while the scoped blocks above slept;
-              ;; re-beat so the watcher's snapshot has something to see
-              (beat! "elena" "/api/pres_widgets")
-              (beat! "quinn" "/api/members")
-              (beat! "nadia" "/api/-/events")
               (let [open (sse-lines port "/api/-/presence"
                                     {"x-waymark-principal" "watcher"})]
                 (doseq [pid ["elena" "quinn" "nadia"]]
@@ -674,7 +677,9 @@
                       (str pid "'s frame rides the unscoped stream")))
                 (.close ^InputStream (:body open))
                 (future-cancel (:reader open)))))
-          (finally (engine/stop! eng server))))
+          (finally
+            (some-> @beating future-cancel)
+            (engine/stop! eng server))))
       (finally (pg/close! st)))))
 
 ;; ── the fabricated self (waymark-tti.3 L7) ─────────────────────────
