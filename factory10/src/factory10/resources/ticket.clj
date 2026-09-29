@@ -959,7 +959,7 @@
     {:from #{:open :in_review} :to :draft
      :guards [only-its-change-moves-it]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and the next sit puts its change back to work."}
+              :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and puts its change back to work in the same move; a change with a pull request goes back under review at the next sit."}
      :display {:label "Stalled" :order 17
                :description "Its change stalled — back to draft, to be groomed again"}}
 
