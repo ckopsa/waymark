@@ -9,7 +9,8 @@
   writes a canned `stdout.json` on the handle's stdout and exits as
   told. The suite then needs no `claude` binary and no network."
   (:require [clojure.java.io :as io])
-  (:import [java.util.concurrent TimeUnit]))
+  (:import [java.lang ProcessBuilder$Redirect]
+           [java.util.concurrent TimeUnit]))
 
 (defprotocol Spawner
   (start [s argv dir env]
@@ -50,6 +51,9 @@
       ;; sets no seat variable, so the Stop hook takes its second path
       ;; and the session closes its own sitting through the connector.
       (doseq [[k v] env] (.put (.environment pb) (str k) (str v)))
+      ;; an empty stdin: nothing is ever written to it, and a pipe left
+      ;; open makes `claude -p` wait three seconds for input first
+      (.redirectInput pb (ProcessBuilder$Redirect/from (io/file "/dev/null")))
       (->ProcessHandle (.start pb)))))
 
 (defn process-spawner

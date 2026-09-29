@@ -1203,7 +1203,9 @@
                                   (into {} (map (fn [[k _]] [k ["unexpected field"]])) body)))
                           nil))]
               ;; 8. natural replay before guards
-              (or (when (and (not dry-run) (get-in defn [:safety :idempotent]))
+              (or (when (and (not dry-run)
+                             (get-in defn [:safety :idempotent])
+                             (not (false? (:replay defn))))
                     (natural-replay engine tx rdef row defn digest within))
                   ;; 9. the guard loop — partial judges only the
                   ;; leaves whose every judged field arrived
@@ -1621,7 +1623,10 @@
                                                (update :refused inc)
                                                (update :refusals conj
                                                        {:self (href id)
-                                                        :reason (problem-reason e)}))
+                                                        :reason (problem-reason e)
+                                                        ;; the router counts the
+                                                        ;; 409s; stripped below
+                                                        :status (:status (ex-data e))}))
                                            (do (binding [*out* *err*]
                                                  (println "waymark10 bulk item error:"
                                                           (name kind) id "-" (ex-message e)))
@@ -1644,9 +1649,17 @@
                                        :not-run (mapv #(hash-map :self (href (:id %)))
                                                       rest))))
                           rep)))
-                    doc (report-doc action-name data nil)]
+                    ;; per-item 409s leave beside the report, not in
+                    ;; it: the stored replay and the wire stay the
+                    ;; shape they were (waymark-fp62.7.11)
+                    conflicts (count (filter #(= 409 (:status %))
+                                             (:refusals data)))
+                    doc (report-doc action-name
+                                    (update data :refusals
+                                            (partial mapv #(dissoc % :status)))
+                                    nil)]
                 (fan-out-store! engine kind marker digest idempotency-key doc)
-                {:report doc}))))))))
+                {:report doc :conflicts conflicts}))))))))
 
 (defn bulk-item!
   "One id through the SAME per-item algorithm bulk!'s partial-success

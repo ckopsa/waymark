@@ -193,3 +193,94 @@
                   :cache_write_tokens 400 :turns 4}
                  (select-keys (:body (first @seen)) (keys counts))))))
       (finally (.stop server 0)))))
+
+(defn- bash-call
+  "A Bash call, in the background or not, and the harness's answer."
+  [background? answer]
+  [{:type "assistant" :requestId "r-c"
+    :message {:role "assistant"
+              :content [{:type "tool_use" :id "tu-3" :name "Bash"
+                         :input (cond-> {:command "sleep 90"}
+                                  background? (assoc :run_in_background true))}]
+              :usage {:input_tokens 10 :output_tokens 2
+                      :cache_read_input_tokens 0
+                      :cache_creation_input_tokens 0}}}
+   {:type "user"
+    :message {:role "user"
+              :content [{:type "tool_result" :tool_use_id "tu-3"
+                         :content [{:type "text" :text answer}]}]}}])
+
+(def ^:private bash-hand-back
+  "The background command's task notification, and the turn it wakes."
+  [{:type "user"
+    :message {:role "user"
+              :content "<task-notification>\n<task-id>bx7k2q9</task-id>\n<status>completed</status>\n</task-notification>"}}
+   {:type "assistant" :requestId "r-d"
+    :message {:role "assistant"
+              :content [{:type "text" :text "The wait is over."}]
+              :usage {:input_tokens 20 :output_tokens 4
+                      :cache_read_input_tokens 0
+                      :cache_creation_input_tokens 0}}}])
+
+(deftest a-fired-run-closes-only-when-its-background-commands-have-handed-back
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)
+        launch (bash-call true "Command running in background with ID: bx7k2q9. Output is being written to: /tmp/bx7k2q9.output")]
+    (try
+      (testing "a stop with the command still out neither closes nor holds"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port launch)
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (zero? (count @seen)))))
+      (testing "the stop after the notification closes once"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port (concat launch bash-hand-back))
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (= 1 (count @seen)))))
+      (finally (.stop server 0)))))
+
+(deftest a-foreground-command-does-not-hold-the-close
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)]
+    (try
+      (let [{:keys [exit out err]}
+            (run-hook! dir (transcript! dir port (bash-call false "done ID: 42"))
+                       {:hook_event_name "Stop"})]
+        (is (zero? exit) err)
+        (is (str/blank? out))
+        (is (= 1 (count @seen))))
+      (finally (.stop server 0)))))
+
+(def ^:private seat-settings
+  (first (filter #(.isFile (io/file %))
+                 ["../seat/.claude/settings.json"
+                  "seat/.claude/settings.json"])))
+
+(deftest the-seat-place-tells-the-seat-its-session-id-at-start
+  (let [hooks (:hooks (wire/read-json (slurp seat-settings)))
+        command-of (fn [event] (-> hooks event first :hooks first :command))
+        close "$CLAUDE_PROJECT_DIR/.claude/hooks/sitting-close.sh"]
+    (testing "the closing hooks still run sitting-close.sh"
+      (is (= close (command-of :Stop)))
+      (is (= close (command-of :SubagentStop)))
+      (is (= (str close " end") (command-of :SessionEnd))))
+    (testing "SessionStart answers the stdin's session id as additionalContext"
+      (let [p (.start (ProcessBuilder. ^java.util.List
+                                       ["bash" "-c" (command-of :SessionStart)]))
+            out (future (slurp (.getInputStream p)))
+            err (future (slurp (.getErrorStream p)))]
+        (with-open [in (.getOutputStream p)]
+          (.write in (.getBytes ^String (wire/write-json
+                                         {:session_id "s-42"
+                                          :hook_event_name "SessionStart"
+                                          :source "startup"})
+                                "UTF-8")))
+        (is (zero? (.waitFor p)) @err)
+        (let [said (:hookSpecificOutput (wire/read-json @out))]
+          (is (= "SessionStart" (:hookEventName said)))
+          (is (= "Your session id is s-42; pass it as `session` to waymark_sit."
+                 (:additionalContext said))))))))

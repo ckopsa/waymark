@@ -21,7 +21,7 @@ with no change to the Routine.
 | mode | `fired` | the Routine and the wake open the sittings |
 | walk | `ticket` | the queue: the tickets that are READY. The kind's default filter is `state=open`, and a draft, blocked or deferred ticket is out of that state by construction, so the collection a firing opens is the work a person groomed and nothing that cannot be worked |
 | rows_per_firing | 1 | one ask is one worktree, one branch and one round; a second ask in the same firing would share the bill and the context |
-| held_for | the model the Routine runs | the seat's place on the ladder |
+| held_for | the row id of the model the Routine runs (`waymark_query` kind `model`) | the seat's place on the ladder |
 | cadence_seconds | 3600 | the wake on `ticket` create fires it sooner (R-12.22) |
 | sitting_budget_tokens | 400000 | a code round reads files; the clerk's ceiling is too small |
 | budget_usd_per_week | the person's number | the fuel |
@@ -345,7 +345,7 @@ Nothing else goes in the instructions (R-12.10).
 3. The scope's `ticket` entry names the repository, the same one the
    bench entries name.
 4. The seat exists and is active, with the scope above and
-   `held_for` naming the model the Routine runs.
+   `held_for` holding the row id of the model the Routine runs.
 5. The seat carries its `instructions`. The engine then mints a key
    for each firing, and the Routine's prompt holds no key. The older
    way also works: `offer_key` on the model row, or `offer_key` on

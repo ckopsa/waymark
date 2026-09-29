@@ -117,8 +117,8 @@ work.
 | `instructions` | string, up to 2000, optional | what one firing does, in the person's words. The engine puts it at the head of the fire text. R-12.33. |
 | `scope` | scope schema | the seat's authority |
 | `substitute_drop` | scope schema | the entries a substitute does not get |
-| `held_for` | list of model refs | the models that can sit as the full sitter. Empty means any. The seat's place on the ladder. |
-| `substitute_for` | list of model refs | the models that can sit as a substitute. Empty means any. |
+| `held_for` | list of model row ids | the models that can sit as the full sitter. Empty means any. The seat's place on the ladder. Find a model's id with `waymark_query` kind `model`. |
+| `substitute_for` | list of model row ids | the models that can sit as a substitute. Empty means any. |
 | `standing_ttl_seconds` | int | the longest leash a grant in this seat can request |
 | `cadence_seconds` | int | how often the schedule fires the seat. The fixed wake cost. |
 | `mode` | enum `fired`, `interactive`, default `fired` | who opens a sitting here. A schedule, a person or a wake fires a fired seat. A person sits in an interactive seat, and nothing fires it. R-10.8. |
@@ -1356,13 +1356,41 @@ open to complete. An entry's `filter` (R-12.24) applies to the row
 that moved on a transition wake, and to the counted rows on a count
 wake.
 
-The damper has three parts. The engine does not fire while the seat
-has an open sitting. The engine fires at most once in
-`fire_interval_seconds`, a seat field with the default 300. A match
-the damper stops sets `wake_pending` on the schedule row. The next
-fire after the damper lifts names no row, so the session walks the
-queue. A replay after a restart is harmless, because the
-open-sitting check stops the second fire.
+The damper has three parts. The first part is a count. The seat has
+a field `max_open_sittings`, a whole number from 1 to 10, with the
+default 1. The seat is busy by its open sittings plus its fires still
+on their way to a sit. A fire counts as on its way for 600 seconds,
+the missed-fire sweep's deadline, until a sitting born after it takes
+it. The engine does not fire while the busy count has reached
+`max_open_sittings`. With the default 1 this is the old law: the
+engine does not fire while the seat has an open sitting or a fire on
+its way. The second part is the gap: the engine fires at most once in
+`fire_interval_seconds`, a seat field with the default 300. A seat of
+several slots is held by the gap only when no row is free for a new
+sitting. A row is free when it is in the walk, no open sitting holds
+it, no stuck change stands beside it, and no fire on its way will take
+it. A fire that fills a free slot for a free row goes out inside the
+gap. When no row is free, an open sitting or the gap holds the fire,
+as with one slot. The third part: a match the damper stops sets
+`wake_pending` on the schedule row. The next fire after the damper
+lifts names no row, so the session walks the queue. When a sitting of
+a seat of several slots closes, the engine may fire it with nothing
+pending, if a slot and a row for it are free. A replay after a
+restart is harmless, because the busy count stops the second fire.
+
+The sit claims its rows. It writes the rows it hands onto its sitting
+in the same transaction that finds them free, so two sits of one seat
+at the same instant never hand the same row. A sit that loses the
+race reads its walk again past the rows the other took; after three
+tries it hands no rows. The row a fire's text names is kept on the
+fire's key, and the sit reads it from there. The sit hands the named
+row alone while no other open sitting holds it. When another open
+sitting holds it, the sit hands the next free rows of the queue
+instead, and its answer says that the named row is held by another
+open sitting and that the session walks the row it was handed. When
+every open row of the walk is held by another open sitting, the sit
+hands no rows, and its answer tells the session there is nothing to
+walk: say so and stop.
 
 An entry may settle. The entry gains an optional field,
 `settle_seconds`, a whole number from 1 to 604800. The entries above
@@ -1419,8 +1447,8 @@ row: `{"kind": "inbox_item", "count": 23, "at_least": 20}`. The
 session therefore walks the queue, as a cadence firing does.
 
 The damper of R-12.22 applies with no change. The engine does not
-fire while the seat has an open sitting, and it fires at most once in
-`fire_interval_seconds`. A match the damper stops sets
+fire while the seat's busy count has reached `max_open_sittings`, and
+it fires at most once in `fire_interval_seconds`. A match the damper stops sets
 `wake_pending`, and one fire goes out when the damper lifts.
 
 The cadence stays. A seat with a count wake and a cadence fires when
@@ -1456,6 +1484,11 @@ The seat's cadence stays the floor for a house where nobody walks the
 door that empties the queue. A count wake is level and not edge: it
 fires each time it is evaluated and its condition holds, `at_least`
 and `at_most` alike, and `fire_interval_seconds` is the damper.
+
+A count entry over another kind counts every row of that kind the
+entry's `filter` matches, whatever the seat's grant: the count is the
+engine's, and it counts the whole house. The sitting it wakes still
+sees only its own scope. (Owner's ruling, 2026-09-28.)
 
 One Routine for each model. Today each seat has its own Routine, and
 a person pastes the seat's instructions and the seat's key into that
@@ -1748,8 +1781,8 @@ One POST to `/api/seats`, by a person who will not sit in it.
   "substitute_drop": [
     {"kind": "insight", "actions": ["create"]}
   ],
-  "held_for": ["claude-opus-5"],
-  "substitute_for": ["claude-sonnet-5"],
+  "held_for": ["<model row id for Opus 5>"],
+  "substitute_for": ["<model row id for Sonnet 5>"],
   "standing_ttl_seconds": 604800,
   "cadence_seconds": 3600,
   "budget_usd_per_week": 12.00,
@@ -1763,7 +1796,9 @@ power, and a scope entry names a power in its `kind` field.
 todo` is legal because `source` is declared filterable with eq, so
 the seat sees the todo tasks and not the chores or the meals.
 `insight.create` exists. The drop entry is inside the scope. Both
-model names are active model rows. Seven days is at the cap.
+model row ids name active model rows; each placeholder stands for
+an id, which `waymark_query` kind `model` lists. Seven days is at
+the cap.
 
 The first draft of this charter had a sixth sentence: "Do not move
 or send mail. The scope does not open those doors." It is cut. The
@@ -1996,7 +2031,7 @@ The person restates the seat. No deploy.
     {"kind": "email.read", "actions": []},
     {"kind": "inbox_item", "actions": ["research", "yes", "no"]}
   ],
-  "held_for": ["claude-sonnet-5"],
+  "held_for": ["<model row id for Sonnet 5>"],
   "walk": "inbox_item",
   "cadence_seconds": 3600,
   "budget_usd_per_week": 4.00,
@@ -2010,7 +2045,7 @@ The scope no longer names `task.create`. The task is born inside
 the yes handler through the cross-write door, under the outer
 principal, and `:touches` says so. The charter lost the receipts
 sentence and the journal sentence. It is 234 characters. The seat is
-held for an economy model as its full sitter, and
+held for an economy model's row id as its full sitter, and
 `step-carries-a-note` records why.
 
 **The schedule.** The person touched only the seat. The engine
@@ -2060,7 +2095,7 @@ prose seat never recorded.
 ### 13.10 Week five: the floor
 
 The person tries one more rung. `restate` with `held_for`
-`["claude-haiku-4-5"]` and the note "Try the last rung." Two weeks
+`["<model row id for Haiku 4.5>"]` and the note "Try the last rung." Two weeks
 later:
 
 | question | week three, Sonnet | week five, Haiku |
@@ -2073,7 +2108,7 @@ later:
 
 Corrections per transition rose five times over. The step does not
 hold (R-11.4). The person restates `held_for` back to
-`["claude-sonnet-5"]` with the note "Haiku says yes to requests that
+`["<model row id for Sonnet 5>"]` with the note "Haiku says yes to requests that
 are not for Colton. The judgment is real at this rung." The floor is
 Sonnet. Both steps are in the transition log with their reasons.
 
@@ -2103,7 +2138,7 @@ The person has four levers on the seat row, and none needs a deploy.
 Sonnet is unavailable for a day. The person restates the schedule
 row's `model` to `claude-haiku-4-5`, the adapter pushes it, and the
 agent asks with `substitute: true`, because the person set
-`substitute_for` to `["claude-haiku-4-5"]` in week five.
+`substitute_for` to `["<model row id for Haiku 4.5>"]` in week five.
 `model-may-sit` passes on `substitute_for`. The substitute walks the
 same tree. It reads the journal and cannot write it, by
 `not-a-substitute`. Every transition it makes carries
@@ -2184,8 +2219,8 @@ tree cannot hold.
     {"kind": "outcome", "actions": ["create", "rework"]},
     {"kind": "hypothesis", "actions": ["create", "restate", "still_stands", "dismiss"]}
   ],
-  "held_for": ["claude-fable-5-1"],
-  "substitute_for": ["claude-opus-5"],
+  "held_for": ["<model row id for Fable 5.1>"],
+  "substitute_for": ["<model row id for Opus 5>"],
   "standing_ttl_seconds": 604800,
   "cadence_seconds": 3600,
   "budget_usd_per_week": 40.00,
@@ -2805,10 +2840,6 @@ trusts.
 - Turn-level cost inside an interactive sitting. The tally is one sum
   over the sitting, so the record does not say which correction cost
   what. Keeping the turns is a later leg.
-- A count wake over a kind the seat cannot see. The count runs under
-  the seat's own grant, so an absent kind counts zero, and the seat
-  says nothing. A sentence in `doors.ask.seat` that says the count
-  sees nothing is the follow-up.
 
 ## 19. Effort
 
@@ -3075,3 +3106,206 @@ room a row is born in. CI enforces this:
 every module declares as a bare agent and as a bare person, and fails
 on a wall only the agent's type closes unless it holds or is named,
 with its reason, in that test's `flat-walls`.
+
+## 15. The house merge line
+
+This section gives the requirements for the house merge line in
+factory10: how the house's merge pass orders the submitted changes of
+one repository, which change it brings up to date, which change it
+merges, and what it writes on the rows so that a person can see the
+line without a log. Before this section the line was described only
+in `factory10/src/factory10/bench.clj`,
+`factory10/src/factory10/resources/repo_policy.clj` and the tests
+(`merge_line_test`, `deploy_line_test`, `ticket_hold_test`,
+`ticket_release_test`). The merge train (ticket ddbfc405, slice d)
+grows from this section.
+
+### 15.1 The problem on record
+
+*Every behind change was brought forward at once.* Main's protection
+wants a branch up to date before it merges (ticket a95c3d63). When the
+pass brought every behind change up to date in one pass, each update
+started one CI run, and the first merge made all the other changes
+stale again (ticket d82d649a).
+
+*The line lived only in memory.* The pass rebuilds the line each time.
+Without a record on the rows, only a log line said which pull request
+was at the front, or why a green change did not merge (ticket
+b85aded5).
+
+*Merges outran deploys.* A repository that deploys each merge could
+get a second merge before the first one was deployed (ticket
+47217098).
+
+*Some work must land in order.* A ticket can need other tickets done
+before its change merges (ticket d069bc3b).
+
+### 15.2 Which repositories have a line
+
+**R-15.1** The house merges a repository's changes only when its
+active `repo_policy` says all three of these (`house-pass-merges?`):
+
+- `auto_merge` is not `false`;
+- `merge_by` is `house` (an absent `merge_by` means GitHub merges);
+- `required_checks` names at least one check. The guard
+  `the-house-merges-only-what-a-check-tested` refuses a policy that
+  says `merge_by: house` with no check.
+
+Every other policy leaves the merge to somebody else, and a green
+change there waits on its person (the person's merge, ticket
+4d59b22d). Such a repository has no line.
+
+### 15.3 Who stands in the line, and in which order
+
+**R-15.2** A change is in its repository's line (`merge-lines`) when
+it is `submitted`, has a pull request `number` and a `head_sha`, its
+repository passes R-15.1, the rig did not park its current head
+(R-15.5), and its ticket is not held by `merge_after` (R-15.7).
+
+**R-15.3** The line is sorted by `line-key`, in this order:
+
+1. the priority of the ticket the change was born from (`born_from`
+   `ticket:<id>`). A lower number is first. A change with no ticket,
+   or a ticket with no priority, is last;
+2. the change's `created_at`. The older change is first;
+3. the change's id, so the order is total.
+
+The pass rebuilds the line from the rows each time. A restart loses
+only the memory of which heads were already updated or parked.
+
+### 15.4 One pass over a line
+
+**R-15.4** Each pass (`merge-green!`, then `work-lines!`) must do
+these steps for each repository:
+
+1. **Offer every change one merge.** A merge call costs no CI, so each
+   change in the line gets ONE `merge` call with the engine's own
+   hand, whatever its place. The call carries the pull request, the
+   head it may merge, the policy's `required_checks` and its
+   `merge_method` (default `merge`) (`merge-args`). A change that is
+   green and up to date merges at once.
+2. **Stop after one merge when the policy names a `deploy_check`.**
+   The next change then waits on the deploy (R-15.6).
+3. **Choose the front after the answers.** The front is the first
+   change of the line that still stands in it (`front-of`,
+   `out-of-line`). A change steps out of the line for one of these
+   reasons:
+   - `conflicted`: its `mergeable` is `conflicted`. The failing path
+     has it (ticket 5f12e772);
+   - `draft`: a draft is not brought forward;
+   - `red`: the rig said `red`. The seat's feedback already carries
+     the red checks;
+   - `parked`: the rig refused this head for good (R-15.5);
+   - `merged`: the rig merged it this pass.
+4. **Bring only the front up to date.** When the rig's answer for the
+   front says it is behind (`behind?`: state `behind`, or a
+   `merge_refused` whose reason says out of date or a status is
+   expected), the pass asks the rig's `update_branch` for that head.
+   The pass must ask one time per head (`seen` keeps `[:updated id]`),
+   so a busy main cannot make the pass loop. A behind change that is
+   not the front must stay as it is until it is the front.
+
+The front leaves the line when it merges, when it goes red (in both
+cases it is no longer `submitted`), or when its head is parked.
+
+**R-15.5** The pass must answer the rig's merge answers so:
+
+| Answer | What the pass does |
+|---|---|
+| no answer, or an exception | log it; the next pass asks again |
+| a missing power | log it; the next pass asks again |
+| behind | nothing now; step 4 updates it if it is the front |
+| `draft`, `no_required_checks`, `not_mergeable` (`parked-refusals`) | park the head: remember it in `seen` with its reason; that head is not offered again |
+| any other refusal (`head_moved` too) | log it; the next pass asks again |
+| `merged` | nothing; the mirror moves the row |
+| `waiting` | nothing; the next pass asks again |
+| `red` | nothing; the seat's feedback carries it |
+
+A new head is a new offer: parking holds only the head that was
+refused.
+
+### 15.5 One deploy at a time
+
+**R-15.6** A policy can name a `deploy_check`: the check on the base
+whose success means that a commit is deployed. When it names none, a
+merge counts as deployed. When a policy names a `deploy_check`:
+
+- The merge pass must write each house merge on the policy's
+  `deploy_waits_on`, as `"<change> <ticket or -> <number or ->"`, and
+  set `deploy_waiting_since` when it is empty (`note-merges!`).
+- While `deploy_waits_on` is not empty, the pass must offer the
+  repository nothing (`deploy-held`). It writes on `deploy_note` the
+  sentence "The line waits on the deploy of #N, since T."
+- The forge pass reads the base (`note-deploy!`). When the
+  `deploy_check` is `success` on the base head, it records
+  `deployed_head`, `deploy_state` `green`, `deployed_at` (when the
+  head moved), and takes off every wait whose pull request that head
+  holds. When no wait is left, it clears `deploy_waiting_since` and
+  `deploy_note`.
+- When the check finishes `failure`, `timed_out`, `cancelled`,
+  `action_required` or `startup_failure`, the forge pass writes
+  `deploy_state` `red` and a `deploy_note`. A red deploy holds the
+  line until the check is green again.
+- A check that is still running writes nothing.
+- A deploy that does not report holds the line for
+  `deploy_wait_seconds` at most (default 1800). After that, and only
+  when the deploy is not red, the pass clears the waits and writes on
+  `deploy_note` that the line went on.
+
+### 15.6 A merge that waits on other tickets
+
+**R-15.7** A ticket's `merge_after` names the tickets that must be
+done before its change merges. The pass must HOLD such a change
+(`merge-holds`): no merge call, no update, and no place in the line.
+The change behind it becomes the front.
+
+- Only `done` releases a hold. A `dropped` dependency does not release
+  it: the work it waited on will never land, so a person must restate
+  `merge_after`.
+- A `done` ticket whose merge is still in a policy's `deploy_waits_on`
+  does not release a hold yet. Its state reads
+  "done, not deployed in <repo>".
+- A dependency that is gone reads `missing`.
+- The hold is written on the change (`line_why` `held`, with
+  `line_reason` from `held-reason`) and on its ticket (`merge_waits`).
+  When nothing holds the ticket, the next pass clears `merge_waits`.
+
+### 15.7 The line, written on the rows
+
+**R-15.8** Each pass must write the line on the rows (`line-marks`,
+`mark-lines!`). It is a MAINTENANCE write (`store/update-data!`): the
+document moves, the version does not, and no transition is logged,
+because a place in a line is not a thing that happened to the row. A
+value that did not move is not written, so a quiet line writes
+nothing.
+
+On the active `repo_policy` of each repository with a line:
+
+| Field | Value |
+|---|---|
+| `line_front` | the id of the front change |
+| `line_front_pr` | the front's pull request number |
+| `line_front_waiting` | `update` (it was brought up to date and CI runs), `checks` (its checks run), or `merge` (it was offered and GitHub has not merged it yet); see `front-waits-on` |
+| `line_waiting` | how many other changes stand in the line |
+| `line_at` | when the pass last wrote the line; it rides a write and never causes one |
+
+When no change stands in the line, all five fields are cleared.
+
+On each change:
+
+| Field | Value |
+|---|---|
+| `line_place` | its place: 1 for the front, then in order; empty out of the line |
+| `line_why` | one of `front`, `behind`, `red`, `conflicted`, `draft`, `parked`, `held` (`line-whys`) |
+| `line_reason` | for `parked`, the rig's refusal; for `held`, what it waits on; at most 500 characters |
+
+A change the rig merged this pass has its marks cleared. A change that
+left `submitted` but still carries a `line_why` has its marks cleared
+on the next pass. When the write fails, the pass logs it and the next
+pass writes the line again.
+
+### 15.8 Not yet specified
+
+The merge train (ticket ddbfc405, slice d) tests more than the front
+together. It must keep R-15.4 to R-15.8: one update per head, one
+deploy at a time, and the holds from `merge_after`.

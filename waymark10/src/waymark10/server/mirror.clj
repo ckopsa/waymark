@@ -2155,9 +2155,11 @@
   [eng {:keys [holder lease-seconds active-job]
         :or {lease-seconds 120}}]
   (let [holder (or holder (str "mirror-sync-" (random-uuid)))
-        queued (store/with-tx (:storage eng)
-                 (fn [tx] (store/query-rows (:storage eng) tx :job
-                                            {:state :queued} {:limit 50})))]
+        queued (if (jobs/serves-jobs? eng)
+                 (store/with-tx (:storage eng)
+                   (fn [tx] (store/query-rows (:storage eng) tx :job
+                                              {:state :queued} {:limit 50})))
+                 [])]
     (reduce
      (fn [n job]
        (if (and (jobs/sync-job? job)

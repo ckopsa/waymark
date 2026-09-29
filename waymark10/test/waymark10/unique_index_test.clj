@@ -121,3 +121,21 @@
                          {:principal elena})
             (is (= 409 (:status (post body)))))))
       (finally (pg/close! st)))))
+
+(deftest unknown-kind-refuses-with-a-named-problem
+  (testing "a query on a kind never ensured on this storage throws a
+            problem naming the kind, never SQL with a nil table
+            (waymark-c631)"
+    (let [st (pg/storage db/dsn)]
+      (try
+        (let [e (try
+                  (store/with-tx st
+                    (fn [tx] (store/query-rows st tx :never_ensured
+                                               {:state :queued} {:limit 50})))
+                  nil
+                  (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? e) "the store refuses before building SQL")
+          (is (true? (:waymark10/unknown-kind (ex-data e))))
+          (is (= :never_ensured (:kind (ex-data e))))
+          (is (str/includes? (str (ex-message e)) "never_ensured")))
+        (finally (pg/close! st))))))

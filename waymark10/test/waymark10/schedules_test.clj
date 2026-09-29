@@ -34,6 +34,8 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.render :as render]
+            [waymark10.server.runner-links :as rl]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -45,8 +47,8 @@
 (def ^:private tables
   ["schedules" "seats" "models" "sittings" "definitions" "members" "roles"
    "grants" "approval_requests" "attachments" "subscriptions" "jobs"
-   "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"
-   "waymark10_drafts"])
+   "runner_links" "waymark10_transitions" "waymark10_idempotency"
+   "waymark10_cursors" "waymark10_drafts"])
 
 (def ^:dynamic *eng* nil)
 (def ^:dynamic *fake* nil)
@@ -474,7 +476,13 @@
              :fire_url :fire_token :last_fired_at :last_run_url
              :wake_pending :wake_fired_at :wake_due_at :last_halted_wake
              ;; a throttle's own instant: the pending wake waits for it
-             :retry_after}
+             :retry_after
+             ;; the transitions a damped wake heard (waymark-fp62.21)
+             :wake_heard
+             ;; the runner pool and the link the last run took (d16b71bf)
+             :runners :last_runner
+             ;; the order the pool is tried in (529deb73)
+             :runner_order}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
       (doseq [a [:claim :observe :pause :resume :fail :end :fired]]
@@ -694,6 +702,64 @@
 
     (seat-do! seat-id :retire)))
 
+(defn- seeded [from]
+  (store/with-tx (:storage *eng*)
+    (fn [tx] (store/query-rows (:storage *eng*) tx :runner_link
+                               {:seeded_from from} {:limit 10}))))
+
+(deftest the-boot-seeds-one-runner-link-from-each-own-link
+  (let [cn :sched-seed-links
+        _ (drain! cn)
+        chair (model! "claude-chair-seed")
+        _ (link-model! chair a-chair-url a-chair-token)
+        linked (seat! "seed-linked-clerk" 3600 [chair])
+        bare (seat! "seed-bare-clerk" 3600 [chair])
+        _ (drain! cn)
+        own-token "rk-test-seed-0123456789abcdef"
+        linked-sched (:id (sched-of linked))
+        bare-sched (:id (sched-of bare))
+        from-model (str "model:" chair)
+        from-linked (str "schedule:" linked-sched)
+        from-bare (str "schedule:" bare-sched)]
+    (link-schedule! linked-sched a-seat-url own-token)
+    (rl/ensure-seeded-links! *eng*)
+
+    (testing "the model and the linked schedule each get exactly one"
+      (let [[m & more] (seeded from-model)]
+        (is (some? m))
+        (is (empty? more))
+        (is (= "claude_routine" (name (get-in m [:data :provider]))))
+        (is (= a-chair-url (get-in m [:data :fire_url])))
+        (is (= a-chair-token (get-in m [:data :fire_token]))))
+      (let [[s & more] (seeded from-linked)]
+        (is (some? s))
+        (is (empty? more))
+        (is (= a-seat-url (get-in s [:data :fire_url])))
+        (is (= own-token (get-in s [:data :fire_token])))))
+
+    (testing "a schedule without its own link gets none"
+      (is (empty? (seeded from-bare))))
+
+    (testing "a second boot adds none"
+      (rl/ensure-seeded-links! *eng*)
+      (is (= 1 (count (seeded from-model))))
+      (is (= 1 (count (seeded from-linked)))))
+
+    (testing "the sources keep their own links"
+      (is (= {:fire_url a-seat-url :fire_token own-token}
+             (sch/link-of *eng* (sched-of linked)))))
+
+    (testing "the token is never readable on the new row"
+      (let [rdef (get (inv/resources *eng*) :runner_link)
+            row (inv/decode-row rdef (first (seeded from-linked)))
+            env (render/envelope rdef row {:principal elena
+                                           :now ((:now-fn *eng*))})]
+        (is (not (contains? (get env "data") "fire_token")))
+        (is (not (str/includes? (pr-str env) own-token)))))
+
+    (seat-do! linked :retire)
+    (seat-do! bare :retire)))
+
 (def ^:private mayor (t/principal {:id "mayor" :type :agent :display "Mayor"}))
 
 (deftest link-like-copies-a-link-without-a-credential-crossing
@@ -709,10 +775,13 @@
         target (:id (sched-of new-id))]
     (link-schedule! source a-seat-url own-token)
 
-    (testing "a row with no link of its own cannot be copied"
-      (is (thrown? clojure.lang.ExceptionInfo
-                   (inv/invoke! *eng* :schedule (str source) :link_like
-                                {:like (str target)} {:principal mayor}))))
+    (testing "a row with no link of its own, whose model has none either, cannot be copied"
+      (let [bare-id (seat! "linked-like-bare" 3600 [(model! "claude-chair-bare")])]
+        (drain! cn)
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (inv/invoke! *eng* :schedule (str source) :link_like
+                                  {:like (str (:id (sched-of bare-id)))} {:principal mayor})))
+        (seat-do! bare-id :retire)))
 
     (testing "nor can a row be linked like itself"
       (is (thrown? clojure.lang.ExceptionInfo
@@ -741,3 +810,43 @@
 
     (seat-do! linked-id :retire)
     (seat-do! new-id :retire)))
+
+(deftest a-broken-schedule-goes-back-to-its-model
+  ;; waymark ticket 1cdf9362: no token is pasted on the way back.
+  (let [cn :sched-relink-model
+        _ (drain! cn)
+        chair (model! "claude-chair-relink")
+        _ (link-model! chair a-chair-url a-chair-token)
+        bare (model! "claude-chair-unlinked")
+        by-chair-id (seat! "fires-through-model" 3600 [chair])
+        broken-id (seat! "broken-then-relinked" 3600 [chair])
+        bare-id (seat! "model-has-no-link" 3600 [bare])
+        _ (drain! cn)
+        target (:id (sched-of broken-id))]
+
+    (testing "link_like naming a schedule that fires through its model copies the model's link"
+      (inv/invoke! *eng* :schedule (str target) :link_like
+                   {:like (str (:id (sched-of by-chair-id)))} {:principal mayor})
+      (is (= :live (:state (sched-of broken-id))))
+      (is (= {:fire_url a-chair-url :fire_token a-chair-token}
+             (sch/own-link-of (sched-of broken-id)))))
+
+    (inv/invoke! *eng* :schedule (str target) :unlink nil {:principal elena})
+    (is (= :broken (:state (sched-of broken-id))))
+
+    (testing "relink_model brings it back live without a token, on the model's Routine"
+      (inv/invoke! *eng* :schedule (str target) :relink_model nil {:principal mayor})
+      (is (= :live (:state (sched-of broken-id))))
+      (is (nil? (sch/own-link-of (sched-of broken-id))))
+      (is (= {:fire_url a-chair-url :fire_token a-chair-token}
+             (sch/link-of *eng* (sched-of broken-id))))
+      (fire-seat! broken-id "Back on the model's Routine.")
+      (drain! cn)
+      (is (= a-chair-url (:fire-url (last (fires-of a-chair-token))))))
+
+    (testing "and it is refused when the model has no link"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! *eng* :schedule (str (:id (sched-of bare-id)))
+                                :relink_model nil {:principal mayor}))))
+
+    (doseq [s [by-chair-id broken-id bare-id]] (seat-do! s :retire))))

@@ -880,15 +880,18 @@
 (defn- text-of [v]
   (some-> v str str/trim not-empty))
 
+;; The rig's shape (ckopsa/waymark-bench bench/landing.py), pinned by
+;; `the-landing-verdict-reads-the-rigs-shape`: {state, failed_step,
+;; steps: [{name, state, seconds, exit_code, output, commit}]}. Only
+;; `state`, `failed_step` and each step's `name`, `state` and `output`
+;; are read; a key off that shape is not guessed at.
+
 (defn- state-text [m]
-  (let [v (or (:state m) (:status m))]
+  (let [v (:state m)]
     (str/lower-case (if (keyword? v) (name v) (str v)))))
 
 (defn- step-name [step]
-  (text-of (or (:name step) (:step step) (:id step))))
-
-(defn- output-of [m]
-  (some #(text-of (get m %)) [:output :error :stderr :log :tail :message]))
+  (text-of (:name step)))
 
 (defn- tail-of [s n]
   (if (> (count s) n) (subs s (- (count s) n)) s))
@@ -912,10 +915,9 @@
                                                  (state-text %))
                                   %)
                                steps))
-              step (or named (step-name failed) (text-of (:step landing))
-                       "unknown")
+              step (or named (step-name failed) "unknown")
               name' (str "landing:" step)
-              out (or (output-of failed) (output-of landing))]
+              out (text-of (:output failed))]
           (cond-> {:verdict :red
                    :names [(subs name' 0 (min (count name') 200))]}
             out (assoc :error (tail-of out landing-error-chars))))
@@ -1099,11 +1101,72 @@
            (not= note (str (get-in row [:data :adoption_note]))))
       {:landed_at stamp :adoption_note note})))
 
+;; ── a submitted change that never opened a pull request (ticket 226d2b85)
+;;
+;; A submitted change with no number whose bench names no pull request
+;; either has an ended ticket, and is closed so the submitted list is
+;; the real queue, or has a live one, and goes stuck once the window
+;; has passed so a person sees it. Close only: the branch is untouched.
+
+(defn- ticket-of
+  "The id of the ticket a seat-born change was built for, or nil."
+  [row]
+  (some (fn [v]
+          (let [s (str v)]
+            (when (str/starts-with? s "ticket:")
+              (not-empty (subs s (count "ticket:"))))))
+        [(get-in row [:data :born_from]) (get-in row [:data :change_id])]))
+
+(defn- merged-beside?
+  "Whether another change built for the same ticket, on the same
+  branch, has merged."
+  [eng row repo branch ticket-id]
+  (let [born (str "ticket:" ticket-id)]
+    (boolean
+     (some #(and (not= (str (:id %)) (str (:id row)))
+                 (= :merged (state-of %))
+                 (= born (str (get-in % [:data :born_from]))))
+           (rows-by eng :change {:repository repo :head_branch branch} 100)))))
+
+(defn unopened-note
+  "The words a submitted change carries when no pull request ever came
+  of it and its ticket is still open."
+  [repo branch]
+  (str "submitted on " repo " but never opened a pull request and no"
+       " pull request row adopted it; head " branch))
+
+(defn- unopened-move
+  "The door and input for a submitted change with no number whose bench
+  names no pull request, or nil: closed when its ticket ended or another
+  change on it merged, else the first sight stamped, else stuck once
+  the window has passed. A change whose ticket is not known is left."
+  [eng row repo branch ^Instant now]
+  (when-some [tid (ticket-of row)]
+    (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
+      (let [stamp (text-of (get-in row [:data :landed_at]))
+            seen (when stamp
+                   (try (Instant/parse stamp) (catch Exception _ nil)))
+            note (unopened-note repo branch)]
+        (cond
+          (or (#{:done :dropped} (state-of t))
+              (merged-beside? eng row repo branch tid))
+          [:supersede {:superseded_by
+                       (str "closed: ticket " tid " ended; this change "
+                            "never opened a pull request")}]
+
+          (nil? seen) [:note_adoption {:landed_at (str now)}]
+
+          (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
+             (long adoption-note-window-ms))
+          [:stick {:why (subs note 0 (min (count note) why-chars))
+                   :failing_checks ["no pull request"]}])))))
+
 (defn- adoption-note-pass!
   "Every submitted change of a repository with an active policy that
   has no number → the pull request its landing opened, and at most one
-  `note_adoption`. A rig that does not answer, or a door the engine
-  refuses, costs that change one pass and nothing else."
+  `note_adoption`; when its landing opened none, the `unopened-move`.
+  A rig that does not answer, or a door the engine refuses, costs that
+  change one pass and nothing else."
   [eng census log-fn]
   (let [by-repo (into {}
                       (keep (fn [p]
@@ -1122,15 +1185,19 @@
            census
            (try
              (let [pr (landed-pull-request eng row policy)
-                   input (when pr
-                           (adoption-move row repo (bench/branch-of row policy)
-                                          pr now))]
+                   branch (bench/branch-of row policy)
+                   [door input] (if pr
+                                  (some->> (adoption-move row repo branch pr now)
+                                           (vector :note_adoption))
+                                  (unopened-move eng row repo branch now))]
                (if (nil? input)
                  census
-                 (do (inv/invoke! eng :change (str (:id row)) :note_adoption
-                                  input (as-opts))
+                 (do (inv/invoke! eng :change (str (:id row)) door input
+                                  (as-opts))
                      (cond-> census
-                       (:adoption_note input) (update :adoption-noted inc)))))
+                       (:adoption_note input) (update :adoption-noted inc)
+                       (= :stick door) (update :stuck inc)
+                       (= :supersede door) (update :unopened-closed inc)))))
              (catch Exception e
                (log-fn "the change " (get-in row [:data :change_id])
                        " was refused its adoption note (" (ex-message e) ")")
@@ -1235,10 +1302,20 @@
 
 (defn- blank->nil [v] (some-> v str not-empty))
 
+(defn- note-base!
+  "The base's own facts on the policy, written only when they moved."
+  [eng policy input stored]
+  (when (not= input stored)
+    (inv/invoke! eng :repo_policy (str (:id policy)) :note_base input
+                 (as-opts))))
+
 (defn- base-move!
-  "One policy's base, read and judged, and at most one ticket move.
+  "One policy's base, read and judged, written, and then at most one
+  ticket move. The base is recorded from the read BEFORE any ticket
+  door is opened, so a door that refuses costs the ticket move and not
+  the base write (ticket 806e9185).
   → the census."
-  [eng source policy census]
+  [eng source policy census log-fn]
   (let [repo (str (get-in policy [:data :repository]))
         base (bench/base-of policy)
         base-read (forge-base source repo base)
@@ -1265,44 +1342,53 @@
                                       (contains? red-conclusions
                                                  (str (:conclusion %))))
                                 (:checks base-read))
-            [census ticket-id]
-            (cond
-              (not (and (= "red" now) (= "red" was)))
-              (if (and (= "green" now) live)
-                (do (inv/invoke! eng :ticket (str (:id live)) :mend
-                                 {:close_reason (str base " is green again at "
-                                                     head ".")}
-                                 (base-opts))
-                    [(update census :base-closed inc) stored-ticket])
-                [census stored-ticket])
-
-              ;; red twice, on a head the known ticket already carries:
-              ;; nothing new, and a ticket a person ended on this very
-              ;; head is not minted again
-              (and known (seen-head? known head))
-              [census stored-ticket]
-
-              live
-              (if-some [door (red-head-doors (state-of live))]
-                (do (inv/invoke! eng :ticket stored-ticket door
-                                 {:red_head (red-head-line head names)}
-                                 (base-opts))
-                    [(update census :base-noted inc) stored-ticket])
-                [census stored-ticket])
-
-              :else
-              [(update census :base-opened inc)
-               (open-red-ticket! eng source repo base head red-from
-                                 red-checks names)])
-            input {:verdict now :head head :red_from red-from
-                   :ticket ticket-id}
             stored {:verdict (blank->nil (:base_state data))
                     :head (blank->nil (:base_head data))
                     :red_from (blank->nil (:base_red_from data))
-                    :ticket stored-ticket}]
-        (when (not= input stored)
-          (inv/invoke! eng :repo_policy (str (:id policy)) :note_base input
-                       (as-opts)))
+                    :ticket stored-ticket}
+            base-facts {:verdict now :head head :red_from red-from
+                        :ticket stored-ticket}
+            ;; the read is written first: what the base is, and on
+            ;; which head, is known here and must not ride on a ticket
+            ;; door answering
+            _ (note-base! eng policy base-facts stored)
+            [census ticket-id]
+            (try
+              (cond
+                (not (and (= "red" now) (= "red" was)))
+                (if (and (= "green" now) live)
+                  (do (inv/invoke! eng :ticket (str (:id live)) :mend
+                                   {:close_reason (str base " is green again at "
+                                                       head ".")}
+                                   (base-opts))
+                      [(update census :base-closed inc) stored-ticket])
+                  [census stored-ticket])
+
+                ;; red twice, on a head the known ticket already carries:
+                ;; nothing new, and a ticket a person ended on this very
+                ;; head is not minted again
+                (and known (seen-head? known head))
+                [census stored-ticket]
+
+                live
+                (if-some [door (red-head-doors (state-of live))]
+                  (do (inv/invoke! eng :ticket stored-ticket door
+                                   {:red_head (red-head-line head names)}
+                                   (base-opts))
+                      [(update census :base-noted inc) stored-ticket])
+                  [census stored-ticket])
+
+                :else
+                [(update census :base-opened inc)
+                 (open-red-ticket! eng source repo base head red-from
+                                   red-checks names)])
+              (catch Exception e
+                (log-fn "the base of " repo " was read and written, but its "
+                        "ticket did not move (" (ex-message e) ")")
+                [census stored-ticket]))]
+        ;; the ticket the move minted, once it is minted and not before
+        (note-base! eng policy (assoc base-facts :ticket ticket-id)
+                    base-facts)
         ;; the deploy the merge line waits on, from the same read
         ;; (ticket 47217098)
         (bench/note-deploy! eng policy base-read
@@ -1319,7 +1405,7 @@
   (reduce
    (fn [census policy]
      (try
-       (base-move! eng source policy census)
+       (base-move! eng source policy census log-fn)
        (catch Exception e
          (log-fn "the base of " (get-in policy [:data :repository])
                  " was not read (" (ex-message e) ")")
@@ -1393,6 +1479,7 @@
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :folded 0 :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
+   :unopened-closed 0
    :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
    :refused 0})
 

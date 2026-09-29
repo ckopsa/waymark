@@ -84,7 +84,7 @@
     :public-url (str "http://127.0.0.1:" port)
     :place      (str place)
     :runs-dir   (str runs-dir)
-    :mcp        {:name "waymark" :url "http://127.0.0.1:9/mcp"}
+    :mcp        {:url "http://127.0.0.1:9/mcp"}
     :routines   (or routines {"sonnet" {:model "claude-sonnet-4-5"}})}))
 
 (defn world
@@ -232,7 +232,7 @@
                  (get-in r [:json :claude_code_session_url])))
 
           (is (wait-for #(= 1 (count @(:calls w)))))
-          (let [{:keys [argv dir]} (first @(:calls w))]
+          (let [{:keys [argv dir env]} (first @(:calls w))]
             (testing "R-5.4: the argument vector, prompt FIRST"
               ;; `--mcp-config` and `--allowedTools` are variadic, so
               ;; every argument behind them is swallowed. The prompt
@@ -245,17 +245,22 @@
                       "--output-format" "json"
                       "--strict-mcp-config"
                       "--mcp-config" (.getPath (runs/mcp-file (:runs w) id))
-                      "--allowedTools" "mcp__waymark__*" "Bash(echo *)"]
+                      "--tools" ""
+                      "--allowedTools" "mcp__Waymark__*"]
                      (vec (drop 3 argv))))
               (is (str/includes? (nth argv 2) "<routine-fire-payload>"))
-              (is (str/includes? (nth argv 2) "Key: sk-secret-abc")))
+              (is (str/includes? (nth argv 2) "    Key: sk-secret-abc"))
+              (is (str/starts-with? (nth argv 2) (str "Your session id is " id "."))))
+
+            (testing "R-5.4: the Waymark tools load up front, no ToolSearch"
+              (is (= {"ENABLE_TOOL_SEARCH" "false"} env)))
 
             (testing "R-5.3: the run runs in its own copy of the place"
               (is (= (.getPath (runs/place-dir (:runs w) id)) dir))
               (is (.isFile (io/file dir "CLAUDE.md")))
               (is (.isFile (io/file dir ".claude" "settings.json")))
               (is (.canExecute (io/file dir ".claude" "hooks" "sitting-close.sh")))
-              (is (= {"mcpServers" {"waymark" {"type" "http"
+              (is (= {"mcpServers" {"Waymark" {"type" "http"
                                                "url" "http://127.0.0.1:9/mcp"}}}
                      (json/read-value (slurp (runs/mcp-file (:runs w) id)))))))
 
@@ -299,7 +304,9 @@
     (try
       (let [r (GET (str (:base w) "/healthz"))]
         (is (= 200 (:status r)))
-        (is (= {:ok true :routines ["haiku" "sonnet"]} (:json r))))
+        (is (= {:ok true :routines ["haiku" "sonnet"]}
+               (select-keys (:json r) [:ok :routines])))
+        (is (true? (get-in r [:json :credential :ok]))))
       (testing "a path no route answers is 404 with a sentence"
         (is (= 404 (:status (GET (str (:base w) "/nothing"))))))
       (finally (server/stop! w)))))
@@ -340,3 +347,53 @@
         (is (string? (:ended-at rec))))
       (is (zero? (runs/mark-lost! runs))))
     (deliver gate true)))
+
+;; ── a fixed OAuth client at the door (R-8.2) ─────────────────────────
+
+(def ^:private door "https://work.kopsa.info/api/-/mcp")
+
+(defn- oauth-config [oauth]
+  (cond-> {:port       8112
+           :public-url "http://127.0.0.1:8112"
+           :place      (str (tmpdir "lf-oauth-place"))
+           :runs-dir   (str (tmpdir "lf-oauth-runs"))
+           :mcp        {:url door}
+           :routines   {"sonnet" {:model "claude-sonnet-4-5"}}}
+    (some? oauth) (assoc-in [:mcp :oauth] oauth)))
+
+(deftest the-config-takes-an-optional-oauth-client
+  (testing "absent means no :oauth, today's behaviour"
+    (is (= {:name "Waymark" :url door}
+           (:mcp (config/normalize (oauth-config nil))))))
+  (testing "a client id and a callback port are kept"
+    (is (= {:name "Waymark" :url door
+            :oauth {:client-id "localfire-claude" :callback-port 8765}}
+           (:mcp (config/normalize
+                  (oauth-config {:client-id "localfire-claude"
+                                 :callback-port 8765}))))))
+  (testing "each bad shape is refused with one sentence"
+    (doseq [o ["localfire-claude"
+               {:callback-port 8765}
+               {:client-id "" :callback-port 8765}
+               {:client-id :localfire :callback-port 8765}
+               {:client-id "localfire-claude"}
+               {:client-id "localfire-claude" :callback-port 0}
+               {:client-id "localfire-claude" :callback-port "8765"}]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":oauth"
+                            (config/normalize (oauth-config o)))
+          (pr-str o)))))
+
+(deftest write-mcp-carries-the-oauth-client
+  (let [f (io/file (tmpdir "lf-oauth-mcp") "mcp.json")]
+    (testing "with :oauth, the shape `claude mcp add --client-id` writes"
+      (runs/write-mcp! f {:name "Waymark" :url door
+                          :oauth {:client-id "localfire-claude" :callback-port 8765}})
+      (is (= {"mcpServers"
+              {"Waymark" {"type" "http" "url" door
+                          "oauth" {"clientId" "localfire-claude"
+                                   "callbackPort" 8765}}}}
+             (json/read-value (slurp f)))))
+    (testing "without :oauth, no oauth block"
+      (runs/write-mcp! f {:name "Waymark" :url door})
+      (is (= {"mcpServers" {"Waymark" {"type" "http" "url" door}}}
+             (json/read-value (slurp f)))))))

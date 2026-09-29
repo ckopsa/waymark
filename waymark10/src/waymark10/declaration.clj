@@ -36,7 +36,11 @@
    ;; refused, and this only says what to do instead (the verdict's
    ;; `reopen` names the verdict that stands). Outside the
    ;; fingerprint's action facet, like :display
-   :out-of-state-says])
+   :out-of-state-says
+   ;; :replay false takes an in-state door out of invoke's natural
+   ;; replay: its handler runs on every call, and the door stays
+   ;; idempotent, so a caller needs no Idempotency-Key
+   :replay])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and

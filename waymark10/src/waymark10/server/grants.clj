@@ -1339,12 +1339,14 @@
               :explain "The requester cannot judge its own ask; another principal decides."}
     :stamps  {:decided-by :approved_by}
     ;; short-lived is the DEFAULT, not an opt-in: an ask naming no
-    ;; expiry gets the engine's configured TTL (1h), stamped AT
-    ;; CREATE so the approver approves the leash that will actually
-    ;; exist. An agent proposes longer at will up to the cap; the
-    ;; approver sees the number either way.
+    ;; expiry gets the engine's configured TTL (24h, the leash's own
+    ;; cap — waymark-h6y: a shorter default killed the minted grant
+    ;; minutes after a late approval, because the offer window and
+    ;; the grant lifetime are one field), stamped AT CREATE so the
+    ;; approver approves the leash that will actually exist. An agent
+    ;; proposes shorter at will; the approver sees the number either way.
     :expires {:field :expires_at
-              :default {:service :grant-default-ttl-seconds :seconds 3600}
+              :default {:service :grant-default-ttl-seconds :seconds 86400}
               :x-display
               {:label "Good until"
                :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}
@@ -1944,6 +1946,22 @@
   [seat-id]
   {:kind "seat" :ids [(str seat-id)] :actions []})
 
+(defn seat-window-conds
+  "The ONE reader of a seat's window (waymark-fp62.1.2): the three conds
+  that name this seat's sittings started at or after `since`, in
+  `states`. The wall sums over it with closed and open
+  (`week-spend-conds`); the ledger (routes/seats) reads its finished
+  bills with closed alone and its spend with both. One state is
+  spelled `:=`, more than one `:in`."
+  [seat-id ^java.time.Instant since states]
+  [(if (= 1 (count states))
+     {:target :state :op := :value (first states)}
+     {:target :state :op :in :values (vec states)})
+   {:target :data :field :seat :cast "text" :op :=
+    :value (str seat-id)}
+   {:target :data :field :started_at :cast "timestamptz" :op :>=
+    :value (str since)}])
+
 (defn week-spend-conds
   "The three conds that name a seat's fuel: this seat's sittings,
   started inside the rolling window, closed or open.
@@ -1960,11 +1978,8 @@
   of one arithmetic are two answers to R-5.2's third wall, correct on
   the day they were written."
   [seat-id ^java.time.Instant now]
-  [{:target :state :op :in :values ["closed" "open"]}
-   {:target :data :field :seat :cast "text" :op :=
-    :value (str seat-id)}
-   {:target :data :field :started_at :cast "timestamptz" :op :>=
-    :value (str (.minusSeconds now budget-window-seconds))}])
+  (seat-window-conds seat-id (.minusSeconds now budget-window-seconds)
+                     ["closed" "open"]))
 
 (defn spent-with
   "The week's spend, over a summing hand the caller holds: `sum` is
