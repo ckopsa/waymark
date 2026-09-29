@@ -28,7 +28,13 @@
                      change the verdict — or maps {:door :kind/action
                      :id binding :input {field binding}}, a binding
                      being (input :f) or (data :f) over the refused
-                     call, so the refusal names the row it acts on
+                     call, or (evidence :f) over what the guard found,
+                     so the refusal names the row it acts on
+    :evidence        what a refusal returns beside its reason, which a
+                     remedy binds as (evidence :f): a vector of names a
+                     :check's (t/deny {:evidence …}) carries, or a map
+                     name → (fn [row ctx] → value), nil where ctx
+                     cannot see (the render probe carries no :find)
     :becomes-available-at  (fn [row] → Instant/LocalDate)
     :requires-token  capability token (\"role:manager\")
     :needs-input     probe override; defaults to (check ∧ judges)
@@ -54,14 +60,17 @@
 ;; ── construction ────────────────────────────────────────────────────
 
 ;; a remedy may name the row and input it acts on, read off the
-;; refused call: {:door :plan/finalize :id (input :plan_id)}
+;; refused call: {:door :plan/finalize :id (input :plan_id)} — or off
+;; the refusal's evidence: {:door :plan_day/assign_meal
+;; :id (evidence :plan_day_id)}
 
 (defn- binding-form?
-  "(input :f) or (data :f): the two reads a remedy binding may make —
-  the refused call's input, a field of the refused call's row."
+  "(input :f), (data :f) or (evidence :f): the three reads a remedy
+  binding may make — the refused call's input, a field of the refused
+  call's row, a value the refusing guard found while judging."
   [f]
   (clojure.core/and (seq? f) (= 2 (count f))
-                    (contains? '#{input data} (first f))
+                    (contains? '#{input data evidence} (first f))
                     (keyword? (second f))))
 
 (defn- remedy-problem
@@ -77,7 +86,7 @@
       (str (pr-str r) " carries keys beyond :door, :id and :input")
 
       (clojure.core/and (contains? r :id) (not (binding-form? (:id r))))
-      (str "the :id of " (pr-str r) " is not (input :f) or (data :f)")
+      (str "the :id of " (pr-str r) " is not (input :f), (data :f) or (evidence :f)")
 
       (clojure.core/and (contains? r :input)
                         (not (clojure.core/and
@@ -85,7 +94,7 @@
                               (every? keyword? (keys (:input r)))
                               (every? binding-form? (vals (:input r))))))
       (str "the :input of " (pr-str r)
-           " is not a map of field to (input :f) or (data :f)"))))
+           " is not a map of field to (input :f), (data :f) or (evidence :f)"))))
 
 (defn remedy-door
   "A remedy's door: the bare :kind/action token, or a map's :door."
@@ -102,31 +111,38 @@
   [r]
   (cond-> (vec (vals (:input r))) (:id r) (conj (:id r))))
 
-(defn- bound-value [[op k] row inp]
+(defn evidence-names
+  "The evidence names a guard declares its refusal returns."
+  [g]
+  (let [e (:evidence g)] (set (if (map? e) (keys e) e))))
+
+(defn- bound-value [[op k] row inp evidence]
   (case op
     input (get inp k)
-    data (get-in row [:data k])))
+    data (get-in row [:data k])
+    evidence (get evidence k)))
 
 (defn resolve-remedies
-  "The refusal's remedies resolved against the refused call: each
-  {:door} plus the :id and :input its bindings read, where they
-  resolve. nil when no remedy binds anything, so a refusal with bare
-  remedies reads as it always did."
-  [g row inp]
-  (when (some map? (:remedies g))
-    (mapv (fn [r]
-            (if-not (map? r)
-              {:door r}
-              (let [id (when-some [f (:id r)] (bound-value f row inp))
-                    in (into {}
-                             (keep (fn [[k f]]
-                                     (when-some [v (bound-value f row inp)]
-                                       [k v])))
-                             (:input r))]
-                (cond-> {:door (:door r)}
-                  (some? id) (assoc :id (str id))
-                  (seq in) (assoc :input in)))))
-          (:remedies g))))
+  "The refusal's remedies resolved against the refused call and the
+  refusal's evidence: each {:door} plus the :id and :input its
+  bindings read, where they resolve. nil when no remedy binds
+  anything, so a refusal with bare remedies reads as it always did."
+  ([g row inp] (resolve-remedies g row inp nil))
+  ([g row inp evidence]
+   (when (some map? (:remedies g))
+     (mapv (fn [r]
+             (if-not (map? r)
+               {:door r}
+               (let [id (when-some [f (:id r)] (bound-value f row inp evidence))
+                     in (into {}
+                              (keep (fn [[k f]]
+                                      (when-some [v (bound-value f row inp evidence)]
+                                        [k v])))
+                              (:input r))]
+                 (cond-> {:door (:door r)}
+                   (some? id) (assoc :id (str id))
+                   (seq in) (assoc :input in)))))
+           (:remedies g)))))
 
 (defn guard
   "Validate and default a guard map. Every invariant here is an
@@ -154,6 +170,14 @@
             :when p]
       (throw (t/definition-error
               (str "guard " (pr-str (clojure.core/or name :guard)) ": remedy " p))))
+    (clojure.core/when-some [e (:evidence g)]
+      (clojure.core/when-not
+       (clojure.core/or (clojure.core/and (map? e) (every? keyword? (keys e))
+                                          (every? fn? (vals e)))
+                        (clojure.core/and (sequential? e) (every? keyword? e)))
+        (throw (t/definition-error
+                (str "guard " (pr-str (clojure.core/or name :guard))
+                     ": :evidence is [name …] or {name (fn [row ctx])}")))))
     ;; a hold is registered when its module loads, so the router's one
     ;; question (holds/hold?) knows it without a list kept by hand
     (clojure.core/when (true? (:hold g))
@@ -316,6 +340,21 @@
                 [(t/deny {:vars (zipmap (:judges g) values)}) g]))
             [(t/allow) g]))))))
 
+(defn- with-evidence
+  "A denying leaf's evidence: the verdict's own, else what the guard's
+  :evidence fns find over (row, ctx), each nil left out. A render ctx
+  without read hooks lends its :evidence-reads, so an envelope's
+  refusal names what the POST's would."
+  [[v g :as res] row ctx]
+  (if (clojure.core/and (t/deny? v) (map? (:evidence g)) (nil? (:evidence v)))
+    (let [ctx (if (:find ctx) ctx (merge ctx (:evidence-reads ctx)))
+          ev (into {}
+                   (keep (fn [[k f]]
+                           (clojure.core/when-some [x (f row ctx)] [k x])))
+                   (:evidence g))]
+      (if (seq ev) [(assoc v :evidence ev) g] res))
+    res))
+
 (defn evaluate
   "→ [verdict denier]. The denier is the leaf whose explain renders
   the refusal."
@@ -340,7 +379,7 @@
         first-deny))
 
     (:relation g) (evaluate-relation g row inp ctx)
-    :else (evaluate-leaf g row inp ctx)))
+    :else (with-evidence (evaluate-leaf g row inp ctx) row ctx)))
 
 ;; ── reasons and structured hope ─────────────────────────────────────
 
@@ -575,8 +614,8 @@
   the fact's spec (:require/spec) so refusals can render the spec's
   explain and vars; the create path (row nil) computes from input in
   phase 2."
-  [fact & [{:keys [explain hide remedies severity]}]]
-  (guard {:name (keyword (str "require:" (clojure.core/name fact)))
+  [fact & [{:keys [explain hide remedies severity evidence]}]]
+  (guard (cond-> {:name (keyword (str "require:" (clojure.core/name fact)))
           :require fact
           :own-explain? (some? explain)
           :explain (clojure.core/or explain
@@ -598,7 +637,8 @@
                           (list 'cond
                                 '(nil? row) '(t/allow {:pending-input (nil? inp)})
                                 (list 'get-in 'row [:data fact]) '(t/allow)
-                                :else '(t/deny)))})}))
+                                :else '(t/deny)))})}
+           evidence (assoc :evidence evidence))))
 
 ;; ── history-judged guards ───────────────────────────────────────────
 

@@ -83,23 +83,19 @@
     {:meal meal :day (get days start) :plan plan
      :glist (make! :grocery_list {:plan_id (id-of plan)})}))
 
-(defn- resolver
-  "Which row each remedy acts on — and, for the day, which meal."
-  [{:keys [meal day plan]}]
-  (fn [door _refused]
-    (case door
-      "plan.finalize" {:id (id-of plan)}
-      ("plan_day.assign_meal" "plan_day.assign_off_theme")
-      {:id (id-of day) :input {:meal_id (id-of meal)}}
-      "meal.accept" {:id (id-of meal)}
-      nil)))
+(defn- choices
+  "Which meal the day gets: the refusals themselves name every row —
+  plan-is-planned the plan, all-days-covered the undecided day."
+  [{:keys [meal]}]
+  {"plan_day.assign_meal" {:input {:meal_id (id-of meal)}}
+   "plan_day.assign_off_theme" {:input {:meal_id (id-of meal)}}})
 
 ;; 2026-01-06 and 2026-01-13 are Tuesdays: the mexican night
 
 (deftest pursue-readies-the-list-through-the-real-plan
   (let [{:keys [day plan glist] :as rows} (chain! "2026-01-06" true)
         res (c/pursue! *session* glist :finalize nil
-                       {:resolve (resolver rows)
+                       {:choices (choices rows)
                         ;; the meal carries no recipe lines: the
                         ;; hollow-week warning rides plan.finalize
                         :acknowledge ["recipes-attached"]})]
@@ -118,7 +114,7 @@
 (deftest an-unlisted-meal-stops-at-the-off-theme-confirm
   (let [{:keys [meal day plan glist] :as rows} (chain! "2026-01-13" false)
         res (c/pursue! *session* glist :finalize nil
-                       {:resolve (resolver rows) :dry-run true})
+                       {:choices (choices rows) :dry-run true})
         off (some #(when (= "plan_day.assign_off_theme" (:door %)) %)
                   (:blocked-on res))]
     (is (:rehearsal res))
@@ -132,6 +128,40 @@
            (:consequence off)))
     (is (empty? (:writes res)))
     (is (= "suggested" (state-of meal)) "the rehearsal writes nothing")
+    (is (= "undecided" (state-of day)))
+    (is (= "draft" (state-of plan)))
+    (is (= "draft" (state-of glist)))))
+
+;; GRAIL 2b: the refusal names the uncovered day — the earliest, when
+;; two wait — and assign_meal's remedy binds it
+(deftest finalize-names-the-earlier-uncovered-day
+  (let [plan (make! :plan {:start_date "2026-01-20" :weeks 1})
+        days (days-of plan)
+        open #{"2026-01-20" "2026-01-23"}
+        _ (doseq [[date d] days :when (not (open date))]
+            (is (c/doc? (c/act! *session* d :mark_eating_out nil))))
+        first-day (id-of (get days "2026-01-20"))
+        refusal (get-in (c/get-doc *session* (:self plan))
+                        [:unavailable :finalize])]
+    (is (= first-day (get-in refusal [:evidence :plan_day_id]))
+        (pr-str refusal))
+    (is (some #{{:door "plan_day.assign_meal" :id first-day}}
+              (:resolved_remedies refusal))
+        (pr-str refusal))
+    (is (= "draft" (state-of plan)))))
+
+;; which meal is the caller's: with no choice, the walk stops at the
+;; day the refusal named, asking for the meal — it never guesses one
+(deftest without-a-meal-the-walk-stops-at-the-named-day
+  (let [{:keys [day plan glist]} (chain! "2026-01-27" true)
+        res (c/pursue! *session* glist :finalize nil {:dry-run true})
+        assign (some #(when (= "plan_day.assign_meal" (:door %)) %)
+                     (:blocked-on res))]
+    (is (nil? (:done res)) (pr-str res))
+    (is (= (id-of day) (last (str/split (str (:row assign)) #"/")))
+        (pr-str res))
+    (is (= [:meal_id] (mapv keyword (:needs assign))) (pr-str res))
+    (is (empty? (:writes res)))
     (is (= "undecided" (state-of day)))
     (is (= "draft" (state-of plan)))
     (is (= "draft" (state-of glist)))))

@@ -400,9 +400,12 @@
   services, visibility, and the kind map link targets resolve
   through. An engine booted with :probe-reads true also rides one
   fresh render-hooks instance (:read/:find/:sum) per request — its cache's
-  scope — so acceptance sets enumerate on the envelope."
+  scope — so acceptance sets enumerate on the envelope. Every engine
+  lends one as :evidence-reads, read only by a refusing guard's
+  :evidence fns (g/evaluate), so the envelope names what it found."
   [eng req]
-  (cond-> {:principal (principal-of req)
+  (cond-> {:evidence-reads (inv/render-hooks eng)
+           :principal (principal-of req)
            :now ((:now-fn eng))
            :services (:services eng)
            :visibility (visibility-of req)
