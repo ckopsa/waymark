@@ -1227,9 +1227,15 @@
 
 (def tools
   "The fixed tools, in the order an agent meets them: the spec's six,
-  waymark_resolve (waymark-pywy.3), the batch lookup — a seventh
+  with waymark_pursue (GRAIL) beside invoke — one goal action walked
+  through its refusals' remedies, each step an ordinary invoke; input
+  kind, action, id?, input?, choices, max_depth, dry_run (default true);
+  answer {done, steps_taken} | {blocked_on, stack, steps_taken}, plus
+  plan on a rehearsal; it stops at a confirm door (with its consequence
+  sentence), a held call and an ungranted door — then
+  waymark_resolve (waymark-pywy.3), the batch lookup — an eighth
   generic tool rather than a per-kind one, still a call onto a route
-  that already exists — waymark_sit, the eighth (spec-seat.md
+  that already exists — waymark_sit, the ninth (spec-seat.md
   R-12.14), which is how ONE session of a person's connector becomes a
   seat's sitter, and the two power tools (waymark-912p), the MCP
   surface of the Gate door. The list is the same for every caller and

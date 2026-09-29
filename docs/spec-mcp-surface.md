@@ -43,12 +43,30 @@ on every law change. Instead, a **fixed small toolset over a dynamic surface**:
 | `waymark_query` | the collection grammar — filters, sort, page, facets |
 | `waymark_get` | one row, its fields, links, and available actions |
 | `waymark_invoke` | one action on one row, with input |
+| `waymark_pursue` | one goal action, walked through its refusals' remedies (GRAIL) |
 | `waymark_history` | the row's transitions (pairs with [time travel](spec-time-travel.md)) |
 
 Six tools, stable across every waymark engine forever. The *interesting*
 surface — which kinds, which actions, which fields — arrives as data through
 `discover`/`schema`, which is exactly how the generic UI already works. An
 agent that can read a schema needs no bespoke tool.
+
+**`waymark_pursue` — a goal, not a door (GRAIL).** One call tries one action
+— or a create, with no `id` — and when a guard refuses it naming remedies,
+tries each remedy in turn (a refused remedy's own remedies first), then
+retries the door it unblocked. Its input is `kind`, `action`, `id?`,
+`input?`, `choices` (remedy door `kind.action` → `{id, input}`: the row a
+remedy on another kind acts on, and what it is given), `max_depth` (how many
+doors may wait on one another, default 8, at most 16) and `dry_run`
+(**default true**: answer the plan, write nothing). Its answer is
+`{done, steps_taken}` or `{blocked_on, stack, steps_taken}`, plus `plan` on a
+rehearsal. Every step is an ordinary invoke under the caller's grant and
+guards, counted on its sitting — it can do nothing the agent could not do by
+hand — and it stops, never guessing, at three walls: a **confirm** door
+(`blocked_on` carries the consequence sentence, to be acknowledged through
+`waymark_invoke`), a call **held** for a person's tap (held, not retried), and
+a door the grant does **not admit**. An input only the agent can choose stops
+it the same way; the answer to such a `blocked_on` goes back in `choices`.
 
 **Safety rides the declaration.** `waymark_invoke` refuses to run an action
 whose `safety.confirm` is true unless the call carries
