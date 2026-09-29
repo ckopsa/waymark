@@ -709,6 +709,39 @@
       (is (= 1 (:abandoned (defs/sweep-seats! eng))))
       (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
 
+(deftest a-call-between-the-sweeps-read-and-its-end-keeps-the-sitting-open
+  ;; ticket e3dfe60d: the pass's read and the ending were two
+  ;; transactions, so a stamp landing between them was closed under
+  ;; its caller. The redef lands that stamp just after the read.
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model {:name "chair"
+                                 :mode "interactive"
+                                 :sitting_idle_seconds 600})
+        sitting (str (:sitting (doc-of (tool h (with-session (initialize! h))
+                                             "waymark_sit"
+                                             {:key a-key :session "run-a"}))))
+        quiet? @#'defs/quiet?]
+    (reset! at (Instant/parse "2026-09-17T09:10:01Z"))
+
+    (testing "the pass finds it quiet, a call stamps it, the end is refused"
+      (with-redefs [defs/quiet? (fn [eng rdef row now seconds]
+                                  (let [q (quiet? eng rdef row now seconds)]
+                                    (seats/stamp-call! eng sitting)
+                                    q))]
+        (is (= {:abandoned 0 :closed 0}
+               (select-keys (defs/sweep-seats! eng) [:abandoned :closed]))))
+      (is (= :open (:state (row-of eng :sitting sitting))))
+      (is (= "2026-09-17T09:10:01Z"
+             (str (get-in (row-of eng :sitting sitting) [:data :last_call_at])))))
+
+    (testing "the sweep ends it once it is quiet again"
+      (reset! at (Instant/parse "2026-09-17T09:20:02Z"))
+      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
+      (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
+
 (deftest a-sitting-that-only-reads-over-the-router-is-not-swept
   ;; ticket 900764ce: a GET through the router under the seat's grant
   ;; is activity, so a sitter that only reads over HTTP keeps its
