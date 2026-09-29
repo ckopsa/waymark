@@ -348,7 +348,9 @@
 ;; secrets and a .claude/ hook runs in every session that opens the
 ;; repository, so the flag is the ENGINE's to set and never the
 ;; caller's: it is dropped from every bench call, and set on a
-;; bench.edit only when the admitting filter names the path (R-12.30).
+;; bench.edit — or on every item of a bench.edit_many, which is many
+;; of that one edit in a single call — only when the admitting filter
+;; names the path (R-12.30).
 
 (def ^:private protected-prefixes [".github/" ".claude/"])
 
@@ -379,26 +381,91 @@
               (filter protected-path?))
         filters))
 
+(def ^:private edit-items-field
+  "The argument a bench.edit_many carries its writes in. Each item is
+  one edit with its own `path`, so the engine judges every one of them
+  the way it judges the lone edit's."
+  :edits)
+
+(defn- arg-str
+  "One argument as a non-blank string, spelled either way: a call that
+  arrives over the wire is keywordized, and one an engine hands in may
+  not be."
+  [m k]
+  (when (map? m)
+    (some-> (or (get m k) (get m (name k))) str not-empty)))
+
+(defn- edit-targets
+  "Every path a bench write means to write — {:item n :path p}, with
+  `item` nil for the call's own `path` and `move_to` and the item's
+  position, counted from one, for a bench.edit_many's. That number is
+  what the refusal names, so a seat fixes the item it wrote instead of
+  doubting a scope that was right."
+  [args]
+  (let [own (keep (fn [k] (when-some [p (arg-str args k)] {:path p}))
+                  [:path :move_to])
+        items (or (get args edit-items-field)
+                  (get args (name edit-items-field)))
+        each (when (sequential? items)
+               (mapcat (fn [i it]
+                         (keep (fn [k]
+                                 (when-some [p (arg-str it k)]
+                                   {:item (inc i) :path p}))
+                               [:path :move_to]))
+                       (range) items))]
+    (vec (concat own each))))
+
+(def ^:private protected-edit-tokens
+  "The powers whose filters may name a protected path. An edit_many is
+  many bench.edits in one call, so a seat told it may write
+  .github/workflows/tests.yml has been told that however it batches
+  the write: both entries' protected globs stand for either tool."
+  ["bench.edit" "bench.edit_many"])
+
+(defn- protected-edit-globs
+  "The protected path globs that admit this call: those on the entry
+  the call is judged under, and those on the seat's other edit entry."
+  [vis gentry args]
+  (into (vec (when gentry (protected-globs (:filters gentry) args)))
+        (comp (keep #(grants/capability-entry vis %))
+              (mapcat #(protected-globs (:filters %) args)))
+        protected-edit-tokens))
+
+(defn- protected-verdict
+  "How a bench edit's protected targets stand: nil when it writes none,
+  {:allow true} when every one of them is clean and named by a
+  protected glob the seat's edit entries carry, and {:refuse {…}}
+  naming the first that is not. The refusal is the BATCH's alone — a
+  lone bench.edit reaches the rig without the flag, as it always has,
+  and the rig refuses that write there."
+  [vis tname gentry args]
+  (when (some #(= tname (bench-tool %)) [:edit :edit_many])
+    (let [targets (edit-targets args)
+          guarded (filterv #(protected-path? (:path %)) targets)]
+      (when (seq guarded)
+        (let [globs (protected-edit-globs vis gentry args)
+              named? (fn [{:keys [path]}]
+                       (and (clean-path? path)
+                            (boolean (some #(path-glob-matches? % path)
+                                           globs))))
+              bad (or (first (remove named? guarded))
+                      (first (remove #(clean-path? (:path %)) targets)))]
+          (cond
+            (nil? bad) {:allow true}
+            (= tname (bench-tool :edit_many)) {:refuse bad}
+            :else nil))))))
+
 (defn- bench-protected
   "The arguments of a bench call with `allow_protected` decided by the
-  engine: any the caller sent is dropped, and a bench.edit whose
-  protected targets (`path`, and `move_to` for a move) are all clean
-  and all named by a protected glob of the admitting entry gets it set.
-  Every other call reaches the rig without it, and the rig refuses a
+  engine: any the caller sent is dropped, and the flag set when the
+  judgment above admitted every protected target of the call. Every
+  other call reaches the rig without it, and the rig refuses a
   protected write as it always has."
-  [tname gentry args]
+  [tname args protected]
   (if-not (bench-tool? tname)
     args
-    (let [args (dissoc (or args {}) :allow_protected "allow_protected")
-          targets (keep #(some-> (get args %) str not-empty) [:path :move_to])
-          guarded (filter protected-path? targets)
-          globs (when (and gentry (seq guarded) (= tname (bench-tool :edit)))
-                  (protected-globs (:filters gentry) args))]
-      (cond-> args
-        (and (seq globs)
-             (every? clean-path? targets)
-             (every? (fn [t] (some #(path-glob-matches? % t) globs)) guarded))
-        (assoc :allow_protected true)))))
+    (cond-> (dissoc (or args {}) :allow_protected "allow_protected")
+      (:allow protected) (assoc :allow_protected true))))
 
 ;; ── affordances ─────────────────────────────────────────────────────
 
@@ -597,6 +664,22 @@
         "` is " (if got (str "\"" got "\"") "not on this call")
         " and the filter admits " want ". Call inside the filter, or"
         " ask for one that names what you need.")
+   token))
+
+(defn- refuse-bench-protected
+  "The 403 for a batch that writes under .github/ or .claude/ where the
+  seat's edit filters name no such path. It names the TOOL and the
+  ITEM, because a seat told only `protected` concludes its whole scope
+  is wrong and files a follow-up against a scope that was right.
+  Nothing reached the rig."
+  [tname token {:keys [item path]}]
+  (refuse-invoke
+   (str tname (when item (str " item " item)) " writes " path
+        ", which no bench.edit filter of this seat names. A write under"
+        " .github/ or .claude/ is the engine's to allow, and it allows"
+        " only a clean path that a protected glob on this grant's edit"
+        " entries names. Write the path that glob names, or ask for a"
+        " filter that names this one.")
    token))
 
 (defn- refuse-unknown
@@ -825,7 +908,8 @@
      (when (or (nil? hit) (nil? entry))
        (refuse-unknown eng asked))
      (let [gentry (grants/capability-entry vis token)
-           args (bench-protected tname gentry args)
+           protected (protected-verdict vis tname gentry args)
+           args (bench-protected tname args protected)
            verdict (when gentry (filter-verdict (:filters gentry) args))
            prepare-block (bench-prepare-block eng vis tname args)
            hold-block (bench-hold-block eng tname args opts)]
@@ -840,6 +924,9 @@
 
          (:miss verdict)
          (refuse-filter tname token (:miss verdict))
+
+         (:refuse protected)
+         (refuse-bench-protected tname token (:refuse protected))
 
          prepare-block
          (refuse-bench-prepare tname prepare-block)
