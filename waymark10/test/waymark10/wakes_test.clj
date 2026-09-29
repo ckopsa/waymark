@@ -2121,6 +2121,113 @@
         (sch/answer! *fire* nil)
         (seat-do! chaired :retire)))))
 
+(deftest a-broken-chair-linked-schedule-is-released-when-its-model-is-linked-again
+  ;; waymark ticket 6e407ca7
+  (let [wn :wake-chair-relinked
+        fn' :wake-chair-relinked-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        token "rk-test-chairrelinked-0123456789abcdef"
+        rotated "rk-test-chairrotated-0123456789abcdef"
+        model (model! "chair-relinked-chair")
+        link-model! #(inv/invoke! *eng* :model (str model) :link
+                                  {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                  "/routines/trig_chairrelinked/fire")
+                                   :token %}
+                                  {:principal elena})
+        _ (link-model! token)
+        seat (seat! "chairrelinkedclerk"
+                    {:held_for [(str model)]
+                     :wake_on [{:kind "wake_task" :actions ["complete"]}]
+                     :fire_interval_seconds 1})
+        _ (drain-fires! fn')]
+    (try
+      (sch/answer! *fire* 401)
+      (task-do! (task! "the one the chair's Routine refuses") :complete)
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (sch/answer! *fire* nil)
+      (is (= 1 (count (fires-of token))) "the refused POST went out once")
+      (is (= :broken (:state (sched-of seat))))
+
+      (testing "a wake on the broken row stays pending"
+        (Thread/sleep 1100)
+        (task-do! (task! "a match while the chair is broken") :complete)
+        (drain-wakes! wn)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (fires-of token))))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+      (testing "linking the model again releases the held wake once"
+        (link-model! rotated)
+        (drain-fires! fn')
+        (drain-fires! fn')
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 2 (count (seat-fires seat))))
+        (is (= 1 (count (fires-of token))) "the refused token is not sent again")
+        (is (= 1 (count (fires-of rotated))) "the held wake went out on the new link")
+        (let [row (sched-of seat)]
+          (is (= :live (:state row)))
+          (is (not (get-in row [:data :wake_pending])))))
+      (finally
+        (sch/answer! *fire* nil)
+        (seat-do! seat :retire)))))
+
+(deftest a-held-schedule-is-released-when-its-runners-are-set
+  ;; waymark ticket 6e407ca7
+  (let [wn :wake-runners-set
+        fn' :wake-runners-set-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "runnersetclerk"
+                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
+                       :fire_interval_seconds 1}
+                      fn')
+        runner-token "rk-test-runnersetrunner-0123456789abcdef"]
+    (try
+      (sch/answer! *fire* 401)
+      (task-do! (task! "the one the provider refuses this seat") :complete)
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (sch/answer! *fire* nil)
+      (is (= :broken (:state (sched-of seat))))
+
+      (testing "a wake on the broken row stays pending"
+        (Thread/sleep 1100)
+        (task-do! (task! "a match while the seat is broken") :complete)
+        (drain-wakes! wn)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (seat-fires seat))))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+      (testing "naming a live runner releases the held wake once"
+        (let [runner (str (:id (:row (inv/create! *eng* :runner_link
+                                                   {:provider "claude_routine"
+                                                    :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                                   "/routines/trig_runnersetrunner/fire")
+                                                    :fire_token runner-token}
+                                                   {:principal elena}))))]
+          (inv/invoke! *eng* :schedule (str (:id (sched-of seat))) :set_runners
+                       {:runners [runner]}
+                       {:principal elena})
+          (drain-fires! fn')
+          (drain-fires! fn')
+          (wakes/sweep-pending! *eng*)
+          (drain-fires! fn')
+          (is (= 2 (count (seat-fires seat))))
+          (is (= 1 (count (fires-of runner-token))) "the fire went through the runner")
+          (is (= 1 (count (fires-of token))) "the broken link was not tried again")
+          (let [row (sched-of seat)]
+            (is (= :live (:state row)))
+            (is (not (get-in row [:data :wake_pending]))))))
+      (finally
+        (sch/answer! *fire* nil)
+        (seat-do! seat :retire)))))
+
 ;; ── several sittings at once (max_open_sittings) ───────────────────────
 ;;
 ;; A seat of three slots runs three sittings at once, each on its own
