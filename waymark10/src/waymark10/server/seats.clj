@@ -1116,7 +1116,7 @@
     (t/allow)))
 
 (g/defguard linked-for-fire
-  {:reads [:schedule :model]
+  {:reads [:schedule :model :runner_link]
    :explain "Link the Routine's fire URL and token first — to this seat's schedule, or to the model it is held for."}
   [row _inp ctx]
   ;; The schedule is read through the ctx `:find` hook — the write's
@@ -1129,13 +1129,29 @@
   ;; door asks the schedule first — a seat a person linked keeps its
   ;; own Routine — and then the first model of `held_for`, which is
   ;; the chair.
+  ;;
+  ;; A POOL IS READ AS THE WAKE READS IT (`schedules/pool-of` — this
+  ;; file cannot require that one, which requires it): a fire is
+  ;; allowed while one of its runners is live. A schedule the provider
+  ;; broke is NOT refused here: a person's fire of it is the probe that
+  ;; checks a repair, and the engine's own wakes hold on
+  ;; `schedules/held?` instead.
   (if-some [find' (:find ctx)]
     (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))
           read' (:read ctx)
           chair (when read'
-                  (some->> (chair-of row) (read' :model)))]
-      (if (or (some-> (get-in sched [:data :fire_url]) str not-empty)
-              (some-> (get-in chair [:data :fire_url]) str not-empty))
+                  (some->> (chair-of row) (read' :model)))
+          link-of' #(some-> (get-in % [:data :fire_url]) str not-empty)
+          runners-of #(some->> (get-in % [:data :runners])
+                               (keep (fn [r] (some-> r str not-empty)))
+                               seq)
+          pool (or (runners-of sched)
+                   (when-not (link-of' sched) (runners-of chair)))]
+      (if (or (link-of' sched)
+              (link-of' chair)
+              (and read'
+                   (some #(= "live" (some-> (read' :runner_link %) :state name))
+                         pool)))
         (t/allow)
         (t/deny)))
     (t/allow)))
