@@ -3215,6 +3215,86 @@
     (is (empty? (get-in answer [:walk :rows]))
         "a round in review is not handed to a second run of the seat")))
 
+;; ── a wake naming it fires nothing (ticket f595c27e) ─────────────────
+
+(defn- close-sittings!
+  "Every open sitting of the seat stands closed, so no damper holds the
+  wake and the branch under test is the one that answers."
+  [eng seat-id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (doseq [row (store/query-rows st tx :sitting
+                                      {:seat (str seat-id) :state :open}
+                                      {:limit 20})]
+          (store/save-row! st tx :sitting
+                           (assoc row :state :closed
+                                  :version (inc (long (:version row))))
+                           (:version row)))))))
+
+(defn- force-ticket-repo!
+  "The ticket names `repo`, as a groomer's restatement would."
+  [w repo]
+  (let [st (:storage (:eng w))
+        id (str (:id (:ticket w)))]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :ticket id {})]
+          (store/save-row! st tx :ticket
+                           (-> row
+                               (assoc-in [:data :repo] repo)
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))))
+
+(defn- seat-fire-moves [eng seat-id]
+  (filterv #(= :fire (:action %))
+           (store/with-tx (:storage eng)
+             (fn [tx]
+               (store/transitions (:storage eng) tx
+                                  {:kind :seat :resource-id (str seat-id)}
+                                  {})))))
+
+(deftest a-transition-wake-naming-a-ticket-open-beside-a-submitted-change-fires-nothing
+  (let [w (ticket-world)
+        eng (:eng w)
+        seat-id (str (:id (:seat w)))
+        ticket-id (str (:id (:ticket w)))
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (force-ticket-state! w :open)
+        _ (close-sittings! eng seat-id)
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng seat-id)))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_benchseat/fire")
+                        :token "rk-test-benchseat-0123456789abcdef"}
+                       {:principal person})
+        fire (schedules/fake-fire)
+        woke (#'wakes/wake-seat! (assoc eng :fire-adapter fire)
+              {:id seat-id :interval 3600 :max-open 1}
+              {:id "groom-beside-a-submitted-change" :kind :ticket
+               :resource-id ticket-id :action :groom}
+              ((:now-fn eng))
+              {:text (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id "\"}")})]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "open" (ticket-state w)))
+    (is (= "submitted" (name (:state (first (changes-of eng))))))
+    (is (true? (seats/named-open-beside-a-submitted-change?
+                eng "ticket" ticket-id))
+        "the ticket stands open beside its submitted change")
+    (is (not woke) "the wake answers that no fire went out")
+    (is (empty? (seat-fire-moves eng seat-id))
+        "the seat's fire door was never taken")
+    (is (empty? (schedules/fires fire)))
+    (is (not (get-in (schedules/schedule-for-seat eng seat-id)
+                     [:data :wake_pending]))
+        "withheld, not damped: nothing is left pending for a release")
+    (testing "a submitted change in another repository does not withhold"
+      (force-ticket-repo! w "ckopsa/elsewhere")
+      (is (false? (seats/named-open-beside-a-submitted-change?
+                   eng "ticket" ticket-id))
+          "only a change in the ticket's own repository counts"))))
+
 (deftest a-submit-on-a-submitted-clean-worktree-says-it-is-already-submitted
   (let [w (ticket-world)
         _ (seat-invokes! w "submit" {:why a-long-sentence})
