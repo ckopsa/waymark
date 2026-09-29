@@ -202,8 +202,14 @@
 ;; fires the next one, a cloud Routine.
 
 (def probe-pass-word
-  "What the probe answers when the read answered, and nothing else."
+  "What the probe answers first when the read answered, followed by
+  the answer's `principal` as JSON."
   "CREDENTIAL-OK")
+
+(def probe-not-delegate
+  "The detail when the door answered, but not to a delegate's token."
+  (str "The door answered, but not as a person's tool: "
+       "add this client to WAYMARK10_OIDC_DELEGATE_CLIENTS."))
 
 (def ^:private probe-timeout-ms 120000)
 
@@ -223,8 +229,10 @@
   (let [tool (probe-tool cfg)]
     [(:claude cfg) "-p"
      (str "Call the tool " tool " once. If it answers, reply with the "
-          "single word " probe-pass-word " and nothing else. If it fails "
-          "or is not available, reply with one sentence that says why.")
+          "word " probe-pass-word ", one space, and then the value of "
+          "its `principal` field as compact JSON (null when it has "
+          "none), and nothing else. If it fails or is not available, "
+          "reply with one sentence that says why.")
      "--output-format" "json"
      "--strict-mcp-config"
      "--mcp-config" (.getPath (probe-mcp-file (:runs-dir cfg)))
@@ -234,20 +242,46 @@
   (let [s (str/trim (str s))]
     (if (> (count s) 300) (str (subs s 0 300) "…") s)))
 
+(defn delegate-principal?
+  "Whether discover's `principal` is a delegate's: a person's token
+  minted through a tool (waymark10.server.oidc, THE DELEGATE). Discover
+  shows no acts-for, so this reads what it does show: the type `agent`
+  and the id `delegate-id` makes, `<client>:<sub>`."
+  [p]
+  (and (map? p)
+       (= "agent" (:type p))
+       (str/includes? (str (:id p)) ":")))
+
+(defn- said-principal
+  "The principal after the pass word → a value, or ::none when the
+  result does not start with the pass word."
+  [result]
+  (let [s (str/trim (str result))]
+    (if (str/starts-with? s probe-pass-word)
+      (try (json/read-value (subs s (count probe-pass-word))
+                            json/keyword-keys-object-mapper)
+           (catch Exception _ nil))
+      ::none)))
+
 (defn judge-probe
   "One probe's exit and output → `{:ok :detail}`. It passes only when
-  the process exited 0, its result is not an error, and it said the
-  pass word."
+  the process exited 0, its result is not an error, it said the pass
+  word, and the principal after it is a delegate's: a door that
+  answers a non-delegate token lets no seat sit."
   [exit stdout stderr]
   (let [r    (try (json/read-value (str stdout) json/keyword-keys-object-mapper)
                   (catch Exception _ nil))
-        said (some-> (when (map? r) (:result r)) clip not-empty)]
+        res  (when (map? r) (:result r))
+        said (some-> res clip not-empty)
+        p    (said-principal res)]
     (cond
       (nil? exit)
       {:ok false :detail "The probe did not end within two minutes."}
 
-      (and (zero? (long exit)) (not (:is_error r)) (= probe-pass-word said))
-      {:ok true :detail "The probe called the MCP door, and it answered."}
+      (and (zero? (long exit)) (not (:is_error r)) (not= ::none p))
+      (if (delegate-principal? p)
+        {:ok true :detail "The probe called the MCP door, and it answered as a person's tool."}
+        {:ok false :detail probe-not-delegate})
 
       :else
       {:ok false :detail (or said
