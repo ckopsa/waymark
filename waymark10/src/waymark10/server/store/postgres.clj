@@ -609,6 +609,18 @@
       (mapv transition->map
             (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))
 
+  (transitions-under-grant [_ tx grant-id since until opts]
+    ;; the window bounds `at`, which ix_wm10_t_at serves; the grant is
+    ;; then a filter over that slice of the log
+    (let [clauses (cond-> [["actor->>'grant' = ?" (str grant-id)]]
+                    since (conj ["at >= ?" (Timestamp/from ^java.time.Instant since)])
+                    until (conj ["at <= ?" (Timestamp/from ^java.time.Instant until)]))
+          sql (str "SELECT * FROM waymark10_transitions WHERE "
+                   (str/join " AND " (map first clauses))
+                   " ORDER BY id LIMIT " (long (:limit opts 500)))]
+      (mapv transition->map
+            (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))
+
   (transition-stats [_ tx since include-system?]
     ;; the double AT TIME ZONE round-trip pins the bucket to the UTC
     ;; ISO week (store/utc-week-start's truncation) whatever the
@@ -631,6 +643,25 @@
                :actor-type (:actor_type r)
                :n (long (:n r))})
             (jdbc/execute! tx [sql (Timestamp/from ^java.time.Instant since)]
+                           jdbc-opts))))
+
+  (transition-times [_ tx kind action since until conds limit]
+    ;; the window walks ix_wm10_t_at; the where and the grant's
+    ;; narrowing ride in as one semi-join over the kind's table, never
+    ;; a query per row
+    (let [table (table-for tables kind)
+          parts (map cond-sql conds)
+          sql (str "SELECT at FROM waymark10_transitions"
+                   " WHERE kind = ? AND action = ? AND at >= ? AND at < ?"
+                   " AND resource_id IN (SELECT id FROM " table
+                   (when (seq parts)
+                     (str " WHERE " (str/join " AND " (map first parts))))
+                   ") ORDER BY at LIMIT " (long limit))]
+      (mapv (comp ->inst :at)
+            (jdbc/execute! tx (-> [sql (name kind) (name action)
+                                   (Timestamp/from ^java.time.Instant since)
+                                   (Timestamp/from ^java.time.Instant until)]
+                                  (into (mapcat second parts)))
                            jdbc-opts))))
 
   (corrections-by-model [_ tx actor-ids since excluded-kinds]

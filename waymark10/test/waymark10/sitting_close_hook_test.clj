@@ -85,13 +85,17 @@
                  "\n"))
     f))
 
-(defn- run-hook! [dir transcript & [hook]]
-  (let [pb (ProcessBuilder. ^java.util.List ["bash" (str script)])
+(defn- run-hook!
+  "`args` follow the script's name; `extra` is laid over the scrubbed
+  environment."
+  [dir transcript & [hook {:keys [args extra]}]]
+  (let [pb (ProcessBuilder. ^java.util.List (into ["bash" (str script)] args))
         env (.environment pb)]
     (doseq [k ["WAYMARK_SEAT_URL" "WAYMARK_SEAT_KEY" "http_proxy" "HTTP_PROXY"
                "https_proxy" "HTTPS_PROXY" "all_proxy" "ALL_PROXY"]]
       (.remove env k))
     (.put env "TMPDIR" (str dir))
+    (doseq [[k v] extra] (.put env ^String k ^String v))
     (let [p (.start pb)
           out (future (slurp (.getInputStream p)))
           err (future (slurp (.getErrorStream p)))]
@@ -136,6 +140,67 @@
           (is (str/includes? out "\"decision\": \"block\""))
           (is (str/includes? out "s-1"))))
       (finally (.stop server 0)))))
+
+(defn- sh! [& argv]
+  (let [p (.start (ProcessBuilder. ^java.util.List (vec argv)))
+        out (future (slurp (.getInputStream p)))
+        err (future (slurp (.getErrorStream p)))]
+    (.close (.getOutputStream p))
+    {:exit (.waitFor p) :out @out :err @err}))
+
+(deftest the-hook-parses
+  (testing "bash reads the script"
+    (let [{:keys [exit err]} (sh! "bash" "-n" (str script))]
+      (is (zero? exit) err)))
+  (testing "every program the script carries compiles"
+    (let [programs (re-seq #"(?ms)^read -r -d '' (\w+) <<'PY'\n(.*?)^PY$"
+                           (slurp script))]
+      (is (= #{"UPLOAD" "SUM"} (set (map second programs))))
+      (doseq [[_ nm src] programs]
+        (let [{:keys [exit err]}
+              (sh! "python3" "-c"
+                   "import sys; compile(sys.argv[1], sys.argv[2], 'exec')"
+                   src nm)]
+          (is (zero? exit) (str nm ": " err)))))))
+
+(deftest a-fired-runs-session-end-closes-nothing
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)
+        door (str "http://127.0.0.1:" port "/api/-/sittings/close")]
+    (try
+      (doseq [[label extra] [["with no door in the environment" {}]
+                             ["with the door in the environment"
+                              {"WAYMARK_SEAT_URL" door}]]]
+        (testing label
+          (let [{:keys [exit out err]}
+                (run-hook! dir (transcript! dir port)
+                           {:hook_event_name "SessionEnd"}
+                           {:args ["end"] :extra extra})]
+            (is (zero? exit) err)
+            (is (str/blank? out) "SessionEnd never holds"))))
+      (is (empty? @seen) "the Stop closes a fired run; SessionEnd leaves it be")
+      (finally (.stop server 0)))))
+
+(deftest close-run-answers-one-status-line
+  (doseq [[status line code] [[200 "closed s-1" 0]
+                              [409 "already-closed s-1" 0]
+                              [500 "failed s-1" 1]]]
+    (testing (str "a close answered " status)
+      (let [dir (temp-dir)
+            [^HttpServer server port seen] (stub-door! status)]
+        (try
+          (let [{:keys [exit out err]}
+                (run-hook! dir (transcript! dir port) nil
+                           {:args ["close-run" "Lost by localfire."]})
+                sent (first @seen)]
+            (is (= code exit) err)
+            (is (str/starts-with? out line) out)
+            (is (= 1 (count @seen)))
+            (is (= a-key (:key sent)))
+            (is (= counts (select-keys (:body sent) (keys counts))))
+            (is (= "Lost by localfire." (:note (:body sent)))
+                "the caller's note stands in for the hook's"))
+          (finally (.stop server 0)))))))
 
 (def ^:private launch
   "A background agent launched mid-run, and the harness's answer."

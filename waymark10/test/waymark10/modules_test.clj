@@ -81,7 +81,7 @@
            ;; core's for the same reason: a `powers` entry that says
            ;; `approval person` is policy on a core kind, and the row
            ;; it waits in cannot be a module an engine leaves out.
-           :mcp_server :held_call
+           :mcp_server :held_call :notifier :notice_rule
            ;; …and the transcript of a sitting and its lines
            ;; (docs/spec-transcript.md): the sit answers the key the
            ;; hook uploads with, and the seat carries the policy
@@ -114,8 +114,8 @@
     ;; and the judgment and the verdict (waymark-fp62.11), core's
     ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
-             :seat :model :sitting :schedule :mcp_server :held_call
-             :transcript :transcript_entry :runner_link :runner_provider
+             :seat :model :sitting :schedule :mcp_server :held_call :notifier
+             :notice_rule :transcript :transcript_entry :runner_link :runner_provider
              :judgment :verdict}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
@@ -235,6 +235,9 @@
                ;; …and the fourth, a seat's inbox (spec-seat.md
                ;; R-12.38): its own key, one sitting's events
                "/api/-/sittings/inbox"
+               ;; the dashboard slot's measure (dashboard measures
+               ;; 1/3): one slot's number over its time window
+               "/api/dashboard_slots/:id/-/measure"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
@@ -281,6 +284,9 @@
                  "/api/-/sittings/transcript"
                  ;; and the inbox door (R-12.38)
                  "/api/-/sittings/inbox"
+                 ;; and the slot's measure: /api/{plural}/{id}/-/{action}
+                 ;; would read it as an action named "measure"
+                 "/api/dashboard_slots/:id/-/measure"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))
@@ -346,7 +352,7 @@
             ;; the MCP servers' cadence (spec-mcp-servers R-4): core's
             ;; fourth hook, elected, waiting on nothing. Its fifth
             ;; sits beside it: the held calls' expiry (R-14, R-7)
-            :mcp-discover :held-call-expiry
+            :mcp-discover :held-call-expiry :notifier
             ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
             ;; R-12.25; spec-transcript.md R-9)
             :seat-clock
@@ -395,7 +401,7 @@
             ;; core's fourth and fifth (spec-mcp-servers R-4 and
             ;; R-14), so a selection that names :jobs still carries
             ;; both
-            :mcp-discover :held-call-expiry :seat-clock
+            :mcp-discover :held-call-expiry :notifier :seat-clock
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))

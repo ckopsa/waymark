@@ -127,6 +127,52 @@
   ;; one says the change merges when it is green.
   (assoc-in row [:data :merge_after] (vec (:merge_after inp))))
 
+(defn- put-its-change-back-to-work!
+  "A TICKET BACK IN THE QUEUE PUTS ITS STUCK CHANGE BACK TO WORK
+  (ticket 9ace68fb). The sit hands no ticket whose change is stuck, so
+  a groom, unblock or resume that left the change stuck left the
+  ticket idle until a person unstuck the change by hand. Every stuck
+  change born from this ticket walks, in the same transaction, the
+  change's `rework` door when it has no pull request, and its
+  `rework_submitted` door when it has one (ticket 4363c63b), so the
+  forge pass reads that pull request's head again. The adoption writes
+  GitHub's id over `change_id`, so a change with a pull request is
+  found by its repository and read by its `born_from`. A pull request
+  that closed or merged took its change out of `stuck` with it.
+
+  BEST-EFFORT, as `release-the-waiters!` is: a change that refuses is
+  said in the log, and the ticket's move stands. A probe or a
+  rehearsal carries no pen, and moves nothing."
+  [row ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)
+        born (str "ticket:" (:id row))
+        repo (some-> (get-in row [:data :repo]) str not-empty)]
+    (when (and find' invoke')
+      (doseq [change (vals (into {}
+                                 (map (juxt :id identity))
+                                 (concat
+                                  (find' :change {:state "stuck" :change_id born}
+                                         {:limit 50})
+                                  (when repo
+                                    (find' :change {:state "stuck" :repository repo}
+                                           {:limit 200})))))
+              :when (= born (str (get-in change [:data :born_from])))]
+        (try
+          (invoke' :change (:id change)
+                   (if (nil? (get-in change [:data :number]))
+                     :rework
+                     :rework_submitted)
+                   nil)
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factory10 ticket: the change" (:id change)
+                       "was not put back to work -" (ex-message e)))))))))
+
+(defhandler groom-the-ticket [row _inp ctx]
+  (put-its-change-back-to-work! row ctx)
+  row)
+
 (defhandler clear-the-blockers [row _inp _ctx]
   ;; The transition log keeps who blocked what; the row says what
   ;; holds NOW, and an unblocked ticket is blocked by nothing.
@@ -134,10 +180,16 @@
       (assoc-in [:data :blocked_by] [])
       (assoc-in [:data :blocked_from] nil)))
 
+(defhandler unblock-the-ticket [row inp ctx]
+  ;; `clear-the-blockers`, and the ticket is in the queue again
+  (put-its-change-back-to-work! row ctx)
+  (clear-the-blockers row inp ctx))
+
 (defhandler defer-the-ticket [row inp _ctx]
   (assoc-in row [:data :defer_until] (:defer_until inp)))
 
-(defhandler resume-the-ticket [row _inp _ctx]
+(defhandler resume-the-ticket [row _inp ctx]
+  (put-its-change-back-to-work! row ctx)
   (assoc-in row [:data :defer_until] nil))
 
 (defn- still-waits-on
@@ -727,6 +779,7 @@
     :groom
     {:from #{:draft} :to :open
      :guards [a-person-or-their-delegate-grooms]
+     :handler groom-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Groom" :style :primary :order 1
                :description "It is stated well enough to build as written — into the queue"}}
@@ -822,7 +875,7 @@
 
     :unblock
     {:from #{:blocked} :to :open
-     :handler clear-the-blockers
+     :handler unblock-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Unblock" :style :primary :order 1
                :description "Back into the queue — nothing holds this one now"}}
@@ -921,7 +974,7 @@
     {:from #{:open :in_review} :to :draft
      :guards [only-its-change-moves-it]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and the next sit puts its change back to work."}
+              :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and puts its change back to work in the same move; a change with a pull request goes back under review at the next sit."}
      :display {:label "Stalled" :order 17
                :description "Its change stalled — back to draft, to be groomed again"}}
 

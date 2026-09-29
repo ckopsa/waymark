@@ -25,7 +25,8 @@
            [java.security MessageDigest]
            [java.util UUID]
            [java.util.concurrent Executors ExecutorService
-            ScheduledExecutorService ThreadFactory TimeUnit]))
+            RejectedExecutionException ScheduledExecutorService
+            ThreadFactory TimeUnit]))
 
 ;; ── answers ─────────────────────────────────────────────────────────
 
@@ -134,6 +135,73 @@
   (println (str "localfire run routine=" routine " id=" id
                 " status=" (name status))))
 
+;; ── the sitting's close (R-5.6) ───────────────────────────────────────
+;;
+;; A run's own Stop hook closes its sitting. A run the server marks lost
+;; never reached that Stop, and a run whose process ended may not have —
+;; killed, crashed, out of turns. So for both the server runs the copied
+;; place's hook in its `close-run` mode, from outside the run. The hook
+;; finds the sitting in the transcript and takes a sitting already closed
+;; as success, so a second close is harmless.
+
+(defn claude-home
+  "Where Claude Code keeps its transcripts, as the hook sees them: the
+  config's `:claude-home` when a `:claude` wrapper runs the sessions
+  somewhere else, or else the HOME the runs inherit from this process."
+  ([] (claude-home nil))
+  ([cfg]
+   (or (:claude-home cfg)
+       (System/getenv "HOME") (System/getProperty "user.home"))))
+
+(defn closed-line?
+  "Whether a close's exit and output say the sitting is closed: exit 0
+  and a status line of `closed <sitting>` or `already-closed <sitting>`."
+  [exit out]
+  (and (= 0 exit)
+       (some? (re-find #"^(already-)?closed \S" (str/trim (str out))))))
+
+(defn close-sitting!
+  "Run the place's `sitting-close.sh close-run` for run `id` with `note`,
+  record its answer in `run.edn`, and log one line. → the hook's status
+  line."
+  [state id note]
+  (let [cfg      (:config state)
+        runs-dir (:runs-dir cfg)
+        hook     (runs/hook-file runs-dir id)
+        input    (json/write-value-as-string
+                  {:session_id      (str id)
+                   :transcript_path (.getPath (runs/transcript-file (claude-home cfg) runs-dir id))})
+        {:keys [exit out]}
+        (if-not (.isFile hook)
+          {:exit nil :out "failed (none): the run's place has no sitting-close.sh"}
+          ;; :hook-via prefixes the argv, as :claude does for a run, so
+          ;; the hook runs on the side of the wrapper the run ran on
+          (try ((:closer state) (into (vec (:hook-via cfg))
+                                      [(.getPath hook) "close-run" note])
+                                (runs/place-dir runs-dir id) input)
+               (catch Exception e
+                 {:exit nil :out (str "failed (none): " (ex-message e))})))
+        line     (if (str/blank? out)
+                   (str "failed (none): the hook answered nothing, exit " exit)
+                   out)]
+    ;; closed only on the hook's word for it. close-run prints "closed
+    ;; <sitting>" or "already-closed <sitting>" and exits 0 only then; a
+    ;; hook older than close-run falls through to another mode, prints
+    ;; nothing and exits 0 too, having closed nothing (R-5.6)
+    (runs/note-close! runs-dir id line (closed-line? exit out))
+    (println (str "localfire close id=" id " " line))
+    line))
+
+(defn close-lost!
+  "At startup: close the sitting of every `lost` run whose close has not
+  succeeded yet. → the number of closes it tried."
+  [state]
+  (count (mapv (fn [rec]
+                 (close-sitting! state (:id rec)
+                                 (str "localfire lost this run at " (:ended-at rec)
+                                      " (restart)")))
+               (runs/lost-unclosed (:runs-dir (:config state))))))
+
 (defn execute-run!
   "Start the process, drain it, wait for it, record it.
 
@@ -179,7 +247,11 @@
                                   :env run-env
                                   :dir (runs/place-dir (:runs-dir cfg) id)
                                   :max-run-seconds (:max-run-seconds routine)})]
-          (log-run! nm id (:status rec)))
+          (log-run! nm id (:status rec))
+          (try (close-sitting! state id "localfire saw the run exit")
+               (catch Exception e
+                 (binding [*out* *err*]
+                   (println (str "localfire close id=" id " failed: " (ex-message e)))))))
         (catch Throwable t
           (runs/finish! cfg id :failed nil)
           (binding [*out* *err*]
@@ -209,7 +281,8 @@
 (def probe-not-delegate
   "The detail when the door answered, but not to a delegate's token."
   (str "The door answered, but not as a person's tool: "
-       "add this client to WAYMARK10_OIDC_DELEGATE_CLIENTS."))
+       "add this client to WAYMARK10_OIDC_DELEGATE_CLIENTS, or, behind "
+       "a proxy that states the principal, send X-Waymark-Acts-For."))
 
 (def ^:private probe-timeout-ms 120000)
 
@@ -243,14 +316,19 @@
     (if (> (count s) 300) (str (subs s 0 300) "…") s)))
 
 (defn delegate-principal?
-  "Whether discover's `principal` is a delegate's: a person's token
-  minted through a tool (waymark10.server.oidc, THE DELEGATE). Discover
-  shows no acts-for, so this reads what it does show: the type `agent`
-  and the id `delegate-id` makes, `<client>:<sub>`."
+  "Whether discover's `principal` is a delegate's: an agent acting for a
+  person, which is what `waymark_sit` asks of a seat key's session. An
+  engine that shows `acts_for` answers it outright — the token a tool
+  mints for a person (waymark10.server.oidc, THE DELEGATE) and the
+  `X-Waymark-Acts-For` a proxy in front of a local engine states alike.
+  An engine older than that field shows no acts-for, so for it this
+  reads what the OIDC delegate's id shows: `delegate-id`'s
+  `<client>:<sub>`."
   [p]
   (and (map? p)
        (= "agent" (:type p))
-       (str/includes? (str (:id p)) ":")))
+       (or (not (str/blank? (str (:acts_for p ""))))
+           (str/includes? (str (:id p)) ":"))))
 
 (defn- said-principal
   "The principal after the pass word → a value, or ::none when the
@@ -313,21 +391,54 @@
   (atom {:ok true :checked-at nil :next-at nil
          :detail "The credential has not been checked."}))
 
+(def backoff-first-seconds
+  "The wait before the check after a first failed one. A failure is most
+  often a blip — the engine mid-deploy — so the check comes back soon,
+  and the fire's 429 says so, rather than throttling for `:check-seconds`."
+  30)
+
+(defn next-check-seconds
+  "The seconds to the next scheduled check after `failures` failed
+  checks in a row: `check-seconds` after a pass, else 30, 60, 120, 240
+  … doubled per failure and capped at `check-seconds`."
+  [check-seconds failures]
+  (let [cs (long check-seconds)
+        n  (long failures)]
+    (if (zero? n)
+      cs
+      (min cs (* (long backoff-first-seconds) (bit-shift-left 1 (min 20 (dec n))))))))
+
+(defn failure-kind
+  "A failed probe's detail → \"transient\" when the door was unreachable,
+  timed out or answered 5xx, else \"refused\" (the credential itself was
+  turned away). Both back off alike; the log line says which."
+  [detail]
+  (if (re-find #"(?i)did not end|could not start|unreachable|no available server|connection (refused|reset)|could not connect|timed? ?out|\b5\d\d\b"
+               (str detail))
+    "transient"
+    "refused"))
+
 (defn check-credential!
   "Probe now and record `{ok, checked_at, detail}` on the state's
-  `:credential`. `:scheduled?` says the timer ran it, so the next
-  check is `:check-seconds` from now. → the credential's state."
+  `:credential`, with `:failures` the failed checks in a row.
+  `:scheduled?` says the timer ran it, so it records `:next-in`, the
+  seconds to the next check (`next-check-seconds`), and `:next-at`.
+  → the credential's state."
   [{:keys [config spawner credential]} {:keys [scheduled?]}]
   (locking credential
-    (let [r (probe! config spawner)]
-      (swap! credential
-             (fn [c]
-               (cond-> (merge c r {:checked-at (runs/now-iso)})
-                 scheduled?
-                 (assoc :next-at (+ (System/currentTimeMillis)
-                                    (* 1000 (long (:check-seconds config))))))))
-      (println (str "localfire check ok=" (:ok r)))
-      @credential)))
+    (let [r (probe! config spawner)
+          c (swap! credential
+                   (fn [c]
+                     (let [fails (if (:ok r) 0 (inc (long (or (:failures c) 0))))
+                           secs  (next-check-seconds (:check-seconds config) fails)]
+                       (cond-> (merge c r {:checked-at (runs/now-iso) :failures fails})
+                         scheduled?
+                         (assoc :next-in secs
+                                :next-at (+ (System/currentTimeMillis) (* 1000 secs)))))))]
+      (println (str "localfire check ok=" (:ok r)
+                    (when-not (:ok r) (str " (" (failure-kind (:detail r)) ")"))
+                    (when scheduled? (str " next in " (:next-in c) "s"))))
+      c)))
 
 (defn- retry-after-seconds
   "The seconds until the next check, at least one; 60 when no check is
@@ -343,18 +454,25 @@
   {:ok (boolean (:ok c)) :checked_at (:checked-at c) :detail (:detail c)})
 
 (defn- start-check-timer!
-  "Check every `:check-seconds`, on a daemon thread of its own."
-  ^ScheduledExecutorService [state]
+  "Check on a daemon thread of its own, `first-seconds` from now; each
+  check schedules the next `:next-in` seconds out, so a failure is
+  re-checked on the backoff and a pass waits `:check-seconds`."
+  ^ScheduledExecutorService [state first-seconds]
   (let [secs (long (get-in state [:config :check-seconds]))
-        ex   (Executors/newSingleThreadScheduledExecutor
-              (reify ThreadFactory
-                (newThread [_ r]
-                  (doto (Thread. ^Runnable r "localfire-check")
-                    (.setDaemon true)))))]
-    (.scheduleWithFixedDelay ex
-                             ^Runnable (fn [] (try (check-credential! state {:scheduled? true})
-                                                   (catch Throwable _ nil)))
-                             secs secs TimeUnit/SECONDS)
+        ^ScheduledExecutorService ex
+        (Executors/newSingleThreadScheduledExecutor
+         (reify ThreadFactory
+           (newThread [_ r]
+             (doto (Thread. ^Runnable r "localfire-check")
+               (.setDaemon true)))))]
+    (letfn [(tick []
+              (let [c (try (check-credential! state {:scheduled? true})
+                           (catch Throwable _ nil))]
+                (schedule (or (:next-in c) secs))))
+            (schedule [s]
+              (try (.schedule ex ^Runnable tick (long s) TimeUnit/SECONDS)
+                   (catch RejectedExecutionException _ nil)))]
+      (schedule first-seconds))
     ex))
 
 ;; ── the body (R-4.5) ────────────────────────────────────────────────
@@ -493,20 +611,32 @@
   "Stand the server up. `:spawner` is the seam (R-9.1): the tests give
   a fake, and `main` gives the real one. `:check?` runs the credential
   check (R-4.6) once now and then on its timer. → the state, with
-  `:port`, which is the bound port even when the config asked for 0."
-  [{:keys [config token spawner check?]}]
+  `:port`, which is the bound port even when the config asked for 0.
+  `:closer` is the sitting's close seam, `spawn/run-to-end` by default;
+  the lost runs' sittings are closed on a thread of their own, and
+  `:closing` is that thread's future → the number it tried (R-5.6)."
+  [{:keys [config token spawner closer check?]}]
   (let [state {:config     config
                :token      token
                :spawner    (or spawner (spawn/process-spawner))
+               :closer     (or closer spawn/run-to-end)
                :running    (atom {})
                :credential (credential-initial)}
+        closing (future
+                  (try (close-lost! state)
+                       (catch Throwable t
+                         (binding [*out* *err*]
+                           (println (str "localfire close of the lost runs failed: "
+                                         (ex-message t))))
+                         0)))
         timer (when check?
-                (check-credential! state {:scheduled? true})
-                (start-check-timer! state))
+                (start-check-timer! state
+                                    (:next-in (check-credential! state {:scheduled? true}))))
         srv   (hk/run-server (handler state)
                              {:port (:port config)
                               :legacy-return-value? false})]
-    (assoc state :http srv :port (hk/server-port srv) :check-timer timer)))
+    (assoc state :http srv :port (hk/server-port srv) :check-timer timer
+                 :closing closing)))
 
 (defn stop!
   "Stop the server. The runs in flight are not waited on; the next

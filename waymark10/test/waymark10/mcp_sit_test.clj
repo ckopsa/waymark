@@ -272,11 +272,21 @@
                                            (seats/sitter-id seat) {})))]
         (is (= "colton" (get-in row [:data :acts_for])))))
 
+    (testing "discover shows the person it acts for, before any key is spent"
+      ;; localfire's credential check reads exactly this (R-4.6)
+      (let [sid3 (init-as h (delegate-headers))
+            d (tool h (delegate-headers sid3) "waymark_discover" {})]
+        (is (= "colton" (get-in (doc-of d) [:principal :acts_for])))))
+
     (testing "the same run WITHOUT that one header is refused"
       (let [bare (dissoc (delegate-headers) "x-waymark-acts-for")
             sid2 (init-as h bare)
+            d (tool h (assoc bare "mcp-session-id" sid2) "waymark_discover" {})
             r (tool h (assoc bare "mcp-session-id" sid2) "waymark_sit"
                     {:key a-key})]
+        (is (= "agent" (get-in (doc-of d) [:principal :type])))
+        (is (not (contains? (:principal (doc-of d)) :acts_for))
+            "an agent acting for nobody shows no acts_for")
         (is (true? (:isError r)))
         (is (str/includes? (text-of r) "A seat key binds a person's tool")
             "one header is the whole difference between a delegate and
@@ -653,6 +663,12 @@
         r (tool h (with-session sid) "waymark_sit" {:key walk-key})]
     [r (doc-of r)]))
 
+(defn- sitting-row
+  "One sitting as the store holds it — the stamps no answer carries."
+  [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx :sitting (str id) {}))))
+
 (defn- utf8-length [^String s]
   (alength (.getBytes s "UTF-8")))
 
@@ -853,6 +869,31 @@
             r (tool h (with-session other) "waymark_sit" {:key a-key})]
         (is (true? (:isError r)))
         (is (= "No seat answers this key." (text-of r)))))))
+
+(deftest a-sitting-handed-no-rows-is-stamped-as-having-walked-nothing
+  ;; An empty walk shows today only as an absent `walked_rows`, which a
+  ;; sitting that walked nothing and a sitting the claim never wrote to
+  ;; both carry — so a reader cannot count the idle wakes. The stamp
+  ;; says which. Every row of this queue is held by the first run's open
+  ;; sitting, the cheapest queue with nothing free in it.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:rows_per_firing 1})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        sit-as! (fn [run]
+                  (let [[sid _] (initialize! h)]
+                    (doc-of (tool h (with-session sid) "waymark_sit"
+                                  {:key walk-key :session run}))))
+        walked (sit-as! "run-wake")
+        handed-nothing (sit-as! "run-fire")]
+    (testing "the sitting handed the queue's row carries no stamp"
+      (is (= [(str (:id gas))] (mapv :id (get-in walked [:walk :rows]))))
+      (is (nil? (get-in (sitting-row eng (:sitting walked))
+                        [:data :walked_nothing]))))
+    (testing "the sitting whose every row was held is stamped"
+      (is (empty? (get-in handed-nothing [:walk :rows])))
+      (is (true? (get-in (sitting-row eng (:sitting handed-nothing))
+                         [:data :walked_nothing]))))))
 
 (deftest a-seat-at-a-wall-answers-no-rows
   ;; R-5.2's third wall, and the cheapest one to stand up: a seat
@@ -1491,3 +1532,59 @@
         (is (false? (:isError r3)) (text-of r3))
         (is (empty? (get-in third [:walk :rows])))
         (is (str/includes? (str (:note third)) "nothing for you to walk"))))))
+
+(deftest a-re-sat-session-is-handed-the-row-only-when-no-other-sitting-holds-it
+  ;; Ticket d7c854b3: a seat of several open sittings walks one row.
+  ;; Sitting A is handed it and ends; a new sit under A's own
+  ;; harness_session opens a NEW sitting. That sitting is handed the
+  ;; row only while no other open sitting of the seat holds it
+  ;; (`seats/claimed-rows`, `seats/unwalkable-rows`, e031e479).
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        gas-id (str (:id gas))
+        sit-as! (fn [run]
+                  (let [[sid _] (initialize! h)
+                        r (tool h (with-session sid) "waymark_sit"
+                                {:key walk-key :session run})]
+                    [r (doc-of r)]))
+        rows-of (fn [d] (mapv :id (get-in d [:walk :rows])))
+        withheld-of (fn [d] (set (map :id (get-in d [:walk :withheld]))))
+        abandon! (fn [d] (inv/invoke! eng :sitting (str (:sitting d)) :abandon nil
+                                      {:principal seats/seats-actor}))
+        [ra a] (sit-as! "run-a")
+        [rb b] (sit-as! "run-b")]
+    (testing "sitting A is handed the one row, and B, open beside it, none"
+      (is (false? (:isError ra)) (text-of ra))
+      (is (false? (:isError rb)) (text-of rb))
+      (is (not= (:sitting a) (:sitting b)))
+      (is (= [gas-id] (rows-of a)))
+      (is (empty? (rows-of b)))
+      (is (contains? (withheld-of b) gas-id)
+          "the row A holds is withheld from B, not dropped from its sight"))
+    (abandon! a)
+    (let [[rc c] (sit-as! "run-a")]
+      (testing "a re-sit under A's harness_session opens a new sitting"
+        (is (false? (:isError rc)) (text-of rc))
+        (is (not= (:sitting a) (:sitting c)))
+        (is (not= (:sitting b) (:sitting c))))
+      (testing "and is handed the row, since no open sitting holds it"
+        (is (= [gas-id] (rows-of c))))
+      (let [[rb2 b2] (sit-as! "run-b")]
+        (testing "B's re-sit is still handed nothing: the new sitting holds it"
+          (is (false? (:isError rb2)) (text-of rb2))
+          (is (not= (:sitting c) (:sitting b2)))
+          (is (empty? (rows-of b2)))
+          (is (contains? (withheld-of b2) gas-id))))
+      (abandon! c)
+      (let [[rb3 b3] (sit-as! "run-b")
+            [rd d] (sit-as! "run-a")]
+        (testing "once the new sitting ends, B takes the row"
+          (is (false? (:isError rb3)) (text-of rb3))
+          (is (= [gas-id] (rows-of b3))))
+        (testing "and the next re-sit under A's harness_session is handed none"
+          (is (false? (:isError rd)) (text-of rd))
+          (is (not= (:sitting c) (:sitting d)))
+          (is (empty? (rows-of d)))
+          (is (contains? (withheld-of d) gas-id)))))))

@@ -275,6 +275,15 @@
 
 (def ^:private typed-demands #{"recall" "composition"})
 
+(defn- value-leaf
+  "The branch of a property that carries a value. An optional entry
+  publishes as anyOf/oneOf with a null branch; every widget question
+  — blank box, bare enum tokens — is about the other branch."
+  [prop]
+  (or (first (remove #(= "null" (:type %))
+                     (concat (:anyOf prop) (:oneOf prop))))
+      prop))
+
 (defn- blank-box?
   "Would this property render as an empty box with nothing in it? A
   boolean, a number, an instant or a date arrives at a real control —
@@ -282,11 +291,7 @@
   it. A bare string, array or object arrives as a rectangle, and a
   rectangle is where the hint sentence earns its keep."
   [prop]
-  ;; an optional entry publishes as anyOf/oneOf with a null branch —
-  ;; the widget question is about the branch that carries a value
-  (let [leaf (or (first (remove #(= "null" (:type %))
-                                (concat (:anyOf prop) (:oneOf prop))))
-                 prop)
+  (let [leaf (value-leaf prop)
         t (:type leaf)]
     (and (not (contains? leaf :format))
          (not (contains? #{"boolean" "integer" "number"} t)))))
@@ -343,7 +348,7 @@
                                     (keyword (str (name k) "." (name sk))))
                    unlabelled (concat unlabelled unlabelled-sub)
                    tokenised (for [[k {:keys [properties]} prop] es
-                                   :when (and (seq (:enum prop))
+                                   :when (and (seq (:enum (value-leaf prop)))
                                               (empty? (get-in properties
                                                               [:x-display
                                                                :choices])))]

@@ -178,3 +178,69 @@
                  (inv/invoke! engine :repo_policy (str (:id (policy-of engine)))
                               :note_base {:verdict "red"}
                               {:principal a-person})))))
+
+(deftest a-ticket-door-that-throws-does-not-cost-the-base-write
+  (let [{:keys [engine] :as w} (world)
+        invoke! inv/invoke!]
+    (head-at! w head-1 801 "failure")
+    (pass! w)
+    (head-at! w head-2 802 "failure")
+    (with-redefs-fn
+      {#'inv/invoke! (fn [eng kind & more]
+                       (if (= :ticket kind)
+                         (throw (ex-info "the ticket door is shut" {}))
+                         (apply invoke! eng kind more)))}
+      (fn []
+        (is (= 0 (:base-opened (pass! w)))
+            "the ticket door refused, so nothing was opened")))
+    (let [policy (policy-of engine)]
+      (is (= "red" (str (get-in policy [:data :base_state]))))
+      (is (= head-2 (get-in policy [:data :base_head]))
+          "the base WAS read on this pass, so the base was written")
+      (is (str/blank? (str (get-in policy [:data :base_ticket])))
+          "and no ticket is claimed that the door never opened"))))
+
+(deftest a-quiet-base-is-stamped-each-pass
+  (let [{:keys [engine] :as w} (world)]
+    (head-at! w head-1 901 "success")
+    (pass! w)
+    (let [before (policy-of engine)
+          checked (str (get-in before [:data :base_checked_at]))]
+      (is (not (str/blank? checked)))
+      (Thread/sleep 20)
+      (pass! w)
+      (let [after (policy-of engine)]
+        (is (not= checked (str (get-in after [:data :base_checked_at])))
+            "a base that moved nothing is still stamped as read")
+        (is (= (:version before) (:version after))
+            "with a maintenance write, not a transition")))))
+
+(deftest a-base-the-pass-cannot-read-is-noted-on-the-policy
+  (let [{:keys [engine] :as w} (world)]
+    (testing "a refused base read writes source_note"
+      (pass! w)
+      (is (str/starts-with? (str (get-in (policy-of engine)
+                                         [:data :source_note]))
+                            "The base `main` was not read (")))
+
+    (testing "a second refusal of the same kind writes nothing again"
+      (let [before (get-in (policy-of engine) [:data :source_note])]
+        (Thread/sleep 20)
+        (pass! w)
+        (is (= before (get-in (policy-of engine) [:data :source_note])))))
+
+    (testing "a good read clears it"
+      (head-at! w head-1 902 "success")
+      (pass! w)
+      (is (str/blank? (str (get-in (policy-of engine) [:data :source_note]))))
+      (is (= head-1 (get-in (policy-of engine) [:data :base_head]))))))
+
+(deftest the-base-pass-runs-when-a-pass-before-it-throws
+  (let [{:keys [engine] :as w} (world)]
+    (head-at! w head-1 903 "failure")
+    (with-redefs-fn
+      {#'forge/label-pass! (fn [& _] (throw (ex-info "the label pass broke" {})))}
+      (fn []
+        (is (thrown? Exception (pass! w)) "the throw is not swallowed")))
+    (is (= head-1 (get-in (policy-of engine) [:data :base_head]))
+        "but the base was read and written first")))
