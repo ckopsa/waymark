@@ -41,7 +41,8 @@
   atom lives on the rdef (:judgment-cache, installed and reset by the
   definitions lifecycle beside :judgment-laws), so per-kind identity
   and invalidation come free with the slot swap."
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.wire :as wire]))
 
@@ -49,12 +50,22 @@
 
 (defn- parse-remedy
   "The fingerprint's remedy spelling back to a token: \"plan.assign_meal\"
-  → :plan/assign_meal, \"assign_meal\" → :assign_meal."
+  → :plan/assign_meal, \"assign_meal\" → :assign_meal; a bound remedy's
+  {door, id, input} back to its map, each binding read again."
   [s]
-  (if (str/includes? s ".")
+  (cond
+    (map? s)
+    (cond-> {:door (parse-remedy (get s "door"))}
+      (get s "id") (assoc :id (edn/read-string (get s "id")))
+      (get s "input") (assoc :input (into {}
+                                          (map (fn [[k f]] [(keyword k) (edn/read-string f)]))
+                                          (get s "input"))))
+
+    (str/includes? s ".")
     (let [[ns' n] (str/split s #"\." 2)]
       (keyword ns' n))
-    (keyword s)))
+
+    :else (keyword s)))
 
 (defn- rebuild-guard
   "One stored judgment, made an ordinary expression guard again — the
