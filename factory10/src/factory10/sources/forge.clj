@@ -1000,6 +1000,11 @@
                    checked (when-not landing
                              (check-verdict (bench/required-checks-of policy)
                                             (read-checks repo head)))
+                   ;; every required check finished on a house change:
+                   ;; wake the merge pass (ticket 6e190062)
+                   _ (when (and checked (bench/house-pass-merges? policy))
+                       (bench/nudge-house! repo [:checks (str (:id row)) head
+                                                 (:verdict checked)]))
                    verdict (case (:verdict landing)
                              :red landing
                              :running nil
@@ -1346,6 +1351,11 @@
             ;; which head, is known here and must not ride on a ticket
             ;; door answering
             _ (note-base! eng policy base-facts stored)
+            ;; the base moved: a house line's front may be behind now
+            ;; (ticket 6e190062)
+            _ (when (and (:head stored) (not= head (:head stored))
+                         (bench/house-pass-merges? policy))
+                (bench/nudge-house! repo [:base repo head]))
             [census ticket-id]
             (try
               (cond

@@ -209,3 +209,60 @@
         "a moved count is written")
     (is (nil? (bench/moved-marks {} {:line_place nil :line_why nil} #{}))
         "clearing what is already clear writes nothing")))
+
+;; ── the pass the mirror wakes (ticket 6e190062) ────────────────────────
+
+(defn- at [seconds] (.plusSeconds ^Instant t0 (long seconds)))
+
+(defn- counter [] (let [n (atom 0)] [n #(swap! n inc)]))
+
+(deftest a-green-front-merges-without-the-clock
+  (let [board (bench/house-board)
+        r (rig (atom {7 {:state "merged"}}))
+        seen (atom {})
+        merge-pass! #(pass! r seen [(a-change "ckopsa/waymark" 7 0)] {})
+        [clocks clock!] (counter)]
+    (testing "no wake, no clock: nothing runs"
+      (is (= {:clock? false :woken #{}}
+             (bench/house-beat! board (at 1) false clock! merge-pass!)))
+      (is (= [] (numbers-of r "bench__merge"))))
+    (testing "the gate turns green: the next tick merges the front"
+      (is (true? (bench/nudge-house! board "ckopsa/waymark"
+                                     [:checks "change-7" "head-7" :green])))
+      (is (= #{"ckopsa/waymark"}
+             (:woken (bench/house-beat! board (at 5) false clock! merge-pass!))))
+      (is (= [7] (numbers-of r "bench__merge")))
+      (is (zero? @clocks)))))
+
+(deftest two-completions-inside-the-window-cause-one-pass
+  (let [board (bench/house-board)
+        [passes pass-once!] (counter)
+        [_ clock!] (counter)]
+    (bench/nudge-house! board "ckopsa/waymark" [:checks "change-7" "head-7" :green])
+    (bench/nudge-house! board "ckopsa/waymark" [:checks "change-8" "head-8" :green])
+    (bench/house-beat! board (at 5) false clock! pass-once!)
+    (bench/house-beat! board (at 10) false clock! pass-once!)
+    (is (= 1 @passes))
+    (testing "the same observation again wakes nothing"
+      (is (false? (bench/nudge-house! board "ckopsa/waymark"
+                                      [:checks "change-7" "head-7" :green]))))
+    (testing "a completion after the pass waits out the window, and is not lost"
+      (bench/nudge-house! board "ckopsa/waymark" [:checks "change-9" "head-9" :green])
+      (bench/house-beat! board (at 20) false clock! pass-once!)
+      (is (= 1 @passes))
+      (bench/house-beat! board (at 35) false clock! pass-once!)
+      (is (= 2 @passes)))))
+
+(deftest the-clock-pass-still-runs
+  (let [board (bench/house-board)
+        [passes pass-once!] (counter)
+        [clocks clock!] (counter)]
+    (testing "with nothing woken, the clock's beat runs its passes"
+      (is (:clock? (bench/house-beat! board (at 300) true clock! pass-once!)))
+      (is (= 1 @clocks))
+      (is (zero? @passes)))
+    (testing "a wake due on a clock beat is answered by the clock alone"
+      (bench/nudge-house! board "ckopsa/waymark" [:base "ckopsa/waymark" "base-2"])
+      (bench/house-beat! board (at 600) true clock! pass-once!)
+      (is (= 2 @clocks))
+      (is (zero? @passes)))))

@@ -1337,6 +1337,91 @@
   can work, so the house asks again soon."
   300)
 
+;; ── the house pass, woken by the mirror (ticket 6e190062) ────────────
+;;
+;; On the clock alone, each step of a merge line (update the front, wait
+;; for its gate, merge, next front) can wait a whole beat after its
+;; check already finished. So the forge mirror WAKES the merge pass when
+;; it sees a required check finish on a house change, or the base move:
+;; it writes the repository on a board, and the sweeper reads the board
+;; every `house-tick-seconds`. A repository is woken at most once per
+;; `house-debounce-seconds`; the clock stays as the fallback.
+
+(def house-debounce-seconds
+  "The least time between two woken merge passes for one repository."
+  30)
+
+(def house-tick-seconds
+  "How often the sweeper reads the wake board between clock beats."
+  5)
+
+(def ^:private house-seen-cap
+  "How many observations the board remembers before it starts over."
+  4096)
+
+(defn house-board
+  "A fresh wake board: `:seen` the observations already woken on,
+  `:pending` the repositories waiting for a woken pass, `:last`
+  repository → the Instant of its last woken pass."
+  []
+  (atom {:seen #{} :pending #{} :last {}}))
+
+(defonce ^{:doc "The process's wake board: the mirror writes it, the
+  sweeper reads it. Both run in the one elected holder."}
+  house-wakes
+  (house-board))
+
+(defn nudge-house!
+  "The mirror saw something that can move `repo`'s merge line. `what`
+  names the observation (a change's head and its verdict, or a base
+  head), and the same observation twice wakes nothing, so a green change
+  that waits does not wake the pass every beat. → true when it woke."
+  ([repo what] (nudge-house! house-wakes repo what))
+  ([board repo what]
+   (let [repo (some-> repo str not-empty)
+         [old new] (swap-vals!
+                    board
+                    (fn [b]
+                      (if (or (nil? repo) (contains? (:seen b) what))
+                        b
+                        (-> b
+                            (update :seen #(if (< (count %) house-seen-cap)
+                                             (conj % what)
+                                             #{what}))
+                            (update :pending conj repo)))))]
+     (not= old new))))
+
+(defn due-wakes!
+  "The repositories whose woken pass is due at `now`: pending, and not
+  woken in the last `house-debounce-seconds`. They leave `:pending` and
+  are stamped `now`; one still inside its window stays pending, so a
+  wake is delayed and never lost. → the set, maybe empty."
+  [board ^Instant now]
+  (let [ready? (fn [b repo]
+                 (let [^Instant at (get-in b [:last repo])]
+                   (or (nil? at)
+                       (not (.isBefore now (.plusSeconds at (long house-debounce-seconds)))))))
+        [old _] (swap-vals!
+                 board
+                 (fn [b]
+                   (let [due (filterv #(ready? b %) (:pending b))]
+                     (-> b
+                         (update :pending #(reduce disj % due))
+                         (update :last into (map (fn [r] [r now])) due)))))]
+    (into #{} (filter #(ready? old %)) (:pending old))))
+
+(defn house-beat!
+  "One tick of the sweeper. When `clock?`, the clock's passes
+  (`clock-pass!`), which merge every line and so answer any wake due
+  now; otherwise the merge pass (`merge-pass!`) when a repository's wake
+  is due. → {:clock? … :woken #{repo}}."
+  [board ^Instant now clock? clock-pass! merge-pass!]
+  (let [woken (due-wakes! board now)]
+    (cond
+      clock? (clock-pass!)
+      (seq woken) (merge-pass!))
+    {:clock? (boolean clock?) :woken woken}))
+
 (defn start-enrol-sweeper!
   "The retry's daemon: one `enroll-unenrolled!` every `:every-seconds`,
   on a daemon thread (the forge pass's own shape). The first pass is
@@ -1348,29 +1433,40 @@
   same election, so one process per database asks the rig to merge,
   and its memory of refused heads lives as long as that holder. So does
   the person's merge ask (`ask-for-merges!`), and its memory of when a
-  change turned clean."
+  change turned clean. Between beats the merge pass also runs when the
+  mirror wakes it (`house-wakes`, `house-beat!`)."
   [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}}]
   (let [stop (CountDownLatch. 1)
         seen (atom {})
         waiting (atom {})
+        every-ms (* 1000 (long every-seconds))
+        tick (max 1 (min (long every-seconds) (long house-tick-seconds)))
+        merge-pass! #(try (merge-green! eng seen)
+                          (catch Exception e
+                            (warn! "the merge pass failed ("
+                                   (ex-message e) ")")))
+        clock-pass! (fn []
+                      (try (enroll-unenrolled! eng)
+                           (catch Exception e
+                             (warn! "the enrolment pass failed ("
+                                    (ex-message e) ")")))
+                      (merge-pass!)
+                      (try (ask-for-merges! eng waiting (Instant/now))
+                           (catch Exception e
+                             (warn! "the merge ask pass failed ("
+                                    (ex-message e) ")"))))
         t (Thread. ^Runnable
                    (fn []
-                     (loop []
-                       (when-not (.await stop (long every-seconds)
-                                         TimeUnit/SECONDS)
-                         (try (enroll-unenrolled! eng)
-                              (catch Exception e
-                                (warn! "the enrolment pass failed ("
-                                       (ex-message e) ")")))
-                         (try (merge-green! eng seen)
-                              (catch Exception e
-                                (warn! "the merge pass failed ("
-                                       (ex-message e) ")")))
-                         (try (ask-for-merges! eng waiting (Instant/now))
-                              (catch Exception e
-                                (warn! "the merge ask pass failed ("
-                                       (ex-message e) ")")))
-                         (recur))))
+                     (loop [next-clock (+ (System/currentTimeMillis) every-ms)]
+                       (when-not (.await stop tick TimeUnit/SECONDS)
+                         (let [ms (System/currentTimeMillis)
+                               clock? (>= ms next-clock)]
+                           (try (house-beat! house-wakes (Instant/now) clock?
+                                             clock-pass! merge-pass!)
+                                (catch Exception e
+                                  (warn! "the sweeper's beat failed ("
+                                         (ex-message e) ")")))
+                           (recur (if clock? (+ ms every-ms) next-clock))))))
                    "factory10-bench-enrol")]
     (doto ^Thread t (.setDaemon true) (.start))
     {:thread t :stop stop}))
