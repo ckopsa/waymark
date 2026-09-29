@@ -808,7 +808,11 @@
   it writes a house merge's (`note-merges!`), and the mirror ends each
   change and its ticket as it does any merge. A base that moved outside
   the house (`base_moved`) throws the train away and the next pass
-  builds another; a rig that does not answer is asked again next pass."
+  builds another; a rig that does not answer is asked again next pass.
+  Only `landed: true` is a landing: an answer neither landed nor refused
+  (`state: waiting`, while GitHub computes mergeability or a check is
+  pending) keeps the train standing, its pull request noted as `:pr`,
+  and the next pass asks again (ticket c3f0f094)."
   [ctx seen repo policy train]
   (let [answer (ask ctx :train_land {:repo repo :base (base-of policy)
                                       :branch (:branch train)
@@ -828,13 +832,17 @@
       (one-at-a-time! ctx seen repo train
                       (str "was refused its landing (" (reason-of answer) ")"))
 
-      :else
+      (true? (:landed answer))
       (do (when-some [answers (:answers ctx)]
             (swap! answers into
                    (map (fn [id] [id {:state "merged" :head (:head train)}]))
                    (:changes train)))
           (ask ctx :train_delete {:repo repo :branch (:branch train)})
-          nil))))
+          nil)
+
+      :else
+      (let [n (:number answer)]
+        (if (pos-int? n) (assoc train :pr n) train)))))
 
 (defn- train-cap
   "How many trains one train of `n` changes may run, its own and the
@@ -957,7 +965,10 @@
   (`build-train!`), and a standing train (`line_train`) is read once
   (`advance-train!`) while its front waits. `trains`, when given, is an
   atom the pass fills with repository → the train that stands now, nil
-  for none, for each repository whose train it built or read.
+  for none, for each repository whose train it built or read. A
+  standing train whose repository has no line this pass — every rider
+  merged or left, or the repository is deploy-held — is read as well,
+  so it still finishes and leaves the policy.
   → the number of `merge` calls made."
   ([ctx seen lines by-repo] (work-lines! ctx seen lines by-repo (atom {})))
   ([ctx seen lines by-repo answers]
@@ -994,6 +1005,13 @@
            (and front (behind? (get @answers id)))
            (update-behind! ctx seen front id
                            (str (get-in front [:data :head_sha]))))))
+     ;; a standing train is read whatever its line: a repository with
+     ;; no line this pass would otherwise keep it on the policy for good
+     (doseq [[repo policy] by-repo
+             :when (not (contains? lines repo))
+             :let [train (get-in policy [:data :line_train])]
+             :when train]
+       (swap! trains assoc repo (advance-train! ctx seen repo policy train)))
      @asked)))
 
 ;; ── the line, written on the rows (ticket b85aded5) ─────────────────
