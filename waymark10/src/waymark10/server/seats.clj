@@ -1110,10 +1110,13 @@
    :reads [:model]
    :open "The registered identifiers are the models collection, one query away; enumerating them into the create form would offer exactly the tokens the guard is about to refuse."
    :explain "A model named {name} is already on record — one row per API identifier. If it was retired, reactivate that row rather than minting a second one: its prices are the history a closed sitting was costed against."}
-  [_row inp ctx]
+  [row inp ctx]
+  ;; on `restate` the row is the model itself, and its own name is no
+  ;; collision; on create there is no row, so nothing is set aside
   (if-some [find' (:find ctx)]
     (if (and (some? (:name inp))
-             (seq (find' :model {:name (str (:name inp))} {:limit 1})))
+             (seq (remove #(= (str (:id %)) (some-> row :id str))
+                          (find' :model {:name (str (:name inp))} {:limit 2}))))
       (t/deny {:vars {:name (str (:name inp))}})
       (t/allow))
     (t/allow)))
@@ -1337,6 +1340,11 @@
           row
           [:price_input_per_mtok :price_output_per_mtok
            :price_cache_read_per_mtok :price_cache_write_per_mtok]))
+
+(defhandler restate-model [row inp _ctx]
+  (reduce (fn [r f] (if (contains? inp f) (assoc-in r [:data f] (get inp f)) r))
+          row
+          [:name :display :notes]))
 
 (def ^:private cost-pairs
   "Which token count is priced by which field — the four halves of a
@@ -2949,6 +2957,33 @@
               :handler reprice-model
               :display {:label "Reprice" :order 2
                         :description "The vendor moved its prices — record the new four; nothing already closed changes"}}
+    ;; The Routine behind a row can move to another model; the row
+    ;; follows it here and keeps its id, its history and its seats.
+    ;; Prices stay with `reprice`. An omitted field keeps its value.
+    :restate {:from #{:active} :to :active
+              :input [:map
+                      [:name {:optional true
+                              :examples ["claude-sonnet-5"]
+                              :x-display {:raw true
+                                          :label "API identifier"
+                                          :help "The identifier the Routine's model now answers to, spelled exactly."}}
+                       [:string {:min 1 :max 64}]]
+                      [:display {:optional true
+                                 :examples ["Sonnet 5"]
+                                 :x-display {:label "What a person reads"
+                                             :help "The short name for a card, a ledger line and a ladder step."}}
+                       [:string {:min 1 :max 120}]]
+                      [:notes {:optional true
+                               :x-display {:label "Anything else worth knowing"
+                                           :help "A line for whoever reads the ladder later."}}
+                       [:maybe [:string {:max 240}]]]]
+              :guards [one-model-spelling]
+              :record true
+              :edit {:prefill [:name :display :notes]}
+              :safety {:idempotent true :reversible true :confirm false}
+              :handler restate-model
+              :display {:label "Restate" :order 3
+                        :description "The Routine now runs another model — rename this row; its seats, sittings and prices stay"}}
 
     ;; ── the chair's four doors (waymark-fp62.7.23) ──────────────────
     ;; The seat's `offer_key`/`revoke_key` and the schedule's
@@ -2969,7 +3004,7 @@
      :guards [a-person-at-the-chair]
      :safety {:idempotent true :reversible true :confirm false}
      :handler set-sitter-key
-     :display {:label "Offer key" :order 3
+     :display {:label "Offer key" :order 4
                :description "Hand this model a secret to paste into its Routine — a session presenting it may sit in any seat this model is the chair of"}}
 
     :revoke_key
@@ -2977,7 +3012,7 @@
      :guards [a-person-at-the-chair]
      :safety {:idempotent true :reversible true :confirm false}
      :handler clear-sitter-key
-     :display {:label "Revoke key" :order 4
+     :display {:label "Revoke key" :order 5
                :description "The key answers for nothing; a session presenting it is told no seat answers, and the seats themselves are untouched"}}
 
     :link
@@ -3000,7 +3035,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The link replaces whatever this model held; Unlink takes it off again."}
      :handler set-chair-link
-     :display {:label "Link the Routine" :style :primary :order 5
+     :display {:label "Link the Routine" :style :primary :order 6
                :description "Paste the fire URL and the token of the Routine you made for this model — its seats fire through it from then on"}}
 
     :unlink
@@ -3009,7 +3044,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The fire URL and the token leave this model; linking again means pasting both once more."}
      :handler clear-chair-link
-     :display {:label "Unlink the Routine" :style :danger :order 6
+     :display {:label "Unlink the Routine" :style :danger :order 7
                :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}
 
     ;; the runner pool (waymark ticket d16b71bf). A list names links,
@@ -3032,7 +3067,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The new list replaces the one this model held; another restate puts it back."}
      :handler set-runners
-     :display {:label "Runner links" :order 7
+     :display {:label "Runner links" :order 8
                :description "Name the runner links this model's seats fire through, in order"}}}
    :deviations
    ["THE CHAIR'S TWO WRITE FENCES ARE BOTH GUARDS, where the schedule fences its link by omission. `sitter_key`, `fire_url` and `fire_token` are declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry all three. `key-not-written-by-hand` and `link-not-written-by-hand` are what refuse them, and each refusal names the door that writes the field instead. Both secrets stay `{:secret true}`, so the advertised create body drops them, no form asks, and the usability policies skip them; what a caller gains over silent omission is the sentence."
