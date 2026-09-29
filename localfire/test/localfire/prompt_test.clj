@@ -20,7 +20,13 @@
     (is (not (str/includes? prompt/routine-prompt "echo")))
     (is (str/ends-with? prompt/routine-prompt
                         "with the numbers it gives, then stop."))
-    (is (str/includes? prompt/routine-prompt "Call waymark_sit once with that key"))))
+    (is (str/includes? prompt/routine-prompt "Call waymark_sit once with that key")))
+  (testing "it carries the cloud prompt's reconnect and deploy-wait paragraph"
+    (is (str/includes? prompt/routine-prompt
+                       "call waymark_sit again\nwith the same key, seat and session id; the engine reuses your open\nsitting. Do not sit for any other reason."))
+    (is (str/includes? prompt/routine-prompt
+                       "wait 30 seconds and\ntry again, for up to 5 minutes, before you stop."))
+    (is (not (str/includes? prompt/routine-prompt "Do not sit again.")))))
 
 (def ^:private preamble
   (str "The following was supplied by the caller of this routine's API fire "

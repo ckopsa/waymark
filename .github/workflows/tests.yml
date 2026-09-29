@@ -207,6 +207,10 @@ jobs:
       localfire: ${{ steps.detect.outputs.localfire }}
       quick: ${{ steps.select.outputs.quick }}
       factory: ${{ steps.select.outputs.factory }}
+      # Why `select` refused a dispatch's `only`, when it did. `gate`
+      # prints it: a seat reads only the tail of each failed job, and
+      # this job's tail is the checkout's post-step cleanup.
+      refused: ${{ steps.select.outputs.refused }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -360,14 +364,20 @@ jobs:
               print("factory=true")
               sys.exit(0)
 
+          # A refusal fails this step and names itself three ways: in
+          # this step's log, as an annotation on the run, and as the
+          # job's `refused` output, which `gate` prints in its tail.
+          def refuse(why):
+              print(f"refused=select: {why}")
+              print(f"::error title=changes / select::{why}", file=sys.stderr)
+              sys.exit(1)
+
           # Each becomes a --focus argument; hold it to the shape of a
           # Clojure test id before anything reads it.
           shape = [t for t in tokens
                    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9._*+!?<>=-]+)?", t)]
           if shape:
-              print(f"only: {', '.join(repr(t) for t in shape)} is not a namespace or ns/test-name",
-                    file=sys.stderr)
-              sys.exit(1)
+              refuse(f"only: {', '.join(repr(t) for t in shape)} is not a namespace or ns/test-name")
 
           def namespaces(root):
               base = pathlib.Path(root, "test")
@@ -389,8 +399,8 @@ jobs:
           # One unknown token refuses the whole list: a typo must not
           # come back green beside the names that did resolve.
           if missing:
-              print(f"only: no test namespace for {', '.join(missing)} in any suite", file=sys.stderr)
-              sys.exit(1)
+              refuse(f"only: no test namespace for {', '.join(missing)} in any suite"
+                     " (name a test namespace or ns/test-name, not a suite or make target)")
           print(f"quick={str(bool({'calendar10', 'localfire'} & homes)).lower()}")
           print(f"factory={str('factory10' in homes).lower()}")
           PY
@@ -915,6 +925,7 @@ jobs:
           TEST_QUEUE: ${{ needs.test-queue.result }}
           DISCOVER: ${{ needs.discover.result }}
           ONLY: ${{ inputs.only }}
+          REFUSED: ${{ needs.changes.outputs.refused }}
           EVENT: ${{ github.event_name }}
           RUN_WAYMARK10: ${{ needs.changes.outputs.waymark10 }}
           RUN_WORKQUEUE10: ${{ needs.changes.outputs.workqueue10 }}
@@ -926,6 +937,9 @@ jobs:
           echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE"
           if [ "$CHANGES" != "success" ]; then
             echo "gate: FAIL — the changes job did not succeed ($CHANGES), so whether this diff touches code is unknown."
+            if [ -n "${REFUSED:-}" ]; then
+              echo "gate: changes refused — $REFUSED"
+            fi
             exit 1
           fi
           if [ "${CODE:-}" != "true" ]; then

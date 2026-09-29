@@ -921,6 +921,28 @@
     (is (str/includes? note "Do not stall the ticket")
         "and not by stalling a ticket the code did not fail")))
 
+(deftest feedback-names-a-merge-trains-red-first
+  ;; ticket 238f45b3: the change's own branch is green, so the rig's
+  ;; feedback says nothing; the train's red rides on the change row
+  (let [with-train-red #'mcp/with-train-red
+        change {:data {:train_red "train/7 https://ci.example/run/9"
+                       :failing_checks ["gate" "test10"]}}
+        rig {"findings" [{"source" "review" "message" "nit"}]
+             "unavailable" []}
+        [first-finding :as findings] (get (with-train-red rig change)
+                                          "findings")]
+    (is (= 2 (count findings)))
+    (is (= "merge-train" (get first-finding "source")))
+    (is (str/includes? (get first-finding "message") "train/7"))
+    (is (str/includes? (get first-finding "message") "gate, test10"))
+    (is (= ["merge-train"]
+           (mapv #(get % "source")
+                 (get (with-train-red nil change) "findings")))
+        "a rig that answered nothing still leaves the train's red")
+    (is (= rig (with-train-red rig {:data {:failing_checks ["gate"]}}))
+        "a change no train found red is left as the rig said it")
+    (is (nil? (with-train-red nil {:data {}})))))
+
 (deftest feedback-with-no-interrupted-finding-carries-no-rerun-note
   (let [w (world)]
     (is (some? (:feedback (:answer w))))
@@ -1648,6 +1670,27 @@
       (is (nil? (get-in row [:data :landing_error]))
           "the last landing's error is not the new round's"))))
 
+(deftest a-seat-submits-again-after-a-train-red
+  ;; ticket 6566d32f: a merge train's red names the head it judged, and
+  ;; the next submit is a new head
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))]
+    (inv/invoke! (:eng w) :change id :fail
+                 {:failing_checks ["merge-train"]
+                  :train_red_head head
+                  :train_red "the train's test10 went red"}
+                 {:principal mirror/source-principal})
+    (is (= "failing" (name (:state (change-row w)))))
+    (is (= head (get-in (change-row w) [:data :train_red_head])))
+    (let [r (submit! w {:why "Fix what the train said."})
+          row (change-row w)]
+      (is (false? (:isError r)) (text-of r))
+      (is (= "submitted" (name (:state row))))
+      (is (nil? (get-in row [:data :train_red_head])))
+      (is (nil? (get-in row [:data :train_red]))
+          "the train judged the old head, not the new round's"))))
+
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
 (def ^:private person-policy {:auto_merge false})
@@ -2296,6 +2339,29 @@
          walk")
     (is (= "open" (get-in answer [:change :state])))))
 
+(deftest a-change-born-on-another-repository-moves-to-the-seats-at-the-next-sit
+  ;; ticket 1ebcd19f: the walk row moved to this seat's repository after
+  ;; its change was born on another one, and the change never opened
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        _ (inv/invoke! (:eng w) :change (str change-id) :rebranch
+                       {:head_branch (str "elsewhere/" ask-id)
+                        :repository "ckopsa/elsewhere"}
+                       {:principal mirror/source-principal})
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (= a-repository (get-in row [:data :repository]))
+        "the next sit hands a change on the seat's repository")
+    (is (not= (str "elsewhere/" ask-id) (get-in row [:data :head_branch]))
+        "and its branch is minted again from that repository's policy")
+    (is (= 1 (count (changes-of (:eng w))))
+        "on the row that is here: no second change is born")
+    (is (= "open" (name (:state row))))
+    (is (= a-repository (get-in answer [:change :data :repository]))
+        "and the seat reads the new repository on the change beside its
+         walk")))
+
 (deftest an-open-seat-born-change-on-the-old-pattern-is-rebranched-too
   ;; Prod's own row was at `open`, not at `stuck`: the sit minted it,
   ;; the prepare refused, and the seat stalled nothing.
@@ -2414,6 +2480,46 @@
                    "submit")
         "and the seat is offered submit on the change beside its walk")
     (is (nil? (:change_note answer)))))
+
+(deftest the-groom-itself-puts-a-stalled-change-back-to-work
+  ;; ticket 9ace68fb: the wakes leave out a ticket beside a stuck
+  ;; change, so the change must be open BEFORE any sit, or no seat
+  ;; fires to walk it
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (person-moves-ticket! w :groom)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the groom moved the change, not a sit")
+    (is (zero? (long (get-in row [:data :rounds]))))
+    (is (not (contains? (seats/stuck-walk-rows (:eng w) "ticket")
+                        (str (:id (:ticket w)))))
+        "so the wakes count the ticket again")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows])))
+        "and the next sit hands it")))
+
+(deftest the-unblock-puts-a-stalled-change-back-to-work
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        blocker (:row (inv/create! (:eng w) :ticket
+                                   {:title "The blocker" :type "task"
+                                    :repo a-repository}
+                                   {:principal person}))
+        tid (str (:id (:ticket w)))
+        drafted (store/with-tx (:storage (:eng w))
+                  (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket tid {})))
+        ;; `block` is fenced: name the version the stall left
+        _ (inv/invoke! (:eng w) :ticket tid :block
+                       {:blocked_by [(str (:id blocker))]}
+                       {:principal person
+                        :if-match (inv/etag :ticket tid (:version drafted))})
+        _ (person-moves-ticket! w :unblock)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the unblock moved the change")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows]))))))
 
 (deftest a-stall-with-no-groom-after-it-stays-stuck
   (let [w (ticket-world)

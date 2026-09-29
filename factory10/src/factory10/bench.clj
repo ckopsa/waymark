@@ -46,6 +46,7 @@
   not answer at all is nil, and a door that reads nil refuses with the
   sentence that says the bench is dark."
   (:require [clojure.string :as str]
+            [factory10.mirror :as mirror]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
@@ -789,19 +790,126 @@
                            :base_head (some-> (:base_head answer) str)
                            :started_at (pass-now ctx)})))))
 
-(defn train-finished!
-  "THE SEAM slice 3 fills (ticket 3deb06ed): what a finished train does
-  with its `verdict`, one of success, failure or cancelled. Until then
-  the train is deleted and its repository goes one at a time for the
-  rest of this process (`seen` keeps that under `[:train-done repo]`),
-  so no train is built only to be thrown away again. → the train that
-  stands after it, nil for none."
-  [ctx seen repo train verdict]
-  (warn! repo ": the train " (:branch train) " finished " verdict
+(defn- one-at-a-time!
+  "Delete a train and send its repository one at a time for the rest of
+  this process (`seen` keeps that under `[:train-done repo]`), so no
+  train is built only to be thrown away again. → nil."
+  [ctx seen repo train why]
+  (warn! repo ": the train " (:branch train) " " why
          "; it is deleted and the line goes one at a time")
   (ask ctx :train_delete {:repo repo :branch (:branch train)})
   (swap! seen assoc [:train-done repo] true)
   nil)
+
+(defn- land-train!
+  "Fast-forward the base to a green train's head → the train that stands
+  after it. Landed, every change it carried is merged: its answer this
+  pass says so (`:answers` in `ctx`), so the pass writes those merges as
+  it writes a house merge's (`note-merges!`), and the mirror ends each
+  change and its ticket as it does any merge. A base that moved outside
+  the house (`base_moved`) throws the train away and the next pass
+  builds another; a rig that does not answer is asked again next pass."
+  [ctx seen repo policy train]
+  (let [answer (ask ctx :train_land {:repo repo :base (base-of policy)
+                                      :branch (:branch train)
+                                      :expect_base_head (:base_head train)
+                                      :head (:head train)})
+        why (refused answer)]
+    (cond
+      (or (nil? answer) (contains? missing-power-refusals why)) train
+
+      (= "base_moved" why)
+      (do (warn! repo ": the base moved under the train " (:branch train)
+                 "; it is deleted and the next pass builds another")
+          (ask ctx :train_delete {:repo repo :branch (:branch train)})
+          nil)
+
+      why
+      (one-at-a-time! ctx seen repo train
+                      (str "was refused its landing (" (reason-of answer) ")"))
+
+      :else
+      (do (when-some [answers (:answers ctx)]
+            (swap! answers into
+                   (map (fn [id] [id {:state "merged" :head (:head train)}]))
+                   (:changes train)))
+          (ask ctx :train_delete {:repo repo :branch (:branch train)})
+          nil))))
+
+(defn- train-cap
+  "How many trains one train of `n` changes may run, its own and the
+  halves that look for its red: log2(n)+1."
+  [n]
+  (inc (long (Math/ceil (/ (Math/log (double (max 1 (long n))))
+                           (Math/log 2.0))))))
+
+(defn- riders-of
+  "The riders a standing train carries, as `build-train!` takes them."
+  [train]
+  (mapv (fn [id n] {:id id :data {:number n}}) (:changes train) (:prs train)))
+
+(defn- bisect-train!
+  "A red train looks for its red: the front half of its changes (at
+  least one) rides again, and the rest go back to the line for the next
+  train. A change red alone on a train goes back to its seat as a red
+  head does (`:train-red!` in `ctx`, change id and why). At most
+  log2(n)+1 trains per train of n, then the line goes one at a time.
+  → the train that stands after it."
+  [ctx seen repo policy train]
+  (let [riders (riders-of train)
+        size (or (:size train) (count riders))
+        tries (inc (long (or (:tries train) 1)))]
+    (cond
+      (= 1 (count riders))
+      (let [id (str (:id (first riders)))]
+        (warn! repo ": " id " is red alone on the train " (:branch train))
+        (if-some [red! (:train-red! ctx)]
+          (red! id (str "The merge train " (:branch train)
+                        " went red with this change alone on it."))
+          (warn! "no hand marks " id " red this pass"))
+        (ask ctx :train_delete {:repo repo :branch (:branch train)})
+        nil)
+
+      (> tries (train-cap size))
+      (one-at-a-time! ctx seen repo train
+                      (str "found no one red change in " (dec tries) " trains"))
+
+      :else
+      (some-> (build-train! ctx repo policy
+                            (subvec riders 0 (quot (count riders) 2)))
+              (assoc :tries tries :size size)))))
+
+(defn- retry-train!
+  "A train whose run was cancelled or timed out runs its checks once
+  more, and that counts as one of its trains; the second time, the line
+  goes one at a time. → the train that stands after it."
+  [ctx seen repo train verdict]
+  (if (:retried train)
+    (one-at-a-time! ctx seen repo train (str "finished " verdict " twice"))
+    (do (warn! repo ": the train " (:branch train) " finished " verdict
+               "; its checks run once more")
+        (assoc (dispatch-checks! ctx repo train)
+               :retried true :tries (inc (long (or (:tries train) 1)))))))
+
+(defn train-finished!
+  "What a finished train does with its `verdict` (ticket 6033c287, slice
+  3 of 3deb06ed) → the train that stands after it, nil for none. A green
+  train lands whole (`land-train!`), a red one looks for its red
+  (`bisect-train!`), and a cancelled or timed-out run runs once more
+  (`retry-train!`). Under a policy restated back to `line` only a green
+  train lands; any other is deleted and the line goes one at a time."
+  [ctx seen repo policy train verdict]
+  (cond
+    (= "success" verdict) (land-train! ctx seen repo policy train)
+
+    (not= "train" (merge-strategy-of policy))
+    (do (warn! repo ": the train " (:branch train) " finished " verdict
+               "; it is deleted and the line goes one at a time")
+        (ask ctx :train_delete {:repo repo :branch (:branch train)})
+        nil)
+
+    (= "failure" verdict) (bisect-train! ctx seen repo policy train)
+    :else (retry-train! ctx seen repo train verdict)))
 
 (defn- status-args [repo train]
   (if-some [run (some-> (:run_id train) str not-empty)]
@@ -812,7 +920,7 @@
   "Read a standing train's run once → the train that stands after it:
   the same one while its run is pending or the rig does not answer,
   and what `train-finished!` says once it finished or was refused."
-  [ctx seen repo train]
+  [ctx seen repo policy train]
   (let [answer (ask ctx :train_status (status-args repo train))
         why (refused answer)
         st (some-> (:state answer) name)]
@@ -821,9 +929,9 @@
       (contains? missing-power-refusals why) train
       why (do (warn! "the rig refused the status of " (:branch train) " ("
                      (reason-of answer) ")")
-              (train-finished! ctx seen repo train "cancelled"))
+              (train-finished! ctx seen repo policy train "cancelled"))
       (or (nil? st) (= "pending" st)) train
-      :else (train-finished! ctx seen repo train st))))
+      :else (train-finished! ctx seen repo policy train st))))
 
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
@@ -836,7 +944,10 @@
   (`build-train!`), and a standing train (`line_train`) is read once
   (`advance-train!`) while its front waits. `trains`, when given, is an
   atom the pass fills with repository → the train that stands now, nil
-  for none, for each repository whose train it built or read.
+  for none, for each repository whose train it built or read. A
+  standing train whose repository has no line this pass — every rider
+  merged or left, or the repository is deploy-held — is read as well,
+  so it still finishes and leaves the policy.
   → the number of `merge` calls made."
   ([ctx seen lines by-repo] (work-lines! ctx seen lines by-repo (atom {})))
   ([ctx seen lines by-repo answers]
@@ -866,11 +977,20 @@
          (warn! repo ": " (or id "nothing") " is the front of the merge line, "
                 (count (remove #(= id (str (:id %))) line)) " wait")
          (cond
-           train (swap! trains assoc repo (advance-train! ctx seen repo train))
+           train (swap! trains assoc repo
+                        (advance-train! (assoc ctx :answers answers)
+                                        seen repo policy train))
            built (swap! trains assoc repo built)
            (and front (behind? (get @answers id)))
            (update-behind! ctx seen front id
                            (str (get-in front [:data :head_sha]))))))
+     ;; a standing train is read whatever its line: a repository with
+     ;; no line this pass would otherwise keep it on the policy for good
+     (doseq [[repo policy] by-repo
+             :when (not (contains? lines repo))
+             :let [train (get-in policy [:data :line_train])]
+             :when train]
+       (swap! trains assoc repo (advance-train! ctx seen repo train)))
      @asked)))
 
 ;; ── the line, written on the rows (ticket b85aded5) ─────────────────
@@ -1266,6 +1386,27 @@
                  (get holds (born-ticket %)))
            changes))
 
+(defn- train-red!
+  "Send a change a merge train found red alone back to its seat, as the
+  forge sends a red head: `fail`, naming the head the train judged, or
+  `stick` on the policy's last round (ticket 6033c287)."
+  [eng changes by-repo id why]
+  (when-some [row (some #(when (= id (str (:id %))) %) changes)]
+    (let [policy (get by-repo (str (get-in row [:data :repository])))
+          last? (>= (long (or (get-in row [:data :rounds]) 0))
+                    (long (rounds-of policy)))]
+      (try
+        (inv/invoke! eng :change id (if last? :stick :fail)
+                     (if last?
+                       {:why (clip why) :failing_checks ["merge-train"]}
+                       {:failing_checks ["merge-train"]
+                        :train_red_head (str (get-in row [:data :head_sha]))
+                        :train_red (clip why)})
+                     {:principal mirror/source-principal})
+        (catch Exception e
+          (warn! "the train's red did not move " id " (" (ex-message e)
+                 "); it rides again"))))))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
@@ -1300,7 +1441,9 @@
                            #(get priorities (born-ticket %)) @seen)
         answers (atom {})
         trains (atom {})
-        asked (work-lines! {:services (:services eng) :now-fn (:now-fn eng)} seen
+        asked (work-lines! {:services (:services eng) :now-fn (:now-fn eng)
+                            :train-red! #(train-red! eng changes by-repo %1 %2)}
+                           seen
                            (apply dissoc lines (keys deploy-holds)) by-repo
                            answers trains)
         standing (merge (into {}

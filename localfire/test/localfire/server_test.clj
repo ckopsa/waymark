@@ -57,6 +57,15 @@
           (destroy [_] (deliver done 143))
           (destroy-forcibly [_] (deliver done 137)))))))
 
+(defn fake-closer
+  "The close's seam faked (R-5.6): `closes` collects one map per call,
+  the hook's stdin read back as JSON, and every close succeeds."
+  [closes]
+  (fn [argv dir input]
+    (swap! closes conj {:argv (vec argv) :dir (str dir)
+                        :input (json/read-value input)})
+    {:exit 0 :out "closed sitting-1"}))
+
 (defn tmpdir ^File [prefix]
   (.toFile (Files/createTempDirectory (str prefix) (make-array FileAttribute 0))))
 
@@ -96,14 +105,16 @@
          runs  (or runs-dir (tmpdir "lf-runs"))
          port  (free-port)
          calls (atom [])
+         closes (atom [])
          cfg   (make-config {:port port :place place :runs-dir runs
                              :routines routines})
          st    (server/start! {:config  cfg
                                :token   (or token "the-token")
                                :spawner (fake-spawner {:calls calls :gate gate
-                                                       :exit exit})})]
+                                                       :exit exit})
+                               :closer  (fake-closer closes)})]
      (assoc st :base (str "http://127.0.0.1:" port)
-            :place place :runs runs :calls calls))))
+            :place place :runs runs :calls calls :closes closes))))
 
 ;; ── a client ────────────────────────────────────────────────────────
 
@@ -347,6 +358,58 @@
         (is (string? (:ended-at rec))))
       (is (zero? (runs/mark-lost! runs))))
     (deliver gate true)))
+
+;; ── the sitting's close from outside the run (R-5.6) ──────────────────
+
+(deftest a-restart-closes-the-sitting-of-a-lost-run
+  (let [runs   (tmpdir "lf-runs-close")
+        place  (make-place!)
+        id     (str (java.util.UUID/randomUUID))
+        closes (atom [])
+        start  #(server/start! {:config  (make-config {:port (free-port) :place place
+                                                       :runs-dir runs})
+                                :token   "the-token"
+                                :spawner (fake-spawner {:calls (atom [])})
+                                :closer  (fake-closer closes)})]
+    (runs/copy-tree! place (runs/place-dir runs id))
+    (runs/write-run-edn! runs id {:id id :routine "sonnet" :status :running
+                                  :started-at (runs/now-iso) :ended-at nil :exit nil})
+    (is (= 1 (runs/mark-lost! runs)))
+    (let [st (start)]
+      (try
+        (testing "the lost run's sitting is closed once, by its session id"
+          (is (= 1 (deref (:closing st) 5000 nil)))
+          (is (= 1 (count @closes)))
+          (let [{:keys [argv input]} (first @closes)]
+            (is (= [(.getPath (runs/hook-file runs id)) "close-run"] (subvec argv 0 2)))
+            (is (str/starts-with? (nth argv 2) "localfire lost this run at "))
+            (is (str/ends-with? (nth argv 2) "(restart)"))
+            (is (= id (get input "session_id")))
+            (is (str/ends-with? (get input "transcript_path") (str id ".jsonl"))))
+          (is (true? (:sitting-closed (runs/read-run-edn runs id)))))
+        (finally (server/stop! st))))
+    (testing "a second start does not close it again"
+      (let [st (start)]
+        (try
+          (is (= 0 (deref (:closing st) 5000 nil)))
+          (is (= 1 (count @closes)))
+          (finally (server/stop! st)))))))
+
+(deftest a-process-exit-closes-the-runs-sitting
+  (let [w  (world)
+        id (get-in (POST (str (:base w) "/fire/sonnet") "the-token")
+                   [:json :claude_code_session_id])]
+    (try
+      (is (wait-for #(true? (:sitting-closed (runs/read-run-edn (:runs w) id)))))
+      (is (= 1 (count @(:closes w))))
+      (let [{:keys [argv dir input]} (first @(:closes w))]
+        (is (= [(.getPath (runs/hook-file (:runs w) id)) "close-run"
+                "localfire saw the run exit"]
+               argv))
+        (is (= (.getPath (runs/place-dir (:runs w) id)) dir))
+        (is (= id (get input "session_id"))))
+      (is (= :done (:status (runs/read-run-edn (:runs w) id))))
+      (finally (server/stop! w)))))
 
 ;; ── a fixed OAuth client at the door (R-8.2) ─────────────────────────
 
