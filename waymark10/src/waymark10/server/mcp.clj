@@ -3115,9 +3115,9 @@
        "its ticket in review, and grooming does not serve it: unstick puts "
        "back a change with no pull request, and unstick_submitted one that "
        "has a pull request. A seat's stall sent the ticket to draft, and "
-       "grooming it again puts the change back to work at the groom, or "
-       "back under review at the next sit when it has a pull request. "
-       "Say that it is stuck, and stop."))
+       "grooming it again puts the change back itself, at the groom: to "
+       "work when it has no pull request, and back under review when it "
+       "has one. Say that it is stuck, and stop."))
 
 (def ^:private groomed-walk-prefix
   "What `born_from` starts with for a change built for a ticket. A
@@ -3137,13 +3137,13 @@
   The change's `change_id` is `ticket:<id>` and unique, so without this
   the sit would hand the seat the same stuck change forever.
 
-  THE BACKSTOP, SINCE TICKET 9ace68fb. A groom, unblock or resume now
-  walks the change's `rework` door in the same transaction, so a stuck
-  change with no pull request is already `open` when the sit reads it.
-  This path is kept for what `rework` leaves: a change WITH a pull
-  request (`rework` refuses it; this unsticks it with
-  `unstick_submitted`), and rows stalled and groomed before `rework`
-  existed.
+  THE BACKSTOP, SINCE TICKETS 9ace68fb AND 4363c63b. A groom, unblock or
+  resume now walks the change's `rework` door in the same transaction,
+  or `rework_submitted` for a change WITH a pull request, so a stuck
+  change is already `open` or `submitted` when the sit reads it. This
+  path is kept only as the fallback for rows stalled and groomed before
+  those doors existed; it unsticks a change with a pull request with
+  `unstick_submitted`.
 
   ONLY A GROOM AFTER THE STALL ANSWERS IT. When the ticket's newest
   `groom` is not newer than the change's newest `stall` — or the change
