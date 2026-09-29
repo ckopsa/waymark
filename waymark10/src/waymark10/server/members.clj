@@ -454,10 +454,11 @@
 ;; handler. Not hidden: a stranger's refusal should read as an
 ;; honest no, and absence from the presence board stays legible as
 ;; "curtained or away — the member row says which".
-(g/defguard curtain-is-your-own-hand
-  {:reads [:principal :member]
-   :explain "The curtain is its member's own to draw or open; only that member themself (or a recovery-admin human, the household valve) may touch it."}
-  [row _inp ctx]
+(defn- own-hand
+  "The own-hand verdict curtain-is-your-own-hand and
+  notify-is-your-own-hand share: the member themself, or a
+  recovery-admin human read from its own member row; never :system."
+  [row ctx]
   (let [p (:principal ctx)
         pid (:id p)
         read' (:read ctx)
@@ -487,6 +488,22 @@
                             "recovery-admin"))
           (t/allow)
           (t/deny))))))
+
+(g/defguard curtain-is-your-own-hand
+  {:reads [:principal :member]
+   :explain "The curtain is its member's own to draw or open; only that member themself (or a recovery-admin human, the household valve) may touch it."}
+  [row _inp ctx]
+  (own-hand row ctx))
+
+;; how a member is reached is their own hand too: set_notify names the
+;; chat a notice rule sends into, so a caller who could write another
+;; member's :notify could redirect that member's notices to their own
+;; chat. The curtain's wall, the curtain's valve.
+(g/defguard notify-is-your-own-hand
+  {:reads [:principal :member]
+   :explain "How a member is reached is that member's own to set; only the member themself (or a recovery-admin human, the household valve) may point their notices somewhere."}
+  [row _inp ctx]
+  (own-hand row ctx))
 
 (defhandler draw-curtain [row _inp _ctx]
   (assoc-in row [:data :curtain] true))
@@ -808,6 +825,7 @@
                           notify-schema]]
                  :record true
                  :edit {:prefill [:notify]}
+                 :guards [notify-is-your-own-hand]
                  :safety {:idempotent true :reversible true :confirm false}
                  :handler set-notify
                  :display {:label "Set how to reach them" :order 4}}
