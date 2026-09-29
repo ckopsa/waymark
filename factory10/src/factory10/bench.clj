@@ -175,6 +175,18 @@
 (defn rounds-of [policy]
   (long (or (get-in policy [:data :rounds_per_change]) default-rounds)))
 
+(defn merge-strategy-of
+  "How the house merges (ticket 394d0602): \"line\" or \"train\". A row
+  that predates the field reads as \"line\", today's one-at-a-time line."
+  [policy]
+  (or (some-> (get-in policy [:data :merge_strategy]) str not-empty) "line"))
+
+(defn train-size-of
+  "How many changes ride one merge train (ticket 394d0602), read only
+  when the strategy is train. A row that predates the field reads as 4."
+  [policy]
+  (long (or (get-in policy [:data :train_size]) 4)))
+
 (defn house-merges?
   "Does this policy say the house merges a green change (ticket
   4dfb00f6)? Only `merge_by: house`; an absent field is GitHub's."
