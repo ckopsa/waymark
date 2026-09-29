@@ -668,6 +668,47 @@
         (is (nil? (get-in row [:data :cost_usd]))
             "R-7.6's posture: the absence of a bill")))))
 
+(deftest a-re-sit-of-an-idle-sitting-survives-the-next-sweep
+  ;; ticket e2b55a0c: a re-sit reused a sitting already past its idle
+  ;; limit, and the sweep abandoned it under the caller seconds later
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model {:name "chair"
+                                 :mode "interactive"
+                                 :sitting_idle_seconds 600})
+        sit! #(str (:sitting (doc-of (tool h (with-session (initialize! h))
+                                           "waymark_sit"
+                                           {:key a-key :session "run-a"}))))
+        sitting (sit!)
+        last-call #(str (get-in (row-of eng :sitting sitting)
+                                [:data :last_call_at]))
+        at! (fn [s] (reset! at (Instant/parse s)))]
+
+    (testing "the re-sit reuses the idle sitting and stamps its last call"
+      (at! "2026-09-17T09:20:00Z")
+      (is (= sitting (sit!)))
+      (is (= "2026-09-17T09:20:00Z" (last-call))))
+
+    (testing "the next sweep leaves it open"
+      (is (= {:abandoned 0 :closed 0}
+             (select-keys (defs/sweep-seats! eng) [:abandoned :closed])))
+      (is (= :open (:state (row-of eng :sitting sitting)))))
+
+    (testing "the following call is counted on it"
+      (at! "2026-09-17T09:21:00Z")
+      (let [sid (initialize! h)]
+        (tool h (with-session sid) "waymark_sit" {:key a-key :session "run-a"})
+        (tool h (with-session sid) "waymark_query" {:kind "meal"}))
+      (is (= "2026-09-17T09:21:00Z" (last-call)))
+      (is (= :open (:state (row-of eng :sitting sitting)))))
+
+    (testing "the sweep still abandons it once nobody re-sits"
+      (at! "2026-09-17T09:31:01Z")
+      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
+      (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
+
 (deftest a-sitting-that-only-reads-over-the-router-is-not-swept
   ;; ticket 900764ce: a GET through the router under the seat's grant
   ;; is activity, so a sitter that only reads over HTTP keeps its

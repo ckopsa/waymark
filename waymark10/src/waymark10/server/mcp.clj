@@ -2091,10 +2091,18 @@
   THE ID IS STAMPED AT BIRTH, not guessed at the close: the engine
   cannot derive which run this is, the harness can, and a pairing made
   here is one the session-end door (R-12.17) reads rather than
-  reconstructs."
+  reconstructs.
+
+  A REUSED SITTING IS STAMPED as it is handed back (ticket e2b55a0c):
+  the sit is a call, and a sitting idle past `sitting_idle_seconds`
+  would otherwise be abandoned by the next sweep under the caller it
+  was just given to. A candidate the stamp finds closed is no answer;
+  a fresh sitting is born instead."
   [eng sid sitter grant seat model harness-session]
   (when model
-    (or (reusable-sitting eng sid grant seat harness-session)
+    (or (when-some [row (reusable-sitting eng sid grant seat harness-session)]
+          (when (seats/stamp-call! eng (:id row))
+            row))
         (:row (inv/create! eng :sitting
                            (cond-> {:seat (str (:id seat))
                                     :model (str (:id model))
