@@ -1430,6 +1430,30 @@
         "no key at all, so a rig that does not know `test` still enrolls
          the repository")))
 
+(deftest a-policy-restated-with-a-select-pattern-enrolls-with-it
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:test {:workflow "tests.yml" :input "only"}})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))
+        pattern "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"]
+    (is (not (contains? (:test (sent 0)) :select_pattern))
+        "a block without a pattern sends none, so the rig keeps its default")
+    (let [current (policy-row eng (:id row))]
+      (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                   (assoc (select-keys (:data current)
+                                       [:repository :branch_pattern :base
+                                        :max_lines :opens_pr :auto_merge
+                                        :rounds_per_change :formatter
+                                        :deny :orientation])
+                          :test {:workflow "tests.yml" :input "only"
+                                 :select_pattern pattern})
+                   {:principal person
+                    :if-match (inv/etag :repo_policy (:id row)
+                                        (:version current))}))
+    (is (= {:workflow "tests.yml" :input "only" :select_pattern pattern}
+           (:test (sent 1)))
+        "the restate carries the pattern to the rig's enrollment")))
+
 ;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
 
 (def ^:private house-policy

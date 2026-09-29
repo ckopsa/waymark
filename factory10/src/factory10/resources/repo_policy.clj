@@ -95,6 +95,21 @@
       (t/deny)
       (t/allow))))
 
+(defguardfn the-test-selection-pattern-compiles
+  {:reads []
+   :open "No other door changes this verdict. Restate the policy with a select_pattern that is a regular expression, or leave it empty for the Clojure shape."
+   :explain "The bench checks a seat's test selection against this pattern before it dispatches the workflow. A pattern that does not compile would refuse every selection."}
+  ;; ticket efa54182: the rig judges `select` against the pattern, so
+  ;; a pattern it cannot compile is refused here, where a person reads
+  ;; why, and not at every seat's test afterwards.
+  [_row inp _ctx]
+  (let [p (get-in inp [:test :select_pattern])]
+    (if (or (nil? p)
+            (try (re-pattern (str p)) true
+                 (catch Exception _ false)))
+      (t/allow)
+      (t/deny))))
+
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
    :hide true
@@ -232,6 +247,27 @@
    :attempt :restate
    :row     {:state :active :data a-policy}
    :input   (assoc a-policy :max_lines 600)
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-test-selection-pattern-must-compile
+  "A select_pattern the rig could not compile would refuse every
+   seat's test, so the restate refuses it first."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :test {:workflow "tests.yml" :input "only"
+                                   :select_pattern "^[A-Za-z_"})
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-test-selection-pattern-compiles}})
+
+(defscenario a-test-selection-pattern-that-compiles-stands
+  "…and a pattern that compiles is the person's to state."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :test {:workflow "tests.yml" :input "only"
+                                   :select_pattern "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"})
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
@@ -426,7 +462,14 @@
       [:string {:min 1 :max 200}]]
      [:input {:x-display {:label "Narrowing input"
                           :help "The name of the workflow's input that narrows the run to what a seat touched."}}
-      [:string {:min 1 :max 120}]]]]
+      [:string {:min 1 :max 120}]]
+     ;; ticket efa54182: OPTIONAL, and the rig's default when absent
+     [:select_pattern {:optional true
+                       :examples ["^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"]
+                       :x-display {:raw true
+                                   :label "What a test selection looks like"
+                                   :help "A regular expression the bench checks a seat's test selection against before it dispatches the workflow. Leave it empty for the Clojure shape: a dotted namespace ending in -test. A Python repository states its own, such as dotted module names."}}
+      [:maybe [:string {:min 1 :max 200}]]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
@@ -634,7 +677,8 @@
    ;; a reader sees them and on no form so a person never writes them.
    :create-schema (into [:map] policy-fields)
    :create-guards [a-person-or-their-delegate-states-the-policy
-                   the-house-merges-only-what-a-check-tested]
+                   the-house-merges-only-what-a-check-tested
+                   the-test-selection-pattern-compiles]
    ;; …and the rig is told at the birth (R-2): a create cannot walk a
    ;; door on a row that does not exist yet
    :on-create enrol-at-birth
@@ -643,7 +687,8 @@
     {:from #{:active} :to :active
      :input (into [:map] policy-fields)
      :guards [a-person-or-their-delegate-states-the-policy
-              the-house-merges-only-what-a-check-tested]
+              the-house-merges-only-what-a-check-tested
+              the-test-selection-pattern-compiles]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes
