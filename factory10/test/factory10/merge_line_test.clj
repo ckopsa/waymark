@@ -244,6 +244,7 @@
                   "bench__train_status"
                   (get @answers "train_status" {:state "pending" :head "train-head"})
                   "bench__train_land" (get @answers "train_land" {:landed true})
+                  "bench__train_open" (get @answers "train_open" {:refused "unknown_tool"})
                   "bench__train_delete" {:repo wm :branch (:branch args)}
                   {:refused "unknown_tool"})}})}}}))
 
@@ -351,6 +352,30 @@
       (is (= {wm nil} (train-pass! r seen (four) (train-policy :line_train train))))
       (is (= 1 (count (args-of r "bench__train_land")))))))
 
+(deftest a-train-names-the-policy-s-test-workflow
+  (let [answers (atom {"train_checks" {:run_id nil :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        pol (train-policy :test {:workflow "tests.yml" :input "only"})
+        train (get (train-pass! r seen (four) pol) wm)]
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1" :workflow "tests.yml"}]
+           (args-of r "bench__train_checks"))
+        "the checks dispatch the policy's workflow")
+    (is (= "tests.yml" (:workflow train)) "the train records it")
+    (train-pass! r seen (four) (assoc-in pol [:data :line_train] train))
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"
+             :workflow "tests.yml"}]
+           (args-of r "bench__train_status"))
+        "with no run yet, the status reads the same workflow")))
+
+(deftest a-standing-train-with-no-line-is-read
+  (let [r (train-rig (atom {}))
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)]
+    (is (= {wm train} (train-pass! r seen [] (train-policy :line_train train)))
+        "a pending train with no change in its line stands, and nothing throws")
+    (is (= [{:repo wm :run_id "77"}] (args-of r "bench__train_status")))))
+
 ;; ── a finished train (ticket 6033c287, slice 3 of 3deb06ed) ──────────
 
 (defn- finish-pass!
@@ -383,6 +408,22 @@
         "all four merge in one go, and the pass writes them as house merges")
     (is (= 1 (count (args-of r "bench__train_checks"))))))
 
+(deftest a-green-train-with-no-line-lands-whole
+  (let [answers (atom {"train_status" {:state "success" :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)
+        by-repo {wm (train-policy :line_train train)}
+        merged (atom {})
+        trains (atom {})]
+    (bench/work-lines! (:ctx r) seen {} by-repo merged trains)
+    (is (= 1 (count (args-of r "bench__train_land")))
+        "a standing train whose repository has no line still lands")
+    (is (nil? (get @trains wm)) "no train stands after it")
+    (is (= (repeat 4 "merged")
+           (map #(:state (get @merged %)) ["change-1" "change-2" "change-3" "change-4"]))
+        "the pass writes its riders as house merges")))
+
 (deftest a-base-moved-outside-the-house-builds-the-train-again
   (let [answers (atom {"train_status" {:state "success" :head "train-head"}
                        "train_land" {:refused "base_moved"}})
@@ -397,6 +438,39 @@
     (train-pass! r seen (four) (train-policy))
     (is (= [[1 2 3 4] [1 2 3 4]] (mapv :prs (args-of r "bench__train_build")))
         "the next pass builds it again on the moved base")))
+
+(deftest a-waiting-landing-keeps-the-train-standing
+  (let [answers (atom {"train_status" {:state "success" :head "train-head"}
+                       "train_land" {:state "waiting" :number 300
+                                     :pending ["gate"]}})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)
+        [after merged] (finish-pass! r seen train)]
+    (is (= (assoc train :pr 300) after)
+        "the train stands unchanged, its pull request noted")
+    (is (empty? (args-of r "bench__train_delete")) "the train is not deleted")
+    (is (not-any? #(= "merged" (:state %)) (vals merged)) "nothing merged")
+    (swap! answers assoc "train_land" {:landed true :number 300 :sha "s"})
+    (let [[again merged] (finish-pass! r seen after)]
+      (is (nil? again))
+      (is (= 2 (count (args-of r "bench__train_land"))) "the next pass asks again")
+      (is (= (repeat 4 "merged")
+             (map #(:state (get merged %)) ["change-1" "change-2" "change-3" "change-4"]))))))
+
+(deftest a-refused-merge-goes-one-at-a-time
+  (let [answers (atom {"train_status" {:state "success" :head "train-head"}
+                       "train_land" {:refused "merge_refused"}})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)
+        [after merged] (finish-pass! r seen train)]
+    (is (nil? after))
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1"}]
+           (args-of r "bench__train_delete")))
+    (is (not-any? #(= "merged" (:state %)) (vals merged)) "nothing merged")
+    (train-pass! r seen (four) (train-policy))
+    (is (= 1 (count (args-of r "bench__train_build"))) "no train is built again")))
 
 (deftest a-red-train-bisects-to-its-one-red-change
   (let [answers (atom {"train_status" {:state "failure" :head "train-head"}})
@@ -437,3 +511,89 @@
       (train-pass! r seen (four) (train-policy))
       (is (= 1 (count (args-of r "bench__train_build"))) "no train is built again")
       (is (= [1] (mapv :number (args-of r "bench__update_branch")))))))
+
+(deftest a-retried-train-read-by-its-branch-skips-the-cancelled-run
+  (let [answers (atom {"train_checks" {:run_id nil :head "train-head"}
+                       "train_status" {:state "cancelled" :run_id "77" :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        t1 (get (train-pass! r seen (four) (train-policy)) wm)
+        [t2] (finish-pass! r seen t1)]
+    (is (true? (:retried t2)))
+    (is (= "77" (:stale_run_id t2)) "the cancelled run stays on the train")
+    (is (nil? (:run_id t2)) "the retry showed no run yet")
+    (testing "the old cancelled run is read as the retry not shown yet"
+      (let [[t3] (finish-pass! r seen t2)]
+        (is (= t2 t3))
+        (is (= {:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"}
+               (last (args-of r "bench__train_status"))))
+        (is (not (get @seen [:train-done wm])) "the line is not sent one at a time")
+        (is (empty? (args-of r "bench__train_delete")))))
+    (testing "the retry's own run is read, and lands green"
+      (swap! answers assoc "train_status" {:state "success" :run_id "78" :head "train-head"})
+      (let [[t4] (finish-pass! r seen t2)]
+        (is (nil? t4))
+        (is (= 1 (count (args-of r "bench__train_land"))))))))
+
+;; ── the pull request's own run is the train's check (e2d485c2) ──────
+
+(deftest a-train-whose-pull-request-opens-runs-its-checks-once
+  (let [answers (atom {"train_open" {:number 397 :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)]
+    (is (= [{:repo wm :base "main" :branch "train/ckopsa/waymark/1" :head "train-head"}]
+           (args-of r "bench__train_open"))
+        "the train's pull request opens right after the build")
+    (is (empty? (args-of r "bench__train_checks")) "no second run is dispatched")
+    (is (= 397 (:pr train)))
+    (is (true? (:pr_run train)))
+    (is (nil? (:run_id train)))
+    (testing "the pull request's run is read by branch and head"
+      (let [[after] (finish-pass! r seen train)]
+        (is (= train after) "pending, it stands")
+        (is (= [{:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"}]
+               (args-of r "bench__train_status")))))
+    (testing "green, it lands, and its checks never ran twice"
+      (swap! answers assoc "train_status" {:state "success" :run_id "90" :head "train-head"})
+      (let [[after merged] (finish-pass! r seen train)]
+        (is (nil? after))
+        (is (= 1 (count (args-of r "bench__train_land"))))
+        (is (= (repeat 4 "merged")
+               (map #(:state (get merged %)) ["change-1" "change-2" "change-3" "change-4"])))
+        (is (empty? (args-of r "bench__train_checks")))))))
+
+(deftest a-red-pull-request-train-bisects-without-dispatching
+  (let [answers (atom {"train_open" {:number 397 :head "train-head"}
+                       "train_status" {:state "failure" :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        t1 (get (train-pass! r seen (four) (train-policy)) wm)
+        [t2] (finish-pass! r seen t1)]
+    (is (= [[1 2 3 4] [1 2]] (mapv :prs (args-of r "bench__train_build"))))
+    (is (= 2 (count (args-of r "bench__train_open"))) "the half's pull request opens too")
+    (is (true? (:pr_run t2)))
+    (is (empty? (args-of r "bench__train_checks")))))
+
+(deftest a-pull-request-that-shows-no-run-gets-its-checks-dispatched
+  (let [answers (atom {"train_open" {:number 397 :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)
+        late (assoc-in r [:ctx :now-fn]
+                       (constantly (.plusSeconds ^Instant t0
+                                                 (long bench/pr-run-grace-seconds))))]
+    (testing "inside the grace, it waits"
+      (let [[after] (finish-pass! r seen train)]
+        (is (= train after))
+        (is (empty? (args-of r "bench__train_checks")))))
+    (testing "past it, the checks are dispatched once"
+      (let [[after] (finish-pass! late seen train)]
+        (is (= [{:repo wm :branch "train/ckopsa/waymark/1"}]
+               (args-of r "bench__train_checks")))
+        (is (= "77" (:run_id after)))
+        (is (nil? (:pr_run after)))
+        (is (= 397 (:pr after)))
+        (let [[again] (finish-pass! late seen after)]
+          (is (= after again))
+          (is (= 1 (count (args-of r "bench__train_checks"))) "not twice"))))))

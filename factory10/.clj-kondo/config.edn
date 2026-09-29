@@ -1,0 +1,3 @@
+;; waymark10's shipped kondo config, consumed sibling-relative (a
+;; :mvn/:git consumer gets the same files via clj-kondo --copy-configs)
+{:config-paths ["../../waymark10/resources/clj-kondo.exports/waymark10/waymark10"]}

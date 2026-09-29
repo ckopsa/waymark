@@ -188,6 +188,13 @@
   [policy]
   (long (or (get-in policy [:data :train_size]) 4)))
 
+(defn test-workflow-of
+  "The workflow the policy's test block names (ticket 90ce5c73), nil
+  when it names none: a train's checks dispatch it and its status reads
+  it, so a rig whose default workflow differs reads the right run."
+  [policy]
+  (some-> (get-in policy [:data :test :workflow]) str not-empty))
+
 (defn house-merges?
   "Does this policy say the house merges a green change (ticket
   4dfb00f6)? Only `merge_by: house`; an absent field is GitHub's."
@@ -316,15 +323,20 @@
   `test` rides only when the row has one (ticket bae401d5): the
   workflow the bench's `test` dispatches and the input that narrows
   it. A row without one sends no key, so a rig that does not know the
-  key still takes it."
+  key still takes it. `select_pattern` rides inside it the same way
+  (ticket efa54182): only when the row states one, so the rig keeps
+  its own Clojure default otherwise."
   [row]
-  (let [test-block (get-in row [:data :test])]
+  (let [test-block (get-in row [:data :test])
+        pattern (:select_pattern test-block)]
     (cond-> {:repo (str (get-in row [:data :repository]))
              :clone_url (clone-url-of row)
              :default_branch (base-of row)
              :deny (vec (get-in row [:data :deny]))
              :land (land-of row)}
-      (some? test-block) (assoc :test (select-keys test-block [:workflow :input])))))
+      (some? test-block) (assoc :test (cond-> (select-keys test-block [:workflow :input])
+                                        (not (str/blank? (str pattern)))
+                                        (assoc :select_pattern (str pattern)))))))
 
 (defn enrolled
   "The row after the engine offered this repository to the rig (R-2).
@@ -711,7 +723,9 @@
 ;; behind it that are green on their own heads ride ONE branch,
 ;; `train/<repo>/<the front's number>`: the rig merges each pull
 ;; request's head onto the base's head (`train_build`) and the branch is
-;; tested once (`train_checks`). The train stands on the policy
+;; tested once: by its own pull request's run when the rig opens one
+;; (`train_open`, ticket e2d485c2), else by a dispatched run
+;; (`train_checks`). The train stands on the policy
 ;; (`line_train`), so a restart finds it, and each pass reads its run
 ;; once (`train_status`). A standing train finishes whatever the
 ;; strategy says now, so a restate back to `line` waits for it. What a
@@ -750,14 +764,53 @@
   "Dispatch a built train's checks → the train with its `run_id`, nil
   when no run showed yet (`train_status` then reads it by branch)."
   [ctx repo train]
-  (let [answer (ask ctx :train_checks {:repo repo :branch (:branch train)})]
+  (let [answer (ask ctx :train_checks
+                    (cond-> {:repo repo :branch (:branch train)}
+                      (:workflow train) (assoc :workflow (:workflow train))))]
     (when (refused answer)
       (warn! "the rig refused the checks of " (:branch train) " ("
              (reason-of answer) ")"))
     (assoc train :run_id (some-> (:run_id answer) str not-empty))))
 
+(def pr-run-grace-seconds
+  "How long a train whose pull request opened waits for that pull
+  request's own run to show before its checks are dispatched instead: a
+  repository whose pull requests run no CI still gets its train tested."
+  600)
+
+(defn- open-train!
+  "Open a built train's pull request (`train_open`, ticket e2d485c2) →
+  the train with its `:pr` and `:pr_run`: that pull request's own run
+  is the train's check, read by branch and head, and no second run is
+  dispatched. A rig with no `train_open`, or one that refused or did
+  not answer, gets the checks dispatched as before (`dispatch-checks!`)."
+  [ctx repo policy train]
+  (let [answer (ask ctx :train_open {:repo repo :base (base-of policy)
+                                     :branch (:branch train)
+                                     :head (:head train)})
+        why (refused answer)
+        n (:number answer)]
+    (if (and (nil? why) (pos-int? n))
+      (assoc train :pr n :pr_run true)
+      (do (when (and why (not (contains? missing-power-refusals why)))
+            (warn! "the rig refused to open the pull request of " (:branch train)
+                   " (" (reason-of answer) "); its checks are dispatched"))
+          (dispatch-checks! ctx repo train)))))
+
+(defn- pr-run-overdue?
+  "Has a train tested by its pull request's run waited
+  `pr-run-grace-seconds` since it was built with no run showing?"
+  [ctx train]
+  (let [started (:started_at train)]
+    (boolean
+     (and (:pr_run train) (nil? (some-> (:run_id train) str not-empty))
+          (instance? Instant started)
+          (not (.isBefore ^Instant (pass-now ctx)
+                          (.plusSeconds ^Instant started (long pr-run-grace-seconds))))))))
+
 (defn build-train!
-  "Build one train of `riders` with the rig and dispatch its checks →
+  "Build one train of `riders` with the rig and open its pull request
+  (`open-train!`), or dispatch its checks when the rig opens none →
   the train as `line_train` records it, or nil when the rig built none
   and the line goes one at a time this pass. A rider whose pull request
   did not merge cleanly stays in the line untouched."
@@ -782,13 +835,15 @@
 
       :else
       (let [rode (filterv #(merged (number-of %)) riders)]
-        (dispatch-checks! ctx repo
-                          {:branch branch
-                           :changes (mapv #(str (:id %)) rode)
-                           :prs (mapv number-of rode)
-                           :head (some-> (:head answer) str)
-                           :base_head (some-> (:base_head answer) str)
-                           :started_at (pass-now ctx)})))))
+        (open-train! ctx repo policy
+                          (cond-> {:branch branch
+                                   :changes (mapv #(str (:id %)) rode)
+                                   :prs (mapv number-of rode)
+                                   :head (some-> (:head answer) str)
+                                   :base_head (some-> (:base_head answer) str)
+                                   :started_at (pass-now ctx)}
+                            (test-workflow-of policy)
+                            (assoc :workflow (test-workflow-of policy))))))))
 
 (defn- one-at-a-time!
   "Delete a train and send its repository one at a time for the rest of
@@ -808,7 +863,11 @@
   it writes a house merge's (`note-merges!`), and the mirror ends each
   change and its ticket as it does any merge. A base that moved outside
   the house (`base_moved`) throws the train away and the next pass
-  builds another; a rig that does not answer is asked again next pass."
+  builds another; a rig that does not answer is asked again next pass.
+  Only `landed: true` is a landing: an answer neither landed nor refused
+  (`state: waiting`, while GitHub computes mergeability or a check is
+  pending) keeps the train standing, its pull request noted as `:pr`,
+  and the next pass asks again (ticket c3f0f094)."
   [ctx seen repo policy train]
   (let [answer (ask ctx :train_land {:repo repo :base (base-of policy)
                                       :branch (:branch train)
@@ -828,13 +887,17 @@
       (one-at-a-time! ctx seen repo train
                       (str "was refused its landing (" (reason-of answer) ")"))
 
-      :else
+      (true? (:landed answer))
       (do (when-some [answers (:answers ctx)]
             (swap! answers into
                    (map (fn [id] [id {:state "merged" :head (:head train)}]))
                    (:changes train)))
           (ask ctx :train_delete {:repo repo :branch (:branch train)})
-          nil))))
+          nil)
+
+      :else
+      (let [n (:number answer)]
+        (if (pos-int? n) (assoc train :pr n) train)))))
 
 (defn- train-cap
   "How many trains one train of `n` changes may run, its own and the
@@ -879,16 +942,22 @@
                             (subvec riders 0 (quot (count riders) 2)))
               (assoc :tries tries :size size)))))
 
+(defn- run-of [x] (some-> (:run_id x) str not-empty))
+
 (defn- retry-train!
   "A train whose run was cancelled or timed out runs its checks once
   more, and that counts as one of its trains; the second time, the line
-  goes one at a time. → the train that stands after it."
+  goes one at a time. The cancelled run stays on the train as
+  `stale_run_id`, so a retry read by its branch never reads that run
+  again. → the train that stands after it."
   [ctx seen repo train verdict]
   (if (:retried train)
     (one-at-a-time! ctx seen repo train (str "finished " verdict " twice"))
     (do (warn! repo ": the train " (:branch train) " finished " verdict
                "; its checks run once more")
-        (assoc (dispatch-checks! ctx repo train)
+        (assoc (dispatch-checks! ctx repo
+                                 (cond-> (dissoc train :pr_run)
+                                   (run-of train) (assoc :stale_run_id (run-of train))))
                :retried true :tries (inc (long (or (:tries train) 1)))))))
 
 (defn train-finished!
@@ -911,27 +980,47 @@
     (= "failure" verdict) (bisect-train! ctx seen repo policy train)
     :else (retry-train! ctx seen repo train verdict)))
 
-(defn- status-args [repo train]
-  (if-some [run (some-> (:run_id train) str not-empty)]
+(defn- status-args
+  "A train with no run yet is read by its branch and head, and by the
+  workflow it dispatched: the train's own, else the policy's test block."
+  [repo policy train]
+  (if-some [run (run-of train)]
     {:repo repo :run_id run}
-    {:repo repo :branch (:branch train) :head (:head train)}))
+    (let [workflow (or (some-> (:workflow train) str not-empty)
+                       (test-workflow-of policy))]
+      (cond-> {:repo repo :branch (:branch train) :head (:head train)}
+        workflow (assoc :workflow workflow)))))
 
 (defn advance-train!
   "Read a standing train's run once → the train that stands after it:
   the same one while its run is pending or the rig does not answer,
-  and what `train-finished!` says once it finished or was refused."
+  and what `train-finished!` says once it finished or was refused. A
+  train read by its branch keeps the run the answer names; an answer
+  naming the run a retry left behind (`stale_run_id`) is read as
+  pending, since the retry's own run has not shown yet. A train tested
+  by its pull request's run that showed none in `pr-run-grace-seconds`
+  has its checks dispatched instead, once."
   [ctx seen repo policy train]
-  (let [answer (ask ctx :train_status (status-args repo train))
+  (let [answer (ask ctx :train_status (status-args repo policy train))
         why (refused answer)
-        st (some-> (:state answer) name)]
+        st (some-> (:state answer) name)
+        run (run-of answer)
+        known (cond-> train
+               (and run (nil? (run-of train))) (assoc :run_id run))]
     (cond
       (nil? answer) train
       (contains? missing-power-refusals why) train
       why (do (warn! "the rig refused the status of " (:branch train) " ("
                      (reason-of answer) ")")
               (train-finished! ctx seen repo policy train "cancelled"))
-      (or (nil? st) (= "pending" st)) train
-      :else (train-finished! ctx seen repo policy train st))))
+      (and run (= run (:stale_run_id train))) train
+      (or (nil? st) (= "pending" st))
+      (if (pr-run-overdue? ctx known)
+        (do (warn! repo ": no run showed on the pull request of " (:branch train)
+                   " in " pr-run-grace-seconds " s; its checks are dispatched")
+            (dispatch-checks! ctx repo (dissoc known :pr_run)))
+        known)
+      :else (train-finished! ctx seen repo policy known st))))
 
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
@@ -944,7 +1033,10 @@
   (`build-train!`), and a standing train (`line_train`) is read once
   (`advance-train!`) while its front waits. `trains`, when given, is an
   atom the pass fills with repository → the train that stands now, nil
-  for none, for each repository whose train it built or read.
+  for none, for each repository whose train it built or read. A
+  standing train whose repository has no line this pass — every rider
+  merged or left, or the repository is deploy-held — is read as well,
+  so it still finishes and leaves the policy.
   → the number of `merge` calls made."
   ([ctx seen lines by-repo] (work-lines! ctx seen lines by-repo (atom {})))
   ([ctx seen lines by-repo answers]
@@ -981,6 +1073,15 @@
            (and front (behind? (get @answers id)))
            (update-behind! ctx seen front id
                            (str (get-in front [:data :head_sha]))))))
+     ;; a standing train is read whatever its line: a repository with
+     ;; no line this pass would otherwise keep it on the policy for good
+     (doseq [[repo policy] by-repo
+             :when (not (contains? lines repo))
+             :let [train (get-in policy [:data :line_train])]
+             :when train]
+       (swap! trains assoc repo
+              (advance-train! (assoc ctx :answers answers)
+                              seen repo policy train)))
      @asked)))
 
 ;; ── the line, written on the rows (ticket b85aded5) ─────────────────

@@ -8,7 +8,8 @@ fires a seat by one POST to a `fire_url` with a bearer token
 in the cloud, so a seat can run only there. With this server, the URL
 is a machine on the LAN, and the same seat, the same key, the same
 sit and the same Stop hook run a headless Claude Code on that machine.
-The engine does not change.
+The engine changes in one place only: a runner link names its provider,
+and a pool of links can prefer its first (section 1).
 
 This document is written in ASD-STE100 Simplified Technical English.
 Technical names from the codebase keep their spelling: seat, model,
@@ -22,21 +23,39 @@ for claude running locally."
 
 ## 1. The decision
 
-The server impersonates the Routine's fire endpoint. It does not add a
-`cron` adapter, and it does not add a provider to the schedule's enum.
+The server answers the Routine's fire endpoint wire. It does not add a
+`cron` adapter. It is its own `runner_link.provider` value, `localfire`,
+beside `claude_routine` (ticket 529deb73).
 
-The reason is in what the engine already does. Three things start a
+The reason for the wire is in what the engine already does. Three things start a
 sitting: the cadence, a person's `fire`, and a transition the seat asked
 to be woken by (R-12.22). All three go out through one POST in
 `schedules/fire!`, and the link they read is on the model row or the
 schedule row. A cron adapter would carry the cadence alone and lose the
-other two. A server that answers that one POST gets all three, and the
-engine needs no new code, no new field and no new state.
+other two. A server that answers that one POST gets all three.
 
-A person therefore invokes `link` on a model row one time, with the
-server's URL and the server's token, exactly as for a cloud Routine
-(ci-classifier.md, "One Routine for each model"). Every seat whose
-chair is that model then fires on the machine.
+The wire is the same, so a `localfire` link fires through the same
+Provider code as a `claude_routine` link. The value is its own for two
+reasons: a count of cloud Routine fires must never count a local fire,
+and a check that is for local links alone must tell them apart. An
+account-wide cap on `claude_routine` fires (ticket ec7e7bfb) is not in
+the code on `main` yet. When it lands, it must count only the links
+whose provider is `claude_routine`.
+
+Ticket 529deb73 also added a pool order, `runner_order`, on the
+schedule row and on the model row. It is `least_used` (the default) or
+`prefer`. With `least_used`, a fire takes the free link that was used
+least. With `prefer`, a fire takes the first free link in list order,
+so a later link takes only the overflow. A pool `[localfire, cloud]`
+with `prefer` therefore fires on the machine first. The cloud link,
+with its own run cap, takes a fire only while the local link waits,
+for example after a 429 (R-4.6, R-5.1).
+
+A person therefore makes a `localfire` runner link one time, with the
+server's URL and the server's token, and puts it first in a model row's
+`runners`, with `runner_order` `prefer` (section 10, step 4). Every seat
+whose chair is that model then fires on the machine, and goes to the
+cloud only for overflow.
 
 ## 2. What the engine pins
 
@@ -138,7 +157,9 @@ answers. The server records `{ok, checked_at, detail}`, which
 `/healthz` answers. While the check fails, a fire answers 429 (R-5.1)
 with `Retry-After` set to the seconds until the next check, and the
 engine reads 429 as throttled: its runner pool skips this link until
-then and fires the next one, a cloud Routine.
+then and fires the next one. In a `[localfire, cloud]` pool with
+`runner_order` `prefer`, that is the capped cloud Routine, and the
+pool comes back to this link when it is free again (section 1).
 
 **R-4.5** The server must not demand the `anthropic-beta` or
 `anthropic-version` headers. The engine sends them, and the server
@@ -359,9 +380,13 @@ database, and `serve-localfire`.
    service's path. A Mac with Homebrew's JDK and no system Java needs
    `JAVA_HOME` set to that JDK's home in the service's environment.
    Check `GET /healthz`.
-4. Invoke `link` on the model row with `{public-url}/fire/{routine}`
-   and the token. Leave the seat's schedule with no link, so it fires
-   through the chair.
+4. Make a runner link with provider `localfire`, the URL
+   `{public-url}/fire/{routine}` and the token. On the model row, set
+   `runners` to that link first and a `claude_routine` link with a run
+   cap second, and set `runner_order` to `prefer`. The model row's list
+   then fires the machine first and sends only the 429 overflow to the
+   cloud. Leave the seat's schedule with no link and no `runners`, so
+   it fires through the chair.
 5. Fire the seat once by hand, open `last_run_url` on the schedule row,
    and read the run page and the sitting row. Read the transcript of
    that run and pin R-6.2.

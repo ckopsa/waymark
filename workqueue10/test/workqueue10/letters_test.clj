@@ -518,10 +518,9 @@
   ;; than a convenience: an inhabitant reads unscoped, so what is
   ;; being proved is that the FEED's population asks for the row-id
   ;; spelling and that the open guard agrees with it. An AGENT
-  ;; addressed the old way is still concealed one layer lower —
-  ;; grants/own-ids pushes down `to = pid` and nothing else — which is
-  ;; a real gap with a bead of its own (waymark-27j) and not something
-  ;; to paper over here.
+  ;; addressed the old way is judged one layer lower, by grants/own-ids
+  ;; and the own-row check; the next test proves that layer asks for
+  ;; every spelling too (waymark-27j).
   (let [token "letters-legacy-token-cccccccc"
         rid (id-of (req :post "/api/members"
                         {:display "Legacy Wren" :actor_type "human"
@@ -562,6 +561,45 @@
         (is (not= 200 (:status (open! l2 (human-headers "neighbour-legacy"))))
             "another inhabitant sees the row — the house is transparent —
              and still cannot open somebody else's mail")))))
+
+(deftest an-agent-addressed-by-its-row-id-sees-the-letter-on-its-own-surface
+  ;; waymark-27j: the scoped half of the case above. An agent reads
+  ;; through the own-surface pushdown, which used to ask for `to = pid`
+  ;; and nothing else, so a letter on the shelf addressed by the
+  ;; agent's member ROW id had a feed card and an Open door and 404'd
+  ;; the moment the agent followed it. The collection and the row GET
+  ;; must answer to the same spellings the feed does.
+  (let [token "letters-legacy-agent-token-dddddddd"
+        rid (id-of (invite! "Legacy Finch" token))
+        pid "finch-legacy-principal"
+        _ (req :get "/api/letters"
+               (assoc (agent-headers pid) "x-waymark-invite" token))
+        bound (agent-headers pid)
+        lid (str (random-uuid))]
+    (is (not= rid pid) "row id and principal id differ, or this proves nothing")
+    (store/with-tx (:storage *eng*)
+      (fn [tx]
+        (store/insert-row! (:storage *eng*) tx :letter
+                           {:id lid :state :waiting :version 1
+                            :data {:owner "quill-legacy-agent" :to rid
+                                   :title "The agent's dispatch"
+                                   :body "Addressed by row id."}
+                            :shape 1 :owner "quill-legacy-agent"})))
+    (testing "the row GET answers to the row-id spelling"
+      (let [r (req :get (str "/api/letters/" lid) bound)]
+        (is (= 200 (:status r)) (str "concealed: " (pr-str (json r))))
+        (is (= "The agent's dispatch" (get-in (json r) [:data :title])))))
+    (testing "and so does the agent's own collection"
+      (is (some #(= lid (item-id %))
+                (items (req :get "/api/letters" bound)))))
+    (testing "and it opens — collection, row and guard agree"
+      (is (= 200 (:status (open! lid bound)))))
+    (testing "a third agent is still nobody's recipient"
+      (let [other (agent-headers "finch-neighbour")]
+        (ensure-member! other)
+        (is (not= 200 (:status (req :get (str "/api/letters/" lid) other))))
+        (is (not-any? #(= lid (item-id %))
+                      (items (req :get "/api/letters" other))))))))
 
 (deftest a-letter-to-an-unclaimed-invitation-is-refused
   (let [quill (agent-headers "quill-unclaimed")
