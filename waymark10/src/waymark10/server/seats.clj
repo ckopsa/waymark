@@ -1462,6 +1462,8 @@
                    (nil? (get-in row [:data :harness_session])))
         (assoc-in [:data :harness_session] (:harness_session inp)))
       (assoc-in [:data :tallied_at] (:now ctx))
+      ;; a hook tallying through a long wait is a run still there
+      (assoc-in [:data :last_call_at] (:now ctx))
       (assoc-in [:data :cost_usd] (cost-of (token-counts inp)
                                            (prices-now row ctx)))))
 
@@ -3367,6 +3369,16 @@
                   {:label "Last tallied"
                    :spelled-by-hand "Stamped by each tally of an open sitting; absent on a sitting nobody has tallied."}}
      [:maybe :waymark/instant]]
+    ;; THE LAST CALL (ticket 086307f2). Stamped by the sit at birth and
+    ;; by every call the doors count against the sitting — a tool
+    ;; answered, a transition, a refusal, a tally — so a FIRED sitting
+    ;; whose run was lost reads as silent, and the sweep ends it after
+    ;; the seat's `sitting_idle_seconds`.
+    [:last_call_at {:optional true
+                    :x-display
+                    {:label "Last call"
+                     :spelled-by-hand "Stamped by the engine on every call counted against an open sitting; the sweep ends a fired sitting silent past its seat's idle limit."}}
+     [:maybe :waymark/instant]]
     ;; THE TRACE OF THE FIRING'S KEY (R-12.37). The sit that spends a
     ;; firing's key keeps its hash here, on the sitting it opened and
     ;; not on the seat, so a run that loses its bind to a restart may
@@ -3465,6 +3477,7 @@
                       ;; rewrites a sitting already under way
                       [:mode (seat-mode-of (:data row) ctx)]
                       [:started_at (:now ctx)]
+                      [:last_call_at (:now ctx)]
                       [:input_tokens 0] [:output_tokens 0]
                       [:cache_read_tokens 0] [:cache_write_tokens 0]
                       [:turns 0] [:transitions 0] [:refusals 0]
@@ -3702,6 +3715,13 @@
            (first (remove stamp-of rows))
            (first rows))))))
 
+(defn- call-stamp
+  "The moment a counted call lands, as the maintenance writes store it
+  (ticket 086307f2): the engine's own clock, so a test that moves the
+  clock moves this stamp too."
+  [eng]
+  (str ((or (:now-fn eng) #(java.time.Instant/now)))))
+
 (defn bump-counter!
   "Add one to an open sitting's `:transitions` or `:refusals`. A
   MAINTENANCE write — document only, version untouched, no transition
@@ -3731,7 +3751,8 @@
                              (assoc :guard (let [g (:guard refusal)]
                                              (if (keyword? g) (name g) (str g))))))]
                (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                   (cond-> (assoc (:data row) counter n)
+                                   (cond-> (assoc (:data row) counter n
+                                                  :last_call_at (call-stamp eng))
                                      stamp (assoc :last_refusal stamp))
                                    nil)
                n))))))))
@@ -3885,7 +3906,10 @@
                                    :bytes (+ (long (or (:bytes prior) 0)) bytes)}
                             (pos? total) (assoc :dropped total))]
                  (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                     (assoc-in (:data row) [:served k] line) nil)
+                                     (-> (:data row)
+                                         (assoc-in [:served k] line)
+                                         (assoc :last_call_at (call-stamp eng)))
+                                     nil)
                  line)))))))))
 
 (defn- seat-row [eng seat-id]

@@ -12,7 +12,12 @@
    fetch). Panels fill CONCURRENTLY and degrade alone: a slot whose
    target/where no longer resolves renders as a problem panel wearing
    the collection's own refusal, with the slot's edit door and a retry
-   — never a broken page, never its neighbors' problem. */
+   — never a broken page, never its neighbors' problem.
+
+   A slot with a :measure (dashboard measures 3/3) draws a number
+   instead of rows: its /-/measure read's value for the latest window,
+   large; the previous window's value beside it with the change; and
+   the current window's buckets as one inline SVG sparkline path. */
 
 /* the slot's target — kind name or plural, saved_view's spelling —
    resolved to its collection href off discovery */
@@ -35,6 +40,72 @@ function dashWhereParams(where) {
       if (k) out[k] = v;
   } catch { /* unparseable: filter nothing, the count stays honest */ }
   return out;
+}
+
+/* a measure's number as the panel shows it: null (an empty window's
+   median or p90) reads as a dash, a fraction keeps two places */
+function dashNumber(v) {
+  return v == null ? "—"
+    : Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
+}
+
+/* the buckets, oldest left, as ONE inline SVG path scaled to its own
+   range; a null bucket lifts the pen rather than drawing it as zero */
+function dashSparkline(buckets) {
+  const ns = "http://www.w3.org/2000/svg", w = 120, h = 28, pad = 2;
+  const vals = (buckets || []).map(b => (b ? b.value : null));
+  const nums = vals.filter(v => v != null).map(Number);
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("class", "slot-spark");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("width", String(w));
+  svg.setAttribute("height", String(h));
+  svg.setAttribute("aria-hidden", "true");
+  if (!nums.length) return svg;
+  const lo = Math.min(...nums), span = (Math.max(...nums) - lo) || 1;
+  const step = vals.length > 1 ? (w - 2 * pad) / (vals.length - 1) : 0;
+  let d = "", pen = false;
+  vals.forEach((v, i) => {
+    if (v == null) { pen = false; return; }
+    const x = pad + i * step;
+    const y = h - pad - ((Number(v) - lo) / span) * (h - 2 * pad);
+    d += `${pen ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)} `;
+    pen = true;
+  });
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("class", "slot-spark-line");
+  path.setAttribute("d", d.trim());
+  svg.append(path);
+  return svg;
+}
+
+async function fillMeasurePanel(panel, slot, openHref, problem) {
+  let m;
+  try {
+    const {ok, body} = await api(`${slot.self}/-/measure`);
+    if (!ok)
+      return problem((body && (body.detail || body.title)) ||
+                     "The measure could not be read.", true);
+    m = body || {};
+  } catch (e) {
+    return problem("Fetch failed: " + ((e && e.message) || e), true);
+  }
+  const value = dashNumber(m.value);
+  panel.append(el("div", {class: "slot-count slot-measure"},
+    openHref
+      ? el("a", {href: "#" + openHref,
+                 title: `${m.stat || "measure"} over the latest window — open the collection`},
+          value)
+      : value));
+  const delta = m.value != null && m.previous != null
+    ? Number(m.value) - Number(m.previous) : null;
+  panel.append(el("div", {class: "slot-previous muted"},
+    `previous ${dashNumber(m.previous)}`,
+    delta == null ? null
+      : el("span", {class: "slot-delta"},
+          (delta > 0 ? "+" : delta < 0 ? "−" : "±") +
+          dashNumber(Math.abs(delta)))));
+  panel.append(dashSparkline(m.buckets));
 }
 
 async function fillSlotPanel(panel, slot) {
@@ -68,6 +139,7 @@ async function fillSlotPanel(panel, slot) {
     return problem(`target “${pretty(String(f.target || ""))}” names no ` +
                    "collection this engine serves — a redeploy may have " +
                    "retired it.", false);
+  if (f.measure) return fillMeasurePanel(panel, slot, openHref, problem);
   let env;
   try {
     const fetchParams = dashWhereParams(f.where);

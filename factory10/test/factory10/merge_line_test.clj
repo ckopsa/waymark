@@ -243,6 +243,7 @@
                   (get @answers "train_checks" {:run_id "77" :head "train-head"})
                   "bench__train_status"
                   (get @answers "train_status" {:state "pending" :head "train-head"})
+                  "bench__train_land" (get @answers "train_land" {:landed true})
                   "bench__train_delete" {:repo wm :branch (:branch args)}
                   {:refused "unknown_tool"})}})}}}))
 
@@ -345,9 +346,94 @@
     (train-pass! r seen (four) (train-policy :line_train train))
     (is (= [{:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"}]
            (args-of r "bench__train_status")))
-    (testing "until slice 3, a finished train is not built again"
-      (swap! answers assoc "train_status" {:state "failure" :head "train-head"})
-      (train-pass! r seen (four) (train-policy :line_train train))
+    (testing "a train read by its branch lands when it finishes green"
+      (swap! answers assoc "train_status" {:state "success" :head "train-head"})
+      (is (= {wm nil} (train-pass! r seen (four) (train-policy :line_train train))))
+      (is (= 1 (count (args-of r "bench__train_land")))))))
+
+;; ── a finished train (ticket 6033c287, slice 3 of 3deb06ed) ──────────
+
+(defn- finish-pass!
+  "One pass over the four with `train` standing under a train policy →
+  [the train that stands after it, change id → the pass's answers]."
+  [{:keys [ctx]} seen train]
+  (let [by-repo {wm (train-policy :line_train train)}
+        answers (atom {})
+        trains (atom {})]
+    (bench/work-lines! ctx seen
+                       (bench/merge-lines (four) by-repo (constantly nil) @seen)
+                       by-repo answers trains)
+    [(get @trains wm) @answers]))
+
+(deftest a-green-train-lands-whole
+  (let [answers (atom {"train_status" {:state "success" :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)
+        [after merged] (finish-pass! r seen train)]
+    (is (= [{:repo wm :base "main" :branch "train/ckopsa/waymark/1"
+             :expect_base_head "base-0" :head "train-head"}]
+           (args-of r "bench__train_land"))
+        "the base is fast-forwarded to the train's head, once")
+    (is (nil? after) "no train stands after it")
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1"}]
+           (args-of r "bench__train_delete")))
+    (is (= (repeat 4 "merged")
+           (map #(:state (get merged %)) ["change-1" "change-2" "change-3" "change-4"]))
+        "all four merge in one go, and the pass writes them as house merges")
+    (is (= 1 (count (args-of r "bench__train_checks"))))))
+
+(deftest a-base-moved-outside-the-house-builds-the-train-again
+  (let [answers (atom {"train_status" {:state "success" :head "train-head"}
+                       "train_land" {:refused "base_moved"}})
+        r (train-rig answers)
+        seen (atom {})
+        train (get (train-pass! r seen (four) (train-policy)) wm)
+        [after merged] (finish-pass! r seen train)]
+    (is (nil? after))
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1"}]
+           (args-of r "bench__train_delete")))
+    (is (not-any? #(= "merged" (:state %)) (vals merged)) "nothing merged")
+    (train-pass! r seen (four) (train-policy))
+    (is (= [[1 2 3 4] [1 2 3 4]] (mapv :prs (args-of r "bench__train_build")))
+        "the next pass builds it again on the moved base")))
+
+(deftest a-red-train-bisects-to-its-one-red-change
+  (let [answers (atom {"train_status" {:state "failure" :head "train-head"}})
+        reds (atom [])
+        r (update (train-rig answers) :ctx assoc
+                  :train-red! (fn [id _why] (swap! reds conj id)))
+        seen (atom {})
+        t1 (get (train-pass! r seen (four) (train-policy)) wm)
+        [t2] (finish-pass! r seen t1)
+        [t3] (finish-pass! r seen t2)
+        [t4] (finish-pass! r seen t3)]
+    (is (= [[1 2 3 4] [1 2] [1]] (mapv :prs (args-of r "bench__train_build")))
+        "the front half rides again, then its front half")
+    (is (= 3 (count (args-of r "bench__train_checks")))
+        "two more runs after the train's own")
+    (is (= [2 3] [(:tries t2) (:tries t3)]))
+    (is (= ["change-1"] @reds) "only the change red alone is marked red")
+    (is (nil? t4))
+    (is (empty? (args-of r "bench__train_land")))
+    (testing "the others go back to the line, and the next train takes them"
+      (is (not (get @seen [:train-done wm])))
+      (train-pass! r seen (rest (four)) (train-policy))
+      (is (= [2 3 4] (:prs (last (args-of r "bench__train_build"))))))))
+
+(deftest a-cancelled-train-runs-once-more-then-the-line-goes-one-at-a-time
+  (let [answers (atom {"train_status" {:state "cancelled" :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        t1 (get (train-pass! r seen (four) (train-policy)) wm)
+        [t2] (finish-pass! r seen t1)]
+    (is (true? (:retried t2)))
+    (is (= 2 (count (args-of r "bench__train_checks"))) "its checks run once more")
+    (is (= 1 (count (args-of r "bench__train_build"))) "on the same train")
+    (let [[t3] (finish-pass! r seen t2)]
+      (is (nil? t3))
+      (is (= [{:repo wm :branch "train/ckopsa/waymark/1"}]
+             (args-of r "bench__train_delete")))
       (train-pass! r seen (four) (train-policy))
-      (is (= 1 (count (args-of r "bench__train_build"))))
+      (is (= 1 (count (args-of r "bench__train_build"))) "no train is built again")
       (is (= [1] (mapv :number (args-of r "bench__update_branch")))))))
