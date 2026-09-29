@@ -815,6 +815,11 @@
         settle
         (mark-settling! eng row (due-at row at settle))
 
+        ;; a broken Routine fires nothing: the wake waits for the link
+        ;; that mends it (waymark ticket bb19404d)
+        (schedules/held? eng row)
+        (mark-pending! eng row)
+
         (if (< 1 (long (or (:max-open seat) 1)))
           (damped? eng (raw-row eng :seat (:id seat)) row at)
           (or (some? (seats/open-sitting-for-seat eng (:id seat)))
@@ -828,6 +833,22 @@
         ;; the fuel wall: the wake waits, and says it was held
         (at-the-fuel-wall? eng (raw-row eng :seat (:id seat)) at)
         (hold-at-the-wall! eng row at)
+
+        ;; the row the wake names is withheld by name (ticket 80a8e60b):
+        ;; a groom that leaves a ticket open beside its submitted change
+        ;; names a row the sit will not hand
+        ;; (`seats/named-open-beside-a-submitted-change?`), so its fire
+        ;; would start a run that walks nothing
+        (let [walk (some-> (raw-row eng :seat (:id seat))
+                           (get-in [:data :walk]) str not-empty)]
+          (and (some? text)
+               (= walk (name (:kind t)))
+               (seats/named-open-beside-a-submitted-change?
+                eng walk (:resource-id t))))
+        (do (warn! "seat " (:id seat) " was woken on " (:resource-id t)
+                   ", which is open beside a submitted change — its wake"
+                   " fires nothing")
+            nil)
 
         ;; the walk would hand nothing (ticket 87c928e9): a transition
         ;; wake asks the same question `release!` does, so a row the
@@ -931,6 +952,7 @@
              (or (get-in schedule-row [:data :wake_pending])
                  (and slot? (free-slot? eng seat-row at)))
              (schedules/linked? eng schedule-row)
+             (not (schedules/held? eng schedule-row seat-row))
              (settled? schedule-row at)
              (not (throttled? schedule-row at))
              (if (< 1 (max-open-of seat-row))
@@ -953,6 +975,15 @@
       (when (fire! eng (:id seat-row) nil key)
         (stamp-fired! eng schedule-row at true)
         true)))))
+
+(defn release-linked!
+  "The wake a broken schedule held, released by the link that mended
+  it (waymark ticket bb19404d). Keyed by the link's transition, so a
+  replayed drain fires it once. → true when a fire went out."
+  [eng schedule-row t]
+  (let [seat-id (get-in schedule-row [:data :seat])]
+    (release! eng (raw-row eng :seat seat-id) schedule-row
+              (str "wake:" seat-id ":link:" (:id t)) (now eng))))
 
 (defn- release-for-sitting!
   "A sitting closed or abandoned: the seat it belonged to may have a
@@ -1022,6 +1053,7 @@
                 (if (and row
                          (not (schedules/linked? row))
                          (schedules/linked? eng row)
+                         (not (schedules/held? eng row seat-row))
                          (not (true? (get-in row [:data :wake_pending])))
                          (cadence-due? seat-row row at))
                   (do (write-pending! eng row true) (inc n))

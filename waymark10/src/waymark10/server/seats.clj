@@ -949,6 +949,41 @@
     :else (t/deny {:vars {:seat (str (get-in row [:data :seat]))
                           :started_at (str (get-in row [:data :started_at]))}})))
 
+(def ^:private default-idle-seconds
+  "The seat schema's own default for `sitting_idle_seconds`, for a row
+  written before that field existed. One hour."
+  3600)
+
+(defn- ->instant [v]
+  (cond (instance? java.time.Instant v) v
+        (inst? v) (.toInstant ^java.util.Date v)
+        (some-> v str not-empty) (java.time.Instant/parse (str v))))
+
+(g/defguard still-quiet-for-the-sweep
+  {:reads [:within]
+   :vars [:last_call_at]
+   :explain "The sweep ends only a quiet sitting, and this one made a call at {last_call_at}, inside its seat's idle limit."}
+  [row _inp ctx]
+  ;; ticket e3dfe60d: the sweep's pass reads `last_call_at` in one
+  ;; transaction and ends the sitting in another, so a sit or a call
+  ;; stamping in between was closed under its caller. Judged HERE, the
+  ;; reading is the row the ending itself holds for update — the stamp
+  ;; writes lock the same row — so the stamp and the end are ordered.
+  ;; Only the sweep's own ending carries `:within` {:action :sweep},
+  ;; with the idle limit it judged by — every other hand passes, the
+  ;; seats actor's own endings at a sit included. A row with no stamp
+  ;; is judged by the sweep's other clocks alone.
+  (let [{:keys [action idle-seconds]} (:within ctx)
+        at (->instant (get-in row [:data :last_call_at]))
+        now (->instant (:now ctx))]
+    (if (or (not= :sweep action) (nil? idle-seconds) (nil? at) (nil? now))
+      (t/allow)
+      (if (.isBefore ^java.time.Instant at
+                     (.minusSeconds ^java.time.Instant now
+                                    (long idle-seconds)))
+        (t/allow)
+        (t/deny {:vars {:last_call_at (str at)}})))))
+
 (g/defguard folded-by-a-merge
   {:reads [:within]
    :hide true
@@ -3518,6 +3553,7 @@
    :actions
    {:close
     {:from #{:open} :to :closed
+     :guards [still-quiet-for-the-sweep]
      :input report-input
      :record true
      ;; :edit-shape — a close welds the first counts onto a row that
@@ -3563,7 +3599,7 @@
     ;; not a zero one.
     :abandon
     {:from #{:open} :to :abandoned
-     :guards [the-engine-or-the-persons-tap]
+     :guards [the-engine-or-the-persons-tap still-quiet-for-the-sweep]
      ;; no handler: nothing is written. The ending of a sitting
      ;; nobody closed is the ABSENCE of a bill, not a zero one, and
      ;; the counts it already carries are what it did before it was
@@ -3689,6 +3725,21 @@
   the honest fix is the sweep, not a longer page."
   50)
 
+(defn open-sittings-for-grant
+  "Every open sitting under `grant-id`, newest first, one page of them:
+  `open-sitting-for-grant`'s query read past its first row. Every
+  sitting of a seat shares the seat's grant, so a sit that must find
+  THIS run's sitting among overlapping runs reads them all
+  (mcp/reusable-sitting)."
+  [eng grant-id]
+  (if (and grant-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/query-rows (:storage eng) tx :sitting
+                          {:grant (str grant-id) :state :open}
+                          {:limit open-sitting-page :newest-first true})))
+    []))
+
 (defn open-sitting-for-seat
   "The open sitting a SESSION-END REPORT belongs to (R-12.17), or nil.
 
@@ -3769,6 +3820,27 @@
                                    nil)
                n))))))))
 
+(defn stamp-call!
+  "Move an open sitting's `last_call_at` to now and nothing else
+  (ticket 900764ce): a READ through the router is activity the idle
+  sweep must see, but it is neither a transition nor a refusal, and
+  `served` is the MCP door's per-tool ledger. The same MAINTENANCE
+  write as `bump-counter!` — document only, version untouched. → the
+  stamp, or nil when there was nothing to stamp: no id, an unknown
+  id, a sitting already closed, or a kind this engine does not serve."
+  [eng sitting-id]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (= :open (:state row))
+            (let [at (call-stamp eng)]
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  (assoc (:data row) :last_call_at at)
+                                  nil)
+              at)))))))
+
 (defn add-cancelled-run!
   "Count one cancelled bench.test run on an open sitting (ticket
   39b2c934). A run with an id is counted once: its id joins
@@ -3794,11 +3866,6 @@
                                         run (assoc :cancelled_run_ids (conj seen run)))
                                       nil)
                   n)))))))))
-
-(defn- ->instant [v]
-  (cond (instance? java.time.Instant v) v
-        (inst? v) (.toInstant ^java.util.Date v)
-        (some-> v str not-empty) (java.time.Instant/parse (str v))))
 
 (defn sitting-transitions
   "The transitions made under a sitting (ticket 39b2c934): the log rows
@@ -4092,11 +4159,6 @@
 ;; there is no step for a person to miss.
 
 (defonce ^:private ^SecureRandom key-random (SecureRandom.))
-
-(def ^:private default-idle-seconds
-  "The seat schema's own default for `sitting_idle_seconds`, for a row
-  written before that field existed. One hour."
-  3600)
 
 (def ^:private key-ceiling
   "How many unspent keys one seat keeps. A seat fires far fewer times
@@ -4492,6 +4554,10 @@
   a second run of the seat has nothing to build on it, and a submit
   there only finds a clean worktree.
 
+  Only a change in the ticket's own repository counts, when the ticket
+  names one (ticket 0eba219c, as 80a8e60b for the named walk): each
+  candidate ticket's repo is loaded once, within the scan limit.
+
   → {ticket-id reason}: each withheld ticket with the sentence the sit
   answers for it (ticket 87c928e9), so a seat handed an empty walk
   can say which row was held back and why. Empty for any other walk
@@ -4506,9 +4572,27 @@
                              (store/query-rows st tx :change where
                                                {:limit limit})))
                          (map #(inv/decode-row rdef %))))
-          live? (fn [born]
-                  (some #(contains? #{:open :submitted :failing}
-                                    (some-> (:state %) name keyword))
+          tdef (get (inv/resources eng) :ticket)
+          repo-of (memoize
+                   (fn [ticket-id]
+                     (when tdef
+                       (try
+                         (some-> (some->> (store/with-tx st
+                                            (fn [tx]
+                                              (store/load-row st tx :ticket
+                                                              ticket-id {})))
+                                          (inv/decode-row tdef))
+                                 (get-in [:data :repo]) str not-empty)
+                         (catch Exception _ nil)))))
+          ours? (fn [ticket-id change]
+                  (let [repo (repo-of ticket-id)]
+                    (or (nil? repo)
+                        (= repo (some-> (get-in change [:data :repository])
+                                        str)))))
+          live? (fn [born ticket-id]
+                  (some #(and (contains? #{:open :submitted :failing}
+                                         (some-> (:state %) name keyword))
+                              (ours? ticket-id %))
                         (changes {:born_from born} live-change-scan-limit)))
           ticket-of (fn [change]
                       (let [born (str (get-in change [:data :born_from]))]
@@ -4516,15 +4600,17 @@
                           (not-empty (subs born (count groomed-walk-prefix))))))]
       (into (into {} (keep (fn [change]
                              (when-some [ticket-id (ticket-of change)]
-                               [ticket-id (str "change " (:id change)
-                                               " is submitted and in review")])))
+                               (when (ours? ticket-id change)
+                                 [ticket-id (str "change " (:id change)
+                                                 " is submitted and in review")]))))
                   (changes {:state "submitted"} stuck-scan-limit))
             (keep (fn [change]
                     (let [born (str (get-in change [:data :born_from]))]
                       (when (str/starts-with? born groomed-walk-prefix)
                         (when-some [ticket-id (not-empty
                                                (subs born (count groomed-walk-prefix)))]
-                          (when (and (not (live? born))
+                          (when (and (ours? ticket-id change)
+                                     (not (live? born ticket-id))
                                      (nil? (groom-after-stall eng change
                                                               ticket-id)))
                             [ticket-id (str "change " (:id change)
@@ -4584,6 +4670,40 @@
                                         {:born_from (str groomed-walk-prefix
                                                          id)}
                                         {:limit live-change-scan-limit})))))))))
+
+(defn named-open-beside-a-submitted-change?
+  "Is the ticket a fire named `open` while a change born from it is
+  `submitted` (ticket 6ca380da)? A groom, unblock or resume that puts a
+  stuck pull request back under review leaves its ticket open, and the
+  fire that follows names it; the round is in the house's hands, so the
+  named walk withholds it as the plain walk does (ticket 60c2ec22). A
+  ticket in review is still handed by name (ticket 7af7d506). Only a
+  change in the ticket's own repository counts, when the ticket names
+  one (ticket 80a8e60b). False for any other walk."
+  [eng walk id]
+  (boolean
+   (when-some [rdef (when (= "ticket" (str walk))
+                      (get (inv/resources eng) :change))]
+     (when-some [tdef (get (inv/resources eng) :ticket)]
+       (let [st (:storage eng)
+             ticket (try
+                      (some->> (store/with-tx st
+                                 (fn [tx]
+                                   (store/load-row st tx :ticket (str id) {})))
+                               (inv/decode-row tdef))
+                      (catch Exception _ nil))]
+         (when (= "open" (some-> (:state ticket) name))
+           (some (let [repo (some-> (get-in ticket [:data :repo]) str not-empty)]
+                   #(and (= "submitted" (some-> (:state %) name))
+                         (or (nil? repo)
+                             (= repo (some-> (get-in % [:data :repository]) str)))))
+                 (map #(inv/decode-row rdef %)
+                      (store/with-tx st
+                        (fn [tx]
+                          (store/query-rows st tx :change
+                                            {:born_from (str groomed-walk-prefix
+                                                             id)}
+                                            {:limit live-change-scan-limit})))))))))))
 
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows

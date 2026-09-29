@@ -472,7 +472,9 @@
                :line_waiting :line_at :line_train
                :deploy_check :deploy_wait_seconds :deploy_waits_on
                :deploy_waiting_since :deployed_head :deployed_at
-               :deploy_state :deploy_note}
+               :deploy_state :deploy_note
+               :groom_floor :groom_floor_settle_seconds
+               :floor_noted_at :floor_count}
              fields)
           "every number a submit obeys, where the bench clones it from,
            and the engine's own: when the bench took it, why it did not,
@@ -486,7 +488,8 @@
                :line_front :line_front_pr :line_front_waiting
                :line_waiting :line_at :line_train
                :deploy_waits_on :deploy_waiting_since :deployed_head
-               :deployed_at :deploy_state :deploy_note}
+               :deployed_at :deploy_state :deploy_note
+               :floor_noted_at :floor_count}
              (into #{} (remove form) fields))
           "…and the engine's are on no form: a person states the
            policy, and the engine says what the bench and the source did

@@ -1479,8 +1479,12 @@
                          (catch clojure.lang.ExceptionInfo e (ex-data e)))))]
     (is (nil? (restate "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"))
         "the waymark-bench pattern is in the common subset")
+    ;; ticket d92a9bf4: the rig runs Python 3.11, which compiles both
+    (doseq [pattern ["^a++$" "^(?>ab)$"]]
+      (is (nil? (restate pattern))
+          (str pattern " is in Python 3.11's re")))
     (doseq [[pattern named] [["^\\p{L}+$" "Unicode property class"]
-                             ["^a++$" "possessive quantifier"]]]
+                             ["^a+\\z" "end-of-input anchor"]]]
       (let [refusal (restate pattern)]
         (is (= :the-test-selection-pattern-compiles
                (some-> (:guard refusal) name keyword))
@@ -1488,7 +1492,7 @@
         (is (str/includes? (pr-str refusal) named)
             (str "the refusal names the construct: " (pr-str refusal)))))
     (is (str/includes? (pr-str (:schema (get (inv/resources eng) :repo_policy)))
-                       "Python's re")
+                       "Python 3.11 re")
         "the help names the rig's dialect")))
 
 ;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
@@ -3211,6 +3215,86 @@
     (is (empty? (get-in answer [:walk :rows]))
         "a round in review is not handed to a second run of the seat")))
 
+;; ── a wake naming it fires nothing (ticket f595c27e) ─────────────────
+
+(defn- close-sittings!
+  "Every open sitting of the seat stands closed, so no damper holds the
+  wake and the branch under test is the one that answers."
+  [eng seat-id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (doseq [row (store/query-rows st tx :sitting
+                                      {:seat (str seat-id) :state :open}
+                                      {:limit 20})]
+          (store/save-row! st tx :sitting
+                           (assoc row :state :closed
+                                  :version (inc (long (:version row))))
+                           (:version row)))))))
+
+(defn- force-ticket-repo!
+  "The ticket names `repo`, as a groomer's restatement would."
+  [w repo]
+  (let [st (:storage (:eng w))
+        id (str (:id (:ticket w)))]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :ticket id {})]
+          (store/save-row! st tx :ticket
+                           (-> row
+                               (assoc-in [:data :repo] repo)
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))))
+
+(defn- seat-fire-moves [eng seat-id]
+  (filterv #(= :fire (:action %))
+           (store/with-tx (:storage eng)
+             (fn [tx]
+               (store/transitions (:storage eng) tx
+                                  {:kind :seat :resource-id (str seat-id)}
+                                  {})))))
+
+(deftest a-transition-wake-naming-a-ticket-open-beside-a-submitted-change-fires-nothing
+  (let [w (ticket-world)
+        eng (:eng w)
+        seat-id (str (:id (:seat w)))
+        ticket-id (str (:id (:ticket w)))
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        _ (force-ticket-state! w :open)
+        _ (close-sittings! eng seat-id)
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng seat-id)))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_benchseat/fire")
+                        :token "rk-test-benchseat-0123456789abcdef"}
+                       {:principal person})
+        fire (schedules/fake-fire)
+        woke (#'wakes/wake-seat! (assoc eng :fire-adapter fire)
+              {:id seat-id :interval 3600 :max-open 1}
+              {:id "groom-beside-a-submitted-change" :kind :ticket
+               :resource-id ticket-id :action :groom}
+              ((:now-fn eng))
+              {:text (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id "\"}")})]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "open" (ticket-state w)))
+    (is (= "submitted" (name (:state (first (changes-of eng))))))
+    (is (true? (seats/named-open-beside-a-submitted-change?
+                eng "ticket" ticket-id))
+        "the ticket stands open beside its submitted change")
+    (is (not woke) "the wake answers that no fire went out")
+    (is (empty? (seat-fire-moves eng seat-id))
+        "the seat's fire door was never taken")
+    (is (empty? (schedules/fires fire)))
+    (is (not (get-in (schedules/schedule-for-seat eng seat-id)
+                     [:data :wake_pending]))
+        "withheld, not damped: nothing is left pending for a release")
+    (testing "a submitted change in another repository does not withhold"
+      (force-ticket-repo! w "ckopsa/elsewhere")
+      (is (false? (seats/named-open-beside-a-submitted-change?
+                   eng "ticket" ticket-id))
+          "only a change in the ticket's own repository counts"))))
+
 (deftest a-submit-on-a-submitted-clean-worktree-says-it-is-already-submitted
   (let [w (ticket-world)
         _ (seat-invokes! w "submit" {:why a-long-sentence})
@@ -3319,6 +3403,40 @@
     (person-moves-ticket! w :resume)
     (back-under-review-and-red? w)))
 
+(deftest a-groomed-ticket-whose-pull-request-is-back-under-review-is-not-walked
+  ;; ticket 6ca380da: the groom leaves the ticket open beside a submitted
+  ;; change, and neither the plain walk nor the fire naming it hands it
+  (let [w (ticket-world)
+        ticket-id (str (:id (:ticket w)))
+        url (do (stalled-with-a-pull-request! w 95)
+                (person-moves-ticket! w :groom)
+                (str "https://github.com/ckopsa/waymark/pull/" 95))
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        sit-fired! (fn []
+                     (let [k (seats/hold-fire-key!
+                              (:eng w) seat-row ((:now-fn (:eng w)))
+                              (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id
+                                   "\",\"action\":\"groom\"}"))]
+                       (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                                      {:key k :seat "bench-seat"}))))]
+    (is (= "submitted" (change-state w)))
+    (is (= "open" (ticket-state w)))
+    (testing "the plain walk leaves it out"
+      (is (empty? (get-in (sit-again! w) [:walk :rows]))))
+    (testing "the fire naming it leaves it out too"
+      (is (empty? (get-in (sit-fired!) [:walk :rows]))))
+    (testing "a red head hands it back with its feedback"
+      (mirror-moves-change! w :fail a-conflict)
+      (let [answer (sit-again! w)]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= "failing" (get-in answer [:change :state])))
+        (is (seq (calls-of (:state w) "bench__feedback")))))
+    (testing "the merge completes the ticket"
+      (mirror-moves-change! w :merge nil)
+      (is (= "done" (ticket-state w)))
+      (is (= (str "Merged: " url ".")
+             (get-in (ticket-row w) [:data :close_reason]))))))
+
 (deftest a-groom-leaves-a-closed-pull-request-alone
   (let [w (ticket-world)]
     (stalled-with-a-pull-request! w 94)
@@ -3408,6 +3526,70 @@
                                     change-id " and stop."))]
         (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
         (is (= change-id (str (get-in answer [:change :id]))))))))
+
+;; A JUDGMENT SEAT, FIRED ON A TICKET IN REVIEW. Its walk is the
+;; judgment's queue (state open), so the rule above was off for it: the
+;; named ticket was never handed, the queue's next row stood in, and the
+;; verdict the seat owed that ticket could not be written (colton-tools'
+;; navigate-engineer, pull request #81).
+
+(defn- judged-ticket-world
+  "`ticket-world`, but the seat walks tickets through a promoted
+  judgment whose queue is the open tickets."
+  []
+  (let [st (state)
+        eng (fresh-engine st)
+        policy (a-policy! eng {})
+        ticket (:row (inv/create! eng :ticket
+                                  {:title "Put the size ceiling on the policy form"
+                                   :type "feature" :repo a-repository}
+                                  {:principal person}))
+        _ (inv/invoke! eng :ticket (str (:id ticket)) :groom {} {:principal person})
+        judgment (:row (inv/create! eng :judgment
+                                    {:name "engineering" :subject_kind "ticket"
+                                     :queue {:state "open"}
+                                     :verdicts [{:name "pr_opened" :sentence "A pull request is open for the ticket, and the remedy carries its address."}
+                                                {:name "needs_info" :sentence "The ticket cannot be built as written, and the remedy says what is missing."}]
+                                     :remedy_max 400}
+                                    {:principal person}))
+        _ (inv/invoke! eng :judgment (str (:id judgment)) :promote {} {:principal person})
+        seat (open-seat! eng {:scope (conj ticket-scope {:kind "verdict" :actions ["judge"]})
+                              :walk "ticket" :judgment (str (:id judgment))})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})]
+    {:eng eng :state st :h h :sid sid :seat seat :ticket ticket :judgment judgment
+     :policy policy :sat sat :answer (doc-of sat)}))
+
+(deftest a-judgment-seat-fired-on-its-ticket-in-review-is-handed-it
+  (let [w (judged-ticket-world)
+        ticket-id (str (:id (:ticket w)))
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        sit-fired! (fn [text]
+                     (let [k (seats/hold-fire-key! (:eng w) seat-row
+                                                   ((:now-fn (:eng w))) text)]
+                       (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                                      {:key k :seat "bench-seat"}))))]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "in_review" (ticket-state w)) "out of the judgment's queue")
+    (testing "unjudged, the named ticket is handed in its own state"
+      (let [answer (sit-fired! (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id "\"}"))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (not (str/includes? (str (:note answer)) "is not in your walk")))))
+    (testing "judged, it is not handed again, and the sit says so"
+      (inv/create! (:eng w) :verdict
+                   {:judgment (str (:id (:judgment w))) :subject_kind "ticket" :subject_id ticket-id
+                    :verdict "pr_opened" :remedy "https://example.test/pull/31"}
+                   {:principal person})
+      (let [answer (sit-fired! (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id "\"}"))]
+        (is (not= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (str/includes? (str (:note answer)) "is not in your walk")
+            "a firing that missed its row is seen to have missed it")))))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 
@@ -3793,3 +3975,16 @@
         (is (nil? (:bench_note (:answer w))) (str (:bench_note (:answer w))))
         (is (some #(= "nav/NAV-1-thing" (get-in % [:data :head_branch]))
                   (changes-of (:eng w))))))))
+
+(deftest a-seat-that-only-reads-the-bench-is-minted-nothing-and-told-nothing
+  ;; triage and prep: they read code in every repository with their own
+  ;; bench calls, name no `change` and hold no writing power
+  (let [w (ask-world [{:kind "ask" :actions ["complete"]}
+                      {:kind "bench.read" :actions []}])
+        answer (:answer w)]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (nil? (:bench answer)))
+    (is (nil? (:bench_note answer))
+        "no sentence says the bench did not open to a seat that never builds")
+    (is (empty? (changes-of (:eng w))))
+    (is (empty? (calls-of (:state w) "bench__prepare")))))

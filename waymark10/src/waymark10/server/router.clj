@@ -1994,7 +1994,10 @@
                                 ;; the session (oidc-rp); the header,
                                 ;; deliberately presented, still wins
                                 (:session-grant principal))]
-                (grants/visibility eng gid principal)
+                ;; with the calling sitting, when the request names
+                ;; one, for the per-sitting wall (ticket 8358b658)
+                (grants/visibility eng gid principal
+                                   (some-> (:waymark10/sitting req) str not-empty))
                 ;; the agent default (waymark-rci): a named agent
                 ;; NEVER runs unscoped — no grant presented means the
                 ;; bootstrap surface (the asking door and the
@@ -2060,6 +2063,26 @@
               (seats/bump-counter! eng sitting-id :refusals
                                    {:type (:type d) :guard (:guard d)})))
           (throw e))))))
+
+(defn wrap-reads-stamped
+  "A sitting's READS are activity (ticket 900764ce): a GET under a
+  live grant stamps the calling sitting's `last_call_at`, so a sitter
+  that only reads over HTTP is not abandoned by the idle sweep while
+  it works. It counts no transition and no refusal. Mounted by
+  `handler` only: the MCP door already stamps every tools/call through
+  `seats/add-served!`. Best-effort, the mind-the-wall! posture — a
+  stamp that could fail a read would be worse than none."
+  [handler eng]
+  (fn [req]
+    (when (= :get (:request-method req))
+      (try
+        (when-some [sitting-id (counted-sitting-id eng req)]
+          (seats/stamp-call! eng sitting-id))
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "waymark10 router: could not stamp the sitting's read -"
+                     (ex-message e))))))
+    (handler req)))
 
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
@@ -2164,5 +2187,8 @@
        ;; boundary resolves and re-throws into the problem boundary
        ;; that projects the refusal it just counted (R-10.6)
        (wrap-refusals-counted eng)
+       ;; beside it, for the same reason: it reads the resolved
+       ;; visibility to find the sitting a GET is activity for
+       (wrap-reads-stamped eng)
        (wrap-identity eng)
        wrap-problems)))

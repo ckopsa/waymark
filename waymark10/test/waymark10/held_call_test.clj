@@ -856,10 +856,46 @@
                              :one-way "A skipped block stays skipped in this rig."}
                     :display {:label "Skip"}}}})
 
+;; two hops: a step names its plan, and the plan names the member
+(defresource notice-plan
+  {:kind :notice_plan
+   :plural "notice_plans"
+   :states [:backlog :active]
+   :initial :backlog
+   :terminal #{:active}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name {:x-display {:label "Name"}} [:string {:min 1 :max 120}]]
+            [:member {:optional true :kind :member
+                      :x-display {:label "Whose plan"}}
+             [:maybe :waymark/ref]]]
+   :actions {:queue {:from #{:backlog} :to :active
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "A queued plan stays queued in this rig."}
+                     :display {:label "Queue"}}}})
+
+(defresource notice-step
+  {:kind :notice_step
+   :plural "notice_steps"
+   :states [:backlog :active]
+   :initial :backlog
+   :terminal #{:active}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name {:x-display {:label "Name"}} [:string {:min 1 :max 120}]]
+            [:plan_id {:optional true :kind :notice_plan
+                       :x-display {:label "Plan"}}
+             [:maybe :waymark/ref]]]
+   :actions {:queue {:from #{:backlog} :to :active
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "A queued step stays queued in this rig."}
+                     :display {:label "Queue"}}}})
+
 (defn- notice-engine [storage log clock]
   (let [fake (fake-chat log (atom false))]
     (engine/engine (cond-> {:storage storage
-                            :resources [caps/capability notice-chore at-block]
+                            :resources [caps/capability notice-chore at-block
+                                        notice-plan notice-step]
                             :services {:mcp-servers
                                        {:client-fn (fn [row]
                                                      (when (= "tgrambot"
@@ -899,10 +935,12 @@
 (defn- notice-member! [{:keys [eng notifier-id]} display notify?]
   (let [m (:row (inv/create! eng :member {:display display :actor_type "human"}
                              {:principal colton}))]
+    ;; how a member is reached is their own hand: the member sets it
     (when notify?
       (inv/invoke! eng :member (str (:id m)) :set_notify
                    {:notify {:notifier notifier-id :input {:chat_id "42"}}}
-                   {:principal colton
+                   {:principal (t/principal {:id (str (:id m))
+                                             :display display})
                     :if-match (inv/etag :member (:id m) (:version m))}))
     (str (:id m))))
 
@@ -1053,3 +1091,47 @@
       (reset! clock (instant "2026-09-29T11:30:00Z"))
       (is (= 1 (held/sweep-notice-instants! eng2)) "the second, due while down, is told")
       (is (= 2 (count (chat-sends log)))))))
+
+(defn- step-rule! [{:keys [eng notifier-id]} address]
+  (:row (inv/create! eng :notice_rule
+                     {:name "tell the plan's member"
+                      :kind "notice_step"
+                      :when {:to_state "active"}
+                      :address address
+                      :notifier notifier-id}
+                     {:principal colton})))
+
+(deftest a-notice-rule-tells-the-member-a-ref-chain-names
+  (let [{:keys [eng log] :as w} (notice-world)
+        jack (notice-member! w "Jack" true)
+        r (step-rule! w {:field "plan_id" :then "member"})
+        plan (:row (inv/create! eng :notice_plan {:name "monday" :member jack}
+                                {:principal colton}))
+        step! #(:row (inv/create! eng :notice_step
+                                  (cond-> {:name "the dishes"}
+                                    % (assoc :plan_id %))
+                                  {:principal colton}))
+        s (step! (str (:id plan)))]
+    (drain-notices! eng)
+    (inv/invoke! eng :notice_step (str (:id s)) :queue {} {:principal colton})
+    (inv/invoke! eng :notice_step (str (:id (step! nil))) :queue {} {:principal colton})
+    (drain-notices! eng)
+    (let [sends (chat-sends log)]
+      (is (= 1 (count sends)))
+      (is (= "42" (str (get-in (first sends) [:params :arguments :chat_id])))
+          "the plan's member says where"))
+    (let [data (notice-rule-data eng (:id r))]
+      (is (= 1 (:sent data)))
+      (is (= 1 (:unaddressed data)) "a step with no plan notifies nobody"))))
+
+(deftest a-ref-chain-judges-every-hop
+  (let [w (notice-world)]
+    (doseq [address [{:field "plan_id"}
+                     {:field "plan_id" :then "name"}
+                     {:field "plan_id" :then "nowhere"}
+                     {:field "name" :then "member"}]]
+      (testing (pr-str address)
+        (let [e (refused #(step-rule! w address))]
+          (is (some? e))
+          (is (re-find #"not a member|not a ref field|address-names-a-member"
+                       (str (ex-message e) " " (pr-str (ex-data e))))))))))

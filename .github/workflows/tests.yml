@@ -205,6 +205,9 @@ jobs:
       calendar10: ${{ steps.detect.outputs.calendar10 }}
       factory10: ${{ steps.detect.outputs.factory10 }}
       localfire: ${{ steps.detect.outputs.localfire }}
+      # Whether the diff touches .github/workflows/ — true too whenever
+      # there is no diff to read. `actionlint` runs on it.
+      workflows: ${{ steps.detect.outputs.workflows }}
       quick: ${{ steps.select.outputs.quick }}
       factory: ${{ steps.select.outputs.factory }}
       # Why `select` refused a dispatch's `only`, when it did. `gate`
@@ -280,7 +283,7 @@ jobs:
             done
           }
 
-          say_yes () { emit true all; echo "$1"; exit 0; }
+          say_yes () { emit true all; echo "workflows=true" >> "$GITHUB_OUTPUT"; echo "$1"; exit 0; }
 
           # A workflow_dispatch has no base, and a brand-new branch's
           # first push reports the all-zeros sha. Both mean "no diff to
@@ -301,8 +304,12 @@ jobs:
           echo "---------------------"
 
           code=false
+          workflows=false
           while IFS= read -r f; do
             [ -n "$f" ] || continue
+            case "$f" in
+              .github/workflows/*) workflows=true ;;
+            esac
             case "$f" in
               waymark10/*|calendar10/*|workqueue10/*|factory10/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
                 echo "code path: $f"
@@ -312,6 +319,7 @@ jobs:
               suites_for "$f"
             fi
           done <<< "$files"
+          echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
 
           if [ "$EVENT" = pull_request ]; then
             # The table decides a pull request: code is whatever it
@@ -888,6 +896,30 @@ jobs:
           path: shard-output.txt
           retention-days: 3
 
+  # ── THE WORKFLOWS THEMSELVES ────────────────────────────────────────
+  #
+  # bench__check reads no .github/ file and no suite parses a workflow,
+  # so a misspelt `needs.` output or a malformed `if:` reached main
+  # unread. actionlint reads every workflow in the tree whenever a diff
+  # touches .github/workflows/, and whenever `changes` had no diff to
+  # narrow. The version is pinned for the same reason the Clojure CLI's
+  # is. Its shellcheck and pyflakes passes are off: the run: blocks
+  # predate this job and were never held to them, so turning them on is
+  # its own change.
+  actionlint:
+    needs: [changes]
+    if: ${{ needs.changes.outputs.workflows == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: '1.7.7'
+        run: |
+          set -euo pipefail
+          bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
+          ./actionlint -color -shellcheck= -pyflakes=
+
   # ── THE ONE CHECK BRANCH PROTECTION NAMES ───────────────────────────
   #
   # Auto-merge waits on REQUIRED checks, and required checks are matched
@@ -911,7 +943,7 @@ jobs:
   # does no work, and the one check a merge waits on must not queue
   # behind the cluster's load.
   gate:
-    needs: [changes, discover, quick, test-factory, test10, test-queue]
+    needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -932,6 +964,8 @@ jobs:
           RUN_CALENDAR10: ${{ needs.changes.outputs.calendar10 }}
           RUN_FACTORY10: ${{ needs.changes.outputs.factory10 }}
           RUN_LOCALFIRE: ${{ needs.changes.outputs.localfire }}
+          WORKFLOWS: ${{ needs.changes.outputs.workflows }}
+          ACTIONLINT: ${{ needs.actionlint.result }}
         run: |
           set -euo pipefail
           echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE"
@@ -940,6 +974,12 @@ jobs:
             if [ -n "${REFUSED:-}" ]; then
               echo "gate: changes refused — $REFUSED"
             fi
+            exit 1
+          fi
+          # Before the code check: a diff touching only a workflow such as
+          # image.yml is no code path, and still must lint.
+          if [ "${WORKFLOWS:-}" = "true" ] && [ "$ACTIONLINT" != "success" ]; then
+            echo "gate: FAIL — a workflow changed and actionlint did not succeed ($ACTIONLINT)."
             exit 1
           fi
           if [ "${CODE:-}" != "true" ]; then

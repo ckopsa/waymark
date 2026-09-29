@@ -723,6 +723,23 @@
                "); the next pass asks again")
         nil))))
 
+(defn stale-waiting?
+  "Does a front wait on a required check its head will never run while
+  its base has moved (ticket 498a089e)? The rig answers `waiting`, and
+  the forge pass wrote `missing_checks` (checks with no run at all, not
+  merely running) and `behind_base` on the row, read at the head it
+  names in `missing_checks_head`: facts read at an older head than the
+  row's `head_sha` are not trusted (ticket 716d12ba). Bringing the
+  branch up to date makes CI run on the new head."
+  [change answer]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean
+     (and (= "waiting" (answer-state answer))
+          head
+          (= head (some-> (get-in change [:data :missing_checks_head]) str))
+          (seq (get-in change [:data :missing_checks]))
+          (true? (get-in change [:data :behind_base]))))))
+
 ;; THE MERGE TRAIN (ticket 47519515, slice 2 of 3deb06ed). With
 ;; `merge_strategy: train` the front and up to train_size-1 changes
 ;; behind it that are green on their own heads ride ONE branch,
@@ -1004,9 +1021,9 @@
   "Read a standing train's run once → the train that stands after it:
   the same one while its run is pending or the rig does not answer,
   and what `train-finished!` says once it finished or was refused. A
-  train read by its branch keeps the run the answer names; an answer
-  naming the run a retry left behind (`stale_run_id`) is read as
-  pending, since the retry's own run has not shown yet. A train tested
+  train read by its branch keeps the run the answer names; the run a
+  retry left behind (`stale_run_id`) is the rig's to skip, through
+  `status-args`' `skip_run_id`. A train tested
   by its pull request's run that showed none in `pr-run-grace-seconds`
   has its checks dispatched instead, once."
   [ctx seen repo policy train]
@@ -1022,7 +1039,6 @@
       why (do (warn! "the rig refused the status of " (:branch train) " ("
                      (reason-of answer) ")")
               (train-finished! ctx seen repo policy train "cancelled"))
-      (and run (= run (:stale_run_id train))) train
       (or (nil? st) (= "pending" st))
       (if (pr-run-overdue? ctx known)
         (do (warn! repo ": no run showed on the pull request of " (:branch train)
@@ -1034,7 +1050,8 @@
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
   hand; then only a line's front is brought up to date when it is
-  behind. The front is chosen after the answers, so a change that went
+  behind, or when it waits on a required check its head never ran
+  while its base moved (`stale-waiting?`). The front is chosen after the answers, so a change that went
   red or was parked this pass does not hold the line. `answers`, when
   given, is an atom the pass fills with change id → the rig's answer.
   A repository whose policy says `merge_strategy: train` sends its
@@ -1079,7 +1096,8 @@
                         (advance-train! (assoc ctx :answers answers)
                                         seen repo policy train))
            built (swap! trains assoc repo built)
-           (and front (behind? (get @answers id)))
+           (and front (or (behind? (get @answers id))
+                          (stale-waiting? front (get @answers id))))
            (update-behind! ctx seen front id
                            (str (get-in front [:data :head_sha]))))))
      ;; a standing train is read whatever its line: a repository with

@@ -1026,14 +1026,39 @@
   [^java.time.Instant at ^java.time.Instant now seconds]
   (boolean (and at (.isBefore at (.minusSeconds now (long seconds))))))
 
+(defn- quiet?
+  "Has this sitting made no call inside `seconds` before `now`, read
+  off the row as it stands NOW rather than as the sweep's pass found
+  it (ticket e2b55a0c)? A re-sit that reuses an idle sitting stamps
+  its `last_call_at` in its own write, and a sit that lands between
+  the pass's read and its end must win: the sweep never closes a
+  sitting out from under the caller it was just handed to. This read
+  spares the pass a doomed invoke; the sitting's own
+  `still-quiet-for-the-sweep` guard judges the same stamp inside the
+  ending's transaction, which is what closes the race (ticket
+  e3dfe60d)."
+  [eng rdef row now seconds]
+  (let [st (:storage eng)
+        fresh (some->> (store/with-tx st
+                         (fn [tx] (store/load-row st tx :sitting
+                                                  (str (:id row)) {})))
+                       (inv/decode-row rdef))
+        at (get-in fresh [:data :last_call_at])]
+    (and (= :open (:state fresh))
+         (or (nil? at) (stale-since? at now seconds)))))
+
 (defn- end-sitting!
   "One sitting, ended through its own door under the seats actor, so
   the ending is in the log like every other ending. A door that
   refuses one sitting must not take the boot down with it: the sweep
-  says so and walks on. → true when it ended."
-  [eng row action body]
+  says so and walks on. `idle` rides `:within` to the sitting's
+  `still-quiet-for-the-sweep` guard, which judges the stamp under the
+  ending's own row lock. → true when it ended."
+  [eng row action body idle]
   (try (inv/invoke! eng :sitting (:id row) action body
-                    {:principal seats/seats-actor})
+                    {:principal seats/seats-actor
+                     :within {:kind :sitting :action :sweep
+                              :idle-seconds idle}})
        true
        (catch Exception e
          (warn! "sitting " (:id row) " could not be ended by " (name action)
@@ -1145,28 +1170,35 @@
 
              interactive?
              (cond
-               (stale-since? tallied now idle)
+               (and (stale-since? tallied now idle)
+                    (quiet? eng rdef row now idle))
                (if (end-sitting! eng row :close
                                  (assoc (last-tally row)
                                         :note (str "Closed by the sweep after "
-                                                   idle " seconds idle.")))
+                                                   idle " seconds idle."))
+                                 idle)
                  (update acc :closed inc)
                  acc)
 
-               (and (nil? tallied) (stale-since? started now idle))
-               (if (end-sitting! eng row :abandon nil)
+               (and (nil? tallied) (stale-since? started now idle)
+                    (quiet? eng rdef row now idle))
+               (if (end-sitting! eng row :abandon nil idle)
                  (update acc :abandoned inc)
                  acc)
 
                :else acc)
 
-             (stale-since? last-call now idle)
-             (if (end-sitting! eng (mark-silent! eng row last-call) :abandon nil)
+             (and (stale-since? last-call now idle)
+                  (quiet? eng rdef row now idle))
+             (if (end-sitting! eng (mark-silent! eng row last-call) :abandon nil idle)
                (update acc :abandoned inc)
                acc)
 
-             (and cadence (stale-since? started now (* 2 (long cadence))))
-             (if (end-sitting! eng row :abandon nil)
+             ;; the outer bound, but never over a fresh last call: a
+             ;; fired sitting re-sat after two cadences is in use
+             (and cadence (stale-since? started now (* 2 (long cadence)))
+                  (quiet? eng rdef row now idle))
+             (if (end-sitting! eng row :abandon nil idle)
                (update acc :abandoned inc)
                acc)
 

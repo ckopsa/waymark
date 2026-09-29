@@ -1131,6 +1131,25 @@
                                "changes_requested" "A reviewer asked for changes"
                                "commented" "A reviewer commented and asked for nothing"}}}
      [:maybe [:enum "pending" "approved" "changes_requested" "commented"]]]
+    ;; ── a head that lacks a required check (ticket 498a089e) ──────
+    ;; the forge pass writes these; the merge line reads them to bring
+    ;; forward a front the rig would leave `waiting` forever
+    [:missing_checks {:optional true
+                      :x-display
+                      {:label "Required checks that never ran"
+                       :help "The policy's required checks with no run at all on the head — not merely pending. A branch cut before its base gained a workflow never runs that workflow's check."}}
+     [:maybe [:vector [:string {:max 200}]]]]
+    [:behind_base {:optional true
+                   :x-display
+                   {:label "Behind its base"
+                    :help "True when the head lacks the base branch's current head, as the forge's compare of base and head answered."}}
+     [:maybe :boolean]]
+    [:base_compared_at {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
+    ;; the head the two facts above were read at (ticket 716d12ba): the
+    ;; merge line trusts them only while it is still the row's head_sha
+    [:missing_checks_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
     ;; ── the bench's three (waymark-fp62.6.3.2, R-4) ──────────────
     [:branch {:optional true
               :x-display
@@ -1347,7 +1366,15 @@
              ;; the forge pass's re-run of an interrupted head (ticket
              ;; 22f91244)
              [:rerun_head {:optional true} [:maybe [:string {:max 64}]]]
-             [:rerun_note {:optional true} [:maybe [:string {:max 240}]]]]
+             [:rerun_note {:optional true} [:maybe [:string {:max 240}]]]
+             ;; the forge pass's read of a head that lacks a required
+             ;; check (ticket 498a089e)
+             [:missing_checks {:optional true}
+              [:maybe [:vector [:string {:max 200}]]]]
+             [:behind_base {:optional true} [:maybe :boolean]]
+             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
+             [:missing_checks_head {:optional true}
+              [:maybe [:string {:max 64}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Observe" :order 10
@@ -1377,7 +1404,13 @@
               [:maybe [:enum "pending" "approved" "changes_requested"
                        "commented"]]]
              [:rerun_head {:optional true} [:maybe [:string {:max 64}]]]
-             [:rerun_note {:optional true} [:maybe [:string {:max 240}]]]]
+             [:rerun_note {:optional true} [:maybe [:string {:max 240}]]]
+             [:missing_checks {:optional true}
+              [:maybe [:vector [:string {:max 200}]]]]
+             [:behind_base {:optional true} [:maybe :boolean]]
+             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
+             [:missing_checks_head {:optional true}
+              [:maybe [:string {:max 64}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Observe" :order 14

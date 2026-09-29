@@ -185,6 +185,15 @@
     "→ true when pull request `number` is merged and its merge commit is
     `sha` or an ancestor of it. Throws when the forge does not answer."))
 
+(defprotocol ForgeCompare
+  "Whether a head lacks its base's current head (ticket 498a089e). A
+  protocol of its own: a source that does not implement it writes no
+  `behind_base`, and the merge line brings no waiting front forward."
+  (forge-behind? [s repository base head-sha]
+    "→ true when `head-sha` lacks the head of branch `base` (the
+    compare of base...head is behind by at least one commit). Throws
+    when the forge does not answer."))
+
 ;; ── what the two kinds take ─────────────────────────────────────────
 
 (def change-create-fields
@@ -1051,6 +1060,70 @@
      census
      (live-changes eng))))
 
+;; ── a head that lacks a required check (ticket 498a089e) ────────────
+;;
+;; A branch cut before its base gained a workflow never runs that
+;; workflow's check, and GitHub may call it `clean` all the same, so
+;; the rig's merge answers `waiting` forever. This pass writes the two
+;; facts the house needs to end that wait — the required checks with no
+;; run at all on the head, and whether the head lacks its base's
+;; current head — and the merge line reads them (bench/work-lines!).
+
+(defn missing-checks
+  "The required checks with NO run at all among `checks`: a check that
+  is pending or running is not missing (ticket 498a089e)."
+  [required checks]
+  (let [ran (into #{} (map #(str (:check_name %))) checks)]
+    (into [] (comp (map str) (distinct) (remove ran)) required)))
+
+(defn- staleness-pass!
+  "Every submitted or failing change of a repository with an active
+  policy → `missing_checks` read from its head and, when one is missing
+  and the source can compare, `behind_base` with `base_compared_at`,
+  both stamped with the head they were read at (`missing_checks_head`,
+  ticket 716d12ba). Written only when a fact changed. A forge that does not answer, or a
+  door the engine refuses, costs that change one pass."
+  [eng source read-checks census log-fn]
+  (let [by-repo (into {}
+                      (keep (fn [p]
+                              (when-some [r (some-> (get-in p [:data :repository])
+                                                    str not-empty)]
+                                [r p])))
+                      (bench/policies eng :active))
+        compare? (satisfies? ForgeCompare source)]
+    (reduce
+     (fn [census row]
+       (let [repo (str (get-in row [:data :repository]))
+             head (some-> (get-in row [:data :head_sha]) str not-empty)
+             base (some-> (get-in row [:data :base_branch]) str not-empty)
+             policy (get by-repo repo)
+             door (get observe-doors (state-of row))]
+         (if-not (and head policy door)
+           census
+           (try
+             (let [missing (missing-checks (bench/required-checks-of policy)
+                                           (read-checks repo head))
+                   behind (when (and (seq missing) base compare?)
+                            (boolean (forge-behind? source repo base head)))
+                   facts (cond-> {:missing_checks missing
+                                  :missing_checks_head head}
+                           (some? behind) (assoc :behind_base behind))]
+               (if (= facts (select-keys (:data row) (keys facts)))
+                 census
+                 (do (inv/invoke! eng :change (str (:id row)) door
+                                  (cond-> facts
+                                    (some? behind)
+                                    (assoc :base_compared_at
+                                           (str (java.time.Instant/now))))
+                                  (as-opts))
+                     (update census :stale-noted inc))))
+             (catch Exception e
+               (log-fn "the missing checks of " (get-in row [:data :change_id])
+                       " were not written (" (ex-message e) ")")
+               (update census :refused inc))))))
+     census
+     (live-changes eng))))
+
 ;; ── a landed pull request nobody adopted (ticket 58e706d6) ──────────
 ;;
 ;; A submitted change whose bench landing opened a pull request, but
@@ -1485,6 +1558,96 @@
    census
    (bench/policies eng :active)))
 
+;; ── the groom floor (ticket eb515931) ───────────────────────────────
+;;
+;; A LINE THAT RUNS DRY SAYS SO. A repository whose open queue falls
+;; below its policy's `groom_floor` gets one draft ticket, where mayor
+;; already reads: the draft tickets. The engine grooms nothing itself;
+;; grooming, completing or dropping that ticket is the answer. At most
+;; one in a settle window, and none while the last is draft or open.
+
+(def ^:private floor-scan-limit
+  "How many tickets of one state in one repository the floor reads."
+  1000)
+
+(def ^:private floor-title-prefix "Groom the next batch for ")
+
+(def ^:private groomable-types #{"bug" "task" "chore"})
+
+(defn- floor-ticket? [repo row]
+  (str/starts-with? (str (get-in row [:data :title]))
+                    (str floor-title-prefix repo ":")))
+
+(defn- as-instant [v]
+  (cond (instance? Instant v) v
+        (str/blank? (str v)) nil
+        :else (Instant/parse (str v))))
+
+(defn- floor-detail [repo n floor waiting]
+  (cut (str "The open queue for `" repo "` holds " n " tickets, under "
+            "the floor of " floor " its policy states. " waiting
+            " draft bugs, tasks and chores wait for grooming.\n\n"
+            "Groom the next batch, or complete or drop this ticket to "
+            "answer it. The engine grooms nothing itself, and files no "
+            "other floor ticket for `" repo "` while this one is draft "
+            "or open.")
+       ticket/detail-chars))
+
+(defn- floor-move!
+  "One policy's floor. `open` is the queue: a blocked, a deferred and an
+  in-review ticket (one beside a submitted change) each has its own
+  state. → true when it filed a ticket."
+  [eng policy]
+  (let [floor (long (or (get-in policy [:data :groom_floor]) 0))
+        settle (long (or (get-in policy [:data :groom_floor_settle_seconds])
+                         3600))
+        repo (blank->nil (get-in policy [:data :repository]))
+        ^Instant now (now-of eng)
+        ^Instant noted (as-instant (get-in policy [:data :floor_noted_at]))
+        in-state #(rows-by eng :ticket {:repo repo :state %} floor-scan-limit)]
+    (when (and repo (pos? floor)
+               (or (nil? noted)
+                   (not (.isBefore now (.plusSeconds noted settle)))))
+      (let [opened (in-state :open)
+            n (count opened)]
+        (when (< n floor)
+          (let [drafts (in-state :draft)]
+            (when-not (some #(floor-ticket? repo %) (concat drafts opened))
+              (inv/create! eng :ticket
+                           {:title (cut (str floor-title-prefix repo ": " n
+                                             " open, floor " floor)
+                                        200)
+                            :detail (floor-detail
+                                     repo n floor
+                                     (count (filter #(contains? groomable-types
+                                                                (str (get-in % [:data :type])))
+                                                    drafts)))
+                            :type "chore"
+                            :priority 1
+                            :repo repo}
+                           (as-opts))
+              (bench/mark-row! eng :repo_policy (str (:id policy))
+                               {:floor_noted_at now :floor_count n} #{})
+              true)))))))
+
+(defn floor-pass!
+  "Every active policy → its groom floor judged, and one draft ticket
+  filed where the open queue fell below it. A policy the pass cannot
+  judge costs that repository this pass and nothing else. → the
+  census, with `:floor-filed` counted."
+  [eng census log-fn]
+  (reduce
+   (fn [census policy]
+     (try
+       (cond-> census
+         (floor-move! eng policy) (update :floor-filed (fnil inc 0)))
+       (catch Exception e
+         (log-fn "the groom floor of " (get-in policy [:data :repository])
+                 " was not judged (" (ex-message e) ")")
+         census)))
+   census
+   (bench/policies eng :active)))
+
 ;; ── the one write ───────────────────────────────────────────────────
 
 (defn- unlabelled?
@@ -1553,7 +1716,7 @@
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
    :unopened-closed 0
    :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
-   :refused 0})
+   :stale-noted 0 :floor-filed 0 :refused 0})
 
 ;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
 ;; whose pulls listing the token cannot read costs its rows a pass and
@@ -1639,10 +1802,13 @@
                   census (stale-pass! eng changes census log-fn)
                   census (label-pass! eng source census log-fn)
                   census (failing-pass! eng source read-checks census log-fn)
+                  census (staleness-pass! eng source read-checks census
+                                          log-fn)
                   census (adoption-note-pass! eng census log-fn)]
               [census nil])
             (catch Exception e [census e]))
           census (base-pass! eng source census log-fn)
+          census (floor-pass! eng census log-fn)
           _ (when thrown (throw thrown))
           census (assoc census :calls (forge-calls source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
@@ -1674,6 +1840,8 @@
                 (str ", " (:base-opened census) " red-base tickets opened, "
                      (:base-noted census) " red heads noted, "
                      (:base-closed census) " closed on green"))
+              (when (pos? (long (:floor-filed census)))
+                (str ", " (:floor-filed census) " groom-floor tickets filed"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
               (when-not (:complete? census)

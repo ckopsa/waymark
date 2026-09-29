@@ -210,6 +210,40 @@
     (is (nil? (bench/moved-marks {} {:line_place nil :line_why nil} #{}))
         "clearing what is already clear writes nothing")))
 
+;; ── a front that waits on a check its head never ran (ticket 498a089e)
+
+(deftest a-waiting-front-missing-a-check-on-a-moved-base-is-updated-once
+  (let [r (rig (atom {1 {:state "waiting"}}))
+        seen (atom {})
+        a (a-change "ckopsa/waymark" 1 0
+                    :missing_checks ["gate"] :behind_base true
+                    :missing_checks_head "head-1")]
+    (pass! r seen [a] {})
+    (is (= [1] (numbers-of r "bench__update_branch")))
+    (pass! r seen [a] {})
+    (is (= [1] (numbers-of r "bench__update_branch"))
+        "not again for the same head")))
+
+(deftest a-waiting-front-whose-facts-name-an-older-head-is-left-alone
+  (let [r (rig (atom {1 {:state "waiting"}}))]
+    (pass! r (atom {}) [(a-change "ckopsa/waymark" 1 0
+                                  :missing_checks ["gate"] :behind_base true
+                                  :missing_checks_head "head-0")] {})
+    (is (= [] (numbers-of r "bench__update_branch"))
+        "the facts were read at a head the row no longer names")))
+
+(deftest a-waiting-front-whose-check-is-running-is-left-alone
+  (let [r (rig (atom {1 {:state "waiting"}}))]
+    (pass! r (atom {}) [(a-change "ckopsa/waymark" 1 0
+                                  :missing_checks [] :behind_base true)] {})
+    (is (= [] (numbers-of r "bench__update_branch")))))
+
+(deftest a-waiting-front-missing-a-check-but-not-behind-is-left-alone
+  (let [r (rig (atom {1 {:state "waiting"}}))]
+    (pass! r (atom {}) [(a-change "ckopsa/waymark" 1 0
+                                  :missing_checks ["gate"] :behind_base false)] {})
+    (is (= [] (numbers-of r "bench__update_branch")))))
+
 ;; ── the pass the mirror wakes (ticket 6e190062) ────────────────────────
 
 (defn- at [seconds] (.plusSeconds ^Instant t0 (long seconds)))
@@ -579,7 +613,8 @@
     (is (true? (:retried t2)))
     (is (= "77" (:stale_run_id t2)) "the cancelled run stays on the train")
     (is (nil? (:run_id t2)) "the retry showed no run yet")
-    (testing "the old cancelled run is read as the retry not shown yet"
+    (testing "the rig skips the old cancelled run, so the retry reads as not shown yet"
+      (swap! answers assoc "train_status" {:state "pending" :run_id nil :head "train-head"})
       (let [[t3] (finish-pass! r seen t2)]
         (is (= t2 t3))
         (is (= {:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"
