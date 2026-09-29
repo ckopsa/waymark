@@ -2126,6 +2126,23 @@
                  (fn [tx] (store/load-row (:storage eng) tx kind id {})))
                (inv/decode-row rdef)))))
 
+(defn- sit-superseded-judgment
+  "The refusal for a seat that still says a superseded judgment
+  (ticket 86514746), or nil. A supersede re-points the seats that say
+  it; this covers rows written before that, and any path that skipped
+  it. It names the successor, which is what the restate should say."
+  [eng seat]
+  (when-some [j (row-of eng :judgment (get-in seat [:data :judgment]))]
+    (when (= :superseded (:state j))
+      (let [successor (some-> (get-in j [:data :successor]) str not-empty)]
+        (str "The seat `" (get-in seat [:data :name]) "` says the judgment "
+             (:id j) ", which is superseded"
+             (if successor
+               (str " by " successor ". Restate the seat to say " successor
+                    ", then sit again.")
+               (str " with no successor. Restate the seat to say a promoted"
+                    " judgment, then sit again.")))))))
+
 (defn- seat-model
   "The model row the sitter claims (R-12.8). For a schedule this engine
   pushes, the schedule's `model` is the declaration and the copy
@@ -3838,7 +3855,8 @@
                     (seats/fire-key-row eng keyed (:key args)))
         fired? (and keyed person (not standing?)
                     (true? (seats/spend-fire-key! eng keyed (:key args))))
-        spent? (and seat person (or standing? fired? (some? resit)))]
+        spent? (and seat person (or standing? fired? (some? resit)))
+        stood-down (when (and seat spent?) (sit-superseded-judgment eng seat))]
     (cond
       ;; a · a session to bind to
       (nil? sid) (result sit-no-session true)
@@ -3856,6 +3874,9 @@
       ;; c' · and a key still worth something: a firing's key that a
       ;; second session took first says what an unknown key says
       (not spent?) (result sit-no-seat true)
+      ;; c'' · a seat whose judgment was superseded walks no law in
+      ;; force, and the refusal names the successor (ticket 86514746)
+      stood-down (result stood-down true)
       :else
       (let [seat-id (str (:id seat))
             named (str (get-in seat [:data :name]))
