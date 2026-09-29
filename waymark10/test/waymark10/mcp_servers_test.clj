@@ -145,6 +145,32 @@
            (mapv :name (get-in (servers/row-by-name eng "emila") [:data :tools])))
         "a tool that leaves the list leaves the row")))
 
+(deftest a-person-discover-asks-the-server-every-time
+  (let [tools (atom three-tools)
+        log (atom [])
+        eng (fresh-engine {:clients {"emila" (fake-server tools log)}})
+        row (a-server! eng {:name "emila" :powers emila-powers})
+        id (str (:id row))
+        discover! #(:row (inv/invoke! eng :mcp_server id :discover {}
+                                      {:principal colton}))
+        discovers #(->> (store/with-tx (:storage eng)
+                          (fn [tx]
+                            (store/transitions (:storage eng) tx
+                                               {:kind :mcp_server :resource-id (:id row)}
+                                               {:newest-first true :limit 100})))
+                        (filter (fn [tr] (= "discover" (name (:action tr)))))
+                        count)]
+    (is (= ["read" "search" "send"] (mapv :name (get-in (discover!) [:data :tools]))))
+    (swap! tools conj {:name "folders" :description "List folders."
+                       :inputSchema {:type "object" :properties {}}})
+    (is (= ["folders" "read" "search" "send"]
+           (mapv :name (get-in (discover!) [:data :tools])))
+        "a second inputless discover reads the moved list, not the last answer")
+    (is (= 3 (count (filter #(= "tools/list" (:method %)) @log)))
+        "the create and each discover asked the server")
+    (is (= 2 (discovers))
+        "each discover lands in the row's history")))
+
 ;; ── the grant world: a sitter wearing a leash, through the MCP door ─
 
 (defn- mint-capabilities! [eng]
