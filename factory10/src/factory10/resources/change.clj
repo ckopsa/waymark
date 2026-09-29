@@ -540,6 +540,10 @@
                              ;; submit is a landing of its own (ticket
                              ;; 92871afb)
                              :landing_error nil
+                             ;; nor is a train's red: it named the old
+                             ;; head (ticket 6566d32f)
+                             :train_red_head nil
+                             :train_red nil
                              ;; nor is the last merge state: the forge
                              ;; computes it again for the new head, and
                              ;; a stale `conflicted` would fail the
@@ -591,7 +595,9 @@
           ;; the forge computes these again for the head it reads next
           :failing_checks nil
           :conflicts nil
-          :landing_error nil))
+          :landing_error nil
+          :train_red_head nil
+          :train_red nil))
 
 ;; ── the checks went red, or green again (ticket d1742908) ───────────
 
@@ -601,12 +607,16 @@
   ;; A conflict rides as `merge-conflict` among the names, and its
   ;; paths, when the bench could name them, beside (ticket 5f12e772).
   ;; A landing that failed rides as `landing:<step>`, and the step's
-  ;; output beside it (ticket 92871afb).
+  ;; output beside it (ticket 92871afb). A merge train that found the
+  ;; change red rides as the head it judged and the train's reason
+  ;; beside the train's red names (ticket 6566d32f).
   [row inp]
   (update row :data assoc
           :failing_checks (vec (:failing_checks inp))
           :conflicts (some-> (:conflicts inp) seq vec)
-          :landing_error (some-> (:landing_error inp) str not-empty)))
+          :landing_error (some-> (:landing_error inp) str not-empty)
+          :train_red_head (some-> (:train_red_head inp) str not-empty)
+          :train_red (some-> (:train_red inp) str not-empty)))
 
 (defhandler write-the-failing-checks [row inp _ctx]
   ;; the ceiling's red: the ticket stays in review, and the stuck
@@ -626,7 +636,7 @@
   ;; the red sent back goes out for review again (ticket 2e869934).
   (move-the-ticket! row ctx #{:open} :review)
   (update row :data assoc :failing_checks nil :conflicts nil
-          :landing_error nil))
+          :landing_error nil :train_red_head nil :train_red nil))
 
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
@@ -1134,6 +1144,19 @@
                       :label "Why the push did not land"
                       :help "The end of the output of the step the bench's landing failed at, when a submit never reached GitHub. The house writes it when it moves the change to failing, and clears it when the seat submits again."}}
      [:maybe [:string {:max 4000}]]]
+    ;; written by a merge train that found this change red though its
+    ;; own head is green (ticket 6566d32f): the head the train judged,
+    ;; and the train's branch and run url. While `head_sha` still is
+    ;; that head the forge pass does not recover the change; a new
+    ;; head, or the seat's next submit, clears both.
+    [:train_red_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:train_red {:optional true
+                 :x-display
+                 {:widget "prose"
+                  :label "Why a merge train found it red"
+                  :help "This change's own checks are green, and the merge train that carried it with others went red with it: the train's branch and the url of its run. `failing_checks` names the train's red checks. The change stays failing until its head moves."}}
+     [:maybe [:string {:max 1000}]]]
     ;; a submit whose landing opened a pull request the forge never
     ;; adopted (ticket 58e706d6): the first time the forge pass saw it,
     ;; and the note it writes once the window has passed. The adoption
@@ -1567,7 +1590,14 @@
              [:landing_error {:optional true
                               :x-display {:widget "prose"
                                           :label "Why the push did not land"}}
-              [:maybe [:string {:max 4000}]]]]
+              [:maybe [:string {:max 4000}]]]
+             ;; a merge train's red (ticket 6566d32f): the head it
+             ;; judged, and its branch and run url
+             [:train_red_head {:optional true} [:maybe [:string {:max 64}]]]
+             [:train_red {:optional true
+                          :x-display {:widget "prose"
+                                      :label "Why a merge train found it red"}}
+              [:maybe [:string {:max 1000}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The required checks finished red on this head, and the ticket this change was built for goes back to the queue, so the seat that wrote it walks it again. The way back is a green head, which the house reads on its next pass, or the seat's next submit."}

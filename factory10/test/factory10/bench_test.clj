@@ -84,7 +84,10 @@
                                       :branch {:type "string"}}
                          :required ["repo" "branch"]}})
         ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"
-         "enroll" "repos" "unenroll" "feedback" "rerun"]))
+         "enroll" "repos" "unenroll" "feedback" "rerun"
+         ;; the merge train's five (ticket 47519515)
+         "train_build" "train_checks" "train_status" "train_land"
+         "train_delete"]))
 
 (def ^:private bench-powers
   "The bench row's powers (waymark-fp62.6.3.3): the four the model may
@@ -157,7 +160,15 @@
                        :message "Name the rule in the comment."}]
            :unavailable ["statuses: the forge answered 403"]}
           "bench__repos" {:repos ["ckopsa/waymark"]}
-          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}}}))
+          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}
+          ;; the merge train (ticket 47519515), in the rig's own shapes
+          "bench__train_build" {:branch "train/ckopsa/waymark/31" :base_head a-head
+                                :head a-commit :merged [31] :conflicted []}
+          "bench__train_checks" {:run_id "7" :head a-commit}
+          "bench__train_status" {:state "pending" :head a-commit
+                                 :url "https://github.com/ckopsa/waymark/actions/runs/7"}
+          "bench__train_land" {:landed true}
+          "bench__train_delete" {:repo "ckopsa/waymark" :branch "train/ckopsa/waymark/31"}}}))
 
 (defn- answer!
   "Script one tool's answer — a result map, or a refusal map with
@@ -1637,6 +1648,27 @@
       (is (nil? (get-in row [:data :landing_error]))
           "the last landing's error is not the new round's"))))
 
+(deftest a-seat-submits-again-after-a-train-red
+  ;; ticket 6566d32f: a merge train's red names the head it judged, and
+  ;; the next submit is a new head
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))]
+    (inv/invoke! (:eng w) :change id :fail
+                 {:failing_checks ["merge-train"]
+                  :train_red_head head
+                  :train_red "the train's test10 went red"}
+                 {:principal mirror/source-principal})
+    (is (= "failing" (name (:state (change-row w)))))
+    (is (= head (get-in (change-row w) [:data :train_red_head])))
+    (let [r (submit! w {:why "Fix what the train said."})
+          row (change-row w)]
+      (is (false? (:isError r)) (text-of r))
+      (is (= "submitted" (name (:state row))))
+      (is (nil? (get-in row [:data :train_red_head])))
+      (is (nil? (get-in row [:data :train_red]))
+          "the train judged the old head, not the new round's"))))
+
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
 (def ^:private person-policy {:auto_merge false})
@@ -3023,6 +3055,33 @@
     (is (contains? (into #{} (map :action) (get-in answer [:change :doors]))
                    "submit")
         "and submit on it is the next round")))
+
+(deftest a-fire-naming-a-ticket-in-review-hands-it-and-its-change
+  ;; ticket 7af7d506: the walk hands open tickets, and a fire that names
+  ;; one in review, or the change beside it, hands both
+  (let [w (ticket-world)
+        change-id (str (get-in (:answer w) [:change :id]))
+        ticket-id (str (:id (:ticket w)))
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        sit-fired! (fn [text]
+                     (let [k (seats/hold-fire-key! (:eng w) seat-row
+                                                   ((:now-fn (:eng w))) text)]
+                       (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                                      {:key k :seat "bench-seat"}))))]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "in_review" (ticket-state w)))
+    (testing "a wake naming the ticket hands it and its submitted change"
+      (let [answer (sit-fired! (str "{\"kind\":\"ticket\",\"id\":\""
+                                    ticket-id "\"}"))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))
+        (is (= "submitted" (get-in answer [:change :state])))))
+    (testing "a person's prose naming the change hands the same"
+      (let [answer (sit-fired! (str "Resolve the conflict on change "
+                                    change-id " and stop."))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))))))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 

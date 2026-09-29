@@ -25,7 +25,8 @@
            [java.security MessageDigest]
            [java.util UUID]
            [java.util.concurrent Executors ExecutorService
-            ScheduledExecutorService ThreadFactory TimeUnit]))
+            RejectedExecutionException ScheduledExecutorService
+            ThreadFactory TimeUnit]))
 
 ;; ── answers ─────────────────────────────────────────────────────────
 
@@ -313,21 +314,54 @@
   (atom {:ok true :checked-at nil :next-at nil
          :detail "The credential has not been checked."}))
 
+(def backoff-first-seconds
+  "The wait before the check after a first failed one. A failure is most
+  often a blip — the engine mid-deploy — so the check comes back soon,
+  and the fire's 429 says so, rather than throttling for `:check-seconds`."
+  30)
+
+(defn next-check-seconds
+  "The seconds to the next scheduled check after `failures` failed
+  checks in a row: `check-seconds` after a pass, else 30, 60, 120, 240
+  … doubled per failure and capped at `check-seconds`."
+  [check-seconds failures]
+  (let [cs (long check-seconds)
+        n  (long failures)]
+    (if (zero? n)
+      cs
+      (min cs (* (long backoff-first-seconds) (bit-shift-left 1 (min 20 (dec n))))))))
+
+(defn failure-kind
+  "A failed probe's detail → \"transient\" when the door was unreachable,
+  timed out or answered 5xx, else \"refused\" (the credential itself was
+  turned away). Both back off alike; the log line says which."
+  [detail]
+  (if (re-find #"(?i)did not end|could not start|unreachable|no available server|connection (refused|reset)|could not connect|timed? ?out|\b5\d\d\b"
+               (str detail))
+    "transient"
+    "refused"))
+
 (defn check-credential!
   "Probe now and record `{ok, checked_at, detail}` on the state's
-  `:credential`. `:scheduled?` says the timer ran it, so the next
-  check is `:check-seconds` from now. → the credential's state."
+  `:credential`, with `:failures` the failed checks in a row.
+  `:scheduled?` says the timer ran it, so it records `:next-in`, the
+  seconds to the next check (`next-check-seconds`), and `:next-at`.
+  → the credential's state."
   [{:keys [config spawner credential]} {:keys [scheduled?]}]
   (locking credential
-    (let [r (probe! config spawner)]
-      (swap! credential
-             (fn [c]
-               (cond-> (merge c r {:checked-at (runs/now-iso)})
-                 scheduled?
-                 (assoc :next-at (+ (System/currentTimeMillis)
-                                    (* 1000 (long (:check-seconds config))))))))
-      (println (str "localfire check ok=" (:ok r)))
-      @credential)))
+    (let [r (probe! config spawner)
+          c (swap! credential
+                   (fn [c]
+                     (let [fails (if (:ok r) 0 (inc (long (or (:failures c) 0))))
+                           secs  (next-check-seconds (:check-seconds config) fails)]
+                       (cond-> (merge c r {:checked-at (runs/now-iso) :failures fails})
+                         scheduled?
+                         (assoc :next-in secs
+                                :next-at (+ (System/currentTimeMillis) (* 1000 secs)))))))]
+      (println (str "localfire check ok=" (:ok r)
+                    (when-not (:ok r) (str " (" (failure-kind (:detail r)) ")"))
+                    (when scheduled? (str " next in " (:next-in c) "s"))))
+      c)))
 
 (defn- retry-after-seconds
   "The seconds until the next check, at least one; 60 when no check is
@@ -343,18 +377,25 @@
   {:ok (boolean (:ok c)) :checked_at (:checked-at c) :detail (:detail c)})
 
 (defn- start-check-timer!
-  "Check every `:check-seconds`, on a daemon thread of its own."
-  ^ScheduledExecutorService [state]
+  "Check on a daemon thread of its own, `first-seconds` from now; each
+  check schedules the next `:next-in` seconds out, so a failure is
+  re-checked on the backoff and a pass waits `:check-seconds`."
+  ^ScheduledExecutorService [state first-seconds]
   (let [secs (long (get-in state [:config :check-seconds]))
-        ex   (Executors/newSingleThreadScheduledExecutor
-              (reify ThreadFactory
-                (newThread [_ r]
-                  (doto (Thread. ^Runnable r "localfire-check")
-                    (.setDaemon true)))))]
-    (.scheduleWithFixedDelay ex
-                             ^Runnable (fn [] (try (check-credential! state {:scheduled? true})
-                                                   (catch Throwable _ nil)))
-                             secs secs TimeUnit/SECONDS)
+        ^ScheduledExecutorService ex
+        (Executors/newSingleThreadScheduledExecutor
+         (reify ThreadFactory
+           (newThread [_ r]
+             (doto (Thread. ^Runnable r "localfire-check")
+               (.setDaemon true)))))]
+    (letfn [(tick []
+              (let [c (try (check-credential! state {:scheduled? true})
+                           (catch Throwable _ nil))]
+                (schedule (or (:next-in c) secs))))
+            (schedule [s]
+              (try (.schedule ex ^Runnable tick (long s) TimeUnit/SECONDS)
+                   (catch RejectedExecutionException _ nil)))]
+      (schedule first-seconds))
     ex))
 
 ;; ── the body (R-4.5) ────────────────────────────────────────────────
@@ -501,8 +542,8 @@
                :running    (atom {})
                :credential (credential-initial)}
         timer (when check?
-                (check-credential! state {:scheduled? true})
-                (start-check-timer! state))
+                (start-check-timer! state
+                                    (:next-in (check-credential! state {:scheduled? true}))))
         srv   (hk/run-server (handler state)
                              {:port (:port config)
                               :legacy-return-value? false})]

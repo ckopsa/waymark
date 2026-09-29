@@ -589,6 +589,53 @@
       (is (nil? (get-in row [:data :cost_usd]))
           "R-7.6's posture: the absence of a bill, not a zero one"))))
 
+(deftest the-sweep-ends-a-fired-sitting-that-fell-silent
+  ;; ticket 086307f2: a run lost to a restart holds its tickets until
+  ;; the clock reads its silence, not until two cadences have passed
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model {:name "fired" :sitting_idle_seconds 600})
+        sid (initialize! h)
+        sat (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))
+        sitting (str (:sitting sat))
+        last-call #(str (get-in (row-of eng :sitting sitting)
+                                [:data :last_call_at]))
+        at! (fn [s] (reset! at (Instant/parse s)))]
+
+    (testing "the sit stamps the clock at birth"
+      (is (= "2026-09-17T09:00:00Z" (last-call))))
+
+    (testing "a query, an invoke and a power call each move it"
+      (at! "2026-09-17T09:01:00Z")
+      (tool h (with-session sid) "waymark_query" {:kind "meal"})
+      (is (= "2026-09-17T09:01:00Z" (last-call)))
+      (at! "2026-09-17T09:02:00Z")
+      (tool h (with-session sid) "waymark_invoke"
+            {:kind "meal" :id (:id (meal! eng "Toast")) :action "accept"})
+      (is (= "2026-09-17T09:02:00Z" (last-call)))
+      (at! "2026-09-17T09:03:00Z")
+      (tool h (with-session sid) "waymark_power" {:tool "nothing_here"})
+      (is (= "2026-09-17T09:03:00Z" (last-call))))
+
+    (testing "a call inside the idle limit keeps it open"
+      (at! "2026-09-17T09:13:00Z")
+      (is (= {:abandoned 0 :closed 0}
+             (select-keys (defs/sweep-seats! eng) [:abandoned :closed])))
+      (is (= :open (:state (row-of eng :sitting sitting)))))
+
+    (testing "silence past the idle limit ends it, long before two cadences"
+      (at! "2026-09-17T09:13:01Z")
+      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
+      (let [row (row-of eng :sitting sitting)]
+        (is (= :abandoned (:state row)))
+        (is (= "sweep" (get-in row [:data :closed_by])))
+        (is (= "silent since 2026-09-17T09:03:00Z"
+               (get-in row [:data :note])))
+        (is (nil? (get-in row [:data :cost_usd]))
+            "R-7.6's posture: the absence of a bill")))))
+
 ;; ── 9 · nothing fires an interactive seat ───────────────────────────
 
 (deftest the-fire-door-refuses-an-interactive-seat-by-name
