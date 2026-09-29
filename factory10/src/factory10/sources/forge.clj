@@ -1079,8 +1079,9 @@
 (defn- staleness-pass!
   "Every submitted or failing change of a repository with an active
   policy → `missing_checks` read from its head and, when one is missing
-  and the source can compare, `behind_base` with `base_compared_at`.
-  Written only when a fact changed. A forge that does not answer, or a
+  and the source can compare, `behind_base` with `base_compared_at`,
+  both stamped with the head they were read at (`missing_checks_head`,
+  ticket 716d12ba). Written only when a fact changed. A forge that does not answer, or a
   door the engine refuses, costs that change one pass."
   [eng source read-checks census log-fn]
   (let [by-repo (into {}
@@ -1104,7 +1105,8 @@
                                            (read-checks repo head))
                    behind (when (and (seq missing) base compare?)
                             (boolean (forge-behind? source repo base head)))
-                   facts (cond-> {:missing_checks missing}
+                   facts (cond-> {:missing_checks missing
+                                  :missing_checks_head head}
                            (some? behind) (assoc :behind_base behind))]
                (if (= facts (select-keys (:data row) (keys facts)))
                  census

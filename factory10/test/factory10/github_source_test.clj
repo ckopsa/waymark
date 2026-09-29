@@ -1875,6 +1875,7 @@
     (is (= ["gate"] (get-in row [:data :missing_checks])))
     (is (true? (get-in row [:data :behind_base])))
     (is (some? (get-in row [:data :base_compared_at])))
+    (is (= the-head (get-in row [:data :missing_checks_head])))
     (is (= 1 (:stale-noted census)))
     (testing "an unchanged read writes nothing"
       (is (= 0 (:stale-noted (pass! r)))))))

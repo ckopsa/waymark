@@ -1199,7 +1199,10 @@
     ;; the two power tools (waymark-912p): the Gate door's MCP
     ;; surface, fixed for every caller — what a grant admits is read
     ;; through waymark_powers, never appended to this list
-    "waymark_powers" "waymark_power"})
+    "waymark_powers" "waymark_power"
+    ;; the pursuit tool (GRAIL 3/3): a goal reached through ordinary
+    ;; invokes under the caller's own grant — fixed for every caller
+    "waymark_pursue"})
 
 (defn- mcp-rpc
   "One JSON-RPC message at the MCP door, as whichever principal the
@@ -1267,7 +1270,8 @@
 
 (defn- mcp-six-tools-violations
   "tools/list is EXACTLY the fixed tools — the spec's six,
-  waymark_resolve, waymark_sit, and the two power tools — for every
+  waymark_pursue, waymark_resolve, waymark_sit, and the two power
+  tools — for every
   caller. The
   design decision stands and has hardened: the list does NOT grow
   with the law, so an engine with fifty kinds advertises exactly what

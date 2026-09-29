@@ -4555,6 +4555,10 @@
   a second run of the seat has nothing to build on it, and a submit
   there only finds a clean worktree.
 
+  Only a change in the ticket's own repository counts, when the ticket
+  names one (ticket 0eba219c, as 80a8e60b for the named walk): each
+  candidate ticket's repo is loaded once, within the scan limit.
+
   → {ticket-id reason}: each withheld ticket with the sentence the sit
   answers for it (ticket 87c928e9), so a seat handed an empty walk
   can say which row was held back and why. Empty for any other walk
@@ -4569,9 +4573,27 @@
                              (store/query-rows st tx :change where
                                                {:limit limit})))
                          (map #(inv/decode-row rdef %))))
-          live? (fn [born]
-                  (some #(contains? #{:open :submitted :failing}
-                                    (some-> (:state %) name keyword))
+          tdef (get (inv/resources eng) :ticket)
+          repo-of (memoize
+                   (fn [ticket-id]
+                     (when tdef
+                       (try
+                         (some-> (some->> (store/with-tx st
+                                            (fn [tx]
+                                              (store/load-row st tx :ticket
+                                                              ticket-id {})))
+                                          (inv/decode-row tdef))
+                                 (get-in [:data :repo]) str not-empty)
+                         (catch Exception _ nil)))))
+          ours? (fn [ticket-id change]
+                  (let [repo (repo-of ticket-id)]
+                    (or (nil? repo)
+                        (= repo (some-> (get-in change [:data :repository])
+                                        str)))))
+          live? (fn [born ticket-id]
+                  (some #(and (contains? #{:open :submitted :failing}
+                                         (some-> (:state %) name keyword))
+                              (ours? ticket-id %))
                         (changes {:born_from born} live-change-scan-limit)))
           ticket-of (fn [change]
                       (let [born (str (get-in change [:data :born_from]))]
@@ -4579,15 +4601,17 @@
                           (not-empty (subs born (count groomed-walk-prefix))))))]
       (into (into {} (keep (fn [change]
                              (when-some [ticket-id (ticket-of change)]
-                               [ticket-id (str "change " (:id change)
-                                               " is submitted and in review")])))
+                               (when (ours? ticket-id change)
+                                 [ticket-id (str "change " (:id change)
+                                                 " is submitted and in review")]))))
                   (changes {:state "submitted"} stuck-scan-limit))
             (keep (fn [change]
                     (let [born (str (get-in change [:data :born_from]))]
                       (when (str/starts-with? born groomed-walk-prefix)
                         (when-some [ticket-id (not-empty
                                                (subs born (count groomed-walk-prefix)))]
-                          (when (and (not (live? born))
+                          (when (and (ours? ticket-id change)
+                                     (not (live? born ticket-id))
                                      (nil? (groom-after-stall eng change
                                                               ticket-id)))
                             [ticket-id (str "change " (:id change)
