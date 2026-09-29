@@ -668,6 +668,30 @@
         (is (nil? (get-in row [:data :cost_usd]))
             "R-7.6's posture: the absence of a bill")))))
 
+(deftest a-refused-silent-abandon-leaves-the-row-as-it-was
+  ;; ticket d8e4f00f: a call that stamps the sitting between the
+  ;; sweep's look and its abandon gets the abandon refused, and the
+  ;; open row must not keep the sweep's "silent since" word
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model {:name "fired" :sitting_idle_seconds 600})
+        sid (initialize! h)
+        sat (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))
+        sitting (str (:sitting sat))
+        before (select-keys (:data (row-of eng :sitting sitting))
+                            [:note :closed_by])]
+    (reset! at (Instant/parse "2026-09-17T09:10:01Z"))
+    (with-redefs [defs/quiet? (fn [& _]
+                                (tool h (with-session sid) "waymark_query"
+                                      {:kind "meal"})
+                                true)]
+      (is (= 0 (:abandoned (defs/sweep-seats! eng)))))
+    (let [row (row-of eng :sitting sitting)]
+      (is (= :open (:state row)))
+      (is (= before (select-keys (:data row) [:note :closed_by]))))))
+
 (deftest a-re-sit-of-an-idle-sitting-survives-the-next-sweep
   ;; ticket e2b55a0c: a re-sit reused a sitting already past its idle
   ;; limit, and the sweep abandoned it under the caller seconds later
