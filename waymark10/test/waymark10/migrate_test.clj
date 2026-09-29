@@ -18,7 +18,10 @@
       :code-or-shape, one revision minted at the next boot.
 
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.java.io :as io]
+            [clojure.java.shell :as sh]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [waymark10.fingerprint :as fp]
@@ -284,3 +287,60 @@
             rev2 (first (filter #(= 2 (get-in % [:data :revision])) rows))]
         (is (= 2 (:current-law rd)) "the boot minted and promoted revision 2")
         (is (= "code_or_shape" (get-in rev2 [:data :diff_class])))))))
+
+;; ── (g) the plan's class routes the deploy ──────────────────────────
+
+(defn- steps-of-kinds [& kinds]
+  (mapv (fn [k] {:kind k :table "widgets" :sql "--" :reason "test"
+                 :destructive? (= k :rename-state)})
+        kinds))
+
+(deftest g-plan-class-names-the-friction
+  (is (= :empty (migrate/plan-class [])))
+  (testing "each additive kind alone is additive"
+    (doseq [k [:create-table :add-column :add-index]]
+      (is (= :additive (migrate/plan-class (steps-of-kinds k))) (str k))))
+  (testing "each reviewed kind alone is reviewed, and so is an unknown kind"
+    (doseq [k [:drop-column :recreate-column :drop-index :tomorrows-kind]]
+      (is (= :reviewed (migrate/plan-class (steps-of-kinds k))) (str k))))
+  (is (= :destructive (migrate/plan-class (steps-of-kinds :rename-state))))
+  (testing "mixed plans: one reviewed step makes the whole plan reviewed"
+    (is (= :additive (migrate/plan-class
+                      (steps-of-kinds :create-table :add-column :add-index))))
+    (is (= :reviewed (migrate/plan-class
+                      (steps-of-kinds :add-column :drop-column :add-index))))
+    (is (= :destructive (migrate/plan-class
+                         (steps-of-kinds :add-column :drop-index :rename-state))))))
+
+(defn- dispatch-script []
+  (some (fn [p] (let [f (io/file p)] (when (.exists f) (.getPath f))))
+        ["../.github/scripts/dispatch-migrate.sh"
+         ".github/scripts/dispatch-migrate.sh"]))
+
+(deftest g-dispatch-migrate-reads-the-plan-class
+  (let [script (dispatch-script)
+        classify (fn [out]
+                   (str/trim (:out (sh/sh "bash" script "--classify" :in out))))]
+    (is (some? script) "dispatch-migrate.sh is reachable from the test's cwd")
+    (when script
+      (is (= "empty"
+             (classify (str "workqueue10: storage matches the declarations — empty plan.\n"
+                            "plan-class: empty\n"))))
+      (is (= "additive"
+             (classify (str "workqueue10: 1 migration step(s):\n"
+                            "  add-column widgets: ALTER TABLE widgets ADD COLUMN f_x text  -- new\n"
+                            "plan-class: additive\n"
+                            "dry run — APPLY=1 executes (DESTRUCTIVE=1 includes state renames).\n"))))
+      (is (= "reviewed"
+             (classify (str "workqueue10: 1 migration step(s):\n"
+                            "  drop-column widgets: ALTER TABLE widgets DROP COLUMN f_x  -- gone\n"
+                            "plan-class: reviewed\n"))))
+      (is (= "destructive"
+             (classify (str "workqueue10: 1 migration step(s):\n"
+                            "  [DESTRUCTIVE] rename-state widgets: UPDATE widgets SET state='b'  -- renamed\n"
+                            "plan-class: destructive\n"))))
+      (testing "a step list without the line is reviewed, never additive"
+        (is (= "reviewed"
+               (classify (str "workqueue10: 1 migration step(s):\n"
+                              "  add-column widgets: ALTER TABLE widgets ADD COLUMN f_x text  -- new\n"))))
+        (is (= "reviewed" (classify "")))))))
