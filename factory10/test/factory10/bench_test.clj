@@ -1479,8 +1479,12 @@
                          (catch clojure.lang.ExceptionInfo e (ex-data e)))))]
     (is (nil? (restate "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"))
         "the waymark-bench pattern is in the common subset")
+    ;; ticket d92a9bf4: the rig runs Python 3.11, which compiles both
+    (doseq [pattern ["^a++$" "^(?>ab)$"]]
+      (is (nil? (restate pattern))
+          (str pattern " is in Python 3.11's re")))
     (doseq [[pattern named] [["^\\p{L}+$" "Unicode property class"]
-                             ["^a++$" "possessive quantifier"]]]
+                             ["^a+\\z" "end-of-input anchor"]]]
       (let [refusal (restate pattern)]
         (is (= :the-test-selection-pattern-compiles
                (some-> (:guard refusal) name keyword))
@@ -1488,7 +1492,7 @@
         (is (str/includes? (pr-str refusal) named)
             (str "the refusal names the construct: " (pr-str refusal)))))
     (is (str/includes? (pr-str (:schema (get (inv/resources eng) :repo_policy)))
-                       "Python's re")
+                       "Python 3.11 re")
         "the help names the rig's dialect")))
 
 ;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
