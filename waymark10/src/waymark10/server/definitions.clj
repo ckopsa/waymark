@@ -1051,6 +1051,25 @@
         [:input_tokens :output_tokens :cache_read_tokens
          :cache_write_tokens :turns]))
 
+(defn- mark-silent!
+  "The sweep's word on a fired sitting it abandons for silence (ticket
+  086307f2), written onto the open row just before the abandon: a
+  MAINTENANCE write, the counters' own spelling, because `abandon`
+  takes no input and writes nothing of its own. → the row, for
+  `end-sitting!`."
+  [eng row last-call]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :sitting (str (:id row))
+                                        {:for-update true})]
+          (store/update-data! st tx :sitting (str (:id row))
+                              (assoc (:data raw)
+                                     :note (str "silent since " last-call)
+                                     :closed_by "sweep")
+                              nil))))
+    row))
+
 (defn- sweep-sittings!
   "The sittings nobody ended, ended — R-7.6 and R-12.25 in one pass
   over the open rows. → {:abandoned n :closed n}.
@@ -1064,6 +1083,9 @@
                                                      last tally
     interactive, never tallied, started_at older
       than the same limit                          → abandon
+    fired, last_call_at older than the same
+      limit                                        → abandon, noted
+                                                     `silent since …`
 
   The abandons carry NO tokens, because the absence of a bill is the
   honest record of a session that never reported one. The close is the
@@ -1073,10 +1095,15 @@
   bill is the last tally, costed at the close's own prices like every
   other bill.
 
-  A fired sitting is never idle-closed and an interactive one is never
-  judged by a cadence: an interactive seat has no cadence to speak of
-  (nothing fires it), and two of one would be an arbitrary clock over
-  a person who is thinking."
+  An interactive sitting is never judged by a cadence: an interactive
+  seat has no cadence to speak of (nothing fires it), and two of one
+  would be an arbitrary clock over a person who is thinking.
+
+  A fired sitting is judged by its LAST CALL (ticket 086307f2): a run
+  lost to a restart, or a sit that never answered, otherwise held its
+  tickets and its seat's open slots until two cadences had passed. The
+  two cadences stay as the outer bound, and they are the only bound
+  for a row born before the stamp existed."
   [eng]
   (let [st (:storage eng)
         rdef (get (inv/resources eng) :sitting)
@@ -1105,6 +1132,7 @@
                               default-idle-seconds))
                started (get-in row [:data :started_at])
                tallied (get-in row [:data :tallied_at])
+               last-call (get-in row [:data :last_call_at])
                ;; the SITTING's own mode, which it inherited at birth,
                ;; and the seat's only for a row born before the field
                ;; existed: a seat restated after a sitting opened must
@@ -1131,6 +1159,11 @@
                  acc)
 
                :else acc)
+
+             (stale-since? last-call now idle)
+             (if (end-sitting! eng (mark-silent! eng row last-call) :abandon nil)
+               (update acc :abandoned inc)
+               acc)
 
              (and cadence (stale-since? started now (* 2 (long cadence))))
              (if (end-sitting! eng row :abandon nil)

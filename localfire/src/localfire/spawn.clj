@@ -56,8 +56,31 @@
       (.redirectInput pb (ProcessBuilder$Redirect/from (io/file "/dev/null")))
       (->ProcessHandle (.start pb)))))
 
+(defn run-to-end
+  "Run one short process to its end with `input` written on its stdin →
+  `{:exit :out}`, `:out` its standard output trimmed, `:exit` nil when
+  it outlived `timeout-ms` and was killed. This is the sitting's close
+  (R-5.6): a hook that reads its JSON on stdin and answers one line. It
+  is not a run, so it is not the Spawner, whose processes get an empty
+  stdin."
+  ([argv dir input] (run-to-end argv dir input 60000))
+  ([argv dir input timeout-ms]
+   (let [pb (ProcessBuilder. ^java.util.List (vec (map str argv)))]
+     (.directory pb (io/file dir))
+     (.redirectError pb ProcessBuilder$Redirect/DISCARD)
+     (let [p   (.start pb)
+           out (future (slurp (.getInputStream p)))]
+       ;; a hook that exits before it reads its stdin breaks the pipe
+       (try (with-open [w (io/writer (.getOutputStream p))] (.write w (str input)))
+            (catch java.io.IOException _ nil))
+       (if (.waitFor p (long timeout-ms) TimeUnit/MILLISECONDS)
+         {:exit (.exitValue p) :out (.trim (str (deref out 5000 "")))}
+         (do (.destroyForcibly p)
+             {:exit nil :out "failed (none): the hook outlived its time and was killed"}))))))
+
 (defn process-spawner
-  "The real spawner. It is the only thing in the module that starts a
-  process, and `clojure -M:serve` is the only caller that uses it."
+  "The real spawner. It and `run-to-end` are the only things in the
+  module that start a process, and `clojure -M:serve` is the only caller
+  that uses it."
   []
   (->ProcessBuilderSpawner))
