@@ -153,6 +153,13 @@
    (or (:claude-home cfg)
        (System/getenv "HOME") (System/getProperty "user.home"))))
 
+(defn closed-line?
+  "Whether a close's exit and output say the sitting is closed: exit 0
+  and a status line of `closed <sitting>` or `already-closed <sitting>`."
+  [exit out]
+  (and (= 0 exit)
+       (some? (re-find #"^(already-)?closed \S" (str/trim (str out))))))
+
 (defn close-sitting!
   "Run the place's `sitting-close.sh close-run` for run `id` with `note`,
   record its answer in `run.edn`, and log one line. → the hook's status
@@ -177,7 +184,11 @@
         line     (if (str/blank? out)
                    (str "failed (none): the hook answered nothing, exit " exit)
                    out)]
-    (runs/note-close! runs-dir id line (= 0 exit))
+    ;; closed only on the hook's word for it. close-run prints "closed
+    ;; <sitting>" or "already-closed <sitting>" and exits 0 only then; a
+    ;; hook older than close-run falls through to another mode, prints
+    ;; nothing and exits 0 too, having closed nothing (R-5.6)
+    (runs/note-close! runs-dir id line (closed-line? exit out))
     (println (str "localfire close id=" id " " line))
     line))
 

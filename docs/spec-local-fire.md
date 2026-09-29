@@ -252,6 +252,11 @@ in `run.edn`. When `:claude` runs the sessions somewhere else (a
 container), `:hook-via` runs the hook there too, where the transcript
 and the shell the hook needs are.
 
+The record says the sitting is closed only when the hook exits 0 with
+a `closed <sitting>` or `already-closed <sitting>` line. A hook that
+exits 0 and says nothing (one older than `close-run`) closed nothing,
+so the run stays unclosed and the next start tries it again.
+
 ## 6. Requirements: the prompt
 
 **R-6.1** The default prompt of a routine is the fixed Routine prompt
