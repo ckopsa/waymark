@@ -2288,7 +2288,7 @@
                                   (seats/named-beside-a-live-change?
                                    eng walk only))
                          (some-> (row-of eng (keyword walk) only) :state name))
-            stuck (cond-> stuck only (-> set (disj (str only))))
+            stuck (cond-> stuck only (dissoc (str only)))
             subtract? (or judgment (seq claimed) (seq stuck))
             asked (if (or subtract? (seq held) only) coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))
