@@ -178,3 +178,24 @@
                  (inv/invoke! engine :repo_policy (str (:id (policy-of engine)))
                               :note_base {:verdict "red"}
                               {:principal a-person})))))
+
+(deftest a-ticket-door-that-throws-does-not-cost-the-base-write
+  (let [{:keys [engine] :as w} (world)
+        invoke! inv/invoke!]
+    (head-at! w head-1 801 "failure")
+    (pass! w)
+    (head-at! w head-2 802 "failure")
+    (with-redefs-fn
+      {#'inv/invoke! (fn [eng kind & more]
+                       (if (= :ticket kind)
+                         (throw (ex-info "the ticket door is shut" {}))
+                         (apply invoke! eng kind more)))}
+      (fn []
+        (is (= 0 (:base-opened (pass! w)))
+            "the ticket door refused, so nothing was opened")))
+    (let [policy (policy-of engine)]
+      (is (= "red" (str (get-in policy [:data :base_state]))))
+      (is (= head-2 (get-in policy [:data :base_head]))
+          "the base WAS read on this pass, so the base was written")
+      (is (str/blank? (str (get-in policy [:data :base_ticket])))
+          "and no ticket is claimed that the door never opened"))))
