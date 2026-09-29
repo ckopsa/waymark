@@ -3905,6 +3905,17 @@
       (if (gate/bench-tool? inner) inner tool-name))
     tool-name))
 
+(defn- cancelled-run
+  "The run id of a bench.test run this answer says was cancelled — \"\"
+  when the rig named no id — or nil when the answer says no such
+  thing (ticket 39b2c934). Read off the rig's own result map, the one
+  `bench-result` reads, for `bench__test` and `bench__test_result`."
+  [served-tool out]
+  (when (contains? #{"bench__test" "bench__test_result"} (str served-tool))
+    (when-some [r (bench-result out)]
+      (when (= "cancelled" (some-> (or (:conclusion r) (:status r)) name))
+        (str (or (:run_id r) ""))))))
+
 (defn- count-served!
   "R-10.6a: the bytes this tool answered, on the open sitting of the
   session's grant.
@@ -3933,7 +3944,9 @@
   (try
     (when-some [sitting-id (calling-sitting eng session)]
       (seats/add-served! eng sitting-id tool-name (result-bytes result)
-                         (dropped-bytes result)))
+                         (dropped-bytes result))
+      (when-some [run (cancelled-run tool-name result)]
+        (seats/add-cancelled-run! eng sitting-id run)))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 mcp served counter" tool-name "failed -"

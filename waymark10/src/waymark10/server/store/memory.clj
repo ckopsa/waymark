@@ -295,6 +295,17 @@
           rows (if (:newest-first opts) (reverse rows) rows)]
       (into [] (take (:limit opts 500)) rows)))
 
+  (transitions-under-grant [_ _tx grant-id since until opts]
+    (into []
+          (comp (filter #(= (str grant-id)
+                            (some-> (get-in % [:actor :grant]) str)))
+                (filter #(or (nil? since)
+                             (not (.isBefore ^Instant (:at %) ^Instant since))))
+                (filter #(or (nil? until)
+                             (not (.isAfter ^Instant (:at %) ^Instant until))))
+                (take (:limit opts 500)))
+          (:transitions @state [])))
+
   (transition-stats [_ _tx since include-system?]
     ;; the same buckets Postgres's date_trunc-at-UTC answers: the one
     ;; truncation lives in store/utc-week-start
