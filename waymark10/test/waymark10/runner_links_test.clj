@@ -157,7 +157,14 @@
     (let [id (:id (make-link! colton))]
       (rl/fire-link! *eng* (stub {:bad-link "The Routine refused the token."})
                      (row-of id) nil)
-      (is (= "broken" (name (:state (row-of id)))))))
+      (is (= "broken" (name (:state (row-of id)))))
+      (testing "and says why"
+        (is (= "The Routine refused the token."
+               (get-in (row-of id) [:data :note]))))
+      (testing "and the next run that starts clears the reason"
+        (rl/fire-link! *eng* (stub {:started nil}) (row-of id) nil)
+        (is (= "live" (name (:state (row-of id)))))
+        (is (nil? (get-in (row-of id) [:data :note]))))))
   (testing "no person may write the live state"
     (let [id (:id (make-link! colton))]
       (is (some? (refusal #(inv/invoke! *eng* :runner_link id :break nil

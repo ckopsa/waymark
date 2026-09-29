@@ -87,7 +87,11 @@
           (fn [data]
             (-> (merge data (select-keys inp [:last_fired_at :window_started_at
                                               :runs_in_window]))
-                (dissoc :retry_after)))))
+                (dissoc :retry_after :note)))))
+
+(defhandler record-break
+  [row inp _ctx]
+  (assoc-in row [:data :note] (:note inp)))
 
 (defhandler hold-throttle
   [row inp _ctx]
@@ -97,7 +101,8 @@
   [row inp _ctx]
   (update row :data
           (fn [data]
-            (cond-> (merge data (select-keys inp [:provider :fire_url :cap]))
+            (cond-> (dissoc (merge data (select-keys inp [:provider :fire_url :cap]))
+                            :note)
               (some? (:token inp)) (assoc :fire_token (:token inp))))))
 
 (def ^:private provider-field
@@ -182,6 +187,12 @@
                      {:label "Last fired"
                       :help "When the engine last started a run through this link. Engine-written."}}
      [:maybe :waymark/instant]]
+    [:note {:optional true
+            :x-display
+            {:widget "prose"
+             :label "Why the link broke"
+             :help "The provider's own sentence about why it refused the last fire. A person restates the link to bring it back. Cleared by the next run that starts, or by a restate. Engine-written."}}
+     [:maybe [:string {:max 280}]]]
     seeded-from-field]
    :create-schema
    [:map
@@ -284,9 +295,16 @@
     ;; with a good URL or token brings it back live.
     :break
     {:from #{:live} :to :broken
+     :input [:map
+             [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]]
+     :record true
      :guards [the-engine-writes-the-fire]
+     :edit {:prefill [:note] :fence false
+            :unfenced-reason
+            "The provider's own sentence, written the moment it refused the fire; no read preceded it to fence against."}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The link fires nothing until a person restates it."}
+     :handler record-break
      :display {:label "Link refused" :style :danger}}}})
 
 ;; ── the provider (ticket ec7e7bfb) ──────────────────────────────────
@@ -538,7 +556,10 @@
           (act! eng link-row :throttle until)))
 
       :else
-      (act! eng link-row :break nil))
+      (let [reason (or (not-empty (str (:bad-link answer)))
+                       "The provider refused the link.")]
+        (act! eng link-row :break
+              {:note (subs reason 0 (min 280 (count reason)))})))
     answer))
 
 ;; ── the pool (waymark ticket d16b71bf) ─────────────────────────────
