@@ -1032,7 +1032,11 @@
   it (ticket e2b55a0c)? A re-sit that reuses an idle sitting stamps
   its `last_call_at` in its own write, and a sit that lands between
   the pass's read and its end must win: the sweep never closes a
-  sitting out from under the caller it was just handed to."
+  sitting out from under the caller it was just handed to. This read
+  spares the pass a doomed invoke; the sitting's own
+  `still-quiet-for-the-sweep` guard judges the same stamp inside the
+  ending's transaction, which is what closes the race (ticket
+  e3dfe60d)."
   [eng rdef row now seconds]
   (let [st (:storage eng)
         fresh (some->> (store/with-tx st
@@ -1185,7 +1189,10 @@
                (update acc :abandoned inc)
                acc)
 
-             (and cadence (stale-since? started now (* 2 (long cadence))))
+             ;; the outer bound, but never over a fresh last call: a
+             ;; fired sitting re-sat after two cadences is in use
+             (and cadence (stale-since? started now (* 2 (long cadence)))
+                  (quiet? eng rdef row now idle))
              (if (end-sitting! eng row :abandon nil)
                (update acc :abandoned inc)
                acc)
