@@ -911,7 +911,9 @@
   ;; waymark ticket bb19404d
   (let [cn :sched-broken-runner
         _ (drain! cn)
-        seat-id (seat! "broken-runner-clerk" 3600 [])
+        chair (model! "claude-chair-broken")
+        _ (link-model! chair a-chair-url a-chair-token)
+        seat-id (seat! "broken-runner-clerk" 3600 [chair] {:instructions the-instructions})
         _ (drain! cn)
         [a b] (repeatedly 2 runner-link!)
         break! (fn [id]
