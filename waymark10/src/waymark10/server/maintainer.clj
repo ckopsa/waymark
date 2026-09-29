@@ -75,6 +75,7 @@
             [waymark10.expr :as expr]
             [waymark10.schema :as schema]
             [waymark10.server.events :as events]
+            [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
   (:import (java.time Instant LocalDate ZoneOffset)
@@ -455,8 +456,9 @@
 
 (defn start-sweeper!
   "The clock daemon: sweep-clocks! every interval-ms (default 30s) on
-  a daemon thread. Engine start! owns the lifecycle; tests call
-  sweep-clocks! directly."
+  a daemon thread, then the notice rules whose instant has come
+  (held-calls/sweep-notice-instants!). Engine start! owns the
+  lifecycle; tests call both directly."
   [eng {:keys [interval-ms] :or {interval-ms 30000}}]
   (let [stop (CountDownLatch. 1)
         t (Thread. ^Runnable
@@ -467,6 +469,7 @@
                          (try (sweep-clocks! eng)
                               (catch Exception e
                                 (warn! "clock sweep failed: " (ex-message e))))
+                         (held-calls/sweep-notice-instants! eng)
                          (recur))))
                    "waymark10-clock-sweeper")]
     (doto ^Thread t (.setDaemon true) (.start))

@@ -1296,6 +1296,14 @@
            :x-display {:label "When"
                        :help "The transition that sends a notice: equality on action, from_state and to_state. Omitted hears every transition of the kind."}}
     [:maybe notice-rule-when]]
+   [:at {:optional true
+         :x-display {:label "At"
+                     :help "A datetime field on the row, e.g. {\"field\": \"starts_at\"}. When set, the rule hears no transition: it tells once when that instant arrives, while the row stands in the `when` to_state."}}
+    [:maybe
+     [:map
+      [:field {:x-display {:label "Field"
+                           :help "A datetime field of the kind."}}
+       [:string {:min 1 :max 64}]]]]]
    [:address {:x-display {:label "Who is told"
                           :help "The ref field on the moved row that names the member, e.g. {\"field\": \"assignee\"}, or a ref and the field on its row that does, e.g. {\"field\": \"plan_id\", \"then\": \"member\"}."}}
     [:map
@@ -1321,7 +1329,9 @@
    [:unaddressed {:optional true :x-display {:label "Unaddressed" :raw true}}
     [:maybe :int]]
    [:last_error {:optional true :x-display {:label "Last error" :raw true}}
-    [:maybe [:string {:max 500}]]]])
+    [:maybe [:string {:max 500}]]]
+   [:told {:optional true :x-display {:label "Told at their instants" :raw true}}
+    [:maybe [:vector :string]]]])
 
 (def ^:private notice-rule-restate-input
   (into [:map] (map (fn [[k props s]]
@@ -1355,7 +1365,7 @@
     {:from #{:active :paused} :to :active
      :input notice-rule-restate-input
      :guards [a-person-tells address-names-a-member]
-     :edit {:prefill [:name :kind :when :address :notifier]}
+     :edit {:prefill [:name :kind :when :at :address :notifier]}
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-notice-rule
      :display {:label "Restate" :style :primary :order 1
@@ -1411,15 +1421,13 @@
          (same? from_state (:from-state t))
          (same? to_state (:to-state t)))))
 
-(defn- tell!
+(defn- address!
   "One addressed notice: the member the rule's field names, reached the
   way the member's `notify` says, with the rule's notifier's text.
-  → :sent, :failed, :skipped, :unaddressed or :self; never throws."
+  → [outcome error], the outcome :sent, :failed, :skipped, :unaddressed
+  or :self. Counts nothing; never throws."
   [eng rule t]
-  (let [rule-id (:id rule)
-        count! (fn [outcome error]
-                 (tally-row! eng :notice_rule rule-id outcome error)
-                 outcome)]
+  (let [count! (fn [outcome error] [outcome error])]
     (try
       (let [row (decoded-row eng (:kind t) (:resource-id t))
             addressee (addressee-of eng (keyword (name (:kind t))) row
@@ -1434,7 +1442,7 @@
         (cond
           (nil? addressee) (count! :unaddressed nil)
           (or (= actor addressee)
-              (= actor (some-> (get-in member [:data :subject]) str))) :self
+              (= actor (some-> (get-in member [:data :subject]) str))) [:self nil]
           (or (nil? member) (empty? notify)) (count! :skipped nil)
           (nil? texter) (count! :failed "the rule's notifier is gone")
           :else
@@ -1449,21 +1457,130 @@
       (catch Exception e
         (warn! "notice rule " (get-in rule [:data :name]) " could not tell for "
                "transition " (:id t) " — " (ex-message e))
-        (try (count! :failed (or (ex-message e) (str e)))
-             (catch Exception _ :failed))))))
+        (count! :failed (or (ex-message e) (str e)))))))
+
+(defn- tell!
+  "One addressed notice, counted on the rule in place.
+  → :sent, :failed, :skipped, :unaddressed or :self; never throws."
+  [eng rule t]
+  (let [[outcome error] (address! eng rule t)]
+    (if (= :self outcome)
+      :self
+      (try (tally-row! eng :notice_rule (:id rule) outcome error)
+           outcome
+           (catch Exception _ :failed)))))
+
+(defn- at-field [rule]
+  (some-> (get-in rule [:data :at :field]) str not-empty keyword))
 
 (defn notice-rules-transition!
   "One transition → one addressed notice per active notice rule that
-  matches it. Never throws."
+  matches it. A rule with `at` hears no transition; the sweep below
+  tells it. Never throws."
   [eng t]
   (try
     (doseq [r (active-rows eng :notice_rule)
+            :when (nil? (at-field r))
             :when (rule-matches? r t)]
       (tell! eng r t))
     (catch Exception e
       (warn! "transition " (:id t) " could not be addressed — " (ex-message e))
       nil))
   nil)
+
+;; ── the timed notice ────────────────────────────────────────────────
+;;
+;; A rule with `at {field}` tells once when the instant its row's field
+;; names arrives, while the row stands in the rule's `when.to_state`.
+;; The maintainer's clock sweep runs the pass (late by up to one sweep
+;; interval). Each send and its mark, keyed (rule, row, instant), land
+;; under the rule row's lock in one transaction, so a restart between
+;; sweeps neither loses a notice nor doubles one. Editing the field
+;; makes a new instant, and a new instant tells; a row that leaves the
+;; state before its instant never matches.
+
+(def ^:private told-cap
+  "How many marks one rule keeps, the oldest dropped first. A mark that
+  old names an instant long past."
+  1000)
+
+(defn- told-mark [row-id at]
+  (str row-id " " at))
+
+(defn- due-rows
+  "[row instant] for each row of the rule's kind in its `when.to_state`
+  whose `at` instant is at or before now."
+  [eng rule ^Instant now]
+  (let [kind (keyword (str (get-in rule [:data :kind])))
+        field (at-field rule)
+        state (some-> (get-in rule [:data :when :to_state]) str not-empty)]
+    (if-some [rd (get (inv/resources eng) kind)]
+      (let [st (:storage eng)]
+        (->> (store/with-tx st
+               (fn [tx] (store/query-rows st tx kind
+                                          (if state {:state (keyword state)} {})
+                                          {:limit sweep-cap})))
+             (map #(inv/decode-row rd %))
+             (keep (fn [row]
+                     (when-some [^Instant at (instant-of (get-in row [:data field]))]
+                       (when (and (or (nil? state) (= state (name (:state row))))
+                                  (not (.isAfter at now)))
+                         [row at]))))
+             vec))
+      [])))
+
+(defn- tell-at!
+  "One rule's pass: each due row not yet told for its instant is told,
+  and its mark and its count land with it under the rule's lock.
+  → how many were told."
+  [eng rule now]
+  (let [due (due-rows eng rule now)
+        st (:storage eng)
+        id (str (:id rule))
+        kind (keyword (str (get-in rule [:data :kind])))]
+    (if (empty? due)
+      0
+      (store/with-tx st
+        (fn [tx]
+          (if-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
+            (let [told (set (get-in raw [:data :told]))
+                  fresh (remove (fn [[row at]] (told (told-mark (:id row) at))) due)
+                  tell (fn [data [row at]]
+                         (let [[outcome error]
+                               (address! eng rule {:id (told-mark (:id row) at)
+                                                   :kind kind
+                                                   :resource-id (:id row)
+                                                   :actor engine-actor})]
+                           (cond-> (update data :told #(conj (vec %) (told-mark (:id row) at)))
+                             (not= :self outcome) (update outcome (fnil inc 0))
+                             error (assoc :last_error (let [s (str error)]
+                                                        (subs s 0 (min 500 (count s))))))))]
+              (when (seq fresh)
+                (store/update-data!
+                 st tx :notice_rule id
+                 (update (reduce tell (:data raw) fresh) :told #(vec (take-last told-cap %)))
+                 (:next-flip-at raw)))
+              (count fresh))
+            0))))))
+
+(defn sweep-notice-instants!
+  "One pass of the timed notice: every active rule with `at`, told for
+  the rows whose instant has come. The maintainer's clock sweep runs
+  it; tests call it directly. → how many were told; never throws."
+  [eng]
+  (try
+    (let [now ((:now-fn eng))]
+      (reduce (fn [n rule]
+                (+ n (try (tell-at! eng rule now)
+                          (catch Exception e
+                            (warn! "notice rule " (get-in rule [:data :name])
+                                   " could not tell at its instant — " (ex-message e))
+                            0))))
+              0
+              (filter at-field (active-rows eng :notice_rule))))
+    (catch Exception e
+      (warn! "the timed notice sweep failed — " (ex-message e))
+      0)))
 
 (defn notifier-consumer-fn
   "The consumer's function of one transition: the notifiers, then the

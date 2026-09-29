@@ -17,7 +17,7 @@
   suite free of a transport it is not about."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [waymark10.resource :refer [defresource]]
+            [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
@@ -828,6 +828,34 @@
                               :one-way "A queued chore stays queued in this rig."}
                      :display {:label "Queue"}}}})
 
+(defhandler retime-block [row inp _ctx]
+  (assoc-in row [:data :starts_at] (:starts_at inp)))
+
+;; A block names its own instant and its member directly: the timed
+;; notice's rig, with a fake clock.
+(defresource at-block
+  {:kind :block
+   :plural "blocks"
+   :states [:planned :skipped]
+   :initial :planned
+   :terminal #{:skipped}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name {:x-display {:label "Name"}} [:string {:min 1 :max 120}]]
+            [:owner {:optional true :kind :member
+                     :x-display {:label "Whose"}}
+             [:maybe :waymark/ref]]
+            [:starts_at {:x-display {:label "Starts at"}} [:string {:min 1 :max 64}]]]
+   :actions {:retime {:from #{:planned} :to :planned
+                      :input [:map [:starts_at [:string {:min 1 :max 64}]]]
+                      :safety {:idempotent true :reversible true :confirm false}
+                      :handler retime-block
+                      :display {:label "Retime"}}
+             :skip {:from #{:planned} :to :skipped
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "A skipped block stays skipped in this rig."}
+                    :display {:label "Skip"}}}})
+
 ;; two hops: a step names its plan, and the plan names the member
 (defresource notice-plan
   {:kind :notice_plan
@@ -863,17 +891,22 @@
                               :one-way "A queued step stays queued in this rig."}
                      :display {:label "Queue"}}}})
 
-(defn- notice-world []
-  (let [log (atom [])
-        fake (fake-chat log (atom false))
-        eng (engine/engine {:storage (memory/storage)
-                            :resources [caps/capability notice-chore
+(defn- notice-engine [storage log clock]
+  (let [fake (fake-chat log (atom false))]
+    (engine/engine (cond-> {:storage storage
+                            :resources [caps/capability notice-chore at-block
                                         notice-plan notice-step]
                             :services {:mcp-servers
                                        {:client-fn (fn [row]
                                                      (when (= "tgrambot"
                                                               (get-in row [:data :name]))
-                                                       fake))}}})
+                                                       fake))}}}
+                     clock (assoc :now-fn #(deref clock))))))
+
+(defn- notice-world [& [clock]]
+  (let [log (atom [])
+        storage (memory/storage)
+        eng (notice-engine storage log clock)
         _ (inv/create! eng :capability
                        {:token "chat.send"
                         :description "chat.send through a server row."
@@ -896,7 +929,8 @@
                                      :audience "colton"
                                      :link_base "https://work.example.org/"}
                                     {:principal colton}))]
-    {:eng eng :log log :notifier-id (str (:id notifier))}))
+    {:eng eng :log log :storage storage :clock clock
+     :notifier-id (str (:id notifier))}))
 
 (defn- notice-member! [{:keys [eng notifier-id]} display notify?]
   (let [m (:row (inv/create! eng :member {:display display :actor_type "human"}
@@ -979,6 +1013,84 @@
     (let [data (notice-rule-data eng (:id r))]
       (is (= 1 (:skipped data)))
       (is (= 1 (:unaddressed data)) "an unassigned chore notifies nobody"))))
+
+;; ── the timed notice ────────────────────────────────────────────────
+
+(defn- instant [s] (java.time.Instant/parse s))
+
+(defn- at-world []
+  (notice-world (atom (instant "2026-09-29T09:00:00Z"))))
+
+(defn- at-rule! [{:keys [eng notifier-id]}]
+  (:row (inv/create! eng :notice_rule
+                     {:name "tell at the start"
+                      :kind "block"
+                      :when {:to_state "planned"}
+                      :at {:field "starts_at"}
+                      :address {:field "owner"}
+                      :notifier notifier-id}
+                     {:principal colton})))
+
+(defn- at-block! [eng owner starts-at]
+  (:row (inv/create! eng :block {:name "focus" :owner owner :starts_at starts-at}
+                     {:principal colton})))
+
+(deftest an-at-rule-tells-once-on-the-first-sweep-at-or-after-the-instant
+  (let [{:keys [eng log clock] :as w} (at-world)
+        jack (notice-member! w "Jack" true)
+        r (at-rule! w)
+        b (at-block! eng jack "2026-09-29T10:00:00Z")]
+    (drain-notices! eng)
+    (is (= [] (chat-sends log)) "an at rule hears no transition")
+    (is (= 0 (held/sweep-notice-instants! eng)) "not yet")
+    (reset! clock (instant "2026-09-29T10:00:00Z"))
+    (is (= 1 (held/sweep-notice-instants! eng)))
+    (reset! clock (instant "2026-09-29T10:05:00Z"))
+    (is (= 0 (held/sweep-notice-instants! eng)) "once")
+    (let [s (chat-sends log)]
+      (is (= 1 (count s)))
+      (is (= "42" (str (get-in (first s) [:params :arguments :chat_id]))))
+      (is (str/includes? (str (get-in (first s) [:params :arguments :text]))
+                         (str "https://work.example.org/api/blocks/" (:id b)))))
+    (is (= 1 (:sent (notice-rule-data eng (:id r)))))))
+
+(deftest editing-the-instant-moves-the-notice
+  (let [{:keys [eng log clock] :as w} (at-world)
+        jack (notice-member! w "Jack" true)
+        _ (at-rule! w)
+        b (at-block! eng jack "2026-09-29T10:00:00Z")]
+    (inv/invoke! eng :block (str (:id b)) :retime {:starts_at "2026-09-29T11:00:00Z"}
+                 {:principal colton})
+    (reset! clock (instant "2026-09-29T10:30:00Z"))
+    (is (= 0 (held/sweep-notice-instants! eng)) "the old instant is gone")
+    (reset! clock (instant "2026-09-29T11:00:00Z"))
+    (is (= 1 (held/sweep-notice-instants! eng)) "the new instant tells")
+    (is (= 1 (count (chat-sends log))))))
+
+(deftest leaving-the-when-state-first-cancels-the-notice
+  (let [{:keys [eng log clock] :as w} (at-world)
+        jack (notice-member! w "Jack" true)
+        _ (at-rule! w)
+        b (at-block! eng jack "2026-09-29T10:00:00Z")]
+    (inv/invoke! eng :block (str (:id b)) :skip {} {:principal colton})
+    (drain-notices! eng)
+    (reset! clock (instant "2026-09-29T10:30:00Z"))
+    (is (= 0 (held/sweep-notice-instants! eng)))
+    (is (= [] (chat-sends log)))))
+
+(deftest a-restart-between-sweeps-neither-loses-nor-doubles-a-notice
+  (let [{:keys [eng log clock storage] :as w} (at-world)
+        jack (notice-member! w "Jack" true)
+        _ (at-rule! w)
+        _ (at-block! eng jack "2026-09-29T10:00:00Z")
+        _ (at-block! eng jack "2026-09-29T11:00:00Z")]
+    (reset! clock (instant "2026-09-29T10:30:00Z"))
+    (is (= 1 (held/sweep-notice-instants! eng)))
+    (let [eng2 (notice-engine storage log clock)]
+      (is (= 0 (held/sweep-notice-instants! eng2)) "the first is not told again")
+      (reset! clock (instant "2026-09-29T11:30:00Z"))
+      (is (= 1 (held/sweep-notice-instants! eng2)) "the second, due while down, is told")
+      (is (= 2 (count (chat-sends log)))))))
 
 (defn- step-rule! [{:keys [eng notifier-id]} address]
   (:row (inv/create! eng :notice_rule
