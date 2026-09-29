@@ -1110,10 +1110,13 @@
    :reads [:model]
    :open "The registered identifiers are the models collection, one query away; enumerating them into the create form would offer exactly the tokens the guard is about to refuse."
    :explain "A model named {name} is already on record — one row per API identifier. If it was retired, reactivate that row rather than minting a second one: its prices are the history a closed sitting was costed against."}
-  [_row inp ctx]
+  [row inp ctx]
+  ;; on `restate` the row is the model itself, and its own name is no
+  ;; collision; on create there is no row, so nothing is set aside
   (if-some [find' (:find ctx)]
     (if (and (some? (:name inp))
-             (seq (find' :model {:name (str (:name inp))} {:limit 1})))
+             (seq (remove #(= (str (:id %)) (some-> row :id str))
+                          (find' :model {:name (str (:name inp))} {:limit 2}))))
       (t/deny {:vars {:name (str (:name inp))}})
       (t/allow))
     (t/allow)))
@@ -1337,6 +1340,11 @@
           row
           [:price_input_per_mtok :price_output_per_mtok
            :price_cache_read_per_mtok :price_cache_write_per_mtok]))
+
+(defhandler restate-model [row inp _ctx]
+  (reduce (fn [r f] (if (contains? inp f) (assoc-in r [:data f] (get inp f)) r))
+          row
+          [:name :display :notes]))
 
 (def ^:private cost-pairs
   "Which token count is priced by which field — the four halves of a
@@ -2949,6 +2957,33 @@
               :handler reprice-model
               :display {:label "Reprice" :order 2
                         :description "The vendor moved its prices — record the new four; nothing already closed changes"}}
+    ;; The Routine behind a row can move to another model; the row
+    ;; follows it here and keeps its id, its history and its seats.
+    ;; Prices stay with `reprice`. An omitted field keeps its value.
+    :restate {:from #{:active} :to :active
+              :input [:map
+                      [:name {:optional true
+                              :examples ["claude-sonnet-5"]
+                              :x-display {:raw true
+                                          :label "API identifier"
+                                          :help "The identifier the Routine's model now answers to, spelled exactly."}}
+                       [:string {:min 1 :max 64}]]
+                      [:display {:optional true
+                                 :examples ["Sonnet 5"]
+                                 :x-display {:label "What a person reads"
+                                             :help "The short name for a card, a ledger line and a ladder step."}}
+                       [:string {:min 1 :max 120}]]
+                      [:notes {:optional true
+                               :x-display {:label "Anything else worth knowing"
+                                           :help "A line for whoever reads the ladder later."}}
+                       [:maybe [:string {:max 240}]]]]
+              :guards [one-model-spelling]
+              :record true
+              :edit {:prefill [:name :display :notes]}
+              :safety {:idempotent true :reversible true :confirm false}
+              :handler restate-model
+              :display {:label "Restate" :order 3
+                        :description "The Routine now runs another model — rename this row; its seats, sittings and prices stay"}}
 
     ;; ── the chair's four doors (waymark-fp62.7.23) ──────────────────
     ;; The seat's `offer_key`/`revoke_key` and the schedule's
@@ -2969,7 +3004,7 @@
      :guards [a-person-at-the-chair]
      :safety {:idempotent true :reversible true :confirm false}
      :handler set-sitter-key
-     :display {:label "Offer key" :order 3
+     :display {:label "Offer key" :order 4
                :description "Hand this model a secret to paste into its Routine — a session presenting it may sit in any seat this model is the chair of"}}
 
     :revoke_key
@@ -2977,7 +3012,7 @@
      :guards [a-person-at-the-chair]
      :safety {:idempotent true :reversible true :confirm false}
      :handler clear-sitter-key
-     :display {:label "Revoke key" :order 4
+     :display {:label "Revoke key" :order 5
                :description "The key answers for nothing; a session presenting it is told no seat answers, and the seats themselves are untouched"}}
 
     :link
@@ -3000,7 +3035,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The link replaces whatever this model held; Unlink takes it off again."}
      :handler set-chair-link
-     :display {:label "Link the Routine" :style :primary :order 5
+     :display {:label "Link the Routine" :style :primary :order 6
                :description "Paste the fire URL and the token of the Routine you made for this model — its seats fire through it from then on"}}
 
     :unlink
@@ -3009,7 +3044,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The fire URL and the token leave this model; linking again means pasting both once more."}
      :handler clear-chair-link
-     :display {:label "Unlink the Routine" :style :danger :order 6
+     :display {:label "Unlink the Routine" :style :danger :order 7
                :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}
 
     ;; the runner pool (waymark ticket d16b71bf). A list names links,
@@ -3032,7 +3067,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The new list replaces the one this model held; another restate puts it back."}
      :handler set-runners
-     :display {:label "Runner links" :order 7
+     :display {:label "Runner links" :order 8
                :description "Name the runner links this model's seats fire through, in order"}}}
    :deviations
    ["THE CHAIR'S TWO WRITE FENCES ARE BOTH GUARDS, where the schedule fences its link by omission. `sitter_key`, `fire_url` and `fire_token` are declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry all three. `key-not-written-by-hand` and `link-not-written-by-hand` are what refuse them, and each refusal names the door that writes the field instead. Both secrets stay `{:secret true}`, so the advertised create body drops them, no form asks, and the usability policies skip them; what a caller gains over silent omission is the sentence."
@@ -4092,18 +4127,28 @@
                         (.getBytes (str (:hash e)) StandardCharsets/UTF_8)))
                      (live-keys row now))))))
 
+(def ^:private uuid-in
+  #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
 (defn- named-row
   "The id of the walk row a fire's text names, or nil. A wake's text is
   the transition as JSON (`wakes/wake-text`): the kind and the row id.
-  Only a row of the kind this seat WALKS counts, and any other text — a
-  person's prose, a count wake's count — names nothing."
+  Only a row of the kind this seat WALKS counts, or, for a seat that
+  walks tickets, a change, which the sit reads back to the ticket it was
+  born from (`named-walk-row`). A person's prose names the first row id
+  it holds (ticket 7af7d506), and the sit hands that row only when it is
+  such a row. Any other text — prose with no id, a count wake's count —
+  names nothing."
   [seat-row text]
   (when-some [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
     (when-some [s (some-> text str str/trim not-empty)]
-      (when (str/starts-with? s "{")
-        (let [m (try (wire/read-json s) (catch Exception _ nil))]
-          (when (and (map? m) (= walk (str (:kind m))))
-            (some-> (:id m) str not-empty)))))))
+      (if (str/starts-with? s "{")
+        (let [m (try (wire/read-json s) (catch Exception _ nil))
+              kind (when (map? m) (str (:kind m)))]
+          (when (or (= walk kind)
+                    (and (= "ticket" walk) (= "change" kind)))
+            (some-> (:id m) str not-empty)))
+        (re-find uuid-in s)))))
 
 (defn hold-fire-key!
   "Mint the key ONE fire carries, and keep its hash on the seat row.
@@ -4455,6 +4500,54 @@
   "The ids of `stuck-walk-reasons`, as a set."
   [eng walk]
   (set (keys (stuck-walk-reasons eng walk))))
+
+(defn named-walk-row
+  "The walk row a fire's text named, as the sit reads it (ticket
+  7af7d506): the id itself when it is a row of the kind the seat walks,
+  and for a ticket walk the ticket a named CHANGE was born from, so a
+  fire that names either hands the ticket and the change beside it. Nil
+  for an id that is neither."
+  [eng walk id]
+  (when-some [id (some-> id str not-empty)]
+    (let [walk (str walk)
+          row-of (fn [kind]
+                   (when-some [rdef (get (inv/resources eng) kind)]
+                     (try
+                       (some->> (store/with-tx (:storage eng)
+                                  (fn [tx]
+                                    (store/load-row (:storage eng) tx kind id
+                                                    {})))
+                                (inv/decode-row rdef))
+                       (catch Exception _ nil))))]
+      (cond
+        (and (seq walk) (row-of (keyword walk))) id
+
+        (= "ticket" walk)
+        (when-some [change (row-of :change)]
+          (let [born (str (get-in change [:data :born_from]))]
+            (when (str/starts-with? born groomed-walk-prefix)
+              (not-empty (subs born (count groomed-walk-prefix))))))))))
+
+(defn named-beside-a-live-change?
+  "Does a live change — open, submitted, failing or stuck — stand beside
+  the ticket a fire named? Such a ticket is walked whatever its own
+  state (ticket 7af7d506): a seat fired on a ticket in review is handed
+  it and its change, and a ticket whose change merged or closed is not.
+  False for any other walk."
+  [eng walk id]
+  (boolean
+   (when-some [rdef (when (= "ticket" (str walk))
+                      (get (inv/resources eng) :change))]
+     (let [st (:storage eng)]
+       (some #(contains? #{:open :submitted :failing :stuck}
+                         (some-> (:state %) name keyword))
+             (map #(inv/decode-row rdef %)
+                  (store/with-tx st
+                    (fn [tx]
+                      (store/query-rows st tx :change
+                                        {:born_from (str groomed-walk-prefix
+                                                         id)}
+                                        {:limit live-change-scan-limit})))))))))
 
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows
