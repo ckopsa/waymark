@@ -1457,6 +1457,40 @@
            (:test (sent 1)))
         "the restate carries the pattern to the rig's enrollment")))
 
+(deftest a-select-pattern-keeps-to-what-the-python-rig-compiles
+  ;; ticket 3052cdf2: the rig compiles select_pattern with Python's re
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:test {:workflow "tests.yml" :input "only"}})
+        restate (fn [pattern]
+                  (let [current (policy-row eng (:id row))]
+                    (try (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                      (assoc (select-keys (:data current)
+                                                          [:repository :branch_pattern :base
+                                                           :max_lines :opens_pr :auto_merge
+                                                           :rounds_per_change :formatter
+                                                           :deny :orientation])
+                                             :test {:workflow "tests.yml" :input "only"
+                                                    :select_pattern pattern})
+                                      {:principal person
+                                       :if-match (inv/etag :repo_policy (:id row)
+                                                           (:version current))})
+                         nil
+                         (catch clojure.lang.ExceptionInfo e (ex-data e)))))]
+    (is (nil? (restate "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"))
+        "the waymark-bench pattern is in the common subset")
+    (doseq [[pattern named] [["^\\p{L}+$" "Unicode property class"]
+                             ["^a++$" "possessive quantifier"]]]
+      (let [refusal (restate pattern)]
+        (is (= :the-test-selection-pattern-compiles
+               (some-> (:guard refusal) name keyword))
+            (pr-str refusal))
+        (is (str/includes? (pr-str refusal) named)
+            (str "the refusal names the construct: " (pr-str refusal)))))
+    (is (str/includes? (pr-str (:schema (get (inv/resources eng) :repo_policy)))
+                       "Python's re")
+        "the help names the rig's dialect")))
+
 ;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
 
 (def ^:private house-policy

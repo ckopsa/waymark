@@ -95,20 +95,46 @@
       (t/deny)
       (t/allow))))
 
+(defn- java-only-construct
+  "The first construct in `p` that java.util.regex compiles and the
+   rig's Python `re` refuses, named for the refusal — or nil. Escapes
+   are read as one token and a character class's insides are skipped,
+   so `\\*+` and `[*+]` stand."
+  [p]
+  (loop [[tok & more] (re-seq #"(?s)\\.|." p)
+         prev nil, quant? false, class? false]
+    (cond
+      (nil? tok) nil
+      (#{"\\p" "\\P"} tok) "a Unicode property class (\\p{…} or \\P{…})"
+      (= "\\z" tok) "the end-of-input anchor \\z"
+      class? (recur more tok false (not= "]" tok))
+      (and (= "(" tok) (= ["?" ">"] (take 2 more))) "an atomic group (?>…)"
+      (and quant? (= "+" tok)) "a possessive quantifier (*+, ++, ?+ or }+)"
+      :else (recur more tok
+                   (and (contains? #{"*" "+" "?" "}"} tok) (not= "(" prev))
+                   (= "[" tok)))))
+
 (defguardfn the-test-selection-pattern-compiles
   {:reads []
-   :open "No other door changes this verdict. Restate the policy with a select_pattern that is a regular expression, or leave it empty for the Clojure shape."
-   :explain "The bench checks a seat's test selection against this pattern before it dispatches the workflow. A pattern that does not compile would refuse every selection."}
+   :vars [:which]
+   :open "No other door changes this verdict. Restate the policy with a select_pattern in the common subset of Java's and Python's regular expressions, or leave it empty for the Clojure shape."
+   :explain "The bench's rig compiles select_pattern with Python's re and checks a seat's test selection against it before it dispatches the workflow. This pattern {which}, so the rig would refuse every selection."}
   ;; ticket efa54182: the rig judges `select` against the pattern, so
   ;; a pattern it cannot compile is refused here, where a person reads
-  ;; why, and not at every seat's test afterwards.
+  ;; why, and not at every seat's test afterwards. Ticket 3052cdf2:
+  ;; the rig (ckopsa/waymark-bench) is Python, so what only Java
+  ;; compiles is refused too, by name.
   [_row inp _ctx]
-  (let [p (get-in inp [:test :select_pattern])]
-    (if (or (nil? p)
-            (try (re-pattern (str p)) true
-                 (catch Exception _ false)))
-      (t/allow)
-      (t/deny))))
+  (let [p (get-in inp [:test :select_pattern])
+        which (when (some? p)
+                (if (try (re-pattern (str p)) false
+                         (catch Exception _ true))
+                  "does not compile as a regular expression"
+                  (some->> (java-only-construct (str p))
+                           (format "uses %s, which Java accepts and Python's re refuses"))))]
+    (if which
+      (t/deny {:vars {:which which}})
+      (t/allow))))
 
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
@@ -258,6 +284,27 @@
    :row     {:state :active :data a-policy}
    :input   (assoc a-policy :test {:workflow "tests.yml" :input "only"
                                    :select_pattern "^[A-Za-z_"})
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-test-selection-pattern-compiles}})
+
+(defscenario a-test-selection-pattern-keeps-to-what-python-compiles
+  "The rig compiles the pattern with Python's re, so a Unicode
+   property class that only Java reads is refused by name…"
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :test {:workflow "tests.yml" :input "only"
+                                   :select_pattern "^\\p{L}+$"})
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-test-selection-pattern-compiles}})
+
+(defscenario a-possessive-quantifier-is-java-only
+  "…and so is a possessive quantifier."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :test {:workflow "tests.yml" :input "only"
+                                   :select_pattern "^a++$"})
    :as      {:id "colton" :type :person}
    :expect  {:refused :the-test-selection-pattern-compiles}})
 
@@ -468,7 +515,7 @@
                        :examples ["^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"]
                        :x-display {:raw true
                                    :label "What a test selection looks like"
-                                   :help "A regular expression the bench checks a seat's test selection against before it dispatches the workflow. Leave it empty for the Clojure shape: a dotted namespace ending in -test. A Python repository states its own, such as dotted module names."}}
+                                   :help "A regular expression the bench checks a seat's test selection against before it dispatches the workflow. Leave it empty for the Clojure shape: a dotted namespace ending in -test. A Python repository states its own, such as dotted module names. The bench's rig compiles it with Python's re: keep to what Java and Python share (character classes, groups, alternation, greedy and lazy quantifiers, ^ and $), and not \\p{…}, possessive quantifiers, atomic groups or \\z."}}
       [:maybe [:string {:min 1 :max 200}]]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
