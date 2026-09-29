@@ -1519,6 +1519,21 @@
     (is (= 1 (count (calls-of st "bench__merge")))
         "the rig refused this head once, and the pass remembers it")))
 
+(deftest a-not-mergeable-refusal-writes-the-conflict-on-the-row
+  ;; ticket 0b564d2d: the mirror's own read can stay `unknown`, and that
+  ;; one field is where the forge's failing pass finds a conflict
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (is (= "unknown" (get-in (change-row w) [:data :mergeable]))
+        "the submit cleared the last head's merge state")
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (bench/merge-green! (:eng w) seen)
+    (is (= "conflicted" (get-in (change-row w) [:data :mergeable]))
+        "the parked head's conflict is on the row, so the failing pass
+         moves the change instead of leaving it submitted")))
+
 (deftest a-moved-head-is-not-parked
   ;; ticket a95c3d63: only a refusal a new pass cannot fix parks a head
   (let [w (submitted-world house-policy)
