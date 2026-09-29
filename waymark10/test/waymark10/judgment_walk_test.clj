@@ -41,6 +41,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.transcripts :as transcripts]
             [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -478,6 +479,125 @@
         (is (= [{:kind "expense" :actions ["create"]}]
                (seats/effective-wake-on written expense))
             "it names verdict.reopen itself if it wants the reopen too")))))
+
+;; ── 4b · a count over sealed transcripts leaves out the judged ───────
+
+(def ^:private seal-count
+  {:kind "transcript" :actions ["seal"] :at_least 5})
+
+(def ^:private worker-sitter (t/principal {:id "worker-sitter" :type :agent}))
+
+(defn- sitting-judgment!
+  "A judgment over closed sittings, promoted: sitting-judge's shape."
+  [eng]
+  (let [row (:row (inv/create!
+                   eng :judgment
+                   {:name "fired-sittings"
+                    :subject_kind "sitting"
+                    :queue {:state "closed"}
+                    :verdicts [{:name "keep" :sentence keep-sentence}
+                               {:name "query" :sentence query-sentence}]
+                    :remedy_max 200
+                    :notes "The count wake's own judgment."}
+                   {:principal person}))]
+    (inv/invoke! eng :judgment (str (:id row)) :promote {} {:principal person})
+    row))
+
+(defn- raw-of [eng kind id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx kind (str id) {}))))
+
+(defn- sealed-sitting!
+  "One fired sitting of `worker`, closed, and its transcript sealed —
+  the seal a count entry over `transcript` hears. → the sitting's id."
+  [eng worker model grant]
+  (let [sid (str (:id (:row (inv/create! eng :sitting
+                                         {:seat (str worker)
+                                          :model (str model)
+                                          :grant (str grant)}
+                                         {:principal worker-sitter}))))]
+    (transcripts/issue-key! eng (raw-of eng :seat worker) (raw-of eng :sitting sid))
+    (inv/invoke! eng :sitting sid :close
+                 {:input_tokens 1000 :output_tokens 100
+                  :cache_read_tokens 0 :cache_write_tokens 0 :turns 1}
+                 {:principal worker-sitter})
+    (transcripts/seal! eng (transcripts/transcript-for-sitting eng sid) nil)
+    sid))
+
+(defn- judge-sitting! [eng judgment sid]
+  (inv/create! eng :verdict
+               {:judgment (str (:id judgment))
+                :subject_kind "sitting"
+                :subject_id (str sid)
+                :verdict "keep"
+                :remedy "Nothing to do: the sitting did its work."}
+               {:principal (t/principal {:id "expense-sitter" :type :agent})}))
+
+(deftest a-judges-count-over-sealed-transcripts-counts-only-the-unjudged
+  (let [eng (fresh-engine)
+        judgment (sitting-judgment! eng)
+        judge (open-judge-seat!
+               eng judgment
+               {:name "sitting-judge"
+                :walk "sitting"
+                :scope [{:kind "sitting" :actions []}
+                        {:kind "transcript" :actions []}
+                        {:kind "verdict" :actions ["judge"]}]
+                :wake_on [seal-count]})
+        model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
+        worker (:id (:row (inv/create!
+                           eng :seat
+                           {:name "worker"
+                            :charter charter
+                            :scope [{:kind "expense" :actions []}]
+                            :walk "expense"
+                            :held_for [(str model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           {:principal person})))
+        grant (:id (:row (inv/create! eng :grant
+                                      {:audience "worker"
+                                       :scope [{:kind "expense" :actions []}]}
+                                      {:principal person})))
+        cursor :judge-count-wakes-test
+        drain! #(consumers/drain-consumer! eng cursor (wakes/consumer-fn eng))
+        fires #(count (filterv (fn [t] (= :fire (:action t)))
+                               (store/with-tx (:storage eng)
+                                 (fn [tx] (store/transitions
+                                           (:storage eng) tx
+                                           {:kind :seat :resource-id (str (:id judge))}
+                                           {})))))
+        n #(#'wakes/entry-count eng (raw-of eng :seat (:id judge)) seal-count)
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng (:id judge))))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_sitting_judge/fire")
+                        :token "rk-test-sitting-judge-0123456789abcdef"}
+                       {:principal person})
+        _ (drain!)]
+
+    (testing "four unjudged beside many judged wake nobody"
+      (dotimes [_ 6]
+        (judge-sitting! eng judgment (sealed-sitting! eng worker model grant))
+        (drain!))
+      (let [unjudged (vec (repeatedly 4 #(let [sid (sealed-sitting! eng worker model grant)]
+                                           (drain!)
+                                           sid)))]
+        (is (= 4 (n)))
+        (is (= 0 (fires)))
+
+        (testing "the fifth unjudged seal wakes the seat once"
+          (let [fifth (sealed-sitting! eng worker model grant)]
+            (drain!)
+            (is (= 5 (n)))
+            (is (= 1 (fires)))
+
+            (testing "judging one of the five drops the count to four"
+              (judge-sitting! eng judgment (or (first unjudged) fifth))
+              (is (= 4 (n))))))))))
 
 ;; ── 5 · a listed verdict files one draft ticket ───────────────────────
 
