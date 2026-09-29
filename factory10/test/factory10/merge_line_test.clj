@@ -579,7 +579,8 @@
     (is (true? (:retried t2)))
     (is (= "77" (:stale_run_id t2)) "the cancelled run stays on the train")
     (is (nil? (:run_id t2)) "the retry showed no run yet")
-    (testing "the old cancelled run is read as the retry not shown yet"
+    (testing "the rig skips the old cancelled run, so the retry reads as not shown yet"
+      (swap! answers assoc "train_status" {:state "pending" :run_id nil :head "train-head"})
       (let [[t3] (finish-pass! r seen t2)]
         (is (= t2 t3))
         (is (= {:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"
