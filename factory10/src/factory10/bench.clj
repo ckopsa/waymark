@@ -503,11 +503,16 @@
 ;; per head, so a busy main cannot make the pass loop; a conflicted
 ;; branch is left to the failing path (ticket 5f12e772).
 
+(def not-mergeable-refusal
+  "The merge refusal that means GitHub found a conflict between the
+  branch and its base."
+  "not_mergeable")
+
 (def parked-refusals
   "The merge refusals a new pass cannot fix: the head is remembered and
   not offered again. Any other refusal — `head_moved` among them — is
   asked again next pass, and a new head is a new offer anyway."
-  #{"draft" "no_required_checks" "not_mergeable"})
+  #{"draft" "no_required_checks" not-mergeable-refusal})
 
 (def ^:private behind-reason
   "What GitHub says when it refuses a merge because the branch is not
@@ -1102,6 +1107,41 @@
                {:merge_waits (some-> (get holds tid) held-reason)} #{}))
   (swap! seen assoc :held-tickets (set (keys holds))))
 
+;; ── a merge refused as not mergeable (ticket 0b564d2d) ───────────────
+;;
+;; The failing path finds a conflict in ONE field: the row's
+;; `mergeable`. The mirror fills that from GitHub, and GitHub computes
+;; mergeability after the push without touching the pull request's
+;; `updated_at` — so a row read too early keeps `unknown` (or `blocked`,
+;; when the state word outranks it) and no later poll corrects it. The
+;; merge call is the honest read: a rig refused `not_mergeable` has just
+;; been told the pull request conflicts. So the pass writes `conflicted`
+;; on the row, a maintenance write as the line is, and the forge's
+;; failing pass takes it from there — `failing` with its conflicted
+;; paths, and a `return` that wakes the seat. Without it the change sits
+;; submitted and parked, offered nothing and asked for nothing.
+
+(defn conflicted-ids
+  "The ids of the changes whose merge the rig refused this pass because
+  the pull request is not mergeable. `answers` is change id → answer."
+  [answers]
+  (into (sorted-set)
+        (keep (fn [[id answer]]
+                (when (= not-mergeable-refusal (refused answer)) (str id))))
+        answers))
+
+(defn- mark-conflicts!
+  "Write `mergeable: conflicted` on every change the rig refused as not
+  mergeable this pass. → how many rows were written."
+  [eng answers]
+  (let [wrote (volatile! 0)]
+    (doseq [id (conflicted-ids answers)]
+      (when (mark-row! eng :change id {:mergeable "conflicted"} #{})
+        (vswap! wrote inc)
+        (warn! "the rig says " id " conflicts with its base; the row says"
+               " conflicted, and the failing pass has it")))
+    @wrote))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
@@ -1114,7 +1154,10 @@
   that under `[:updated id]`). `merged` needs nothing here, because the
   mirror moves the row; `waiting` and every other refusal are asked
   again next pass; `red` is left, because the seat's feedback already
-  carries the red checks. Then the line is written on the rows
+  carries the red checks; a refusal that says the pull request is not
+  mergeable writes `conflicted` on the row (`mark-conflicts!`), because
+  the mirror's own read may never say so. Then the line is written on
+  the rows
   (`mark-lines!`): the policy names its front and who waits, and each
   change its place and why it is not merging. A change whose ticket
   still waits on another to merge (`merge-holds`) is held out of all
@@ -1140,6 +1183,7 @@
                            answers)]
     (try
       (note-merges! eng by-repo lines @answers)
+      (mark-conflicts! eng @answers)
       (doseq [[repo why] deploy-holds]
         (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
                    {:deploy_note why} #{}))
