@@ -745,15 +745,28 @@
 
 (defn- number-of [change] (get-in change [:data :number]))
 
+(defn- workflow-of
+  "The workflow the policy's test block names, nil when it names none
+  (the rig's own default then answers for the train)."
+  [policy]
+  (some-> (get-in policy [:data :test :workflow]) str not-empty))
+
 (defn- dispatch-checks!
   "Dispatch a built train's checks → the train with its `run_id`, nil
-  when no run showed yet (`train_status` then reads it by branch)."
-  [ctx repo train]
-  (let [answer (ask ctx :train_checks {:repo repo :branch (:branch train)})]
+  when no run showed yet (`train_status` then reads it by branch), and
+  the `workflow` the run was dispatched on: the rig's answer, else the
+  policy's test block, so a read by branch names it as the rig's
+  contract asks."
+  [ctx repo policy train]
+  (let [workflow (workflow-of policy)
+        answer (ask ctx :train_checks (cond-> {:repo repo :branch (:branch train)}
+                                        workflow (assoc :workflow workflow)))
+        ran-on (or (some-> (:workflow answer) str not-empty) workflow)]
     (when (refused answer)
       (warn! "the rig refused the checks of " (:branch train) " ("
              (reason-of answer) ")"))
-    (assoc train :run_id (some-> (:run_id answer) str not-empty))))
+    (cond-> (assoc train :run_id (some-> (:run_id answer) str not-empty))
+      ran-on (assoc :workflow ran-on))))
 
 (defn build-train!
   "Build one train of `riders` with the rig and dispatch its checks →
@@ -781,7 +794,7 @@
 
       :else
       (let [rode (filterv #(merged (number-of %)) riders)]
-        (dispatch-checks! ctx repo
+        (dispatch-checks! ctx repo policy
                           {:branch branch
                            :changes (mapv #(str (:id %)) rode)
                            :prs (mapv number-of rode)
@@ -806,7 +819,8 @@
 (defn- status-args [repo train]
   (if-some [run (some-> (:run_id train) str not-empty)]
     {:repo repo :run_id run}
-    {:repo repo :branch (:branch train) :head (:head train)}))
+    (cond-> {:repo repo :branch (:branch train) :head (:head train)}
+      (some-> (:workflow train) str not-empty) (assoc :workflow (str (:workflow train))))))
 
 (defn advance-train!
   "Read a standing train's run once → the train that stands after it:

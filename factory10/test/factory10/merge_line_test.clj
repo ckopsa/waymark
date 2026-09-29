@@ -351,3 +351,17 @@
       (train-pass! r seen (four) (train-policy))
       (is (= 1 (count (args-of r "bench__train_build"))))
       (is (= [1] (mapv :number (args-of r "bench__update_branch")))))))
+
+(deftest a-train-read-by-its-branch-names-the-policys-workflow
+  (let [answers (atom {"train_checks" {:run_id nil :head "train-head"}})
+        r (train-rig answers)
+        seen (atom {})
+        test-block {:workflow "tests.yml" :input "only"}
+        train (get (train-pass! r seen (four) (train-policy :test test-block)) wm)]
+    (is (= "tests.yml" (:workflow (first (args-of r "bench__train_checks"))))
+        "train_checks is told the workflow the policy's test block names")
+    (is (= "tests.yml" (:workflow train)) "line_train records it")
+    (train-pass! r seen (four) (train-policy :test test-block :line_train train))
+    (is (= [{:repo wm :branch "train/ckopsa/waymark/1" :head "train-head"
+             :workflow "tests.yml"}]
+           (args-of r "bench__train_status")))))

@@ -588,7 +588,7 @@
                  :x-display
                  {:raw true
                   :label "The train"
-                  :help "The changes that ride one train together: its branch, their changes and pull requests, the train's head and the base head it was built on, the check run that tests it, and when it started. Empty when no train stands."}}
+                  :help "The changes that ride one train together: its branch, their changes and pull requests, the train's head and the base head it was built on, the check run that tests it and its workflow, and when it started. Empty when no train stands."}}
     [:maybe
      [:map
       [:branch [:string {:max 200}]]
@@ -597,6 +597,7 @@
       [:head {:optional true} [:maybe [:string {:max 64}]]]
       [:base_head {:optional true} [:maybe [:string {:max 64}]]]
       [:run_id {:optional true} [:maybe [:string {:max 64}]]]
+      [:workflow {:optional true} [:maybe [:string {:max 200}]]]
       [:started_at :waymark/instant]]]]])
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
