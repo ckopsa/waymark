@@ -608,6 +608,9 @@
       [:retried {:optional true} [:maybe :boolean]]
       ;; the pull request a waiting landing answered (c3f0f094)
       [:pr {:optional true} [:maybe [:int {:min 1}]]]
+      ;; the pull request's own run is the train's check, and none was
+      ;; dispatched (e2d485c2)
+      [:pr_run {:optional true} [:maybe :boolean]]
       [:started_at :waymark/instant]]]]])
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────

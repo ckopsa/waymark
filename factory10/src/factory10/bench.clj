@@ -718,7 +718,9 @@
 ;; behind it that are green on their own heads ride ONE branch,
 ;; `train/<repo>/<the front's number>`: the rig merges each pull
 ;; request's head onto the base's head (`train_build`) and the branch is
-;; tested once (`train_checks`). The train stands on the policy
+;; tested once: by its own pull request's run when the rig opens one
+;; (`train_open`, ticket e2d485c2), else by a dispatched run
+;; (`train_checks`). The train stands on the policy
 ;; (`line_train`), so a restart finds it, and each pass reads its run
 ;; once (`train_status`). A standing train finishes whatever the
 ;; strategy says now, so a restate back to `line` waits for it. What a
@@ -765,8 +767,45 @@
              (reason-of answer) ")"))
     (assoc train :run_id (some-> (:run_id answer) str not-empty))))
 
+(def pr-run-grace-seconds
+  "How long a train whose pull request opened waits for that pull
+  request's own run to show before its checks are dispatched instead: a
+  repository whose pull requests run no CI still gets its train tested."
+  600)
+
+(defn- open-train!
+  "Open a built train's pull request (`train_open`, ticket e2d485c2) →
+  the train with its `:pr` and `:pr_run`: that pull request's own run
+  is the train's check, read by branch and head, and no second run is
+  dispatched. A rig with no `train_open`, or one that refused or did
+  not answer, gets the checks dispatched as before (`dispatch-checks!`)."
+  [ctx repo policy train]
+  (let [answer (ask ctx :train_open {:repo repo :base (base-of policy)
+                                     :branch (:branch train)
+                                     :head (:head train)})
+        why (refused answer)
+        n (:number answer)]
+    (if (and (nil? why) (pos-int? n))
+      (assoc train :pr n :pr_run true)
+      (do (when (and why (not (contains? missing-power-refusals why)))
+            (warn! "the rig refused to open the pull request of " (:branch train)
+                   " (" (reason-of answer) "); its checks are dispatched"))
+          (dispatch-checks! ctx repo train)))))
+
+(defn- pr-run-overdue?
+  "Has a train tested by its pull request's run waited
+  `pr-run-grace-seconds` since it was built with no run showing?"
+  [ctx train]
+  (let [started (:started_at train)]
+    (boolean
+     (and (:pr_run train) (nil? (some-> (:run_id train) str not-empty))
+          (instance? Instant started)
+          (not (.isBefore ^Instant (pass-now ctx)
+                          (.plusSeconds ^Instant started (long pr-run-grace-seconds))))))))
+
 (defn build-train!
-  "Build one train of `riders` with the rig and dispatch its checks →
+  "Build one train of `riders` with the rig and open its pull request
+  (`open-train!`), or dispatch its checks when the rig opens none →
   the train as `line_train` records it, or nil when the rig built none
   and the line goes one at a time this pass. A rider whose pull request
   did not merge cleanly stays in the line untouched."
@@ -791,7 +830,7 @@
 
       :else
       (let [rode (filterv #(merged (number-of %)) riders)]
-        (dispatch-checks! ctx repo
+        (open-train! ctx repo policy
                           (cond-> {:branch branch
                                    :changes (mapv #(str (:id %)) rode)
                                    :prs (mapv number-of rode)
@@ -912,7 +951,7 @@
     (do (warn! repo ": the train " (:branch train) " finished " verdict
                "; its checks run once more")
         (assoc (dispatch-checks! ctx repo
-                                 (cond-> train
+                                 (cond-> (dissoc train :pr_run)
                                    (run-of train) (assoc :stale_run_id (run-of train))))
                :retried true :tries (inc (long (or (:tries train) 1)))))))
 
@@ -953,7 +992,9 @@
   and what `train-finished!` says once it finished or was refused. A
   train read by its branch keeps the run the answer names; an answer
   naming the run a retry left behind (`stale_run_id`) is read as
-  pending, since the retry's own run has not shown yet."
+  pending, since the retry's own run has not shown yet. A train tested
+  by its pull request's run that showed none in `pr-run-grace-seconds`
+  has its checks dispatched instead, once."
   [ctx seen repo policy train]
   (let [answer (ask ctx :train_status (status-args repo policy train))
         why (refused answer)
@@ -968,7 +1009,12 @@
                      (reason-of answer) ")")
               (train-finished! ctx seen repo policy train "cancelled"))
       (and run (= run (:stale_run_id train))) train
-      (or (nil? st) (= "pending" st)) known
+      (or (nil? st) (= "pending" st))
+      (if (pr-run-overdue? ctx known)
+        (do (warn! repo ": no run showed on the pull request of " (:branch train)
+                   " in " pr-run-grace-seconds " s; its checks are dispatched")
+            (dispatch-checks! ctx repo (dissoc known :pr_run)))
+        known)
       :else (train-finished! ctx seen repo policy known st))))
 
 (defn work-lines!
