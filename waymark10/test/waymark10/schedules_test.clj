@@ -850,3 +850,59 @@
                                 :relink_model nil {:principal mayor}))))
 
     (doseq [s [by-chair-id broken-id bare-id]] (seat-do! s :retire))))
+
+;; ── 10 · the pool order through a fire (waymark ticket 4e9b076e) ────
+;; runner_links_test drives `fire-pool!` in both orders; here the order
+;; reaches it through a seat's fire, so `pool-order-of` is what picks:
+;; the order of the row whose runners list the fire took. Every link is
+;; fresh, so its use count is only what this test's own fires wrote.
+
+(defn- runner-link! []
+  (str (:id (:row (inv/create! *eng* :runner_link
+                               {:provider "claude_routine"
+                                :fire_url a-seat-url
+                                :fire_token a-seat-token}
+                               {:principal elena})))))
+
+(defn- set-runners! [kind id body]
+  (inv/invoke! *eng* kind (str id) :set_runners body {:principal elena}))
+
+(deftest a-fire-takes-the-order-of-the-row-whose-runners-it-took
+  (let [cn :sched-runner-order
+        _ (drain! cn)
+        chair (model! "claude-chair-order")
+        _ (link-model! chair a-chair-url a-chair-token)
+        own (seat! "order-own-clerk" 3600 [chair] {:instructions the-instructions})
+        bare (seat! "order-bare-clerk" 3600 [chair] {:instructions the-instructions})
+        _ (drain! cn)
+        [a b c d] (repeatedly 4 runner-link!)
+        fire-twice! (fn [seat-id]
+                      (vec (repeatedly 2 #(do (fire-seat! seat-id "Walk the pool.")
+                                              (drain! cn)
+                                              (get-in (sched-of seat-id)
+                                                      [:data :last_runner])))))]
+    (set-runners! :model chair {:runners [c d] :runner_order "prefer"})
+
+    (testing "a schedule with its own list takes its own order, not the model's"
+      (set-runners! :schedule (:id (sched-of own)) {:runners [a b]})
+      (is (= [a b] (fire-twice! own))
+          "least_used alternates, though the model says prefer"))
+
+    (testing "a schedule that falls back to its model's list takes the model's order"
+      (is (nil? (get-in (sched-of bare) [:data :runners])))
+      (is (= [c c] (fire-twice! bare))
+          "prefer keeps to the first link that may fire"))
+
+    (testing "a schedule's own prefer keeps to its first link"
+      (set-runners! :schedule (:id (sched-of own))
+                    {:runners [a b] :runner_order "prefer"})
+      (is (= "prefer" (get-in (sched-of own) [:data :runner_order])))
+      (is (= [a a] (fire-twice! own))))
+
+    (testing "a set_runners without runner_order clears it back to least_used"
+      (set-runners! :schedule (:id (sched-of own)) {:runners [a b]})
+      (is (nil? (get-in (sched-of own) [:data :runner_order])))
+      (is (= [b b] (fire-twice! own))
+          "b has run once and a three times, so least_used takes b twice"))
+
+    (doseq [s [own bare]] (seat-do! s :retire))))

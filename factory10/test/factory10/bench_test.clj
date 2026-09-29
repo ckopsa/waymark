@@ -84,7 +84,10 @@
                                       :branch {:type "string"}}
                          :required ["repo" "branch"]}})
         ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"
-         "enroll" "repos" "unenroll" "feedback" "rerun"]))
+         "enroll" "repos" "unenroll" "feedback" "rerun"
+         ;; the merge train's five (ticket 47519515)
+         "train_build" "train_checks" "train_status" "train_land"
+         "train_delete"]))
 
 (def ^:private bench-powers
   "The bench row's powers (waymark-fp62.6.3.3): the four the model may
@@ -157,7 +160,15 @@
                        :message "Name the rule in the comment."}]
            :unavailable ["statuses: the forge answered 403"]}
           "bench__repos" {:repos ["ckopsa/waymark"]}
-          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}}}))
+          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}
+          ;; the merge train (ticket 47519515), in the rig's own shapes
+          "bench__train_build" {:branch "train/ckopsa/waymark/31" :base_head a-head
+                                :head a-commit :merged [31] :conflicted []}
+          "bench__train_checks" {:run_id "7" :head a-commit}
+          "bench__train_status" {:state "pending" :head a-commit
+                                 :url "https://github.com/ckopsa/waymark/actions/runs/7"}
+          "bench__train_land" {:landed true}
+          "bench__train_delete" {:repo "ckopsa/waymark" :branch "train/ckopsa/waymark/31"}}}))
 
 (defn- answer!
   "Script one tool's answer — a result map, or a refusal map with
@@ -224,7 +235,10 @@
               [:string {:min 1 :max 200}]]
              [:status {:optional true :filter #{:eq :in}
                        :x-display {:label "Where it stands"}}
-              [:maybe [:enum "open" "done"]]]]
+              [:maybe [:enum "open" "done"]]]
+             ;; a row may name its own home (R-12.32a)
+             [:repo {:optional true} [:maybe [:string {:max 200}]]]
+             [:branch {:optional true} [:maybe [:string {:max 200}]]]]
     :filterable {:state #{:eq :in}}
     :default-filters {:status "open"}
     :actions
@@ -910,6 +924,28 @@
     (is (str/includes? note "Do not stall the ticket")
         "and not by stalling a ticket the code did not fail")))
 
+(deftest feedback-names-a-merge-trains-red-first
+  ;; ticket 238f45b3: the change's own branch is green, so the rig's
+  ;; feedback says nothing; the train's red rides on the change row
+  (let [with-train-red #'mcp/with-train-red
+        change {:data {:train_red "train/7 https://ci.example/run/9"
+                       :failing_checks ["gate" "test10"]}}
+        rig {"findings" [{"source" "review" "message" "nit"}]
+             "unavailable" []}
+        [first-finding :as findings] (get (with-train-red rig change)
+                                          "findings")]
+    (is (= 2 (count findings)))
+    (is (= "merge-train" (get first-finding "source")))
+    (is (str/includes? (get first-finding "message") "train/7"))
+    (is (str/includes? (get first-finding "message") "gate, test10"))
+    (is (= ["merge-train"]
+           (mapv #(get % "source")
+                 (get (with-train-red nil change) "findings")))
+        "a rig that answered nothing still leaves the train's red")
+    (is (= rig (with-train-red rig {:data {:failing_checks ["gate"]}}))
+        "a change no train found red is left as the rig said it")
+    (is (nil? (with-train-red nil {:data {}})))))
+
 (deftest feedback-with-no-interrupted-finding-carries-no-rerun-note
   (let [w (world)]
     (is (some? (:feedback (:answer w))))
@@ -1301,6 +1337,51 @@
       (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
           "a seat's sitter could otherwise raise its own ceiling"))))
 
+(deftest a-policy-states-its-merge-strategy-and-never-its-train
+  ;; the merge train, slice a (ticket 394d0602): data only
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        strategy #(get-in (policy-row eng (:id row)) [:data :merge_strategy])
+        train-size #(get-in (policy-row eng (:id row)) [:data :train_size])
+        restated (fn [extra]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (merge (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         extra)
+                                  {:principal person
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))]
+    (testing "a row without either reads as line / 4"
+      (is (= "line" (bench/merge-strategy-of {:data {}})))
+      (is (= 4 (bench/train-size-of {:data {}}))))
+    (testing "a restate states line and train"
+      (doseq [s ["train" "line"]]
+        (restated {:merge_strategy s})
+        (is (= s (strategy)))
+        (is (= s (bench/merge-strategy-of (policy-row eng (:id row)))))))
+    (testing "and refuses another word"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (restated {:merge_strategy "convoy"})))
+      (is (= "line" (strategy))))
+    (testing "a restate states 2 to 10"
+      (doseq [n [2 10]]
+        (restated {:train_size n})
+        (is (= n (train-size)))))
+    (testing "and refuses 1 and 11"
+      (doseq [n [1 11]]
+        (is (thrown? clojure.lang.ExceptionInfo (restated {:train_size n})))
+        (is (= 10 (train-size)))))
+    (testing "the train is the engine's to write, and no input carries it"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (restated {:line_train {:branch "train/1" :changes [] :prs []
+                                           :started_at "2026-09-29T12:00:00Z"}})))
+      (is (nil? (get-in (policy-row eng (:id row)) [:data :line_train]))))))
+
 (deftest a-policy-that-opens-no-pull-request-lands-without-one
   (let [st (state)
         eng (fresh-engine st)
@@ -1351,6 +1432,30 @@
     (is (not (contains? args :test))
         "no key at all, so a rig that does not know `test` still enrolls
          the repository")))
+
+(deftest a-policy-restated-with-a-select-pattern-enrolls-with-it
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:test {:workflow "tests.yml" :input "only"}})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))
+        pattern "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"]
+    (is (not (contains? (:test (sent 0)) :select_pattern))
+        "a block without a pattern sends none, so the rig keeps its default")
+    (let [current (policy-row eng (:id row))]
+      (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                   (assoc (select-keys (:data current)
+                                       [:repository :branch_pattern :base
+                                        :max_lines :opens_pr :auto_merge
+                                        :rounds_per_change :formatter
+                                        :deny :orientation])
+                          :test {:workflow "tests.yml" :input "only"
+                                 :select_pattern pattern})
+                   {:principal person
+                    :if-match (inv/etag :repo_policy (:id row)
+                                        (:version current))}))
+    (is (= {:workflow "tests.yml" :input "only" :select_pattern pattern}
+           (:test (sent 1)))
+        "the restate carries the pattern to the rig's enrollment")))
 
 ;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
 
@@ -1591,6 +1696,27 @@
       (is (nil? (get-in row [:data :failing_checks])))
       (is (nil? (get-in row [:data :landing_error]))
           "the last landing's error is not the new round's"))))
+
+(deftest a-seat-submits-again-after-a-train-red
+  ;; ticket 6566d32f: a merge train's red names the head it judged, and
+  ;; the next submit is a new head
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))]
+    (inv/invoke! (:eng w) :change id :fail
+                 {:failing_checks ["merge-train"]
+                  :train_red_head head
+                  :train_red "the train's test10 went red"}
+                 {:principal mirror/source-principal})
+    (is (= "failing" (name (:state (change-row w)))))
+    (is (= head (get-in (change-row w) [:data :train_red_head])))
+    (let [r (submit! w {:why "Fix what the train said."})
+          row (change-row w)]
+      (is (false? (:isError r)) (text-of r))
+      (is (= "submitted" (name (:state row))))
+      (is (nil? (get-in row [:data :train_red_head])))
+      (is (nil? (get-in row [:data :train_red]))
+          "the train judged the old head, not the new round's"))))
 
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
@@ -2163,13 +2289,15 @@
             "a reference is for reading only")))))
 
 (deftest a-reference-scope-the-engine-cannot-read-one-repository-from-opens-no-bench
-  (testing "a bench.edit with a comma still opens no bench"
+  (testing "a bench.edit with a comma still opens no bench for a row that names none"
     (let [w (ask-world (reference-scope (str a-repository "," a-reference)
                                         (str a-repository "," a-reference)))
           answer (:answer w)]
       (is (false? (:isError (:sat w))) (text-of (:sat w)))
       (is (nil? (:bench answer)))
-      (is (str/includes? (str (:bench_note answer)) "one repository"))
+      (is (= @#'mcp/several-repos-note (:bench_note answer))
+          "every entry names the same two: a seat of several repositories,
+           told that its row named none (R-12.32a)")
       (is (empty? (changes-of (:eng w))))))
   (testing "a bench.read that leaves out the edit repository opens no bench"
     (let [w (ask-world (reference-scope a-repository a-reference))
@@ -2239,6 +2367,59 @@
         "and the seat reads the new branch on the change beside its
          walk")
     (is (= "open" (get-in answer [:change :state])))))
+
+(deftest a-change-born-on-another-repository-moves-to-the-seats-at-the-next-sit
+  ;; ticket 1ebcd19f: the walk row moved to this seat's repository after
+  ;; its change was born on another one, and the change never opened
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        _ (inv/invoke! (:eng w) :change (str change-id) :rebranch
+                       {:head_branch (str "elsewhere/" ask-id)
+                        :repository "ckopsa/elsewhere"}
+                       {:principal mirror/source-principal})
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (= a-repository (get-in row [:data :repository]))
+        "the next sit hands a change on the seat's repository")
+    (is (not= (str "elsewhere/" ask-id) (get-in row [:data :head_branch]))
+        "and its branch is minted again from that repository's policy")
+    (is (= 1 (count (changes-of (:eng w))))
+        "on the row that is here: no second change is born")
+    (is (= "open" (name (:state row))))
+    (is (= a-repository (get-in answer [:change :data :repository]))
+        "and the seat reads the new repository on the change beside its
+         walk")))
+
+(deftest a-change-with-a-pull-request-on-another-repository-stays-and-the-sit-says-so
+  ;; ticket c8ed268e: the other path of ticket 1ebcd19f — the change
+  ;; already has a pull request there, so the forge holds it and the
+  ;; house leaves it where it is
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        _ (inv/invoke! (:eng w) :change (str change-id) :rebranch
+                       {:head_branch (str "elsewhere/" ask-id)
+                        :repository "ckopsa/elsewhere"}
+                       {:principal mirror/source-principal})
+        _ (inv/invoke! (:eng w) :change (str change-id) :adopt
+                       {:change_id (str (get-in (:answer w)
+                                                [:change :data :change_id]))
+                        :number 7
+                        :url "https://github.com/ckopsa/elsewhere/pull/7"}
+                       {:principal mirror/source-principal})
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (= "ckopsa/elsewhere" (get-in row [:data :repository]))
+        "a change with a pull request keeps its repository")
+    (is (= (str "elsewhere/" ask-id) (get-in row [:data :head_branch]))
+        "and its branch")
+    (is (= 7 (get-in row [:data :number])))
+    (is (= 1 (count (changes-of (:eng w))))
+        "and no second change is born on the seat's repository")
+    (is (= @#'mcp/elsewhere-change-note
+           (or (:change_note answer) (:bench_note answer)))
+        "the sit tells the seat why its bench cannot reach the change")))
 
 (deftest an-open-seat-born-change-on-the-old-pattern-is-rebranched-too
   ;; Prod's own row was at `open`, not at `stuck`: the sit minted it,
@@ -2358,6 +2539,46 @@
                    "submit")
         "and the seat is offered submit on the change beside its walk")
     (is (nil? (:change_note answer)))))
+
+(deftest the-groom-itself-puts-a-stalled-change-back-to-work
+  ;; ticket 9ace68fb: the wakes leave out a ticket beside a stuck
+  ;; change, so the change must be open BEFORE any sit, or no seat
+  ;; fires to walk it
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (person-moves-ticket! w :groom)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the groom moved the change, not a sit")
+    (is (zero? (long (get-in row [:data :rounds]))))
+    (is (not (contains? (seats/stuck-walk-rows (:eng w) "ticket")
+                        (str (:id (:ticket w)))))
+        "so the wakes count the ticket again")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows])))
+        "and the next sit hands it")))
+
+(deftest the-unblock-puts-a-stalled-change-back-to-work
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        blocker (:row (inv/create! (:eng w) :ticket
+                                   {:title "The blocker" :type "task"
+                                    :repo a-repository}
+                                   {:principal person}))
+        tid (str (:id (:ticket w)))
+        drafted (store/with-tx (:storage (:eng w))
+                  (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket tid {})))
+        ;; `block` is fenced: name the version the stall left
+        _ (inv/invoke! (:eng w) :ticket tid :block
+                       {:blocked_by [(str (:id blocker))]}
+                       {:principal person
+                        :if-match (inv/etag :ticket tid (:version drafted))})
+        _ (person-moves-ticket! w :unblock)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the unblock moved the change")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows]))))))
 
 (deftest a-stall-with-no-groom-after-it-stays-stuck
   (let [w (ticket-world)
@@ -2568,6 +2789,57 @@
           "the ending on the record stands")
       (is (= :complete (:action (last-ticket-move w)))
           "and the merge walked no door on it"))))
+
+;; ── a train's lone red, end to end (ticket e84e9317) ─────────────────
+;;
+;; merge_line_test.clj watches the bisect with a recording `:train-red!`.
+;; Here the engine's own hand takes the door: a train of two goes red,
+;; its front half rides alone and goes red again, and that change is
+;; `failing` with its ticket back in the queue.
+
+(deftest a-trains-lone-red-change-fails-and-returns-its-ticket
+  (let [w (ticket-world (assoc house-policy :merge_strategy "train"))
+        st (:state w)
+        seen (atom {})
+        _ (submitted-and-adopted! w 31)
+        red-id (get-in (:answer w) [:change :id])
+        other (:row (inv/create! (:eng w) :ticket
+                                 {:title "Name the ceiling on the form"
+                                  :type "feature" :repo a-repository}
+                                 {:principal person}))
+        _ (inv/invoke! (:eng w) :ticket (str (:id other)) :groom {}
+                       {:principal person})
+        w2 (assoc w :answer (sit-again! w))
+        _ (submitted-and-adopted! w2 32)
+        other-id (get-in (:answer w2) [:change :id])
+        row-of #(change-row {:eng (:eng w) :change {:id %}})
+        train (fn [prs] {:branch "train/ckopsa/waymark/31" :base_head a-head
+                         :head a-commit :merged prs :conflicted []})]
+    (is (not= red-id other-id) "two changes, one for each ticket")
+    (is (= "submitted" (name (:state (row-of other-id)))))
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__train_build" (train [31 32]))
+    (bench/merge-green! (:eng w) seen)
+    (answer! st "bench__train_status" {:state "failure" :head a-commit})
+    (answer! st "bench__train_build" (train [31]))
+    (bench/merge-green! (:eng w) seen)
+    (is (= [[31 32] [31]]
+           (mapv #(get-in % [:arguments :prs]) (calls-of st "bench__train_build")))
+        "a train of two, then its front half alone")
+    (bench/merge-green! (:eng w) seen)
+    (let [red (row-of red-id)]
+      (is (= "failing" (name (:state red))))
+      (is (= ["merge-train"] (get-in red [:data :failing_checks])))
+      (is (= (str (get-in red [:data :head_sha]))
+             (get-in red [:data :train_red_head]))
+          "the red names the head the train judged")
+      (is (str/includes? (str (get-in red [:data :train_red])) "alone")))
+    (is (= "open" (ticket-state w)) "its ticket is back in the queue")
+    (is (= :return (:action (last-ticket-move w))))
+    (is (= "submitted" (name (:state (row-of other-id))))
+        "the change that rode with it is not judged by its red")
+    (is (nil? (get-in (the-policy w) [:data :line_train]))
+        "and no train stands")))
 
 ;; ── a merge that waits on other tickets (ticket d069bc3b) ────────────
 
@@ -2937,6 +3209,88 @@
     (inv/invoke! (:eng w) :change id :unstick {} {:principal person})
     (is (= "open" (name (:state (first (changes-of (:eng w)))))))))
 
+;; ── the ticket puts a stuck pull request back under review (ticket 4363c63b)
+;;
+;; A seat stalls a change whose pull request went red or conflicted, and
+;; the stall shelves its ticket. The groom, unblock or resume that puts
+;; the ticket back in the queue puts that pull request back under
+;; review in the same transaction, where the next forge pass reads it.
+
+(defn- stalled-with-a-pull-request!
+  [w number]
+  (submitted-and-adopted! w number)
+  (let [stalled (seat-invokes! w "stall" {:why a-stall-sentence})]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))))
+
+(defn- change-state [w] (name (:state (first (changes-of (:eng w))))))
+
+(def ^:private a-conflict
+  {:failing_checks ["merge-conflict"]
+   :conflicts ["factory10/src/factory10/resources/ticket.clj"]})
+
+(defn- back-under-review-and-red? [w]
+  (let [row (first (changes-of (:eng w)))]
+    (is (= "submitted" (name (:state row)))
+        "the ticket's move put the pull request back under review")
+    (is (zero? (long (get-in row [:data :rounds]))))
+    (is (nil? (get-in row [:data :failing_checks])))
+    (is (= "open" (ticket-state w)))
+    (mirror-moves-change! w :fail a-conflict)
+    (let [row (first (changes-of (:eng w)))]
+      (is (= "failing" (name (:state row)))
+          "the next forge pass reads the conflict and sends it to the seat")
+      (is (= (:conflicts a-conflict) (get-in row [:data :conflicts]))))))
+
+(deftest a-groom-puts-a-stuck-pull-request-back-under-review
+  (let [w (ticket-world)]
+    (stalled-with-a-pull-request! w 91)
+    (person-moves-ticket! w :groom)
+    (back-under-review-and-red? w)))
+
+(deftest an-unblock-puts-a-stuck-pull-request-back-under-review
+  (let [w (ticket-world)
+        _ (stalled-with-a-pull-request! w 92)
+        blocker (:row (inv/create! (:eng w) :ticket
+                                   {:title "The blocker" :type "task"
+                                    :repo a-repository}
+                                   {:principal person}))]
+    (force-ticket-state! w :open)
+    (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :block
+                 {:blocked_by [(str (:id blocker))]}
+                 (ticket-fence w))
+    (is (= "stuck" (change-state w)))
+    (person-moves-ticket! w :unblock)
+    (back-under-review-and-red? w)))
+
+(deftest a-resume-puts-a-stuck-pull-request-back-under-review
+  (let [w (ticket-world)]
+    (stalled-with-a-pull-request! w 93)
+    (force-ticket-state! w :deferred)
+    (person-moves-ticket! w :resume)
+    (back-under-review-and-red? w)))
+
+(deftest a-groom-leaves-a-closed-pull-request-alone
+  (let [w (ticket-world)]
+    (stalled-with-a-pull-request! w 94)
+    (mirror-moves-change! w :close nil)
+    (force-ticket-state! w :draft)
+    (person-moves-ticket! w :groom)
+    (is (= "closed" (change-state w))
+        "GitHub closed it, and the groom does not put it back")))
+
+(deftest the-ticket-door-is-refused-to-every-hand
+  (let [w (ticket-world)
+        _ (stalled-with-a-pull-request! w 95)
+        id (get-in (:answer w) [:change :id])]
+    (doseq [p [person mirror/source-principal]]
+      (is (thrown? Exception
+                   (inv/invoke! (:eng w) :change id :rework_submitted {}
+                                {:principal p}))))
+    (is (true? (:isError (seat-invokes! w "rework_submitted" {})))
+        "the seat is refused at the wire")
+    (is (= "stuck" (change-state w)))))
+
 ;; ── a reopen finds the submitted change ────────────────────────────────────
 ;;
 ;; THE SOURCE ADOPTS A SUBMITTED CHANGE, which writes GitHub's id over
@@ -2978,6 +3332,33 @@
     (is (contains? (into #{} (map :action) (get-in answer [:change :doors]))
                    "submit")
         "and submit on it is the next round")))
+
+(deftest a-fire-naming-a-ticket-in-review-hands-it-and-its-change
+  ;; ticket 7af7d506: the walk hands open tickets, and a fire that names
+  ;; one in review, or the change beside it, hands both
+  (let [w (ticket-world)
+        change-id (str (get-in (:answer w) [:change :id]))
+        ticket-id (str (:id (:ticket w)))
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        sit-fired! (fn [text]
+                     (let [k (seats/hold-fire-key! (:eng w) seat-row
+                                                   ((:now-fn (:eng w))) text)]
+                       (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                                      {:key k :seat "bench-seat"}))))]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "in_review" (ticket-state w)))
+    (testing "a wake naming the ticket hands it and its submitted change"
+      (let [answer (sit-fired! (str "{\"kind\":\"ticket\",\"id\":\""
+                                    ticket-id "\"}"))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))
+        (is (= "submitted" (get-in answer [:change :state])))))
+    (testing "a person's prose naming the change hands the same"
+      (let [answer (sit-fired! (str "Resolve the conflict on change "
+                                    change-id " and stop."))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))))))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 
@@ -3247,3 +3628,99 @@
       (swap! rows assoc-in ["A" :state] :closed)
       (is (str/includes? (str (bench/unheld-detail change (ctx "A")))
                          "sitting A is closed")))))
+
+;; ── the row names its own home (R-12.32a) ───────────────────────────
+;;
+;; A SEAT MAY WORK SEVERAL REPOSITORIES. Its scope names them all, so no
+;; one repository can be read off it; the row it walks says which one
+;; the work is in, and may say the branch. The engine prepares there,
+;; and only in a repository every bench entry of the seat already names.
+
+(def ^:private another-repository "ckopsa/other")
+
+(def ^:private two-repo-scope
+  "A seat that works two repositories: every bench entry names both."
+  (into [{:kind "ask" :actions ["complete"]}
+         {:kind "change" :actions ["submit" "stall" "discard"]}]
+        (map (fn [token] {:kind token :actions []
+                          :filter {:repo (str a-repository "," another-repository)}}))
+        ["bench.find" "bench.read" "bench.edit" "bench.pull"]))
+
+(defn- home-world
+  "An engine with two policies, ONE ask that names `home` (its repo and
+  branch), and a session of a seat with `scope` sat in it."
+  [scope home]
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        _ (a-policy! eng {:repository another-repository
+                          :branch_pattern "other/*"
+                          :base "dev"})
+        asked (:row (inv/create! eng :ask (merge {:title "Fix the report timestamps"
+                                                  :status "open"}
+                                                 home)
+                                 {:principal person}))
+        seat (open-seat! eng {:scope scope :walk "ask"})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})]
+    {:eng eng :state st :h h :sid sid :seat seat :ask asked
+     :sat sat :answer (doc-of sat)}))
+
+(deftest a-seat-of-several-repositories-walking-a-row-that-names-none-is-told-so
+  (let [w (home-world two-repo-scope {})
+        answer (:answer w)]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (nil? (:bench answer)))
+    (is (= @#'mcp/several-repos-note (:bench_note answer))
+        "a seat built to work several repositories is not a scope written
+         wrong: the sentence says the ROW named none, and what the seat
+         does instead")
+    (is (empty? (changes-of (:eng w))))))
+
+(deftest a-row-that-names-its-repository-and-branch-opens-the-bench-there
+  (let [branch "navigate/NAVIGATE-5428-reports-run-errors"
+        w (home-world two-repo-scope {:repo another-repository :branch branch})
+        answer (:answer w)
+        mine (first (filter #(= (str "ask:" (:id (:ask w)))
+                                (get-in % [:data :change_id]))
+                            (changes-of (:eng w))))]
+    (is (some? mine) "one change was minted for the row")
+    (is (= another-repository (get-in mine [:data :repository]))
+        "on the repository the ROW names, which the seat's scope reaches")
+    (is (= branch (get-in mine [:data :head_branch]))
+        "on the row's own branch, not the pattern with the row's id")
+    (is (= "dev" (get-in mine [:data :base_branch]))
+        "against that repository's policy's base")
+    (is (nil? (:bench_note answer)) (str (:bench_note answer)))
+    (is (= branch (:branch (:arguments (last (calls-of (:state w) "bench__prepare")))))
+        "the worktree is asked for on the row's branch")
+    (testing "and the next sit does not mint the branch again from the pattern"
+      (sit-again! w)
+      (let [row (first (filter #(= (:id mine) (:id %)) (changes-of (:eng w))))]
+        (is (= branch (get-in row [:data :head_branch])))))))
+
+(deftest a-row-that-names-a-repository-the-seat-does-not-reach-opens-nothing
+  (let [w (home-world two-repo-scope {:repo "ckopsa/secret"})
+        answer (:answer w)]
+    (is (nil? (:bench answer)))
+    (is (str/includes? (str (:bench_note answer)) "ckopsa/secret")
+        "the sentence names the repository the row asked for")
+    (is (not-any? #(= (str "ask:" (:id (:ask w))) (get-in % [:data :change_id]))
+                  (changes-of (:eng w)))
+        "a row never widens what the seat may touch: nothing is minted")
+    (is (not-any? #(= "ckopsa/secret" (:repo (:arguments %)))
+                  (calls-of (:state w) "bench__prepare"))
+        "and the rig is asked for nothing there")))
+
+(deftest a-row-branch-that-is-the-base-falls-back-to-the-pattern
+  (let [w (home-world two-repo-scope {:repo another-repository :branch "dev"})
+        mine (first (filter #(= (str "ask:" (:id (:ask w)))
+                                (get-in % [:data :change_id]))
+                            (changes-of (:eng w))))]
+    (is (= (str "other/" (:id (:ask w))) (get-in mine [:data :head_branch]))
+        "a change is never worked on its repository's base")))

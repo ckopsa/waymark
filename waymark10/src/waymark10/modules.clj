@@ -160,6 +160,7 @@
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
+            [waymark10.server.routes.dashboard :as dashboard-routes]
             [waymark10.server.routes.gate :as gate-routes]
             [waymark10.server.routes.law-sweep :as law-sweep-routes]
             [waymark10.server.routes.mcp :as mcp-routes]
@@ -255,6 +256,17 @@
              ;; which is core's already.
              {:kind :held_call :enroll :always
               :kinds (fn [_] [held-calls/held-call])}
+             ;; the notifier (bead waymark-fp62.10.3): the engine tells
+             ;; a person through an mcp_server power it holds itself.
+             ;; Core's beside the held call, the first thing it tells.
+             {:kind :notifier :enroll :always
+              :kinds (fn [_] [held-calls/notifier])}
+             ;; the addressed notice (docs/spec-addressed-notice.md):
+             ;; the notifier's sibling, telling the member a row's ref
+             ;; names. Core's beside the notifier, whose consumer it
+             ;; rides.
+             {:kind :notice_rule :enroll :always
+              :kinds (fn [_] [held-calls/notice-rule])}
              ;; the transcript of a sitting and its lines
              ;; (docs/spec-transcript.md): core's beside the sitting
              ;; for the sitting's own reason. The sit answers the key
@@ -333,6 +345,18 @@
                             (get-in eng [:services :held-calls :sweep-ms]
                                     300000)}))
              :stop held-calls/stop-expiry-sweeper!}
+            ;; the notifier's consumer (waymark-fp62.10.3 R-2): one
+            ;; send per matching transition. Elected, because two
+            ;; engines draining the same log would tell a person twice.
+            {:hook :notifier
+             :after [:dispatcher]
+             :elected :notifier
+             :when held-calls/notifying?
+             :start (fn [eng running]
+                      (held-calls/start-notifiers!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop held-calls/stop-notifiers!}
             ;; the seat's clock (spec-seat.md R-7.6, R-12.25;
             ;; spec-transcript.md R-9): the sittings nobody ended and
             ;; the transcripts past their grace, swept on a cadence
@@ -421,6 +445,7 @@
     :enrols [{:kind :saved_view :enroll :app-opt-in}
              {:kind :dashboard :enroll :app-opt-in}
              {:kind :dashboard_slot :enroll :app-opt-in}]
+    :routes dashboard-routes/routes
     :pack packs/dashboard}
 
    ;; the seat's schedule (spec-seat.md §12): the means by which a

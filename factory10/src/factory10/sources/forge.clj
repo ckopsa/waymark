@@ -942,7 +942,9 @@
   "The one door the verdict opens on this row, as [door input], or nil.
   A red head under the round ceiling goes to `failing`; a red head on
   the last round goes to `stuck` with the names as its why; a green
-  head brings a failing change back to `submitted`. `conflicts` is the
+  head brings a failing change back to `submitted`, unless a merge train
+  found that same head red (`train_red_head`, ticket 6566d32f): its own
+  green does not clear the train's red, and a new head does. `conflicts` is the
   list of conflicting paths, written beside the names when there is one;
   a failed landing's output rides as the verdict's `:error`."
   [row verdict policy conflicts]
@@ -961,7 +963,11 @@
         [:fail (cond-> {:failing_checks names}
                  (seq conflicts) (assoc :conflicts conflicts)
                  error (assoc :landing_error error))])
-      [:failing :green] [:recover {}]
+      [:failing :green]
+      (let [train-head (some-> (get-in row [:data :train_red_head]) str not-empty)]
+        (when-not (and train-head
+                       (= train-head (str (get-in row [:data :head_sha]))))
+          [:recover {}]))
       nil)))
 
 (def ^:private moved-counts
@@ -1005,9 +1011,15 @@
                    _ (when (and checked (bench/house-pass-merges? policy))
                        (bench/nudge-house! repo [:checks (str (:id row)) head
                                                  (:verdict checked)]))
+                   ;; a conflicted row is red while its landing still
+                   ;; runs too: GitHub reads the pull request's own
+                   ;; head, and each submit resets `mergeable`, so a
+                   ;; landing that never says it finished does not hold
+                   ;; a conflict at `submitted` (ticket 7af7d506)
                    verdict (case (:verdict landing)
                              :red landing
-                             :running nil
+                             :running (when (conflicted? row)
+                                        (with-conflict nil row))
                              (with-conflict checked row))
                    ;; a head whose run died without a verdict is re-run
                    ;; once, and the re-run is its move for this pass
@@ -1021,7 +1033,7 @@
                                       [census false])
                    ;; the rig is asked only when a conflict will move
                    ;; the row, never for a row that stays where it is
-                   conflicts (when (and (nil? landing)
+                   conflicts (when (and (not= :red (:verdict landing))
                                         (conflicted? row)
                                         (= :submitted (state-of row)))
                                (conflict-paths eng row))]
@@ -1301,12 +1313,63 @@
 
 (defn- blank->nil [v] (some-> v str not-empty))
 
+(defn- now-of [eng] (if-some [f (:now-fn eng)] (f) (java.time.Instant/now)))
+
 (defn- note-base!
-  "The base's own facts on the policy, written only when they moved."
+  "The base's own facts on the policy, written through `note_base` only
+  when they moved. A read that moved nothing still stamps
+  `base_checked_at`, with a maintenance write as bench's `mark-row!`
+  makes, so a quiet base says when it was last read and the log is not
+  flooded (ticket c4bac627)."
   [eng policy input stored]
-  (when (not= input stored)
+  (if (not= input stored)
     (inv/invoke! eng :repo_policy (str (:id policy)) :note_base input
-                 (as-opts))))
+                 (as-opts))
+    (bench/mark-row! eng :repo_policy (str (:id policy))
+                     {:base_checked_at (now-of eng)} #{})))
+
+;; A BASE THE PASS COULD NOT READ (ticket c4bac627). A base read that
+;; throws, or answers no head, is written on the policy's `source_note`
+;; with a maintenance write, and the first good read clears it. A note
+;; that already says the same reason is left alone, and a note of the
+;; source's own refusal is the larger fact and `source-note-pass!`'s to
+;; clear, so the base pass never writes over it. A policy that names no
+;; required checks has no base verdict to lose, and is not noted.
+
+(def ^:private base-note-prefix "The base ")
+
+(defn- base-note? [note] (str/starts-with? (str note) base-note-prefix))
+
+(defn- base-note-head [base why]
+  (cut (str base-note-prefix "`" base "` was not read (" why ")") 300))
+
+(defn- note-base-read!
+  "The policy's `source_note` after one base read: `why` nil clears a
+  base note, and a reason writes one."
+  [eng policy base why]
+  (let [id (str (:id policy))
+        stored (str (get-in (row-by-id eng :repo_policy id)
+                            [:data :source_note]))]
+    (cond
+      (nil? why)
+      (when (base-note? stored)
+        (bench/mark-row! eng :repo_policy id {:source_note nil} #{}))
+
+      (empty? (bench/required-checks-of policy))
+      nil
+
+      (or (str/blank? stored)
+          (and (base-note? stored)
+               (not (str/starts-with? stored (base-note-head base why)))))
+      (bench/mark-row! eng :repo_policy id
+                       {:source_note
+                        (cut (str (base-note-head base why) " at "
+                                  (now-of eng)
+                                  ": the house cannot judge this "
+                                  "repository's base, so a red base opens "
+                                  "no ticket.")
+                             480)}
+                       #{}))))
 
 (defn- base-move!
   "One policy's base, read and judged, written, and then at most one
@@ -1317,8 +1380,12 @@
   [eng source policy census log-fn]
   (let [repo (str (get-in policy [:data :repository]))
         base (bench/base-of policy)
-        base-read (forge-base source repo base)
+        [base-read why] (try [(forge-base source repo base) nil]
+                             (catch Exception e
+                               [nil (or (ex-message e) (str (class e)))]))
         head (blank->nil (:head_sha base-read))]
+    (note-base-read! eng policy base
+                     (or why (when (nil? head) "the forge answered no head")))
     (if (nil? head)
       census
       (let [data (:data policy)
@@ -1391,8 +1458,9 @@
                         "ticket did not move (" (ex-message e) ")")
                 [census stored-ticket]))]
         ;; the ticket the move minted, once it is minted and not before
-        (note-base! eng policy (assoc base-facts :ticket ticket-id)
-                    base-facts)
+        (when (not= ticket-id stored-ticket)
+          (note-base! eng policy (assoc base-facts :ticket ticket-id)
+                      base-facts))
         ;; the deploy the merge line waits on, from the same read
         ;; (ticket 47217098)
         (bench/note-deploy! eng policy base-read
@@ -1404,7 +1472,7 @@
 (defn- base-pass!
   "Every active policy → its base read, judged, and written. A base the
   forge will not read costs that repository this pass and nothing
-  else, and writes nothing."
+  else, and is noted on its policy."
   [eng source census log-fn]
   (reduce
    (fn [census policy]
@@ -1514,7 +1582,9 @@
                                                          (:route refusal)))
                        {:answered (:status refusal) :route (:route refusal)})
 
-                     (and (contains? answered repo) (not (str/blank? stored)))
+                     ;; a base note is the base pass's to clear
+                     (and (contains? answered repo) (not (str/blank? stored))
+                          (not (base-note? stored)))
                      {})]
          (if (nil? input)
            census
@@ -1552,18 +1622,28 @@
           census (assoc fresh-census
                         :repositories (count repositories)
                         :complete? (boolean complete?))
-          census (source-note-pass! eng refusals answered census log-fn)
-          census (change-pass! eng changes census log-fn)
-          read-checks (head-reader source)
-          census (run-pass! eng source
-                            (into (vec checks)
-                                  (live-reds eng read-checks checks log-fn))
-                            census log-fn)
-          census (stale-pass! eng changes census log-fn)
-          census (label-pass! eng source census log-fn)
-          census (failing-pass! eng source read-checks census log-fn)
-          census (adoption-note-pass! eng census log-fn)
+          ;; the base pass runs whatever a pass before it did (ticket
+          ;; c4bac627): a throw above it is thrown again only after
+          ;; every base was read
+          [census thrown]
+          (try
+            (let [census (source-note-pass! eng refusals answered census
+                                            log-fn)
+                  census (change-pass! eng changes census log-fn)
+                  read-checks (head-reader source)
+                  census (run-pass! eng source
+                                    (into (vec checks)
+                                          (live-reds eng read-checks checks
+                                                     log-fn))
+                                    census log-fn)
+                  census (stale-pass! eng changes census log-fn)
+                  census (label-pass! eng source census log-fn)
+                  census (failing-pass! eng source read-checks census log-fn)
+                  census (adoption-note-pass! eng census log-fn)]
+              [census nil])
+            (catch Exception e [census e]))
           census (base-pass! eng source census log-fn)
+          _ (when thrown (throw thrown))
           census (assoc census :calls (forge-calls source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
               (:minted census) " changes minted, " (:adopted census)

@@ -95,6 +95,21 @@
       (t/deny)
       (t/allow))))
 
+(defguardfn the-test-selection-pattern-compiles
+  {:reads []
+   :open "No other door changes this verdict. Restate the policy with a select_pattern that is a regular expression, or leave it empty for the Clojure shape."
+   :explain "The bench checks a seat's test selection against this pattern before it dispatches the workflow. A pattern that does not compile would refuse every selection."}
+  ;; ticket efa54182: the rig judges `select` against the pattern, so
+  ;; a pattern it cannot compile is refused here, where a person reads
+  ;; why, and not at every seat's test afterwards.
+  [_row inp _ctx]
+  (let [p (get-in inp [:test :select_pattern])]
+    (if (or (nil? p)
+            (try (re-pattern (str p)) true
+                 (catch Exception _ false)))
+      (t/allow)
+      (t/deny))))
+
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
    :hide true
@@ -235,6 +250,27 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
+(defscenario a-test-selection-pattern-must-compile
+  "A select_pattern the rig could not compile would refuse every
+   seat's test, so the restate refuses it first."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :test {:workflow "tests.yml" :input "only"
+                                   :select_pattern "^[A-Za-z_"})
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-test-selection-pattern-compiles}})
+
+(defscenario a-test-selection-pattern-that-compiles-stands
+  "…and a pattern that compiles is the person's to state."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :test {:workflow "tests.yml" :input "only"
+                                   :select_pattern "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"})
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 (defscenario the-house-never-merges-what-nothing-tested
   "A policy that says the house merges a green change names the checks
    that make it green. An empty list is refused, even from the person."
@@ -269,6 +305,12 @@
   {"merge" "A merge commit"
    "squash" "One squashed commit"
    "rebase" "The commits, rebased onto the base"})
+
+;; the merge train (ticket 394d0602, slice a of 3deb06ed). A later
+;; strategy is one more member here, and the enum follows the keys.
+(def ^:private merge-strategy-choices
+  {"line" "The line: one change at a time, each brought up to date and re-checked before it merges"
+   "train" "The merge train: the front and up to train_size-1 green changes behind it are tested together and land together"})
 
 (def ^:private policy-fields
   "The whole policy, as schema entries. The create door and the
@@ -374,6 +416,25 @@
                         {:label "Rounds for one change"
                          :help "How many times a seat may submit one change before the house stops. At the ceiling the change moves to stuck and waits for a person."}}
     [:int {:min 1 :max 20}]]
+   ;; the merge train (ticket 394d0602, slice a of 3deb06ed). Both
+   ;; OPTIONAL for the reason merge_wait_seconds is: a row that
+   ;; predates them reads as line / 4 (bench's `merge-strategy-of` and
+   ;; `train-size-of`). Nothing reads them yet
+   [:merge_strategy {:optional true
+                     :default "line"
+                     :examples ["line"]
+                     :x-display
+                     {:label "How the house merges"
+                      :choices merge-strategy-choices
+                      :help "line merges one change at a time, each brought up to date and re-checked first. train tests the front and the green changes behind it together, and lands them together. Switching is safe at any time: a train that is running finishes, or is discarded, before the line changes shape."}}
+    (into [:enum] (sort (keys merge-strategy-choices)))]
+   [:train_size {:optional true
+                 :default 4
+                 :examples [4]
+                 :x-display
+                 {:label "How many changes ride one train"
+                  :help "How many green changes the house tests and merges together as one train, from 2 to 10. It applies only to the train strategy; the line reads none of it."}}
+    [:int {:min 2 :max 10}]]
    [:formatter {:default "runner"
                 :x-display
                 {:label "What formats the code"
@@ -401,7 +462,14 @@
       [:string {:min 1 :max 200}]]
      [:input {:x-display {:label "Narrowing input"
                           :help "The name of the workflow's input that narrows the run to what a seat touched."}}
-      [:string {:min 1 :max 120}]]]]
+      [:string {:min 1 :max 120}]]
+     ;; ticket efa54182: OPTIONAL, and the rig's default when absent
+     [:select_pattern {:optional true
+                       :examples ["^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"]
+                       :x-display {:raw true
+                                   :label "What a test selection looks like"
+                                   :help "A regular expression the bench checks a seat's test selection against before it dispatches the workflow. Leave it empty for the Clojure shape: a dotted namespace ending in -test. A Python repository states its own, such as dotted module names."}}
+      [:maybe [:string {:min 1 :max 200}]]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
@@ -535,8 +603,9 @@
                          {:label "The front waits on"
                           :choices {"update" "It was just brought up to date, and its checks run on the new head"
                                     "checks" "Its checks are still running"
-                                    "merge" "It was offered the merge, and GitHub has not merged it yet"}}}
-    [:maybe [:enum "update" "checks" "merge"]]]
+                                    "merge" "It was offered the merge, and GitHub has not merged it yet"
+                                    "train" "It rides a train, and the train's checks run"}}}
+    [:maybe [:enum "update" "checks" "merge" "train"]]]
    [:line_waiting {:optional true
                    :examples [2]
                    :x-display
@@ -548,7 +617,44 @@
               :x-display
               {:label "Line read at"
                :help "When the merge pass last wrote the line, which it does when the line moves."}}
-    [:maybe :waymark/instant]]])
+    [:maybe :waymark/instant]]
+   ;; the merge train (ticket 394d0602): the train that stands now, as
+   ;; the merge pass writes it. Nothing writes it yet
+   [:line_train {:optional true
+                 :examples [{:branch "train/ckopsa/waymark/1"
+                             :changes ["2847912e-7783-4651-bead-61eab0492776"]
+                             :prs [250]
+                             :head "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"
+                             :base_head "0e1d2c3b4a5968778695a4b3c2d1e0f912345678"
+                             :run_id "123456789"
+                             :workflow "tests.yml"
+                             :started_at "2026-09-29T12:00:00Z"}]
+                 :x-display
+                 {:raw true
+                  :label "The train"
+                  :help "The changes that ride one train together: its branch, their changes and pull requests, the train's head and the base head it was built on, the check run that tests it, and when it started. Empty when no train stands."}}
+    [:maybe
+     [:map
+      [:branch [:string {:max 200}]]
+      [:changes [:vector [:string {:max 64}]]]
+      [:prs [:vector [:int {:min 1}]]]
+      [:head {:optional true} [:maybe [:string {:max 64}]]]
+      [:base_head {:optional true} [:maybe [:string {:max 64}]]]
+      [:run_id {:optional true} [:maybe [:string {:max 64}]]]
+      ;; the policy's test workflow the checks ran (90ce5c73), so a
+      ;; train with no run yet is read by the same workflow
+      [:workflow {:optional true} [:maybe [:string {:max 200}]]]
+      ;; a red train's halves count their trains against the train
+      ;; they look in, and a cancelled run is run once more (6033c287)
+      [:tries {:optional true} [:maybe [:int {:min 1}]]]
+      [:size {:optional true} [:maybe [:int {:min 1}]]]
+      [:retried {:optional true} [:maybe :boolean]]
+      ;; the pull request a waiting landing answered (c3f0f094)
+      [:pr {:optional true} [:maybe [:int {:min 1}]]]
+      ;; the pull request's own run is the train's check, and none was
+      ;; dispatched (e2d485c2)
+      [:pr_run {:optional true} [:maybe :boolean]]
+      [:started_at :waymark/instant]]]]])
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
@@ -580,7 +686,8 @@
    ;; a reader sees them and on no form so a person never writes them.
    :create-schema (into [:map] policy-fields)
    :create-guards [a-person-or-their-delegate-states-the-policy
-                   the-house-merges-only-what-a-check-tested]
+                   the-house-merges-only-what-a-check-tested
+                   the-test-selection-pattern-compiles]
    ;; …and the rig is told at the birth (R-2): a create cannot walk a
    ;; door on a row that does not exist yet
    :on-create enrol-at-birth
@@ -589,7 +696,8 @@
     {:from #{:active} :to :active
      :input (into [:map] policy-fields)
      :guards [a-person-or-their-delegate-states-the-policy
-              the-house-merges-only-what-a-check-tested]
+              the-house-merges-only-what-a-check-tested
+              the-test-selection-pattern-compiles]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes
@@ -600,7 +708,7 @@
                       :opens_pr :auto_merge :merge_by :required_checks
                       :merge_method :merge_wait_seconds
                       :deploy_check :deploy_wait_seconds
-                      :rounds_per_change :formatter
+                      :rounds_per_change :merge_strategy :train_size :formatter
                       :deny :test :orientation]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
