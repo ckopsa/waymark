@@ -323,15 +323,20 @@
   `test` rides only when the row has one (ticket bae401d5): the
   workflow the bench's `test` dispatches and the input that narrows
   it. A row without one sends no key, so a rig that does not know the
-  key still takes it."
+  key still takes it. `select_pattern` rides inside it the same way
+  (ticket efa54182): only when the row states one, so the rig keeps
+  its own Clojure default otherwise."
   [row]
-  (let [test-block (get-in row [:data :test])]
+  (let [test-block (get-in row [:data :test])
+        pattern (:select_pattern test-block)]
     (cond-> {:repo (str (get-in row [:data :repository]))
              :clone_url (clone-url-of row)
              :default_branch (base-of row)
              :deny (vec (get-in row [:data :deny]))
              :land (land-of row)}
-      (some? test-block) (assoc :test (select-keys test-block [:workflow :input])))))
+      (some? test-block) (assoc :test (cond-> (select-keys test-block [:workflow :input])
+                                        (not (str/blank? (str pattern)))
+                                        (assoc :select_pattern (str pattern)))))))
 
 (defn enrolled
   "The row after the engine offered this repository to the rig (R-2).
