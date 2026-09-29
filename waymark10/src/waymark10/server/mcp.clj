@@ -1020,8 +1020,10 @@
         "remedies first, then retry the door it unblocked. Every step "
         "is an ordinary invoke judged by YOUR grant and guards and "
         "counted on your sitting; it can do nothing you could not do by "
-        "hand. A remedy on the refused row's own kind acts on that row; "
-        "any other needs its row named in `choices`. It stops, never "
+        "hand. A remedy the refusal itself binds to a row (its "
+        "resolved_remedies) acts on that row; any other is taken from "
+        "`choices`, and one on the refused row's own kind that "
+        "`choices` does not name acts on that row. It stops, never "
         "guessing, at a confirm door (blocked_on carries the "
         "consequence sentence: acknowledge it through waymark_invoke), "
         "at a call held for a person's tap (held, not retried), at an "
@@ -1845,9 +1847,11 @@
                                                      (random-uuid)))))))})))
 
 (defn- pursue
-  "waymark_pursue: waymark10.client/pursue! over this door. `choices`
-  (remedy door → {id, input}) is its :choices; a door it does not name
-  falls back to the refused row when the remedy is on that row's kind.
+  "waymark_pursue: waymark10.client/pursue! over this door. A remedy
+  the refusal binds (its resolved_remedies) is followed first; `choices`
+  (remedy door → {id, input}) is its :choices for the rest, and fills
+  the input a binding left unset; a door it does not name falls back to
+  the refused row when the remedy is on that row's kind.
   dry_run defaults TRUE — a pursuit writes only when asked to. The
   answer is written without `wire-value`: `done` is the route's own
   envelope and its keys pass through as the route spelled them."
