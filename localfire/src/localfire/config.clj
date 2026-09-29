@@ -57,6 +57,20 @@
      :prompt           (or (some-> (:prompt r) str not-empty)
                            prompt/routine-prompt)}))
 
+(defn- normalize-oauth
+  "The `:mcp` map's optional `:oauth` (R-8.2): the fixed client a
+  person signed in with, for a door that refuses dynamic registration."
+  [o]
+  (when-not (map? o)
+    (fail! "the config's :mcp :oauth must be a map."))
+  (let [client-id (:client-id o)
+        port      (:callback-port o)]
+    (when-not (and (string? client-id) (not (str/blank? client-id)))
+      (fail! "the config's :mcp :oauth needs a :client-id, as a non-empty string."))
+    (when-not (pos-int? port)
+      (fail! "the config's :mcp :oauth needs a :callback-port, as a positive integer."))
+    {:client-id client-id :callback-port (long port)}))
+
 (defn normalize
   "The config as the server uses it: every default filled in, every
   name a string, every routine complete. It throws ex-info with one
@@ -93,8 +107,10 @@
      :place         place
      :runs-dir      runs
      :claude        (or (some-> (:claude m) str not-empty) "claude")
-     :mcp           {:name (or (some-> (:name mcp) str not-empty) default-mcp-name)
-                     :url  (str (:url mcp))}
+     ;; :oauth absent means no oauth block in the run's MCP entry
+     :mcp           (cond-> {:name (or (some-> (:name mcp) str not-empty) default-mcp-name)
+                             :url  (str (:url mcp))}
+                      (some? (:oauth mcp)) (assoc :oauth (normalize-oauth (:oauth mcp))))
      :allowed-tools (vec (or (seq (map str (:allowed-tools m)))
                              default-allowed-tools))
      ;; R-4.6: how often the credential is probed

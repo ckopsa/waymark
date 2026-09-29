@@ -7,7 +7,10 @@
 FROM clojure:temurin-21-tools-deps-bookworm-slim
 
 # The one pin for the CLI every fired session runs. Bump it here.
-ARG CLAUDE_CODE_VERSION=2.0.0
+# 2.1.284 is the first checked with `claude mcp add --client-id
+# --callback-port` and `claude mcp login`, which a fixed OAuth client
+# needs (R-8.2).
+ARG CLAUDE_CODE_VERSION=2.1.284
 ARG NODE_MAJOR=22
 
 # Node LTS for the Claude Code CLI; git, curl and jq for what a

@@ -70,11 +70,17 @@
 (defn write-mcp!
   "The one file the server writes beside the copied place (R-5.3): the
   engine's MCP door, named so `--strict-mcp-config` lets the session
-  reach that door and nothing else."
-  [^File f {:keys [name url]}]
+  reach that door and nothing else. With an `:oauth` client the entry
+  carries it, in the shape `claude mcp add --client-id --callback-port`
+  writes, so the stored sign-in (R-8.2) matches this entry."
+  [^File f {:keys [name url oauth]}]
   (io/make-parents f)
   (spit f (json/write-value-as-string
-           {"mcpServers" {(str name) {"type" "http" "url" (str url)}}})))
+           {"mcpServers"
+            {(str name)
+             (cond-> {"type" "http" "url" (str url)}
+               oauth (assoc "oauth" {"clientId"     (:client-id oauth)
+                                     "callbackPort" (:callback-port oauth)}))}})))
 
 ;; ── the record ──────────────────────────────────────────────────────
 
