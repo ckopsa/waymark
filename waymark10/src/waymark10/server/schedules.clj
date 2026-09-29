@@ -522,13 +522,19 @@
 
 (defhandler stamp-fire
   [row inp _ctx]
+  ;; a fire that went out supersedes the throttle that held the last
+  ;; one (waymark ticket e30762f3): the wake `hold-throttle` kept
+  ;; pending would be one extra run out of `sweep-pending!`, so the
+  ;; flag and the settle's due moment go the way of the note and
+  ;; `retry_after` — the pair wakes/stamp-fired! clears after its own
+  ;; fire, cleared here for the fires that never pass through it.
   (-> row
       (assoc-in [:data :last_fired_at] (:last_fired_at inp))
       (cond-> (:last_run_url inp)
         (assoc-in [:data :last_run_url] (:last_run_url inp)))
       (cond-> (:last_runner inp)
         (assoc-in [:data :last_runner] (:last_runner inp)))
-      (update :data dissoc :note :retry_after)))
+      (update :data dissoc :note :retry_after :wake_pending :wake_due_at)))
 
 (defhandler hold-throttle
   [row inp _ctx]

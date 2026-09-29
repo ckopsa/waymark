@@ -808,7 +808,11 @@
   it writes a house merge's (`note-merges!`), and the mirror ends each
   change and its ticket as it does any merge. A base that moved outside
   the house (`base_moved`) throws the train away and the next pass
-  builds another; a rig that does not answer is asked again next pass."
+  builds another; a rig that does not answer is asked again next pass.
+  Only `landed: true` is a landing: an answer neither landed nor refused
+  (`state: waiting`, while GitHub computes mergeability or a check is
+  pending) keeps the train standing, its pull request noted as `:pr`,
+  and the next pass asks again (ticket c3f0f094)."
   [ctx seen repo policy train]
   (let [answer (ask ctx :train_land {:repo repo :base (base-of policy)
                                       :branch (:branch train)
@@ -828,13 +832,17 @@
       (one-at-a-time! ctx seen repo train
                       (str "was refused its landing (" (reason-of answer) ")"))
 
-      :else
+      (true? (:landed answer))
       (do (when-some [answers (:answers ctx)]
             (swap! answers into
                    (map (fn [id] [id {:state "merged" :head (:head train)}]))
                    (:changes train)))
           (ask ctx :train_delete {:repo repo :branch (:branch train)})
-          nil))))
+          nil)
+
+      :else
+      (let [n (:number answer)]
+        (if (pos-int? n) (assoc train :pr n) train)))))
 
 (defn- train-cap
   "How many trains one train of `n` changes may run, its own and the
@@ -879,16 +887,22 @@
                             (subvec riders 0 (quot (count riders) 2)))
               (assoc :tries tries :size size)))))
 
+(defn- run-of [x] (some-> (:run_id x) str not-empty))
+
 (defn- retry-train!
   "A train whose run was cancelled or timed out runs its checks once
   more, and that counts as one of its trains; the second time, the line
-  goes one at a time. → the train that stands after it."
+  goes one at a time. The cancelled run stays on the train as
+  `stale_run_id`, so a retry read by its branch never reads that run
+  again. → the train that stands after it."
   [ctx seen repo train verdict]
   (if (:retried train)
     (one-at-a-time! ctx seen repo train (str "finished " verdict " twice"))
     (do (warn! repo ": the train " (:branch train) " finished " verdict
                "; its checks run once more")
-        (assoc (dispatch-checks! ctx repo train)
+        (assoc (dispatch-checks! ctx repo
+                                 (cond-> train
+                                   (run-of train) (assoc :stale_run_id (run-of train))))
                :retried true :tries (inc (long (or (:tries train) 1)))))))
 
 (defn train-finished!
@@ -912,26 +926,33 @@
     :else (retry-train! ctx seen repo train verdict)))
 
 (defn- status-args [repo train]
-  (if-some [run (some-> (:run_id train) str not-empty)]
+  (if-some [run (run-of train)]
     {:repo repo :run_id run}
     {:repo repo :branch (:branch train) :head (:head train)}))
 
 (defn advance-train!
   "Read a standing train's run once → the train that stands after it:
   the same one while its run is pending or the rig does not answer,
-  and what `train-finished!` says once it finished or was refused."
+  and what `train-finished!` says once it finished or was refused. A
+  train read by its branch keeps the run the answer names; an answer
+  naming the run a retry left behind (`stale_run_id`) is read as
+  pending, since the retry's own run has not shown yet."
   [ctx seen repo policy train]
   (let [answer (ask ctx :train_status (status-args repo train))
         why (refused answer)
-        st (some-> (:state answer) name)]
+        st (some-> (:state answer) name)
+        run (run-of answer)
+        known (cond-> train
+               (and run (nil? (run-of train))) (assoc :run_id run))]
     (cond
       (nil? answer) train
       (contains? missing-power-refusals why) train
       why (do (warn! "the rig refused the status of " (:branch train) " ("
                      (reason-of answer) ")")
               (train-finished! ctx seen repo policy train "cancelled"))
-      (or (nil? st) (= "pending" st)) train
-      :else (train-finished! ctx seen repo policy train st))))
+      (and run (= run (:stale_run_id train))) train
+      (or (nil? st) (= "pending" st)) known
+      :else (train-finished! ctx seen repo policy known st))))
 
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
@@ -944,7 +965,10 @@
   (`build-train!`), and a standing train (`line_train`) is read once
   (`advance-train!`) while its front waits. `trains`, when given, is an
   atom the pass fills with repository → the train that stands now, nil
-  for none, for each repository whose train it built or read.
+  for none, for each repository whose train it built or read. A
+  standing train whose repository has no line this pass — every rider
+  merged or left, or the repository is deploy-held — is read as well,
+  so it still finishes and leaves the policy.
   → the number of `merge` calls made."
   ([ctx seen lines by-repo] (work-lines! ctx seen lines by-repo (atom {})))
   ([ctx seen lines by-repo answers]
@@ -981,6 +1005,13 @@
            (and front (behind? (get @answers id)))
            (update-behind! ctx seen front id
                            (str (get-in front [:data :head_sha]))))))
+     ;; a standing train is read whatever its line: a repository with
+     ;; no line this pass would otherwise keep it on the policy for good
+     (doseq [[repo policy] by-repo
+             :when (not (contains? lines repo))
+             :let [train (get-in policy [:data :line_train])]
+             :when train]
+       (swap! trains assoc repo (advance-train! ctx seen repo policy train)))
      @asked)))
 
 ;; ── the line, written on the rows (ticket b85aded5) ─────────────────

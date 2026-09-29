@@ -1490,11 +1490,13 @@
   action it is the door signing its work, so `actions-from-mcp` can
   count what came through here. A fenced action carries the If-Match
   of the row we READ, so the write lands on the row the agent saw or
-  not at all."
-  [session entry etag warnings]
+  not at all — and `fenced?` is the caller's answer to 'is this door
+  fenced', read off the envelope's entry when it has one and off the
+  DECLARATION when a guard shut the door (ticket ec814cac)."
+  [session fenced? etag warnings]
   (cond-> {"idempotency-key" (origin-key (get-in session [:principal :id])
                                          (random-uuid))}
-    (and (get-in entry [:safety :fence]) etag)
+    (and fenced? etag)
     (assoc "if-match" etag)
     (seq warnings)
     (assoc "waymark-acknowledge" (str/join "," (map name warnings)))))
@@ -1689,6 +1691,18 @@
           (pass-through env-resp)
           (let [env (body-json env-resp)
                 entry (get-in env [:actions (wire-action aname)])
+                ;; A door a GUARD shut is not in `actions` at all — it
+                ;; is in `unavailable`, which carries a reason and its
+                ;; remedies and no `safety` — so the fence flag falls
+                ;; back to the DECLARATION here. Read off `entry`
+                ;; alone, a guard-refused fenced door went out with no
+                ;; If-Match, and invoke's fence (step 6, ahead of the
+                ;; guard loop) answered 412 "Version conflict" on a row
+                ;; that had not changed, where the guard's own 409
+                ;; belonged (ticket ec814cac).
+                fenced? (boolean
+                         (or (get-in entry [:safety :fence])
+                             (get-in rdef [:actions aname :safety :fence])))
                 sentence (consequence-of entry)]
             (if (and (get-in entry [:safety :confirm])
                      (not= acknowledge sentence))
@@ -1702,7 +1716,7 @@
                                      {:body (or input {})
                                       :query (when dry_run "dry_run=1")
                                       :headers (invoke-headers
-                                                session entry
+                                                session fenced?
                                                 (get-in env-resp [:headers "ETag"])
                                                 acknowledge_warnings)})
                             :waymark10/sitting
