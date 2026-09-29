@@ -436,6 +436,18 @@
                     (filter wanted))
               (some-> (:mcp-sessions eng) deref (evict ((:now-fn eng)))))))))
 
+(defn- live-sessions
+  "The hashes of every connector session heard from since `since`, as
+  a set: the sessions whose claim on a sitting still stands (ticket
+  7496403e). A plain read — no touch."
+  [eng ^Instant since]
+  (if (session-table? eng)
+    (sessions/live-hashes (:storage eng) since)
+    (into #{}
+          (comp (remove (fn [[_ e]] (neg? (compare (:touched e) since))))
+                (map (comp sessions/id-hash key)))
+          (some-> (:mcp-sessions eng) deref))))
+
 (defn- bound-seat
   "The seat this session is bound to, or nil. Read from the BINDING
   and not from the sitting row: `waymark_sit` writes the seat and the
@@ -2191,29 +2203,59 @@
        sitting stamped with it — the pairing `open-sitting-for-seat`
        makes at the close;
     3. only then the grant's newest UNCLAIMED open sitting: no stamp,
-       and — when the seat lets more than one sitting run at once — no
-       other live connector session bound to it. At one, an open
-       sitting holds every wake (`max-open-sittings-help`), so a second
-       session's sit re-keys it rather than opening another."
+       and — when the seat lets more than one sitting run at once — a
+       connector-session claim that is this session's own, or whose
+       session is gone: closed, or unheard for longer than the seat's
+       `sitting_idle_seconds` (ticket 7496403e). A row no sit has
+       claimed yet is free when no other live session is bound to it.
+       At one, an open sitting holds every wake
+       (`max-open-sittings-help`), so a second session's sit re-keys it
+       rather than opening another.
+
+  The row answered is CLAIMED for this session (`seats/claim-sitting!`)
+  in the transaction that judges it, so two session-less sits racing
+  for one sibling serialise on its lock and exactly one takes it."
   [eng sid grant seat harness-session]
   (let [gid (str (:id grant))
         many? (< 1 (long (or (get-in seat [:data :max_open_sittings]) 1)))
         stamp-of #(some-> (get-in % [:data :harness_session]) str not-empty)
+        claim-of #(some-> (:connector_session %) str not-empty)
         wanted (some-> harness-session str not-empty)
+        mine (some-> sid str not-empty sessions/id-hash)
+        claim! (fn [row free?] (seats/claim-sitting! eng (:id row) mine free?))
         bound (some->> (bound-sitting eng sid) str not-empty (row-of eng :sitting))]
     (or (when (and bound
                    (= "open" (some-> (:state bound) name))
                    (= gid (str (get-in bound [:data :grant])))
                    (let [held (stamp-of bound)]
                      (or (nil? held) (nil? wanted) (= held wanted))))
-          bound)
+          (claim! bound (constantly true)))
         (let [rows (seats/open-sittings-for-grant eng gid)]
-          (or (when wanted (first (filter #(= wanted (stamp-of %)) rows)))
+          (or (when wanted
+                (some-> (first (filter #(= wanted (stamp-of %)) rows))
+                        (claim! (constantly true))))
               (let [free (remove stamp-of rows)
+                    now ^Instant ((:now-fn eng))
+                    idle (long (or (get-in seat [:data :sitting_idle_seconds])
+                                   seats/default-idle-seconds))
+                    since (let [quiet (.minusSeconds now idle)
+                                ttl (ttl-cutoff now)]
+                            (if (.isAfter quiet ttl) quiet ttl))
+                    live (if many? (disj (live-sessions eng since) mine) #{})
                     taken (if many?
-                            (bound-elsewhere eng sid (map (comp str :id) free))
-                            #{})]
-                (first (remove #(contains? taken (str (:id %))) free))))))))
+                            (bound-elsewhere eng sid
+                                             (map (comp str :id)
+                                                  (remove (comp claim-of :data) free)))
+                            #{})
+                    free? (fn [row]
+                            (fn [data]
+                              (let [held (claim-of data)]
+                                (cond
+                                  (not many?) true
+                                  (nil? held) (not (contains? taken (str (:id row))))
+                                  (= held mine) true
+                                  :else (not (contains? live held))))))]
+                (some #(claim! % (free? %)) free)))))))
 
 (defn- open-sitting!
   "The sitting this bound session is counted against (R-12.15): the
@@ -2237,20 +2279,23 @@
   A REUSED SITTING IS STAMPED as it is handed back (ticket e2b55a0c):
   the sit is a call, and a sitting idle past `sitting_idle_seconds`
   would otherwise be abandoned by the next sweep under the caller it
-  was just given to. A candidate the stamp finds closed is no answer;
-  a fresh sitting is born instead."
+  was just given to. The stamp is the claim (ticket 7496403e), and a
+  candidate the claim finds closed is no answer; a fresh sitting is
+  born instead, and claimed for this session at birth."
   [eng sid sitter grant seat model harness-session]
   (when model
-    (or (when-some [row (reusable-sitting eng sid grant seat harness-session)]
-          (when (seats/stamp-call! eng (:id row))
-            row))
-        (:row (inv/create! eng :sitting
-                           (cond-> {:seat (str (:id seat))
-                                    :model (str (:id model))
-                                    :grant (str (:id grant))}
-                             harness-session
-                             (assoc :harness_session harness-session))
-                           {:principal sitter})))))
+    (or (reusable-sitting eng sid grant seat harness-session)
+        (let [row (:row (inv/create! eng :sitting
+                                     (cond-> {:seat (str (:id seat))
+                                              :model (str (:id model))
+                                              :grant (str (:id grant))}
+                                       harness-session
+                                       (assoc :harness_session harness-session))
+                                     {:principal sitter}))]
+          (or (seats/claim-sitting! eng (:id row)
+                                    (some-> sid str not-empty sessions/id-hash)
+                                    (constantly true))
+              row)))))
 
 (defn- standing-seat-grant
   "The grant this sitter already holds FOR THIS SEAT, or nil.
