@@ -517,6 +517,11 @@
     (assoc :json-schema/x-options (option-props props))
     (:x-display props)
     (assoc :json-schema/x-display (:x-display props))
+    ;; a prose field holds markdown, said once here for every kind: the
+    ;; standard keyword a client renders by, the value itself stored
+    ;; and served untouched (maxLength still counts its raw characters)
+    (= "prose" (some-> props :x-display :widget name))
+    (assoc :json-schema/contentMediaType "text/markdown")
     (:kind props)
     (assoc :json-schema/x-ref (ref-props props))
     (contains? props :open)
