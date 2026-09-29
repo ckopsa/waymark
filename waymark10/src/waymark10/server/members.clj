@@ -546,7 +546,8 @@
      [:string {:min 1 :max 64}]]
     [:input {:optional true
              :x-display {:label "Where"
-                         :help "The tool's arguments for this person, laid over the rule's text, e.g. {\"chat_id\": \"42\"}."}}
+                         :help "The tool's arguments for this person, laid over the rule's text, e.g. {\"chat_id\": \"42\"}."
+                         :spelled-by-hand "The notifier's tool's own arguments for this person as JSON, e.g. {\"chat_id\": \"42\"}; each tool names its own keys, so a form cannot list them."}}
      [:maybe [:map-of :keyword :any]]]]])
 
 (defresource member
