@@ -1223,27 +1223,48 @@
 ;; at-least-once, never throws. An empty ref, a member with no
 ;; `notify` and a failed send are counted on the rule, in place; the
 ;; actor who caused the transition is told nothing.
+;;
+;; The address may walk one more hop: `{field: "plan_id", then:
+;; "member"}` reads the moved row's `plan_id`, loads the row it names
+;; and reads that row's `member`. The wall judges every hop; the send
+;; resolves the chain at send time, and an empty hop is unaddressed.
+
+(defn- ref-named
+  "The ref field of this resource named `field`, or nil."
+  [rd field]
+  (some #(when (= (str field) (name (:field %))) %)
+        (schema/ref-fields (:schema rd))))
+
+(defn- address-path
+  "The field names an address walks, in order: `field`, then `then`."
+  [address]
+  (into [] (keep #(some-> (get address %) str not-empty)) [:field :then]))
 
 (g/defguard address-names-a-member
   {:reads [:services]
    :vars [:kind :field :why]
    :open "The kinds and their ref fields are each kind's published schema, one GET away; enumerating them into this form would duplicate it."
-   :explain "A notice rule addresses the member a ref field on the kind it hears names; {kind}.{field} {why}."}
+   :explain "A notice rule addresses the member a ref field on the kind it hears names, directly or through one more ref; {kind}.{field} {why}."}
   [row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
     (let [kind (str (or (:kind inp) (get-in row [:data :kind])))
-          field (str (or (get-in inp [:address :field])
-                         (get-in row [:data :address :field])))
-          rd (when-not (str/blank? kind) (rdef-of kind))
-          ref (when rd
-                (some #(when (= field (name (:field %))) %)
-                      (schema/ref-fields (:schema rd))))
-          why (cond
-                (nil? rd) "names no kind this engine serves"
-                (nil? ref) "is not a ref field of that kind"
-                (:listed ref) "is a list of refs, and a rule addresses one member"
-                (not= :member (keyword (:kind ref)))
-                (str "names a " (name (:kind ref)) ", not a member"))]
+          hops (address-path (or (:address inp) (get-in row [:data :address])))
+          field (str/join "." hops)
+          why (loop [k kind
+                     [h & more] hops
+                     first? true]
+                (let [rd (when-not (str/blank? k) (rdef-of k))
+                      ref (when rd (ref-named rd h))
+                      at (fn [s] (if first? s (str "reaches " k ", whose " h " " s)))]
+                  (cond
+                    (nil? rd) (if first?
+                                "names no kind this engine serves"
+                                (str "reaches " k ", a kind this engine does not serve"))
+                    (nil? ref) (at "is not a ref field of that kind")
+                    (:listed ref) (at "is a list of refs, and a rule addresses one member")
+                    (seq more) (recur (name (:kind ref)) more false)
+                    (not= :member (keyword (:kind ref)))
+                    (at (str "names a " (name (:kind ref)) ", not a member")))))]
       (if why
         (t/deny {:vars {:kind kind :field field :why why}})
         (t/allow)))
@@ -1276,11 +1297,15 @@
                        :help "The transition that sends a notice: equality on action, from_state and to_state. Omitted hears every transition of the kind."}}
     [:maybe notice-rule-when]]
    [:address {:x-display {:label "Who is told"
-                          :help "The ref field on the moved row that names the member, e.g. {\"field\": \"assignee\"}."}}
+                          :help "The ref field on the moved row that names the member, e.g. {\"field\": \"assignee\"}, or a ref and the field on its row that does, e.g. {\"field\": \"plan_id\", \"then\": \"member\"}."}}
     [:map
      [:field {:x-display {:label "Field"
-                          :help "A ref field of the kind whose target is member."}}
-      [:string {:min 1 :max 64}]]]]
+                          :help "A ref field of the kind whose target is member, or, with then, whose target carries the member."}}
+      [:string {:min 1 :max 64}]]
+     [:then {:optional true
+             :x-display {:label "Then"
+                         :help "A ref field, on the row field names, whose target is member. Empty: field itself names the member."}}
+      [:maybe [:string {:min 1 :max 64}]]]]]
    [:notifier {:kind :notifier
                :x-display {:label "Notifier"
                            :help "The notifier whose input template and address make the text and the link. The member's own notifier carries the send when the member names one."}}
@@ -1361,6 +1386,18 @@
   (when-some [rd (get (inv/resources eng) kind)]
     (some->> (stored-row eng kind id) (inv/decode-row rd))))
 
+(defn- addressee-of
+  "The member id an address path names from the moved row, read hop by
+  hop at send time; nil where a hop is empty or names no row."
+  [eng kind row hops]
+  (loop [kind kind, row row, [h & more] hops]
+    (let [v (some-> (get-in row [:data (keyword h)]) str not-empty)]
+      (if (or (nil? v) (empty? more))
+        v
+        (let [next-kind (some-> (get (inv/resources eng) kind)
+                                (ref-named h) :kind keyword)]
+          (recur next-kind (when next-kind (decoded-row eng next-kind v)) more))))))
+
 (defn rule-matches?
   "Does this notice rule's kind and `when` name the transition?
   Equality only; an empty entry matches anything."
@@ -1385,8 +1422,8 @@
                  outcome)]
     (try
       (let [row (decoded-row eng (:kind t) (:resource-id t))
-            field (keyword (str (get-in rule [:data :address :field])))
-            addressee (some-> (get-in row [:data field]) str not-empty)
+            addressee (addressee-of eng (keyword (name (:kind t))) row
+                                    (address-path (get-in rule [:data :address])))
             member (when addressee (decoded-row eng :member addressee))
             notify (get-in member [:data :notify])
             texter (decoded-row eng :notifier (get-in rule [:data :notifier]))
