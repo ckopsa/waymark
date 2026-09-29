@@ -150,7 +150,10 @@
         ;; call, and one taken away is gone from it
         sitter (let [s (:sitter bound)]
                  (assoc s :roles (members/held-roles eng (:id s))))
-        vis (or (grants/worn-visibility eng sitter)
+        ;; the bound sitting is the calling one: the per-sitting wall
+        ;; judges ITS fuel, not the newest sibling's (ticket 8358b658)
+        vis (or (grants/worn-visibility eng sitter
+                                        (some-> (:sitting bound) str not-empty))
                 (grants/bootstrap-visibility eng sitter))]
     (router/mind-the-wall! eng (:seat vis))
     {:principal sitter :visibility vis}))
