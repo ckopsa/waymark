@@ -1485,6 +1485,96 @@
    census
    (bench/policies eng :active)))
 
+;; ── the groom floor (ticket eb515931) ───────────────────────────────
+;;
+;; A LINE THAT RUNS DRY SAYS SO. A repository whose open queue falls
+;; below its policy's `groom_floor` gets one draft ticket, where mayor
+;; already reads: the draft tickets. The engine grooms nothing itself;
+;; grooming, completing or dropping that ticket is the answer. At most
+;; one in a settle window, and none while the last is draft or open.
+
+(def ^:private floor-scan-limit
+  "How many tickets of one state in one repository the floor reads."
+  1000)
+
+(def ^:private floor-title-prefix "Groom the next batch for ")
+
+(def ^:private groomable-types #{"bug" "task" "chore"})
+
+(defn- floor-ticket? [repo row]
+  (str/starts-with? (str (get-in row [:data :title]))
+                    (str floor-title-prefix repo ":")))
+
+(defn- as-instant [v]
+  (cond (instance? Instant v) v
+        (str/blank? (str v)) nil
+        :else (Instant/parse (str v))))
+
+(defn- floor-detail [repo n floor waiting]
+  (cut (str "The open queue for `" repo "` holds " n " tickets, under "
+            "the floor of " floor " its policy states. " waiting
+            " draft bugs, tasks and chores wait for grooming.\n\n"
+            "Groom the next batch, or complete or drop this ticket to "
+            "answer it. The engine grooms nothing itself, and files no "
+            "other floor ticket for `" repo "` while this one is draft "
+            "or open.")
+       ticket/detail-chars))
+
+(defn- floor-move!
+  "One policy's floor. `open` is the queue: a blocked, a deferred and an
+  in-review ticket (one beside a submitted change) each has its own
+  state. → true when it filed a ticket."
+  [eng policy]
+  (let [floor (long (or (get-in policy [:data :groom_floor]) 0))
+        settle (long (or (get-in policy [:data :groom_floor_settle_seconds])
+                         3600))
+        repo (blank->nil (get-in policy [:data :repository]))
+        ^Instant now (now-of eng)
+        ^Instant noted (as-instant (get-in policy [:data :floor_noted_at]))
+        in-state #(rows-by eng :ticket {:repo repo :state %} floor-scan-limit)]
+    (when (and repo (pos? floor)
+               (or (nil? noted)
+                   (not (.isBefore now (.plusSeconds noted settle)))))
+      (let [opened (in-state :open)
+            n (count opened)]
+        (when (< n floor)
+          (let [drafts (in-state :draft)]
+            (when-not (some #(floor-ticket? repo %) (concat drafts opened))
+              (inv/create! eng :ticket
+                           {:title (cut (str floor-title-prefix repo ": " n
+                                             " open, floor " floor)
+                                        200)
+                            :detail (floor-detail
+                                     repo n floor
+                                     (count (filter #(contains? groomable-types
+                                                                (str (get-in % [:data :type])))
+                                                    drafts)))
+                            :type "chore"
+                            :priority 1
+                            :repo repo}
+                           (as-opts))
+              (bench/mark-row! eng :repo_policy (str (:id policy))
+                               {:floor_noted_at now :floor_count n} #{})
+              true)))))))
+
+(defn floor-pass!
+  "Every active policy → its groom floor judged, and one draft ticket
+  filed where the open queue fell below it. A policy the pass cannot
+  judge costs that repository this pass and nothing else. → the
+  census, with `:floor-filed` counted."
+  [eng census log-fn]
+  (reduce
+   (fn [census policy]
+     (try
+       (cond-> census
+         (floor-move! eng policy) (update :floor-filed (fnil inc 0)))
+       (catch Exception e
+         (log-fn "the groom floor of " (get-in policy [:data :repository])
+                 " was not judged (" (ex-message e) ")")
+         census)))
+   census
+   (bench/policies eng :active)))
+
 ;; ── the one write ───────────────────────────────────────────────────
 
 (defn- unlabelled?
@@ -1553,7 +1643,7 @@
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
    :unopened-closed 0
    :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
-   :refused 0})
+   :floor-filed 0 :refused 0})
 
 ;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
 ;; whose pulls listing the token cannot read costs its rows a pass and
@@ -1643,6 +1733,7 @@
               [census nil])
             (catch Exception e [census e]))
           census (base-pass! eng source census log-fn)
+          census (floor-pass! eng census log-fn)
           _ (when thrown (throw thrown))
           census (assoc census :calls (forge-calls source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
@@ -1674,6 +1765,8 @@
                 (str ", " (:base-opened census) " red-base tickets opened, "
                      (:base-noted census) " red heads noted, "
                      (:base-closed census) " closed on green"))
+              (when (pos? (long (:floor-filed census)))
+                (str ", " (:floor-filed census) " groom-floor tickets filed"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
               (when-not (:complete? census)
