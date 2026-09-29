@@ -2853,14 +2853,20 @@
                   (every? #(some #{repo} (entry-repos %)) entries)))))
 
 (defn- several-repositories?
-  "Does every writing entry of the seat name the SAME two or more
+  "Does every CHOOSING entry of the seat name the SAME two or more
   repositories? That is a seat built to work several, not a scope
-  written wrong: entries that disagree still get `seat-repo-note`."
+  written wrong: entries that disagree still get `seat-repo-note`.
+  The choosers are `seat-repositories`' own: the writing entries, or
+  every bench entry when the scope names no writing token - a rig
+  whose powers group its tools under other tokens (bench.write for
+  edit and pull) names none of `bench-write-tokens`."
   [seat]
-  (let [writes (filterv #(contains? bench-write-tokens (str (:kind %)))
-                        (get-in seat [:data :scope]))
-        sets (mapv (comp set entry-repos) writes)]
-    (boolean (and (seq writes)
+  (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
+                         (get-in seat [:data :scope]))
+        writes (filterv #(contains? bench-write-tokens (str (:kind %))) entries)
+        choosers (or (not-empty writes) entries)
+        sets (mapv (comp set entry-repos) choosers)]
+    (boolean (and (seq choosers)
                   (apply = sets)
                   (< 1 (count (first sets)))))))
 

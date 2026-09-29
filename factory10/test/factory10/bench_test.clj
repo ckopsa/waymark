@@ -3724,3 +3724,23 @@
                             (changes-of (:eng w))))]
     (is (= (str "other/" (:id (:ask w))) (get-in mine [:data :head_branch]))
         "a change is never worked on its repository's base")))
+
+(deftest a-seat-whose-powers-name-no-writing-token-is-several-by-its-entries
+  ;; a rig that groups edit and pull under bench.write names none of
+  ;; bench-write-tokens, so every bench entry chooses, as it does for
+  ;; the one repository (colton-tools' bench powers)
+  (let [scope (into [{:kind "ask" :actions ["complete"]}
+                     {:kind "change" :actions ["submit" "stall" "discard"]}]
+                    (map (fn [token] {:kind token :actions []
+                                      :filter {:repo (str a-repository "," another-repository)}}))
+                    ;; only reading tokens: none of bench-write-tokens,
+                    ;; which is what a rig of other token names looks like
+                    ["bench.find" "bench.read"])
+        w (home-world scope {})]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (= @#'mcp/several-repos-note (:bench_note (:answer w))))
+    (testing "and a row that names one of them opens the bench there"
+      (let [w (home-world scope {:repo another-repository :branch "nav/NAV-1-thing"})]
+        (is (nil? (:bench_note (:answer w))) (str (:bench_note (:answer w))))
+        (is (some #(= "nav/NAV-1-thing" (get-in % [:data :head_branch]))
+                  (changes-of (:eng w))))))))
