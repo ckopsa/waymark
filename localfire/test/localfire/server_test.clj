@@ -397,6 +397,43 @@
           (is (= 1 (count @closes)))
           (finally (server/stop! st)))))))
 
+(deftest a-close-is-closed-only-on-the-hooks-word
+  (testing "exit 0 with a closed or already-closed line is closed"
+    (is (true? (server/closed-line? 0 "closed 75f0d1e3")))
+    (is (true? (server/closed-line? 0 "already-closed 75f0d1e3\n"))))
+  (testing "exit 0 with nothing said is not: a hook older than close-run"
+    (is (false? (server/closed-line? 0 "")))
+    (is (false? (server/closed-line? 0 "   "))))
+  (testing "a failed line, or a non-zero exit, is not"
+    (is (false? (server/closed-line? 0 "failed 75f0d1e3: the door answered 500")))
+    (is (false? (server/closed-line? 1 "closed 75f0d1e3")))
+    (is (false? (server/closed-line? nil "closed 75f0d1e3")))))
+
+(deftest a-silent-hook-leaves-the-lost-run-to-the-next-start
+  (let [runs   (tmpdir "lf-runs-silent")
+        place  (make-place!)
+        id     (str (java.util.UUID/randomUUID))
+        closes (atom [])
+        silent (fn [argv _dir _input] (swap! closes conj (vec argv)) {:exit 0 :out ""})
+        start  #(server/start! {:config  (make-config {:port (free-port) :place place
+                                                       :runs-dir runs})
+                                :token   "the-token"
+                                :spawner (fake-spawner {:calls (atom [])})
+                                :closer  silent})]
+    (runs/copy-tree! place (runs/place-dir runs id))
+    (runs/write-run-edn! runs id {:id id :routine "sonnet" :status :running
+                                  :started-at (runs/now-iso) :ended-at nil :exit nil})
+    (runs/mark-lost! runs)
+    (doseq [n [1 2]]
+      (let [st (start)]
+        (try
+          (is (= 1 (deref (:closing st) 5000 nil)) "tried again, since nothing closed it")
+          (is (= n (count @closes)))
+          (let [rec (runs/read-run-edn runs id)]
+            (is (false? (:sitting-closed rec)))
+            (is (str/includes? (:sitting-close rec) "the hook answered nothing, exit 0")))
+          (finally (server/stop! st)))))))
+
 (deftest a-process-exit-closes-the-runs-sitting
   (let [w  (world)
         id (get-in (POST (str (:base w) "/fire/sonnet") "the-token")
