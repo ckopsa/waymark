@@ -216,12 +216,21 @@
   (let [r (rig (atom {1 {:state "waiting"}}))
         seen (atom {})
         a (a-change "ckopsa/waymark" 1 0
-                    :missing_checks ["gate"] :behind_base true)]
+                    :missing_checks ["gate"] :behind_base true
+                    :missing_checks_head "head-1")]
     (pass! r seen [a] {})
     (is (= [1] (numbers-of r "bench__update_branch")))
     (pass! r seen [a] {})
     (is (= [1] (numbers-of r "bench__update_branch"))
         "not again for the same head")))
+
+(deftest a-waiting-front-whose-facts-name-an-older-head-is-left-alone
+  (let [r (rig (atom {1 {:state "waiting"}}))]
+    (pass! r (atom {}) [(a-change "ckopsa/waymark" 1 0
+                                  :missing_checks ["gate"] :behind_base true
+                                  :missing_checks_head "head-0")] {})
+    (is (= [] (numbers-of r "bench__update_branch"))
+        "the facts were read at a head the row no longer names")))
 
 (deftest a-waiting-front-whose-check-is-running-is-left-alone
   (let [r (rig (atom {1 {:state "waiting"}}))]
