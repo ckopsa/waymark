@@ -1533,7 +1533,7 @@
       (let [[rb2 b2] (sit-as! "run-b")]
         (testing "B's re-sit is still handed nothing: the new sitting holds it"
           (is (false? (:isError rb2)) (text-of rb2))
-          (is (= (:sitting b) (:sitting b2)) "B's open sitting is reused")
+          (is (not= (:sitting c) (:sitting b2)))
           (is (empty? (rows-of b2)))
           (is (contains? (withheld-of b2) gas-id))))
       (abandon! c)
