@@ -79,6 +79,24 @@
            :explain "Nobody answers the knock."
            :remedies [:hatch/knock]}))
 
+;; cross-kind read, so the POST refuses a shut gate with both remedies:
+;; nudge lands it ajar (open is retried), shove lands it open (open's
+;; own effect.to, so it stands in for open)
+(g/defguard gate-stuck
+  {:reads [:gate]
+   :explain "The gate is stuck shut."
+   :remedies [:gate/nudge :gate/shove]}
+  [row _inp ctx]
+  (if (and (:read ctx) (= "shut" (some-> row :state name)))
+    (t/deny)
+    (t/allow)))
+
+;; pure over the row: a tight gate refuses nudge, with no remedy
+(def gate-loose
+  (g/expr {:name :gate-loose
+           :when '(= (data :loose) true)
+           :explain "The gate will not budge a little."}))
+
 (r/defhandler assign-meal-handler [row inp _ctx]
   (assoc-in row [:data :meal_id] (:meal_id inp)))
 
@@ -155,7 +173,29 @@
      :knock {:from #{:shut} :to :shut :safety fx/routine}
      :close {:from #{:open} :to :shut :safety fx/routine}}}))
 
-(def resources [fx/meal plan-day plan grocery-list latch hatch])
+;; spelled once: the gate's doors are not declared reversible
+(def one-way
+  {:idempotent true :reversible false :confirm false
+   :one-way "A test gate: close covers regret."})
+
+(def gate
+  (r/resource
+   {:kind :gate
+    :states [:shut :ajar :open]
+    :initial :shut
+    :summary "Gate · {state}"
+    :schema [:map [:loose {:optional true} [:maybe :boolean]]]
+    :actions
+    {:open {:from #{:shut :ajar} :to :open
+            :guards [gate-stuck]
+            :safety one-way}
+     :nudge {:from #{:shut} :to :ajar
+             :guards [gate-loose]
+             :safety one-way}
+     :shove {:from #{:shut} :to :open :safety one-way}
+     :close {:from #{:ajar :open} :to :shut :safety one-way}}}))
+
+(def resources [fx/meal plan-day plan grocery-list latch hatch gate])
 
 (def ^:dynamic *session* nil)
 
@@ -398,6 +438,28 @@
     (is (seq (:writes res)))
     (is (every? #{"hatch.knock"} (map :door (:writes res))))
     (is (= "shut" (state-of hx)))))
+
+;; ── an alternative that reaches the refused door's effect.to
+
+(deftest an-alternative-landing-the-doors-state-stands-in-for-it
+  (let [gx (make! :gate {:loose false})
+        plan (c/pursue! *session* gx :open nil {:dry-run true})
+        res (c/pursue! *session* gx :open nil {})]
+    (is (= ["gate.shove"] (mapv :door (:writes plan))) (pr-str plan))
+    (is (c/doc? (:done res)) (pr-str res))
+    (is (= ["gate.shove"] (mapv :door (:writes res)))
+        "shove landed the gate open: open is not retried")
+    (is (= "open" (state-of gx)))))
+
+(deftest an-alternative-landing-elsewhere-still-retries-the-door
+  (let [gx (make! :gate {:loose true})
+        plan (c/pursue! *session* gx :open nil {:dry-run true})
+        res (c/pursue! *session* gx :open nil {})]
+    (is (= ["gate.nudge" "gate.open"] (mapv :door (:writes plan))) (pr-str plan))
+    (is (c/doc? (:done res)) (pr-str res))
+    (is (= ["gate.nudge" "gate.open"] (mapv :door (:writes res)))
+        "nudge landed the gate ajar, not open: open is retried")
+    (is (= "open" (state-of gx)))))
 
 ;; ── GRAIL 3/3: waymark_pursue, the MCP tool ─────────────────────────────
 
