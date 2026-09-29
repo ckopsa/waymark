@@ -94,6 +94,30 @@
 
 ;; ── the credential check (R-4.6) ─────────────────────────────────────
 
+(def ^:private delegate-json
+  "discover's principal for a delegate's token"
+  (json/write-value-as-string {"id" "localfire-claude:sub-1" "type" "agent"
+                               "display" "Claude for P" "roles" []}))
+
+(defn- probe-out [result]
+  (json/write-value-as-string {"type" "result" "is_error" false "result" result}))
+
+(deftest the-probe-passes-only-for-a-delegate
+  (testing "a delegate's principal passes"
+    (is (true? (:ok (server/judge-probe 0 (probe-out (str server/probe-pass-word " " delegate-json)) "")))))
+  (testing "a person's own token answers, but no seat could sit on it"
+    (let [human (json/write-value-as-string {"id" "sub-1" "type" "human"
+                                             "display" "P" "roles" ["member"]})
+          r (server/judge-probe 0 (probe-out (str server/probe-pass-word " " human)) "")]
+      (is (false? (:ok r)))
+      (is (= server/probe-not-delegate (:detail r)))))
+  (testing "no principal, or the bare pass word, is not a delegate"
+    (is (false? (:ok (server/judge-probe 0 (probe-out (str server/probe-pass-word " null")) ""))))
+    (is (false? (:ok (server/judge-probe 0 (probe-out server/probe-pass-word) "")))))
+  (testing "a failure still says why"
+    (is (= "The MCP server answered 401."
+           (:detail (server/judge-probe 1 (probe-out "The MCP server answered 401.") ""))))))
+
 (defn- probe-spawner
   "A run goes to the suite's fake; the probe — the one start with no
   `--session-id` — passes or fails as `pass?` says."
@@ -107,7 +131,7 @@
                 out  (json/write-value-as-string
                       (if ok?
                         {"type" "result" "is_error" false
-                         "result" server/probe-pass-word}
+                         "result" (str server/probe-pass-word " " delegate-json)}
                         {"type" "result" "is_error" true
                          "result" "The MCP server waymark answered 401: the credential expired."}))]
             (swap! probes conj (vec argv))

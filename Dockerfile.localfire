@@ -45,8 +45,16 @@ RUN HOME=/app clojure -P -M:serve
 COPY --chown=localfire:localfire localfire/src/ src/
 
 # The seat place, baked in: the image moves with every change to seat/,
-# so the node never clones it.
+# so the node never clones it. It is the same three files
+# .github/workflows/seat-place.yml assembles: seat/ holds CLAUDE.md and
+# .claude/settings.json, and the hook's one source is the repo root's
+# .claude/hooks/sitting-close.sh.
 COPY seat/ /srv/waymark-seat/
+COPY --chmod=755 .claude/hooks/sitting-close.sh /srv/waymark-seat/.claude/hooks/sitting-close.sh
+RUN test "$(cd /srv/waymark-seat && find . -type f | LC_ALL=C sort | tr '\n' ' ')" \
+      = "./.claude/hooks/sitting-close.sh ./.claude/settings.json ./CLAUDE.md " \
+ && test -x /srv/waymark-seat/.claude/hooks/sitting-close.sh \
+ && bash -n /srv/waymark-seat/.claude/hooks/sitting-close.sh
 
 ENV HOME=/data
 EXPOSE 8112
