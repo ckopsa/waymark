@@ -580,6 +580,13 @@
   (move-the-ticket! row ctx #{:in_review} :return)
   (assoc-in row [:data :rounds] 0))
 
+(defhandler rework-the-change [row _inp _ctx]
+  ;; `unstick`'s count, walked by the TICKET (ticket 9ace68fb): a groom,
+  ;; an unblock or a resume is a person's reading of the ask, so the
+  ;; rounds start again. The ticket is already on its way to `open`,
+  ;; so nothing here moves it.
+  (assoc-in row [:data :rounds] 0))
+
 (defhandler unstick-the-pull-request [row _inp ctx]
   ;; A STUCK CHANGE WITH A PULL REQUEST GOES BACK WHERE THE PULL REQUEST
   ;; IS (ticket 6bdaf6fe). An `open` change is read by neither the
@@ -736,6 +743,20 @@
     (if (and (= :agent type) (str/blank? (str acts-for)))
       (t/deny)
       (t/allow))))
+
+(defguardfn only-its-ticket-reworks-it
+  {:reads [:within]
+   :open "No door clears this one. A stuck change goes back to work when a person grooms, unblocks or resumes the ticket it was built for; the ticket moves it then, and a person who wants it sooner taps unstick."
+   :explain "A stuck change is put back to work by its ticket's groom, unblock or resume, in the same transaction, and by no hand: a person's own door is unstick."}
+  [_row _inp ctx]
+  ;; ticket's `only-its-change-moves-it`, the other way round: the door
+  ;; opens inside a `ticket` door's own transaction and for nobody's
+  ;; hand. The wire, the render probe and every rehearsal answer nil,
+  ;; so it renders refused, which is true.
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :ticket kind) (contains? #{:groom :unblock :resume} action))
+      (t/allow)
+      (t/deny))))
 
 (defn- has-a-pull-request? [row]
   (some? (get-in row [:data :number])))
@@ -1751,6 +1772,22 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Back to work" :style :primary :order 1
                :description "Put this change back in the queue — the rounds start again"}}
+
+    ;; THE TICKET'S WAY BACK FOR ITS CHANGE (ticket 9ace68fb). A stall
+    ;; sends the ticket to draft, and a block takes it out of the queue;
+    ;; the groom, unblock or resume that puts it back in `open` puts a
+    ;; stuck change with no pull request back to work with it, or the
+    ;; sit would leave the ticket out beside its stuck change forever.
+    ;; A change WITH a pull request stays stuck for a person's
+    ;; unstick_submitted.
+    :rework
+    {:from #{:stuck} :to :open
+     :guards [only-its-ticket-reworks-it
+              the-change-has-no-pull-request]
+     :handler rework-the-change
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Reworked" :order 21
+               :description "Its ticket was groomed, unblocked or resumed — the change goes back to work"}}
 
     ;; the same door for a change with a pull request (ticket 6bdaf6fe):
     ;; it lands where the pull request is, so the forge pass reads its

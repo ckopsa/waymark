@@ -2481,6 +2481,46 @@
         "and the seat is offered submit on the change beside its walk")
     (is (nil? (:change_note answer)))))
 
+(deftest the-groom-itself-puts-a-stalled-change-back-to-work
+  ;; ticket 9ace68fb: the wakes leave out a ticket beside a stuck
+  ;; change, so the change must be open BEFORE any sit, or no seat
+  ;; fires to walk it
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (person-moves-ticket! w :groom)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the groom moved the change, not a sit")
+    (is (zero? (long (get-in row [:data :rounds]))))
+    (is (not (contains? (seats/stuck-walk-rows (:eng w) "ticket")
+                        (str (:id (:ticket w)))))
+        "so the wakes count the ticket again")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows])))
+        "and the next sit hands it")))
+
+(deftest the-unblock-puts-a-stalled-change-back-to-work
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        blocker (:row (inv/create! (:eng w) :ticket
+                                   {:title "The blocker" :type "task"
+                                    :repo a-repository}
+                                   {:principal person}))
+        tid (str (:id (:ticket w)))
+        drafted (store/with-tx (:storage (:eng w))
+                  (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket tid {})))
+        ;; `block` is fenced: name the version the stall left
+        _ (inv/invoke! (:eng w) :ticket tid :block
+                       {:blocked_by [(str (:id blocker))]}
+                       {:principal person
+                        :if-match (inv/etag :ticket tid (:version drafted))})
+        _ (person-moves-ticket! w :unblock)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the unblock moved the change")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows]))))))
+
 (deftest a-stall-with-no-groom-after-it-stays-stuck
   (let [w (ticket-world)
         stalled (seat-invokes! w "stall" {:why a-stall-sentence})
