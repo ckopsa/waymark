@@ -14,6 +14,8 @@ uv.lock
 !.claude/hooks/
 !.claude/skills/
 dist/
+# emacs autosave files (escaped: a leading # starts a comment)
+\#*#
 # external repo clones vendored for reference, not part of this project
 full_stack/
 
