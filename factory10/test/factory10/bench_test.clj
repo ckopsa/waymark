@@ -3209,6 +3209,88 @@
     (inv/invoke! (:eng w) :change id :unstick {} {:principal person})
     (is (= "open" (name (:state (first (changes-of (:eng w)))))))))
 
+;; ── the ticket puts a stuck pull request back under review (ticket 4363c63b)
+;;
+;; A seat stalls a change whose pull request went red or conflicted, and
+;; the stall shelves its ticket. The groom, unblock or resume that puts
+;; the ticket back in the queue puts that pull request back under
+;; review in the same transaction, where the next forge pass reads it.
+
+(defn- stalled-with-a-pull-request!
+  [w number]
+  (submitted-and-adopted! w number)
+  (let [stalled (seat-invokes! w "stall" {:why a-stall-sentence})]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))))
+
+(defn- change-state [w] (name (:state (first (changes-of (:eng w))))))
+
+(def ^:private a-conflict
+  {:failing_checks ["merge-conflict"]
+   :conflicts ["factory10/src/factory10/resources/ticket.clj"]})
+
+(defn- back-under-review-and-red? [w]
+  (let [row (first (changes-of (:eng w)))]
+    (is (= "submitted" (name (:state row)))
+        "the ticket's move put the pull request back under review")
+    (is (zero? (long (get-in row [:data :rounds]))))
+    (is (nil? (get-in row [:data :failing_checks])))
+    (is (= "open" (ticket-state w)))
+    (mirror-moves-change! w :fail a-conflict)
+    (let [row (first (changes-of (:eng w)))]
+      (is (= "failing" (name (:state row)))
+          "the next forge pass reads the conflict and sends it to the seat")
+      (is (= (:conflicts a-conflict) (get-in row [:data :conflicts]))))))
+
+(deftest a-groom-puts-a-stuck-pull-request-back-under-review
+  (let [w (ticket-world)]
+    (stalled-with-a-pull-request! w 91)
+    (person-moves-ticket! w :groom)
+    (back-under-review-and-red? w)))
+
+(deftest an-unblock-puts-a-stuck-pull-request-back-under-review
+  (let [w (ticket-world)
+        _ (stalled-with-a-pull-request! w 92)
+        blocker (:row (inv/create! (:eng w) :ticket
+                                   {:title "The blocker" :type "task"
+                                    :repo a-repository}
+                                   {:principal person}))]
+    (force-ticket-state! w :open)
+    (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :block
+                 {:blocked_by [(str (:id blocker))]}
+                 (ticket-fence w))
+    (is (= "stuck" (change-state w)))
+    (person-moves-ticket! w :unblock)
+    (back-under-review-and-red? w)))
+
+(deftest a-resume-puts-a-stuck-pull-request-back-under-review
+  (let [w (ticket-world)]
+    (stalled-with-a-pull-request! w 93)
+    (force-ticket-state! w :deferred)
+    (person-moves-ticket! w :resume)
+    (back-under-review-and-red? w)))
+
+(deftest a-groom-leaves-a-closed-pull-request-alone
+  (let [w (ticket-world)]
+    (stalled-with-a-pull-request! w 94)
+    (mirror-moves-change! w :close nil)
+    (force-ticket-state! w :draft)
+    (person-moves-ticket! w :groom)
+    (is (= "closed" (change-state w))
+        "GitHub closed it, and the groom does not put it back")))
+
+(deftest the-ticket-door-is-refused-to-every-hand
+  (let [w (ticket-world)
+        _ (stalled-with-a-pull-request! w 95)
+        id (get-in (:answer w) [:change :id])]
+    (doseq [p [person mirror/source-principal]]
+      (is (thrown? Exception
+                   (inv/invoke! (:eng w) :change id :rework_submitted {}
+                                {:principal p}))))
+    (is (true? (:isError (seat-invokes! w "rework_submitted" {})))
+        "the seat is refused at the wire")
+    (is (= "stuck" (change-state w)))))
+
 ;; ── a reopen finds the submitted change ────────────────────────────────────
 ;;
 ;; THE SOURCE ADOPTS A SUBMITTED CHANGE, which writes GitHub's id over
