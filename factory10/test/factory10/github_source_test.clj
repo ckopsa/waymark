@@ -1085,6 +1085,45 @@
       (is (nil? (get-in row [:data :failing_checks])))
       (is (= 1 (:recovered census))))))
 
+(deftest a-train-red-head-is-not-recovered-by-its-own-green
+  ;; ticket 6566d32f: a merge train found this head red, so the head's
+  ;; own green checks do not bring it back; a new head does
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["check-queue"]} 1)
+        id (str (:id (the-change engine)))
+        head (get-in a-pull-request [:head :sha])]
+    (inv/invoke! engine :change id :fail
+                 {:failing_checks ["merge-train"]
+                  :train_red_head head
+                  :train_red "the train's test10 went red"}
+                 {:principal mirror/source-principal})
+    (is (= :failing (:state (the-change engine))))
+    (testing "a green pass on the train's red head leaves it failing"
+      (let [census (pass! r)
+            row (the-change engine)]
+        (is (= head (get-in row [:data :head_sha])))
+        (is (= :failing (:state row)))
+        (is (= head (get-in row [:data :train_red_head])))
+        (is (= "the train's test10 went red" (get-in row [:data :train_red])))
+        (is (= 0 (:recovered census)))))
+    (testing "a green new head recovers it and clears the train's red"
+      (gh/seed-pull! state repo
+                     (assoc a-pull-request
+                            :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                            :updated_at "2026-09-18T14:00:00Z")
+                     {:files the-files :reviews the-reviews})
+      (gh/seed-check! state repo a-new-head
+                      {:id 41752098500 :name "check-queue"
+                       :status "completed" :conclusion "success"
+                       :head_sha a-new-head})
+      (let [census (pass! r)
+            row (the-change engine)]
+        (is (= a-new-head (get-in row [:data :head_sha])))
+        (is (= :submitted (:state row)))
+        (is (nil? (get-in row [:data :train_red_head])))
+        (is (nil? (get-in row [:data :train_red])))
+        (is (= 1 (:recovered census)))))))
+
 (deftest the-red-head-on-the-last-round-sticks-the-change
   (let [{:keys [engine] :as r}
         (red-world {:required_checks ["test10 (shard 3)"] :rounds_per_change 2}
