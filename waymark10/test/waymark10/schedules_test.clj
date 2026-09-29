@@ -906,3 +906,32 @@
           "b has run once and a three times, so least_used takes b twice"))
 
     (doseq [s [own bare]] (seat-do! s :retire))))
+
+(deftest a-broken-runner-is-passed-over-and-the-schedule-holds-only-when-none-is-live
+  ;; waymark ticket bb19404d
+  (let [cn :sched-broken-runner
+        _ (drain! cn)
+        chair (model! "claude-chair-broken")
+        _ (link-model! chair a-chair-url a-chair-token)
+        seat-id (seat! "broken-runner-clerk" 3600 [chair] {:instructions the-instructions})
+        _ (drain! cn)
+        [a b] (repeatedly 2 runner-link!)
+        break! (fn [id]
+                 (inv/invoke! *eng* :runner_link id :break
+                              {:note "The Routine refused the token."}
+                              {:principal sch/system-actor}))]
+    (set-runners! :schedule (:id (sched-of seat-id))
+                  {:runners [a b] :runner_order "prefer"})
+    (break! a)
+
+    (testing "the first runner is broken, so the fire goes through the second"
+      (is (not (sch/held? *eng* (sched-of seat-id))))
+      (fire-seat! seat-id "Walk the pool.")
+      (drain! cn)
+      (is (= b (get-in (sched-of seat-id) [:data :last_runner]))))
+
+    (testing "with no runner live, the whole schedule holds"
+      (break! b)
+      (is (sch/held? *eng* (sched-of seat-id))))
+
+    (seat-do! seat-id :retire)))

@@ -3689,6 +3689,21 @@
   the honest fix is the sweep, not a longer page."
   50)
 
+(defn open-sittings-for-grant
+  "Every open sitting under `grant-id`, newest first, one page of them:
+  `open-sitting-for-grant`'s query read past its first row. Every
+  sitting of a seat shares the seat's grant, so a sit that must find
+  THIS run's sitting among overlapping runs reads them all
+  (mcp/reusable-sitting)."
+  [eng grant-id]
+  (if (and grant-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/query-rows (:storage eng) tx :sitting
+                          {:grant (str grant-id) :state :open}
+                          {:limit open-sitting-page :newest-first true})))
+    []))
+
 (defn open-sitting-for-seat
   "The open sitting a SESSION-END REPORT belongs to (R-12.17), or nil.
 
@@ -3768,6 +3783,27 @@
                                      stamp (assoc :last_refusal stamp))
                                    nil)
                n))))))))
+
+(defn stamp-call!
+  "Move an open sitting's `last_call_at` to now and nothing else
+  (ticket 900764ce): a READ through the router is activity the idle
+  sweep must see, but it is neither a transition nor a refusal, and
+  `served` is the MCP door's per-tool ledger. The same MAINTENANCE
+  write as `bump-counter!` — document only, version untouched. → the
+  stamp, or nil when there was nothing to stamp: no id, an unknown
+  id, a sitting already closed, or a kind this engine does not serve."
+  [eng sitting-id]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (= :open (:state row))
+            (let [at (call-stamp eng)]
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  (assoc (:data row) :last_call_at at)
+                                  nil)
+              at)))))))
 
 (defn add-cancelled-run!
   "Count one cancelled bench.test run on an open sitting (ticket

@@ -206,3 +206,27 @@
                              (write-binding (assoc b :bench {:repo repo
                                                              :branch branch}))
                              h]))))))
+
+(defn bound-elsewhere
+  "Which of `sitting-ids` a session OTHER than `id` is bound to, as a
+  set. Only sessions touched since `cutoff` count: an older row is one
+  the next sweep takes. A plain read: no touch, no eviction."
+  [storage id sitting-ids ^Instant cutoff]
+  (let [ids (vec (distinct (keep #(some-> % str not-empty) sitting-ids)))]
+    (if (empty? ids)
+      #{}
+      (store/with-tx storage
+        (fn [tx]
+          (ensure! storage tx)
+          (into #{}
+                (keep :bound_sitting)
+                (jdbc/execute!
+                 tx (into [(str "SELECT DISTINCT bound_sitting"
+                                " FROM waymark10_mcp_sessions"
+                                " WHERE id_hash <> ? AND touched >= ?"
+                                " AND bound_sitting IN ("
+                                (apply str (interpose ", " (repeat (count ids) "?")))
+                                ")")
+                           (id-hash id) (ts cutoff)]
+                          ids)
+                 jdbc-opts)))))))
