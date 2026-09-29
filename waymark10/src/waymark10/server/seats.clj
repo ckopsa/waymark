@@ -949,7 +949,7 @@
     :else (t/deny {:vars {:seat (str (get-in row [:data :seat]))
                           :started_at (str (get-in row [:data :started_at]))}})))
 
-(def ^:private default-idle-seconds
+(def default-idle-seconds
   "The seat schema's own default for `sitting_idle_seconds`, for a row
   written before that field existed. One hour."
   3600)
@@ -3423,6 +3423,22 @@
                                  :label "The firing key's hash"
                                  :spelled-by-hand "The SHA-256 of the firing key that opened this sitting. The sit writes it; it answers only while the sitting is open; the engine never shows a key."}}
      [:maybe [:string {:max 64}]]]
+    ;; THE CONNECTOR SESSION'S CLAIM (ticket 7496403e). The sit that
+    ;; picks this sitting stamps the hash of its connector session and
+    ;; the moment, in the same transaction that holds the row, so a
+    ;; session-less re-sit after a drop can tell a claim whose session
+    ;; is gone from one a live run still holds (mcp/reusable-sitting).
+    [:connector_session {:optional true
+                         :x-display
+                         {:raw true
+                          :label "The claiming connector session"
+                          :help "The SHA-256 of the connector session that last sat in this sitting. The sit writes it; the engine never shows a session id."}}
+     [:maybe [:string {:max 64}]]]
+    [:claimed_at {:optional true
+                  :x-display
+                  {:label "Claimed"
+                   :spelled-by-hand "Stamped by the sit that last claimed this sitting for its connector session."}}
+     [:maybe :waymark/instant]]
     ;; THE INBOX'S KEY. A seat that declares an `inbox` is answered a
     ;; fresh key at each sit (`issue-inbox-key!`), and its hash is kept
     ;; here, on the sitting, so the key answers only while the sitting
@@ -3840,6 +3856,31 @@
                                   (assoc (:data row) :last_call_at at)
                                   nil)
               at)))))))
+
+(defn claim-sitting!
+  "Claim an open sitting for the connector session whose hash is
+  `claimant` (ticket 7496403e): `connector_session`, `claimed_at` and
+  `last_call_at` move together, when `free?` — handed the row's data
+  as this transaction holds it for update — says the row may be taken.
+  The same MAINTENANCE write as `stamp-call!`. Two sits racing for one
+  row serialise on its lock, and the second reads the first's claim.
+  A nil `claimant` stamps the call alone. → the row as claimed, or
+  nil: no id, an unknown id, a closed sitting, or a claim `free?`
+  refuses."
+  [eng sitting-id claimant free?]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (and (= :open (:state row)) (free? (:data row)))
+            (let [at (call-stamp eng)
+                  data (cond-> (assoc (:data row) :last_call_at at)
+                         claimant (assoc :connector_session (str claimant)
+                                         :claimed_at at))]
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  data nil)
+              (assoc row :data data))))))))
 
 (defn add-cancelled-run!
   "Count one cancelled bench.test run on an open sitting (ticket
