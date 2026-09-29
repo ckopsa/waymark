@@ -347,7 +347,7 @@
   (into {}
         (filter (comp some? val))
         {:reason (g/render-reason denier deny row)
-         :remedies (not-empty (vec (:remedies denier)))
+         :remedies (not-empty (g/remedy-doors denier))
          :becomes-available (g/becomes-available denier deny row)}))
 
 (defn- out-of-state-entry [defn' state]
