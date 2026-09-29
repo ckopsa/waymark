@@ -124,7 +124,7 @@ work.
 | `mode` | enum `fired`, `interactive`, default `fired` | who opens a sitting here. A schedule, a person or a wake fires a fired seat. A person sits in an interactive seat, and nothing fires it. R-10.8. |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
-| `sitting_idle_seconds` | int, 60 to 86400, default 3600 | how long an open interactive sitting can wait with no new tally before the sweep ends it. R-7.6. |
+| `sitting_idle_seconds` | int, 60 to 86400, default 3600 | how long an open interactive sitting can wait with no new tally, or an open fired sitting with no call, before the sweep ends it. R-7.6. |
 | `walk` | kind name, optional | the queue this seat walks, one row at a time, in the order of its default sort. R-12.9. |
 | `rows_per_firing` | int, default 20 | the most rows one firing moves to a leaf. The walk's cap. |
 | `stale` | list of scope entries | written by the sweep. A person never writes it. |
@@ -309,6 +309,14 @@ An open interactive sitting that has no tally, and that has waited
 longer than `sitting_idle_seconds` after `started_at`, is
 `abandoned`, as the rule above abandons a stale fired sitting. The
 sweep records the absence of a bill, and not a bill of zero.
+
+A fired sitting has a clock too. Every call the doors count against
+an open sitting (a tool answered, a transition, a refusal, a tally)
+stamps its `last_call_at`, and the sit stamps it at birth. The sweep
+must abandon an open fired sitting whose `last_call_at` is older than
+the seat's `sitting_idle_seconds`, with `closed_by` `sweep` and the
+note `silent since {last_call_at}`. The two cadences above stay as
+the outer bound.
 
 **R-7.7** A hard stop must raise an alert. The owner's ruling,
 2026-09-17: the three walls of R-5.2 (the seat not active, the model

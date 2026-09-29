@@ -597,6 +597,11 @@
       [:head {:optional true} [:maybe [:string {:max 64}]]]
       [:base_head {:optional true} [:maybe [:string {:max 64}]]]
       [:run_id {:optional true} [:maybe [:string {:max 64}]]]
+      ;; a red train's halves count their trains against the train
+      ;; they look in, and a cancelled run is run once more (6033c287)
+      [:tries {:optional true} [:maybe [:int {:min 1}]]]
+      [:size {:optional true} [:maybe [:int {:min 1}]]]
+      [:retried {:optional true} [:maybe :boolean]]
       [:started_at :waymark/instant]]]]])
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────

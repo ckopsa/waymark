@@ -9,6 +9,11 @@
   over the current window, over the one before it, and over each of
   the current window's equal buckets, oldest first.
 
+  An :at of transition:<action> (dashboard measures 2/3) counts the
+  history log instead: each logged transition of that action on a row
+  the where and the grant admit, placed by the transition's own time —
+  one read of the log for the kind (store/transition-times).
+
   Recorded choices: count counts rows; sum, median and p90 skip a row
   whose field is empty (or, for a duration, either end); an empty
   window's sum is 0 and its median or p90 null. p90 is nearest-rank.
@@ -74,6 +79,39 @@
     (some (fn [[k r]] (when (or (= t (name k)) (= t (:plural r))) r))
           (inv/resources eng))))
 
+(defn- over-cap! [n what]
+  (when (> n read-cap)
+    (throw (p/schema-invalid
+            :measure
+            {:rows [(str "over " read-cap " " what
+                         " fall in the window — narrow the where")]}))))
+
+(defn- row-points
+  "[instant value] per target row whose :at falls in the two windows."
+  [st kind parsed at conds]
+  (let [rows (store/with-tx st
+               (fn [tx]
+                 (store/search-rows st tx kind conds
+                                    {:order-by nil :desc nil
+                                     :limit (inc read-cap)})))
+        _ (over-cap! (count rows) "rows")
+        value-of (value-fn parsed)]
+    (keep (fn [row]
+            (when-some [t (instant-of (get-in row [:data at]))]
+              [t (value-of row)]))
+          rows)))
+
+(defn- transition-points
+  "[instant 1.0] per logged transition of action on the kind's rows
+  that match conds, in the two windows."
+  [st kind action before now conds]
+  (let [ats (store/with-tx st
+              (fn [tx]
+                (store/transition-times st tx kind (keyword action)
+                                        before now conds (inc read-cap))))]
+    (over-cap! (count ats) "transitions")
+    (map (fn [t] [t 1.0]) ats)))
+
 (defn report
   "The measure document for one dashboard_slot row, read under vis —
   the per-request grant projection; nil for an unscoped caller."
@@ -88,6 +126,7 @@
             (throw (p/not-found "collection" (:plural trdef))))
         kind (:kind trdef)
         stat (str (:stat m))
+        action (dash/transition-action (:at m))
         at (keyword (str (:at m)))
         parsed (dash/parse-measure-field (:field m))
         window (long (:window_seconds m))
@@ -99,8 +138,9 @@
                          trdef
                          (into {} (map (fn [[k v]] [(name k) v]))
                                (sv/parse-where (:where data))))
-        read-fields (distinct (cons at (or (:duration parsed)
-                                           (some-> (:field parsed) vector))))
+        read-fields (when-not action
+                      (distinct (cons at (or (:duration parsed)
+                                             (some-> (:field parsed) vector)))))
         ;; the oracle judges the slot's filters AND every field the
         ;; number reads: a hidden field is not summed into a number
         _ (grants/check-query! vis trdef
@@ -108,11 +148,13 @@
                                        (map (fn [f] {:target :data :field f})
                                             read-fields))
                                nil)
-        conds (into (vec conds)
-                    [{:target :data :field at :cast "timestamptz"
-                      :op :>= :value (str before)}
-                     {:target :data :field at :cast "timestamptz"
-                      :op :< :value (str now)}])
+        ;; a transition count bounds the LOG's time, not the rows'
+        conds (cond-> (vec conds)
+                (nil? action)
+                (into [{:target :data :field at :cast "timestamptz"
+                        :op :>= :value (str before)}
+                       {:target :data :field at :cast "timestamptz"
+                        :op :< :value (str now)}]))
         conds (if-some [ids (when vis ((:ids-of vis) kind))]
                 (conj conds {:target :id :op :in :values (vec ids)})
                 conds)
@@ -121,21 +163,9 @@
                 (into conds fconds)
                 conds)
         st (:storage eng)
-        rows (store/with-tx st
-               (fn [tx]
-                 (store/search-rows st tx kind conds
-                                    {:order-by nil :desc nil
-                                     :limit (inc read-cap)})))
-        _ (when (> (count rows) read-cap)
-            (throw (p/schema-invalid
-                    :measure
-                    {:rows [(str "over " read-cap
-                                 " rows fall in the window — narrow the where")]})))
-        value-of (value-fn parsed)
-        points (keep (fn [row]
-                       (when-some [t (instant-of (get-in row [:data at]))]
-                         [t (value-of row)]))
-                     rows)
+        points (if action
+                 (transition-points st kind action before now conds)
+                 (row-points st kind parsed at conds))
         cur (filterv (fn [[^Instant t _]] (not (.isBefore t from))) points)
         prev (filterv (fn [[^Instant t _]] (.isBefore t from)) points)
         wms (* 1000 window)
