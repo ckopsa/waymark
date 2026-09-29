@@ -374,6 +374,16 @@
                         {:label "Rounds for one change"
                          :help "How many times a seat may submit one change before the house stops. At the ceiling the change moves to stuck and waits for a person."}}
     [:int {:min 1 :max 20}]]
+   ;; the merge train (ticket 394d0602, slice a of 3deb06ed). OPTIONAL
+   ;; for the reason merge_wait_seconds is: a row that predates it
+   ;; reads as 1 (bench's `train-size-of`)
+   [:train_size {:optional true
+                 :default 1
+                 :examples [1]
+                 :x-display
+                 {:label "How many changes ride one train"
+                  :help "How many green changes the house tests and merges together as one train. 1 is today's line: one change at a time, each brought up to date and merged alone."}}
+    [:int {:min 1 :max 10}]]
    [:formatter {:default "runner"
                 :x-display
                 {:label "What formats the code"
@@ -535,8 +545,9 @@
                          {:label "The front waits on"
                           :choices {"update" "It was just brought up to date, and its checks run on the new head"
                                     "checks" "Its checks are still running"
-                                    "merge" "It was offered the merge, and GitHub has not merged it yet"}}}
-    [:maybe [:enum "update" "checks" "merge"]]]
+                                    "merge" "It was offered the merge, and GitHub has not merged it yet"
+                                    "train" "It rides a train, and the train's checks run"}}}
+    [:maybe [:enum "update" "checks" "merge" "train"]]]
    [:line_waiting {:optional true
                    :examples [2]
                    :x-display
@@ -548,7 +559,30 @@
               :x-display
               {:label "Line read at"
                :help "When the merge pass last wrote the line, which it does when the line moves."}}
-    [:maybe :waymark/instant]]])
+    [:maybe :waymark/instant]]
+   ;; the merge train (ticket 394d0602): the train that stands now, as
+   ;; the merge pass writes it. Nothing writes it yet
+   [:line_train {:optional true
+                 :examples [{:branch "train/ckopsa/waymark/1"
+                             :changes ["2847912e-7783-4651-bead-61eab0492776"]
+                             :prs [250]
+                             :head "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"
+                             :base_head "0e1d2c3b4a5968778695a4b3c2d1e0f912345678"
+                             :run_id "123456789"
+                             :started_at "2026-09-29T12:00:00Z"}]
+                 :x-display
+                 {:raw true
+                  :label "The train"
+                  :help "The changes that ride one train together: its branch, their changes and pull requests, the train's head and the base head it was built on, the check run that tests it, and when it started. Empty when no train stands."}}
+    [:maybe
+     [:map
+      [:branch [:string {:max 200}]]
+      [:changes [:vector [:string {:max 64}]]]
+      [:prs [:vector [:int {:min 1}]]]
+      [:head {:optional true} [:maybe [:string {:max 64}]]]
+      [:base_head {:optional true} [:maybe [:string {:max 64}]]]
+      [:run_id {:optional true} [:maybe [:string {:max 64}]]]
+      [:started_at :waymark/instant]]]]])
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
@@ -600,7 +634,7 @@
                       :opens_pr :auto_merge :merge_by :required_checks
                       :merge_method :merge_wait_seconds
                       :deploy_check :deploy_wait_seconds
-                      :rounds_per_change :formatter
+                      :rounds_per_change :train_size :formatter
                       :deny :test :orientation]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
