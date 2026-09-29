@@ -408,6 +408,25 @@
     (when-some [gid (get-in session [:visibility :grant :id])]
       (some-> (seats/open-sitting-for-grant eng gid) :id str))))
 
+(defn- bound-elsewhere
+  "Which of `sitting-ids` another live connector session is bound to,
+  as a set: a sitting some run is using, even one its harness never
+  stamped (ticket 5d4bbab6)."
+  [eng id sitting-ids]
+  (let [id (some-> id str not-empty)]
+    (cond
+      (empty? sitting-ids) #{}
+      (session-table? eng)
+      (sessions/bound-elsewhere (:storage eng) id sitting-ids
+                                (ttl-cutoff ((:now-fn eng))))
+      :else
+      (let [wanted (set (map str sitting-ids))]
+        (into #{}
+              (comp (remove (fn [[k _]] (= k id)))
+                    (keep (fn [[_ e]] (some-> e :bound :sitting str)))
+                    (filter wanted))
+              (some-> (:mcp-sessions eng) deref (evict ((:now-fn eng)))))))))
+
 (defn- bound-seat
   "The seat this session is bound to, or nil. Read from the BINDING
   and not from the sitting row: `waymark_sit` writes the seat and the
@@ -2020,13 +2039,34 @@
   scheduled hour — and the second run reusing the first's sitting
   would put both wakes' tokens on one row and leave the first run's
   hook with nothing to close. So the reuse holds only when the row is
-  THIS run's: no harness session stamped on it (nobody has claimed
-  it), or the same one this session just declared."
-  [eng grant harness-session]
-  (when-some [open (seats/open-sitting-for-grant eng (:id grant))]
-    (let [held (some-> (get-in open [:data :harness_session]) str not-empty)]
-      (when (or (nil? held) (= held harness-session))
-        open))))
+  THIS run's, and every sitting of a seat shares the seat's grant, so
+  the grant's NEWEST open sitting is not the answer (tickets 8c72fd3a,
+  5d4bbab6). Read in this order:
+
+    1. the open sitting this connector session is already bound to,
+       under this grant — unless it is stamped with another run's
+       harness session than the one just declared;
+    2. when a harness session is declared, the grant's newest open
+       sitting stamped with it — the pairing `open-sitting-for-seat`
+       makes at the close;
+    3. only then the grant's newest UNCLAIMED open sitting: no stamp,
+       and no other live connector session bound to it."
+  [eng sid grant harness-session]
+  (let [gid (str (:id grant))
+        stamp-of #(some-> (get-in % [:data :harness_session]) str not-empty)
+        wanted (some-> harness-session str not-empty)
+        bound (some->> (bound-sitting eng sid) str not-empty (row-of eng :sitting))]
+    (or (when (and bound
+                   (= "open" (some-> (:state bound) name))
+                   (= gid (str (get-in bound [:data :grant])))
+                   (let [held (stamp-of bound)]
+                     (or (nil? held) (nil? wanted) (= held wanted))))
+          bound)
+        (let [rows (seats/open-sittings-for-grant eng gid)]
+          (or (when wanted (first (filter #(= wanted (stamp-of %)) rows)))
+              (let [free (remove stamp-of rows)
+                    taken (bound-elsewhere eng sid (map (comp str :id) free))]
+                (first (remove #(contains? taken (str (:id %))) free))))))))
 
 (defn- open-sitting!
   "The sitting this bound session is counted against (R-12.15): the
@@ -2046,9 +2086,9 @@
   cannot derive which run this is, the harness can, and a pairing made
   here is one the session-end door (R-12.17) reads rather than
   reconstructs."
-  [eng sitter grant seat model harness-session]
+  [eng sid sitter grant seat model harness-session]
   (when model
-    (or (reusable-sitting eng grant harness-session)
+    (or (reusable-sitting eng sid grant harness-session)
         (:row (inv/create! eng :sitting
                            (cond-> {:seat (str (:id seat))
                                     :model (str (:id model))
@@ -3667,7 +3707,7 @@
             ;; g' · the sitting the router counts against, opened here
             ;; because nobody else opens one for a keyed session
             sitting (or (second resit)
-                        (open-sitting! eng sitter grant seat model-row harness))
+                        (open-sitting! eng sid sitter grant seat model-row harness))
             ;; … and the spent firing's key leaves its trace on the
             ;; sitting it opened, so a lost bind can find its way back
             _ (when (and fired? sitting)
