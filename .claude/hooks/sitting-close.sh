@@ -17,8 +17,9 @@
 # answer to waymark_sit, which carries "mode" beside "sitting" — so this
 # hook reads it out of the transcript rather than being told.
 #
-# Argument: "end" for the SessionEnd entry; anything else (the Stop
-# entry passes nothing) is the Stop event.
+# Argument: "end" for the SessionEnd entry; "close-run" for a close
+# from outside the run (see below: localfire calls it); anything else
+# (the Stop entry passes nothing) is the Stop event.
 #
 # Two paths, as R-12.26 has them. When the environment carries the
 # door's URL, the hook posts. When it carries nothing — a cloud
@@ -293,9 +294,10 @@ def text_of(block):  # a tool result is a string, or blocks of text
 
 totals, turns = dict.fromkeys(FIELDS, 0), 0
 sat, sitting, seat_mode, closed, transcript = set(), "", "", False, None
-# Agent launches by tool_use id (True when run in the background), and
-# the ids of the background agents that have not handed back yet.
-launched, pending = {}, set()
+# Agent launches by tool_use id (True when run in the background), the
+# tool_use ids of background Bash and Monitor launches, and the ids of
+# the background agents and tasks that have not handed back yet.
+launched, tasks, pending = {}, set(), set()
 for index, path in enumerate(paths):
     seen = set()
     try:
@@ -331,6 +333,13 @@ for index, path in enumerate(paths):
                 elif kind == "tool_use" and name in ("Agent", "Task"):
                     launched[block.get("id")] = bool(
                         (block.get("input") or {}).get("run_in_background"))
+                elif kind == "tool_use" and (name == "Monitor" or (
+                        name == "Bash" and (block.get("input") or {}).get("run_in_background"))):
+                    tasks.add(block.get("id"))
+                elif kind == "tool_use" and name == "TaskStop":
+                    # a stopped task will not hand back: drop the id it names
+                    arg = block.get("input") or {}
+                    pending -= {v for v in arg.values() if isinstance(v, str)}
                 elif kind == "tool_result" and block.get("tool_use_id") in sat:
                     answer = text_of(block)
                     named = re.findall(r'"sitting"\s*:\s*"([^"]+)"', answer)
@@ -355,6 +364,12 @@ for index, path in enumerate(paths):
                     if launched[block.get("tool_use_id")] or re.search(
                             r"async.*launched|launched.*background", answer, re.I | re.S):
                         pending.update(re.findall(r"agentId:\s*([\w-]+)", answer))
+                elif kind == "tool_result" and block.get("tool_use_id") in tasks:
+                    # "Command running in background with ID: <id>.", and the
+                    # Monitor's answer names its task id likewise; the hand-back
+                    # is a later <task-notification> line naming <task-id><id>
+                    pending.update(re.findall(
+                        r"(?:\bID|\btask[ _-]?id)[\"'\s:=]+([\w-]+)", text_of(block), re.I))
             if record.get("type") != "assistant":
                 continue
             # One API response is several lines, one for each content
@@ -384,6 +399,21 @@ report = {"input_tokens": count[0], "output_tokens": count[1],
           "note": ("Reported by the hook after %d turns." % turns)[:240]}
 if MODE == "post":
     json.dump(report, sys.stdout)
+    sys.exit(0)
+
+# "close-run": what "direct" answers, for a close from OUTSIDE the run.
+# No stop is being held and the run is gone, so neither a pending agent
+# nor stop_hook_active holds it back, and the caller note (from
+# WAYMARK_CLOSE_NOTE) stands in for the hook note when one is given.
+if MODE == "close-run":
+    note = os.environ.get("WAYMARK_CLOSE_NOTE", "").strip()
+    if note:
+        report["note"] = note[:240]
+    if sitting and not closed and transcript \
+            and re.search(r"/transcript/?$", transcript[0]):
+        sys.stdout.write(re.sub(r"/transcript/?$", "/close", transcript[0]) + "\n")
+        sys.stdout.write(transcript[1] + "\n")
+        json.dump(report, sys.stdout)
     sys.exit(0)
 
 # While waiting, the status line alone: no close, and no hold.
@@ -445,12 +475,57 @@ post_report() {
       detail=$(printf '%s' "${reply%$'\n'*}" | python3 -c 'import json,sys
 try: print(json.loads(sys.stdin.read()).get("detail") or "")
 except Exception: pass' 2>/dev/null)
-      echo "waymark: the sitting report was answered ${status}. ${detail}" >&2 ;;
-    *) echo "waymark: the sitting report did not reach the door: $(printf '%s' \
+      echo "waymark: the sitting report for ${SITTING:-no sitting} was answered ${status}. ${detail}" >&2 ;;
+    *) echo "waymark: the sitting report for ${SITTING:-no sitting} did not reach the door: $(printf '%s' \
          "$reply" | tr '\n' ' ')" >&2 ;;
   esac
   return 0
 }
+
+# An EXTERNAL close for a fired run: localfire calls it for a run it
+# marks lost or whose process exited, when no Stop will come to close
+# the sitting. `sitting-close.sh close-run [note]`, with the run's
+# {session_id, transcript_path} on stdin and the note as the argument or
+# in WAYMARK_CLOSE_NOTE. It finds the sitting and the transcript key as
+# direct_close does and posts the close with the harness's counts and
+# that note, whether or not the environment carries the door. It prints
+# ONE status line on stdout, for the caller: "closed <sitting>",
+# "already-closed <sitting>" (a close in the transcript, or a 409), or
+# "failed <sitting>: <reason>"; and it exits 0 only when the sitting is
+# closed, so a failure is the caller's to say.
+if [ "$EVENT" = "close-run" ]; then
+  OUT=$(printf '%s' "$HOOK" | WAYMARK_CLOSE_NOTE="${2:-${WAYMARK_CLOSE_NOTE:-}}" \
+    python3 -c "$SUM" close-run 2>/dev/null) || {
+    echo "failed (none): the transcript could not be read"; exit 1; }
+  STATUS_LINE=${OUT%%$'\n'*}
+  REST=${STATUS_LINE#*|}
+  SITTING=${REST%%|*}
+  REST=${REST#*|}
+  CLOSED=${REST%%|*}
+  [ -n "$SITTING" ] || { echo "failed (none): the transcript holds no sit"; exit 1; }
+  [ "$CLOSED" = "0" ] || { echo "already-closed $SITTING"; exit 0; }
+  case "$OUT" in
+    *$'\n'*$'\n'*$'\n'*) OUT=${OUT#*$'\n'} ;;
+    *) echo "failed $SITTING: the sit answered no transcript address and key"; exit 1 ;;
+  esac
+  URL=${OUT%%$'\n'*}
+  REST=${OUT#*$'\n'}
+  KEY=${REST%%$'\n'*}
+  BODY=${REST#*$'\n'}
+  [ -n "$URL" ] && [ -n "$KEY" ] && [ -n "$BODY" ] || {
+    echo "failed $SITTING: the close door, the transcript key or the counts came back empty"; exit 1; }
+  REPLY=$(curl -sS --max-time 20 -X POST -H 'Content-Type: application/json' \
+    -H "Waymark-Transcript-Key: ${KEY}" -d "$BODY" -w '\n%{http_code}' "$URL" 2>&1)
+  STATUS=${REPLY##*$'\n'}
+  case "$STATUS" in
+    2??) echo "closed $SITTING"; exit 0 ;;
+    409) echo "already-closed $SITTING"; exit 0 ;;
+    [1-5][0-9][0-9])
+      echo "failed $SITTING: the door answered ${STATUS}: $(printf '%s' "${REPLY%$'\n'*}" | tr '\n' ' ' | cut -c1-200)" ;;
+    *) echo "failed $SITTING: it did not reach the door: $(printf '%s' "$REPLY" | tr '\n' ' ' | cut -c1-200)" ;;
+  esac
+  exit 1
+fi
 
 # Path one: the environment carries the door.
 if [ -n "${WAYMARK_SEAT_URL:-}" ]; then
@@ -538,25 +613,34 @@ fi
 # transcript's address and key, the key also opens the close beside it,
 # and the transcript went up above. A 2xx means the bill is in and the
 # stop is not held; anything else falls back to the hold below, once.
+# Every way the close can miss says so on stderr, one line naming the
+# sitting and the reason, so the next miss can be read off the hook log.
+miss() {
+  echo "waymark: the close of sitting ${SITTING:-(none)} did not land: $1; holding the stop." >&2
+}
 direct_close() {
   local out url rest key body reply status
-  out=$(printf '%s' "$HOOK" | python3 -c "$SUM" direct 2>/dev/null) || return 1
+  out=$(printf '%s' "$HOOK" | python3 -c "$SUM" direct 2>/dev/null) || {
+    miss "the hook could not read the transcript"; return 1; }
   case "$out" in
     *$'\n'*$'\n'*$'\n'*) out=${out#*$'\n'} ;;
-    *) return 1 ;;
+    *) miss "the sit answered no transcript address and key"; return 1 ;;
   esac
   url=${out%%$'\n'*}
   rest=${out#*$'\n'}
   key=${rest%%$'\n'*}
   body=${rest#*$'\n'}
-  [ -n "$url" ] && [ -n "$key" ] && [ -n "$body" ] || return 1
+  [ -n "$url" ] && [ -n "$key" ] && [ -n "$body" ] || {
+    miss "the close door, the transcript key or the counts came back empty"; return 1; }
   reply=$(curl -sS --max-time 20 -X POST -H 'Content-Type: application/json' \
     -H "Waymark-Transcript-Key: ${key}" -d "$body" -w '\n%{http_code}' "$url" 2>&1)
   status=${reply##*$'\n'}
   case "$status" in
     2??) return 0 ;;
+    [1-5][0-9][0-9])
+      miss "the door answered ${status}: $(printf '%s' "${reply%$'\n'*}" | tr '\n' ' ' | cut -c1-200)" ;;
+    *) miss "it did not reach the door: $(printf '%s' "$reply" | tr '\n' ' ' | cut -c1-200)" ;;
   esac
-  echo "waymark: the close by the transcript key was answered ${status}; holding the stop." >&2
   return 1
 }
 

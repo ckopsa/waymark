@@ -267,6 +267,22 @@
   (when-some [gid (get-in (visibility-of req) [:grant :id])]
     (seats/open-sitting-for-grant eng gid)))
 
+(defn- counted-sitting-id
+  "The id of the sitting a request is counted against, or nil: the
+  CALLING sitting when the request carries one, and the open sitting
+  under the live grant only when it does not.
+
+  Every sitting of a seat shares the seat's grant, so once a seat runs
+  more than one at a time `open-sitting` names the NEWEST open sitting
+  and not the one that called — a write and a refusal would land on a
+  sibling's row. The connector stamps `:waymark10/sitting` on every
+  door call a bound session makes (ticket 51dfd10b), which is the
+  request saying which sitting it is; this reads that first so the
+  guess is only ever the fallback."
+  [eng req]
+  (or (some-> (:waymark10/sitting req) str not-empty)
+      (:id (open-sitting eng req))))
+
 (defn- count-committed!
   "R-10.6, the transitions half: a committed, non-replayed transition
   under a live grant adds one to the open sitting's count. Returns the
@@ -282,8 +298,16 @@
   (when (and (not= :sitting kind)
              (:transition result)
              (nil? (:replayed? result)))
-    (when-some [sitting (open-sitting eng req)]
-      (seats/bump-counter! eng (:id sitting) :transitions)))
+    ;; the calling session's own sitting first (ticket f6c8d5ce): a
+    ;; bound session is never counted on a sibling under the grant
+    (when-some [sitting-id (counted-sitting-id eng req)]
+      (seats/bump-counter! eng sitting-id :transitions))
+    ;; the corrections line: a person's write on a row a closed sitting
+    ;; last moved counts against THAT sitting, found by the previous
+    ;; transition's grant — this request wears none of it
+    (seats/count-correction! eng kind
+                             (or (get-in result [:transition :resource-id])
+                                 (get-in result [:row :id]))))
   result)
 
 ;; ── the visibility checks (phase 9a, concealment) ───────────────────
@@ -334,7 +358,13 @@
      ;; a wall can refuse an agent UNLESS its own scope admits the
      ;; door. Nil for everybody who presented no live grant, which is
      ;; the posture those walls had before there was a door at all.
-     :grant (:grant (visibility-of req))
+     ;; with the calling sitting on it as `:sitting` when the request
+     ;; came from a session bound to one (mcp's waymark_invoke): every
+     ;; sitting of a seat shares the seat's grant, so the grant alone
+     ;; cannot say which sitting is calling (ticket 51dfd10b)
+     :grant (let [g (:grant (visibility-of req))
+                  sid (some-> (:waymark10/sitting req) str not-empty)]
+              (cond-> g (and (map? g) sid) (assoc :sitting sid)))
      :acknowledged (into #{} (map keyword) (csv (get headers "waymark-acknowledge")))
      ;; dry_run=1 is the full rehearsal; dry_run=partial judges only
      ;; what the caller provided (design §23) — anything else is a
@@ -376,7 +406,10 @@
            :now ((:now-fn eng))
            :services (:services eng)
            :visibility (visibility-of req)
-           :resources (inv/resources eng)}
+           :resources (inv/resources eng)
+           ;; the links assembled modules lend core kinds
+           ;; (seams/Linking), gathered once at boot
+           :link-doors (:link-doors eng)}
     (:probe-reads eng) (merge (inv/render-hooks eng))))
 
 (defn envelope-response
@@ -588,10 +621,18 @@
          ;; who the engine resolved this request to — the UI's
          ;; signed-in identity; absent when anonymous
          (not= t/anonymous principal)
-         (assoc :principal {:id (:id principal)
-                            :display (or (:display principal) (:id principal))
-                            :type (name (:type principal :human))
-                            :roles (vec (sort (:roles principal)))}))))))
+         (assoc :principal (cond-> {:id (:id principal)
+                                    :display (or (:display principal) (:id principal))
+                                    :type (name (:type principal :human))
+                                    :roles (vec (sort (:roles principal)))}
+                             ;; the person a tool acts for — what
+                             ;; waymark_sit asks of a seat key's session,
+                             ;; so a client (localfire's credential check)
+                             ;; can tell a delegate from an agent holding
+                             ;; its own key before it spends one. Absent
+                             ;; when the principal acts for nobody.
+                             (not (str/blank? (str (:acts-for principal ""))))
+                             (assoc :acts_for (str (:acts-for principal))))))))))
 
 (defn- kind-schema [eng]
   (fn [{{:keys [kind]} :path-params :as req}]
@@ -1212,7 +1253,14 @@
                                      action result))
             (dry-run-response result))
 
-        :else (report-response result)))))
+        :else
+        ;; R-10.6: a partial bulk's per-item 409s count on the
+        ;; sitting as a thrown one would (waymark-fp62.7.11)
+        (do (when (pos? (or (:conflicts result) 0))
+              (when-some [sitting-id (counted-sitting-id eng req)]
+                (dotimes [_ (:conflicts result)]
+                  (seats/bump-counter! eng sitting-id :refusals))))
+            (report-response result))))))
 
 (defn- batch-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
@@ -1591,7 +1639,7 @@
                                                     "fresh one")}})))
           home (welcome-home eng principal)
           services (:services eng)
-          default-ttl (long (:grant-default-ttl-seconds services 3600))
+          default-ttl (long (:grant-default-ttl-seconds services 86400))
           max-ttl (long (:grant-max-ttl-seconds services 86400))]
       (json-response
        200
@@ -1971,7 +2019,9 @@
 (defn wrap-refusals-counted
   "R-10.6, the refusals half: a 409 served under a live grant is fuel
   the sitting spent on law the model did not know ahead of time, so
-  the open sitting for that grant counts one. A refusal is the first
+  the CALLING sitting counts one — the request names it whenever a
+  connector session is bound to one, and the open sitting under the
+  grant answers only when it names none. A refusal is the first
   thing this codebase has ever counted, and the reason it is counted
   at all is that it is waymark's OWN backlog — a seat that spends its
   week on refused doors is a place where the law was not spoken at the
@@ -1991,12 +2041,14 @@
   middleware there: one refusal at either door counts once
   (waymark-fp62.7, item 2).
 
-  It counts a refusal the engine THREW. A bulk or batch call that
-  reports a per-item refusal in a 200 report counts nothing: the
-  report keeps the refusal's sentence and drops its status, so a
-  per-item 409 cannot be told from a per-item 404 or 422 here. An
-  atomic bulk, whose refusal leaves as one thrown 409, is counted like
-  any other."
+  It counts a refusal the engine THREW. An atomic bulk or batch, whose
+  refusal leaves as one thrown 409, is counted like any other. A
+  partial bulk reports its per-item refusals in a 200 report, which
+  keeps each refusal's sentence and drops its status; `bulk!` answers
+  the count of per-item 409s beside that report, and `bulk-action`
+  counts them on the sitting (waymark-fp62.7.11). A batch has no
+  partial mode, and a deferred bulk's items run in the job worker,
+  outside any sitting's request."
   [handler eng]
   (fn [req]
     (try
@@ -2004,8 +2056,9 @@
       (catch Exception e
         (let [d (ex-data e)]
           (when (and (:waymark10/problem d) (= 409 (:status d)))
-            (when-some [sitting (open-sitting eng req)]
-              (seats/bump-counter! eng (:id sitting) :refusals)))
+            (when-some [sitting-id (counted-sitting-id eng req)]
+              (seats/bump-counter! eng sitting-id :refusals
+                                   {:type (:type d) :guard (:guard d)})))
           (throw e))))))
 
 (defn core-static

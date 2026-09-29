@@ -13,10 +13,15 @@
             [clojure.string :as str]
             [localfire.prompt :as prompt]))
 
+(def default-mcp-name
+  "The MCP server's name, the cloud connector's own, so a run's tools
+  are `mcp__Waymark__…` as the seats' instructions spell them."
+  "Waymark")
+
 (def default-allowed-tools
   "What a run may reach when the config names nothing: the engine's own
-  MCP door, and the one echo the Routine prompt asks for."
-  ["mcp__waymark__*" "Bash(echo *)"])
+  MCP door and nothing else. The built-in tools are off (R-5.4)."
+  ["mcp__Waymark__*"])
 
 (defn- fail! [msg]
   (throw (ex-info msg {:localfire/config true})))
@@ -52,6 +57,20 @@
      :prompt           (or (some-> (:prompt r) str not-empty)
                            prompt/routine-prompt)}))
 
+(defn- normalize-oauth
+  "The `:mcp` map's optional `:oauth` (R-8.2): the fixed client a
+  person signed in with, for a door that refuses dynamic registration."
+  [o]
+  (when-not (map? o)
+    (fail! "the config's :mcp :oauth must be a map."))
+  (let [client-id (:client-id o)
+        port      (:callback-port o)]
+    (when-not (and (string? client-id) (not (str/blank? client-id)))
+      (fail! "the config's :mcp :oauth needs a :client-id, as a non-empty string."))
+    (when-not (pos-int? port)
+      (fail! "the config's :mcp :oauth needs a :callback-port, as a positive integer."))
+    {:client-id client-id :callback-port (long port)}))
+
 (defn normalize
   "The config as the server uses it: every default filled in, every
   name a string, every routine complete. It throws ex-info with one
@@ -79,6 +98,15 @@
       (fail! "the config needs an :mcp map with a :url, the engine's MCP door."))
     (when-not (and (map? rs) (seq rs))
       (fail! "the config needs at least one routine under :routines."))
+    (when-not (or (nil? (:check-seconds m)) (pos-int? (:check-seconds m)))
+      (fail! "the config's :check-seconds must be a positive integer."))
+    (when-not (or (nil? (:hook-via m))
+                  (and (sequential? (:hook-via m))
+                       (every? #(and (string? %) (not (str/blank? %))) (:hook-via m))))
+      (fail! "the config's :hook-via must be a list of non-empty strings."))
+    (when-not (or (nil? (:claude-home m))
+                  (and (string? (:claude-home m)) (not (str/blank? (:claude-home m)))))
+      (fail! "the config's :claude-home must be a non-empty string."))
     {:port          (long port)
      ;; a trailing slash on the public URL would double in every run
      ;; page link, and the engine writes that link onto the row
@@ -86,10 +114,21 @@
      :place         place
      :runs-dir      runs
      :claude        (or (some-> (:claude m) str not-empty) "claude")
-     :mcp           {:name (or (some-> (:name mcp) str not-empty) "waymark")
-                     :url  (str (:url mcp))}
+     ;; :oauth absent means no oauth block in the run's MCP entry
+     :mcp           (cond-> {:name (or (some-> (:name mcp) str not-empty) default-mcp-name)
+                             :url  (str (:url mcp))}
+                      (some? (:oauth mcp)) (assoc :oauth (normalize-oauth (:oauth mcp))))
      :allowed-tools (vec (or (seq (map str (:allowed-tools m)))
                              default-allowed-tools))
+     ;; R-4.6: how often the credential is probed
+     :check-seconds (long (or (:check-seconds m) 600))
+     ;; R-5.6: the close runs the hook where the runs run. A :claude
+     ;; wrapper that moves a run into a container moves its transcript
+     ;; there too, so the hook goes through the same door (:hook-via)
+     ;; and looks under that side's HOME (:claude-home). Absent, the
+     ;; hook runs here, under this process's HOME.
+     :hook-via      (vec (:hook-via m))
+     :claude-home   (:claude-home m)
      :routines      (into {}
                           (map (fn [[k v]]
                                  (let [nm (routine-name k)]

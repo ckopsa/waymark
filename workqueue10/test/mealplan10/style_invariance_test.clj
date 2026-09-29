@@ -856,14 +856,19 @@
   ;; re-pinned 2026-09-06 (waymark-e6bj): retired left :terminal for
   ;; :over {:let-go #{:retired}} and restore walks it back — an
   ;; intentional law change, not style drift
-  {:meal      "e7fcf84baedab0ba11ae3b35e399d0df43dfa179e6a6360345fb528cc7db2796"
+  ;; re-pinned 2026-09-28 (waymark-fp62.4.1.2): :over joined the kind
+  ;; fingerprint, so the meal's declared endings are law now — a
+  ;; one-time re-mint, not style drift
+  {:meal      "011803649a07a40279115fefb9e6fbbe2afb4aebdc794a7de44f4a8eba0cf5e7"
    ;; re-pinned 2026-07-24: :date gained :filter #{:eq :range} — the
    ;; day board's related join (one engine since waymark-bwu.2) needs
    ;; the promoted column; an intentional law change, not style drift.
    ;; Re-pinned again 2026-09-06 (waymark-e6bj): done left :terminal
    ;; for :over {:accomplished #{:done} :let-go #{:cancelled}} and
    ;; reopen walks it back — an intentional law change, not style drift
-   :prep_task "ba3a159402e7eb112787a87f04649df7b871efde9b75e3159eefe43c19ece324"})
+   ;; Re-pinned 2026-09-28 (waymark-fp62.4.1.2): :over joined the kind
+   ;; fingerprint — a one-time re-mint, not style drift
+   :prep_task "87ebdf7e32386d89c523e25a2a3686388e158349b7db837a1f252ead2719f93f"})
 
 (deftest the-canonical-residue-hashes-are-pinned-as-literals
   (is (= (:meal the-canonical-hashes) (hash-of-resource meal/meal)))

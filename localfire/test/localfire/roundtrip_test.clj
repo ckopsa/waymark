@@ -17,9 +17,13 @@
 
   waymark10 is on the classpath for the `:test` alias only (R-4.1);
   the server itself depends on nothing of the engine at run time."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [jsonista.core :as json]
             [localfire.server :as server]
             [localfire.server-test :as w]
+            [localfire.spawn :as spawn]
             [waymark10.server.schedules :as sch]))
 
 (defn- caught
@@ -87,3 +91,166 @@
       (finally
         (deliver gate true)
         (server/stop! world)))))
+
+;; ── the credential check (R-4.6) ─────────────────────────────────────
+
+(def ^:private delegate-json
+  "discover's principal for a delegate's token"
+  (json/write-value-as-string {"id" "localfire-claude:sub-1" "type" "agent"
+                               "display" "Claude for P" "roles" []}))
+
+(defn- probe-out [result]
+  (json/write-value-as-string {"type" "result" "is_error" false "result" result}))
+
+(deftest the-probe-passes-only-for-a-delegate
+  (testing "a delegate's principal passes"
+    (is (true? (:ok (server/judge-probe 0 (probe-out (str server/probe-pass-word " " delegate-json)) "")))))
+  (testing "a person's own token answers, but no seat could sit on it"
+    (let [human (json/write-value-as-string {"id" "sub-1" "type" "human"
+                                             "display" "P" "roles" ["member"]})
+          r (server/judge-probe 0 (probe-out (str server/probe-pass-word " " human)) "")]
+      (is (false? (:ok r)))
+      (is (= server/probe-not-delegate (:detail r)))))
+  (testing "an agent a proxy states as acting for a person passes by acts_for"
+    (let [proxied (json/write-value-as-string {"id" "localfire-runner" "type" "agent"
+                                               "display" "" "roles" []
+                                               "acts_for" "colton"})]
+      (is (true? (:ok (server/judge-probe 0 (probe-out (str server/probe-pass-word " " proxied)) ""))))))
+  (testing "an agent holding its own key, acting for nobody, does not"
+    (let [bare (json/write-value-as-string {"id" "localfire-runner" "type" "agent"
+                                            "display" "" "roles" []})
+          r (server/judge-probe 0 (probe-out (str server/probe-pass-word " " bare)) "")]
+      (is (false? (:ok r)))
+      (is (= server/probe-not-delegate (:detail r)))))
+  (testing "no principal, or the bare pass word, is not a delegate"
+    (is (false? (:ok (server/judge-probe 0 (probe-out (str server/probe-pass-word " null")) ""))))
+    (is (false? (:ok (server/judge-probe 0 (probe-out server/probe-pass-word) "")))))
+  (testing "a failure still says why"
+    (is (= "The MCP server answered 401."
+           (:detail (server/judge-probe 1 (probe-out "The MCP server answered 401.") ""))))))
+
+(defn- probe-spawner
+  "A run goes to the suite's fake; the probe — the one start with no
+  `--session-id` — passes or fails as `pass?` says."
+  [pass? calls probes]
+  (let [runs (w/fake-spawner {:calls calls})]
+    (reify spawn/Spawner
+      (start [_ argv dir env]
+        (if (some #{"--session-id"} argv)
+          (spawn/start runs argv dir env)
+          (let [ok?  @pass?
+                out  (json/write-value-as-string
+                      (if ok?
+                        {"type" "result" "is_error" false
+                         "result" (str server/probe-pass-word " " delegate-json)}
+                        {"type" "result" "is_error" true
+                         "result" "The MCP server waymark answered 401: the credential expired."}))]
+            (swap! probes conj (vec argv))
+            (reify spawn/Handle
+              (stdout [_] (io/input-stream (.getBytes ^String out "UTF-8")))
+              (stderr [_] (io/input-stream (byte-array 0)))
+              (await-exit [_ _] (if ok? 0 1))
+              (destroy [_] nil)
+              (destroy-forcibly [_] nil))))))))
+
+(deftest a-failing-credential-check-answers-the-fire-as-throttled
+  (let [pass?   (atom false)
+        calls   (atom [])
+        probes  (atom [])
+        port    (w/free-port)
+        cfg     (w/make-config {:port port :place (w/make-place!)
+                                :runs-dir (w/tmpdir "lf-runs-check")})
+        st      (server/start! {:config cfg :token "the-token" :check? true
+                                :spawner (probe-spawner pass? calls probes)})
+        base    (str "http://127.0.0.1:" port)
+        url     (str base "/fire/sonnet")
+        adapter (sch/routine-fire)]
+    (try
+      (testing "the check ran once at start, with the run's mcp.json shape"
+        (is (= 1 (count @probes)))
+        (is (some #{(server/probe-tool cfg)} (first @probes)))
+        (is (some #{"--strict-mcp-config"} (first @probes)))
+        (is (.isFile (server/probe-mcp-file (:runs-dir cfg)))))
+
+      (testing "/healthz is 503 with the probe's detail"
+        (let [r (w/GET (str base "/healthz"))]
+          (is (= 503 (:status r)))
+          (is (false? (get-in r [:json :ok])))
+          (is (false? (get-in r [:json :credential :ok])))
+          (is (string? (get-in r [:json :credential :checked_at])))
+          (is (str/includes? (str (get-in r [:json :credential :detail])) "401"))))
+
+      (testing "a fire answers 429 with Retry-After the seconds to the next check"
+        (let [r (w/POST url "the-token")
+              s (some-> (:retry-after r) parse-long)]
+          (is (= 429 (:status r)))
+          (is (some? s))
+          (is (<= 1 s 600))
+          (is (str/includes? (str (get-in r [:json :detail])) "credential"))
+          (is (empty? @calls) "no run was started")))
+
+      (testing "the bearer, the routine and the pause are judged first"
+        (is (= 401 (:status (w/POST url "not-the-token"))))
+        (is (= 404 (:status (w/POST (str base "/fire/no-such") "the-token")))))
+
+      (testing "the engine's adapter throws with :status 429 and :retry-after"
+        (let [e (try (sch/fire-routine adapter url "the-token" "Seat: s\nKey: k\n") nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? e))
+          (is (= 429 (:status (ex-data e))))
+          (is (string? (:retry-after (ex-data e))))))
+
+      (testing "POST /check needs the bearer"
+        (is (= 401 (:status (w/POST (str base "/check") nil)))))
+
+      (testing "when the probe passes again, the check says so and a fire answers 200"
+        (reset! pass? true)
+        (let [r (w/POST (str base "/check") "the-token")]
+          (is (= 200 (:status r)))
+          (is (true? (get-in r [:json :ok]))))
+        (is (= 200 (:status (w/GET (str base "/healthz")))))
+        (is (= 200 (:status (w/POST url "the-token"))))
+        (is (w/wait-for #(zero? (server/running-count st "sonnet")))))
+      (finally
+        (server/stop! st)))))
+
+(deftest a-failed-check-is-rechecked-on-a-backoff
+  (let [pass?  (atom false)
+        calls  (atom [])
+        probes (atom [])
+        port   (w/free-port)
+        cfg    (w/make-config {:port port :place (w/make-place!)
+                               :runs-dir (w/tmpdir "lf-runs-backoff")})
+        cs     (:check-seconds cfg)
+        st     (server/start! {:config cfg :token "the-token" :check? true
+                               :spawner (probe-spawner pass? calls probes)})
+        url    (str "http://127.0.0.1:" port "/fire/sonnet")]
+    (try
+      (testing "a failed probe schedules the next one 30 s out"
+        (is (= (min 30 cs) (:next-in @(:credential st))))
+        (let [r (w/POST url "the-token")
+              s (some-> (:retry-after r) parse-long)]
+          (is (= 429 (:status r)))
+          (is (some? s))
+          (is (<= 1 s 30))))
+
+      (testing "a second failure doubles it"
+        (is (= (min 60 cs) (:next-in (server/check-credential! st {:scheduled? true})))))
+
+      (testing "a pass restores check-seconds"
+        (reset! pass? true)
+        (let [c (server/check-credential! st {:scheduled? true})]
+          (is (true? (:ok c)))
+          (is (zero? (:failures c)))
+          (is (= cs (:next-in c)))))
+
+      (testing "the backoff caps at check-seconds"
+        (is (= [600 30 60 120 240 480 600 600]
+               (mapv #(server/next-check-seconds 600 %) [0 1 2 3 4 5 6 30]))))
+
+      (testing "the log names a transient failure apart from a refused one"
+        (is (= "transient" (server/failure-kind "The MCP server waymark answered 503: no available server")))
+        (is (= "transient" (server/failure-kind "The probe did not end within two minutes.")))
+        (is (= "refused" (server/failure-kind "The MCP server waymark answered 401: the credential expired."))))
+      (finally
+        (server/stop! st)))))

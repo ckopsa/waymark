@@ -85,7 +85,11 @@
            ;; …and the transcript of a sitting and its lines
            ;; (docs/spec-transcript.md): the sit answers the key the
            ;; hook uploads with, and the seat carries the policy
-           :transcript :transcript_entry}
+           :transcript :transcript_entry
+           ;; …and the runner link (runner-pool work, piece 1a): a
+           ;; provider, a fire URL and a held token, which no
+           ;; application's vocabulary names either
+           :runner_link :runner_provider}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -111,7 +115,7 @@
     ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
-             :transcript :transcript_entry
+             :transcript :transcript_entry :runner_link :runner_provider
              :judgment :verdict}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
@@ -231,6 +235,9 @@
                ;; …and the fourth, a seat's inbox (spec-seat.md
                ;; R-12.38): its own key, one sitting's events
                "/api/-/sittings/inbox"
+               ;; the dashboard slot's measure (dashboard measures
+               ;; 1/3): one slot's number over its time window
+               "/api/dashboard_slots/:id/-/measure"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
@@ -277,6 +284,9 @@
                  "/api/-/sittings/transcript"
                  ;; and the inbox door (R-12.38)
                  "/api/-/sittings/inbox"
+                 ;; and the slot's measure: /api/{plural}/{id}/-/{action}
+                 ;; would read it as an action named "measure"
+                 "/api/dashboard_slots/:id/-/measure"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))

@@ -10,7 +10,7 @@
   seconds and a run takes minutes, so the 200 is answered and the
   process is started on a thread of its own (R-5.2).
 
-  Six routes is not enough to earn a router, so the dispatch is a
+  Seven routes is not enough to earn a router, so the dispatch is a
   `cond` on the path's own segments and the method."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
@@ -23,7 +23,10 @@
             [org.httpkit.server :as hk])
   (:import [java.nio.charset StandardCharsets]
            [java.security MessageDigest]
-           [java.util UUID]))
+           [java.util UUID]
+           [java.util.concurrent Executors ExecutorService
+            RejectedExecutionException ScheduledExecutorService
+            ThreadFactory TimeUnit]))
 
 ;; ── answers ─────────────────────────────────────────────────────────
 
@@ -95,10 +98,11 @@
   "The argument vector of R-5.4, with the config's values in it.
 
   `--session-id` makes the session's id the one the engine already
-  holds, so `CLAUDE_CODE_SESSION_ID` inside the session is the id the
-  Routine prompt asks the session to echo and pass to the sit. The
-  prompt is the FIRST argument, whole and unquoted — it is the run's
-  entire payload and the server never cuts it."
+  holds, the id the Routine prompt states and the session passes to
+  the sit. `--tools \"\"` turns every built-in tool off, so the run
+  sees the Waymark tools and nothing else. The prompt is the FIRST
+  argument, whole and unquoted — it is the run's entire payload and
+  the server never cuts it."
   [cfg routine id prompt-text]
   ;; THE PROMPT COMES FIRST, right behind `-p`, and not last. Both
   ;; `--mcp-config` and `--allowedTools` are VARIADIC in Claude Code —
@@ -115,8 +119,14 @@
        "--output-format" "json"
        "--strict-mcp-config"
        "--mcp-config" (.getPath (runs/mcp-file (:runs-dir cfg) id))
+       "--tools" ""
        "--allowedTools"]
       (into (map str) (:allowed-tools cfg))))
+
+(def run-env
+  "What the server adds to a run's environment (R-5.4): tool search off,
+  so the Waymark tools load up front and no ToolSearch is needed."
+  {"ENABLE_TOOL_SEARCH" "false"})
 
 (defn- log-run!
   "One line per fire (R-7.3): the routine, the run, the status. Not the
@@ -124,6 +134,73 @@
   [routine id status]
   (println (str "localfire run routine=" routine " id=" id
                 " status=" (name status))))
+
+;; ── the sitting's close (R-5.6) ───────────────────────────────────────
+;;
+;; A run's own Stop hook closes its sitting. A run the server marks lost
+;; never reached that Stop, and a run whose process ended may not have —
+;; killed, crashed, out of turns. So for both the server runs the copied
+;; place's hook in its `close-run` mode, from outside the run. The hook
+;; finds the sitting in the transcript and takes a sitting already closed
+;; as success, so a second close is harmless.
+
+(defn claude-home
+  "Where Claude Code keeps its transcripts, as the hook sees them: the
+  config's `:claude-home` when a `:claude` wrapper runs the sessions
+  somewhere else, or else the HOME the runs inherit from this process."
+  ([] (claude-home nil))
+  ([cfg]
+   (or (:claude-home cfg)
+       (System/getenv "HOME") (System/getProperty "user.home"))))
+
+(defn closed-line?
+  "Whether a close's exit and output say the sitting is closed: exit 0
+  and a status line of `closed <sitting>` or `already-closed <sitting>`."
+  [exit out]
+  (and (= 0 exit)
+       (some? (re-find #"^(already-)?closed \S" (str/trim (str out))))))
+
+(defn close-sitting!
+  "Run the place's `sitting-close.sh close-run` for run `id` with `note`,
+  record its answer in `run.edn`, and log one line. → the hook's status
+  line."
+  [state id note]
+  (let [cfg      (:config state)
+        runs-dir (:runs-dir cfg)
+        hook     (runs/hook-file runs-dir id)
+        input    (json/write-value-as-string
+                  {:session_id      (str id)
+                   :transcript_path (.getPath (runs/transcript-file (claude-home cfg) runs-dir id))})
+        {:keys [exit out]}
+        (if-not (.isFile hook)
+          {:exit nil :out "failed (none): the run's place has no sitting-close.sh"}
+          ;; :hook-via prefixes the argv, as :claude does for a run, so
+          ;; the hook runs on the side of the wrapper the run ran on
+          (try ((:closer state) (into (vec (:hook-via cfg))
+                                      [(.getPath hook) "close-run" note])
+                                (runs/place-dir runs-dir id) input)
+               (catch Exception e
+                 {:exit nil :out (str "failed (none): " (ex-message e))})))
+        line     (if (str/blank? out)
+                   (str "failed (none): the hook answered nothing, exit " exit)
+                   out)]
+    ;; closed only on the hook's word for it. close-run prints "closed
+    ;; <sitting>" or "already-closed <sitting>" and exits 0 only then; a
+    ;; hook older than close-run falls through to another mode, prints
+    ;; nothing and exits 0 too, having closed nothing (R-5.6)
+    (runs/note-close! runs-dir id line (closed-line? exit out))
+    (println (str "localfire close id=" id " " line))
+    line))
+
+(defn close-lost!
+  "At startup: close the sitting of every `lost` run whose close has not
+  succeeded yet. → the number of closes it tried."
+  [state]
+  (count (mapv (fn [rec]
+                 (close-sitting! state (:id rec)
+                                 (str "localfire lost this run at " (:ended-at rec)
+                                      " (restart)")))
+               (runs/lost-unclosed (:runs-dir (:config state))))))
 
 (defn execute-run!
   "Start the process, drain it, wait for it, record it.
@@ -134,10 +211,10 @@
   seconds, then destroy, and the record says `killed`.
 
   → the final record."
-  [state {:keys [id argv dir max-run-seconds]}]
+  [state {:keys [id argv dir env max-run-seconds]}]
   (let [cfg      (:config state)
         runs-dir (:runs-dir cfg)
-        handle   (spawn/start (:spawner state) argv dir {})
+        handle   (spawn/start (:spawner state) argv dir (or env {}))
         drain    (fn [in f] (future (try (io/copy in f) (catch Exception _ nil))))
         d-out    (drain (spawn/stdout handle) (runs/stdout-file runs-dir id))
         d-err    (drain (spawn/stderr handle) (runs/stderr-file runs-dir id))
@@ -163,13 +240,18 @@
     (future
       (try
         (let [argv (fire-argv cfg routine id
-                              (prompt/compose (:prompt routine) text))
+                              (prompt/compose (:prompt routine) text id))
               rec  (execute-run! state
                                  {:id id
                                   :argv argv
+                                  :env run-env
                                   :dir (runs/place-dir (:runs-dir cfg) id)
                                   :max-run-seconds (:max-run-seconds routine)})]
-          (log-run! nm id (:status rec)))
+          (log-run! nm id (:status rec))
+          (try (close-sitting! state id "localfire saw the run exit")
+               (catch Exception e
+                 (binding [*out* *err*]
+                   (println (str "localfire close id=" id " failed: " (ex-message e)))))))
         (catch Throwable t
           (runs/finish! cfg id :failed nil)
           (binding [*out* *err*]
@@ -178,6 +260,220 @@
           (log-run! nm id :failed))
         (finally
           (release! (:running state) nm id))))))
+
+;; ── the credential (R-4.6) ────────────────────────────────────────────────
+;;
+;; A run reaches the engine with the person's stored OAuth credential
+;; for the MCP door (R-8.2), and runs claude on the machine's own login.
+;; When either expires, every run fails before its sit: the fire is
+;; answered 200, a run is spent, and no sitting opens. So the server
+;; probes both on a timer — one headless session that calls one cheap
+;; Waymark read and exits — and while the probe fails, a fire answers
+;; 429 with `Retry-After` the seconds until the next probe. The engine
+;; reads 429 as throttled: its pool skips this link until then and
+;; fires the next one, a cloud Routine.
+
+(def probe-pass-word
+  "What the probe answers first when the read answered, followed by
+  the answer's `principal` as JSON."
+  "CREDENTIAL-OK")
+
+(def probe-not-delegate
+  "The detail when the door answered, but not to a delegate's token."
+  (str "The door answered, but not as a person's tool: "
+       "add this client to WAYMARK10_OIDC_DELEGATE_CLIENTS, or, behind "
+       "a proxy that states the principal, send X-Waymark-Acts-For."))
+
+(def ^:private probe-timeout-ms 120000)
+
+(defn probe-dir ^java.io.File [runs-dir] (io/file (str runs-dir) "check"))
+(defn probe-mcp-file ^java.io.File [runs-dir] (io/file (probe-dir runs-dir) "mcp.json"))
+
+(defn probe-tool
+  "The one tool the probe may call: the engine's cheapest read."
+  [cfg]
+  (str "mcp__" (get-in cfg [:mcp :name]) "__waymark_discover"))
+
+(defn probe-argv
+  "The probe's argument vector. The prompt comes first for the reason
+  `fire-argv` gives, and the mcp.json has a run's shape, so the probe
+  reaches the door exactly as a run does."
+  [cfg]
+  (let [tool (probe-tool cfg)]
+    [(:claude cfg) "-p"
+     (str "Call the tool " tool " once. If it answers, reply with the "
+          "word " probe-pass-word ", one space, and then the value of "
+          "its `principal` field as compact JSON (null when it has "
+          "none), and nothing else. If it fails or is not available, "
+          "reply with one sentence that says why.")
+     "--output-format" "json"
+     "--strict-mcp-config"
+     "--mcp-config" (.getPath (probe-mcp-file (:runs-dir cfg)))
+     "--allowedTools" tool]))
+
+(defn- clip [s]
+  (let [s (str/trim (str s))]
+    (if (> (count s) 300) (str (subs s 0 300) "…") s)))
+
+(defn delegate-principal?
+  "Whether discover's `principal` is a delegate's: an agent acting for a
+  person, which is what `waymark_sit` asks of a seat key's session. An
+  engine that shows `acts_for` answers it outright — the token a tool
+  mints for a person (waymark10.server.oidc, THE DELEGATE) and the
+  `X-Waymark-Acts-For` a proxy in front of a local engine states alike.
+  An engine older than that field shows no acts-for, so for it this
+  reads what the OIDC delegate's id shows: `delegate-id`'s
+  `<client>:<sub>`."
+  [p]
+  (and (map? p)
+       (= "agent" (:type p))
+       (or (not (str/blank? (str (:acts_for p ""))))
+           (str/includes? (str (:id p)) ":"))))
+
+(defn- said-principal
+  "The principal after the pass word → a value, or ::none when the
+  result does not start with the pass word."
+  [result]
+  (let [s (str/trim (str result))]
+    (if (str/starts-with? s probe-pass-word)
+      (try (json/read-value (subs s (count probe-pass-word))
+                            json/keyword-keys-object-mapper)
+           (catch Exception _ nil))
+      ::none)))
+
+(defn judge-probe
+  "One probe's exit and output → `{:ok :detail}`. It passes only when
+  the process exited 0, its result is not an error, it said the pass
+  word, and the principal after it is a delegate's: a door that
+  answers a non-delegate token lets no seat sit."
+  [exit stdout stderr]
+  (let [r    (try (json/read-value (str stdout) json/keyword-keys-object-mapper)
+                  (catch Exception _ nil))
+        res  (when (map? r) (:result r))
+        said (some-> res clip not-empty)
+        p    (said-principal res)]
+    (cond
+      (nil? exit)
+      {:ok false :detail "The probe did not end within two minutes."}
+
+      (and (zero? (long exit)) (not (:is_error r)) (not= ::none p))
+      (if (delegate-principal? p)
+        {:ok true :detail "The probe called the MCP door, and it answered as a person's tool."}
+        {:ok false :detail probe-not-delegate})
+
+      :else
+      {:ok false :detail (or said
+                             (not-empty (clip stderr))
+                             (str "The probe exited " exit "."))})))
+
+(defn- probe!
+  "Run one probe through the spawner → `{:ok :detail}`. It never throws."
+  [cfg spawner]
+  (try
+    (let [dir (probe-dir (:runs-dir cfg))
+          _   (.mkdirs dir)
+          _   (runs/write-mcp! (probe-mcp-file (:runs-dir cfg)) (:mcp cfg))
+          h   (spawn/start spawner (probe-argv cfg) dir {})
+          out (future (try (slurp (spawn/stdout h)) (catch Exception _ "")))
+          err (future (try (slurp (spawn/stderr h)) (catch Exception _ "")))
+          ex  (spawn/await-exit h probe-timeout-ms)]
+      (when (nil? ex)
+        (spawn/destroy-forcibly h)
+        (spawn/await-exit h 10000))
+      (judge-probe ex (deref out 5000 "") (deref err 5000 "")))
+    (catch Throwable t
+      {:ok false :detail (str "The probe could not start: " (ex-message t))})))
+
+(defn- credential-initial
+  "Before any check. A server that does not check calls its credential
+  good, so the fire judges as it always did."
+  []
+  (atom {:ok true :checked-at nil :next-at nil
+         :detail "The credential has not been checked."}))
+
+(def backoff-first-seconds
+  "The wait before the check after a first failed one. A failure is most
+  often a blip — the engine mid-deploy — so the check comes back soon,
+  and the fire's 429 says so, rather than throttling for `:check-seconds`."
+  30)
+
+(defn next-check-seconds
+  "The seconds to the next scheduled check after `failures` failed
+  checks in a row: `check-seconds` after a pass, else 30, 60, 120, 240
+  … doubled per failure and capped at `check-seconds`."
+  [check-seconds failures]
+  (let [cs (long check-seconds)
+        n  (long failures)]
+    (if (zero? n)
+      cs
+      (min cs (* (long backoff-first-seconds) (bit-shift-left 1 (min 20 (dec n))))))))
+
+(defn failure-kind
+  "A failed probe's detail → \"transient\" when the door was unreachable,
+  timed out or answered 5xx, else \"refused\" (the credential itself was
+  turned away). Both back off alike; the log line says which."
+  [detail]
+  (if (re-find #"(?i)did not end|could not start|unreachable|no available server|connection (refused|reset)|could not connect|timed? ?out|\b5\d\d\b"
+               (str detail))
+    "transient"
+    "refused"))
+
+(defn check-credential!
+  "Probe now and record `{ok, checked_at, detail}` on the state's
+  `:credential`, with `:failures` the failed checks in a row.
+  `:scheduled?` says the timer ran it, so it records `:next-in`, the
+  seconds to the next check (`next-check-seconds`), and `:next-at`.
+  → the credential's state."
+  [{:keys [config spawner credential]} {:keys [scheduled?]}]
+  (locking credential
+    (let [r (probe! config spawner)
+          c (swap! credential
+                   (fn [c]
+                     (let [fails (if (:ok r) 0 (inc (long (or (:failures c) 0))))
+                           secs  (next-check-seconds (:check-seconds config) fails)]
+                       (cond-> (merge c r {:checked-at (runs/now-iso) :failures fails})
+                         scheduled?
+                         (assoc :next-in secs
+                                :next-at (+ (System/currentTimeMillis) (* 1000 secs)))))))]
+      (println (str "localfire check ok=" (:ok r)
+                    (when-not (:ok r) (str " (" (failure-kind (:detail r)) ")"))
+                    (when scheduled? (str " next in " (:next-in c) "s"))))
+      c)))
+
+(defn- retry-after-seconds
+  "The seconds until the next check, at least one; 60 when no check is
+  scheduled."
+  [c]
+  (if-let [n (:next-at c)]
+    (max 1 (long (Math/ceil (/ (- (long n) (System/currentTimeMillis)) 1000.0))))
+    60))
+
+(defn- credential-view
+  "The credential as `/healthz` and `/check` answer it."
+  [c]
+  {:ok (boolean (:ok c)) :checked_at (:checked-at c) :detail (:detail c)})
+
+(defn- start-check-timer!
+  "Check on a daemon thread of its own, `first-seconds` from now; each
+  check schedules the next `:next-in` seconds out, so a failure is
+  re-checked on the backoff and a pass waits `:check-seconds`."
+  ^ScheduledExecutorService [state first-seconds]
+  (let [secs (long (get-in state [:config :check-seconds]))
+        ^ScheduledExecutorService ex
+        (Executors/newSingleThreadScheduledExecutor
+         (reify ThreadFactory
+           (newThread [_ r]
+             (doto (Thread. ^Runnable r "localfire-check")
+               (.setDaemon true)))))]
+    (letfn [(tick []
+              (let [c (try (check-credential! state {:scheduled? true})
+                           (catch Throwable _ nil))]
+                (schedule (or (:next-in c) secs))))
+            (schedule [s]
+              (try (.schedule ex ^Runnable tick (long s) TimeUnit/SECONDS)
+                   (catch RejectedExecutionException _ nil)))]
+      (schedule first-seconds))
+    ex))
 
 ;; ── the body (R-4.5) ────────────────────────────────────────────────
 
@@ -210,6 +506,14 @@
 
       (runs/paused? runs-dir nm)
       (refusal 400 "The routine is paused on this server.")
+
+      ;; R-4.6: throttled, so the engine's pool falls back until then
+      (not (:ok @(:credential state)))
+      (let [c @(:credential state)
+            s (retry-after-seconds c)]
+        (refusal 429 (str "The credential check failed: " (:detail c)
+                          " Try again after " s " seconds.")
+                 {"Retry-After" (str s)}))
 
       :else
       (let [id (str (UUID/randomUUID))]
@@ -286,8 +590,17 @@
         (html-resp (page/runs-page (runs/list-runs (get-in state [:config :runs-dir]))))
 
         (and (= :get method) (= ["healthz"] parts))
-        (json-resp 200 {:ok true
-                        :routines (vec (sort (keys (get-in state [:config :routines]))))})
+        (let [c (credential-view @(:credential state))]
+          (json-resp (if (:ok c) 200 503)
+                     {:ok (:ok c)
+                      :routines (vec (sort (keys (get-in state [:config :routines]))))
+                      :credential c}))
+
+        (and (= :post method) (= ["check"] parts))
+        (if-not (token-ok? state req)
+          (refusal 401 "The bearer token is not this server's token.")
+          (let [c (credential-view (check-credential! state {}))]
+            (json-resp (if (:ok c) 200 503) c)))
 
         :else
         (refusal 404 "No route of this server answers that path.")))))
@@ -296,21 +609,40 @@
 
 (defn start!
   "Stand the server up. `:spawner` is the seam (R-9.1): the tests give
-  a fake, and `main` gives the real one. → the state, with `:port`,
-  which is the bound port even when the config asked for 0."
-  [{:keys [config token spawner]}]
-  (let [state {:config  config
-               :token   token
-               :spawner (or spawner (spawn/process-spawner))
-               :running (atom {})}
+  a fake, and `main` gives the real one. `:check?` runs the credential
+  check (R-4.6) once now and then on its timer. → the state, with
+  `:port`, which is the bound port even when the config asked for 0.
+  `:closer` is the sitting's close seam, `spawn/run-to-end` by default;
+  the lost runs' sittings are closed on a thread of their own, and
+  `:closing` is that thread's future → the number it tried (R-5.6)."
+  [{:keys [config token spawner closer check?]}]
+  (let [state {:config     config
+               :token      token
+               :spawner    (or spawner (spawn/process-spawner))
+               :closer     (or closer spawn/run-to-end)
+               :running    (atom {})
+               :credential (credential-initial)}
+        closing (future
+                  (try (close-lost! state)
+                       (catch Throwable t
+                         (binding [*out* *err*]
+                           (println (str "localfire close of the lost runs failed: "
+                                         (ex-message t))))
+                         0)))
+        timer (when check?
+                (start-check-timer! state
+                                    (:next-in (check-credential! state {:scheduled? true}))))
         srv   (hk/run-server (handler state)
                              {:port (:port config)
                               :legacy-return-value? false})]
-    (assoc state :http srv :port (hk/server-port srv))))
+    (assoc state :http srv :port (hk/server-port srv) :check-timer timer
+                 :closing closing)))
 
 (defn stop!
   "Stop the server. The runs in flight are not waited on; the next
   start records them `lost` (R-5.6)."
   [state]
+  (when-let [^ExecutorService t (:check-timer state)]
+    (.shutdownNow t))
   (when-let [srv (:http state)]
     (hk/server-stop! srv {:timeout 100})))

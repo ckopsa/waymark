@@ -84,7 +84,10 @@
                                       :branch {:type "string"}}
                          :required ["repo" "branch"]}})
         ["prepare" "status" "find" "read" "edit" "pull" "submit" "discard"
-         "enroll" "repos" "unenroll" "feedback" "rerun"]))
+         "enroll" "repos" "unenroll" "feedback" "rerun"
+         ;; the merge train's five (ticket 47519515)
+         "train_build" "train_checks" "train_status" "train_land"
+         "train_delete"]))
 
 (def ^:private bench-powers
   "The bench row's powers (waymark-fp62.6.3.3): the four the model may
@@ -157,7 +160,15 @@
                        :message "Name the rule in the comment."}]
            :unavailable ["statuses: the forge answered 403"]}
           "bench__repos" {:repos ["ckopsa/waymark"]}
-          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}}}))
+          "bench__unenroll" {:repo "ckopsa/waymark" :kept true}
+          ;; the merge train (ticket 47519515), in the rig's own shapes
+          "bench__train_build" {:branch "train/ckopsa/waymark/31" :base_head a-head
+                                :head a-commit :merged [31] :conflicted []}
+          "bench__train_checks" {:run_id "7" :head a-commit}
+          "bench__train_status" {:state "pending" :head a-commit
+                                 :url "https://github.com/ckopsa/waymark/actions/runs/7"}
+          "bench__train_land" {:landed true}
+          "bench__train_delete" {:repo "ckopsa/waymark" :branch "train/ckopsa/waymark/31"}}}))
 
 (defn- answer!
   "Script one tool's answer — a result map, or a refusal map with
@@ -910,6 +921,28 @@
     (is (str/includes? note "Do not stall the ticket")
         "and not by stalling a ticket the code did not fail")))
 
+(deftest feedback-names-a-merge-trains-red-first
+  ;; ticket 238f45b3: the change's own branch is green, so the rig's
+  ;; feedback says nothing; the train's red rides on the change row
+  (let [with-train-red #'mcp/with-train-red
+        change {:data {:train_red "train/7 https://ci.example/run/9"
+                       :failing_checks ["gate" "test10"]}}
+        rig {"findings" [{"source" "review" "message" "nit"}]
+             "unavailable" []}
+        [first-finding :as findings] (get (with-train-red rig change)
+                                          "findings")]
+    (is (= 2 (count findings)))
+    (is (= "merge-train" (get first-finding "source")))
+    (is (str/includes? (get first-finding "message") "train/7"))
+    (is (str/includes? (get first-finding "message") "gate, test10"))
+    (is (= ["merge-train"]
+           (mapv #(get % "source")
+                 (get (with-train-red nil change) "findings")))
+        "a rig that answered nothing still leaves the train's red")
+    (is (= rig (with-train-red rig {:data {:failing_checks ["gate"]}}))
+        "a change no train found red is left as the rig said it")
+    (is (nil? (with-train-red nil {:data {}})))))
+
 (deftest feedback-with-no-interrupted-finding-carries-no-rerun-note
   (let [w (world)]
     (is (some? (:feedback (:answer w))))
@@ -1301,6 +1334,51 @@
       (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
           "a seat's sitter could otherwise raise its own ceiling"))))
 
+(deftest a-policy-states-its-merge-strategy-and-never-its-train
+  ;; the merge train, slice a (ticket 394d0602): data only
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        strategy #(get-in (policy-row eng (:id row)) [:data :merge_strategy])
+        train-size #(get-in (policy-row eng (:id row)) [:data :train_size])
+        restated (fn [extra]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (merge (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         extra)
+                                  {:principal person
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))]
+    (testing "a row without either reads as line / 4"
+      (is (= "line" (bench/merge-strategy-of {:data {}})))
+      (is (= 4 (bench/train-size-of {:data {}}))))
+    (testing "a restate states line and train"
+      (doseq [s ["train" "line"]]
+        (restated {:merge_strategy s})
+        (is (= s (strategy)))
+        (is (= s (bench/merge-strategy-of (policy-row eng (:id row)))))))
+    (testing "and refuses another word"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (restated {:merge_strategy "convoy"})))
+      (is (= "line" (strategy))))
+    (testing "a restate states 2 to 10"
+      (doseq [n [2 10]]
+        (restated {:train_size n})
+        (is (= n (train-size)))))
+    (testing "and refuses 1 and 11"
+      (doseq [n [1 11]]
+        (is (thrown? clojure.lang.ExceptionInfo (restated {:train_size n})))
+        (is (= 10 (train-size)))))
+    (testing "the train is the engine's to write, and no input carries it"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (restated {:line_train {:branch "train/1" :changes [] :prs []
+                                           :started_at "2026-09-29T12:00:00Z"}})))
+      (is (nil? (get-in (policy-row eng (:id row)) [:data :line_train]))))))
+
 (deftest a-policy-that-opens-no-pull-request-lands-without-one
   (let [st (state)
         eng (fresh-engine st)
@@ -1351,6 +1429,30 @@
     (is (not (contains? args :test))
         "no key at all, so a rig that does not know `test` still enrolls
          the repository")))
+
+(deftest a-policy-restated-with-a-select-pattern-enrolls-with-it
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:test {:workflow "tests.yml" :input "only"}})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))
+        pattern "^[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)+$"]
+    (is (not (contains? (:test (sent 0)) :select_pattern))
+        "a block without a pattern sends none, so the rig keeps its default")
+    (let [current (policy-row eng (:id row))]
+      (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                   (assoc (select-keys (:data current)
+                                       [:repository :branch_pattern :base
+                                        :max_lines :opens_pr :auto_merge
+                                        :rounds_per_change :formatter
+                                        :deny :orientation])
+                          :test {:workflow "tests.yml" :input "only"
+                                 :select_pattern pattern})
+                   {:principal person
+                    :if-match (inv/etag :repo_policy (:id row)
+                                        (:version current))}))
+    (is (= {:workflow "tests.yml" :input "only" :select_pattern pattern}
+           (:test (sent 1)))
+        "the restate carries the pattern to the rig's enrollment")))
 
 ;; ── the house's merge (ticket 4dfb00f6) ─────────────────────────────────
 
@@ -1591,6 +1693,27 @@
       (is (nil? (get-in row [:data :failing_checks])))
       (is (nil? (get-in row [:data :landing_error]))
           "the last landing's error is not the new round's"))))
+
+(deftest a-seat-submits-again-after-a-train-red
+  ;; ticket 6566d32f: a merge train's red names the head it judged, and
+  ;; the next submit is a new head
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))]
+    (inv/invoke! (:eng w) :change id :fail
+                 {:failing_checks ["merge-train"]
+                  :train_red_head head
+                  :train_red "the train's test10 went red"}
+                 {:principal mirror/source-principal})
+    (is (= "failing" (name (:state (change-row w)))))
+    (is (= head (get-in (change-row w) [:data :train_red_head])))
+    (let [r (submit! w {:why "Fix what the train said."})
+          row (change-row w)]
+      (is (false? (:isError r)) (text-of r))
+      (is (= "submitted" (name (:state row))))
+      (is (nil? (get-in row [:data :train_red_head])))
+      (is (nil? (get-in row [:data :train_red]))
+          "the train judged the old head, not the new round's"))))
 
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
@@ -1971,6 +2094,45 @@
     (is (= 31 (get-in answer [:feedback :pull_request :number]))
         "so the run gets what the last round caused all the same")))
 
+(deftest a-token-of-several-tools-lists-every-tool-it-admits
+  (let [powers (into [{:power "bench.read" :tools ["read" "prepare" "status"]
+                       :why false :constraints ["repo" "path"]}
+                      {:power "bench.symbols" :tools ["symbols" "read_symbol"]
+                       :why false :constraints ["repo" "path"]}]
+                     (remove #(= "bench.read" (:power %)))
+                     bench-powers)
+        tools-of (fn [scope]
+                   (let [st (state)
+                         _ (swap! st assoc :powers powers)
+                         eng (fresh-engine st)
+                         _ (a-policy! eng {})
+                         _ (a-change! eng {})
+                         _ (open-seat! eng {:scope scope})
+                         h (engine/handler eng)
+                         sid (get-in (rpc h (bearer) "initialize"
+                                          {:protocolVersion mcp/protocol-version
+                                           :capabilities {}
+                                           :clientInfo {:name "routine" :version "0"}})
+                                     [:headers "Mcp-Session-Id"])
+                         sat (call! h sid "waymark_sit" {:key a-key})]
+                     (is (false? (:isError sat)) (text-of sat))
+                     (get-in (doc-of sat) [:bench :tools])))
+        change {:kind "change" :actions ["submit" "discard" "stall"]}
+        reads {:kind "bench.read" :actions [] :filter {:repo a-repository}}
+        symbols {:kind "bench.symbols" :actions [] :filter {:repo a-repository}}]
+    (is (= {:bench.read "bench__read"
+            :bench.prepare "bench__prepare"
+            :bench.status "bench__status"
+            :bench.symbols "bench__symbols"
+            :bench.read_symbol "bench__read_symbol"}
+           (tools-of [change reads symbols]))
+        "a token that names several tools lists every one of them")
+    (is (= {:bench.read "bench__read"
+            :bench.prepare "bench__prepare"
+            :bench.status "bench__status"}
+           (tools-of [change reads]))
+        "a seat without bench.symbols is handed neither of its tools")))
+
 (deftest a-code-seat-that-holds-bench-rerun-is-handed-the-rerun-tool
   (let [w (ask-world (conj ask-scope {:kind "bench.rerun" :actions []
                                       :filter {:repo a-repository}}))
@@ -2201,6 +2363,59 @@
          walk")
     (is (= "open" (get-in answer [:change :state])))))
 
+(deftest a-change-born-on-another-repository-moves-to-the-seats-at-the-next-sit
+  ;; ticket 1ebcd19f: the walk row moved to this seat's repository after
+  ;; its change was born on another one, and the change never opened
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        _ (inv/invoke! (:eng w) :change (str change-id) :rebranch
+                       {:head_branch (str "elsewhere/" ask-id)
+                        :repository "ckopsa/elsewhere"}
+                       {:principal mirror/source-principal})
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (= a-repository (get-in row [:data :repository]))
+        "the next sit hands a change on the seat's repository")
+    (is (not= (str "elsewhere/" ask-id) (get-in row [:data :head_branch]))
+        "and its branch is minted again from that repository's policy")
+    (is (= 1 (count (changes-of (:eng w))))
+        "on the row that is here: no second change is born")
+    (is (= "open" (name (:state row))))
+    (is (= a-repository (get-in answer [:change :data :repository]))
+        "and the seat reads the new repository on the change beside its
+         walk")))
+
+(deftest a-change-with-a-pull-request-on-another-repository-stays-and-the-sit-says-so
+  ;; ticket c8ed268e: the other path of ticket 1ebcd19f — the change
+  ;; already has a pull request there, so the forge holds it and the
+  ;; house leaves it where it is
+  (let [w (ask-world)
+        ask-id (str (:id (:ask w)))
+        change-id (get-in (:answer w) [:change :id])
+        _ (inv/invoke! (:eng w) :change (str change-id) :rebranch
+                       {:head_branch (str "elsewhere/" ask-id)
+                        :repository "ckopsa/elsewhere"}
+                       {:principal mirror/source-principal})
+        _ (inv/invoke! (:eng w) :change (str change-id) :adopt
+                       {:change_id (str (get-in (:answer w)
+                                                [:change :data :change_id]))
+                        :number 7
+                        :url "https://github.com/ckopsa/elsewhere/pull/7"}
+                       {:principal mirror/source-principal})
+        answer (sit-again! w)
+        row (first (changes-of (:eng w)))]
+    (is (= "ckopsa/elsewhere" (get-in row [:data :repository]))
+        "a change with a pull request keeps its repository")
+    (is (= (str "elsewhere/" ask-id) (get-in row [:data :head_branch]))
+        "and its branch")
+    (is (= 7 (get-in row [:data :number])))
+    (is (= 1 (count (changes-of (:eng w))))
+        "and no second change is born on the seat's repository")
+    (is (= @#'mcp/elsewhere-change-note
+           (or (:change_note answer) (:bench_note answer)))
+        "the sit tells the seat why its bench cannot reach the change")))
+
 (deftest an-open-seat-born-change-on-the-old-pattern-is-rebranched-too
   ;; Prod's own row was at `open`, not at `stuck`: the sit minted it,
   ;; the prepare refused, and the seat stalled nothing.
@@ -2319,6 +2534,46 @@
                    "submit")
         "and the seat is offered submit on the change beside its walk")
     (is (nil? (:change_note answer)))))
+
+(deftest the-groom-itself-puts-a-stalled-change-back-to-work
+  ;; ticket 9ace68fb: the wakes leave out a ticket beside a stuck
+  ;; change, so the change must be open BEFORE any sit, or no seat
+  ;; fires to walk it
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (person-moves-ticket! w :groom)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the groom moved the change, not a sit")
+    (is (zero? (long (get-in row [:data :rounds]))))
+    (is (not (contains? (seats/stuck-walk-rows (:eng w) "ticket")
+                        (str (:id (:ticket w)))))
+        "so the wakes count the ticket again")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows])))
+        "and the next sit hands it")))
+
+(deftest the-unblock-puts-a-stalled-change-back-to-work
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        blocker (:row (inv/create! (:eng w) :ticket
+                                   {:title "The blocker" :type "task"
+                                    :repo a-repository}
+                                   {:principal person}))
+        tid (str (:id (:ticket w)))
+        drafted (store/with-tx (:storage (:eng w))
+                  (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket tid {})))
+        ;; `block` is fenced: name the version the stall left
+        _ (inv/invoke! (:eng w) :ticket tid :block
+                       {:blocked_by [(str (:id blocker))]}
+                       {:principal person
+                        :if-match (inv/etag :ticket tid (:version drafted))})
+        _ (person-moves-ticket! w :unblock)
+        row (first (changes-of (:eng w)))]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "open" (name (:state row))) "the unblock moved the change")
+    (is (= [(str (:id (:ticket w)))]
+           (mapv :id (get-in (sit-again! w) [:walk :rows]))))))
 
 (deftest a-stall-with-no-groom-after-it-stays-stuck
   (let [w (ticket-world)
@@ -2530,6 +2785,57 @@
       (is (= :complete (:action (last-ticket-move w)))
           "and the merge walked no door on it"))))
 
+;; ── a train's lone red, end to end (ticket e84e9317) ─────────────────
+;;
+;; merge_line_test.clj watches the bisect with a recording `:train-red!`.
+;; Here the engine's own hand takes the door: a train of two goes red,
+;; its front half rides alone and goes red again, and that change is
+;; `failing` with its ticket back in the queue.
+
+(deftest a-trains-lone-red-change-fails-and-returns-its-ticket
+  (let [w (ticket-world (assoc house-policy :merge_strategy "train"))
+        st (:state w)
+        seen (atom {})
+        _ (submitted-and-adopted! w 31)
+        red-id (get-in (:answer w) [:change :id])
+        other (:row (inv/create! (:eng w) :ticket
+                                 {:title "Name the ceiling on the form"
+                                  :type "feature" :repo a-repository}
+                                 {:principal person}))
+        _ (inv/invoke! (:eng w) :ticket (str (:id other)) :groom {}
+                       {:principal person})
+        w2 (assoc w :answer (sit-again! w))
+        _ (submitted-and-adopted! w2 32)
+        other-id (get-in (:answer w2) [:change :id])
+        row-of #(change-row {:eng (:eng w) :change {:id %}})
+        train (fn [prs] {:branch "train/ckopsa/waymark/31" :base_head a-head
+                         :head a-commit :merged prs :conflicted []})]
+    (is (not= red-id other-id) "two changes, one for each ticket")
+    (is (= "submitted" (name (:state (row-of other-id)))))
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__train_build" (train [31 32]))
+    (bench/merge-green! (:eng w) seen)
+    (answer! st "bench__train_status" {:state "failure" :head a-commit})
+    (answer! st "bench__train_build" (train [31]))
+    (bench/merge-green! (:eng w) seen)
+    (is (= [[31 32] [31]]
+           (mapv #(get-in % [:arguments :prs]) (calls-of st "bench__train_build")))
+        "a train of two, then its front half alone")
+    (bench/merge-green! (:eng w) seen)
+    (let [red (row-of red-id)]
+      (is (= "failing" (name (:state red))))
+      (is (= ["merge-train"] (get-in red [:data :failing_checks])))
+      (is (= (str (get-in red [:data :head_sha]))
+             (get-in red [:data :train_red_head]))
+          "the red names the head the train judged")
+      (is (str/includes? (str (get-in red [:data :train_red])) "alone")))
+    (is (= "open" (ticket-state w)) "its ticket is back in the queue")
+    (is (= :return (:action (last-ticket-move w))))
+    (is (= "submitted" (name (:state (row-of other-id))))
+        "the change that rode with it is not judged by its red")
+    (is (nil? (get-in (the-policy w) [:data :line_train]))
+        "and no train stands")))
+
 ;; ── a merge that waits on other tickets (ticket d069bc3b) ────────────
 
 (defn- a-groomed-ticket!
@@ -2555,17 +2861,19 @@
                 :if-match (inv/etag :ticket id (:version (ticket-by-id w id)))}))
 
 (defn- held-world
-  "A house-merged world whose change is submitted and adopted as #91,
-  and whose ticket was then told to merge after one open ticket — a
-  dependency named after the pull request exists."
-  []
-  (let [w (ticket-world house-policy)
+  "A house-merged world (or one under `policy`) whose change is
+  submitted and adopted as #91, and whose ticket was then told to merge
+  after one open ticket — a dependency named after the pull request
+  exists."
+  ([] (held-world house-policy))
+  ([policy]
+  (let [w (ticket-world policy)
         dep (a-groomed-ticket! w "Land the per-repository line first")]
     (submitted-and-adopted! w 91)
     (is (= "in_review" (ticket-state w)))
     (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :merge_after_in_review
                  {:merge_after [dep]} (ticket-fence w))
-    (assoc w :dep dep)))
+    (assoc w :dep dep))))
 
 (deftest a-change-that-merges-after-an-open-ticket-is-held-until-it-is-done
   (let [w (held-world)
@@ -2592,6 +2900,22 @@
       (is (= 1 (count (calls-of st "bench__merge"))))
       (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
           "and the ticket no longer says it waits"))))
+
+(deftest a-person-merged-change-that-merges-after-an-open-ticket-raises-no-ask
+  (let [w (held-world person-policy)
+        eng (:eng w)
+        waiting (atom {})]
+    (mirror-moves-change! w :observe_submitted {:mergeable "clean"})
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 600)))
+        "a clean change whose ticket waits on an open one is not asked")
+    (is (empty? (bench/merge-asks eng)))
+    (testing "once its dependency is done, it is asked after its own wait"
+      (end-ticket! w (:dep w) :complete)
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 601)))
+          "the wait starts when nothing holds it")
+      (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 700))))
+      (is (= 1 (count (bench/merge-asks eng)))))))
 
 (deftest a-dropped-dependency-keeps-the-change-held
   (let [w (held-world)
@@ -2784,7 +3108,12 @@
     (is (= "open" (ticket-state w)))
     (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
     (is (empty? (get-in answer [:walk :rows]))
-        "the ticket beside a stuck change is left out like a claimed row")))
+        "the ticket beside a stuck change is left out like a claimed row")
+    (let [withheld (get-in answer [:walk :withheld])]
+      (is (= [(str (:id (:ticket w)))] (mapv :id withheld))
+          "the sit answers the withheld row rather than an empty list")
+      (is (re-find #"stuck" (str (:reason (first withheld))))
+          "and says why it was held back"))))
 
 (deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
   (let [w (ticket-world)
@@ -2800,7 +3129,10 @@
         "the wakes leave the ticket out as the sit does")
     (is (= 0 (#'wakes/walk-count eng seat))
         "so a groom or a count wake reads the walk as empty")
-    (is (true? (#'wakes/empty-walk? eng seat)))))
+    (is (true? (#'wakes/empty-walk? eng seat)))
+    (is (= 0 (#'wakes/entry-count eng seat {:kind "ticket" :at_least 1
+                                             :filter {:state "open"}}))
+        "a count entry under a filter of its own leaves the ticket out too")))
 
 ;; ── a submitted round is not walked twice (ticket 60c2ec22) ────────────
 
@@ -2913,6 +3245,33 @@
     (is (contains? (into #{} (map :action) (get-in answer [:change :doors]))
                    "submit")
         "and submit on it is the next round")))
+
+(deftest a-fire-naming-a-ticket-in-review-hands-it-and-its-change
+  ;; ticket 7af7d506: the walk hands open tickets, and a fire that names
+  ;; one in review, or the change beside it, hands both
+  (let [w (ticket-world)
+        change-id (str (get-in (:answer w) [:change :id]))
+        ticket-id (str (:id (:ticket w)))
+        submitted (seat-invokes! w "submit" {:why a-long-sentence})
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        sit-fired! (fn [text]
+                     (let [k (seats/hold-fire-key! (:eng w) seat-row
+                                                   ((:now-fn (:eng w))) text)]
+                       (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                                      {:key k :seat "bench-seat"}))))]
+    (is (false? (:isError submitted)) (text-of submitted))
+    (is (= "in_review" (ticket-state w)))
+    (testing "a wake naming the ticket hands it and its submitted change"
+      (let [answer (sit-fired! (str "{\"kind\":\"ticket\",\"id\":\""
+                                    ticket-id "\"}"))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))
+        (is (= "submitted" (get-in answer [:change :state])))))
+    (testing "a person's prose naming the change hands the same"
+      (let [answer (sit-fired! (str "Resolve the conflict on change "
+                                    change-id " and stop."))]
+        (is (= [ticket-id] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= change-id (str (get-in answer [:change :id]))))))))
 
 ;; ── the bench helper's own arithmetic ───────────────────────────────
 
@@ -3144,3 +3503,41 @@
         (is (not (contains? (set (keys (:unavailable doc))) :stamp_label))
             "a hidden door is ABSENT from the envelope, not listed as
              unavailable — nobody spends a call to learn it is shut")))))
+
+;; ── the holder wall judges the calling sitting (ticket 51dfd10b) ─────
+
+(deftest the-holder-wall-judges-the-calling-sitting-not-the-newest-under-the-grant
+  (let [rows (atom {"A" {:id "A" :state :open
+                         :data {:grant "G" :seat "S" :walked_rows ["T"]}}
+                    "B" {:id "B" :state :open
+                         :data {:grant "G" :seat "S" :walked_rows ["U"]}}})
+        ;; B is the newer sitting; both share the seat's grant G
+        newest-first ["B" "A"]
+        ctx (fn [sid]
+              {:principal {:id "seat:S"}
+               :grant (cond-> {:id "G"} sid (assoc :sitting sid))
+               :read (fn [_ id] (get @rows (str id)))
+               :find (fn [_ where _]
+                       (->> newest-first
+                            (map @rows)
+                            (filter #(or (nil? (:state where))
+                                         (= (:state where) (:state %))))
+                            (filter #(or (nil? (:seat where))
+                                         (= (:seat where) (get-in % [:data :seat]))))
+                            (filter #(or (nil? (:grant where))
+                                         (= (:grant where) (get-in % [:data :grant]))))
+                            vec))})
+        change {:data {:born_from "ticket:T"}}]
+    (testing "the older sitting A, which holds T, may submit T's change"
+      (is (nil? (bench/unheld-detail change (ctx "A"))))
+      (is (= "A" (bench/sitting-id (ctx "A")))
+          "the trailer names the calling sitting, not the newest"))
+    (testing "the newer sitting B, which holds U, is refused naming A"
+      (is (str/includes? (str (bench/unheld-detail change (ctx "B")))
+                         "held by sitting A")))
+    (testing "a request that names no sitting is not judged"
+      (is (nil? (bench/unheld-detail change (ctx nil)))))
+    (testing "a closed A is refused on its own write"
+      (swap! rows assoc-in ["A" :state] :closed)
+      (is (str/includes? (str (bench/unheld-detail change (ctx "A")))
+                         "sitting A is closed")))))

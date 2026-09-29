@@ -172,6 +172,15 @@
   [eng-or-rpc token]
   (some-> (servers/engine-of eng-or-rpc) (servers/token-tool token)))
 
+(defn token-tools
+  "EVERY tool a power token admits, as a caller spells them —
+  `mcp-servers/token-tools`, over a dispatcher. Empty when there is
+  no engine yet."
+  [eng-or-rpc token]
+  (if-some [eng (servers/engine-of eng-or-rpc)]
+    (servers/token-tools eng token)
+    []))
+
 ;; ── the grant's read of the policy ──────────────────────────────────
 
 (defn- admitted?
@@ -339,7 +348,9 @@
 ;; secrets and a .claude/ hook runs in every session that opens the
 ;; repository, so the flag is the ENGINE's to set and never the
 ;; caller's: it is dropped from every bench call, and set on a
-;; bench.edit only when the admitting filter names the path (R-12.30).
+;; bench.edit — or on every item of a bench.edit_many, which is many
+;; of that one edit in a single call — only when the admitting filter
+;; names the path (R-12.30).
 
 (def ^:private protected-prefixes [".github/" ".claude/"])
 
@@ -370,26 +381,91 @@
               (filter protected-path?))
         filters))
 
+(def ^:private edit-items-field
+  "The argument a bench.edit_many carries its writes in. Each item is
+  one edit with its own `path`, so the engine judges every one of them
+  the way it judges the lone edit's."
+  :edits)
+
+(defn- arg-str
+  "One argument as a non-blank string, spelled either way: a call that
+  arrives over the wire is keywordized, and one an engine hands in may
+  not be."
+  [m k]
+  (when (map? m)
+    (some-> (or (get m k) (get m (name k))) str not-empty)))
+
+(defn- edit-targets
+  "Every path a bench write means to write — {:item n :path p}, with
+  `item` nil for the call's own `path` and `move_to` and the item's
+  position, counted from one, for a bench.edit_many's. That number is
+  what the refusal names, so a seat fixes the item it wrote instead of
+  doubting a scope that was right."
+  [args]
+  (let [own (keep (fn [k] (when-some [p (arg-str args k)] {:path p}))
+                  [:path :move_to])
+        items (or (get args edit-items-field)
+                  (get args (name edit-items-field)))
+        each (when (sequential? items)
+               (mapcat (fn [i it]
+                         (keep (fn [k]
+                                 (when-some [p (arg-str it k)]
+                                   {:item (inc i) :path p}))
+                               [:path :move_to]))
+                       (range) items))]
+    (vec (concat own each))))
+
+(def ^:private protected-edit-tokens
+  "The powers whose filters may name a protected path. An edit_many is
+  many bench.edits in one call, so a seat told it may write
+  .github/workflows/tests.yml has been told that however it batches
+  the write: both entries' protected globs stand for either tool."
+  ["bench.edit" "bench.edit_many"])
+
+(defn- protected-edit-globs
+  "The protected path globs that admit this call: those on the entry
+  the call is judged under, and those on the seat's other edit entry."
+  [vis gentry args]
+  (into (vec (when gentry (protected-globs (:filters gentry) args)))
+        (comp (keep #(grants/capability-entry vis %))
+              (mapcat #(protected-globs (:filters %) args)))
+        protected-edit-tokens))
+
+(defn- protected-verdict
+  "How a bench edit's protected targets stand: nil when it writes none,
+  {:allow true} when every one of them is clean and named by a
+  protected glob the seat's edit entries carry, and {:refuse {…}}
+  naming the first that is not. The refusal is the BATCH's alone — a
+  lone bench.edit reaches the rig without the flag, as it always has,
+  and the rig refuses that write there."
+  [vis tname gentry args]
+  (when (some #(= tname (bench-tool %)) [:edit :edit_many])
+    (let [targets (edit-targets args)
+          guarded (filterv #(protected-path? (:path %)) targets)]
+      (when (seq guarded)
+        (let [globs (protected-edit-globs vis gentry args)
+              named? (fn [{:keys [path]}]
+                       (and (clean-path? path)
+                            (boolean (some #(path-glob-matches? % path)
+                                           globs))))
+              bad (or (first (remove named? guarded))
+                      (first (remove #(clean-path? (:path %)) targets)))]
+          (cond
+            (nil? bad) {:allow true}
+            (= tname (bench-tool :edit_many)) {:refuse bad}
+            :else nil))))))
+
 (defn- bench-protected
   "The arguments of a bench call with `allow_protected` decided by the
-  engine: any the caller sent is dropped, and a bench.edit whose
-  protected targets (`path`, and `move_to` for a move) are all clean
-  and all named by a protected glob of the admitting entry gets it set.
-  Every other call reaches the rig without it, and the rig refuses a
+  engine: any the caller sent is dropped, and the flag set when the
+  judgment above admitted every protected target of the call. Every
+  other call reaches the rig without it, and the rig refuses a
   protected write as it always has."
-  [tname gentry args]
+  [tname args protected]
   (if-not (bench-tool? tname)
     args
-    (let [args (dissoc (or args {}) :allow_protected "allow_protected")
-          targets (keep #(some-> (get args %) str not-empty) [:path :move_to])
-          guarded (filter protected-path? targets)
-          globs (when (and gentry (seq guarded) (= tname (bench-tool :edit)))
-                  (protected-globs (:filters gentry) args))]
-      (cond-> args
-        (and (seq globs)
-             (every? clean-path? targets)
-             (every? (fn [t] (some #(path-glob-matches? % t) globs)) guarded))
-        (assoc :allow_protected true)))))
+    (cond-> (dissoc (or args {}) :allow_protected "allow_protected")
+      (:allow protected) (assoc :allow_protected true))))
 
 ;; ── affordances ─────────────────────────────────────────────────────
 
@@ -590,6 +666,22 @@
         " ask for one that names what you need.")
    token))
 
+(defn- refuse-bench-protected
+  "The 403 for a batch that writes under .github/ or .claude/ where the
+  seat's edit filters name no such path. It names the TOOL and the
+  ITEM, because a seat told only `protected` concludes its whole scope
+  is wrong and files a follow-up against a scope that was right.
+  Nothing reached the rig."
+  [tname token {:keys [item path]}]
+  (refuse-invoke
+   (str tname (when item (str " item " item)) " writes " path
+        ", which no bench.edit filter of this seat names. A write under"
+        " .github/ or .claude/ is the engine's to allow, and it allows"
+        " only a clean path that a protected glob on this grant's edit"
+        " entries names. Write the path that glob names, or ask for a"
+        " filter that names this one.")
+   token))
+
 (defn- refuse-unknown
   "The 404 for a name this door does not answer to (R-5).
 
@@ -656,6 +748,95 @@
               "Prepare a branch outside the branch_pattern instead — `read/<seat name>`, by convention."
               (str "State a repo_policy for " repo ", or prepare in an"
                    " enrolled repository."))]})))
+
+;; ── the sitting that holds the row (ticket d7c854b3) ────────────────
+;;
+;; A branch the repository's own branch_pattern minted names ONE walk
+;; row (`bench/<ticket id>`), and a write on it is the write of the
+;; sitting that holds that row. A sitting closed early while its run
+;; still edits, or one another open sitting of its seat has taken the
+;; row from, is refused before the forward: two sittings never write
+;; one branch. Reads stay open, a branch outside the pattern is not
+;; judged, and neither is a call that names no sitting (the REST door,
+;; the engine's own hand). A sitting whose walk handed it no row at all
+;; is judged only on being open and on no other sitting holding the row.
+
+(def ^:private bench-writes #{:edit :edit_many :pull :submit})
+
+(defn- bench-write? [tname]
+  (boolean (some #(= tname (bench-tool %)) bench-writes)))
+
+(defn- branch-row-id
+  "The walk row a branch was minted for: what the `*` of the
+  repository's branch_pattern stands for in it, or nil for a branch
+  outside the pattern."
+  [policy branch]
+  (let [pattern (or (some-> (get-in policy [:data :branch_pattern]) str not-empty)
+                    default-branch-pattern)
+        [pre post] (str/split pattern #"\*" 2)
+        pre (str pre)
+        post (str post)
+        branch (str branch)]
+    (when (and (str/includes? pattern "*")
+               (str/starts-with? branch pre)
+               (str/ends-with? branch post)
+               (> (count branch) (+ (count pre) (count post))))
+      (subs branch (count pre) (- (count branch) (count post))))))
+
+(defn- holds-row? [sitting row-id]
+  (boolean (some #(= row-id (str %)) (get-in sitting [:data :walked_rows]))))
+
+(defn- bench-hold-block
+  "Why a bench write should be refused because the calling sitting does
+  not hold the row its branch was minted for, as {:row :sitting :state
+  :ended :holder}, or nil when it should not be."
+  [eng tname args opts]
+  (when (bench-write? tname)
+    (let [sid (some-> (:sitting opts) str not-empty)
+          branch (some-> (:branch args) str not-empty)]
+      (when (and sid branch (get (inv/resources eng) :sitting))
+        (when-some [row-id (branch-row-id (repo-policy-of eng (:repo args)) branch)]
+          (let [st (:storage eng)
+                [sitting holder]
+                (store/with-tx st
+                  (fn [tx]
+                    (let [s (store/load-row st tx :sitting sid {})
+                          seat (some-> (get-in s [:data :seat]) str not-empty)]
+                      [s (when seat
+                           (->> (store/query-rows st tx :sitting
+                                                  {:seat seat :state :open}
+                                                  {:limit 50 :newest-first true})
+                                (remove #(= sid (str (:id %))))
+                                (filter #(holds-row? % row-id))
+                                first))])))
+                state (some-> (:state sitting) name)
+                walked (seq (get-in sitting [:data :walked_rows]))]
+            (when (and sitting
+                       (or holder
+                           (not= "open" state)
+                           (and walked (not (holds-row? sitting row-id)))))
+              {:row row-id :sitting sid :state state
+               :ended (get-in sitting [:data :ended_at])
+               :holder (some-> (:id holder) str)})))))))
+
+(defn- refuse-bench-hold
+  "The 409 for a bench write from a sitting that no longer holds the
+  row its branch was minted for. It names the row and why, and the
+  remedy is to stop: the sitting that holds the row finishes it."
+  [tname {:keys [row sitting state ended holder]}]
+  (throw (p/problem
+          :sitting-does-not-hold 409 "Not this sitting's row"
+          {:detail
+           (str "Invoking " tname " writes the branch of ticket " row
+                ", and this sitting no longer holds ticket " row " ("
+                (cond
+                  holder (str "held by sitting " holder)
+                  (not= "open" state) (str "sitting " sitting " is " state
+                                           (when ended (str ", closed at " ended)))
+                  :else (str "sitting " sitting "'s walk never handed it that row"))
+                "); stop, do not write.")
+           :remedies
+           ["Stop: do not write this branch. The sitting that holds the row finishes it; close this one."]})))
 
 (defn- carries-why? [args]
   (or (not (str/blank? (str (:why args))))
@@ -727,9 +908,11 @@
      (when (or (nil? hit) (nil? entry))
        (refuse-unknown eng asked))
      (let [gentry (grants/capability-entry vis token)
-           args (bench-protected tname gentry args)
+           protected (protected-verdict vis tname gentry args)
+           args (bench-protected tname args protected)
            verdict (when gentry (filter-verdict (:filters gentry) args))
-           prepare-block (bench-prepare-block eng vis tname args)]
+           prepare-block (bench-prepare-block eng vis tname args)
+           hold-block (bench-hold-block eng tname args opts)]
        (cond
          (nil? gentry)
          (refuse-invoke
@@ -742,8 +925,14 @@
          (:miss verdict)
          (refuse-filter tname token (:miss verdict))
 
+         (:refuse protected)
+         (refuse-bench-protected tname token (:refuse protected))
+
          prepare-block
          (refuse-bench-prepare tname prepare-block)
+
+         hold-block
+         (refuse-bench-hold tname hold-block)
 
          (and why (not (carries-why? args)))
          (refuse-why tname)
@@ -793,10 +982,12 @@
         (let [tname (str tool)
               {:keys [row entry token]} (servers/resolve-tool eng tname)
               gentry (when token (grants/capability-entry vis token))
-              args (bench-protected tname gentry args)
+              protected (protected-verdict vis tname gentry args)
+              args (bench-protected tname args protected)
               verdict (when gentry (filter-verdict (:filters gentry) args))
               prepare-block (bench-prepare-block eng vis tname args)]
-          (when (and entry gentry (not (:miss verdict)) (not prepare-block))
+          (when (and entry gentry (not (:miss verdict)) (not prepare-block)
+                     (not (:refuse protected)))
             (try
               (servers/call! eng tname
                              (forward-args row (with-allow args (:allow verdict))))

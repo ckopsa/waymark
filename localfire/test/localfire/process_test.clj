@@ -65,6 +65,19 @@
         (is (.canExecute (io/file (runs/place-dir runs id)
                                   ".claude/hooks/sitting-close.sh")))))))
 
+(deftest a-run-starts-with-an-empty-stdin
+  (let [{:keys [state runs] :as world} (world)
+        id (str (UUID/randomUUID))]
+    (begin! world id)
+    ;; with /dev/null the read meets end of input at once; with an open
+    ;; pipe it would wait until the kill
+    (let [rec (server/execute-run! state {:id id
+                                          :argv ["sh" "-c" "if read -r x; then exit 5; fi; exit 0"]
+                                          :dir (runs/place-dir runs id)
+                                          :max-run-seconds 10})]
+      (is (= :done (:status rec)))
+      (is (= 0 (:exit rec))))))
+
 (deftest a-run-that-exits-non-zero-is-failed
   (let [{:keys [state runs] :as world} (world)
         id (str (UUID/randomUUID))]

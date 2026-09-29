@@ -79,13 +79,30 @@
                              :one-way "Sealing is for good."}
                     :display {:label "Seal"}}}})
 
+;; the same refusing door, declared bulk: a bulk action lives on the
+;; collection alone, so the vault above keeps its per-row seal
+(r/defresource bulk-vault
+  {:kind :seat_bulk_vault
+   :plural "seat_bulk_vaults"
+   :states [:open :sealed]
+   :initial :open
+   :terminal #{:sealed}
+   :summary "{data.name} · {state}"
+   :schema [:map [:name [:string {:min 1 :max 80}]]]
+   :actions {:seal {:from #{:open} :to :sealed
+                    :bulk {:max-items 5}
+                    :guards [sealed-for-good]
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "Sealing is for good."}
+                    :display {:label "Seal"}}}})
+
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private t0 (Instant/parse "2026-09-17T08:00:00Z"))
 
 (defn- world []
   (let [clock (atom t0)
-        eng (dev/scratch! [pantry ledger vault] {:now-fn (fn [] @clock)})]
+        eng (dev/scratch! [pantry ledger vault bulk-vault] {:now-fn (fn [] @clock)})]
     {:clock clock :eng eng :h (dev/handler eng)}))
 
 (defn- req
@@ -560,3 +577,71 @@
       (req h :post "/api/seat_pantries" {:headers as :body {:name "salt"}})
       (req h :post "/api/seat_vaults" {:headers as :body {:name "chest"}})
       (is (= [3 1] (counts)) "the counts are frozen at the close"))))
+
+(deftest a-partial-bulks-per-item-409-counts-one-refusal-on-the-sitting
+  (let [{:keys [h]} (world)
+        model (add-model! h "bulk-count-model")
+        seat (open-seat! h "clerk-bulk-count"
+                         {:scope [{:kind "seat_bulk_vault"
+                                   :actions ["create" "seal"]}]})
+        gid (sit! h (sitter "ari-bulk") "clerk-bulk-count" {})
+        as (sitter "ari-bulk" {:grant gid})
+        made (req h :post "/api/sittings"
+                  {:headers as :body {:seat seat :model model
+                                      :grant gid}})
+        sid (id-of made)
+        refusals (fn []
+                   (:refusals (:data (json (req h :get (str "/api/sittings/" sid)
+                                                {:headers human})))))
+        v (req h :post "/api/seat_bulk_vaults" {:headers as :body {:name "strongbox"}})
+        _ (is (= 201 (:status v)))
+        before (refusals)
+        ;; one row the guard refuses (409) and one row that is not there
+        ;; (404): the bulk door answers its report, and only the 409 is a
+        ;; refusal the sitting counts
+        bulk (req h :post "/api/seat_bulk_vaults/-/seal"
+                  {:headers as
+                   :body {:ids [(id-of v) (str (random-uuid))]}})]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (is (= 0 before))
+    (is (< (:status bulk) 300) (pr-str (json bulk)))
+    (is (= (inc before) (refusals))
+        "the per-item 409 counts exactly one refusal; the 404 counts none")
+    (is (= "open" (:state (json (req h :get (str "/api/seat_bulk_vaults/" (id-of v))
+                                     {:headers as}))))
+        "the refused row stays untouched")))
+
+(deftest a-closed-sitting-shows-the-rows-a-person-reversed
+  (let [{:keys [h]} (world)
+        model (add-model! h "correct-model")
+        seat (open-seat! h "clerk-correct")
+        gid (sit! h (sitter "ari-correct") "clerk-correct" {})
+        as (sitter "ari-correct" {:grant gid})
+        sid (id-of (req h :post "/api/sittings"
+                        {:headers as :body {:seat seat :model model
+                                            :grant gid}}))
+        mine (id-of (req h :post "/api/seat_pantries"
+                         {:headers as :body {:name "flour"}}))
+        line (fn []
+               (let [d (:data (json (req h :get (str "/api/sittings/" sid)
+                                         {:headers human})))]
+                 [(or (:corrections d) 0) (vec (:corrected_rows d))]))]
+    (is (= 200 (:status (req h :post (str "/api/sittings/" sid "/-/close")
+                             {:headers as
+                              :body {:input_tokens 10 :output_tokens 10
+                                     :cache_read_tokens 0
+                                     :cache_write_tokens 0
+                                     :turns 1 :note "Done."}}))))
+    (is (= [0 []] (line)))
+
+    (testing "a person's change on a row the sitter never touched adds nothing"
+      (let [theirs (id-of (req h :post "/api/seat_pantries"
+                               {:headers human :body {:name "rice"}}))]
+        (req h :post (str "/api/seat_pantries/" theirs "/-/finish")
+             {:headers human})
+        (is (= [0 []] (line)))))
+
+    (testing "a person's transition on the sitter's row adds one and the id"
+      (is (= 200 (:status (req h :post (str "/api/seat_pantries/" mine "/-/finish")
+                               {:headers human}))))
+      (is (= [1 [mine]] (line))))))

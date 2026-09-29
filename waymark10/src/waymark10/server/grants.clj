@@ -180,6 +180,9 @@
             ;; circle, and `tokens-of-rows` is pure over the page the
             ;; guard's own ctx hands it
             [waymark10.server.mcp-servers :as servers]
+            ;; spellings-of: the ids a reader answers to (waymark-27j).
+            ;; members requires nothing that requires grants
+            [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -1339,12 +1342,14 @@
               :explain "The requester cannot judge its own ask; another principal decides."}
     :stamps  {:decided-by :approved_by}
     ;; short-lived is the DEFAULT, not an opt-in: an ask naming no
-    ;; expiry gets the engine's configured TTL (1h), stamped AT
-    ;; CREATE so the approver approves the leash that will actually
-    ;; exist. An agent proposes longer at will up to the cap; the
-    ;; approver sees the number either way.
+    ;; expiry gets the engine's configured TTL (24h, the leash's own
+    ;; cap — waymark-h6y: a shorter default killed the minted grant
+    ;; minutes after a late approval, because the offer window and
+    ;; the grant lifetime are one field), stamped AT CREATE so the
+    ;; approver approves the leash that will actually exist. An agent
+    ;; proposes shorter at will; the approver sees the number either way.
     :expires {:field :expires_at
-              :default {:service :grant-default-ttl-seconds :seconds 3600}
+              :default {:service :grant-default-ttl-seconds :seconds 86400}
               :x-display
               {:label "Good until"
                :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}
@@ -1762,9 +1767,14 @@
 (defn- branch-owns?
   "Does this row's `branch` name the principal? A branch is a PATH
   into the document — [:requested_by] for a promoted column,
-  [:requested_by :id] for a requester riding as an object."
-  [row branch pid]
-  (= pid (get-in row (into [:data] branch))))
+  [:requested_by :id] for a requester riding as an object.
+
+  `pids` is a SET: every spelling the principal answers to
+  (members/spellings-of — the principal id and its bound member row
+  id), so a row addressed by either spelling is the reader's own
+  (waymark-27j)."
+  [row branch pids]
+  (contains? pids (get-in row (into [:data] branch))))
 
 (defn- own-branch-ids
   "The principal's own ids for one branch of one kind, inside the
@@ -1782,14 +1792,16 @@
   closed (no foreign id can enter either way), but mail accumulates
   and journals do not shrink. The window is still a window; what
   changed is which end of the rope it holds."
-  [eng tx kind branch pid]
+  [eng tx kind branch pids]
   (let [st (:storage eng)
         opts {:limit 200 :newest-first true}]
     (if (= 1 (count branch))
-      (into #{} (map :id)
-            (store/query-rows st tx kind {(first branch) pid} opts))
       (into #{}
-            (comp (filter #(branch-owns? % branch pid)) (map :id))
+            (comp (mapcat #(store/query-rows st tx kind {(first branch) %} opts))
+                  (map :id))
+            pids)
+      (into #{}
+            (comp (filter #(branch-owns? % branch pids)) (map :id))
             (store/query-rows st tx kind {} opts)))))
 
 (defn- own-ids
@@ -1803,14 +1815,22 @@
 
   nil = unrestricted, the :all posture: the whole kind lists.
   Otherwise never empty — an impossible id keeps an empty surface's
-  total honestly zero (an empty IN would not parse)."
+  total honestly zero (an empty IN would not parse).
+
+  The principal is asked for under EVERY spelling it answers to
+  (members/spellings-of, waymark-27j): a letter addressed by the
+  member row id is the reader's as surely as one addressed by the
+  principal id, and the feed and the open guard already say so. The
+  cost is one member read per collection request, and one query per
+  spelling per branch (at most a handful)."
   [eng kind os pid]
   (when-not (:all os)
-    (let [ids (store/with-tx
+    (let [pids (set (members/spellings-of eng pid))
+          ids (store/with-tx
                 (:storage eng)
                 (fn [tx]
                   (into (sorted-set)
-                        (mapcat #(own-branch-ids eng tx kind % pid))
+                        (mapcat #(own-branch-ids eng tx kind % pids))
                         (:by os))))]
       (if (seq ids) (vec ids) ["-none-"]))))
 
@@ -1944,6 +1964,22 @@
   [seat-id]
   {:kind "seat" :ids [(str seat-id)] :actions []})
 
+(defn seat-window-conds
+  "The ONE reader of a seat's window (waymark-fp62.1.2): the three conds
+  that name this seat's sittings started at or after `since`, in
+  `states`. The wall sums over it with closed and open
+  (`week-spend-conds`); the ledger (routes/seats) reads its finished
+  bills with closed alone and its spend with both. One state is
+  spelled `:=`, more than one `:in`."
+  [seat-id ^java.time.Instant since states]
+  [(if (= 1 (count states))
+     {:target :state :op := :value (first states)}
+     {:target :state :op :in :values (vec states)})
+   {:target :data :field :seat :cast "text" :op :=
+    :value (str seat-id)}
+   {:target :data :field :started_at :cast "timestamptz" :op :>=
+    :value (str since)}])
+
 (defn week-spend-conds
   "The three conds that name a seat's fuel: this seat's sittings,
   started inside the rolling window, closed or open.
@@ -1960,11 +1996,8 @@
   of one arithmetic are two answers to R-5.2's third wall, correct on
   the day they were written."
   [seat-id ^java.time.Instant now]
-  [{:target :state :op :in :values ["closed" "open"]}
-   {:target :data :field :seat :cast "text" :op :=
-    :value (str seat-id)}
-   {:target :data :field :started_at :cast "timestamptz" :op :>=
-    :value (str (.minusSeconds now budget-window-seconds))}])
+  (seat-window-conds seat-id (.minusSeconds now budget-window-seconds)
+                     ["closed" "open"]))
 
 (defn spent-with
   "The week's spend, over a summing hand the caller holds: `sum` is
@@ -2196,6 +2229,9 @@
         surfaces (own-surfaces eng)
         own-of (fn [k] (when named? (get surfaces k)))
         own-kind? (fn [k] (some? (own-of k)))
+        ;; every id the principal answers to (waymark-27j), read once
+        ;; and only when a row GET actually asks
+        spellings (delay (set (members/spellings-of eng pid)))
         own-row? (fn [k id]
                    (when-some [os (own-of k)]
                      (if (:all os)
@@ -2209,7 +2245,7 @@
                        ;; falls out of :row? and 404s like any
                        ;; un-granted one)
                        (when-some [row (load-decoded eng (keyword k) id)]
-                         (boolean (some #(branch-owns? row % pid)
+                         (boolean (some #(branch-owns? row % @spellings)
                                         (:by os)))))))
         ;; the two closures the GUARD-side of the leash consults
         ;; (waymark-sfe) are bound here rather than only in the map

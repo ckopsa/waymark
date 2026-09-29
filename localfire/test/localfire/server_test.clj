@@ -57,6 +57,15 @@
           (destroy [_] (deliver done 143))
           (destroy-forcibly [_] (deliver done 137)))))))
 
+(defn fake-closer
+  "The close's seam faked (R-5.6): `closes` collects one map per call,
+  the hook's stdin read back as JSON, and every close succeeds."
+  [closes]
+  (fn [argv dir input]
+    (swap! closes conj {:argv (vec argv) :dir (str dir)
+                        :input (json/read-value input)})
+    {:exit 0 :out "closed sitting-1"}))
+
 (defn tmpdir ^File [prefix]
   (.toFile (Files/createTempDirectory (str prefix) (make-array FileAttribute 0))))
 
@@ -78,14 +87,16 @@
   []
   (with-open [s (ServerSocket. 0)] (.getLocalPort s)))
 
-(defn make-config [{:keys [port place runs-dir routines]}]
+(defn make-config [{:keys [port place runs-dir routines hook-via claude-home]}]
   (config/normalize
-   {:port       port
-    :public-url (str "http://127.0.0.1:" port)
-    :place      (str place)
-    :runs-dir   (str runs-dir)
-    :mcp        {:name "waymark" :url "http://127.0.0.1:9/mcp"}
-    :routines   (or routines {"sonnet" {:model "claude-sonnet-4-5"}})}))
+   (cond-> {:port       port
+            :public-url (str "http://127.0.0.1:" port)
+            :place      (str place)
+            :runs-dir   (str runs-dir)
+            :mcp        {:url "http://127.0.0.1:9/mcp"}
+            :routines   (or routines {"sonnet" {:model "claude-sonnet-4-5"}})}
+     hook-via    (assoc :hook-via hook-via)
+     claude-home (assoc :claude-home claude-home))))
 
 (defn world
   "A server on an ephemeral port with a fake spawner. → the state,
@@ -96,14 +107,16 @@
          runs  (or runs-dir (tmpdir "lf-runs"))
          port  (free-port)
          calls (atom [])
+         closes (atom [])
          cfg   (make-config {:port port :place place :runs-dir runs
                              :routines routines})
          st    (server/start! {:config  cfg
                                :token   (or token "the-token")
                                :spawner (fake-spawner {:calls calls :gate gate
-                                                       :exit exit})})]
+                                                       :exit exit})
+                               :closer  (fake-closer closes)})]
      (assoc st :base (str "http://127.0.0.1:" port)
-            :place place :runs runs :calls calls))))
+            :place place :runs runs :calls calls :closes closes))))
 
 ;; ── a client ────────────────────────────────────────────────────────
 
@@ -232,7 +245,7 @@
                  (get-in r [:json :claude_code_session_url])))
 
           (is (wait-for #(= 1 (count @(:calls w)))))
-          (let [{:keys [argv dir]} (first @(:calls w))]
+          (let [{:keys [argv dir env]} (first @(:calls w))]
             (testing "R-5.4: the argument vector, prompt FIRST"
               ;; `--mcp-config` and `--allowedTools` are variadic, so
               ;; every argument behind them is swallowed. The prompt
@@ -245,17 +258,22 @@
                       "--output-format" "json"
                       "--strict-mcp-config"
                       "--mcp-config" (.getPath (runs/mcp-file (:runs w) id))
-                      "--allowedTools" "mcp__waymark__*" "Bash(echo *)"]
+                      "--tools" ""
+                      "--allowedTools" "mcp__Waymark__*"]
                      (vec (drop 3 argv))))
               (is (str/includes? (nth argv 2) "<routine-fire-payload>"))
-              (is (str/includes? (nth argv 2) "Key: sk-secret-abc")))
+              (is (str/includes? (nth argv 2) "    Key: sk-secret-abc"))
+              (is (str/starts-with? (nth argv 2) (str "Your session id is " id "."))))
+
+            (testing "R-5.4: the Waymark tools load up front, no ToolSearch"
+              (is (= {"ENABLE_TOOL_SEARCH" "false"} env)))
 
             (testing "R-5.3: the run runs in its own copy of the place"
               (is (= (.getPath (runs/place-dir (:runs w) id)) dir))
               (is (.isFile (io/file dir "CLAUDE.md")))
               (is (.isFile (io/file dir ".claude" "settings.json")))
               (is (.canExecute (io/file dir ".claude" "hooks" "sitting-close.sh")))
-              (is (= {"mcpServers" {"waymark" {"type" "http"
+              (is (= {"mcpServers" {"Waymark" {"type" "http"
                                                "url" "http://127.0.0.1:9/mcp"}}}
                      (json/read-value (slurp (runs/mcp-file (:runs w) id)))))))
 
@@ -299,7 +317,9 @@
     (try
       (let [r (GET (str (:base w) "/healthz"))]
         (is (= 200 (:status r)))
-        (is (= {:ok true :routines ["haiku" "sonnet"]} (:json r))))
+        (is (= {:ok true :routines ["haiku" "sonnet"]}
+               (select-keys (:json r) [:ok :routines])))
+        (is (true? (get-in r [:json :credential :ok]))))
       (testing "a path no route answers is 404 with a sentence"
         (is (= 404 (:status (GET (str (:base w) "/nothing"))))))
       (finally (server/stop! w)))))
@@ -340,3 +360,188 @@
         (is (string? (:ended-at rec))))
       (is (zero? (runs/mark-lost! runs))))
     (deliver gate true)))
+
+;; ── the sitting's close from outside the run (R-5.6) ──────────────────
+
+(deftest a-restart-closes-the-sitting-of-a-lost-run
+  (let [runs   (tmpdir "lf-runs-close")
+        place  (make-place!)
+        id     (str (java.util.UUID/randomUUID))
+        closes (atom [])
+        start  #(server/start! {:config  (make-config {:port (free-port) :place place
+                                                       :runs-dir runs})
+                                :token   "the-token"
+                                :spawner (fake-spawner {:calls (atom [])})
+                                :closer  (fake-closer closes)})]
+    (runs/copy-tree! place (runs/place-dir runs id))
+    (runs/write-run-edn! runs id {:id id :routine "sonnet" :status :running
+                                  :started-at (runs/now-iso) :ended-at nil :exit nil})
+    (is (= 1 (runs/mark-lost! runs)))
+    (let [st (start)]
+      (try
+        (testing "the lost run's sitting is closed once, by its session id"
+          (is (= 1 (deref (:closing st) 5000 nil)))
+          (is (= 1 (count @closes)))
+          (let [{:keys [argv input]} (first @closes)]
+            (is (= [(.getPath (runs/hook-file runs id)) "close-run"] (subvec argv 0 2)))
+            (is (str/starts-with? (nth argv 2) "localfire lost this run at "))
+            (is (str/ends-with? (nth argv 2) "(restart)"))
+            (is (= id (get input "session_id")))
+            (is (str/ends-with? (get input "transcript_path") (str id ".jsonl"))))
+          (is (true? (:sitting-closed (runs/read-run-edn runs id)))))
+        (finally (server/stop! st))))
+    (testing "a second start does not close it again"
+      (let [st (start)]
+        (try
+          (is (= 0 (deref (:closing st) 5000 nil)))
+          (is (= 1 (count @closes)))
+          (finally (server/stop! st)))))))
+
+(deftest a-close-is-closed-only-on-the-hooks-word
+  (testing "exit 0 with a closed or already-closed line is closed"
+    (is (true? (server/closed-line? 0 "closed 75f0d1e3")))
+    (is (true? (server/closed-line? 0 "already-closed 75f0d1e3\n"))))
+  (testing "exit 0 with nothing said is not: a hook older than close-run"
+    (is (false? (server/closed-line? 0 "")))
+    (is (false? (server/closed-line? 0 "   "))))
+  (testing "a failed line, or a non-zero exit, is not"
+    (is (false? (server/closed-line? 0 "failed 75f0d1e3: the door answered 500")))
+    (is (false? (server/closed-line? 1 "closed 75f0d1e3")))
+    (is (false? (server/closed-line? nil "closed 75f0d1e3")))))
+
+(deftest a-silent-hook-leaves-the-lost-run-to-the-next-start
+  (let [runs   (tmpdir "lf-runs-silent")
+        place  (make-place!)
+        id     (str (java.util.UUID/randomUUID))
+        closes (atom [])
+        silent (fn [argv _dir _input] (swap! closes conj (vec argv)) {:exit 0 :out ""})
+        start  #(server/start! {:config  (make-config {:port (free-port) :place place
+                                                       :runs-dir runs})
+                                :token   "the-token"
+                                :spawner (fake-spawner {:calls (atom [])})
+                                :closer  silent})]
+    (runs/copy-tree! place (runs/place-dir runs id))
+    (runs/write-run-edn! runs id {:id id :routine "sonnet" :status :running
+                                  :started-at (runs/now-iso) :ended-at nil :exit nil})
+    (runs/mark-lost! runs)
+    (doseq [n [1 2]]
+      (let [st (start)]
+        (try
+          (is (= 1 (deref (:closing st) 5000 nil)) "tried again, since nothing closed it")
+          (is (= n (count @closes)))
+          (let [rec (runs/read-run-edn runs id)]
+            (is (false? (:sitting-closed rec)))
+            (is (str/includes? (:sitting-close rec) "the hook answered nothing, exit 0")))
+          (finally (server/stop! st)))))))
+
+(deftest a-process-exit-closes-the-runs-sitting
+  (let [w  (world)
+        id (get-in (POST (str (:base w) "/fire/sonnet") "the-token")
+                   [:json :claude_code_session_id])]
+    (try
+      (is (wait-for #(true? (:sitting-closed (runs/read-run-edn (:runs w) id)))))
+      (is (= 1 (count @(:closes w))))
+      (let [{:keys [argv dir input]} (first @(:closes w))]
+        (is (= [(.getPath (runs/hook-file (:runs w) id)) "close-run"
+                "localfire saw the run exit"]
+               argv))
+        (is (= (.getPath (runs/place-dir (:runs w) id)) dir))
+        (is (= id (get input "session_id"))))
+      (is (= :done (:status (runs/read-run-edn (:runs w) id))))
+      (finally (server/stop! w)))))
+
+(deftest a-close-runs-the-hook-where-the-runs-run
+  (let [runs   (tmpdir "lf-runs-via")
+        place  (make-place!)
+        id     (str (java.util.UUID/randomUUID))
+        closes (atom [])
+        st     (server/start! {:config  (make-config {:port (free-port) :place place
+                                                      :runs-dir runs
+                                                      :hook-via ["/opt/hook-in-cage" "--quiet"]
+                                                      :claude-home "/home/agent"})
+                               :token   "the-token"
+                               :spawner (fake-spawner {:calls (atom [])})
+                               :closer  (fake-closer closes)})]
+    (runs/copy-tree! place (runs/place-dir runs id))
+    (runs/write-run-edn! runs id {:id id :routine "sonnet" :status :done
+                                  :started-at (runs/now-iso) :ended-at (runs/now-iso) :exit 0})
+    (try
+      (server/close-sitting! st id "a note")
+      (let [{:keys [argv input]} (first @closes)]
+        (testing ":hook-via goes ahead of the hook, as :claude goes ahead of a run"
+          (is (= ["/opt/hook-in-cage" "--quiet" (.getPath (runs/hook-file runs id))
+                  "close-run" "a note"]
+                 argv)))
+        (testing ":claude-home is where the hook is told the transcript is"
+          (is (str/starts-with? (get input "transcript_path") "/home/agent/.claude/projects/"))
+          (is (str/ends-with? (get input "transcript_path") (str id ".jsonl")))))
+      (finally (server/stop! st)))))
+
+(deftest the-config-takes-an-optional-hook-door
+  (let [base {:port 8112 :public-url "http://127.0.0.1:8112"
+              :place (str (tmpdir "lf-via-place")) :runs-dir (str (tmpdir "lf-via-runs"))
+              :mcp {:url "http://127.0.0.1:8090/api/-/mcp"}
+              :routines {"sonnet" {:model "claude-sonnet-4-5"}}}]
+    (testing "absent means the hook runs here, under this process's HOME"
+      (let [c (config/normalize base)]
+        (is (= [] (:hook-via c)))
+        (is (nil? (:claude-home c)))))
+    (testing "present, both are kept as given"
+      (let [c (config/normalize (assoc base :hook-via ["/x/in-cage"] :claude-home "/home/agent"))]
+        (is (= ["/x/in-cage"] (:hook-via c)))
+        (is (= "/home/agent" (:claude-home c)))))
+    (testing "a malformed value is refused with a sentence"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":hook-via"
+                            (config/normalize (assoc base :hook-via "/x/in-cage"))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":claude-home"
+                            (config/normalize (assoc base :claude-home "")))))))
+
+;; ── a fixed OAuth client at the door (R-8.2) ─────────────────────────
+
+(def ^:private door "https://work.kopsa.info/api/-/mcp")
+
+(defn- oauth-config [oauth]
+  (cond-> {:port       8112
+           :public-url "http://127.0.0.1:8112"
+           :place      (str (tmpdir "lf-oauth-place"))
+           :runs-dir   (str (tmpdir "lf-oauth-runs"))
+           :mcp        {:url door}
+           :routines   {"sonnet" {:model "claude-sonnet-4-5"}}}
+    (some? oauth) (assoc-in [:mcp :oauth] oauth)))
+
+(deftest the-config-takes-an-optional-oauth-client
+  (testing "absent means no :oauth, today's behaviour"
+    (is (= {:name "Waymark" :url door}
+           (:mcp (config/normalize (oauth-config nil))))))
+  (testing "a client id and a callback port are kept"
+    (is (= {:name "Waymark" :url door
+            :oauth {:client-id "localfire-claude" :callback-port 8765}}
+           (:mcp (config/normalize
+                  (oauth-config {:client-id "localfire-claude"
+                                 :callback-port 8765}))))))
+  (testing "each bad shape is refused with one sentence"
+    (doseq [o ["localfire-claude"
+               {:callback-port 8765}
+               {:client-id "" :callback-port 8765}
+               {:client-id :localfire :callback-port 8765}
+               {:client-id "localfire-claude"}
+               {:client-id "localfire-claude" :callback-port 0}
+               {:client-id "localfire-claude" :callback-port "8765"}]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":oauth"
+                            (config/normalize (oauth-config o)))
+          (pr-str o)))))
+
+(deftest write-mcp-carries-the-oauth-client
+  (let [f (io/file (tmpdir "lf-oauth-mcp") "mcp.json")]
+    (testing "with :oauth, the shape `claude mcp add --client-id` writes"
+      (runs/write-mcp! f {:name "Waymark" :url door
+                          :oauth {:client-id "localfire-claude" :callback-port 8765}})
+      (is (= {"mcpServers"
+              {"Waymark" {"type" "http" "url" door
+                          "oauth" {"clientId" "localfire-claude"
+                                   "callbackPort" 8765}}}}
+             (json/read-value (slurp f)))))
+    (testing "without :oauth, no oauth block"
+      (runs/write-mcp! f {:name "Waymark" :url door})
+      (is (= {"mcpServers" {"Waymark" {"type" "http" "url" door}}}
+             (json/read-value (slurp f)))))))

@@ -198,6 +198,16 @@
     (is (= "conflicted" (get-in after [:data :mergeable])))
     (is (= "pending" (get-in after [:data :review_state])))))
 
+(deftest mergeable-false-outranks-the-state-word
+  (testing "GitHub's own mergeable: false is a conflict, whatever the policy word"
+    (is (= "conflicted" (gh/mergeable-of {:mergeable_state "blocked" :mergeable false})))
+    (is (= "conflicted" (gh/mergeable-of {:mergeable_state "behind" :mergeable false})))
+    (is (= "conflicted" (gh/mergeable-of {:mergeable false}))))
+  (testing "without it the state word still speaks"
+    (is (= "blocked" (gh/mergeable-of {:mergeable_state "blocked" :mergeable true})))
+    (is (= "blocked" (gh/mergeable-of {:mergeable_state "blocked" :mergeable nil})))
+    (is (= "unknown" (gh/mergeable-of {})))))
+
 (deftest a-merged-pull-request-moves-the-row-to-merged
   (let [{:keys [state engine] :as r} (rig)
         _ (pass! r)
@@ -1075,6 +1085,45 @@
       (is (nil? (get-in row [:data :failing_checks])))
       (is (= 1 (:recovered census))))))
 
+(deftest a-train-red-head-is-not-recovered-by-its-own-green
+  ;; ticket 6566d32f: a merge train found this head red, so the head's
+  ;; own green checks do not bring it back; a new head does
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["check-queue"]} 1)
+        id (str (:id (the-change engine)))
+        head (get-in a-pull-request [:head :sha])]
+    (inv/invoke! engine :change id :fail
+                 {:failing_checks ["merge-train"]
+                  :train_red_head head
+                  :train_red "the train's test10 went red"}
+                 {:principal mirror/source-principal})
+    (is (= :failing (:state (the-change engine))))
+    (testing "a green pass on the train's red head leaves it failing"
+      (let [census (pass! r)
+            row (the-change engine)]
+        (is (= head (get-in row [:data :head_sha])))
+        (is (= :failing (:state row)))
+        (is (= head (get-in row [:data :train_red_head])))
+        (is (= "the train's test10 went red" (get-in row [:data :train_red])))
+        (is (= 0 (:recovered census)))))
+    (testing "a green new head recovers it and clears the train's red"
+      (gh/seed-pull! state repo
+                     (assoc a-pull-request
+                            :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                            :updated_at "2026-09-18T14:00:00Z")
+                     {:files the-files :reviews the-reviews})
+      (gh/seed-check! state repo a-new-head
+                      {:id 41752098500 :name "check-queue"
+                       :status "completed" :conclusion "success"
+                       :head_sha a-new-head})
+      (let [census (pass! r)
+            row (the-change engine)]
+        (is (= a-new-head (get-in row [:data :head_sha])))
+        (is (= :submitted (:state row)))
+        (is (nil? (get-in row [:data :train_red_head])))
+        (is (nil? (get-in row [:data :train_red])))
+        (is (= 1 (:recovered census)))))))
+
 (deftest the-red-head-on-the-last-round-sticks-the-change
   (let [{:keys [engine] :as r}
         (red-world {:required_checks ["test10 (shard 3)"] :rounds_per_change 2}
@@ -1154,14 +1203,21 @@
   "One change at `submitted` with `rounds` spent, whose pull request
   GitHub reads with `mergeable-state` and whose one check is green. The
   bench behind the engine answers `conflicts` with `paths`, and
-  `:asked` holds every tool it was called with."
-  [mergeable-state paths policy rounds]
+  `:asked` holds every tool it was called with. A `landing` is what the
+  bench's feedback answers for the branch."
+  ([mergeable-state paths policy rounds]
+   (conflict-world mergeable-state paths policy rounds nil))
+  ([mergeable-state paths policy rounds landing]
   (let [state (gh/fake-state)
         asked (atom [])
         rpc (fn [_method params]
               (swap! asked conj params)
-              (when (and paths (= "bench__conflicts" (str (:name params))))
-                {:structuredContent {:result {:paths paths}}}))
+              (cond
+                (and paths (= "bench__conflicts" (str (:name params))))
+                {:structuredContent {:result {:paths paths}}}
+
+                (and landing (= "bench__feedback" (str (:name params))))
+                {:structuredContent {:result {:landing landing}}}))
         engine (engine/engine {:storage (memory/storage)
                                :resources (vec (main/resources))
                                :services {:bench-rpc rpc}})
@@ -1186,10 +1242,23 @@
                                         :version (inc (long (:version row))))
                                  (assoc-in [:data :rounds] rounds))
                              (:version row))))))
-    r))
+    r)))
 
 (defn- conflict-asks [{:keys [asked]}]
   (filterv #(= "bench__conflicts" (str (:name %))) @asked))
+
+(deftest a-conflicted-change-goes-failing-while-its-landing-still-runs
+  ;; ticket 7af7d506: a landing that never said it finished held a
+  ;; conflicted pull request at `submitted`, parked, and nothing woke
+  ;; the seat
+  (let [{:keys [engine] :as r} (conflict-world "dirty" the-conflicts {} 1
+                                               {:state "running"})
+        census (pass! r)
+        row (the-change engine)]
+    (is (= :failing (:state row)))
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+    (is (= the-conflicts (get-in row [:data :conflicts])))
+    (is (= 1 (:failing census)))))
 
 (deftest a-conflicted-submitted-change-goes-failing-with-its-paths
   (let [{:keys [engine] :as r} (conflict-world "dirty" the-conflicts {} 1)
@@ -1465,6 +1534,66 @@
     (is (nil? (get-in (the-unadopted engine) [:data :landed_at])))
     (is (nil? (get-in (the-unadopted engine) [:data :adoption_note])))))
 
+;; ── a submitted change that never opened a pull request (ticket 226d2b85)
+
+(defn- a-ticket-at!
+  "One ticket in the engine, forced to `state`, and the unadopted
+  change born from it. → the ticket's id."
+  [engine state]
+  (let [id (str (:id (:row (inv/create! engine :ticket
+                                        {:title "A seat's ticket"
+                                         :type "feature" :repo repo}
+                                        {:principal a-person}))))
+        st (:storage engine)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :ticket id {})]
+          (store/save-row! st tx :ticket
+                           (assoc row :state state
+                                  :version (inc (long (:version row))))
+                           (:version row)))))
+    (rewrite-unadopted! engine #(assoc-in % [:data :born_from]
+                                          (str "ticket:" id)))
+    id))
+
+(deftest a-change-that-never-opened-a-pull-request-closes-when-its-ticket-ends
+  (doseq [state [:done :dropped]]
+    (testing (name state)
+      (let [{:keys [engine] :as r} (unadopted-world nil)
+            tid (a-ticket-at! engine state)
+            census (pass! r)
+            row (the-unadopted engine)]
+        (is (= "closed" (name (:state row))))
+        (is (= (str "closed: ticket " tid " ended; this change never opened"
+                    " a pull request")
+               (get-in row [:data :superseded_by])))
+        (is (= 1 (:unopened-closed census)))))))
+
+(deftest a-change-that-never-opened-a-pull-request-sticks-after-the-window
+  (let [{:keys [engine] :as r} (unadopted-world nil)
+        _ (a-ticket-at! engine :open)
+        long-ago (str (.minus (java.time.Instant/now)
+                              (java.time.Duration/ofMinutes 20)))]
+    (pass! r)
+    (let [row (the-unadopted engine)]
+      (is (= "submitted" (name (:state row))) "inside the window it waits")
+      (is (some? (get-in row [:data :landed_at])) "the first sight is stamped"))
+    (rewrite-unadopted! engine #(assoc-in % [:data :landed_at] long-ago))
+    (let [census (pass! r)
+          row (the-unadopted engine)]
+      (is (= "stuck" (name (:state row))) "after the window a person sees it")
+      (is (= 1 (:stuck census))))))
+
+(deftest a-change-with-a-pull-request-is-untouched-when-its-ticket-ends
+  (let [{:keys [engine] :as r} (unadopted-world nil)
+        _ (a-ticket-at! engine :done)]
+    (rewrite-unadopted! engine #(assoc-in % [:data :number] 7))
+    (let [census (pass! r)
+          row (the-unadopted engine)]
+      (is (not= "closed" (name (:state row))))
+      (is (nil? (get-in row [:data :superseded_by])))
+      (is (= 0 (:unopened-closed census))))))
+
 (deftest the-adoption-note-says-when-the-forge-already-ended-it
   (is (= (str "landed as #7 on " repo " but no pull request row adopted"
               " it; head b; the pull request is already merged on the forge")
@@ -1477,16 +1606,61 @@
 (deftest the-landing-verdict-names-the-failed-step
   (is (= {:verdict :red :names ["landing:push"] :error a-rejected-push}
          (forge/landing-verdict (a-failed-landing))))
-  (is (= {:verdict :red :names ["landing:push"] :error "rejected"}
+  (is (= {:verdict :red :names ["landing:push"]}
          (forge/landing-verdict {:state "failed" :failed_step "push"
                                  :error "rejected"}))
-      "a landing that names its failed step and no steps still says which")
+      "a landing that names its failed step and no steps still says which;
+       output off the steps is not the rig's shape and is not read")
   (is (= {:verdict :red :names ["landing:unknown"]}
          (forge/landing-verdict {:state "failed"}))
       "a failed landing that names nothing is still red")
   (is (= {:verdict :running} (forge/landing-verdict {:state "running"})))
   (is (nil? (forge/landing-verdict {:state "succeeded"})))
   (is (nil? (forge/landing-verdict nil))))
+
+;; The rig's own `feedback.landing` (ckopsa/waymark-bench
+;; bench/landing.py): {state, failed_step, steps: [{name, state,
+;; seconds, exit_code, output, commit}]}. A rename on the rig must break
+;; these, not read a failed landing as not failed (ticket 92871afb).
+
+(def ^:private rig-commit-step
+  {:name "commit" :state "passed" :seconds 0.4 :exit_code 0
+   :output "[bench/one 1bae3a0] Fix" :commit "1bae3a0"})
+
+(def ^:private rig-failed-landing
+  {:state "failed" :failed_step "push"
+   :steps [rig-commit-step
+           {:name "push" :state "failed" :seconds 1.2 :exit_code 1
+            :output a-rejected-push :commit nil}]})
+
+(def ^:private rig-running-landing
+  {:state "running" :failed_step nil
+   :steps [rig-commit-step
+           {:name "push" :state "running" :seconds nil :exit_code nil
+            :output nil :commit nil}]})
+
+(def ^:private rig-passed-landing
+  {:state "passed" :failed_step nil
+   :steps [rig-commit-step
+           {:name "push" :state "passed" :seconds 1.1 :exit_code 0
+            :output "To github.com:ckopsa/waymark.git" :commit "1bae3a0"}]})
+
+(deftest the-landing-verdict-reads-the-rigs-shape
+  (is (= {:verdict :red :names ["landing:push"] :error a-rejected-push}
+         (forge/landing-verdict rig-failed-landing))
+      "the failed step's name and output ride the red name")
+  (is (= {:verdict :red :names ["landing:push"] :error a-rejected-push}
+         (forge/landing-verdict (dissoc rig-failed-landing :failed_step)))
+      "without failed_step, the first step whose state failed is the one")
+  (is (= {:verdict :running} (forge/landing-verdict rig-running-landing)))
+  (is (nil? (forge/landing-verdict rig-passed-landing)))
+  (is (nil? (forge/landing-verdict {:status "failed"}))
+      "`status` is not the rig's key: only `state` is read")
+  (is (= {:verdict :red :names ["landing:unknown"]}
+         (forge/landing-verdict
+          {:state "failed"
+           :steps [{:step "push" :state "failed" :error "rejected"}]}))
+      "a step's name and output are read from `name` and `output` only"))
 
 (deftest a-conflict-joins-the-red-names
   (let [row {:data {:mergeable "conflicted"}}]

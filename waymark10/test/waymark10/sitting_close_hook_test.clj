@@ -85,13 +85,17 @@
                  "\n"))
     f))
 
-(defn- run-hook! [dir transcript & [hook]]
-  (let [pb (ProcessBuilder. ^java.util.List ["bash" (str script)])
+(defn- run-hook!
+  "`args` follow the script's name; `extra` is laid over the scrubbed
+  environment."
+  [dir transcript & [hook {:keys [args extra]}]]
+  (let [pb (ProcessBuilder. ^java.util.List (into ["bash" (str script)] args))
         env (.environment pb)]
     (doseq [k ["WAYMARK_SEAT_URL" "WAYMARK_SEAT_KEY" "http_proxy" "HTTP_PROXY"
                "https_proxy" "HTTPS_PROXY" "all_proxy" "ALL_PROXY"]]
       (.remove env k))
     (.put env "TMPDIR" (str dir))
+    (doseq [[k v] extra] (.put env ^String k ^String v))
     (let [p (.start pb)
           out (future (slurp (.getInputStream p)))
           err (future (slurp (.getErrorStream p)))]
@@ -136,6 +140,67 @@
           (is (str/includes? out "\"decision\": \"block\""))
           (is (str/includes? out "s-1"))))
       (finally (.stop server 0)))))
+
+(defn- sh! [& argv]
+  (let [p (.start (ProcessBuilder. ^java.util.List (vec argv)))
+        out (future (slurp (.getInputStream p)))
+        err (future (slurp (.getErrorStream p)))]
+    (.close (.getOutputStream p))
+    {:exit (.waitFor p) :out @out :err @err}))
+
+(deftest the-hook-parses
+  (testing "bash reads the script"
+    (let [{:keys [exit err]} (sh! "bash" "-n" (str script))]
+      (is (zero? exit) err)))
+  (testing "every program the script carries compiles"
+    (let [programs (re-seq #"(?ms)^read -r -d '' (\w+) <<'PY'\n(.*?)^PY$"
+                           (slurp script))]
+      (is (= #{"UPLOAD" "SUM"} (set (map second programs))))
+      (doseq [[_ nm src] programs]
+        (let [{:keys [exit err]}
+              (sh! "python3" "-c"
+                   "import sys; compile(sys.argv[1], sys.argv[2], 'exec')"
+                   src nm)]
+          (is (zero? exit) (str nm ": " err)))))))
+
+(deftest a-fired-runs-session-end-closes-nothing
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)
+        door (str "http://127.0.0.1:" port "/api/-/sittings/close")]
+    (try
+      (doseq [[label extra] [["with no door in the environment" {}]
+                             ["with the door in the environment"
+                              {"WAYMARK_SEAT_URL" door}]]]
+        (testing label
+          (let [{:keys [exit out err]}
+                (run-hook! dir (transcript! dir port)
+                           {:hook_event_name "SessionEnd"}
+                           {:args ["end"] :extra extra})]
+            (is (zero? exit) err)
+            (is (str/blank? out) "SessionEnd never holds"))))
+      (is (empty? @seen) "the Stop closes a fired run; SessionEnd leaves it be")
+      (finally (.stop server 0)))))
+
+(deftest close-run-answers-one-status-line
+  (doseq [[status line code] [[200 "closed s-1" 0]
+                              [409 "already-closed s-1" 0]
+                              [500 "failed s-1" 1]]]
+    (testing (str "a close answered " status)
+      (let [dir (temp-dir)
+            [^HttpServer server port seen] (stub-door! status)]
+        (try
+          (let [{:keys [exit out err]}
+                (run-hook! dir (transcript! dir port) nil
+                           {:args ["close-run" "Lost by localfire."]})
+                sent (first @seen)]
+            (is (= code exit) err)
+            (is (str/starts-with? out line) out)
+            (is (= 1 (count @seen)))
+            (is (= a-key (:key sent)))
+            (is (= counts (select-keys (:body sent) (keys counts))))
+            (is (= "Lost by localfire." (:note (:body sent)))
+                "the caller's note stands in for the hook's"))
+          (finally (.stop server 0)))))))
 
 (def ^:private launch
   "A background agent launched mid-run, and the harness's answer."
@@ -193,3 +258,94 @@
                   :cache_write_tokens 400 :turns 4}
                  (select-keys (:body (first @seen)) (keys counts))))))
       (finally (.stop server 0)))))
+
+(defn- bash-call
+  "A Bash call, in the background or not, and the harness's answer."
+  [background? answer]
+  [{:type "assistant" :requestId "r-c"
+    :message {:role "assistant"
+              :content [{:type "tool_use" :id "tu-3" :name "Bash"
+                         :input (cond-> {:command "sleep 90"}
+                                  background? (assoc :run_in_background true))}]
+              :usage {:input_tokens 10 :output_tokens 2
+                      :cache_read_input_tokens 0
+                      :cache_creation_input_tokens 0}}}
+   {:type "user"
+    :message {:role "user"
+              :content [{:type "tool_result" :tool_use_id "tu-3"
+                         :content [{:type "text" :text answer}]}]}}])
+
+(def ^:private bash-hand-back
+  "The background command's task notification, and the turn it wakes."
+  [{:type "user"
+    :message {:role "user"
+              :content "<task-notification>\n<task-id>bx7k2q9</task-id>\n<status>completed</status>\n</task-notification>"}}
+   {:type "assistant" :requestId "r-d"
+    :message {:role "assistant"
+              :content [{:type "text" :text "The wait is over."}]
+              :usage {:input_tokens 20 :output_tokens 4
+                      :cache_read_input_tokens 0
+                      :cache_creation_input_tokens 0}}}])
+
+(deftest a-fired-run-closes-only-when-its-background-commands-have-handed-back
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)
+        launch (bash-call true "Command running in background with ID: bx7k2q9. Output is being written to: /tmp/bx7k2q9.output")]
+    (try
+      (testing "a stop with the command still out neither closes nor holds"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port launch)
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (zero? (count @seen)))))
+      (testing "the stop after the notification closes once"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port (concat launch bash-hand-back))
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (= 1 (count @seen)))))
+      (finally (.stop server 0)))))
+
+(deftest a-foreground-command-does-not-hold-the-close
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)]
+    (try
+      (let [{:keys [exit out err]}
+            (run-hook! dir (transcript! dir port (bash-call false "done ID: 42"))
+                       {:hook_event_name "Stop"})]
+        (is (zero? exit) err)
+        (is (str/blank? out))
+        (is (= 1 (count @seen))))
+      (finally (.stop server 0)))))
+
+(def ^:private seat-settings
+  (first (filter #(.isFile (io/file %))
+                 ["../seat/.claude/settings.json"
+                  "seat/.claude/settings.json"])))
+
+(deftest the-seat-place-tells-the-seat-its-session-id-at-start
+  (let [hooks (:hooks (wire/read-json (slurp seat-settings)))
+        command-of (fn [event] (-> hooks event first :hooks first :command))
+        close "$CLAUDE_PROJECT_DIR/.claude/hooks/sitting-close.sh"]
+    (testing "the closing hooks still run sitting-close.sh"
+      (is (= close (command-of :Stop)))
+      (is (= close (command-of :SubagentStop)))
+      (is (= (str close " end") (command-of :SessionEnd))))
+    (testing "SessionStart answers the stdin's session id as additionalContext"
+      (let [p (.start (ProcessBuilder. ^java.util.List
+                                       ["bash" "-c" (command-of :SessionStart)]))
+            out (future (slurp (.getInputStream p)))
+            err (future (slurp (.getErrorStream p)))]
+        (with-open [in (.getOutputStream p)]
+          (.write in (.getBytes ^String (wire/write-json
+                                         {:session_id "s-42"
+                                          :hook_event_name "SessionStart"
+                                          :source "startup"})
+                                "UTF-8")))
+        (is (zero? (.waitFor p)) @err)
+        (let [said (:hookSpecificOutput (wire/read-json @out))]
+          (is (= "SessionStart" (:hookEventName said)))
+          (is (= "Your session id is s-42; pass it as `session` to waymark_sit."
+                 (:additionalContext said))))))))

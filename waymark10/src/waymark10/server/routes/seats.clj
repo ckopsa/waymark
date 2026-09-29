@@ -45,21 +45,18 @@
 
   Recorded deviations (each a sentence):
 
-  - THE BUDGET WINDOW IS READ, NEVER STORED, AND IT IS SAID TWICE.
+  - THE BUDGET WINDOW IS READ, NEVER STORED, AND IT IS SAID ONCE.
     `spent` is one SUM over the seat's sittings of the last seven
     days at the moment somebody asks — no counter on the row, which
     would be one write per close and one more thing to be wrong. The
     wall itself (`grants/spent-this-week`, R-5.2 step 3) runs the
-    SAME aggregate over the SAME conds, and that function is private
-    to a namespace this wave does not own, so `spending-conds` below
-    is a second spelling of one arithmetic. They agree today because
-    they are the same store call with the same three conds — CLOSED
-    AND OPEN both, since R-12.27 put a running cost on an open
-    sitting; the follow-up is one public reader both call, and it
-    belongs beside the seat rather than beside either caller. The
-    LEDGER keeps its own conds (`window-conds`, closed alone): a
-    ledger line is a finished bill, and a sitting still going has not
-    made one.
+    SAME aggregate, and both it and this namespace spell the window
+    through the one public reader `grants/seat-window-conds`. The
+    wall and `spending-conds` count CLOSED AND OPEN both, since
+    R-12.27 put a running cost on an open sitting; the LEDGER's
+    `window-conds` asks the same reader for closed alone: a ledger
+    line is a finished bill, and a sitting still going has not made
+    one.
   - `by_model` KEYS ON THE MODEL ROW, AND A CORRECTION KEYS ON A
     CLAIM. A sitting carries a `model` ref; a transition's actor
     carries the session's model CLAIM, an API identifier
@@ -73,6 +70,7 @@
     to read, and the honest fix is a shorter `since`, not a longer
     page."
   (:require [clojure.string :as str]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
@@ -142,15 +140,11 @@
 
 (defn- window-conds
   "The three conds that name a seat's counted sittings: closed, this
-  seat's, started inside the window. `grants/spent-this-week` — the
-  wall itself — sums over exactly these, and saying them once here is
-  the closest this file can get to saying them once in the house (see
-  the ns deviations)."
+  seat's, started inside the window — the house's one window reader
+  (`grants/seat-window-conds`) asked for closed alone (see the ns
+  deviations)."
   [seat-id ^Instant since]
-  [{:target :state :op := :value "closed"}
-   {:target :data :field :seat :cast "text" :op := :value (str seat-id)}
-   {:target :data :field :started_at :cast "timestamptz" :op :>=
-    :value (str since)}])
+  (grants/seat-window-conds seat-id since ["closed"]))
 
 (defn- spending-conds
   "The conds the WALL sums over (R-5.2 step 3, widened by R-12.27):
@@ -160,8 +154,7 @@
   has spent what its last tally says, and a budget that could not see
   it would be a budget an interactive sitting walks through."
   [seat-id ^Instant since]
-  (into [{:target :state :op :in :values ["closed" "open"]}]
-        (rest (window-conds seat-id since))))
+  (grants/seat-window-conds seat-id since ["closed" "open"]))
 
 (defn closed-sittings
   "The seat's closed sittings started at or after `since`, decoded,
@@ -568,50 +561,68 @@
                 :type :agent
                 :display (seats/sitter-display seat)}))
 
+(defn- hook-hand
+  "The sitter, wearing `seats/hook-role` — so the close handler writes
+  `closed_by` \"hook\" and not \"door\". Only the close route wears it."
+  [seat]
+  (update (sitter-of seat) :roles conj seats/hook-role))
+
 (defn- close-doc
   "What the hook reads back: the row it closed, the counts as
   recorded, and the two numbers the engine counted and has now frozen
   (R-10.6). `cost_usd` is the close's own arithmetic over the model's
   prices at that moment (R-10.4) — the hook reports tokens and learns
-  what they cost."
+  what they cost.
+
+  `last_refusal` rides beside the count when the sitting was refused
+  at least once: the problem type, the guard that refused when one
+  did, and the moment. The count says how many; this says WHICH law
+  the newest one was, so the close can tell whether the last invoke or
+  bench write was refused. A sitting nothing refused carries no such
+  key, so absence and silence read the same."
   [seat row]
   (let [d (:data row)]
-    {:waymark "10"
-     :kind "sitting_close"
-     :sitting (str (:id row))
-     :seat (str (:id seat))
-     :state (name (:state row))
-     :cost_usd (:cost_usd d)
-     :input_tokens (:input_tokens d)
-     :output_tokens (:output_tokens d)
-     :cache_read_tokens (:cache_read_tokens d)
-     :cache_write_tokens (:cache_write_tokens d)
-     :turns (:turns d)
-     :transitions (:transitions d)
-     :refusals (:refusals d)}))
+    (cond-> {:waymark "10"
+             :kind "sitting_close"
+             :sitting (str (:id row))
+             :seat (str (:id seat))
+             :state (name (:state row))
+             :closed_by (:closed_by d)
+             :cost_usd (:cost_usd d)
+             :input_tokens (:input_tokens d)
+             :output_tokens (:output_tokens d)
+             :cache_read_tokens (:cache_read_tokens d)
+             :cache_write_tokens (:cache_write_tokens d)
+             :turns (:turns d)
+             :transitions (:transitions d)
+             :refusals (:refusals d)}
+      (:last_refusal d) (assoc :last_refusal (:last_refusal d)))))
 
 (defn- tally-doc
   "What the Stop hook reads back: the row it tallied, the counts as
   recorded, the running cost at this moment (R-12.27) and the stamp
   the sweep measures idleness from. `state` is there and says `open`,
   because the one thing a hook must be able to tell from this answer
-  is that the sitting is still going."
+  is that the sitting is still going. `last_refusal` rides beside the
+  count the same way the close's does — which law the newest refusal
+  was, absent when there was none."
   [seat row]
   (let [d (:data row)]
-    {:waymark "10"
-     :kind "sitting_tally"
-     :sitting (str (:id row))
-     :seat (str (:id seat))
-     :state (name (:state row))
-     :cost_usd (:cost_usd d)
-     :input_tokens (:input_tokens d)
-     :output_tokens (:output_tokens d)
-     :cache_read_tokens (:cache_read_tokens d)
-     :cache_write_tokens (:cache_write_tokens d)
-     :turns (:turns d)
-     :transitions (:transitions d)
-     :refusals (:refusals d)
-     :tallied_at (some-> (:tallied_at d) str)}))
+    (cond-> {:waymark "10"
+             :kind "sitting_tally"
+             :sitting (str (:id row))
+             :seat (str (:id seat))
+             :state (name (:state row))
+             :cost_usd (:cost_usd d)
+             :input_tokens (:input_tokens d)
+             :output_tokens (:output_tokens d)
+             :cache_read_tokens (:cache_read_tokens d)
+             :cache_write_tokens (:cache_write_tokens d)
+             :turns (:turns d)
+             :transitions (:transitions d)
+             :refusals (:refusals d)
+             :tallied_at (some-> (:tallied_at d) str)}
+      (:last_refusal d) (assoc :last_refusal (:last_refusal d)))))
 
 (defn- paired
   "The three refusals in the order of what they cost, and the row they
@@ -705,7 +716,7 @@
   (fn [req]
     (let [[seat report sitting] (paired eng req)
           closed (:row (inv/invoke! eng :sitting (str (:id sitting)) :close
-                                    report {:principal (sitter-of seat)}))]
+                                    report {:principal (hook-hand seat)}))]
       (router/json-response 200 (close-doc seat closed)))))
 
 ;; ── the transcript door (docs/spec-transcript.md § 5) ──────────────

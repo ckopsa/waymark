@@ -240,6 +240,17 @@
       (is (= asked (get-in kept [:data :expires_at]))
           "a leash the asker named is left exactly as asked"))))
 
+(deftest an-unconfigured-ask-defaults-to-the-24-hour-cap
+  ;; waymark-h6y: the grant copies the ask's expires_at, so a short
+  ;; default made the offer window the grant's whole life
+  (let [now (java.time.Instant/parse "2026-08-24T18:00:00Z")
+        ctx (t/ctx {:principal (t/principal {:id "agent-ari" :type :agent})
+                    :now now})
+        stamped ((:on-create grants/approval-request)
+                 {:data {:task "read the pantry"}} ctx)]
+    (is (= (.plusSeconds now 86400) (get-in stamped [:data :expires_at]))
+        "with no configured TTL, a blank leash runs 24 hours from filing")))
+
 (def ^:private the-canonical-hash
   ;; The hash approval_request carried BEFORE the :decision key
   ;; existed — recomputed from the pre-sugar source at waymark-442.5
@@ -262,7 +273,12 @@
   ;; THE LAW MOVED AGAIN (waymark-7v7v): create gained
   ;; an-anchorless-ask-names-its-grant, which refuses an anchorless ask
   ;; from a holder of several live grants. Re-pin from CI the same way.
-  "87c403a19083ff896dbc1c83cde04098c1867bc0cd9eb16bcfa7ee7fcb111dce")
+  ;;
+  ;; THE LAW MOVED AGAIN (waymark-442.9): create-door guards joined the
+  ;; fingerprint (create.guards, absent when a kind declares none), so
+  ;; the ask's create walls now show in its hash — and the edit above,
+  ;; which never moved it, finally does. Re-pinned from CI (PR #298).
+  "7bc24c757b70be6a91bf17546f60151f9c158e6d6b7dfe0af6d3cecc077ffe38")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

@@ -87,8 +87,10 @@ on:
         default: false
       only:
         description: >-
-          Narrow this dispatch to one test namespace, or to one test as
-          ns/test-name. Empty runs everything, exactly as a push does.
+          Narrow this dispatch to test namespaces, or to single tests as
+          ns/test-name, several separated by spaces or commas; each
+          suite that holds one runs, narrowed to its own. Empty runs
+          everything, exactly as a push does.
           The bench's `test` tool dispatches with this so a seat can run
           the namespace it touched in a couple of minutes instead of
           waiting on the full PR run. A name that matches no suite fails
@@ -195,8 +197,20 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.detect.outputs.code }}
+      # One flag per suite, from the path table in `detect`: every one
+      # true except on a pull_request, which runs only what its paths
+      # reach.
+      waymark10: ${{ steps.detect.outputs.waymark10 }}
+      workqueue10: ${{ steps.detect.outputs.workqueue10 }}
+      calendar10: ${{ steps.detect.outputs.calendar10 }}
+      factory10: ${{ steps.detect.outputs.factory10 }}
+      localfire: ${{ steps.detect.outputs.localfire }}
       quick: ${{ steps.select.outputs.quick }}
       factory: ${{ steps.select.outputs.factory }}
+      # Why `select` refused a dispatch's `only`, when it did. `gate`
+      # prints it: a seat reads only the tail of each failed job, and
+      # this job's tail is the checkout's post-step cleanup.
+      refused: ${{ steps.select.outputs.refused }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -208,10 +222,65 @@ jobs:
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
-          say_yes () { echo "code=true" >> "$GITHUB_OUTPUT"; echo "$1"; exit 0; }
+          # ── THE PATH TABLE: WHICH SUITES A PULL REQUEST RUNS ─────────
+          #
+          #   changed path      suites that run
+          #   ----------------  ------------------------------------------
+          #   docs/**, *.md     none: the gate answers from the diff alone
+          #   localfire/**      localfire
+          #   calendar10/**     calendar10, workqueue10
+          #   factory10/**      factory10, workqueue10
+          #   workqueue10/**    workqueue10
+          #   waymark10/**      waymark10, calendar10, factory10, workqueue10
+          #   anything else     all of them: .github/, Makefile, Dockerfile.*,
+          #                     scripts/, a tree this table does not know
+          #
+          # A suite runs for its own tree and for every tree its deps.edn
+          # reaches: workqueue10 needs waymark10, calendar10 and factory10;
+          # calendar10 and factory10 need waymark10. localfire reaches
+          # waymark10 only through its :test alias, for the one round trip
+          # of R-9.2, and a waymark10 PR leaves it out on purpose — main
+          # runs it on the merge.
+          #
+          # "workqueue10" is check-queue in `quick` plus the test-queue
+          # matrix; "calendar10" and "localfire" are steps of `quick`.
+          #
+          # ONLY a pull_request is narrowed. A push to main and a dispatch
+          # run every suite whenever the diff touches code, exactly as
+          # before, so a narrowed PR cannot hide a break past its merge.
+          SUITES="waymark10 workqueue10 calendar10 factory10 localfire"
+          declare -A reach=()
+          suites_for () {
+            case "$1" in
+              docs/*|*.md)    ;;
+              localfire/*)    reach[localfire]=1 ;;
+              calendar10/*)   reach[calendar10]=1; reach[workqueue10]=1 ;;
+              factory10/*)    reach[factory10]=1; reach[workqueue10]=1 ;;
+              workqueue10/*)  reach[workqueue10]=1 ;;
+              waymark10/*)    reach[waymark10]=1; reach[calendar10]=1
+                              reach[factory10]=1; reach[workqueue10]=1 ;;
+              *)              for s in $SUITES; do reach[$s]=1; done ;;
+            esac
+          }
+
+          # code=, then one flag per suite: every one true under `all`,
+          # the table's answer otherwise.
+          emit () {
+            echo "code=$1" >> "$GITHUB_OUTPUT"
+            for s in $SUITES; do
+              if [ "$2" = all ] || [ -n "${reach[$s]:-}" ]; then
+                echo "$s=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "$s=false" >> "$GITHUB_OUTPUT"
+              fi
+            done
+          }
+
+          say_yes () { emit true all; echo "$1"; exit 0; }
 
           # A workflow_dispatch has no base, and a brand-new branch's
           # first push reports the all-zeros sha. Both mean "no diff to
@@ -235,13 +304,33 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              waymark10/*|calendar10/*|workqueue10/*|factory10/*|localfire/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
+              waymark10/*|calendar10/*|workqueue10/*|factory10/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
                 echo "code path: $f"
                 code=true ;;
             esac
+            if [ "$EVENT" = pull_request ]; then
+              suites_for "$f"
+            fi
           done <<< "$files"
 
-          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = pull_request ]; then
+            # The table decides a pull request: code is whatever it
+            # reached, so an unknown path runs everything and a docs-only
+            # diff runs nothing.
+            code=false
+            echo "pull request — the suites this diff reaches:"
+            for s in $SUITES; do
+              if [ -n "${reach[$s]:-}" ]; then
+                code=true
+                echo "  $s: runs"
+              else
+                echo "  $s: skipped"
+              fi
+            done
+            emit "$code" table
+          else
+            emit "$code" all
+          fi
           if [ "$code" = true ]; then
             echo "this diff touches code — the suites run"
           else
@@ -251,9 +340,9 @@ jobs:
       # ── WHICH SUITES A NARROWED DISPATCH RUNS ──────────────────────────
       #
       # Empty `only` (every push, every PR, a plain dispatch) answers yes
-      # to both and nothing below it changes. Set, it must name a test
-      # namespace in one of the trees, or ns/test-name inside one; a
-      # name found nowhere FAILS this job, and with it the gate, so a
+      # to both and nothing below it changes. Set, each of its tokens
+      # must name a test namespace in one of the trees, or
+      # ns/test-name inside one; a name found nowhere FAILS this job, and with it the gate, so a
       # misspelt namespace cannot report a green that ran nothing.
       # quick holds calendar10's and localfire's suites, test-factory
       # holds factory10's; the two sharded suites are narrowed by
@@ -266,39 +355,64 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, pathlib, re, sys
 
-          only = os.environ.get("ONLY", "").strip()
-          if not only:
+          # Several tokens may be given, split on spaces or commas; each
+          # is resolved on its own, and every suite that holds any of
+          # them runs.
+          tokens = [t for t in re.split(r"[\s,]+", os.environ.get("ONLY", "")) if t]
+          if not tokens:
               print("quick=true")
               print("factory=true")
               sys.exit(0)
 
-          # It becomes a --focus argument; hold it to the shape of a
-          # Clojure test id before anything reads it.
-          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9._*+!?<>=-]+)?", only):
-              print(f"only={only!r} is not a namespace or ns/test-name", file=sys.stderr)
+          # A refusal fails this step and names itself three ways: in
+          # this step's log, as an annotation on the run, and as the
+          # job's `refused` output, which `gate` prints in its tail.
+          def refuse(why):
+              print(f"refused=select: {why}")
+              print(f"::error title=changes / select::{why}", file=sys.stderr)
               sys.exit(1)
-          ns = only.split("/", 1)[0]
+
+          # Each becomes a --focus argument; hold it to the shape of a
+          # Clojure test id before anything reads it.
+          shape = [t for t in tokens
+                   if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9._*+!?<>=-]+)?", t)]
+          if shape:
+              refuse(f"only: {', '.join(repr(t) for t in shape)} is not a namespace or ns/test-name")
 
           def namespaces(root):
               base = pathlib.Path(root, "test")
               return {str(p.relative_to(base).with_suffix("")).replace("/", ".").replace("_", "-")
                       for p in base.rglob("*_test.clj")} if base.is_dir() else set()
 
-          home = [r for r in ("waymark10", "workqueue10", "calendar10", "localfire", "factory10")
-                  if ns in namespaces(r)]
-          if not home:
-              print(f"only={only}: no test namespace {ns} in any suite", file=sys.stderr)
-              sys.exit(1)
-          print(f"only={only}: {ns} lives in {', '.join(home)}", file=sys.stderr)
-          print(f"quick={str(bool({'calendar10', 'localfire'} & set(home))).lower()}")
-          print(f"factory={str('factory10' in home).lower()}")
+          suites = {r: namespaces(r) for r in
+                    ("waymark10", "workqueue10", "calendar10", "localfire", "factory10")}
+          homes = set()
+          missing = []
+          for t in tokens:
+              ns = t.split("/", 1)[0]
+              home = [r for r, names in suites.items() if ns in names]
+              if not home:
+                  missing.append(t)
+                  continue
+              homes.update(home)
+              print(f"only: {t} lives in {', '.join(home)}", file=sys.stderr)
+          # One unknown token refuses the whole list: a typo must not
+          # come back green beside the names that did resolve.
+          if missing:
+              refuse(f"only: no test namespace for {', '.join(missing)} in any suite"
+                     " (name a test namespace or ns/test-name, not a suite or make target)")
+          print(f"quick={str(bool({'calendar10', 'localfire'} & homes)).lower()}")
+          print(f"factory={str('factory10' in homes).lower()}")
           PY
 
   # The cheap signal, first: neither of these needs a database, and a
   # declaration error should not wait behind a JVM suite to be told.
   quick:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.quick == 'true'
+    if: >-
+      needs.changes.outputs.code == 'true' && needs.changes.outputs.quick == 'true' &&
+      (needs.changes.outputs.workqueue10 == 'true' || needs.changes.outputs.calendar10 == 'true' ||
+       needs.changes.outputs.localfire == 'true')
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     steps:
       - uses: actions/checkout@v4
@@ -310,15 +424,21 @@ jobs:
       # named in that variable. Every clojure call in this file carries
       # it, and it goes before -M — the CLI stops reading its own flags
       # there. Why: .github/actions/setup-clojure/action.yml.
+      # Each step answers to its own flag from the path table, so a
+      # localfire PR does not pay for calendar10 and a waymark10 PR does
+      # not run localfire. Every flag is true off a pull_request.
       - name: check-queue — declaration gate, no database
+        if: needs.changes.outputs.workqueue10 == 'true'
         run: cd workqueue10 && clojure -Sdeps "$CLJ_SDEPS" -M:check
       - name: calendar10 — pure translation, no database or network
+        if: needs.changes.outputs.calendar10 == 'true'
         run: cd calendar10 && clojure -Sdeps "$CLJ_SDEPS" -M:test
       # localfire belongs here rather than in a job of its own: its
       # suite needs no database and no network past the loopback, so it
       # costs seconds beside the two above instead of minutes and a
       # postgres service container (docs/spec-local-fire.md R-9.1).
       - name: localfire — the fire wire, loopback only, no database
+        if: needs.changes.outputs.localfire == 'true'
         run: cd localfire && clojure -Sdeps "$CLJ_SDEPS" -M:test
       - name: JVM crash report
         if: failure()
@@ -340,7 +460,9 @@ jobs:
   # declaration error should not wait behind a suite to be told.
   test-factory:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.factory == 'true'
+    if: >-
+      needs.changes.outputs.code == 'true' && needs.changes.outputs.factory == 'true' &&
+      needs.changes.outputs.factory10 == 'true'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     steps:
       - uses: actions/checkout@v4
@@ -375,7 +497,7 @@ jobs:
         env:
           N_WAYMARK10: ${{ env.SHARDS_WAYMARK10 }}
           N_WORKQUEUE10: ${{ env.SHARDS_WORKQUEUE10 }}
-          # Checked by `changes` already: a test id, or empty.
+          # Checked by `changes` already: test ids, or empty.
           ONLY: ${{ inputs.only }}
         run: |
           set -euo pipefail
@@ -452,20 +574,23 @@ jobs:
               return [{"id": i + 1, "nses": "\n".join(sorted(g))}
                       for i, g in enumerate(groups) if g]
 
-          # A narrowed dispatch: the one namespace (or ns/test-name, which
-          # kaocha's --focus takes as it is) in ONE shard of the suite
-          # that holds it, and an empty list for the other — its matrix
-          # job is skipped on that, since an empty matrix fails a run.
-          only = os.environ.get("ONLY", "").strip()
+          # A narrowed dispatch: the tokens (namespaces, or ns/test-names,
+          # which kaocha's --focus takes as they are) that live in a
+          # suite go in ONE shard of it, one per line so each gets its
+          # own --focus; a suite holding none gets an empty list — its
+          # matrix job is skipped on that, since an empty matrix fails
+          # a run. Split as `changes` splits them.
+          import re
+          only = [t for t in re.split(r"[\s,]+", os.environ.get("ONLY", "")) if t]
 
           for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
                                     ("workqueue10", "workqueue10", "N_WORKQUEUE10")):
               names = namespaces(root)
               if only:
-                  m = ([{"id": 1, "nses": only}]
-                       if only.split("/", 1)[0] in names else [])
+                  mine = [t for t in only if t.split("/", 1)[0] in names]
+                  m = [{"id": 1, "nses": "\n".join(mine)}] if mine else []
                   print(f"{key}={json.dumps(m)}")
-                  print(f"# {key}: only={only}, {len(m)} shard",
+                  print(f"# {key}: only={' '.join(mine)}, {len(m)} shard",
                         file=__import__("sys").stderr)
                   continue
               m = shards(names, int(os.environ[envvar]))
@@ -476,7 +601,9 @@ jobs:
 
   test10:
     needs: [changes, discover]
-    if: needs.changes.outputs.code == 'true' && needs.discover.outputs.waymark10 != '[]'
+    if: >-
+      needs.changes.outputs.code == 'true' && needs.discover.outputs.waymark10 != '[]' &&
+      needs.changes.outputs.waymark10 == 'true'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       # One shard failing must not hide the others: the point of a
@@ -623,7 +750,9 @@ jobs:
 
   test-queue:
     needs: [changes, discover]
-    if: needs.changes.outputs.code == 'true' && needs.discover.outputs.workqueue10 != '[]'
+    if: >-
+      needs.changes.outputs.code == 'true' && needs.discover.outputs.workqueue10 != '[]' &&
+      needs.changes.outputs.workqueue10 == 'true'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       fail-fast: false
@@ -796,11 +925,21 @@ jobs:
           TEST_QUEUE: ${{ needs.test-queue.result }}
           DISCOVER: ${{ needs.discover.result }}
           ONLY: ${{ inputs.only }}
+          REFUSED: ${{ needs.changes.outputs.refused }}
+          EVENT: ${{ github.event_name }}
+          RUN_WAYMARK10: ${{ needs.changes.outputs.waymark10 }}
+          RUN_WORKQUEUE10: ${{ needs.changes.outputs.workqueue10 }}
+          RUN_CALENDAR10: ${{ needs.changes.outputs.calendar10 }}
+          RUN_FACTORY10: ${{ needs.changes.outputs.factory10 }}
+          RUN_LOCALFIRE: ${{ needs.changes.outputs.localfire }}
         run: |
           set -euo pipefail
           echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE"
           if [ "$CHANGES" != "success" ]; then
             echo "gate: FAIL — the changes job did not succeed ($CHANGES), so whether this diff touches code is unknown."
+            if [ -n "${REFUSED:-}" ]; then
+              echo "gate: changes refused — $REFUSED"
+            fi
             exit 1
           fi
           if [ "${CODE:-}" != "true" ]; then
@@ -815,9 +954,24 @@ jobs:
           fi
           # A narrowed dispatch skips every suite that does not hold its
           # namespace, on purpose; `changes` has already failed the run if
-          # none does. Skipped counts only there — never on a push or PR.
-          for r in "$QUICK" "$TEST_FACTORY" "$TEST10" "$TEST_QUEUE"; do
+          # none does. A pull request skips every job the path table in
+          # `changes` left out, on purpose too — but only a job it left
+          # out: a selected job that was skipped is still a failure. On a
+          # push every flag is true, so a skip there always fails.
+          quick_sel=false
+          for f in "${RUN_WORKQUEUE10:-}" "${RUN_CALENDAR10:-}" "${RUN_LOCALFIRE:-}"; do
+            if [ "$f" = true ]; then quick_sel=true; fi
+          done
+          for job in "quick $QUICK $quick_sel" \
+                     "test-factory $TEST_FACTORY ${RUN_FACTORY10:-}" \
+                     "test10 $TEST10 ${RUN_WAYMARK10:-}" \
+                     "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}"; do
+            read -r name r selected <<< "$job"
             if [ -n "${ONLY:-}" ] && [ "$r" = "skipped" ]; then
+              continue
+            fi
+            if [ "$EVENT" = pull_request ] && [ "${selected:-}" != true ] && [ "$r" = "skipped" ]; then
+              echo "gate: $name skipped on purpose — this diff's paths do not reach it."
               continue
             fi
             if [ "$r" != "success" ]; then
@@ -825,7 +979,7 @@ jobs:
               exit 1
             fi
           done
-          echo "gate: PASS — code changed and every suite succeeded."
+          echo "gate: PASS — code changed and every selected suite succeeded."
 
   # ── ONE TABLE INSTEAD OF ELEVEN LOGS ────────────────────────────────
   #

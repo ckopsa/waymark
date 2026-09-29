@@ -395,6 +395,19 @@
   [eng id]
   (some-> (binding-of eng id) :sitting))
 
+(defn- calling-sitting
+  "The id of the sitting a call is served, tallied and refused as
+  (ticket f6c8d5ce): the one THIS connector session is bound to, open
+  or closed — never a sibling that happens to be the newest open
+  sitting under the seat's shared grant. Only a session bound to no
+  sitting falls back to the open one under its grant."
+  [eng session]
+  (if-some [bound (some-> (bound-sitting eng (:mcp-session-id session))
+                          str not-empty)]
+    bound
+    (when-some [gid (get-in session [:visibility :grant :id])]
+      (some-> (seats/open-sitting-for-grant eng gid) :id str))))
+
 (defn- bound-seat
   "The seat this session is bound to, or nil. Read from the BINDING
   and not from the sitting row: `waymark_sit` writes the seat and the
@@ -468,6 +481,9 @@
            :headers (or headers {})
            :waymark10/principal (:principal session)}
     (:visibility session) (assoc :waymark10/visibility (:visibility session))
+    ;; the sitting this session is bound to rides every door call, so
+    ;; the router counts a transition on THIS sitting (ticket f6c8d5ce)
+    (:sitting session) (assoc :waymark10/sitting (:sitting session))
     query (assoc :query-string query)
     body (assoc :body (wire/write-json body))))
 
@@ -1474,11 +1490,13 @@
   action it is the door signing its work, so `actions-from-mcp` can
   count what came through here. A fenced action carries the If-Match
   of the row we READ, so the write lands on the row the agent saw or
-  not at all."
-  [session entry etag warnings]
+  not at all — and `fenced?` is the caller's answer to 'is this door
+  fenced', read off the envelope's entry when it has one and off the
+  DECLARATION when a guard shut the door (ticket ec814cac)."
+  [session fenced? etag warnings]
   (cond-> {"idempotency-key" (origin-key (get-in session [:principal :id])
                                          (random-uuid))}
-    (and (get-in entry [:safety :fence]) etag)
+    (and fenced? etag)
     (assoc "if-match" etag)
     (seq warnings)
     (assoc "waymark-acknowledge" (str/join "," (map name warnings)))))
@@ -1673,19 +1691,36 @@
           (pass-through env-resp)
           (let [env (body-json env-resp)
                 entry (get-in env [:actions (wire-action aname)])
+                ;; A door a GUARD shut is not in `actions` at all — it
+                ;; is in `unavailable`, which carries a reason and its
+                ;; remedies and no `safety` — so the fence flag falls
+                ;; back to the DECLARATION here. Read off `entry`
+                ;; alone, a guard-refused fenced door went out with no
+                ;; If-Match, and invoke's fence (step 6, ahead of the
+                ;; guard loop) answered 412 "Version conflict" on a row
+                ;; that had not changed, where the guard's own 409
+                ;; belonged (ticket ec814cac).
+                fenced? (boolean
+                         (or (get-in entry [:safety :fence])
+                             (get-in rdef [:actions aname :safety :fence])))
                 sentence (consequence-of entry)]
             (if (and (get-in entry [:safety :confirm])
                      (not= acknowledge sentence))
               (refusal (confirm-refusal aname sentence acknowledge))
               (answer
-               (call (request session :post
-                              (or (:href entry) (str self "/-/" (name aname)))
-                              {:body (or input {})
-                               :query (when dry_run "dry_run=1")
-                               :headers (invoke-headers
-                                         session entry
-                                         (get-in env-resp [:headers "ETag"])
-                                         acknowledge_warnings)}))
+               ;; the sitting this session is bound to rides the request,
+               ;; so a wall judges THIS sitting and not the newest under
+               ;; the seat's shared grant (ticket 51dfd10b)
+               (call (assoc (request session :post
+                                     (or (:href entry) (str self "/-/" (name aname)))
+                                     {:body (or input {})
+                                      :query (when dry_run "dry_run=1")
+                                      :headers (invoke-headers
+                                                session fenced?
+                                                (get-in env-resp [:headers "ETag"])
+                                                acknowledge_warnings)})
+                            :waymark10/sitting
+                            (bound-sitting eng (:mcp-session-id session))))
                return
                ;; `from` and the changed set come off the row as READ —
                ;; the same read the gate and the ETag came from
@@ -2243,9 +2278,12 @@
   when it is given, the page holds that row alone, or nothing when the
   row is not in the queue or is claimed.
 
-  `stuck` is the tickets whose change waits for a person
-  (`seats/stuck-walk-rows`, ticket 6bdaf6fe). They are subtracted as the
-  claimed rows are: a seat handed one could only say it is stuck."
+  `stuck` is the tickets whose change waits for a person, each with
+  its reason (`seats/stuck-walk-reasons`, ticket 6bdaf6fe). They are
+  subtracted as the claimed rows are: a seat handed one could only say
+  it is stuck. The queue rows left out for either cause are answered
+  under `withheld`, each with its reason (ticket 87c928e9), so an empty
+  walk over a queue that is not empty says why."
   [eng call session seat claimed held only stuck]
   (when-some [walk (some-> (get-in seat [:data :walk]) str not-empty)]
     (when-some [rdef (get (inv/resources eng) (keyword walk))]
@@ -2256,6 +2294,15 @@
             walk-filter (when-not judgment (seats/walk-filter seat))
             n (min (long (or (get-in seat [:data :rows_per_firing]) 20))
                    coll/page-size-max)
+            ;; a named ticket beside a live change is read under its
+            ;; own state, in review as well as open, and is not left
+            ;; out as stuck: the fire sent the run to it (ticket
+            ;; 7af7d506)
+            only-state (when (and only (not judgment)
+                                  (seats/named-beside-a-live-change?
+                                   eng walk only))
+                         (some-> (row-of eng (keyword walk) only) :state name))
+            stuck (cond-> stuck only (dissoc (str only)))
             subtract? (or judgment (seq claimed) (seq stuck))
             asked (if (or subtract? (seq held) only) coll/page-size-max n)
             resp (call (request session :get (str "/api/" (:plural rdef))
@@ -2265,12 +2312,14 @@
                                                             judgment))
                                            walk-filter (merge
                                                         (filter-params
-                                                         walk-filter))))}))
+                                                         walk-filter))
+                                           only-state (assoc "state"
+                                                             only-state)))}))
             doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
         (when (collection-doc? doc)
           (let [id-of #(id-of-self (get % "self"))
                 skip (if subtract?
-                       (into (into (set claimed) stuck)
+                       (into (into (set claimed) (keys stuck))
                              (when judgment
                                (judged-subjects eng (:id judgment))))
                        #{})
@@ -2291,12 +2340,25 @@
                              (concat kept
                                      (take (- n (count kept))
                                            (remove mine? items))))
-                items (into [] (filter #(contains? chosen (id-of %))) items)]
+                items (into [] (filter #(contains? chosen (id-of %))) items)
+                claimed? (set claimed)
+                withheld (into []
+                               (keep (fn [item]
+                                       (let [id (id-of item)]
+                                         (cond
+                                           (contains? stuck id)
+                                           {"id" id "reason" (get stuck id)}
+
+                                           (contains? claimed? id)
+                                           {"id" id
+                                            "reason" "another open sitting of this seat holds it"}))))
+                               (get-in doc ["data" "items"]))]
             (cond-> {"kind" walk
                      "charter" (str (get-in seat [:data :charter]))
                      "total" (get-in doc ["data" "total"])
                      "rows" (mapv walk-row items)}
-              judgment (assoc "judgment" (judgment-block judgment)))))))))
+              judgment (assoc "judgment" (judgment-block judgment))
+              (seq withheld) (assoc "withheld" withheld))))))))
 
 (def ^:private walk-note
   "What a sitter holding its rows does next — and what it must not do.
@@ -2399,10 +2461,12 @@
   → {:walk w :named-held? bool :all-held? bool}."
   [eng call sitter-sees seat sitting named]
   (let [seat-id (str (:id seat))
+        ;; a named change is read back to its ticket (ticket 7af7d506)
+        named (seats/named-walk-row eng (get-in seat [:data :walk]) named)
         held (get-in sitting [:data :walked_rows])
         ;; read once for the sit: the tickets beside a stuck change
         ;; are out of the walk whichever try claims (ticket 6bdaf6fe)
-        stuck (seats/stuck-walk-rows eng (get-in seat [:data :walk]))
+        stuck (seats/stuck-walk-reasons eng (get-in seat [:data :walk]))
         walk-past (fn [taken only]
                     (walk-of eng call sitter-sees seat taken held only stuck))]
     (loop [n 1
@@ -2674,23 +2738,25 @@
        vec))
 
 (defn- bench-tools-of
-  "THE TOOL FOR EACH BENCH POWER THE SEAT HOLDS (R-12.29,
-  waymark-fp62.6.3.12) → {\"bench.read\" \"bench__read\", …}.
+  "EVERY BENCH TOOL THE SEAT'S GRANT HOLDS (R-12.29,
+  waymark-fp62.6.3.12) → {\"bench.read\" \"bench__read\",
+  \"bench.prepare\" \"bench__prepare\", …}.
 
   The seat's scope gives the tokens and the bench row's powers give
-  the tool, through the same `token-tool` the power door resolves a
-  name with. So the sit TELLS the seat what to call, and no
-  instruction has to name a spelling.
-
-  A token the row does not map to exactly one tool is ABSENT: the
-  door would refuse that name, and a map that promised it would send
-  the seat at a 404."
+  EVERY tool each token names, through the same `token-tools` the
+  power door admits a call by. Each tool is keyed by its own bare
+  name under the rig's prefix, so a token that covers several tools
+  (`bench.read` → read, prepare, status; `bench.symbols` → symbols,
+  read_symbol) lists them all, and a token of one tool keeps the key
+  it always had. The map is built from the grant, so it cannot drift
+  from it: a power the scope does not name adds no tool."
   [eng seat]
-  (into (sorted-map)
-        (keep (fn [token]
-                (when-some [nm (gate/token-tool eng token)]
-                  [token nm])))
-        (bench-tokens seat)))
+  (let [prefix (gate/bench-tool "")]
+    (into (sorted-map)
+          (for [token (bench-tokens seat)
+                nm (gate/token-tools eng token)
+                :when (str/starts-with? nm prefix)]
+            [(str bench-power-prefix (subs nm (count prefix))) nm]))))
 
 (defn- change-by-id
   "The change row with this `change_id`, or nil. `change_id` is
@@ -2844,6 +2910,20 @@
                (str/includes? said ":"))
       (not-empty (subs said (inc (str/index-of said ":")))))))
 
+(defn- unpushed-change?
+  "True when the change was born here and never pushed: open or stuck,
+  no pull request number, no round, and a `change_id` that is still the
+  walk row's. Only such a change is minted again — its branch or its
+  repository — because the forge holds nothing of it."
+  [change]
+  (boolean
+   (and change
+        (contains? #{:open :stuck} (some-> (:state change) name keyword))
+        (nil? (get-in change [:data :number]))
+        (zero? (long (or (get-in change [:data :rounds]) 0)))
+        (not (str/starts-with? (str (get-in change [:data :change_id]))
+                               forge-change-prefix)))))
+
 (defn- rebranched-change
   "The change this firing works, with its branch minted again from the
   policy's pattern when the pattern moved under it (bead
@@ -2861,14 +2941,7 @@
   with the same system hand the mint uses. A refusal costs the new
   branch and never the sit: the row stands as it was."
   [eng change]
-  (or (when (and change
-                 (contains? #{:open :stuck}
-                            (some-> (:state change) name keyword))
-                 (nil? (get-in change [:data :number]))
-                 (zero? (long (or (get-in change [:data :rounds]) 0)))
-                 (not (str/starts-with?
-                       (str (get-in change [:data :change_id]))
-                       forge-change-prefix)))
+  (or (when (unpushed-change? change)
         (when-some [row-id (born-row-id change)]
           (let [policy (repo-policy-of
                         eng (str (get-in change [:data :repository])))
@@ -2885,6 +2958,53 @@
                   nil))))))
       change))
 
+(defn- rehomed-change
+  "The change this firing works, moved to the seat's repository when its
+  walk row moved there after the change was born (ticket 1ebcd19f) —
+  else the row as it stands.
+
+  A TICKET RESTATED TO ANOTHER REPOSITORY KEEPS ITS `change_id`, so the
+  lookup finds the change born on the old one, and every bench call of
+  the seat that walks it now refuses: its grant admits its own
+  repository only. A change that was never pushed has nothing on the
+  old repository to keep, so the house writes the seat's repository and
+  that policy's branch and base over it through `rebranch`, on the row
+  that is here. A change with a pull request keeps its repository,
+  because the forge holds it, and the sit says so instead.
+
+  A refusal costs the move and never the sit: the row stands as it was."
+  [eng seat change]
+  (let [repo (seat-repository seat)]
+    (or (when (and repo
+                   (unpushed-change? change)
+                   (not= repo (str (get-in change [:data :repository]))))
+          (when-some [row-id (born-row-id change)]
+            (let [policy (repo-policy-of eng repo)]
+              (try
+                (:row (inv/invoke! eng :change (str (:id change)) :rebranch
+                                   {:repository repo
+                                    :head_branch (pattern-branch policy row-id)
+                                    :base_branch (or (some-> (get-in policy [:data :base])
+                                                             str not-empty)
+                                                     default-base)}
+                                   {:principal seat-change-principal}))
+                (catch Exception e
+                  (binding [*out* *err*]
+                    (println "waymark10 seat change rehome failed -"
+                             (ex-message e)))
+                  nil)))))
+        change)))
+
+(def ^:private elsewhere-change-note
+  "What the sit says when the change this firing works lives in another
+  repository than the seat's and could not be moved: it has a pull
+  request there, which the house does not move (ticket 1ebcd19f)."
+  (str "The change for this row lives in another repository than this "
+       "seat's, and it already has a pull request there, so it was not "
+       "moved and this seat's bench cannot reach it. Stall it with one "
+       "sentence that says so, so a person closes that pull request or "
+       "moves the row back."))
+
 (def ^:private stuck-change-note
   "What the sit says when the change this firing works is still
   `stuck`: no door on it submits, so the seat can only say so. It names
@@ -2897,7 +3017,8 @@
        "its ticket in review, and grooming does not serve it: unstick puts "
        "back a change with no pull request, and unstick_submitted one that "
        "has a pull request. A seat's stall sent the ticket to draft, and "
-       "grooming it again puts the change back to work at the next sit. "
+       "grooming it again puts the change back to work at the groom, or "
+       "back under review at the next sit when it has a pull request. "
        "Say that it is stuck, and stop."))
 
 (def ^:private groomed-walk-prefix
@@ -2917,6 +3038,14 @@
   behind: the rounds start from zero and the seat is offered submit.
   The change's `change_id` is `ticket:<id>` and unique, so without this
   the sit would hand the seat the same stuck change forever.
+
+  THE BACKSTOP, SINCE TICKET 9ace68fb. A groom, unblock or resume now
+  walks the change's `rework` door in the same transaction, so a stuck
+  change with no pull request is already `open` when the sit reads it.
+  This path is kept for what `rework` leaves: a change WITH a pull
+  request (`rework` refuses it; this unsticks it with
+  `unstick_submitted`), and rows stalled and groomed before `rework`
+  existed.
 
   ONLY A GROOM AFTER THE STALL ANSWERS IT. When the ticket's newest
   `groom` is not newer than the change's newest `stall` — or the change
@@ -2983,9 +3112,14 @@
     :else (let [[change note] (minted-change eng seat walk)
                 change (some->> change
                                 (regroomed-change eng)
-                                (rebranched-change eng))]
+                                (rehomed-change eng seat)
+                                (rebranched-change eng))
+                repo (seat-repository seat)]
             [change
              (or note
+                 (when (and change repo
+                            (not= repo (str (get-in change [:data :repository]))))
+                   elsewhere-change-note)
                  (when (= :stuck (some-> (:state change) name keyword))
                    stuck-change-note))])))
 
@@ -3077,6 +3211,32 @@
        "tool (bench.rerun in bench.tools) with this repo and branch, then "
        "stop the sitting. Do not stall the ticket on dead CI, and do not "
        "change code for it."))
+
+(defn- train-red-finding
+  "The finding a merge train's red makes, or nil (ticket 238f45b3). A
+  change whose own checks are green and that a train found red carries
+  `train_red` (the train's branch and run url) and the train's red
+  check names in `failing_checks`; the rig's feedback reads only the
+  change's own branch, which is green, so without this the seat sees
+  nothing that says why it was sent back."
+  [change]
+  (when-some [said (some-> (get-in change [:data :train_red]) str not-empty)]
+    (let [checks (seq (map str (get-in change [:data :failing_checks])))]
+      {"source" "merge-train"
+       "severity" "failure"
+       "message" (str "merge train red: " said
+                      (when checks
+                        (str "; failing checks: " (str/join ", " checks))))})))
+
+(defn- with-train-red
+  "The sit's `feedback` with the change's own train red first among its
+  findings; the train's red alone when the rig answered nothing."
+  [feedback change]
+  (if-some [finding (train-red-finding change)]
+    (if feedback
+      (update feedback "findings" #(into [finding] %))
+      {"findings" [finding] "unavailable" []})
+    feedback))
 
 (defn- feedback-of
   "What the submit caused, or nil. ONE `feedback` of the rig, with the
@@ -3260,15 +3420,19 @@
           ;; pull request at all, so a head branch alone is not a
           ;; submit here: such a row carries no `number` until a round
           ;; pushes it and the source adopts it.
-          feedback (when (and made
-                              (or (>= (long (or (get-in change [:data :rounds])
-                                                0))
-                                      1)
-                                  (and (some-> (get-in change [:data :head_branch])
-                                               str not-empty)
-                                       (some? (get-in change [:data :number])))))
-                     (feedback-of gate-rpc (str (or (:repo made) repo))
-                                  (str (or (:branch made) branch))))
+          ;; a merge train's red rides on the change row, not on the
+          ;; branch the rig reads, so it is added here (ticket 238f45b3)
+          feedback (with-train-red
+                     (when (and made
+                                (or (>= (long (or (get-in change [:data :rounds])
+                                                  0))
+                                        1)
+                                    (and (some-> (get-in change [:data :head_branch])
+                                                 str not-empty)
+                                         (some? (get-in change [:data :number])))))
+                       (feedback-of gate-rpc (str (or (:repo made) repo))
+                                    (str (or (:branch made) branch))))
+                     change)
           ;; the path the policy names, answered only when the file
           ;; is really there (R-6); a worktree that was never made
           ;; holds nothing, so a dark rig is asked for no read
@@ -3439,6 +3603,16 @@
             {walk :walk named-held? :named-held? all-held? :all-held?}
             (when-not halted
               (claimed-walk! eng call sitter-sees seat sitting named-row))
+            ;; … and a sitting the walk handed nothing is stamped as
+            ;; such — no rows free, an empty queue, or a seat at a wall
+            ;; — so seat health counts an idle wake without reading an
+            ;; absent `walked_rows`. The rows this sitting already
+            ;; holds count: a re-sit of a sitting that walked is not it.
+            _ (when sitting
+                (seats/stamp-walked-nothing!
+                 eng (:id sitting)
+                 (and (empty? (get walk "rows"))
+                      (empty? (get-in sitting [:data :walked_rows])))))
             ;; i' · the change this firing submits: the walk's own
             ;; first row for a code seat (R-12.29), and the row the
             ;; engine finds or mints for a seat that walks a queue of
@@ -3866,6 +4040,17 @@
       (if (gate/bench-tool? inner) inner tool-name))
     tool-name))
 
+(defn- cancelled-run
+  "The run id of a bench.test run this answer says was cancelled — \"\"
+  when the rig named no id — or nil when the answer says no such
+  thing (ticket 39b2c934). Read off the rig's own result map, the one
+  `bench-result` reads, for `bench__test` and `bench__test_result`."
+  [served-tool out]
+  (when (contains? #{"bench__test" "bench__test_result"} (str served-tool))
+    (when-some [r (bench-result out)]
+      (when (= "cancelled" (some-> (or (:conclusion r) (:status r)) name))
+        (str (or (:run_id r) ""))))))
+
 (defn- count-served!
   "R-10.6a: the bytes this tool answered, on the open sitting of the
   session's grant.
@@ -3892,13 +4077,11 @@
   the model the very bytes it is there to measure."
   [eng session tool-name result]
   (try
-    (when-some [sitting-id
-                (or (when (= "waymark_sit" tool-name)
-                      (bound-sitting eng (:mcp-session-id session)))
-                    (when-some [gid (get-in session [:visibility :grant :id])]
-                      (:id (seats/open-sitting-for-grant eng gid))))]
+    (when-some [sitting-id (calling-sitting eng session)]
       (seats/add-served! eng sitting-id tool-name (result-bytes result)
-                         (dropped-bytes result)))
+                         (dropped-bytes result))
+      (when-some [run (cancelled-run tool-name result)]
+        (seats/add-cancelled-run! eng sitting-id run)))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 mcp served counter" tool-name "failed -"
@@ -3936,14 +4119,50 @@
   [eng session tool-name out]
   (try
     (when (power-refusal? tool-name out)
-      (when-some [gid (get-in session [:visibility :grant :id])]
-        (when-some [sitting (seats/open-sitting-for-grant eng gid)]
-          (seats/bump-counter! eng (:id sitting) :refusals))))
+      (when-some [sitting-id (calling-sitting eng session)]
+        (let [doc (body-json {:body (-> out :content first :text)})
+              field (fn [k] (when (map? doc) (or (get doc k) (get doc (name k)))))]
+          (seats/bump-counter! eng sitting-id :refusals
+                               {:type (or (field :type) "power-refused")
+                                :guard (field :guard)}))))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 mcp refusal counter" tool-name "failed -"
                  (ex-message e)))
       nil)))
+
+(defn- closed-sitting-refusal
+  "The `sitting_closed` refusal for a call on a session whose sitting
+  is no longer open, or nil (ticket f6c8d5ce). The call is never
+  re-attributed to another sitting of the seat: a run whose close came
+  while it was still working learns that its sitting is over rather
+  than spending on a sibling's bill. `waymark_sit` is the one door left
+  open, because a re-sit is how a run whose connector dropped finds
+  its own sitting again. A bench tool through `waymark_power` is left to
+  the gate's hold guard, which names the ticket the closed sitting no
+  longer holds and refuses its writes, while its reads still forward."
+  [eng session tool-name arguments]
+  (when-not (or (= "waymark_sit" (str tool-name))
+                (and (= "waymark_power" (str tool-name))
+                     (str/starts-with? (str (or (get arguments :tool)
+                                                (get arguments "tool")))
+                                       "bench__")))
+    (when-some [sid (some-> (bound-sitting eng (:mcp-session-id session))
+                            str not-empty)]
+      (when-some [row (row-of eng :sitting sid)]
+        (let [state (some-> (:state row) name)]
+          (when (not= "open" state)
+            (refusal
+             (p/problem :sitting_closed 409 "Sitting closed"
+                        {:detail (str "This session sat in sitting " sid
+                                      ", and it is " state
+                                      (when-some [e (get-in row [:data :ended_at])]
+                                        (str " since " e))
+                                      ". A call is never counted on another"
+                                      " sitting of the seat; this run's"
+                                      " sitting is over.")
+                         :sitting sid
+                         :state state}))))))))
 
 (defn message
   "One JSON-RPC message → the response to send, or nil when there is
@@ -3973,8 +4192,10 @@
        "tools/list"
        (rpc-result id {:tools (listing)})
        "tools/call"
-       (let [out (call-tool eng call gate-rpc session
-                            (:name params) (:arguments params))]
+       (let [out (or (closed-sitting-refusal eng session (:name params)
+                                             (:arguments params))
+                     (call-tool eng call gate-rpc session
+                                (:name params) (:arguments params)))]
          (if (= ::unknown-tool out)
            (rpc-error id invalid-request
                       (str "Unknown tool " (pr-str (:name params))
