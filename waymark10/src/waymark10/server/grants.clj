@@ -1007,6 +1007,43 @@
                              ", the one live grant you hold: approval widens it."))))
         row))))
 
+(defn- member-named
+  "The member row a principal id names: the row of that id, or the row
+  a binding stamped with it as `subject`."
+  [ctx who]
+  (when-some [who (some-> who str not-empty)]
+    (or ((:read ctx) :member who)
+        (first ((:find ctx) :member {:subject who} {:limit 1})))))
+
+(defn waits-on
+  "The member a new ask or held call waits on
+  (docs/spec-addressed-notice.md): the member `who` is, or, when that
+  member is a seat's sitter or a person's delegate, the member its
+  `acts_for` names. Read through ctx, so the engine stamps it at create
+  and no body supplies it. → a member id, or nil when nobody answers
+  or the ctx cannot look."
+  [ctx who]
+  (when (and (:read ctx) (:find ctx))
+    (when-some [m (member-named ctx who)]
+      (let [person (some-> (get-in m [:data :acts_for]) str not-empty)]
+        (some-> (if person (member-named ctx person) m) :id str)))))
+
+(defn- stamp-waits-on
+  "The ask waits on the person its requester acts for, or on the
+  requester themselves. Whatever the body said is dropped."
+  [row ctx]
+  (let [p (:principal ctx)
+        m (waits-on ctx (or (some-> (:acts-for p) str not-empty) (:id p)))]
+    (if m
+      (assoc-in row [:data :waits_on] m)
+      (update row :data dissoc :waits_on))))
+
+(defn- born-ask
+  "The ask's birth hook: anchor-the-lone-grant, then the person it
+  waits on."
+  [row ctx]
+  (-> row (anchor-the-lone-grant ctx) (stamp-waits-on ctx)))
+
 (g/defguard requester-is-named
   {:reads [:principal]
    :open "No door names an anonymous caller: sign in, or sit in a seat, and ask again."
@@ -1419,7 +1456,15 @@
             [:substitute {:optional true
                           :x-display {:label "As a substitute"
                                       :help "Tick this to stand in rather than hold the seat: a substitute gets the seat's scope minus its drop list, reads the seat's memory without writing it, and is not limited to one per seat."}}
-             [:maybe :boolean]]]
+             [:maybe :boolean]]
+            ;; THE PERSON WHOSE TAP THIS WAITS ON
+            ;; (docs/spec-addressed-notice.md): stamped at birth by
+            ;; born-ask, never read from the body, so a notice_rule
+            ;; can address {field waits_on}
+            [:waits_on {:optional true :kind :member
+                        :x-display {:label "Waits on"
+                                    :help "The member who must approve this ask: the person the requesting seat or delegate acts for, or the requester themselves. The engine stamps it at birth."}}
+             [:maybe :waymark/ref]]]
    :filterable {:grant_id #{:eq}}
    ;; the approval page opens on the decision queue: newest ask first,
    ;; and only the ones still waiting on a person — both projected by
@@ -1439,8 +1484,9 @@
             :href "/api/grants/{data.grant_id}"
             :summary "The grant this request extends or minted"}]
    ;; the engine anchors an anchorless ask from a holder of one live
-   ;; grant; the sugar runs its stamps first, so requested_by is set
-   :on-create anchor-the-lone-grant
+   ;; grant, and stamps the member the ask waits on; the sugar runs its
+   ;; stamps first, so requested_by is set
+   :on-create born-ask
    :create-guards [requester-is-named
                    requester-holds-the-grant
                    an-anchorless-ask-names-its-grant

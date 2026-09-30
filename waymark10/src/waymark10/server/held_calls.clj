@@ -55,6 +55,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.store :as store]
@@ -267,13 +268,21 @@
   (assoc-in row [:data :reason] (:reason inp)))
 
 (defn- born
-  "The birth stamps: the leash the caller never chose. `expires_at`
-  is written AT CREATE, so the person who reads the row reads the
-  moment it will actually stop waiting."
+  "The birth stamps: the leash the caller never chose, and the person
+  the call waits on. `expires_at` is written AT CREATE, so the person
+  who reads the row reads the moment it will actually stop waiting.
+  `waits_on` is the member the `owner` names, or the one the `caller`
+  is or acts for (grants/waits-on), so a notice_rule can address it.
+  It is read from the member rows, never from the body."
   [row ctx]
-  (update-in row [:data :expires_at]
-             #(or % (.plusSeconds ^Instant (:now ctx)
-                                  (long default-ttl-seconds)))))
+  (let [who (or (some-> (get-in row [:data :owner]) str not-empty)
+                (get-in row [:data :caller]))
+        m (grants/waits-on ctx who)]
+    (-> row
+        (update-in [:data :expires_at]
+                   #(or % (.plusSeconds ^Instant (:now ctx)
+                                        (long default-ttl-seconds))))
+        (update :data #(if m (assoc % :waits_on m) (dissoc % :waits_on))))))
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 ;;
@@ -428,6 +437,13 @@
                          :label "Waits on"
                          :help "The person a held seat call waits on: the one its author acts for. Only they answer it."}}
      [:maybe [:string {:min 1 :max 128}]]]
+    ;; the MEMBER the call waits on (docs/spec-addressed-notice.md),
+    ;; beside `owner`'s principal string: `born` stamps it, so a
+    ;; notice_rule can address {field waits_on}
+    [:waits_on {:optional true :kind :member
+                :x-display {:label "Tells"
+                            :help "The member this call waits on: the person the calling seat or delegate acts for, or the caller themselves. The engine stamps it at birth, and a notice rule tells them."}}
+     [:maybe :waymark/ref]]
     [:expires_at {:optional true
                   :x-display {:label "Waits until"
                               :help "When the sweep expires this call. Stamped at birth, 24 hours out, so the person reads the moment it will actually stop waiting."}}
@@ -1098,6 +1114,19 @@
         base (str/replace (str (get-in notifier-row [:data :link_base])) #"/+$" "")]
     (str base "/api/" plural "/" (:resource-id t))))
 
+(defn ui-link
+  "The UI's page for one row, `<public origin>/#/api/<plural>/<id>`
+  (the hash route the approve handoff already hands a person), from
+  the engine's configured public origin, [:services :transcripts
+  :public-origin]. nil when none is configured or the kind is not
+  served, and the notice falls back to `notice-link`."
+  [eng kind id]
+  (let [origin (some-> (get-in eng [:services :transcripts :public-origin])
+                       str (str/replace #"/+$" "") not-empty)
+        plural (:plural (get (inv/resources eng) (keyword (name kind))))]
+    (when (and origin plural (some? id))
+      (str origin "/#/api/" plural "/" id))))
+
 (defn- fill-notice [s values]
   (str/replace (str s) #"\{(kind|id|action|summary|caller|why|link|expires_at)\}"
                (fn [[_ k]] (str (get values (keyword k) "")))))
@@ -1124,7 +1153,8 @@
      :caller (or (some-> (:caller data) str not-empty) (actor-id (:actor t)))
      :why (or (:why data) "")
      :expires_at (or (:expires_at data) "")
-     :link (notice-link eng notifier-row t)}))
+     :link (or (ui-link eng (:kind t) (:resource-id t))
+               (notice-link eng notifier-row t))}))
 
 (defn- active-rows [eng kind]
   (if-some [rd (get (inv/resources eng) kind)]
@@ -1545,11 +1575,16 @@
             carrier (or (some->> (:notifier notify) str not-empty
                                  (decoded-row eng :notifier))
                         texter)
-            actor (actor-id (:actor t))]
+            ;; a held call's birth is the engine's hand: the person
+            ;; who caused it is the row's `caller`
+            causers (cond-> #{(actor-id (:actor t))}
+                      (some-> (get-in row [:data :caller]) str not-empty)
+                      (conj (str (get-in row [:data :caller]))))
+            subject (some-> (get-in member [:data :subject]) str)]
         (cond
           (nil? addressee) (count! :unaddressed nil)
-          (or (= actor addressee)
-              (= actor (some-> (get-in member [:data :subject]) str))) [:self nil]
+          (or (contains? causers addressee)
+              (contains? causers subject)) [:self nil]
           (or (nil? member) (empty? notify)) (count! :skipped nil)
           (nil? texter) (count! :failed "the rule's notifier is gone")
           (quiet? notify (now-of eng))

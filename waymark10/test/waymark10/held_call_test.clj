@@ -28,6 +28,7 @@
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.mcp-servers :as servers]
+            [waymark10.server.members :as members]
             [waymark10.server.store :as store]
             [waymark10.summary :as summary]
             [waymark10.server.store.memory :as memory]
@@ -1235,6 +1236,92 @@
           (is (some? e))
           (is (re-find #"not a member|not a ref field|address-names-a-member"
                        (str (ex-message e) " " (pr-str (ex-data e))))))))))
+
+;; ── waits_on: the person a held call or an ask waits on ─────────────
+
+(defn- waits-on-rule! [{:keys [eng notifier-id]} kind to-state]
+  (:row (inv/create! eng :notice_rule
+                     {:name (str "tell whom the " kind " waits on")
+                      :kind kind
+                      :when {:to_state to-state}
+                      :address {:field "waits_on"}
+                      :notifier notifier-id}
+                     {:principal colton})))
+
+(defn- held-for! [eng chore caller owner]
+  (held/hold-door! eng (cond-> {:kind "chore" :action "queue"
+                                :id (str (:id chore)) :body {}
+                                :caller caller :why "Queue the dishes."}
+                         owner (assoc :owner owner))))
+
+(deftest a-held-call-a-seat-made-tells-its-person-with-the-ui-link
+  (let [{:keys [eng log] :as w} (notice-world)
+        eng (assoc-in eng [:services :transcripts :public-origin]
+                      "https://ui.example.org/")
+        jack (notice-member! w "Jack" true)
+        _ (members/ensure-sitter! eng "seat:dishes" "dishes" jack)
+        r (waits-on-rule! w "held_call" "held")
+        c (notice-chore! eng nil)]
+    (drain-notices! eng)
+    (let [h (held-for! eng c "seat:dishes" nil)]
+      (is (= jack (get-in h [:data :waits_on])) "the seat's person")
+      (drain-notices! eng)
+      (let [s (chat-sends log)
+            text (str (get-in (first s) [:params :arguments :text]))]
+        (is (= 1 (count s)))
+        (is (str/includes? text (str (get-in h [:data :shown])))
+            "the call's sentence")
+        (is (str/includes? text (str "https://ui.example.org/#/api/held_calls/"
+                                     (:id h)))
+            "the UI's page for the row")
+        (is (= 1 (:sent (notice-rule-data eng (:id r)))))))))
+
+(deftest a-held-call-its-own-person-caused-tells-nobody
+  (let [{:keys [eng log] :as w} (notice-world)
+        jack (notice-member! w "Jack" true)
+        _ (waits-on-rule! w "held_call" "held")
+        c (notice-chore! eng nil)]
+    (drain-notices! eng)
+    (is (= jack (get-in (held-for! eng c jack nil) [:data :waits_on])))
+    (drain-notices! eng)
+    (is (= [] (chat-sends log)))))
+
+(deftest a-person-without-notify-is-skipped-and-counted
+  (let [{:keys [eng log] :as w} (notice-world)
+        jill (notice-member! w "Jill" false)
+        _ (members/ensure-sitter! eng "seat:dishes" "dishes" jill)
+        r (waits-on-rule! w "held_call" "held")
+        c (notice-chore! eng nil)]
+    (drain-notices! eng)
+    (held-for! eng c "seat:dishes" nil)
+    (drain-notices! eng)
+    (is (= [] (chat-sends log)))
+    (is (= 1 (:skipped (notice-rule-data eng (:id r)))))))
+
+(deftest an-ask-a-seat-files-tells-the-person-who-approves
+  (let [{:keys [eng log] :as w} (notice-world)
+        jack (notice-member! w "Jack" true)
+        jill (notice-member! w "Jill" true)
+        _ (members/ensure-sitter! eng "seat:dishes" "dishes" jack)
+        r (waits-on-rule! w "approval_request" "offered")
+        _ (drain-notices! eng)
+        sitter (assoc (t/principal {:id "seat:dishes" :type :agent})
+                      :acts-for jack)
+        ask (:row (inv/create! eng :approval_request
+                               {:task "Queue the week's chores."
+                                :waits_on jill
+                                :scope [{:kind "chore" :actions ["queue"]}]}
+                               {:principal sitter}))]
+    (is (= jack (get-in ask [:data :waits_on]))
+        "the engine stamps the person; the body's value is dropped")
+    (drain-notices! eng)
+    (let [s (chat-sends log)]
+      (is (= 1 (count s)))
+      (is (str/includes? (str (get-in (first s) [:params :arguments :text]))
+                         (str "https://work.example.org/api/approval_requests/"
+                              (:id ask)))
+          "no public origin: the notifier's link_base and the API path"))
+    (is (= 1 (:sent (notice-rule-data eng (:id r)))))))
 
 ;; ── quiet hours ─────────────────────────────────────────────────────
 
