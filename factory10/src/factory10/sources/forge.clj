@@ -715,6 +715,64 @@
                                          {:limit failing-scan-limit}))
               ["submitted" "failing"])))))
 
+;; ── a stale `unknown` is read again (ticket 544d36dd) ────────────────
+;;
+;; GitHub computes mergeability after the push without moving
+;; `updated_at`, so the window never offers a pull request first read
+;; as `unknown` again. Where the house merges, the merge call's refusal
+;; corrects it; where GitHub merges, nothing did. So each pass asks for
+;; a handful of them by number, oldest first, and writes the answer
+;; through the change pass: a `conflicted` answer then moves the change
+;; the way a conflict already does.
+
+(def unknown-reread-limit
+  "How many `unknown` changes one pass reads again by number, so a
+  burst of them cannot eat the API budget."
+  5)
+
+(defn- unknown-changes
+  "The open and submitted changes with a number whose stored
+  `mergeable` is `unknown` and whose `change_id` is not in `seen` (the
+  window already read them), least recently written first."
+  [eng seen]
+  (let [st (:storage eng)]
+    (->> (store/with-tx st
+           (fn [tx]
+             (into []
+                   (mapcat #(store/query-rows st tx :change {:state %}
+                                              {:limit failing-scan-limit}))
+                   ["submitted" "open"])))
+         (filter #(and (= "unknown" (str (get-in % [:data :mergeable])))
+                       (some? (get-in % [:data :number]))
+                       (not (contains? seen
+                                       (str (get-in % [:data :change_id]))))))
+         (sort-by #(str (:updated-at %)))
+         (take unknown-reread-limit))))
+
+(defn- unknown-pass!
+  "Each stale `unknown` change → its pull request read by number and
+  handed to the change pass. A forge that will not answer costs that
+  change one pass and nothing else."
+  [eng source changes census log-fn]
+  (if-not (satisfies? ForgePull source)
+    census
+    (let [seen (into #{} (map #(str (:change_id %))) changes)]
+      (reduce
+       (fn [census row]
+         (let [repo (str (get-in row [:data :repository]))
+               number (get-in row [:data :number])
+               doc (try (forge-pull source repo number)
+                        (catch Exception e
+                          (log-fn "the pull request #" number " of " repo
+                                  " could not be read again ("
+                                  (ex-message e) ")")
+                          nil))]
+           (if (map? doc)
+             (change-pass! eng [doc] census log-fn)
+             census)))
+       census
+       (unknown-changes eng seen)))))
+
 (defn- head-reader
   "The checks of each head, read once for the whole pass (ticket
   3aca3ae8): the run pass and the failing pass ask the same heads, and
@@ -2030,6 +2088,7 @@
                   refused (volatile! [])
                   census (change-pass! eng changes census log-fn refused)
                   _ (retry-refused! source @refused log-fn)
+                  census (unknown-pass! eng source changes census log-fn)
                   read-checks (head-reader source)
                   census (run-pass! eng source
                                     (into (vec checks)
