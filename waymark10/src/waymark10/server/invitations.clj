@@ -12,7 +12,11 @@
   non-secret argument of that action's input. Whether the SUBJECT may
   take the door is judged where it always is, at the subject's own
   invoke: an invitation to a door the person lacks meets that door's
-  refusal, which is the honest answer.
+  refusal, which is the honest answer. What the ROW can take now is
+  judged at create, by the envelope's own availability: a door its
+  state does not offer is refused with that door's `unavailable`
+  reason, so the author learns it before the person meets a page
+  with no button on it.
 
   ANSWER IS NOT A DOOR anybody taps. A durable log consumer (the
   judgments consumer's shape) hears every committed transition, and
@@ -32,6 +36,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant)
@@ -90,6 +95,28 @@
        (= "password" (some-> (:format props) name))
        (= "password" (some-> (get-in props [:json-schema :format]) name)))))
 
+(defn- shut-now
+  "Why the row cannot take the door now, in the words its envelope's
+  `unavailable` uses; nil when it can. A denier reading the principal
+  or the grant refused the AUTHOR's hand, not the row, and the
+  subject's hand is judged at the subject's own invoke, so it is no
+  reason here."
+  [rdef action row ctx]
+  (let [{:keys [status reason denier]}
+        (render/action-availability rdef action row ctx)]
+    (when (and (= :unavailable status)
+               (not (some #{:principal :grant} (:reads denier))))
+      (or reason (str "`" (name action) "` is not open on that row now.")))))
+
+(defn- subject-name
+  "The subject's display name, as its member row labels it; the raw
+  id when no member row carries that id."
+  [subject ctx]
+  (or (some-> (:read ctx)
+              (apply [:member (str subject)])
+              (get-in [:data :display]))
+      (str subject)))
+
 ;; ── guards ──────────────────────────────────────────────────────────
 
 (g/defguard the-author-sees-the-step
@@ -121,7 +148,12 @@
             (nil? ((:read ctx) k id)))
         (t/deny {:vars {:problem "your grant does not see that row or does not admit that door."}})
 
-        :else (t/allow)))))
+        :else
+        (if-some [why (some->> ((:read ctx) k id)
+                               (#(shut-now rdef action % ctx)))]
+          (t/deny {:vars {:problem (str "the row cannot take `" (name action)
+                                        "` now: " why)}})
+          (t/allow))))))
 
 (g/defguard the-field-is-an-open-argument
   {:judges [:action :field]
@@ -181,6 +213,7 @@
   [row ctx]
   (-> row
       (assoc-in [:data :author] (str (get-in ctx [:principal :id])))
+      (assoc-in [:data :subject_name] (subject-name (get-in row [:data :subject]) ctx))
       (update-in [:data :expires_at]
                  #(or % (.plusSeconds ^Instant (:now ctx)
                                       (long default-ttl-seconds))))))
@@ -232,7 +265,7 @@
    :states [:open :answered :declined :withdrawn :expired]
    :initial :open
    :terminal #{:answered :declined :withdrawn :expired}
-   :summary "{data.note} · {data.subject} · {state}"
+   :summary "{data.note} · {data.subject_name} · {state}"
    :label-template "{data.note}"
    :schema
    (-> [:map
@@ -242,6 +275,10 @@
                               :help "The principal that handed the step over, stamped by the engine at birth."}}
          [:string {:min 1 :max 128}]]]
        (into step-fields)
+       (conj [:subject_name {:optional true
+                             :x-display {:label "Invited by name"
+                                         :help "The invited person's name as their member row said it at birth, stamped by the engine."}}
+              [:maybe [:string {:max 128}]]])
        (conj [:answered_by {:optional true
                             :not-a-ref "It holds the log id of the transition that answered, and a log entry is no row of any kind."
                             :x-display {:raw true
