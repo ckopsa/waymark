@@ -1052,6 +1052,34 @@
     (t/deny)
     (t/allow)))
 
+(g/defguard judgment-not-superseded
+  ;; No remedy: a superseded judgment cannot be promoted, so the door
+  ;; `judgment-in-force` names would only send the reader to a wall.
+  ;; Say where the house went next, as `walk-matches-the-judgment`
+  ;; does (ticket 86514746). A supersede re-points parked seats too,
+  ;; so this bites only rows written before it did.
+  {:reads [:judgment]
+   :vars [:judgment :problem]
+   :explain "This seat says the judgment {judgment}, which is superseded, and a seat walks only a judgment in force: {problem}, then unpark."}
+  [row _inp ctx]
+  (let [id (some-> (get-in row [:data :judgment]) str not-empty)
+        read' (:read ctx)]
+    (if (and id read')
+      (let [j (read' :judgment id)]
+        (if (and j (= :superseded (:state j)))
+          (t/deny {:vars {:judgment (or (some-> (get-in j [:data :name]) str)
+                                        id)
+                          :problem
+                          (if-some [s (some-> (get-in j [:data :successor])
+                                              str not-empty)]
+                            (str "it is superseded by " s
+                                 " — restate the seat to name " s)
+                            (str "it is superseded with no successor"
+                                 " — restate the seat to name a promoted"
+                                 " judgment, or without one"))}})
+          (t/allow)))
+      (t/allow))))
+
 (g/defguard judgment-in-force
   {:reads [:judgment]
    :vars [:judgment]
@@ -1061,11 +1089,13 @@
   ;; An authored seat may be born citing a DRAFT (invariant 5), and
   ;; the unpark is the moment it would start walking one. A person's
   ;; unpark meets this wall too: it is about the seat, not the hand.
+  ;; A superseded judgment is `judgment-not-superseded`'s to refuse:
+  ;; this one's remedy is a promote, and that one cannot be promoted.
   (let [id (some-> (get-in row [:data :judgment]) str not-empty)
         read' (:read ctx)]
     (if (and id read')
       (let [j (read' :judgment id)]
-        (if (and j (not= :promoted (:state j)))
+        (if (and j (not (#{:promoted :superseded} (:state j))))
           (t/deny {:vars {:judgment (or (some-> (get-in j [:data :name]) str)
                                         id)}})
           (t/allow)))
@@ -2649,7 +2679,8 @@
 
     :unpark
     {:from #{:parked} :to :active
-     :guards [a-person judgment-in-force delegation/the-persons-lever]
+     :guards [a-person judgment-not-superseded judgment-in-force
+              delegation/the-persons-lever]
      :safety {:idempotent true :reversible true :confirm false}
      :handler unpark-seat
      :display {:label "Unpark" :style :primary :order 3
