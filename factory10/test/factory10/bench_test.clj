@@ -3289,6 +3289,9 @@
     (is (not (get-in (schedules/schedule-for-seat eng seat-id)
                      [:data :wake_pending]))
         "withheld, not damped: nothing is left pending for a release")
+    (is (= ticket-id (get-in (schedules/schedule-for-seat eng seat-id)
+                             [:data :last_withheld_wake]))
+        "the withhold-by-name branch stamps the row it withheld, which the empty-walk branch does not")
     (testing "a submitted change in another repository does not withhold"
       (force-ticket-repo! w "ckopsa/elsewhere")
       (is (false? (seats/named-open-beside-a-submitted-change?
