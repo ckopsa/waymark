@@ -298,6 +298,36 @@
                            ", so it waits for your person's tap. The verdict"
                            " that stands stays where it is until they allow it.")}}))))
 
+;; ── the app's own walls ─────────────────────────────────────────────
+
+(def verdict-guards-key
+  "Where an app hands this door its own walls: the engine opts'
+  `[:services :verdict-guards]`, a map from a judgment's NAME to a
+  seq of `(fn [inp ctx] → nil | sentence)`. nil admits; a sentence
+  refuses, and is the refusal's whole explanation. The fn reads what
+  every guard here reads — `(:read ctx)`, `(:find ctx)` — inside the
+  write's own transaction."
+  [:services :verdict-guards])
+
+(g/defguard the-house-admits-this-verdict
+  {:judges [:judgment :subject_id]
+   :reads [:judgment :services]
+   :vars [:problem]
+   :open "This wall is the app's, not the kind's: the house that serves this judgment says what a verdict under it waits on, and its refusal says what to do first."
+   :explain "{problem}"}
+  [_row inp ctx]
+  ;; the storage-free probe advertises optimistically, as every wall
+  ;; above does: an app's wall reads rows, and a probe holds none
+  (if (nil? (:read ctx))
+    (t/allow)
+    (let [jrow (cited-judgment inp ctx)
+          walls (get (get-in ctx verdict-guards-key)
+                     (str (get-in jrow [:data :name])))]
+      (if-some [problem (some (fn [wall] (some-> (wall inp ctx) str not-empty))
+                              walls)]
+        (t/deny {:vars {:problem problem}})
+        (t/allow)))))
+
 ;; ── the engine's own door ───────────────────────────────────────────
 
 (g/defguard the-engine-overrules-this-row
@@ -629,7 +659,10 @@
                    subject-is-a-row
                    a-correction-cites-what-stands
                    a-person-corrects
-                   one-standing-verdict-per-subject]
+                   one-standing-verdict-per-subject
+                   ;; LAST: the house's own walls, once the kind's
+                   ;; law has admitted the body
+                   the-house-admits-this-verdict]
    :actions
    {:overrule
     {:from #{:said} :to :overruled

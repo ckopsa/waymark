@@ -249,7 +249,14 @@
                                    (assoc row :kind :held_call))]
           (is (str/includes? line "emila__send"))
           (is (str/includes? line "mail-clerk"))
-          (is (str/includes? line "otto@example.test")))))
+          (is (str/includes? line "otto@example.test")))
+        (testing "the envelope's call is the input, and the row stores none (ticket cec5bb7a)"
+          (let [doc (wire/read-json ((:render-fn (:eng w))
+                                     (get (inv/resources (:eng w)) :held_call)
+                                     (assoc row :kind :held_call)))]
+            (is (nil? (get-in row [:data :call])))
+            (is (= (wire/read-json (wire/write-json (get-in row [:data :input])))
+                   (get-in doc [:data :call])))))))
 
     (testing "an entry that marks no shown fields leaves the line to
               the why"

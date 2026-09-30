@@ -1225,6 +1225,36 @@
       (change! "ckopsa/one" :submit)
       (is (= [tid] (keys (seats/stuck-walk-reasons eng "ticket")))))))
 
+(deftest a-queue-of-only-stuck-tickets-is-stamped-as-having-walked-nothing
+  ;; Ticket 7ae97cd5: the held-row case above the ticket kinds proves the
+  ;; stamp over a queue another open sitting holds. A stuck change
+  ;; empties the walk through `seats/stuck-walk-reasons` instead, and
+  ;; this proves the stamp still lands when that is the only cause.
+  (let [eng (fresh-engine [fx/meal ticket-kind change-kind])
+        h (engine/handler eng)
+        _ (open-ticket-seat! eng)
+        tk (:row (inv/create! eng :ticket {:title "Stuck on a person"
+                                           :repo "ckopsa/one"}
+                              {:principal person}))
+        tid (str (:id tk))
+        ch (:row (inv/create! eng :change {:born_from (str "ticket:" tid)
+                                           :repository "ckopsa/one"}
+                              {:principal person}))
+        _ (inv/invoke! eng :change (str (:id ch)) :stall nil
+                       {:principal person})
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit"
+                {:key ticket-key :session "run-stuck"})
+        answer (doc-of r)]
+    (testing "the ticket is withheld for its stuck change"
+      (is (= [tid] (keys (seats/stuck-walk-reasons eng "ticket"))))
+      (is (false? (:isError r)) (text-of r))
+      (is (empty? (get-in answer [:walk :rows])))
+      (is (= [tid] (mapv :id (get-in answer [:walk :withheld])))))
+    (testing "and the sitting handed nothing is stamped"
+      (is (true? (get-in (sitting-row eng (:sitting answer))
+                         [:data :walked_nothing]))))))
+
 ;; ── 7. the seat may be NAMED, and its chair's key opens it ──────────
 ;;
 ;; Bead waymark-fp62.7.23, R-4: one Routine stands for one MODEL, so
