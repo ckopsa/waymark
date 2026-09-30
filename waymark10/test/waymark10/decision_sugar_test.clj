@@ -88,6 +88,10 @@
                           :x-display {:label "As a substitute"
                                       :help "Tick this to stand in rather than hold the seat: a substitute gets the seat's scope minus its drop list, reads the seat's memory without writing it, and is not limited to one per seat."}}
              [:maybe :boolean]]
+            [:waits_on {:optional true :kind :member
+                        :x-display {:label "Waits on"
+                                    :help "The member who must approve this ask: the person the requesting seat or delegate acts for, or the requester themselves. The engine stamps it at birth."}}
+             [:maybe :waymark/ref]]
             [:expires_at {:optional true
                           :x-display
                           {:label "Good until"
@@ -122,6 +126,10 @@
                                  :x-display {:label "As a substitute"
                                              :help "Tick this to stand in rather than hold the seat: a substitute gets the seat's scope minus its drop list, reads the seat's memory without writing it, and is not limited to one per seat."}}
                     [:maybe :boolean]]
+                   [:waits_on {:optional true :kind :member
+                               :x-display {:label "Waits on"
+                                           :help "The member who must approve this ask: the person the requesting seat or delegate acts for, or the requester themselves. The engine stamps it at birth."}}
+                    [:maybe :waymark/ref]]
                    [:expires_at {:optional true
                                  :x-display
                                  {:label "Good until"
