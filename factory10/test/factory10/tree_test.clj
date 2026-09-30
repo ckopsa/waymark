@@ -465,7 +465,7 @@
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
                :merge_wait_seconds :rounds_per_change :merge_strategy
                :train_size :formatter :deny
-               :test :orientation :enrolled_at :note :source_note
+               :test :check :orientation :enrolled_at :note :source_note
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
