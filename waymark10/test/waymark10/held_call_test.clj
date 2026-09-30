@@ -1261,6 +1261,37 @@
         (is (str/includes? (str (:text args))
                            (str "https://work.example.org/api/chores/" (:id c))))))))
 
+(defn- member-data [eng id]
+  (:data (store/with-tx (:storage eng)
+           #(store/load-row (:storage eng) % :member (str id) {}))))
+
+(deftest a-failed-digest-keeps-its-lines-and-sends-them-on-the-next-sweep
+  (let [down? (atom false)
+        {:keys [eng log clock] :as w}
+        (notice-world (atom (instant "2026-09-29T23:00:00Z"))
+                      #(when @down? (throw (ex-info "the chat is down" {}))))
+        jack (quiet-member! w "Jack")
+        _ (notice-rule! w "assignee")
+        chores (vec (repeatedly 2 #(notice-chore! eng jack)))]
+    (drain-notices! eng)
+    (doseq [c chores] (queue-chore! eng c colton))
+    (drain-notices! eng)
+    (reset! down? true)
+    (reset! clock (instant "2026-09-30T07:00:00Z"))
+    (is (= 0 (held/sweep-quiet-digests! eng)) "the send failed")
+    (let [data (member-data eng jack)]
+      (is (= 2 (count (:quiet_held data))) "the lines are put back")
+      (is (= 1 (:quiet_digest_failed data)) "the failure is counted")
+      (is (seq (:quiet_digest_error data)) "and says why"))
+    (reset! down? false)
+    (reset! clock (instant "2026-09-30T07:05:00Z"))
+    (is (= 1 (held/sweep-quiet-digests! eng)) "the next sweep sends them")
+    (is (empty? (:quiet_held (member-data eng jack))))
+    (let [s (chat-sends log)]
+      (is (= 1 (count s)) "one digest")
+      (is (str/starts-with? (str (get-in (first s) [:params :arguments :text]))
+                            "2 notices")))))
+
 (deftest a-notice-outside-the-quiet-window-sends-at-once
   (let [{:keys [eng log] :as w} (notice-world (atom (instant "2026-09-29T12:00:00Z")))
         jack (quiet-member! w "Jack")
