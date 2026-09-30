@@ -267,10 +267,10 @@ function fieldCell(schema, field, value, row) {
     return el("span", {},
       ...value.flatMap((id, i) =>
         i ? [", ", resourceRef(kind, id)] : [resourceRef(kind, id)]));
-  if (byKind && value && !Array.isArray(value)) return resourceRef(kind, value);
-  if (ref && typeof value === "string" && value) {
+  if (ref && value && !Array.isArray(value)) {
     if (ref.principal) return principalRef(value);
     if (ref.address) return typedAddressCell(value);
+    if (byKind) return resourceRef(kind, value);
   }
   /* a DECLARED ref always wins, and so does a value that IS an address
      (a field named for a hand may still hold a row, and a row is not a
