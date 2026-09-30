@@ -690,16 +690,11 @@
                            (some? (delegation/authoring-seat ctx :seat nil)))
                       nil
 
-                      ;; a superseded judgment names where the house
-                      ;; went next (ticket 86514746), so say it
+                      ;; a superseded judgment cannot be promoted, so
+                      ;; it is `walk-judgment-not-superseded`'s to
+                      ;; refuse: this guard's remedy is a promote
                       (= :superseded (:state j))
-                      (if-some [s (some-> (get-in j [:data :successor]) str not-empty)]
-                        (str "that judgment is superseded by " s
-                             ", and only a promoted one is walked — name " s
-                             " instead")
-                        (str "that judgment is superseded with no successor"
-                             ", and only a promoted one is walked — name one"
-                             " that is promoted"))
+                      nil
 
                       (not= :promoted (:state j))
                       (str "that judgment is " (name (:state j))
@@ -717,6 +712,31 @@
         (if problem (t/deny {:vars {:problem problem}}) (t/allow)))
       (t/allow))
     (t/allow)))
+
+(g/defguard walk-judgment-not-superseded
+  ;; No remedy: a superseded judgment cannot be promoted, so the door
+  ;; `walk-matches-the-judgment` names would only send the reader to a
+  ;; wall — `judgment-not-superseded`'s split, at the create and the
+  ;; restate. Say where the house went next (ticket 86514746).
+  {:judges [:judgment]
+   :reads [:judgment]
+   :vars [:problem]
+   :explain "A seat that says a judgment walks that judgment's own subjects and answers with its verdicts: {problem}."}
+  [_row inp ctx]
+  (let [id (some-> (:judgment inp) str not-empty)
+        read' (:read ctx)
+        j (when (and id read') (read' :judgment id))]
+    (if (and j (= :superseded (:state j)))
+      (t/deny {:vars {:problem
+                      (if-some [s (some-> (get-in j [:data :successor])
+                                          str not-empty)]
+                        (str "that judgment is superseded by " s
+                             ", and only a promoted one is walked — name " s
+                             " instead")
+                        (str "that judgment is superseded with no successor"
+                             ", and only a promoted one is walked — name one"
+                             " that is promoted"))}})
+      (t/allow))))
 
 ;; ── what wakes a seat is named the way its scope is (R-12.22) ───────
 ;;
@@ -1055,7 +1075,7 @@
 (g/defguard judgment-not-superseded
   ;; No remedy: a superseded judgment cannot be promoted, so the door
   ;; `judgment-in-force` names would only send the reader to a wall.
-  ;; Say where the house went next, as `walk-matches-the-judgment`
+  ;; Say where the house went next, as `walk-judgment-not-superseded`
   ;; does (ticket 86514746). A supersede re-points parked seats too,
   ;; so this bites only rows written before it did.
   {:reads [:judgment]
@@ -2466,6 +2486,7 @@
                    held-for-active-models
                    walk-names-a-kind-in-scope
                    walk-leaves-its-filter
+                   walk-judgment-not-superseded
                    walk-matches-the-judgment
                    wake-on-names-real-kinds
                    wake-on-names-real-actions
@@ -2650,6 +2671,7 @@
               held-for-active-models
               walk-names-a-kind-in-scope
               walk-leaves-its-filter
+              walk-judgment-not-superseded
               walk-matches-the-judgment
               wake-on-names-real-kinds
               wake-on-names-real-actions
