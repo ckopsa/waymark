@@ -54,7 +54,8 @@
    :terminal #{:retired}
    :summary "{data.display} · {state}"
    :schema [:map
-            [:owner [:string {:min 1 :max 128}]]
+            [:owner {:not-a-ref "A fixture's bare principal id."}
+             [:string {:min 1 :max 128}]]
             [:display [:string {:min 1 :max 80}]]
             [:about {:optional true} [:maybe [:string {:max 240}]]]]
    :filterable {:owner #{:eq} :state #{:eq}}
