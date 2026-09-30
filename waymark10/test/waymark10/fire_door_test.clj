@@ -350,10 +350,11 @@
       (let [p (refusal #(fire-seat! bare-id "now please"))]
         (is (= :linked-for-fire (:guard p)))
         (is (= (str "Link the Routine's fire URL and token first — to this "
-                    "seat's schedule, or to the model it is held for.")
+                    "seat's schedule, or to the model it is held for — or "
+                    "bring a runner in the schedule's or the model's pool live.")
                (str (:detail p)))
             "the sentence names both places a link may stand
-             (waymark-fp62.7.23)")))
+             (waymark-fp62.7.23), and the runner pool as a way in")))
 
     (testing "a bare agent, with no person behind it"
       (let [p (refusal #(fire-seat! seat-id "now please" clerk))]
