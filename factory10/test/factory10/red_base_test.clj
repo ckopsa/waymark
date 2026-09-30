@@ -155,6 +155,51 @@
       (is (not (str/includes? detail "all green here"))
           "a suite that passed is not quoted"))))
 
+(defn- red-gate-with-steps!
+  "`main` red on `gate` for two passes, its job's steps seeded in the
+  run listing: one green, one red. → the minted ticket's detail."
+  [{:keys [state engine] :as w}]
+  (gh/seed-branch! state repo "main" head-1)
+  (gh/seed-check! state repo head-1 (a-check 701 head-1 "failure"))
+  (gh/seed-log! state "701" "Run make check-queue\nFAIL in (calendar10-clash)")
+  (gh/seed-job! state repo 900
+                {:id 701 :run_id 900 :name "gate" :status "completed"
+                 :conclusion "failure"
+                 :steps [{:name "Set up job" :conclusion "success"}
+                         {:name "check-queue" :conclusion "failure"}]})
+  (pass! w)
+  (is (= 1 (:base-opened (pass! w))))
+  (str (get-in (first (tickets engine)) [:data :detail])))
+
+(defn- without-steps
+  "The source with every ForgeSource verb and no ForgeSteps."
+  [s]
+  (reify forge/ForgeSource
+    (forge-poll [_] (forge/forge-poll s))
+    (forge-log-tail [_ check] (forge/forge-log-tail s check))
+    (forge-label! [_ change label] (forge/forge-label! s change label))
+    (forge-calls [_] (forge/forge-calls s))
+    (forge-checks [_ repository sha] (forge/forge-checks s repository sha))
+    (forge-base [_ repository branch] (forge/forge-base s repository branch))))
+
+(deftest a-red-main-ticket-names-the-red-step
+  ;; ticket c0d7ce64: the step is named even when the tail is cut
+  (let [detail (red-gate-with-steps! (world))]
+    (is (str/includes? detail "### gate\n\nRed steps: `check-queue`\n\n```")
+        "the red step heads the check's log")
+    (is (not (str/includes? detail "`Set up job`"))
+        "a step that passed is not named")
+    (is (str/includes? detail "FAIL in (calendar10-clash)"))))
+
+(deftest a-source-without-steps-writes-the-detail-as-before
+  (let [w (update (world) :source without-steps)
+        detail (red-gate-with-steps! w)]
+    (is (not (satisfies? forge/ForgeSteps (:source w))))
+    (is (not (str/includes? detail "Red steps:")))
+    (is (str/includes? detail "### gate\n\n```\n")
+        "the log tail follows the check's heading directly")
+    (is (str/includes? detail "FAIL in (calendar10-clash)"))))
+
 (deftest a-red-after-green-names-the-head-that-turned-it
   (let [{:keys [engine] :as w} (world)]
     (head-at! w head-1 701 "success")
