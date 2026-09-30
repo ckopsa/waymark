@@ -1,4 +1,18 @@
 /* ── actions: buttons, forms from input schema, confirm, dry-run ───── */
+/* share my screen (docs/spec-guided-follow.md §1): a form's values as
+   they may leave this tab — a field the schema marks writeOnly,
+   format: password or x-secret is removed here, whatever the grant
+   (the server removes it again at report time) */
+function shareableValues(values, input) {
+  const props = (input || {}).properties || {};
+  const out = {};
+  for (const [k, v] of Object.entries(values || {})) {
+    const p = props[k] || {};
+    if (p.writeOnly || p.format === "password" || p["x-secret"]) continue;
+    out[k] = v;
+  }
+  return out;
+}
 /* effort-aware emphasis: an assent action is one click — prominent
    unless the declaration styles it; display.style always wins. */
 function actionButton({name, entry, doc, label: lbl, small, onDone, prefill}) {

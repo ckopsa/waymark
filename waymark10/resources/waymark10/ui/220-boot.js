@@ -31,8 +31,16 @@ function onPresenceFrame({event, data: f}) {
     PRESENCE.clear();
     for (const p of f.presences || []) PRESENCE.set(p.principal.id, p);
   } else if (f.event === "leave") PRESENCE.delete(f.principal.id);
-  else PRESENCE.set(f.principal.id, f);   // join | move
+  else PRESENCE.set(f.principal.id, f);   // join | move | ui
   paintPresence();
+  /* guided follow (200-events-follow.js): the followed principal's
+     screen state, applied — a snapshot's entry carries its last ui */
+  if (f.event === "ui") applyGuidedUi(f);
+  else if (f.event === "snapshot" && followUi && followId) {
+    guidedSeq = -1;
+    const p = PRESENCE.get(followId);
+    if (p && p.ui) applyGuidedUi(p);
+  }
   /* the chip's gaze state: live while presence holds the followed
      principal, kept-but-faded once they leave */
   if (followId) {
@@ -67,11 +75,20 @@ async function presenceBeat() {
   if (localStorage.getItem("wm10.curtain")) return;
   const here = hereHref();
   if (!principalId() || !here.startsWith("/api/")) return;
+  /* share my screen (200-events-follow.js): the ui part rides the beat
+     only while this tab's toggle is on; turning it off sends one empty
+     part, so followers stop seeing what was last shared */
+  const body = {self: here};
+  if (uiSharing()) body.ui = uiShareState();
+  else if (uiShareClear) {
+    body.ui = {dialog: null, fields: null, collection: null, focus: null};
+    uiShareClear = false;
+  }
   try {
     await fetch("/api/-/presence", {method: "POST",
       headers: Object.assign({"Content-Type": "application/json"},
                              principalHeaders()),
-      body: JSON.stringify({self: here})});
+      body: JSON.stringify(body)});
   } catch (_e) { /* engine not started, or restarting */ }
 }
 setInterval(presenceBeat, 10000);
@@ -290,7 +307,7 @@ $("#apphost").textContent = location.host;  // the honest app identity
    /api/{plural}/{id}/-/events) are deliberately NOT folded in: those
    are short, opened on purpose, and carry the implicit presence
    registration this stream does not. */
-sse("/api/-/live", frame => {
+sse(liveHref, frame => {
   switch (frame.event) {
     case "transition":
     case "derivation": return onRowFrame(frame);

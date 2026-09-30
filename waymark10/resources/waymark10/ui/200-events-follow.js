@@ -61,11 +61,21 @@ function sseResume() {
 if (typeof document !== "undefined" && document.addEventListener)
   document.addEventListener("visibilitychange",
     () => (document.hidden ? ssePause() : sseResume()));
+/* reopen a stream now, from the top: its href (a function) is asked
+   again, and the loop reconnects without a backoff. Guided follow
+   reopens the live stream this way to add or drop ?ui=. */
+function sseReopen(href) {
+  for (const s of SSE_STREAMS)
+    if (s.href === href && s.ctl) {
+      s.reopen = true;
+      try { s.ctl.abort(); } catch (_e) {}
+    }
+}
 async function sse(href, onFrame) {
   /* lastId is this stream's resume point — set only by frames that
      actually carry an id line, which is how a resumable route
      (the firehose) tells itself apart from an ephemeral one */
-  const stream = {href, ctl: null, lastId: null, wake: null};
+  const stream = {href, ctl: null, lastId: null, wake: null, reopen: false};
   SSE_STREAMS.add(stream);
   while (true) {
     while (ssePaused) await new Promise(r => { stream.wake = r; });
@@ -76,8 +86,11 @@ async function sse(href, onFrame) {
     try {
       const headers = principalHeaders();
       if (stream.lastId != null) headers["Last-Event-ID"] = String(stream.lastId);
-      const res = await fetch(href, ctl ? {headers, signal: ctl.signal}
-                                        : {headers});
+      /* a function href is asked again on every (re)connect: the live
+         stream's ?ui= follows whoever is followed in guided mode */
+      const url = typeof href === "function" ? href() : href;
+      const res = await fetch(url, ctl ? {headers, signal: ctl.signal}
+                                       : {headers});
       if (!res.ok) {
         /* a live surface answering a problem is a CAUSE, not noise —
            the classic: a leftover grant selector conceals the SSE
@@ -87,7 +100,7 @@ async function sse(href, onFrame) {
         const cause = localStorage.getItem("wm10.grant")
           ? "live surfaces are concealed under a grant scope — "
             + "leave the grant (✕ on the chip) to watch again"
-          : `the live stream ${href} answers ${res.status}`;
+          : `the live stream ${url} answers ${res.status}`;
         if (sseRefusalToldFor !== cause) {
           sseRefusalToldFor = cause;
           $("#ticker").replaceChildren(el("span", {}, "⚠ " + cause));
@@ -116,6 +129,8 @@ async function sse(href, onFrame) {
     /* aborted by the hide: park at the top of the loop with no timer
        pending, rather than sleeping and reconnecting into a hidden tab */
     if (ssePaused) continue;
+    /* aborted on purpose by sseReopen: straight back, no backoff */
+    if (stream.reopen) { stream.reopen = false; continue; }
     await new Promise(r => setTimeout(r, refused ? 15000 : 2000));
   }
 }
@@ -170,14 +185,30 @@ let followGaze = null;
    following stays parked. Armed by follow(actor, {jump:true}) when
    no gaze is known yet; the next move spends it. */
 let followJumpArmed = false;
+/* guided follow (docs/spec-guided-follow.md §2): besides where they
+   look, apply what their screen shows — the open dialog read-only,
+   the collection query, the focused row. Asked for on the live stream
+   with ?ui=<pid>; nothing arrives unless they share their screen. */
+let followUi = !!followId && localStorage.getItem("wm10.follow.ui") === "1";
+function liveHref() {
+  return followUi && followId
+    ? "/api/-/live?ui=" + encodeURIComponent(followId) : "/api/-/live";
+}
 function follow(actor, opts) {
   const jump = !!(opts && opts.jump);
+  const wasUi = followUi;
+  followUi = !!(opts && opts.ui);
+  if (followUi) localStorage.setItem("wm10.follow.ui", "1");
+  else { localStorage.removeItem("wm10.follow.ui"); closeGuided(); }
+  guidedSeq = -1;
+  guidedDismissed = null;
   followId = actor.id;
   followName = actor.display || actor.id;
   followGaze = null;
   localStorage.setItem("wm10.follow.id", followId);
   localStorage.setItem("wm10.follow.name", followName);
   followChip();
+  if (followUi || wasUi) sseReopen(liveHref);
   /* the balcony parks navigation — say so, or follow looks broken
      (delayed one beat: the call site's own toast speaks first) */
   if (!jump && hereHref() === "access")
@@ -226,10 +257,129 @@ async function followRequester(pid) {
   toast(`approved — following ${display}`);
 }
 function unfollow() {
+  const wasUi = followUi;
   followId = followName = followGaze = null;
+  followUi = false;
   localStorage.removeItem("wm10.follow.id");
   localStorage.removeItem("wm10.follow.name");
+  localStorage.removeItem("wm10.follow.ui");
+  closeGuided();
+  guidedFocus = null;
+  paintGuidedFocus();
   followChip();
+  /* the live stream without ?ui=: today's frames, byte for byte */
+  if (wasUi) sseReopen(liveHref);
+}
+
+/* ── guided follow, the follower's side: a `ui` frame applied ──────── */
+let guidedSeq = -1;          // the last seq applied; an older one drops
+let guidedFocus = null;      // their focused row's self
+let guidedLastFields = {};   // their form, as last reported
+let guidedOpening = null;    // the dialog key being fetched right now
+let guidedDismissed = null;  // the dialog key this person closed by hand
+function markGuidedFocus(row, on) {
+  row.toggleAttribute("data-guided-focus", on);
+  row.style.outline = on ? "2px solid #7a5cff" : "";
+}
+function paintGuidedFocus() {
+  for (const r of document.querySelectorAll("tr[data-self]"))
+    markGuidedFocus(r, !!guidedFocus && r.dataset.self === guidedFocus);
+}
+function closeGuided() {
+  const g = $("dialog[open][data-guided]");
+  if (g) { g.dataset.guidedAuto = "1"; g.close(); }
+}
+async function openGuidedDialog(d, name, key) {
+  guidedOpening = key;
+  const res = await api(d.self);
+  if (guidedOpening !== key) return;     // overtaken by a newer frame
+  guidedOpening = null;
+  if (!res.ok || !followUi || $("dialog[open]")) return;
+  const entry = (res.body.actions || {})[d.action];
+  if (!entry) return;                    // not a door this person sees
+  await actionDialog({name: d.action, entry, doc: res.body,
+    guided: {name, key, onDismiss: () => { guidedDismissed = key; }}});
+  const g = $("dialog[open][data-guided]");
+  if (g && g.guidedSet) g.guidedSet(guidedLastFields);
+}
+function applyGuidedUi(f) {
+  if (!followUi || !followId || !f || !f.ui ||
+      (f.principal || {}).id !== followId) return;
+  /* seq counts up per principal: a frame arriving late across
+     processes is dropped */
+  if (typeof f.seq === "number") {
+    if (f.seq <= guidedSeq) return;
+    guidedSeq = f.seq;
+  }
+  const ui = f.ui, d = ui.dialog, c = ui.collection;
+  guidedLastFields = ui.fields || {};
+  guidedFocus = ui.focus || null;
+  /* the existing guards: the Access panel parks, and a dialog this
+     person opened themselves is never replaced */
+  if (hereHref() !== "access" && !$("dialog[open]:not([data-guided])")) {
+    const target = c && c.self ? collectionHrefOf(c) : f.self;
+    const here = c && c.self
+      ? collectionHrefOf(collectionShareOf(location.hash.slice(1)) || {self: ""})
+      : hereHref();
+    if (target && target !== here) location.hash = "#" + target;
+    const g = $("dialog[open][data-guided]");
+    const key = d ? d.self + " " + d.action : null;
+    if (!d) { guidedDismissed = null; closeGuided(); }
+    else if (g && g.getAttribute("data-guided") === key) g.guidedSet(guidedLastFields);
+    else if (key !== guidedDismissed && key !== guidedOpening) {
+      closeGuided();
+      openGuidedDialog(d, f.principal.display || f.principal.id, key);
+    }
+  }
+  paintGuidedFocus();
+}
+
+/* ── share my screen, the reporter's side (§2): per tab, OFF by
+   default. While on, every beat carries this tab's `ui` part — the
+   dialog and its fields (180-action-dialog.js, 170-forms.js), the
+   collection query (130-collection.js) and the focused row. A
+   person's form is never broadcast because someone chose to watch. */
+const UI_SHARE = {dialog: null, fields: null, focus: null};
+let uiShareTimer = null, uiShareClear = false;
+function uiSharing() {
+  try { return sessionStorage.getItem("wm10.share.ui") === "1"; }
+  catch (_e) { return false; }
+}
+function uiShareState() {
+  return {dialog: UI_SHARE.dialog,
+          fields: UI_SHARE.dialog ? UI_SHARE.fields : null,
+          collection: collectionShareOf(location.hash.slice(1)),
+          focus: UI_SHARE.focus};
+}
+function shareUi(part) {
+  Object.assign(UI_SHARE, part);
+  if (!uiSharing()) return;
+  clearTimeout(uiShareTimer);
+  uiShareTimer = setTimeout(presenceBeat, 0);
+}
+function shareChip() {
+  const b = $("#sharebtn");
+  if (!b) return;
+  const on = uiSharing();
+  b.setAttribute("aria-pressed", String(on));
+  b.textContent = on ? "⧉ sharing" : "⧉";
+  b.title = on
+    ? "sharing this tab's dialog, form, filters and focused row with "
+      + "whoever follows you in guided mode — click to stop"
+    : "share my screen with followers: this tab's dialog, form, filters "
+      + "and focused row (off by default, this tab only)";
+}
+function toggleShareUi() {
+  const on = !uiSharing();
+  try {
+    if (on) sessionStorage.setItem("wm10.share.ui", "1");
+    else sessionStorage.removeItem("wm10.share.ui");
+  } catch (_e) { /* no storage, no sharing */ }
+  /* turning it off clears what followers were shown: one beat with
+     every part empty, then beats carry no ui at all */
+  uiShareClear = !on;
+  shareChip();
+  presenceBeat();
 }
 function followChip() {
   const chip = $("#followchip");
@@ -265,6 +415,19 @@ function followChip() {
       title: "follow-navigation parks on the Access panel — leave it and "
            + "this screen goes where they look"},
       "⏸ parked"));
+  /* guided mode, offered here and marked here */
+  chip.append(" · ", followUi
+    ? el("button", {class: "guided", "data-guided-mark": "",
+        title: `guided: ${followName}'s open dialog, form, filters and `
+             + `focused row show here, read-only, while they share their `
+             + `screen — click to follow their gaze only`,
+        onclick: () => follow({id: followId, display: followName})},
+        "🧭 guided")
+    : el("button", {title: `guided follow: also show ${followName}'s open `
+             + `dialog, form, filters and focused row, read-only — only `
+             + `while they share their screen`,
+        onclick: () => follow({id: followId, display: followName}, {ui: true})},
+        "guide me"));
   chip.append(el("button", {title: "stop following", onclick: unfollow}, "✕"));
 }
 window.addEventListener("hashchange", followChip);
@@ -275,4 +438,9 @@ if (bootParams.get("follow")) {
   history.replaceState(null, "", location.pathname + location.hash);
 }
 followChip();
+const $share = $("#sharebtn");
+if ($share) $share.addEventListener("click", toggleShareUi);
+shareChip();
+/* a new screen has no focused row until one is picked */
+window.addEventListener("hashchange", () => { UI_SHARE.focus = null; });
 

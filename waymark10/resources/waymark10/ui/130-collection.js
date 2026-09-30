@@ -4,6 +4,33 @@ function parseHrefQuery(href) {
   return {path, params: new URLSearchParams(q || "")};
 }
 
+/* guided follow (docs/spec-guided-follow.md §1): a collection screen's
+   query as the `ui` part carries it — {self, filter, sort, page}, or
+   null off a collection — and back into the href a follower goes to */
+function collectionShareOf(href) {
+  const {path, params} = parseHrefQuery(href || "");
+  const self = decodeURIComponent(path);
+  if (!/^\/api\/[^/?]+$/.test(self) || self === "/api/-") return null;
+  const filter = {};
+  let page = null;
+  for (const [k, v] of params) {
+    if (k === "page" || k === "page[number]") { page = v; continue; }
+    if (k === "sort" || k === "rows" || k.startsWith("page[")) continue;
+    filter[k] = v;
+  }
+  return {self, filter, sort: params.get("sort") || null,
+          page: /^\d+$/.test(page || "") ? Number(page) : null};
+}
+function collectionHrefOf(c) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(c.filter || {}))
+    if (v != null) params.set(k, String(v));
+  if (c.sort) params.set("sort", c.sort);
+  if (c.page != null) params.set("page", String(c.page));
+  const q = params.toString();
+  return c.self + (q ? "?" + q : "");
+}
+
 /* Active scalar filters whose names exactly match create-input
    properties become prefills — the user was already looking at that
    slice, so the form starts there (still editable). */
@@ -519,7 +546,7 @@ function itemTable(items, opts) {
     anyActions ? el("th", {}, "") : null);
   const tbody = el("tbody", {});
   for (const item of items) {
-    const row = el("tr", {},
+    const row = el("tr", {"data-self": item.self},
       opts.selectable ? el("td", {class:"c-check"},
         el("input", {type: "checkbox", "data-bulk-check": "",
           onclick: e => e.stopPropagation()})) : null,
@@ -541,6 +568,11 @@ function itemTable(items, opts) {
         fieldCell(opts.hints, f, (item.fields || {})[f], item.fields))),
       el("td", {class:"metaline mono c-updated"},
         localStamp((item.meta || {}).updated_at)));
+    /* guided follow: the followed principal's focused row, lit; and
+       this row as the focus this tab shares while sharing is on */
+    if (guidedFocus && guidedFocus === item.self) markGuidedFocus(row, true);
+    row.addEventListener("focusin", () => shareUi({focus: item.self}));
+    row.addEventListener("click", () => shareUi({focus: item.self}));
     if (opts.selectable) {
       const box = row.querySelector("[data-bulk-check]");
       const id = item.self.split("/").pop();
