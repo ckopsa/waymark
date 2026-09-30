@@ -1070,6 +1070,27 @@
                          (str "https://work.example.org/api/blocks/" (:id b)))))
     (is (= 1 (:sent (notice-rule-data eng (:id r)))))))
 
+(deftest an-at-rule-stored-before-the-wall-reports-its-field-once
+  (let [{:keys [eng log clock storage] :as w} (at-world)
+        jack (notice-member! w "Jack" true)
+        r (at-rule! w)
+        id (str (:id r))
+        _ (at-block! eng jack "2026-09-29T10:00:00Z")]
+    ;; a row the wall never judged: its `at` names a string field
+    (store/with-tx storage
+      (fn [tx]
+        (let [raw (store/load-row storage tx :notice_rule id {:for-update true})]
+          (store/update-data! storage tx :notice_rule id
+                              (assoc (:data raw) :at {:field "name"})
+                              (:next-flip-at raw)))))
+    (reset! clock (instant "2026-09-29T10:30:00Z"))
+    (is (= 0 (held/sweep-notice-instants! eng)))
+    (is (= 0 (held/sweep-notice-instants! eng)))
+    (is (= [] (chat-sends log)))
+    (let [data (notice-rule-data eng id)]
+      (is (re-find #"block\.name is not a datetime" (str (:last_error data))))
+      (is (= 1 (:failed data)) "counted once, not once a sweep"))))
+
 (deftest editing-the-instant-moves-the-notice
   (let [{:keys [eng log clock] :as w} (at-world)
         jack (notice-member! w "Jack" true)

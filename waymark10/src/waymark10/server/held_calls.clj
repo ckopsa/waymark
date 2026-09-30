@@ -1552,7 +1552,39 @@
              vec))
       [])))
 
-(defn- tell-at!
+(defn- at-fault
+  "Why the rule's `at` can never tell, judged as at-names-a-datetime
+  judges it — or nil. A rule stored before that wall stood is judged
+  here, on every sweep."
+  [eng rule]
+  (let [kind (str (get-in rule [:data :kind]))
+        field (at-field rule)]
+    (when-some [rd (get (inv/resources eng) (keyword kind))]
+      (let [s (schema/field-schema (:schema rd) field)
+            head (if (vector? s) (first s) s)
+            why (cond (nil? s) "is not a field of that kind"
+                      (not= :waymark/instant head) "is not a datetime, so it never tells")]
+        (when why
+          (str "at: " kind "." (name field) " " why))))))
+
+(defn- note-at-fault!
+  "Counts the fault once as failed and names it in last_error, under
+  the rule's lock; the same fault on the next sweep changes nothing."
+  [eng rule why]
+  (let [st (:storage eng)
+        id (str (:id rule))]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
+          (when (not= why (get-in raw [:data :last_error]))
+            (store/update-data!
+             st tx :notice_rule id
+             (-> (:data raw)
+                 (assoc :last_error why)
+                 (update :failed (fnil inc 0)))
+             (:next-flip-at raw))))))))
+
+(defn- tell-due!
   "One rule's pass: each due row not yet told for its instant is told,
   and its mark and its count land with it under the rule's lock.
   → how many were told."
@@ -1585,6 +1617,14 @@
                  (:next-flip-at raw)))
               (count fresh))
             0))))))
+
+(defn- tell-at!
+  "The pass, unless the rule's `at` can never tell: then the fault is
+  reported on the rule instead. → how many were told."
+  [eng rule now]
+  (if-some [why (at-fault eng rule)]
+    (do (note-at-fault! eng rule why) 0)
+    (tell-due! eng rule now)))
 
 (defn sweep-notice-instants!
   "One pass of the timed notice: every active rule with `at`, told for
