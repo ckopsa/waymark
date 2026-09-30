@@ -226,13 +226,22 @@
 
   It lives in the realtime module, not core, because two of its three
   sources do — an engine without this module has no presence or
-  intents registry to combine, and /api/-/live 404s beside them."
+  intents registry to combine, and /api/-/live 404s beside them.
+
+  ?ui=<pid> is guided follow's opt-in here as on /api/-/presence: the
+  follower's page is already near the six-connection cap, so the ui
+  frames ride this stream rather than a second one."
   [eng]
   (fn [req]
-    (let [visible? (presence/self-visible? eng (router/visibility-of req))]
+    (let [vis (router/visibility-of req)
+          visible? (presence/self-visible? eng vis)
+          ui (some-> (get (router/query-params req) "ui") str/trim not-empty)]
       (live/sse-handler eng
                         [(live/firehose-source eng req)
-                         (live/presence-source (presence-registry eng) visible?)
+                         (live/presence-source
+                          (presence-registry eng) visible?
+                          (when ui
+                            {:ui ui :redact (presence/ui-redactor eng vis)}))
                          (live/intents-source (intents-registry eng) visible?)]
                         req))))
 
