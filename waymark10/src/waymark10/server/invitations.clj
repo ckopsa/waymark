@@ -193,7 +193,7 @@
 (def ^:private step-fields
   "What the author writes: the create model, and the row's own entries
   after `author`."
-  [[:subject {:not-a-ref "bare today; swept by 5cb6a0c7"
+  [[:subject {:x-ref {:principal true}
               :x-display {:raw true
                           :label "Who is invited"
                           :help "The person the step is handed to: their principal id. Only their own transition answers it."}}
@@ -236,14 +236,14 @@
    :label-template "{data.note}"
    :schema
    (-> [:map
-        [:author {:not-a-ref "bare today; swept by 5cb6a0c7"
+        [:author {:x-ref {:principal true}
                   :x-display {:raw true
                               :label "Who invited"
                               :help "The principal that handed the step over, stamped by the engine at birth."}}
          [:string {:min 1 :max 128}]]]
        (into step-fields)
        (conj [:answered_by {:optional true
-                            :not-a-ref "bare today; swept by 5cb6a0c7"
+                            :not-a-ref "It holds the log id of the transition that answered, and a log entry is no row of any kind."
                             :x-display {:raw true
                                         :label "Answered by"
                                         :help "The log id of the person's own transition that answered this invitation."}}

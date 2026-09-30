@@ -1351,7 +1351,7 @@
                                              :not-a-ref "The question, in words: never a row id, whatever the field is called."}
                                   [:string {:min 1 :max ask-max}]]
                                  [by {:optional true :x-display {:raw true}
-                                      :not-a-ref "bare today; swept by 5cb6a0c7"}
+                                      :x-ref {:principal true}}
                                   [:maybe [:string {:max 128}]]]]
                           exp-field
                           (conj [exp-field {:optional true
@@ -1360,7 +1360,7 @@
                           decided-by
                           (conj [decided-by {:optional true
                                              :x-display {:raw true}
-                                             :not-a-ref "bare today; swept by 5cb6a0c7"}
+                                             :x-ref {:principal true}}
                                  [:maybe [:string {:max 128}]]]))
                 entries (into entries
                               (map (fn [n]

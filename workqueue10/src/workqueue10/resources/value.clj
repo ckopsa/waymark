@@ -671,19 +671,19 @@
                    [:maybe [:vector {:max 12} [:string {:min 1 :max 40}]]])
             (entry :scope {:filter #{:eq}} [:enum "household" "mine"])
             (entry :owner {:optional true :filter #{:eq}
-                           :not-a-ref "bare today; swept by 5cb6a0c7"}
+                           :x-ref {:principal true}}
                    [:maybe [:string {:max 128}]])
             ;; WHOSE HAND, which is not the same question as whose
             ;; value. Filterable because "everything this composer ever
             ;; wrote down" is the first thing anybody will want to read
             ;; after the first week of it writing things down.
             (entry :written_by {:optional true :filter #{:eq}
-                                :not-a-ref "bare today; swept by 5cb6a0c7"}
+                                :x-ref {:principal true}}
                    [:maybe [:string {:max 128}]])
             (entry :affirmed_at {:optional true :sort true}
                    [:maybe :waymark/instant])
             (entry :affirmed_by {:optional true :filter #{:eq}
-                                 :not-a-ref "bare today; swept by 5cb6a0c7"}
+                                 :x-ref {:principal true}}
                    [:maybe [:string {:max 128}]])]
    ;; the client states whose value and what it says; the OWNER, the
    ;; WRITER and the affirmation stamps are all the engine's
