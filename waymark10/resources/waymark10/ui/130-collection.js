@@ -26,7 +26,9 @@ function collectionHrefOf(c) {
   for (const [k, v] of Object.entries(c.filter || {}))
     if (v != null) params.set(k, String(v));
   if (c.sort) params.set("sort", c.sort);
-  if (c.page != null) params.set("page", String(c.page));
+  /* the collection route reads page[number] (collections.clj
+     parse-query) and answers a bare page= with a 422 */
+  if (c.page != null) params.set("page[number]", String(c.page));
   const q = params.toString();
   return c.self + (q ? "?" + q : "");
 }
