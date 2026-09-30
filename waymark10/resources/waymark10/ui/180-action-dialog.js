@@ -59,6 +59,10 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   const initialValues = Object.assign({},
     entry.draft && !bulkIds ? prefillFromDoc(source, input) : {},
     declared,
+    /* a door's computed prefill (:edit {:prefill-fn}) outranks the
+       row's own projection: the server knows the value the row does
+       not hold. Never for a bulk write, as above. */
+    (!bulkIds && entry.prefill_values) || {},
     prefill || {},
     (draftView || {}).prefill || {},
     (draftView || {}).values || {});

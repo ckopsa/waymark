@@ -449,6 +449,22 @@
     (if (chair-link-read read' row) (t/allow) (t/deny))
     (t/allow)))                         ; probe ctx — decline to guess
 
+(defn- chair-url-prefill
+  "The `link` form's computed prefill (waymark ticket 7152184d): the
+  fire URL of the model this schedule's seat is held for. The form
+  used to offer whatever URL the row last held, and on 2026-09-28
+  that relinked code-seat to inbox-clerk's Routine. Nil when the seat
+  has no chair, the chair has no URL, or there is no reader — the
+  row's own fire_url stands then. The token is never prefilled."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [url (some->> (get-in row [:data :seat]) str not-empty
+                             (read' :seat)
+                             seats/chair-of
+                             (read' :model)
+                             :data :fire_url str not-empty)]
+      {:fire_url url})))
+
 (def no-link-note
   "The note an unlinked row carries (R-12.18), spelled once so the
   door and the test read the same words."
@@ -856,7 +872,7 @@
      ;; input digest, summary — is still the audit that a link was
      ;; made, by whom, when.
      :guards [a-person-or-a-delegate]
-     :edit {:prefill [:fire_url] :fence false
+     :edit {:prefill [:fire_url] :prefill-fn chair-url-prefill :fence false
             :unfenced-reason
             "The token comes from the Routine's own page, not from this row; a link replaces what stands rather than editing it."}
      :safety {:idempotent true :reversible false :confirm false
