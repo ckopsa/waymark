@@ -66,7 +66,7 @@
   {:judges [:token]
    :reads [:principal]
    :explain "A new token is a person's to paste. Restate the link without a token, and the one it holds stays."
-   :open "No door changes who the caller is: leave :token out, or ask the person to paste the new one."}
+   :remedies [:runner_link/restate]}
   [_row inp ctx]
   (if (or (nil? (:token inp)) (a-persons-hand? ctx))
     (t/allow)
