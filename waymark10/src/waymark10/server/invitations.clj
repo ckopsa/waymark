@@ -216,7 +216,8 @@
     [:string {:min 1 :max 240}]]
    [:suggest {:optional true
               :x-display {:label "Suggested values"
-                          :help "Values shown to the person as suggestions. The engine never submits them; only the person's own submit does."}}
+                          :help "Values shown to the person as suggestions. The engine never submits them; only the person's own submit does."
+                          :spelled-by-hand "Its keys are the arguments of the invited action, which differ per action, so no fixed sub-form can offer them."}}
     [:maybe [:map-of :keyword :any]]]
    [:expires_at {:optional true
                  :x-display {:label "Waits until"
@@ -260,14 +261,14 @@
     {:from #{:open} :to :declined
      :guards [the-subject-declines]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The author reads that you declined. Handing the step over again is a new invitation."}
+              :final "The author reads that you declined and may act on it; reopening would make the record lie. Handing the step over again is a new invitation."}
      :display {:label "Decline" :style :danger :order 1
                :description "Say no to this step; the author reads it on the row"}}
     :withdraw
     {:from #{:open} :to :withdrawn
      :guards [the-author-withdraws]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The person no longer sees the step. Handing it over again is a new invitation."}
+              :final "The person no longer sees the step and may have moved on; reopening would make the record lie. Handing it over again is a new invitation."}
      :display {:label "Withdraw" :order 2
                :description "Take this step back from the person"}}
     ;; the two endings the ENGINE writes
@@ -287,7 +288,7 @@
     {:from #{:open} :to :expired
      :guards [the-engine-resolves-it]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "An expired invitation waits no longer. Handing the step over again is a new invitation."}
+              :final "The clock ended the wait; reopening would make the record lie. Handing the step over again is a new invitation."}
      :display {:label "Expired"}}}})
 
 ;; ── the engine's own hand ───────────────────────────────────────────

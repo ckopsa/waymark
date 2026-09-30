@@ -89,7 +89,10 @@
            ;; …and the runner link (runner-pool work, piece 1a): a
            ;; provider, a fire URL and a held token, which no
            ;; application's vocabulary names either
-           :runner_link :runner_provider}
+           :runner_link :runner_provider
+           ;; …and the invitation (docs/spec-guided-follow.md § 3),
+           ;; the held call's sibling hand-off, which a grant names
+           :invitation}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -116,7 +119,7 @@
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
-             :judgment :verdict}
+             :judgment :verdict :invitation}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
@@ -356,6 +359,9 @@
             ;; fourth hook, elected, waiting on nothing. Its fifth
             ;; sits beside it: the held calls' expiry (R-14, R-7)
             :mcp-discover :held-call-expiry :notifier
+            ;; the invitations' resolution and expiry
+            ;; (spec-guided-follow § 3)
+            :invitations :invitation-expiry
             ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
             ;; R-12.25; spec-transcript.md R-9)
             :seat-clock
@@ -404,7 +410,8 @@
             ;; core's fourth and fifth (spec-mcp-servers R-4 and
             ;; R-14), so a selection that names :jobs still carries
             ;; both
-            :mcp-discover :held-call-expiry :notifier :seat-clock
+            :mcp-discover :held-call-expiry :notifier
+            :invitations :invitation-expiry :seat-clock
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))

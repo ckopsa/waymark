@@ -166,6 +166,9 @@
              ;; with waymark-fp62.10.2: the held calls' expiry, so
              ;; nothing a person never answered runs late (R-14, R-7)
              :mcp-discover :held-call-expiry :notifier
+             ;; the invitations' resolution and expiry
+             ;; (spec-guided-follow § 3)
+             :invitations :invitation-expiry
              ;; core's sixth: the seat's clock, so a transcript seals
              ;; and an idle sitting closes between deploys
              :seat-clock
