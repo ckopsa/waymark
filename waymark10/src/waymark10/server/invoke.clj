@@ -837,22 +837,24 @@
      :awaiting (mapv :name awaiting)
      :warnings (not-empty warned)}))
 
-(defn- finish!
-  "Steps 11–15: handler, tamper refusal, materialize, advance,
-  append, save, idempotency store."
-  [engine tx rdef row defn inp ctx
+(defn unchanged
+  "A handler's answer that says it moved nothing: `row` itself, marked.
+  When the door's state is the row's own, invoke lands no transition,
+  no version bump and no history entry, and answers the row with its
+  latest transition, as a natural replay does (:replayed? :unchanged).
+  It is for a door that must ASK on every call and writes only when
+  the answer moved (mcp_server discover asks the server each time)."
+  [row]
+  (vary-meta row assoc ::unchanged true))
+
+(defn- land!
+  "Steps 12–15: tamper refusal, materialize, advance, append, save,
+  idempotency store — of the row the handler answered."
+  [engine tx rdef row defn inp ctx handled
    {:keys [digest overridden basis idempotency-key principal correlation-id
            record-key?]
     :or {record-key? true}}]
   (let [now (:now ctx)
-        handled (if-some [h (:handler defn)]
-                  (let [out (h row inp ctx)]
-                    (when-not (map? out)
-                      (throw (t/definition-error
-                              (str "handler for " (name (:name defn))
-                                   " must return the row"))))
-                    out)
-                  row)
         _ (when-some [facts (seq (derived/tampered rdef row handled now))]
             (throw (p/derived-tampered (:name defn) (vec facts))))
         ;; ref labels + one-of clears (phase 8): engine passes, never
@@ -920,6 +922,25 @@
     (let [inner (some-> (:inner-sink ctx) deref not-empty)]
       (cond-> {:row (decode-row rdef saved) :transition record}
         inner (assoc :inner-writes inner)))))
+
+(defn- finish!
+  "Step 11, the handler, then `land!` — unless the handler answered
+  `unchanged` on an in-state door, which writes nothing."
+  [engine tx rdef row defn inp ctx opts]
+  (let [handled (if-some [h (:handler defn)]
+                  (let [out (h row inp ctx)]
+                    (when-not (map? out)
+                      (throw (t/definition-error
+                              (str "handler for " (name (:name defn))
+                                   " must return the row"))))
+                    out)
+                  row)]
+    (if (and (::unchanged (meta handled)) (= (:state row) (:to defn)))
+      (let [[latest] (store/transitions (:storage engine) tx
+                                        {:kind (:kind rdef) :resource-id (:id row)}
+                                        {:newest-first true :limit 1})]
+        {:row row :transition latest :replayed? :unchanged})
+      (land! engine tx rdef row defn inp ctx handled opts))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
