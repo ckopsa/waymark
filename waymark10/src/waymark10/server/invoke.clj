@@ -1182,23 +1182,28 @@
                   given (some-> if-match str str/trim not-empty)
                   given (if (and given (re-matches #"\d+" given))
                           (etag kind id given)
-                          given)]
+                          given)
+                  ;; the fields that moved since `given`, from the
+                  ;; retained document, for either mode's refusal
+                  moved #(patch/moved defn
+                                      (store/transitions
+                                       (:storage engine) tx
+                                       {:kind kind :resource-id (:id row)}
+                                       {})
+                                      (patch/read-version given)
+                                      (:version row)
+                                      (:data raw))]
               (cond
                 (and patch? given (not= given current))
                 (throw (patch/stale action-name
                                     {:kind kind :id id :etag current}
-                                    (patch/moved defn
-                                                 (store/transitions
-                                                  (:storage engine) tx
-                                                  {:kind kind :resource-id (:id row)}
-                                                  {})
-                                                 (patch/read-version given)
-                                                 (:version row)
-                                                 (:data raw))))
+                                    (moved)))
                 (and (get-in defn [:safety :fence]) (not= given current))
                 (throw (p/version-conflict action-name
                                            {:kind kind :id id
-                                            :etag current}))))
+                                            :etag current}
+                                           (when (and given (patch/prefill defn))
+                                             (moved))))))
             ;; 7. input validation — decode first (validation
             ;; speaks schema types), closed maps refuse unknowns.
             ;; The partial rehearsal (:dry-run :partial, design §23)

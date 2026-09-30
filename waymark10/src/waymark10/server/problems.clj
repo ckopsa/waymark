@@ -49,11 +49,21 @@
              :becomes-available {:in-states (vec (sort from))}
              :resource resource})))
 
-(defn version-conflict [action resource]
-  (problem :version-conflict 412 "Version conflict"
-           {:detail "The resource changed since you read it. Re-read and retry with the current etag."
-            :action-attempted action
-            :resource resource}))
+(defn version-conflict
+  "The fence's refusal of a write whose caller read an older version.
+  `moved`, when known (an edit door's retained document, ticket
+  760ae5f8), names the fields that changed since, in the list and in
+  one sentence; the type and the 412 stay as ever."
+  ([action resource] (version-conflict action resource nil))
+  ([action resource moved]
+   (problem :version-conflict 412 "Version conflict"
+            (cond-> {:detail (str "The resource changed since you read it."
+                                  (when (seq moved)
+                                    (str " Moved since: " (str/join ", " moved) "."))
+                                  " Re-read and retry with the current etag.")
+                     :action-attempted action
+                     :resource resource}
+              (seq moved) (assoc :moved (vec moved))))))
 
 (defn unique-conflict
   "A declared :unique group already holds a row with these values —

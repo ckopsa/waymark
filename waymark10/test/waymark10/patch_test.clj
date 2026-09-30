@@ -124,6 +124,20 @@
     (testing "the version as it stands writes"
       (is (= ["p" "q"] (:tags (revise! eng id {:tags {:add ["q"]}} {:if-match "2"})))))))
 
+(deftest a-stale-wholesale-write-names-the-moved-field
+  ;; ticket 760ae5f8: without `patch` the refusal stays version-conflict
+  ;; and its 412, and carries the same moved list stale does
+  (let [eng (world)
+        id (born! eng {:title "first" :tags ["p"]})
+        read-at (inv/etag :jot id 1)]
+    (revise! eng id {:title "moved"})
+    (let [e (refusal #(inv/invoke! eng :jot id :revise {:title "whole" :tags ["q"]}
+                                   {:principal colton :if-match read-at}))]
+      (is (= :version-conflict (:waymark10/problem e)))
+      (is (= 412 (:status e)))
+      (is (= ["title"] (:moved e)))
+      (is (str/includes? (:detail e) "title")))))
+
 (deftest the-door-says-omitted-fields-keep-their-values
   (let [eng (world)
         id (born! eng {:title "first" :tags ["p"]})
