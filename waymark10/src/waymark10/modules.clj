@@ -158,6 +158,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
+            [waymark10.server.invitations :as invitations]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.routes.dashboard :as dashboard-routes]
@@ -295,7 +296,14 @@
              {:kind :judgment :enroll :always
               :kinds (fn [_] [judgment/judgment])}
              {:kind :verdict :enroll :always
-              :kinds (fn [_] [verdict/verdict])}]
+              :kinds (fn [_] [verdict/verdict])}
+             ;; the invitation (docs/spec-guided-follow.md § 3): an
+             ;; agent hands one step to a person, and the person's own
+             ;; transition answers it. Core's beside the held call,
+             ;; its sibling hand-off: a grant names the door that
+             ;; creates one, and grants are core's.
+             {:kind :invitation :enroll :always
+              :kinds (fn [_] [invitations/invitation])}]
     ;; the three surfaces no waymark engine is a waymark engine
     ;; without: the outbox reader every other surface rides, the
     ;; law-refresh consumer (a core need in any multi-process
@@ -357,6 +365,27 @@
                        eng {:dispatcher (:dispatcher running)
                             :poll-ms (:events-poll-ms eng 2000)}))
              :stop held-calls/stop-notifiers!}
+            ;; the invitations' resolution (spec-guided-follow § 3):
+            ;; the subject's own transition on (self, action) answers
+            ;; the open invitation. Elected, because two engines
+            ;; draining the same log would walk `answer` twice.
+            {:hook :invitations
+             :after [:dispatcher]
+             :elected :invitations
+             :start (fn [eng running]
+                      (invitations/start!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop invitations/stop!}
+            ;; …and their expiry, elected for the held calls' reason
+            {:hook :invitation-expiry
+             :elected :invitation-expiry
+             :start (fn [eng _]
+                      (invitations/start-expiry-sweeper!
+                       eng {:interval-ms
+                            (get-in eng [:services :invitations :sweep-ms]
+                                    300000)}))
+             :stop invitations/stop-expiry-sweeper!}
             ;; the seat's clock (spec-seat.md R-7.6, R-12.25;
             ;; spec-transcript.md R-9): the sittings nobody ended and
             ;; the transcripts past their grace, swept on a cadence
