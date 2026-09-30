@@ -70,6 +70,62 @@ function memberRef(id) {
   return span;
 }
 
+/* ── refs whose target the VALUE names (8ca09ba7) ───────────────────
+   A `:kind` ref fixes its target in the declaration. Three x-ref forms
+   read it from the value instead, and label exactly like one: the
+   target's live depth=summary read under the reader's own grant, so a
+   row the reader may not see — or one that is not there — leaves the
+   bare value on the screen, unlinked.
+   - {principal: true}: `member:<id>`, `seat:<id>` or a bare member id
+   - {address: true}: `<kind>:<id>` for a kind this engine serves;
+     `github:owner/repo#n` is that pull request; any other scheme is text
+   - {"kind-from": f}: the target kind is the value of sibling field f */
+function labelledRef(kind, id, raw) {
+  const span = el("span", {class:"mono", title: String(raw)}, String(raw));
+  rowSummary(kind, id).then(s => {
+    if (s) span.replaceWith(resourceRef(kind, id, s));
+  }).catch(() => {});
+  return span;
+}
+const PRINCIPAL_REF = /^(member|seat):([^\s\/?#]+)$/;
+function principalRef(v) {
+  const m = PRINCIPAL_REF.exec(v);
+  if (m) return labelledRef(m[1], m[2], v);
+  return PRINCIPAL_TOKEN.test(v) ? memberRef(v) : el("span", {}, v);
+}
+const GITHUB_PR = /^github:([\w.-]+\/[\w.-]+)#(\d+)$/;
+const TYPED_ADDRESS = /^([a-z][a-z0-9_]*):([^\s\/?#]+)$/;
+function typedAddressCell(v) {
+  const gh = GITHUB_PR.exec(v);
+  if (gh) return el("a", {href: "https://github.com/" + gh[1] + "/pull/" + gh[2],
+    target: "_blank", rel: "noopener", title: v}, v);
+  const m = TYPED_ADDRESS.exec(v);
+  if (!m) return el("span", {}, v);
+  if (wellKnownNow)
+    return collectionHref(wellKnownNow, m[1]) ? labelledRef(m[1], m[2], v)
+                                               : el("span", {}, v);
+  /* cold: text now, the link once discovery says the kind is served */
+  const span = el("span", {}, v);
+  wellKnown().then(w => {
+    if (collectionHref(w, m[1])) span.replaceWith(labelledRef(m[1], m[2], v));
+  }).catch(() => {});
+  return span;
+}
+/* the kind a `kind-from` ref names: its sibling's value in the same map,
+   or null when that sibling is unset or not in hand (a grid row carries
+   only its grid fields) */
+function siblingKind(ref, row) {
+  const k = row ? row[ref["kind-from"]] : null;
+  return typeof k === "string" && k ? k : null;
+}
+/* a nested map's own published schema, seen through a nullable oneOf */
+function nestedSchema(prop) {
+  if (!prop || typeof prop !== "object") return null;
+  if (prop.properties) return prop;
+  const sub = schemaProp(prop);
+  return sub && sub.properties ? sub : null;
+}
+
 /* ── prose is markdown (a2037ee7) ────────────────────────────────────
    A field declared prose holds markdown, and the ENGINE renders it:
    POST /api/-/render/markdown is the one safe renderer (raw HTML
@@ -182,29 +238,40 @@ function valueCell(v, xd) {
     return el("span", {title: v}, localStamp(v));
   return el("span", {}, String(v));
 }
-function nestedTable(rows) {
+function nestedTable(rows, schema) {
   const cols = [...new Set(rows.flatMap(r => Object.keys(r)))]
     .filter(c => rows.some(r => r[c] !== null && r[c] !== undefined));
   return el("div", {style:"overflow-x:auto"}, el("table", {class:"items"},
     el("thead", {}, el("tr", {}, cols.map(c => el("th", {title: c}, title(c))))),
     el("tbody", {}, rows.map(r => el("tr", {},
-      cols.map(c => el("td", {}, valueCell(r[c]))))))));
+      cols.map(c => el("td", {},
+        schema ? fieldCell(schema, c, r[c], r) : valueCell(r[c]))))))));
 }
 /* one field's value, the ref-or-plain rule kvTable and the grid body
    both need — a ref field with a set value links to the target
    (labeled by a LIVE depth=summary fetch, resourceRef's own job:
    always current, unlike a denormalized label copy), anything else
    is valueCell's honest rendering. */
-function fieldCell(schema, field, value) {
+function fieldCell(schema, field, value, row) {
   const xd = xdisplay(schema, field);
-  const ref = xref(((schema || {}).properties || {})[field]);
-  if (ref && Array.isArray(value) && value.length)
+  const prop = ((schema || {}).properties || {})[field];
+  const ref = xref(prop);
+  /* the target kind: fixed by :kind, or read off the sibling a
+     `kind-from` ref names (`row` is the map this field sits in) */
+  const kind = ref && ref["kind-from"] ? siblingKind(ref, row) : ref && ref.kind;
+  const byKind = ref && !ref.principal && !ref.address &&
+    (!ref["kind-from"] || kind);
+  if (byKind && Array.isArray(value) && value.length)
     /* a ref ARRAY (a mirror's external-keyed :many — team members,
        team funds): one live-labeled link per id */
     return el("span", {},
       ...value.flatMap((id, i) =>
-        i ? [", ", resourceRef(ref.kind, id)] : [resourceRef(ref.kind, id)]));
-  if (ref && value && !Array.isArray(value)) return resourceRef(ref.kind, value);
+        i ? [", ", resourceRef(kind, id)] : [resourceRef(kind, id)]));
+  if (byKind && value && !Array.isArray(value)) return resourceRef(kind, value);
+  if (ref && typeof value === "string" && value) {
+    if (ref.principal) return principalRef(value);
+    if (ref.address) return typedAddressCell(value);
+  }
   /* a DECLARED ref always wins, and so does a value that IS an address
      (a field named for a hand may still hold a row, and a row is not a
      principal). Only an undeclared bare token asks the roster whether
@@ -212,6 +279,15 @@ function fieldCell(schema, field, value) {
   if (principalField(field) && typeof value === "string" && value &&
       xd.widget !== "prose" && !isAddress(value) && PRINCIPAL_TOKEN.test(value))
     return memberRef(value);
+  /* a nested map, or a list of them, labels its OWN entries' refs by
+     the same rule, one level down */
+  const inner = nestedSchema(prop);
+  if (inner && value && typeof value === "object" && !Array.isArray(value))
+    return kvTable(value, inner);
+  const items = nestedSchema(prop && (prop.items || schemaProp(prop).items));
+  if (items && Array.isArray(value) && value.length &&
+      value.every(x => x && typeof x === "object" && !Array.isArray(x)))
+    return nestedTable(value, items);
   return valueCell(value, xd);
 }
 function kvTable(obj, schema) {
@@ -222,7 +298,7 @@ function kvTable(obj, schema) {
     const v = obj[k];
     t.append(el("tr", {},
       el("td", {class:"k", title: k}, fieldLabel(schema, k)),
-      el("td", {}, fieldCell(schema, k, v))));
+      el("td", {}, fieldCell(schema, k, v, obj))));
   }
   return t;
 }

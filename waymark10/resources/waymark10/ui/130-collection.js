@@ -511,7 +511,7 @@ function itemTable(items, opts) {
             String(item.fields[f])))),
       ...cols.map(f => el("td",
         {class:"c-field", "data-label": fieldLabel(opts.hints, f)},
-        fieldCell(opts.hints, f, (item.fields || {})[f]))),
+        fieldCell(opts.hints, f, (item.fields || {})[f], item.fields))),
       el("td", {class:"metaline mono c-updated"},
         localStamp((item.meta || {}).updated_at)));
     if (opts.selectable) {
