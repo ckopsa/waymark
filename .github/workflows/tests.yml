@@ -97,6 +97,16 @@ on:
           the run: a typo must not come back green.
         type: string
         default: ''
+      order:
+        description: >-
+          Run exactly these waymark10 test namespaces, in this order, in
+          one JVM, on the same database fixture as a test10 shard;
+          space-separated. For reproducing an order-dependent failure:
+          kaocha's --focus keeps the tree's order and shuffles it, so
+          `only` cannot say what runs after what. Every other suite is
+          skipped. Give `only` or `order`, not both.
+        type: string
+        default: ''
 
 concurrency:
   group: tests-${{ github.ref }}
@@ -359,6 +369,7 @@ jobs:
       - id: select
         env:
           ONLY: ${{ inputs.only }}
+          ORDER: ${{ inputs.order }}
         run: |
           set -euo pipefail
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -368,7 +379,8 @@ jobs:
           # is resolved on its own, and every suite that holds any of
           # them runs.
           tokens = [t for t in re.split(r"[\s,]+", os.environ.get("ONLY", "")) if t]
-          if not tokens:
+          order = [t for t in re.split(r"[\s,]+", os.environ.get("ORDER", "")) if t]
+          if not tokens and not order:
               print("quick=true")
               print("factory=true")
               sys.exit(0)
@@ -395,6 +407,24 @@ jobs:
 
           suites = {r: namespaces(r) for r in
                     ("waymark10", "workqueue10", "calendar10", "localfire", "factory10")}
+
+          # An ordered run: whole waymark10 namespaces only, since the
+          # test10 shard is the fixture it reproduces. Each name ends up
+          # inside a kaocha config, so it must also be a plain name.
+          if order:
+              if tokens:
+                  refuse("give `only` or `order`, not both")
+              bad = [t for t in order
+                     if t not in suites["waymark10"]
+                     or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", t)]
+              if bad:
+                  refuse(f"order: {', '.join(repr(t) for t in bad)} is not a waymark10 test namespace"
+                         " (order runs whole namespaces in one test10 shard)")
+              print(f"order: {' '.join(order)}, in one test10 JVM", file=sys.stderr)
+              print("quick=false")
+              print("factory=false")
+              sys.exit(0)
+
           homes = set()
           missing = []
           for t in tokens:
@@ -508,6 +538,8 @@ jobs:
           N_WORKQUEUE10: ${{ env.SHARDS_WORKQUEUE10 }}
           # Checked by `changes` already: test ids, or empty.
           ONLY: ${{ inputs.only }}
+          # Checked there too: waymark10 namespaces, or empty.
+          ORDER: ${{ inputs.order }}
         run: |
           set -euo pipefail
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -591,6 +623,16 @@ jobs:
           # a run. Split as `changes` splits them.
           import re
           only = [t for t in re.split(r"[\s,]+", os.environ.get("ONLY", "")) if t]
+
+          # An ordered dispatch: one test10 shard carrying the list as
+          # given, which the shard turns into its own kaocha config;
+          # workqueue10 runs nothing.
+          order = [t for t in re.split(r"[\s,]+", os.environ.get("ORDER", "")) if t]
+          if order:
+              print(f"waymark10={json.dumps([{'id': 1, 'nses': '', 'order': ' '.join(order)}])}")
+              print("workqueue10=[]")
+              print(f"# order: {' '.join(order)}, one test10 shard", file=__import__("sys").stderr)
+              raise SystemExit(0)
 
           for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
                                     ("workqueue10", "workqueue10", "N_WORKQUEUE10")):
@@ -708,6 +750,7 @@ jobs:
           # actually got (see "Locate the postgres service").
           WAYMARK10_TEST_DSN: jdbc:postgresql://${{ env.PGHOST }}:${{ env.PGPORT }}/waymark10_test?user=ckopsa
           FOCUS_NS: ${{ matrix.shard.nses }}
+          ORDER_NS: ${{ matrix.shard.order || '' }}
           PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
@@ -720,6 +763,28 @@ jobs:
           while IFS= read -r ns; do
             [ -n "$ns" ] && args+=(--focus "$ns")
           done <<< "$FOCUS_NS"
+          # An ordered dispatch. --focus cannot give it: kaocha keeps the
+          # tree's order and shuffles it. So one suite per namespace, in
+          # the order given, and the shuffle off — suites run as declared,
+          # all in this one JVM. The names were held to [A-Za-z0-9._-]
+          # by `changes`; \Q...\E makes each pattern match its name only.
+          if [ -n "${ORDER_NS:-}" ]; then
+            cfg="$RUNNER_TEMP/order-tests.edn"
+            {
+              echo '#kaocha/v1'
+              echo '{:tests ['
+              i=0
+              read -ra names <<< "$ORDER_NS"
+              for ns in "${names[@]}"; do
+                i=$((i + 1))
+                printf '  {:id :order-%d :test-paths ["test"] :ns-patterns ["^\\\\Q%s\\\\E$"]}\n' "$i" "$ns"
+              done
+              echo ']}'
+            } > "$cfg"
+            echo "ordered run:"
+            cat "$cfg"
+            args+=(--config-file "$cfg" --no-randomize)
+          fi
           # Opt-in: kaocha's profiling plugin prints the slowest tests and
           # namespaces, which is what a duration-weighted split needs.
           if [ "${PROFILE:-false}" = "true" ]; then
@@ -969,6 +1034,7 @@ jobs:
           TEST_QUEUE: ${{ needs.test-queue.result }}
           DISCOVER: ${{ needs.discover.result }}
           ONLY: ${{ inputs.only }}
+          ORDER: ${{ inputs.order }}
           REFUSED: ${{ needs.changes.outputs.refused }}
           EVENT: ${{ github.event_name }}
           RUN_WAYMARK10: ${{ needs.changes.outputs.waymark10 }}
@@ -1019,7 +1085,7 @@ jobs:
                      "test10 $TEST10 ${RUN_WAYMARK10:-}" \
                      "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}"; do
             read -r name r selected <<< "$job"
-            if [ -n "${ONLY:-}" ] && [ "$r" = "skipped" ]; then
+            if [ -n "${ONLY:-}${ORDER:-}" ] && [ "$r" = "skipped" ]; then
               continue
             fi
             if [ "$EVENT" = pull_request ] && [ "${selected:-}" != true ] && [ "$r" = "skipped" ]; then
