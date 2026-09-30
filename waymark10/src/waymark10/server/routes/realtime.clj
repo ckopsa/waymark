@@ -97,17 +97,33 @@
   "GET /api/-/presence: the where-they-look stream. Unlike the
   firehose, a scoped request is not 404'd — it gets the stream
   PROJECTED: only presences on selves its visibility could GET, the
-  frames it may not see byte-level absent."
+  frames it may not see byte-level absent. ?ui=<pid> is guided
+  follow's opt-in: that ONE pid's ui frames, redacted under this
+  stream's own visibility; without it the stream is today's, byte for
+  byte."
   [eng]
   (fn [req]
-    (let [reg (presence-registry eng)]
-      (presence/sse-handler eng reg
-                            (presence/self-visible?
-                             eng (router/visibility-of req))
-                            req))))
+    (let [reg (presence-registry eng)
+          vis (router/visibility-of req)
+          ui (some-> (get (router/query-params req) "ui") str/trim not-empty)]
+      (presence/sse-handler eng reg (presence/self-visible? eng vis) req
+                            (when ui
+                              {:ui ui :redact (presence/ui-redactor eng vis)})))))
+
+(defn- reportable-ui
+  "A ui part's own row selves pass the beat's gate: a dialog on a
+  private row the reporter cannot see drops with its fields, and such
+  a focus drops."
+  [eng req ui]
+  (let [ok? #(reportable-self? eng req presence/normalize-self %)]
+    (cond-> ui
+      (and (map? ui) (map? (:dialog ui)) (not (ok? (get-in ui [:dialog :self]))))
+      (assoc :dialog nil :fields nil)
+      (and (map? ui) (some? (:focus ui)) (not (ok? (:focus ui))))
+      (assoc :focus nil))))
 
 (defn- presence-report
-  "POST /api/-/presence {self}: the explicit heartbeat for clients
+  "POST /api/-/presence {self, ui}: the explicit heartbeat for clients
   that only hold the firehose (the ported UI's case). A scoped
   principal's own reporting is always accepted — and a beat on a
   private row the reporter cannot itself see is accepted too and
@@ -115,9 +131,11 @@
   [eng]
   (fn [req]
     (let [reg (presence-registry eng)
-          self (:self (router/read-body req))]
+          body (router/read-body req)
+          self (:self body)]
       (when (reportable-self? eng req presence/normalize-self self)
-        (presence/report! reg (router/principal-of req) self))
+        (presence/report! reg (router/principal-of req) self
+                          (reportable-ui eng req (:ui body))))
       {:status 204 :headers {}})))
 
 (defn- intents-registry
