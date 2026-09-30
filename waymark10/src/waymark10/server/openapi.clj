@@ -11,8 +11,9 @@
   Scope, recorded: enough for /docs-style tooling, not a full OAS
   validation suite — response bodies reference the SHARED shapes
   (components.schemas: envelope, collection, problem, bulk_report —
-  structural, not per-kind; the per-kind data model rides
-  /api/schemas/{kind} and the envelope's own affordances), the
+  structural — plus one {kind}_data per kind, the fetch response's
+  data model as /api/schemas/{kind} publishes it: :computed fields
+  readOnly, :secret ones dropped), the
   surfaces routes document per declared surface (batch F), the SSE/
   attachment-bytes/collab/well-known routes stay undocumented,
   securitySchemes name both doors (the OIDC bearer and the dev
@@ -132,6 +133,19 @@
                      :content problem-content}
     "idempotency_key_required" {:description "The action is not idempotent; send an Idempotency-Key header"
                                 :content problem-content}}})
+
+(defn- data-schema-name [rdef]
+  (str (name (:kind rdef)) "_data"))
+
+(defn- kind-data-schema
+  "A kind's data model as the router's /api/schemas/{kind} publishes
+  it (unscoped): stored fields, :computed ones beside them readOnly,
+  :secret ones dropped."
+  [rdef]
+  (schema/conceal
+   (schema/with-computed (schema/json-schema (:schema rdef))
+     (:computed rdef))
+   (schema/secret-fields (:schema rdef))))
 
 (defn- resp-ref [k]
   {"$ref" (str "#/components/responses/" k)})
@@ -267,7 +281,9 @@
                 :summary (str "Fetch a " kname " envelope")
                 :parameters [id-param]
                 :responses {"200" {:description "The resource envelope"
-                                   :content envelope-content}
+                                   :content {"application/waymark+json"
+                                             {:schema {:allOf [(schema-ref "envelope")
+                                                               {:properties {:data (schema-ref (data-schema-name rdef))}}]}}}}
                             "404" (resp-ref "not_found")}}}}]
     (reduce
      (fn [paths defn']
@@ -366,4 +382,7 @@
                  (mapcat (fn [[_ rdef]] (kind-paths rdef))
                          (sort-by key (inv/resources eng)))
                  (surface-paths (:surfaces eng))))
-   :components components})
+   :components (update components :schemas into
+                       (map (fn [[_ rdef]]
+                              [(data-schema-name rdef) (kind-data-schema rdef)]))
+                       (inv/resources eng))})
