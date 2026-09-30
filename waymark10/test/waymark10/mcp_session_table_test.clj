@@ -119,8 +119,8 @@
 
 (defn- open-seat!
   "mcp_sit_test's seat over the meal kind, its schedule minted and its
-  key offered."
-  [eng]
+  key offered. `extra` merges into the seat's fields."
+  [eng & [extra]]
   (let [model (:row (inv/create! eng :model
                                  {:name "claude-deploy-5" :display "Deploy 5"
                                   :vendor "anthropic" :tier "strong"
@@ -131,14 +131,15 @@
                                  {:principal person}))
         seat (:row (inv/create!
                     eng :seat
-                    {:name "deploy-clerk"
-                     :charter "Decide whether a meal belongs on the list."
-                     :scope [{:kind "meal" :actions ["accept"]}]
-                     :held_for [(:id model)]
-                     :standing_ttl_seconds 604800
-                     :cadence_seconds 3600
-                     :budget_usd_per_week 5M
-                     :sitting_budget_tokens 60000}
+                    (merge {:name "deploy-clerk"
+                            :charter "Decide whether a meal belongs on the list."
+                            :scope [{:kind "meal" :actions ["accept"]}]
+                            :held_for [(:id model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           extra)
                     {:principal person}))]
     (schedules/ensure-schedule! eng seat)
     (inv/invoke! eng :seat (:id seat) :offer_key {:key a-key}
@@ -215,3 +216,44 @@
                 "and evicted, not merely refused")
             (is (= 404 (:status (rpc (engine/handler eng-b-later)
                                      (with-session sid) "tools/list" nil))))))))))
+
+(deftest a-session-less-re-sit-claims-its-sitting-over-the-table
+  ;; Ticket 7496403e over Postgres: mcp_sit_test covers the claim on the
+  ;; in-memory twin; here `live-hashes` reads the session table, and two
+  ;; concurrent sits — one on each engine, each on its own pool —
+  ;; serialise on the sitting's FOR UPDATE lock.
+  (with-two-engines
+    (fn [eng-a eng-b]
+      (let [h-a (engine/handler eng-a)
+            h-b (engine/handler eng-b)
+            _ (open-seat! eng-a {:max_open_sittings 3})
+            sit! (fn [h sid]
+                   (let [r (tool h (with-session sid) "waymark_sit" {:key a-key})]
+                     (is (false? (:isError r)) (text-of r))
+                     (str (:sitting (doc-of r)))))
+            unheard! (fn [sid]
+                       (store/with-tx (:storage eng-a)
+                         (fn [tx]
+                           (jdbc/execute!
+                            tx ["UPDATE waymark10_mcp_sessions SET touched = ?
+                                 WHERE id_hash = ?"
+                                (java.sql.Timestamp/from
+                                 (.minusSeconds (Instant/now) 7200))
+                                (sessions/id-hash sid)]))))
+            dropped (initialize! h-a)
+            a (sit! h-a dropped)]
+        (testing "while the first session is heard from, a new one gets a fresh sitting"
+          (is (not= a (sit! h-a (initialize! h-a)))))
+        (unheard! dropped)
+        (testing "once the dropped session is unheard past the idle limit, the re-sit gets the same sitting"
+          (let [s2 (initialize! h-b)]
+            (is (= a (sit! h-b s2)))
+            (unheard! s2)))
+        (testing "two concurrent session-less sits get that sitting once and one fresh sitting"
+          (let [s3 (initialize! h-a)
+                s4 (initialize! h-b)
+                f3 (future (sit! h-a s3))
+                f4 (future (sit! h-b s4))
+                got [@f3 @f4]]
+            (is (not= (first got) (second got)))
+            (is (= 1 (count (filter #{a} got))))))))))
