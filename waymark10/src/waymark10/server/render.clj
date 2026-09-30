@@ -860,7 +860,9 @@
   "The kind's :computed fields for one DECODED row, encoded as a
   stored field of the same schema would be; the ones this request
   conceals (redacted) are never computed. Each fn reads the row and a
-  read-only ctx (:read/:find — no writes, no invoke). A throw prints
+  read-only ctx (:read/:find — no writes, no invoke). A field that
+  declares `:reads? true` renders nil when this render lends no :read:
+  a wrong answer is worse than none (ticket 82589f6e). A throw prints
   one warning and the field renders nil: a read never fails because
   of it."
   [rdef row ctx-opts redacted]
@@ -869,15 +871,16 @@
           cctx {:read (or (:read ctx-opts) (:read hooks))
                 :find (or (:find ctx-opts) (:find hooks))}]
       (into {}
-            (map (fn [[f {s :schema compute :fn}]]
-                   [f (when-some [v (try (compute row cctx)
+            (map (fn [[f {s :schema compute :fn reads? :reads?}]]
+                   [f (when-some [v (when (or (not reads?) (:read cctx))
+                                      (try (compute row cctx)
                                          (catch Exception e
                                            (binding [*out* *err*]
                                              (println (str "waymark10 computed field ["
                                                            (name (:kind rdef)) "." (name f)
                                                            "] failed on " (:id row) ": "
                                                            (ex-message e))))
-                                           nil))]
+                                           nil)))]
                         (get (schema/encode [:map [f s]] {f v}) f))]))
             computed))))
 

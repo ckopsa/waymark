@@ -102,7 +102,8 @@
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; read-only fields the server computes at read time: {field {:schema
-   ;; <malli> :x-display {…} :fn (fn [row ctx] value)}} — never stored,
+   ;; <malli> :x-display {…} :fn (fn [row ctx] value) :reads? bool}} —
+   ;; :reads? true renders nil where no :read is lent; never stored,
    ;; never an input, never in the fingerprint (its whitelist does not
    ;; name them), rendered by render/envelope before the projection
    :computed
