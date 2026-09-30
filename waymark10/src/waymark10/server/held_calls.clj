@@ -697,7 +697,9 @@
   the row that waits for that tap. → the row.
 
   `forward` is the body exactly as the author sent it, and `door`
-  names where the allow replays it. The engine writes the row
+  names where the allow replays it. The body is kept once: a door
+  hold writes no `input`, so a patch's hold stays small, and every
+  reader of a door hold's call reads `forward`. The engine writes the row
   (`the-power-door-mints-it`), `caller` names the author's sitter and
   `owner` the one person who may answer it.
 
@@ -740,7 +742,6 @@
                                             "Held for the person's tap.")
                                         240))
                     :caller (str caller)
-                    :input (or body {})
                     :forward (or body {})
                     :shown (:text (capped shown 140))
                     :door (cond-> {:kind kind :action action}
