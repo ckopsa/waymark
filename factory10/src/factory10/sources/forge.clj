@@ -1641,7 +1641,8 @@
 
 (defn- note-base-read!
   "The policy's `source_note` after one base read: `why` nil clears a
-  base note, and a reason writes one."
+  base note, and a reason writes one — on a policy whose base read
+  matters, one naming `required_checks` or a `deploy_check`."
   [eng policy base why]
   (let [id (str (:id policy))
         stored (str (get-in (row-by-id eng :repo_policy id)
@@ -1651,7 +1652,8 @@
       (when (base-note? stored)
         (bench/mark-row! eng :repo_policy id {:source_note nil} #{}))
 
-      (empty? (bench/required-checks-of policy))
+      (and (empty? (bench/required-checks-of policy))
+           (nil? (bench/deploy-check-of policy)))
       nil
 
       (or (str/blank? stored)
