@@ -23,8 +23,11 @@
          :main-opts   ["-m" "kaocha.runner"]}
   :dev  {:main-opts ["-m" "workqueue10.main"]}
   ;; make check-queue: the declaration-time gate — warnings on
-  ;; stdout, exit 1 on a definition error; no database, no env
-  :check {:main-opts ["-m" "waymark10.check" "workqueue10.main/check-resources"]}
+  ;; stdout, exit 1 on a definition error; no database, no env.
+  ;; It assembles EVERY module's kinds into one registry (ticket
+  ;; c09e2f88), so a finding that needs another module's kind fires
+  ;; here and not first in CI's suites: see waymark10.check-all
+  :check {:main-opts ["-m" "waymark10.check-all"]}
   ;; make migrate-queue: print the schema plan; APPLY=1 executes,
   ;; DESTRUCTIVE=1 includes state renames
   :migrate {:main-opts ["-e" "((requiring-resolve 'workqueue10.main/migrate!))"]}
