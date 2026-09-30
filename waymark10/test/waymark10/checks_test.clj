@@ -850,3 +850,52 @@
     (is (every? #(and (string? (:bead %)) (not (str/blank? (:bead %)))) ws))
     (is (= (count ws) (count (distinct (map (juxt :guard :family :kind) ws))))
         "a waiver written twice is a waiver half-deleted")))
+
+;; ── unref'd ids: principals and nested ids ──────────────────────────
+
+(defn- unrefd
+  "check-unref'd-ids over base with these fields added to its data,
+  serving no kinds: only a principal name or an id beside a kind can
+  flag."
+  [& fields]
+  (checks/check-unref'd-ids
+   (load-quietly (update base :schema into fields)) #{}))
+
+(defn- unrefd-refuses [& fields]
+  (try
+    (apply unrefd fields)
+    (is false "expected [unref'd-ids] to refuse this declaration")
+    (catch clojure.lang.ExceptionInfo e
+      (is (= :unref'd-ids (:check (ex-data e))) (ex-message e))
+      (ex-message e))))
+
+(deftest unrefd-ids-a-principal-named-field
+  (is (str/includes? (unrefd-refuses [:author [:string {:max 64}]])
+                     "field :author (a principal)")))
+
+(deftest unrefd-ids-a-by-field
+  (is (str/includes? (unrefd-refuses [:approved_by [:maybe [:string {:max 64}]]])
+                     "field :approved_by (a principal)")))
+
+(deftest unrefd-ids-a-nested-door-author
+  ;; two maps down: below where kind-surfaces stops
+  (is (str/includes? (unrefd-refuses
+                      [:call [:map [:door [:map [:author [:string {:max 64}]]]]]])
+                     "data, call, door field :author")))
+
+(deftest unrefd-ids-a-nested-id-beside-kind
+  (is (str/includes? (unrefd-refuses
+                      [:door [:map
+                              [:kind [:string {:max 64}]]
+                              [:id [:string {:max 64}]]]])
+                     "data, door field :id (id beside kind)"))
+  (testing "an id with no kind beside it is not judged"
+    (is (nil? (unrefd [:door [:map [:id [:string {:max 64}]]]])))))
+
+(deftest unrefd-ids-a-waiver-with-a-reason-passes
+  (is (nil? (unrefd [:owner {:not-a-ref "The owner's display name."}
+                     [:string {:max 64}]]))))
+
+(deftest unrefd-ids-a-waiver-without-a-reason-is-refused
+  (unrefd-refuses [:owner {:not-a-ref ""} [:string {:max 64}]])
+  (unrefd-refuses [:owner {:not-a-ref true} [:string {:max 64}]]))

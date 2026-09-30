@@ -423,7 +423,8 @@
             ;; the AUTHOR — stamped by the engine (on-create); a
             ;; persisted row always carries it. Filterable so own-ids
             ;; can query the author's half of the two-party surface.
-            [:owner {:optional true :x-display {:raw true}}
+            [:owner {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+                     :x-display {:raw true}}
              [:maybe [:string {:min 1 :max 128}]]]
             ;; the RECIPIENT's DELIVERY identity — resolved and
             ;; stamped on create (never the raw spelling the sender
@@ -435,6 +436,7 @@
             [:body {:x-display {:widget "prose"}} [:string {:min 1 :max 10000}]]]
    :create-schema [:map
                    [:owner {:optional true
+                            :not-a-ref "bare today; swept by 5cb6a0c7"
                             :x-display
                             {:label "From"
                              :help "Who is signing this — leave it blank and the house signs it in your own name; a letter cannot be sent under anybody else's."}}
