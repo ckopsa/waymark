@@ -771,7 +771,37 @@
            (str where " field " k " declares :kind " (:kind properties)
                 ", so it holds the id of a row. Declare it :waymark/ref, "
                 "[:maybe :waymark/ref] or [:vector :waymark/ref]. It "
-                "declares " (pr-str schema) ", which holds no id.")))))
+                "declares " (pr-str schema) ", which holds no id."))))
+  ;; the x-ref forms whose target the VALUE names (8ca09ba7): a
+  ;; principal, a typed `<kind>:<id>` address, and a kind read off a
+  ;; sibling field. None carries :kind, so the dangling-ref wall leaves
+  ;; them alone and the client labels them from the value.
+  (doseq [[where form] (kind-surfaces r)
+          :let [entries (into {} (schema/entry-map form))]
+          [k {:keys [properties]}] entries
+          :let [xr (:x-ref properties)]
+          :when (some? xr)]
+    (when-not (or (= {:principal true} xr)
+                  (= {:address true} xr)
+                  (and (map? xr) (= [:kind-from] (keys xr))
+                       (or (keyword? (:kind-from xr)) (string? (:kind-from xr)))))
+      (err r :ref-shape
+           (str where " field " k " declares :x-ref " (pr-str xr)
+                "; the forms are {:principal true}, {:address true} and "
+                "{:kind-from <sibling field>}")))
+    (when (:kind properties)
+      (err r :ref-shape
+           (str where " field " k " declares both :kind and :x-ref; :kind "
+                "fixes the target kind, :x-ref reads it from the value — "
+                "declare one")))
+    (when-some [from (:kind-from xr)]
+      (let [sib (keyword (name from))]
+        (when (or (= sib k) (not (contains? entries sib)))
+          (err r :ref-shape
+               (str where " field " k " declares :x-ref {:kind-from "
+                    (name from) "}, which is not a sibling of " (name k)
+                    " — the target kind is read from another field of "
+                    "the same map")))))))
 
 (defn- string-shape?
   "Is this schema form a string — bare, nilable, or a list of them?"

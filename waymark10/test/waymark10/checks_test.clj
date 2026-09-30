@@ -221,6 +221,40 @@
               (assoc close-action
                      :input [:map [:into {:kind :thing} [:int {:min 0}]]])))))
 
+(deftest ref-forms
+  ;; 8ca09ba7: three x-ref forms read the target from the VALUE — a
+  ;; principal, a typed address, and a kind named by a sibling field
+  (let [with-field (fn [& entries]
+                     (assoc base :schema (into [:map [:name [:string {:max 100}]]]
+                                               entries)))]
+    (testing "each form is accepted"
+      (doseq [m [(with-field [:by {:x-ref {:principal true}} [:string {:max 100}]])
+                 (with-field [:about {:x-ref {:address true}} [:string {:max 100}]])
+                 (with-field [:target_kind [:string {:max 40}]]
+                             [:target {:x-ref {:kind-from :target_kind}}
+                              [:string {:max 100}]])]]
+        (is (= [] (warnings-of m)) (pr-str (:schema m)))))
+    (testing "the published x-ref carries the form, kind-from by name"
+      (is (= {:kind-from "target_kind"}
+             (get-in (schema/json-schema
+                      [:map [:target_kind :string]
+                       [:target {:x-ref {:kind-from :target_kind}} :string]])
+                     [:properties :target :x-ref])))
+      (is (= {:principal true}
+             (get-in (schema/json-schema
+                      [:map [:by {:x-ref {:principal true}} :string]])
+                     [:properties :by :x-ref]))))
+    (testing "kind-from must name a sibling of the same map"
+      (breaks :ref-shape
+              (with-field [:target {:x-ref {:kind-from :nowhere}} [:string {:max 100}]]))
+      (breaks :ref-shape
+              (with-field [:target {:x-ref {:kind-from :target}} [:string {:max 100}]])))
+    (testing "an unknown form, and :kind beside :x-ref, are refused"
+      (breaks :ref-shape
+              (with-field [:by {:x-ref {:principal "yes"}} [:string {:max 100}]]))
+      (breaks :ref-shape
+              (with-field [:by {:kind :thing :x-ref {:principal true}} :waymark/ref])))))
+
 (deftest faceted
   (breaks :faceted (assoc base :faceted [:name])))
 
