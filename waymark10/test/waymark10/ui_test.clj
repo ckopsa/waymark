@@ -166,6 +166,30 @@
     (is (str/includes? body
                        "invokeBare(invitation.doc.actions.decline, invitation.doc)"))))
 
+(deftest ui-follow-offers-guided-mode
+  ;; docs/spec-guided-follow.md §2: the follow chip offers guided mode,
+  ;; which reopens the one live stream with ?ui=<pid> and applies the
+  ;; followed principal's ui frames read-only, behind the old guards
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "follow({id: followId, display: followName}, {ui: true})"))
+    (is (str/includes? body "\"/api/-/live?ui=\" + encodeURIComponent(followId)"))
+    (is (str/includes? body "sse(liveHref, frame =>"))
+    (is (str/includes? body "if (wasUi) sseReopen(liveHref);"))
+    (is (str/includes? body "if (f.event === \"ui\") applyGuidedUi(f);"))
+    (is (str/includes? body "is filling this in"))
+    (is (str/includes? body "dialog[open]:not([data-guided])"))
+    (is (str/includes? body "data-guided-mark"))))
+
+(deftest ui-sharing-is-off-by-default
+  ;; the reporting side's opt-in: a per-tab toggle, off until pressed,
+  ;; and a beat carries a ui part only while it is on
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "id=\"sharebtn\""))
+    (is (str/includes? body "type=\"button\" aria-pressed=\"false\""))
+    (is (str/includes? body "sessionStorage.getItem(\"wm10.share.ui\") === \"1\""))
+    (is (str/includes? body "if (uiSharing()) body.ui = uiShareState();"))
+    (is (str/includes? body "shareableValues(collectValues(form, input), input)"))))
+
 (defn- render! [headers body]
   (let [resp (*h* {:request-method :post :uri "/api/-/render/markdown"
                    :headers (merge {"content-type" "application/json"} headers)

@@ -32,6 +32,11 @@
   <button id="curtainbtn" style="font-size:12px;padding:4px 10px"
           type="button"
           title="the house did not say whether your curtain is drawn — click to ask again">⛨ ?</button>
+  <!-- share my screen with followers (docs/spec-guided-follow.md §2):
+       this tab only, off by default; 200-events-follow.js wires it -->
+  <button id="sharebtn" style="font-size:12px;padding:4px 10px"
+          type="button" aria-pressed="false"
+          title="share my screen with followers — off">⧉</button>
   <button id="ledgertoggle" style="font-size:12px;padding:4px 10px"
           aria-expanded="false" aria-controls="ledger"
           title="the live ledger — every transition as it lands">
