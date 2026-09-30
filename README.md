@@ -94,3 +94,12 @@ make migrate-queue         # print the schema plan; APPLY=1 executes
 
 REPL entry point: `waymark10.dev/scratch!` (see
 [`docs/waymark10-vocabulary.md`](docs/waymark10-vocabulary.md)).
+
+## License
+
+Copyright (C) 2026 Colton Kopsa. Licensed under the GNU Affero General
+Public License v3.0 or later, with an additional permission for
+combining with EPL-licensed code; see [`LICENSE`](LICENSE) and
+[`LICENSE-EXCEPTION`](LICENSE-EXCEPTION).
+
+SPDX: `AGPL-3.0-or-later WITH LicenseRef-EPL-linking-exception`
