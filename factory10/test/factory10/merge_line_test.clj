@@ -155,6 +155,23 @@
         "a red change has no place, and says why")
     (is (= {:line_place 2 :line_why "behind"} (get-in m [:changes "change-3"])))))
 
+(deftest a-red-answer-on-a-head-read-green-stands-in-the-line
+  (testing "the rig's red on the head the mirror read green is carried over (ticket baf76388)"
+    (let [m (marks! (rig (atom {2 {:state "red"}})) (atom {})
+                    [(a-change "ckopsa/waymark" 1 0)
+                     (a-change "ckopsa/waymark" 2 1 :green_head "head-2")
+                     (a-change "ckopsa/waymark" 3 2)])]
+      (is (= 2 (get-in m [:policies "ckopsa/waymark" :line_waiting])))
+      (is (= {:line_place 2 :line_why "behind"} (get-in m [:changes "change-2"])))
+      (is (= "behind" (:state (bench/head-answer (a-change "ckopsa/waymark" 2 1 :green_head "head-2")
+                                                  {:state "red"})))
+          "green on its own head, so it may ride the next train")))
+  (testing "a head that moved since the green read keeps the rig's red"
+    (let [m (marks! (rig (atom {2 {:state "red"}})) (atom {})
+                    [(a-change "ckopsa/waymark" 1 0)
+                     (a-change "ckopsa/waymark" 2 1 :green_head "head-old")])]
+      (is (= {:line_why "red"} (get-in m [:changes "change-2"]))))))
+
 (deftest a-red-front-does-not-hold-the-line
   (let [r (rig (atom {1 {:state "red"}}))
         m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0)
