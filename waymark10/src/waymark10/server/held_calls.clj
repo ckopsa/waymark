@@ -55,6 +55,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.store :as store]
@@ -267,13 +268,21 @@
   (assoc-in row [:data :reason] (:reason inp)))
 
 (defn- born
-  "The birth stamps: the leash the caller never chose. `expires_at`
-  is written AT CREATE, so the person who reads the row reads the
-  moment it will actually stop waiting."
+  "The birth stamps: the leash the caller never chose, and the person
+  the call waits on. `expires_at` is written AT CREATE, so the person
+  who reads the row reads the moment it will actually stop waiting.
+  `waits_on` is the member the `owner` names, or the one the `caller`
+  is or acts for (grants/waits-on), so a notice_rule can address it.
+  It is read from the member rows, never from the body."
   [row ctx]
-  (update-in row [:data :expires_at]
-             #(or % (.plusSeconds ^Instant (:now ctx)
-                                  (long default-ttl-seconds)))))
+  (let [who (or (some-> (get-in row [:data :owner]) str not-empty)
+                (get-in row [:data :caller]))
+        m (grants/waits-on ctx who)]
+    (-> row
+        (update-in [:data :expires_at]
+                   #(or % (.plusSeconds ^Instant (:now ctx)
+                                        (long default-ttl-seconds))))
+        (update :data #(if m (assoc % :waits_on m) (dissoc % :waits_on))))))
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 ;;
@@ -428,6 +437,13 @@
                          :label "Waits on"
                          :help "The person a held seat call waits on: the one its author acts for. Only they answer it."}}
      [:maybe [:string {:min 1 :max 128}]]]
+    ;; the MEMBER the call waits on (docs/spec-addressed-notice.md),
+    ;; beside `owner`'s principal string: `born` stamps it, so a
+    ;; notice_rule can address {field waits_on}
+    [:waits_on {:optional true :kind :member
+                :x-display {:label "Tells"
+                            :help "The member this call waits on: the person the calling seat or delegate acts for, or the caller themselves. The engine stamps it at birth, and a notice rule tells them."}}
+     [:maybe :waymark/ref]]
     [:expires_at {:optional true
                   :x-display {:label "Waits until"
                               :help "When the sweep expires this call. Stamped at birth, 24 hours out, so the person reads the moment it will actually stop waiting."}}
@@ -1098,6 +1114,19 @@
         base (str/replace (str (get-in notifier-row [:data :link_base])) #"/+$" "")]
     (str base "/api/" plural "/" (:resource-id t))))
 
+(defn ui-link
+  "The UI's page for one row, `<public origin>/#/api/<plural>/<id>`
+  (the hash route the approve handoff already hands a person), from
+  the engine's configured public origin, [:services :transcripts
+  :public-origin]. nil when none is configured or the kind is not
+  served, and the notice falls back to `notice-link`."
+  [eng kind id]
+  (let [origin (some-> (get-in eng [:services :transcripts :public-origin])
+                       str (str/replace #"/+$" "") not-empty)
+        plural (:plural (get (inv/resources eng) (keyword (name kind))))]
+    (when (and origin plural (some? id))
+      (str origin "/#/api/" plural "/" id))))
+
 (defn- fill-notice [s values]
   (str/replace (str s) #"\{(kind|id|action|summary|caller|why|link|expires_at)\}"
                (fn [[_ k]] (str (get values (keyword k) "")))))
@@ -1124,7 +1153,8 @@
      :caller (or (some-> (:caller data) str not-empty) (actor-id (:actor t)))
      :why (or (:why data) "")
      :expires_at (or (:expires_at data) "")
-     :link (notice-link eng notifier-row t)}))
+     :link (or (ui-link eng (:kind t) (:resource-id t))
+               (notice-link eng notifier-row t))}))
 
 (defn- active-rows [eng kind]
   (if-some [rd (get (inv/resources eng) kind)]
@@ -1185,6 +1215,9 @@
 ;; is counted `held`. The clock sweep sends one digest through the
 ;; member's own `notify` once the window has closed; the held lines are
 ;; taken off the row under its lock first, so a digest goes out once.
+;; A digest that does not go out puts its lines back and is counted on
+;; the member row (`quiet_digest_failed`, `quiet_digest_error`), so the
+;; next sweep sends them again.
 
 (def ^:private quiet-held-cap
   "How many held lines one member keeps; the oldest are dropped first."
@@ -1542,11 +1575,16 @@
             carrier (or (some->> (:notifier notify) str not-empty
                                  (decoded-row eng :notifier))
                         texter)
-            actor (actor-id (:actor t))]
+            ;; a held call's birth is the engine's hand: the person
+            ;; who caused it is the row's `caller`
+            causers (cond-> #{(actor-id (:actor t))}
+                      (some-> (get-in row [:data :caller]) str not-empty)
+                      (conj (str (get-in row [:data :caller]))))
+            subject (some-> (get-in member [:data :subject]) str)]
         (cond
           (nil? addressee) (count! :unaddressed nil)
-          (or (= actor addressee)
-              (= actor (some-> (get-in member [:data :subject]) str))) [:self nil]
+          (or (contains? causers addressee)
+              (contains? causers subject)) [:self nil]
           (or (nil? member) (empty? notify)) (count! :skipped nil)
           (nil? texter) (count! :failed "the rule's notifier is gone")
           (quiet? notify (now-of eng))
@@ -1653,17 +1691,18 @@
 (defn- at-fault
   "Why the rule's `at` can never tell, judged as at-names-a-datetime
   judges it — or nil. A rule stored before that wall stood is judged
-  here, on every sweep."
+  here, on every sweep, and so is one whose kind is no longer served."
   [eng rule]
   (let [kind (str (get-in rule [:data :kind]))
         field (at-field rule)]
-    (when-some [rd (get (inv/resources eng) (keyword kind))]
+    (if-some [rd (get (inv/resources eng) (keyword kind))]
       (let [s (schema/field-schema (:schema rd) field)
             head (if (vector? s) (first s) s)
             why (cond (nil? s) "is not a field of that kind"
                       (not= :waymark/instant head) "is not a datetime, so it never tells")]
         (when why
-          (str "at: " kind "." (name field) " " why))))))
+          (str "at: " kind "." (name field) " " why)))
+      (str "kind: " kind " is not a kind this engine serves, so it never tells"))))
 
 (defn- note-at-fault!
   "Counts the fault once as failed and names it in last_error, under
@@ -1774,11 +1813,33 @@
                                 (str/trim (str "- " summary " " link)))
                               lines)))))
 
+(defn- digest-failed!
+  "A digest that did not go out: its lines go back on the member row
+  ahead of any held since, and the failure is counted there, so the
+  next sweep sends them again and a person can read why. → 0."
+  [eng id held error]
+  (warn! "member " id "'s digest did not go out — " error)
+  (let [st (:storage eng)
+        error (str error)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :member id {:for-update true})]
+          (store/update-data!
+           st tx :member id
+           (-> (:data raw)
+               (update :quiet_held #(vec (take-last quiet-held-cap
+                                                    (into (vec held) %))))
+               (update :quiet_digest_failed (fnil inc 0))
+               (assoc :quiet_digest_error (subs error 0 (min 500 (count error)))))
+           (:next-flip-at raw))))))
+  0)
+
 (defn- digest!
   "One member's digest, once their window has closed: the held lines
   are taken off the row under its lock, then sent outside it through
-  the member's own `notify`, over the carrier's template. → 1 when a
-  digest went out, else 0; never throws."
+  the member's own `notify`, over the carrier's template. A send that
+  fails puts them back (digest-failed!). → 1 when a digest went out,
+  else 0; never throws."
   [eng member now]
   (let [st (:storage eng)
         id (str (:id member))
@@ -1798,9 +1859,9 @@
         (cond
           (empty? held) 0
           (nil? carrier)
-          (do (warn! "member " id " held " (count held)
-                     " notices and names no notifier to send the digest")
-              0)
+          (digest-failed! eng id held
+                          (str "held " (count held)
+                               " notices and names no notifier to send the digest"))
           :else
           (try
             (let [args (merge (render-notice (get-in carrier [:data :input_template]) {})
@@ -1808,13 +1869,17 @@
                               (:input notify))
                   answer (servers/call! eng (notifier-tool eng carrier) args)]
               (if (:isError answer)
-                (do (warn! "member " id "'s digest failed — "
-                           (some-> answer :content first :text))
-                    0)
+                (digest-failed! eng id held
+                                (str "the notifier answered an error: "
+                                     (some-> answer :content first :text)))
                 1))
             (catch Exception e
-              (warn! "member " id "'s digest could not send — " (ex-message e))
-              0)))))))
+              (try (digest-failed! eng id held
+                                   (str "could not send: " (ex-message e)))
+                   (catch Exception e2
+                     (warn! "member " id "'s digest lines could not be put back — "
+                            (ex-message e2))
+                     0)))))))))
 
 (defn sweep-quiet-digests!
   "One pass of quiet hours: each member holding notices whose window

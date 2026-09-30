@@ -95,6 +95,42 @@ rather than a URL:
   accumulated into one digest. A household queue that pages at 03:00 gets
   muted, permanently, by a human.
 
+## Worked example: told when something waits on your tap
+
+A held call and an approval request each carry `waits_on`, a ref to the
+member whose tap they wait on. The engine stamps it at create: the
+person the calling seat or delegate acts for (`acts_for`), or the
+calling person themselves. It is never read from the body, so a notice
+rule addresses it like any other member ref. Nothing is seeded: the
+notifier names the person's own bot server, so the person creates it
+and these two rules through the engine.
+
+```clojure
+;; a held call, when it is minted
+{:name "tell me what waits on my tap"
+ :kind "held_call"
+ :when {:to_state "held"}
+ :address {:field "waits_on"}
+ :notifier "<the notifier over tgrambot send_message>"}
+
+;; an approval request, when it is filed
+{:name "tell me what asks for my approval"
+ :kind "approval_request"
+ :when {:to_state "offered"}
+ :address {:field "waits_on"}
+ :notifier "<the same notifier>"}
+```
+
+Then the member sets their own `notify` to that notifier with their
+`chat_id`. A member with no `notify` is skipped and counted on the
+rule. A call the person caused themselves (its `caller` is them) tells
+nobody.
+
+The notice's `{link}` is the UI's page for the row,
+`<public origin>/#/api/<plural>/<id>`, when the engine is configured
+with `[:services :transcripts :public-origin]`. Without one it falls
+back to the notifier's `link_base` and the row's API path.
+
 **Delivery reuses the deliverer verbatim** — one cursor per rule, at-least-once,
 park on throw. Nothing new about the hard part.
 

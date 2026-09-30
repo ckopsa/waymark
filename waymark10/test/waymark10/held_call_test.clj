@@ -28,6 +28,7 @@
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.mcp-servers :as servers]
+            [waymark10.server.members :as members]
             [waymark10.server.store :as store]
             [waymark10.summary :as summary]
             [waymark10.server.store.memory :as memory]
@@ -1095,6 +1096,27 @@
       (is (re-find #"block\.name is not a datetime" (str (:last_error data))))
       (is (= 1 (:failed data)) "counted once, not once a sweep"))))
 
+(deftest an-at-rule-whose-kind-is-no-longer-served-reports-it-once
+  (let [{:keys [eng log clock storage] :as w} (at-world)
+        jack (notice-member! w "Jack" true)
+        r (at-rule! w)
+        id (str (:id r))
+        _ (at-block! eng jack "2026-09-29T10:00:00Z")]
+    ;; a row whose kind the engine stopped serving after it was stored
+    (store/with-tx storage
+      (fn [tx]
+        (let [raw (store/load-row storage tx :notice_rule id {:for-update true})]
+          (store/update-data! storage tx :notice_rule id
+                              (assoc (:data raw) :kind "retired_block")
+                              (:next-flip-at raw)))))
+    (reset! clock (instant "2026-09-29T10:30:00Z"))
+    (is (= 0 (held/sweep-notice-instants! eng)))
+    (is (= 0 (held/sweep-notice-instants! eng)))
+    (is (= [] (chat-sends log)))
+    (let [data (notice-rule-data eng id)]
+      (is (re-find #"retired_block is not a kind this engine serves" (str (:last_error data))))
+      (is (= 1 (:failed data)) "counted once, not once a sweep"))))
+
 (deftest editing-the-instant-moves-the-notice
   (let [{:keys [eng log clock] :as w} (at-world)
         jack (notice-member! w "Jack" true)
@@ -1215,6 +1237,92 @@
           (is (re-find #"not a member|not a ref field|address-names-a-member"
                        (str (ex-message e) " " (pr-str (ex-data e))))))))))
 
+;; ── waits_on: the person a held call or an ask waits on ─────────────
+
+(defn- waits-on-rule! [{:keys [eng notifier-id]} kind to-state]
+  (:row (inv/create! eng :notice_rule
+                     {:name (str "tell whom the " kind " waits on")
+                      :kind kind
+                      :when {:to_state to-state}
+                      :address {:field "waits_on"}
+                      :notifier notifier-id}
+                     {:principal colton})))
+
+(defn- held-for! [eng chore caller owner]
+  (held/hold-door! eng (cond-> {:kind "chore" :action "queue"
+                                :id (str (:id chore)) :body {}
+                                :caller caller :why "Queue the dishes."}
+                         owner (assoc :owner owner))))
+
+(deftest a-held-call-a-seat-made-tells-its-person-with-the-ui-link
+  (let [{:keys [eng log] :as w} (notice-world)
+        eng (assoc-in eng [:services :transcripts :public-origin]
+                      "https://ui.example.org/")
+        jack (notice-member! w "Jack" true)
+        _ (members/ensure-sitter! eng "seat:dishes" "dishes" jack)
+        r (waits-on-rule! w "held_call" "held")
+        c (notice-chore! eng nil)]
+    (drain-notices! eng)
+    (let [h (held-for! eng c "seat:dishes" nil)]
+      (is (= jack (get-in h [:data :waits_on])) "the seat's person")
+      (drain-notices! eng)
+      (let [s (chat-sends log)
+            text (str (get-in (first s) [:params :arguments :text]))]
+        (is (= 1 (count s)))
+        (is (str/includes? text (str (get-in h [:data :shown])))
+            "the call's sentence")
+        (is (str/includes? text (str "https://ui.example.org/#/api/held_calls/"
+                                     (:id h)))
+            "the UI's page for the row")
+        (is (= 1 (:sent (notice-rule-data eng (:id r)))))))))
+
+(deftest a-held-call-its-own-person-caused-tells-nobody
+  (let [{:keys [eng log] :as w} (notice-world)
+        jack (notice-member! w "Jack" true)
+        _ (waits-on-rule! w "held_call" "held")
+        c (notice-chore! eng nil)]
+    (drain-notices! eng)
+    (is (= jack (get-in (held-for! eng c jack nil) [:data :waits_on])))
+    (drain-notices! eng)
+    (is (= [] (chat-sends log)))))
+
+(deftest a-person-without-notify-is-skipped-and-counted
+  (let [{:keys [eng log] :as w} (notice-world)
+        jill (notice-member! w "Jill" false)
+        _ (members/ensure-sitter! eng "seat:dishes" "dishes" jill)
+        r (waits-on-rule! w "held_call" "held")
+        c (notice-chore! eng nil)]
+    (drain-notices! eng)
+    (held-for! eng c "seat:dishes" nil)
+    (drain-notices! eng)
+    (is (= [] (chat-sends log)))
+    (is (= 1 (:skipped (notice-rule-data eng (:id r)))))))
+
+(deftest an-ask-a-seat-files-tells-the-person-who-approves
+  (let [{:keys [eng log] :as w} (notice-world)
+        jack (notice-member! w "Jack" true)
+        jill (notice-member! w "Jill" true)
+        _ (members/ensure-sitter! eng "seat:dishes" "dishes" jack)
+        r (waits-on-rule! w "approval_request" "offered")
+        _ (drain-notices! eng)
+        sitter (assoc (t/principal {:id "seat:dishes" :type :agent})
+                      :acts-for jack)
+        ask (:row (inv/create! eng :approval_request
+                               {:task "Queue the week's chores."
+                                :waits_on jill
+                                :scope [{:kind "chore" :actions ["queue"]}]}
+                               {:principal sitter}))]
+    (is (= jack (get-in ask [:data :waits_on]))
+        "the engine stamps the person; the body's value is dropped")
+    (drain-notices! eng)
+    (let [s (chat-sends log)]
+      (is (= 1 (count s)))
+      (is (str/includes? (str (get-in (first s) [:params :arguments :text]))
+                         (str "https://work.example.org/api/approval_requests/"
+                              (:id ask)))
+          "no public origin: the notifier's link_base and the API path"))
+    (is (= 1 (:sent (notice-rule-data eng (:id r)))))))
+
 ;; ── quiet hours ─────────────────────────────────────────────────────
 
 (defn- quiet-member! [{:keys [eng notifier-id]} display]
@@ -1260,6 +1368,37 @@
       (doseq [c chores]
         (is (str/includes? (str (:text args))
                            (str "https://work.example.org/api/chores/" (:id c))))))))
+
+(defn- member-data [eng id]
+  (:data (store/with-tx (:storage eng)
+           #(store/load-row (:storage eng) % :member (str id) {}))))
+
+(deftest a-failed-digest-keeps-its-lines-and-sends-them-on-the-next-sweep
+  (let [down? (atom false)
+        {:keys [eng log clock] :as w}
+        (notice-world (atom (instant "2026-09-29T23:00:00Z"))
+                      #(when @down? (throw (ex-info "the chat is down" {}))))
+        jack (quiet-member! w "Jack")
+        _ (notice-rule! w "assignee")
+        chores (vec (repeatedly 2 #(notice-chore! eng jack)))]
+    (drain-notices! eng)
+    (doseq [c chores] (queue-chore! eng c colton))
+    (drain-notices! eng)
+    (reset! down? true)
+    (reset! clock (instant "2026-09-30T07:00:00Z"))
+    (is (= 0 (held/sweep-quiet-digests! eng)) "the send failed")
+    (let [data (member-data eng jack)]
+      (is (= 2 (count (:quiet_held data))) "the lines are put back")
+      (is (= 1 (:quiet_digest_failed data)) "the failure is counted")
+      (is (seq (:quiet_digest_error data)) "and says why"))
+    (reset! down? false)
+    (reset! clock (instant "2026-09-30T07:05:00Z"))
+    (is (= 1 (held/sweep-quiet-digests! eng)) "the next sweep sends them")
+    (is (empty? (:quiet_held (member-data eng jack))))
+    (let [s (chat-sends log)]
+      (is (= 1 (count s)) "one digest")
+      (is (str/starts-with? (str (get-in (first s) [:params :arguments :text]))
+                            "2 notices")))))
 
 (deftest a-notice-outside-the-quiet-window-sends-at-once
   (let [{:keys [eng log] :as w} (notice-world (atom (instant "2026-09-29T12:00:00Z")))
