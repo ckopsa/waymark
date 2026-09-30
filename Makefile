@@ -53,7 +53,7 @@ test10:  ## (moved to CI) waymark10 framework tests — GitHub Actions runs thes
 # declaration gate, test-queue their conformance run, dev-queue the
 # one dev server, migrate-queue the one schema plan.
 
-check-queue:  ## workqueue10 declaration-time checks + usability warnings (no database)
+check-queue:  ## every module's kinds in one registry: declaration-time checks + usability warnings (no database)
 	cd workqueue10 && clojure -M:check
 
 test-queue:  ## (moved to CI) the household suite — GitHub Actions runs these
