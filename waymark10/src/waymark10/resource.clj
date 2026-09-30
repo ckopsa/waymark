@@ -879,7 +879,7 @@
 
 (def ^:private decision-keys
   #{:asks :by :decider :verdicts :stamps :expires :pacing :offered
-    :own-surface})
+    :own-surface :engine-fields})
 
 (def ^:private verdict-keys
   ;; :undo joins the list for docs/spec-undo.md: a verdict may name the
@@ -1250,6 +1250,8 @@
   | :asks :by :stamps     | the schema entries each owns, the             |
   |                       | :create-schema that omits the stamped ones,   |
   |                       | :on-create's requester stamp                  |
+  | :engine-fields        | more entries the create model omits: fields   |
+  |                       | the kind's own birth hook stamps              |
   | :decider              | every verdict action's :guards, walls first   |
   |                       | (:anyone → none, said out loud)              |
   | :expires              | the leash field, its create default, and      |
@@ -1297,7 +1299,8 @@
           (sugar-err kind ":decision"
                      (str "unknown key(s) " (vec unknown) "; a decision speaks "
                           (vec (sort decision-keys)))))
-        (let [{:keys [asks by decider verdicts stamps expires pacing]} d
+        (let [{:keys [asks by decider verdicts stamps expires pacing
+                      engine-fields]} d
               offered (:offered d :offered)
               ask-field (if (map? asks) (:field asks) asks)
               ask-max (if (map? asks) (:max asks 240) 240)]
@@ -1314,6 +1317,11 @@
             (sugar-err kind ":decision"
                        (str "no verdict leaves " offered
                             " — a decision must be able to land somewhere")))
+          (when-not (and (or (nil? engine-fields) (sequential? engine-fields)
+                             (set? engine-fields))
+                         (every? keyword? engine-fields))
+            (sugar-err kind ":decision"
+                       ":engine-fields lists the field keywords the engine stamps"))
           (let [decider-gs (decider-guards kind (or decider {}))
                 actions (into {}
                               (map (fn [v]
@@ -1356,7 +1364,10 @@
                                       [:maybe [:string {:max 240}]]]))
                               (sort note-fields))
                 schema (add-entries (:schema rmap) entries)
-                stamped (cond-> (into #{} note-fields)
+                ;; :engine-fields are the kind's own birth stamps (an
+                ;; authored :on-create writes them over any body), so
+                ;; the create model must not offer them either
+                stamped (cond-> (into (set engine-fields) note-fields)
                           by (conj by)
                           decided-by (conj decided-by))]
             (-> rmap
