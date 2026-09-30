@@ -1177,13 +1177,14 @@
             ;; whenever its caller names the version it read, as the
             ;; etag or the bare number (`if_version` over MCP), and a
             ;; stale one refuses naming which of its fields moved since
-            (let [current (etag kind id (:version row))
+            (let [patch? (and (patch/prefill defn) (patch/patch? body))
+                  current (etag kind id (:version row))
                   given (some-> if-match str str/trim not-empty)
                   given (if (and given (re-matches #"\d+" given))
                           (etag kind id given)
                           given)]
               (cond
-                (and (patch/prefill defn) given (not= given current))
+                (and patch? given (not= given current))
                 (throw (patch/stale action-name
                                     {:kind kind :id id :etag current}
                                     (patch/moved defn
@@ -1206,14 +1207,18 @@
             ;; but a provided field's errors (and an unknown key)
             ;; refuse exactly as ever
             (let [partial? (= :partial dry-run)
-                  ;; an edit door takes a patch (ticket 5120da15): what
+                  ;; an edit door takes a patch when the caller asks
+                  ;; for one with `patch: true` (ticket 5120da15): what
                   ;; the caller left out keeps its stored value and a
                   ;; list may arrive as {add, remove}, resolved here so
                   ;; validation, the guards, the handler and the log
-                  ;; all read the whole input
-                  body (if (and (patch/prefill defn) (not partial?))
-                         (patch/resolve-input defn (:data raw) body)
-                         body)
+                  ;; all read the whole input. Without the flag the
+                  ;; input is wholesale, as ever
+                  patch? (and (patch/prefill defn) (patch/patch? body))
+                  body (cond-> body
+                         (patch/prefill defn) patch/strip
+                         (and patch? (not partial?))
+                         (->> (patch/resolve-input defn (:data raw))))
                   inp (if (:input defn)
                         (let [decoded (schema/apply-defaults
                                        (:input defn)

@@ -17,7 +17,8 @@
             [waymark10.wire :as wire]))
 
 (r/defhandler jot-revise [row inp _ctx]
-  (update row :data merge (select-keys inp [:title :tags :note])))
+  ;; wholesale: an omitted optional is cleared
+  (update row :data merge {:title (:title inp) :tags (:tags inp) :note (:note inp)}))
 
 (def jot
   (r/resource
@@ -36,7 +37,7 @@
     {:revise {:from #{:open} :to :open
               :input [:map
                       [:title [:string {:min 1 :max 40}]]
-                      [:tags [:vector [:string {:max 20}]]]
+                      [:tags {:optional true} [:vector [:string {:max 20}]]]
                       ;; added after the rows were written: never
                       ;; stored, never demanded, its default fills it
                       [:note {:default "none"} [:string {:max 40}]]]
@@ -62,10 +63,10 @@
     (inv/etag :jot id (:version (store/with-tx st #(store/load-row st % :jot id {}))))))
 
 (defn- revise!
-  "The row's data after one revise."
+  "The row's data after one revise, asked for as a patch."
   ([eng id body] (revise! eng id body {:if-match (current eng id)}))
   ([eng id body opts]
-   (:data (:row (inv/invoke! eng :jot id :revise body
+   (:data (:row (inv/invoke! eng :jot id :revise (assoc body :patch true)
                              (merge {:principal colton} opts))))))
 
 (defn- refusal [f]
@@ -88,6 +89,16 @@
       (is (= {:title "whole" :tags ["z"] :note "n"}
              (select-keys (revise! eng id {:title "whole" :tags ["z"] :note "n"})
                           [:title :tags :note]))))))
+
+(deftest without-patch-the-input-is-whole
+  (let [eng (world)
+        id (born! eng {:title "first" :tags ["p" "q"]})
+        data (:data (:row (inv/invoke! eng :jot id :revise {:title "second"}
+                                       {:principal colton
+                                        :if-match (current eng id)})))]
+    (testing "an omitted optional is cleared, as today"
+      (is (= "second" (:title data)))
+      (is (nil? (:tags data))))))
 
 (deftest a-remove-of-an-absent-entry-refuses-patch-miss
   (let [eng (world)
@@ -121,7 +132,9 @@
                                        :uri (str "/api/jots/" id)
                                        :headers {"x-waymark-principal" "colton"}})))
         input (get-in env [:actions :revise :input])]
-    (is (not-any? #{"title" "tags"} (map name (:required input))))
+    (is (= "boolean" (get-in input [:properties :patch :type])))
+    (is (some #{"title"} (map name (:required input)))
+        "without patch the input is whole, so what it requires stays required")
     (is (str/includes? (:description input) "keeps its stored value"))
     (is (str/includes? (:description input) "tags"))))
 
@@ -129,7 +142,7 @@
   (let [eng (world)
         id (born! eng {:title "held" :tags ["a" "b"]})
         hold #(held/hold-door! eng {:kind :jot :action :revise :id id
-                                    :body {:tags {:remove ["a"] :add ["c"]}}
+                                    :body {:patch true :tags {:remove ["a"] :add ["c"]}}
                                     :caller "seat:jotter" :owner "colton"
                                     :why "Swap one tag."
                                     :if-match (inv/etag :jot id 1)})

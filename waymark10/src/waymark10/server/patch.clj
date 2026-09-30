@@ -2,7 +2,13 @@
   "An edit door takes a patch (ticket 5120da15). An action that declares
   `:edit {:prefill [fields]}` already says which of its input fields the
   row answers; this namespace makes that declaration the caller's
-  saving too, once, in the invoke path and not per kind:
+  saving too, once, in the invoke path and not per kind.
+
+  A PATCH IS ASKED FOR. The rules below hold only when the input
+  carries the top-level key `\"patch\": true`, which the framework
+  strips before validation. Without it the input is wholesale exactly
+  as ever: an omitted field is omitted, and a door whose law clears an
+  omitted optional still clears it.
 
   - OMITTED MEANS UNCHANGED. A prefill field the input leaves out takes
     the row's stored value before validation, so the guards and the
@@ -36,6 +42,17 @@
   declares none."
   [defn']
   (seq (get-in defn' [:edit :prefill])))
+
+(defn patch?
+  "Whether a body asks for patch semantics: `\"patch\": true` at its top."
+  [body]
+  (and (map? body)
+       (true? (if (contains? body :patch) (get body :patch) (get body "patch")))))
+
+(defn strip
+  "The body without its `patch` flag, which no door's input declares."
+  [body]
+  (if (map? body) (dissoc body :patch "patch") body))
 
 (defn- canon
   "A value as a comparison reads it: keys and keyword values as names,
@@ -188,30 +205,35 @@
               :moved (vec moved)}))
 
 (defn door-js
-  "An edit door's advertised input: every prefill field optional, and
-  prose that says so, so an agent learns the patch from the envelope
-  and from waymark_schema alike."
+  "An edit door's advertised input: an optional boolean `patch`, and
+  prose that says what it asks for, so an agent learns the patch from
+  the envelope and from waymark_schema alike. Without `patch` the input
+  is the door's whole input, so what it requires stays required."
   [js defn']
   (let [props (:properties js)
         prop (fn [f] (get props f (get props (name f))))
         fields (filter prop (prefill defn'))]
     (if (empty? fields)
       js
-      (let [names (into #{} (map name) fields)
-            required (filterv #(not (contains? names (name %))) (:required js))
-            lists (filter #(= "array" (:type (prop %))) fields)
-            prose (str "An edit: a field you leave out keeps its stored value, "
-                       "so name only what changes ("
-                       (str/join ", " (map name fields)) " are optional here)."
+      (let [lists (filter #(= "array" (:type (prop %))) fields)
+            prose (str "An edit. Send \"patch\": true and a field you leave out "
+                       "keeps its stored value, so name only what changes ("
+                       (str/join ", " (map name fields)) ")."
                        (when (seq lists)
                          (str " A list field (" (str/join ", " (map name lists))
-                              ") also takes {\"add\": [...], \"remove\": [...]}: "
+                              ") then also takes {\"add\": [...], \"remove\": [...]}: "
                               "remove matches whole entries and runs first, and "
                               "an entry the list does not hold refuses patch-miss."))
-                       " Pass the version you read as if_version (If-Match over "
-                       "HTTP) and a stale write refuses, naming what moved.")]
-        (cond-> (assoc js :description (if-some [d (:description js)]
-                                         (str d "\n\n" prose)
-                                         prose))
-          (seq required) (assoc :required required)
-          (empty? required) (dissoc :required))))))
+                       " Without patch the input is whole, as stated."
+                       " With it, pass the version you read as if_version "
+                       "(If-Match over HTTP) and a stale write refuses, naming "
+                       "what moved.")]
+        (-> js
+            (assoc :description (if-some [d (:description js)]
+                                  (str d "\n\n" prose)
+                                  prose))
+            (assoc-in [:properties :patch]
+                      {:type "boolean"
+                       :description (str "true: a field you leave out keeps its "
+                                         "stored value, and a list takes "
+                                         "{add, remove}.")}))))))

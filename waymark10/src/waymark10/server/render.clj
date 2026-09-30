@@ -300,9 +300,9 @@
                  (when-some [f (:prefill-fn edit)] (f row ctx))))))
 
 (defn edit-input-js
-  "An edit door's advertised input (ticket 5120da15): its prefill
-  fields optional and its prose saying that an omitted field keeps its
-  value. Public beside project-input-js, and for the same reason: the
+  "An edit door's advertised input (ticket 5120da15): an optional
+  `patch` flag and prose saying that, with it, an omitted field keeps
+  its value. Public beside project-input-js, and for the same reason: the
   envelope's entry and waymark_schema wear one rule, not two."
   [js defn']
   (patch/door-js js defn'))

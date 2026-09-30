@@ -711,18 +711,22 @@
         action (name action)
         what (or (some-> (:name body) str not-empty) (some-> id str))
         ;; the door's own declaration, for an edit on a row: the
-        ;; prefill fields the body NAMES are what the call is about. A
-        ;; patch (ticket 5120da15) names only what it changes, so the
-        ;; fence and the diff read those and never an untouched field
+        ;; prefill fields are what the call is about. A patch (ticket
+        ;; 5120da15, `patch: true`) names only what it changes, so the
+        ;; fence and the diff read those and never an untouched field;
+        ;; a whole input is about every prefill field, as ever
         edit (when (some-> id str not-empty)
                (some-> (get-in (inv/resources eng)
                                [(keyword kind) :actions (keyword action)])
                        (assoc :name (keyword action))))
-        named (filterv #(contains? (or body {}) %) (patch/prefill edit))
+        patch? (patch/patch? body)
+        named (if patch?
+                (filterv #(contains? body %) (patch/prefill edit))
+                (vec (patch/prefill edit)))
         now (when (seq named) (prefill-now eng kind id named))
         digests (when (some-> if-match str not-empty)
                   (not-empty (:digests now)))
-        changes (when now
+        changes (when (and patch? now)
                   (not-empty (patch/changes (:data now)
                                             (patch/resolve-input edit (:data now) body)
                                             named)))
