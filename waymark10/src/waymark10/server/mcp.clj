@@ -3860,6 +3860,15 @@
                 (seats/resit-sitting eng named (:key args) (:session args)))
         seat (or keyed (first resit))
         now ((:now-fn eng))
+        ;; A SUPERSEDED JUDGMENT IS JUDGED BEFORE THE SPEND (ticket
+        ;; 017814ab): a seat that walks no law in force refuses the
+        ;; sit without burning a firing's key, so a restate can be
+        ;; followed by the same fire's key rather than a new fire.
+        ;; `seat` is only ever a row the presented key already opened
+        ;; (or a re-sit's own), and a person must stand behind the
+        ;; session, so an unkeyed caller learns nothing here that an
+        ;; unknown key would not tell it.
+        stood-down (when (and seat person) (sit-superseded-judgment eng seat))
         ;; THE FIRING'S OWN KEY IS SPENT HERE, and one time (R-12.37).
         ;; A standing key (the seat's own, or its chair's) is spent by
         ;; nothing and answers true at once. Anything else that got
@@ -3879,10 +3888,9 @@
         ;; which takes the key's entry off the seat row
         named-row (when (and keyed person (not standing?))
                     (seats/fire-key-row eng keyed (:key args)))
-        fired? (and keyed person (not standing?)
+        fired? (and keyed person (not standing?) (nil? stood-down)
                     (true? (seats/spend-fire-key! eng keyed (:key args))))
-        spent? (and seat person (or standing? fired? (some? resit)))
-        stood-down (when (and seat spent?) (sit-superseded-judgment eng seat))]
+        spent? (and seat person (or standing? fired? (some? resit)))]
     (cond
       ;; a · a session to bind to
       (nil? sid) (result sit-no-session true)
@@ -3897,12 +3905,13 @@
               true)
       ;; c · a seat that answers the key
       (nil? seat) (result sit-no-seat true)
-      ;; c' · and a key still worth something: a firing's key that a
+      ;; c' · a seat whose judgment was superseded walks no law in
+      ;; force, and the refusal names the successor (ticket 86514746).
+      ;; It comes before the spend's wall: the key was never spent
+      stood-down (result stood-down true)
+      ;; c'' · and a key still worth something: a firing's key that a
       ;; second session took first says what an unknown key says
       (not spent?) (result sit-no-seat true)
-      ;; c'' · a seat whose judgment was superseded walks no law in
-      ;; force, and the refusal names the successor (ticket 86514746)
-      stood-down (result stood-down true)
       :else
       (let [seat-id (str (:id seat))
             named (str (get-in seat [:data :name]))
