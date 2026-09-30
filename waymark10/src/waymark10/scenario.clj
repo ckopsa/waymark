@@ -88,7 +88,11 @@
 
 (def row-keys [:state :data])
 (def given-keys [:kind :state :data :handle])
-(def principal-keys [:id :type :roles])
+;; :leashed (waymark-zs9) is the conformance tier's one opt-out: an
+;; :agent is attempted holding a grant over exactly the door it knocks
+;; on, unless the scenario says `:leashed false` — which is how "an
+;; unleashed agent sees nothing" stays a sentence a scenario can say.
+(def principal-keys [:id :type :roles :leashed])
 
 (def offline-reads
   "The external dependencies a STORAGE-FREE judgment can honestly
@@ -151,7 +155,9 @@
   (when (some? as)
     (when-not (map? as) (err sname ":as is the principal map {:id … :type … :roles #{…}}"))
     (closed! sname "principal" principal-keys as)
-    (when (str/blank? (str (:id as))) (err sname ":as names the principal's :id")))
+    (when (str/blank? (str (:id as))) (err sname ":as names the principal's :id"))
+    (when (and (contains? as :leashed) (not (boolean? (:leashed as))))
+      (err sname ":as :leashed is true or false")))
   ;; roles cross the wire and the role guard as STRINGS (guards/role
   ;; reads (contains? (:roles principal) (name role))), so a scenario
   ;; may spell them either way and lands on one

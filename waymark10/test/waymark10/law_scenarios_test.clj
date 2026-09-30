@@ -37,6 +37,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
+            [waymark10.test.packs :as packs]
             [waymark10.test.suite :as suite]
             [waymark10.types :as t]))
 
@@ -351,3 +352,27 @@
              " ranking_note's, recipe_proposal's, feed_view's,"
              " verdict_reason's and remark's — went with it (retired"
              " 2026-09). The other three of errand's are not re-run here"))))
+
+(defn- an-agent-closes
+  [as]
+  (scenario/scenario
+   :an-agent-is-no-curator
+   "An agent is no curator, and the wall says so — not the router."
+   {:kind    :errand
+    :attempt :close
+    :row     {:state :open :data {:title "Take the bins out"}}
+    :as      as
+    :expect  {:refused :curator-only
+              :because "Only a curator closes an errand"}}))
+
+(deftest an-agent-is-attempted-on-the-walkers-leash
+  (let [ctx (suite/context {:engine *eng* :handler *h* :kinds [:errand]})
+        run #(#'packs/run-scenario ctx errand %)]
+    (testing "leashed by default: the wall itself refuses, by name, not the router's 404"
+      (is (nil? (run (an-agent-closes {:id "sweeper" :type :agent})))))
+    (testing ":leashed false keeps the unleashed agent's 404 a scenario of its own — judged unreadable"
+      (let [v (run (an-agent-closes {:id "sweeper" :type :agent :leashed false}))]
+        (is (string? v))
+        (is (str/includes? (str v) "404") v)))
+    (testing ":leashed is a boolean, refused where it is written"
+      (is (thrown? Exception (an-agent-closes {:id "sweeper" :type :agent :leashed "no"}))))))

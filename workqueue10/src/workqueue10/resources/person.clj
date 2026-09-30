@@ -545,6 +545,22 @@
    :expect  {:refused :relates-through-somebody-here
              :because "this house has nobody at"}})
 
+(defscenario an-agent-writes-down-somebody-through-somebody-real
+  "The same check, from the hand this door stands open for. An agent may
+   write down somebody it found — no wall at the create door — but the
+   chain it writes is checked like anybody's, so a caregiver it relates
+   through a grandfather nobody holds is refused where it was written.
+   Attempted on the walker's leash (waymark-zs9): an unleashed agent is
+   answered 404 before this wall could speak."
+  {:kind    :person
+   :attempt :create
+   :as      {:id "compiler" :type :agent}
+   :input   {:name "Bram"
+             :relation "Odell's CNA"
+             :through_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9C0"}
+   :expect  {:refused :relates-through-somebody-here
+             :because "this house has nobody at"}})
+
 ;; ── :person — the roster this house plans from ──────────────────────
 
 (defresource person
@@ -635,7 +651,8 @@
                an-agent-does-not-write-somebody-out-of-this-house
                a-guess-is-answered-with-one-tap
                a-departed-person-is-not-corrected-back-into-the-week
-               a-relation-runs-through-somebody-this-house-holds]
+               a-relation-runs-through-somebody-this-house-holds
+               an-agent-writes-down-somebody-through-somebody-real]
    :actions
    ;; THE CORRECTING DOOR SPLITS BY HAND, waymark-jfv.10's cost paid
    ;; again: `:to` is a static keyword, so one door cannot land in two
