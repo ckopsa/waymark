@@ -26,6 +26,13 @@
 (r/defhandler memo-rename [row inp _ctx]
   (assoc-in row [:data :title] (:title inp)))
 
+(defn- reply-prefill
+  "A computed prefill that reads through the ctx's reader, as a door
+  prefilling from another row would."
+  [row ctx]
+  (when-some [read (:read ctx)]
+    {:title (str "re: " (get-in (read :memo (:id row)) [:data :title]))}))
+
 (def memo
   (r/resource
    {:kind :memo
@@ -51,6 +58,13 @@
               :edit {:prefill [:title]}
               :safety {:idempotent true :reversible true :confirm false}
               :handler memo-rename}
+     ;; a drafted :edit whose right prefill is NOT the row's own value
+     :reply {:from #{:open} :to :open
+             :input [:map [:title [:string {:min 1 :max 40}]]]
+             :edit {:prefill [:title] :prefill-fn reply-prefill
+                    :draft {:shared false}}
+             :safety {:idempotent true :reversible true :confirm false}
+             :handler memo-rename}
      :archive {:from #{:open} :to :archived
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "An archived memo rests."}}}}))
@@ -173,6 +187,19 @@
     (is (= {:recipe "ribs 2000g, Traeger at 225F"} (:prefill b))
         "prefill carries the declared :edit :prefill fields' current values")
     (is (= 3 (:base_version b)) "the edit moved the row before the draft")))
+
+(deftest the-draft-prefill-speaks-the-prefill-fn
+  (let [mid (id-of (req :post "/api/memos" {:title "packing list"}))
+        uri (str "/api/memos/" mid "/-/reply/draft")
+        env (json (req :get (str "/api/memos/" mid)))
+        put (json (req :put uri {:title "draft"}))
+        got (json (req :get uri))]
+    (testing "the envelope's prefill_values come from the :prefill-fn"
+      (is (= {:title "re: packing list"}
+             (get-in env [:actions :reply :prefill_values]))))
+    (testing "the draft view answers the same, not the row's stale value"
+      (is (= {:title "re: packing list"} (:prefill put)))
+      (is (= {:title "re: packing list"} (:prefill got))))))
 
 ;; ── 4. acting consumes the draft ────────────────────────────────────
 
