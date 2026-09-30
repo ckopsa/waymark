@@ -1962,3 +1962,69 @@
 (deftest missing-checks-counts-only-checks-with-no-run
   (is (= ["tests"] (forge/missing-checks ["gate" "tests" "gate"]
                                          [{:check_name "gate" :status "queued"}]))))
+
+;; ── a parent stranded in review by an early merge (ticket 499bcd72) ─
+
+(defn- force!
+  "The row moved to `state` with `data` merged in, by hand: the doors
+  that reach it are not what is under test."
+  [engine kind id state data]
+  (let [st (:storage engine)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx kind id {})]
+          (store/save-row! st tx kind
+                           (-> row
+                               (assoc :state state
+                                      :version (inc (long (:version row))))
+                               (update :data merge data))
+                           (:version row)))))))
+
+(defn- a-ticket!
+  "One ticket, forced to `state` with `data`. → its id."
+  [engine state data]
+  (let [id (str (:id (:row (inv/create! engine :ticket
+                                        {:title "A seat's ticket"
+                                         :type "feature" :repo repo}
+                                        {:principal a-person}))))]
+    (force! engine :ticket id state data)
+    id))
+
+(def ^:private a-merged-url "https://github.com/ckopsa/waymark/pull/9")
+
+(defn- stranded-world
+  "A parent in review with no `merged_change`, a merged change born
+  from it, and one child in `child-state`. → {:engine :parent}."
+  [child-state]
+  (let [engine (boot)
+        parent (a-ticket! engine :in_review {})
+        cid (str (:id (:row (inv/create! engine :change
+                                         {:change_id (str "ticket:" parent)
+                                          :repository repo
+                                          :title "A parent's change"
+                                          :base_branch "main"
+                                          :head_branch (str "bench/" parent)}
+                                         {:principal mirror/source-principal}))))]
+    (force! engine :change cid :merged {:born_from (str "ticket:" parent)
+                                        :url a-merged-url})
+    (a-ticket! engine child-state {:parent parent})
+    {:engine engine :parent parent}))
+
+(defn- ticket-row [engine id]
+  (let [st (:storage engine)]
+    (store/with-tx st (fn [tx] (store/load-row st tx :ticket id {})))))
+
+(deftest the-boot-ends-a-parent-stranded-in-review
+  (let [{:keys [engine parent]} (stranded-world :done)]
+    (is (= 1 (forge/finish-merged-parents! engine)))
+    (let [row (ticket-row engine parent)]
+      (is (not= :in_review (:state row)) "the parent is ended")
+      (is (= (str "Merged: " a-merged-url "; children done.")
+             (get-in row [:data :close_reason]))))
+    (is (= 0 (forge/finish-merged-parents! engine))
+        "a second boot ends nothing")))
+
+(deftest the-boot-leaves-a-parent-with-an-open-child
+  (let [{:keys [engine parent]} (stranded-world :open)]
+    (is (= 0 (forge/finish-merged-parents! engine)))
+    (is (= :in_review (:state (ticket-row engine parent))))))
