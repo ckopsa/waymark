@@ -903,6 +903,51 @@
         (err r :faceted (str "faceted field " f " is not :eq/:in-filterable; "
                              "declare it in :filterable first"))))))
 
+(def ^:private summary-data-root #"\{data\.([A-Za-z0-9_]+)")
+
+(defn- check-computed
+  "A :computed field is read-only and computed at read time, after the
+  row leaves the store: it has no column, so it can be no stored field,
+  and nothing that runs over promoted columns or the stored document —
+  filtering, sorting, facets, the worksheet round-trip, the summary
+  line — can name it. Each entry declares its :schema and its :fn."
+  [r]
+  (let [computed (:computed r)
+        dkeys (data-keys r)]
+    (when (and (some? computed) (not (map? computed)))
+      (err r :computed ":computed is {field {:schema … :fn (fn [row ctx] …)}}"))
+    (doseq [[f c] (sort-by key computed)]
+      (when-not (map? c)
+        (err r :computed (str "computed field " f " is not a map; declare "
+                              "{:schema … :fn (fn [row ctx] …)}")))
+      (when-not (contains? c :schema)
+        (err r :computed (str "computed field " f " declares no :schema — "
+                              "the value is encoded as a stored field of "
+                              "that schema would be")))
+      (when-not (fn? (:fn c))
+        (err r :computed (str "computed field " f " declares no :fn — "
+                              "(fn [row ctx] value) is what computes it")))
+      (when (contains? dkeys f)
+        (err r :computed (str "computed field " f " collides with the schema "
+                              "field of the same name — a field is stored "
+                              "or computed, never both"))))
+    (when (seq computed)
+      (let [named (fn [where fs]
+                    (when-some [clash (seq (sort (filter #(contains? computed %)
+                                                         fs)))]
+                      (err r :computed
+                           (str where " names computed field(s) " (vec clash)
+                                " — a computed value has no column and is "
+                                "not in the stored row, so it cannot be "
+                                "filtered, sorted, faceted, edited or "
+                                "summarized"))))]
+        (named ":filterable" (keys (:filterable r)))
+        (named ":sortable" (get-in r [:sortable :fields]))
+        (named ":faceted" (:faceted r))
+        (named ":worksheet" (keep :field (get-in r [:worksheet :columns])))
+        (named ":summary" (map (comp keyword second)
+                               (re-seq summary-data-root (str (:summary r)))))))))
+
 (def ^:private view-kinds #{:deck :feed})
 
 (defn where-field?
@@ -1710,7 +1755,7 @@
           check-summary-template check-waive-tokens
           check-place check-edit check-altitude check-long-text
           check-options check-ref-shape check-resolvers
-          check-filterable check-sortable check-default-filters
+          check-computed check-filterable check-sortable check-default-filters
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
           check-defaults check-answered-at-a-door check-remedy-bindings])})
