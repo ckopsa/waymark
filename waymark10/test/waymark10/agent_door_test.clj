@@ -653,19 +653,24 @@
 
 ;; ── capability grants: the authority crosses, not the data ──────────
 
+;; A token no other namespace registers: gate_proxy_test and
+;; narrow_power_test register telegram.send, and a shard-mate that runs
+;; first on the same database would make the refusal below a 201.
+(def ^:private door-token "agentdoor.probe")
+
 (deftest a-capability-grant-is-law-about-access-not-data
   (testing "an unregistered dotted token refuses at the door"
     (is (contains? #{409 422}
                    (:status (req* *raw* :post "/api/grants"
                                   {:body {:audience "gate-pilot"
-                                          :scope [{:kind "telegram.send"
+                                          :scope [{:kind door-token
                                                    :actions []}]}
                                    :headers admin})))))
 
   ;; the registry names the power; the dot is how a scope entry is
   ;; known to mean it
   (let [cap (json (req* *raw* :post "/api/capabilities"
-                        {:body {:token "telegram.send"
+                        {:body {:token door-token
                                 :description "Send a Telegram message via Gate"
                                 :enforced_by "gate-mcp"}
                          :headers admin}))]
@@ -679,7 +684,7 @@
 
   (let [grant (json (req* *raw* :post "/api/grants"
                           {:body {:audience "gate-pilot"
-                                  :scope [{:kind "telegram.send"
+                                  :scope [{:kind door-token
                                            :actions []
                                            :filter {:chat "family"}}]
                                   :expires_at (str (.plusSeconds
@@ -694,7 +699,7 @@
                       {:query (str "grant=" gid
                                    "&principal=" (or principal "gate-pilot")
                                    "&capability=" (or capability
-                                                      "telegram.send"))
+                                                      door-token))
                        :headers headers}))]
     (is (some? (:self grant)) (pr-str grant))
 
@@ -721,7 +726,7 @@
       (is (= 401 (:status (req* *gated* :get "/api/-/grant-check"
                                 {:query (str "grant=" gid
                                              "&principal=gate-pilot"
-                                             "&capability=telegram.send")})))
+                                             "&capability=" door-token)})))
           "the anonymous get nothing at all")
       (is (true? (:allowed (json (check as-pilot))))
           "the audience may introspect itself")
@@ -740,7 +745,7 @@
     (testing "a retired capability refuses NEW grants; the registry is
               the vocabulary's clock"
       (let [row-self (-> (json (req* *raw* :get "/api/capabilities"
-                                     {:query "token=telegram.send"
+                                     {:query (str "token=" door-token)
                                       :headers admin}))
                          (get-in [:data :items]) first :self)]
         (is (some? row-self))
@@ -749,6 +754,6 @@
       (is (contains? #{409 422}
                      (:status (req* *raw* :post "/api/grants"
                                     {:body {:audience "gate-pilot-2"
-                                            :scope [{:kind "telegram.send"
+                                            :scope [{:kind door-token
                                                      :actions []}]}
                                      :headers admin})))))))
