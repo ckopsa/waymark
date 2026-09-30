@@ -1215,6 +1215,9 @@
 ;; is counted `held`. The clock sweep sends one digest through the
 ;; member's own `notify` once the window has closed; the held lines are
 ;; taken off the row under its lock first, so a digest goes out once.
+;; A digest that does not go out puts its lines back and is counted on
+;; the member row (`quiet_digest_failed`, `quiet_digest_error`), so the
+;; next sweep sends them again.
 
 (def ^:private quiet-held-cap
   "How many held lines one member keeps; the oldest are dropped first."
@@ -1688,17 +1691,18 @@
 (defn- at-fault
   "Why the rule's `at` can never tell, judged as at-names-a-datetime
   judges it — or nil. A rule stored before that wall stood is judged
-  here, on every sweep."
+  here, on every sweep, and so is one whose kind is no longer served."
   [eng rule]
   (let [kind (str (get-in rule [:data :kind]))
         field (at-field rule)]
-    (when-some [rd (get (inv/resources eng) (keyword kind))]
+    (if-some [rd (get (inv/resources eng) (keyword kind))]
       (let [s (schema/field-schema (:schema rd) field)
             head (if (vector? s) (first s) s)
             why (cond (nil? s) "is not a field of that kind"
                       (not= :waymark/instant head) "is not a datetime, so it never tells")]
         (when why
-          (str "at: " kind "." (name field) " " why))))))
+          (str "at: " kind "." (name field) " " why)))
+      (str "kind: " kind " is not a kind this engine serves, so it never tells"))))
 
 (defn- note-at-fault!
   "Counts the fault once as failed and names it in last_error, under
@@ -1809,11 +1813,33 @@
                                 (str/trim (str "- " summary " " link)))
                               lines)))))
 
+(defn- digest-failed!
+  "A digest that did not go out: its lines go back on the member row
+  ahead of any held since, and the failure is counted there, so the
+  next sweep sends them again and a person can read why. → 0."
+  [eng id held error]
+  (warn! "member " id "'s digest did not go out — " error)
+  (let [st (:storage eng)
+        error (str error)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :member id {:for-update true})]
+          (store/update-data!
+           st tx :member id
+           (-> (:data raw)
+               (update :quiet_held #(vec (take-last quiet-held-cap
+                                                    (into (vec held) %))))
+               (update :quiet_digest_failed (fnil inc 0))
+               (assoc :quiet_digest_error (subs error 0 (min 500 (count error)))))
+           (:next-flip-at raw))))))
+  0)
+
 (defn- digest!
   "One member's digest, once their window has closed: the held lines
   are taken off the row under its lock, then sent outside it through
-  the member's own `notify`, over the carrier's template. → 1 when a
-  digest went out, else 0; never throws."
+  the member's own `notify`, over the carrier's template. A send that
+  fails puts them back (digest-failed!). → 1 when a digest went out,
+  else 0; never throws."
   [eng member now]
   (let [st (:storage eng)
         id (str (:id member))
@@ -1833,9 +1859,9 @@
         (cond
           (empty? held) 0
           (nil? carrier)
-          (do (warn! "member " id " held " (count held)
-                     " notices and names no notifier to send the digest")
-              0)
+          (digest-failed! eng id held
+                          (str "held " (count held)
+                               " notices and names no notifier to send the digest"))
           :else
           (try
             (let [args (merge (render-notice (get-in carrier [:data :input_template]) {})
@@ -1843,13 +1869,17 @@
                               (:input notify))
                   answer (servers/call! eng (notifier-tool eng carrier) args)]
               (if (:isError answer)
-                (do (warn! "member " id "'s digest failed — "
-                           (some-> answer :content first :text))
-                    0)
+                (digest-failed! eng id held
+                                (str "the notifier answered an error: "
+                                     (some-> answer :content first :text)))
                 1))
             (catch Exception e
-              (warn! "member " id "'s digest could not send — " (ex-message e))
-              0)))))))
+              (try (digest-failed! eng id held
+                                   (str "could not send: " (ex-message e)))
+                   (catch Exception e2
+                     (warn! "member " id "'s digest lines could not be put back — "
+                            (ex-message e2))
+                     0)))))))))
 
 (defn sweep-quiet-digests!
   "One pass of quiet hours: each member holding notices whose window
