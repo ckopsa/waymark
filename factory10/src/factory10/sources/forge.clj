@@ -176,6 +176,17 @@
   (forge-rerun! [s repository run-id]
     "Re-run the failed jobs of one run. Throws when the forge refuses."))
 
+(defprotocol ForgeRetry
+  "The pull requests whose rows the change pass refused, handed back
+  to the source (ticket 365043a6). The poll's cursor has already moved
+  past their stamps, so a merged pull request that never moves again
+  would never be offered again, and its row would keep a head it no
+  longer has. A protocol of its own, so a source that does not
+  implement it retries nothing and the pass goes on as before."
+  (forge-retry! [s docs]
+    "Offer these change documents again at the next `forge-poll`,
+    read afresh by `:repository` and `:number`."))
+
 (defprotocol ForgeDeploy
   "Whether a merged pull request is in a commit of its base, for the
   line that waits on a deploy (ticket 47217098). A protocol of its own:
@@ -471,38 +482,52 @@
 (defn- change-pass!
   "Every pull request the forge answered → a row minted, a row
   adopted, or a row moved. A row the engine refuses is counted and
-  skipped: the next pass offers it again."
-  [eng changes census log-fn]
-  (reduce
-   (fn [census doc]
-     (try
-       (if-some [existing (row-by eng :change {:change_id (:change_id doc)})]
-         (if-some [ours (when (forge-minted? existing)
-                          (adoptable-row eng doc))]
-           ;; a duplicate minted before the house row could adopt:
-           ;; fold it, so one row holds the pull request
-           (do (fold-duplicate! eng existing ours doc)
-               (update census :folded inc))
-           (let [[_ moved?] (move-change! eng existing doc)]
-             (cond-> census moved? (update :moved inc))))
-         (if-some [ours (adoptable-row eng doc)]
-           ;; the house asked for this pull request: the seat built
-           ;; the branch and its submit opened it. One row, adopted
-           ;; where it stands, rather than a second row beside it
-           (do (move-change! eng (adopt-change! eng ours doc) doc)
-               (update census :adopted inc))
-           ;; a birth lands at `open`, because that is the kind's
-           ;; initial state; a pull request first seen after it merged
-           ;; walks its door in the same pass rather than waiting for
-           ;; a move that will never come again
-           (do (move-change! eng (mint-change! eng doc) doc)
-               (update census :minted inc))))
-       (catch Exception e
-         (log-fn "the pull request " (:change_id doc)
-                 " was refused a row (" (ex-message e) ")")
-         (update census :refused inc))))
-   census
-   changes))
+  skipped, and its document is kept in `refused`, which the pass hands
+  back to the source: the cursor has already moved past it, so only a
+  retry offers it again (ticket 365043a6)."
+  ([eng changes census log-fn]
+   (change-pass! eng changes census log-fn (volatile! [])))
+  ([eng changes census log-fn refused]
+   (reduce
+    (fn [census doc]
+      (try
+        (if-some [existing (row-by eng :change {:change_id (:change_id doc)})]
+          (if-some [ours (when (forge-minted? existing)
+                           (adoptable-row eng doc))]
+            ;; a duplicate minted before the house row could adopt:
+            ;; fold it, so one row holds the pull request
+            (do (fold-duplicate! eng existing ours doc)
+                (update census :folded inc))
+            (let [[_ moved?] (move-change! eng existing doc)]
+              (cond-> census moved? (update :moved inc))))
+          (if-some [ours (adoptable-row eng doc)]
+            ;; the house asked for this pull request: the seat built
+            ;; the branch and its submit opened it. One row, adopted
+            ;; where it stands, rather than a second row beside it
+            (do (move-change! eng (adopt-change! eng ours doc) doc)
+                (update census :adopted inc))
+            ;; a birth lands at `open`, because that is the kind's
+            ;; initial state; a pull request first seen after it merged
+            ;; walks its door in the same pass rather than waiting for
+            ;; a move that will never come again
+            (do (move-change! eng (mint-change! eng doc) doc)
+                (update census :minted inc))))
+        (catch Exception e
+          (log-fn "the pull request " (:change_id doc)
+                  " was refused a row (" (ex-message e) ")")
+          (vswap! refused conj doc)
+          (update census :refused inc))))
+    census
+    changes)))
+
+(defn- retry-refused!
+  "Hand the refused documents back to a source that retries them."
+  [source docs log-fn]
+  (when (and (seq docs) (satisfies? ForgeRetry source))
+    (try (forge-retry! source docs)
+         (catch Exception e
+           (log-fn "the refused pull requests could not be offered again ("
+                   (ex-message e) ")")))))
 
 ;; ── the red runs ────────────────────────────────────────────────────
 
@@ -2000,7 +2025,9 @@
           (try
             (let [census (source-note-pass! eng refusals answered census
                                             log-fn)
-                  census (change-pass! eng changes census log-fn)
+                  refused (volatile! [])
+                  census (change-pass! eng changes census log-fn refused)
+                  _ (retry-refused! source @refused log-fn)
                   read-checks (head-reader source)
                   census (run-pass! eng source
                                     (into (vec checks)

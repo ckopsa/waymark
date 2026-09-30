@@ -265,13 +265,13 @@
 
 (defn- at [seconds] (.plusSeconds ^Instant t0 (long seconds)))
 
-(defn- counter [] (let [n (atom 0)] [n #(swap! n inc)]))
+(defn- counter [] (let [n (atom 0)] [n (fn [& _] (swap! n inc))]))
 
 (deftest a-green-front-merges-without-the-clock
   (let [board (bench/house-board)
         r (rig (atom {7 {:state "merged"}}))
         seen (atom {})
-        merge-pass! #(pass! r seen [(a-change "ckopsa/waymark" 7 0)] {})
+        merge-pass! (fn [_] (pass! r seen [(a-change "ckopsa/waymark" 7 0)] {}))
         [clocks clock!] (counter)]
     (testing "no wake, no clock: nothing runs"
       (is (= {:clock? false :woken #{}}
@@ -317,6 +317,16 @@
       (bench/house-beat! board (at 600) true clock! pass-once!)
       (is (= 2 @clocks))
       (is (zero? @passes)))))
+
+(deftest a-woken-pass-is-told-which-repositories-woke-it
+  ;; ticket 26a8d561
+  (let [board (bench/house-board)
+        asked (atom [])
+        [_ clock!] (counter)]
+    (bench/nudge-house! board "ckopsa/waymark" [:checks "change-7" "head-7" :green])
+    (bench/house-beat! board (at 5) false clock! #(swap! asked conj %))
+    (is (= [#{"ckopsa/waymark"}] @asked)
+        "the pass is given the woken repository, and no other")))
 
 ;; ── the merge train (ticket 47519515, slice 2 of 3deb06ed) ───────────
 

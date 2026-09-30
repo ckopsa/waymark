@@ -1651,6 +1651,33 @@
       (is (nil? (get-in (the-policy w) [:data :line_front])))
       (is (nil? (get-in (the-policy w) [:data :line_at]))))))
 
+(deftest a-woken-pass-for-one-repository-leaves-the-others-alone
+  ;; ticket 26a8d561
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})
+        elsewhere "ckopsa/elsewhere"
+        line-of (fn [] [(select-keys (:data (the-policy w))
+                                     [:line_front :line_front_pr :line_front_waiting
+                                      :line_waiting :line_at])
+                        (select-keys (:data (change-row w))
+                                     [:line_place :line_why])])]
+    (a-policy! (:eng w) (assoc house-policy :repository elsewhere))
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! (:eng w) seen)
+    (let [merges (count (calls-of st "bench__merge"))
+          before (line-of)]
+      (is (= "front" (get-in before [1 :line_why])))
+      (is (= 0 (bench/merge-green! (:eng w) seen #{elsewhere})))
+      (is (= merges (count (calls-of st "bench__merge")))
+          "a pass woken for another repository makes no merge call here")
+      (is (= before (line-of))
+          "and this repository's line marks stay as they were")
+      (testing "a pass woken for this repository works it"
+        (bench/merge-green! (:eng w) seen #{a-repository})
+        (is (= (inc merges) (count (calls-of st "bench__merge"))))))))
+
 (deftest a-merge-refused-as-out-of-date-is-brought-up-to-date
   (let [w (submitted-world house-policy)
         st (:state w)]
@@ -3061,6 +3088,29 @@
       (is (some? (get-in (the-policy w) [:data :deployed_at])))
       (is (= 1 (bench/merge-green! eng seen)))
       (is (= 2 (count (calls-of st "bench__merge")))))))
+
+(deftest a-deploy-held-repository-still-reads-its-standing-train
+  ;; ticket 1652d0a3: merge-green! drops a deploy-held repository's line,
+  ;; and its standing train must still be read and leave the policy
+  (let [w (submitted-world deploy-policy)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "merged"})
+    (bench/merge-green! eng seen)
+    (bench/mark-row! eng :repo_policy (str (:id (the-policy w)))
+                     {:line_train {:branch "train/ckopsa/waymark/31" :changes []
+                                   :prs [31] :run_id "7"
+                                   :started_at "2026-09-29T12:00:00Z"}}
+                     #{})
+    (answer! st "bench__train_status" {:state "failure" :head a-commit})
+    (is (= 0 (bench/merge-green! eng seen)) "the repository is deploy-held")
+    (is (= [{:repo a-repository :run_id "7"}]
+           (mapv :arguments (calls-of st "bench__train_status")))
+        "the standing train is read all the same")
+    (is (= 1 (count (calls-of st "bench__train_delete"))))
+    (is (nil? (get-in (the-policy w) [:data :line_train]))
+        "the finished train leaves the policy")))
 
 (deftest a-red-deploy-holds-the-line-past-the-wait-and-says-so
   (let [w (submitted-world deploy-policy)

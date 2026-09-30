@@ -1256,40 +1256,59 @@
                   (:next-flip-at raw))
                  true)))))))))
 
+(defn- in-scope?
+  "Whether `repo` is one of `repos`; a nil `repos` is every repository."
+  [repos repo]
+  (or (nil? repos) (contains? repos (str repo))))
+
 (defn- marked-change-ids
-  "The id of every change that carries a `line_why`, whatever its state."
-  [eng]
-  (if (rdef-of-kind eng :change)
-    (let [st (:storage eng)]
-      (into #{}
-            (mapcat (fn [why]
-                      (map #(str (:id %))
-                           (store/with-tx st
-                             (fn [tx] (store/query-rows st tx :change {:line_why why}
-                                                        {:limit 1000}))))))
-            line-whys))
-    #{}))
+  "The id of every change that carries a `line_why`, whatever its state —
+  only the changes of `repos` when it is given (`in-scope?`)."
+  ([eng] (marked-change-ids eng nil))
+  ([eng repos]
+   (if-some [rd (rdef-of-kind eng :change)]
+     (let [st (:storage eng)]
+       (into #{}
+             (comp (mapcat (fn [why]
+                             (store/with-tx st
+                               (fn [tx] (store/query-rows st tx :change {:line_why why}
+                                                          {:limit 1000})))))
+                   (filter #(or (nil? repos)
+                                (in-scope? repos (get-in (inv/decode-row rd %)
+                                                         [:data :repository]))))
+                   (map #(str (:id %))))
+             line-whys))
+     #{})))
 
 (defn mark-lines!
   "Write one pass's `marks` (`line-marks`) on the rows: every active
   policy and every submitted change, and every change that still says a
   place though it left `submitted`. What a marks map leaves out is
-  cleared. → how many rows were written."
-  [eng marks submitted]
-  (let [now (if-some [f (:now-fn eng)] (f) (Instant/now))
-        blank-policy (zipmap line-policy-fields (repeat nil))
-        blank-change (zipmap line-change-fields (repeat nil))
-        wrote (volatile! 0)
-        write! (fn [kind id m quiet]
-                 (when (mark-row! eng kind id m quiet) (vswap! wrote inc)))]
-    (doseq [p (policies eng :active)
-            :let [m (get (:policies marks) (str (get-in p [:data :repository])))]]
-      (write! :repo_policy (str (:id p))
-              (merge blank-policy m (when (seq m) {:line_at now}))
-              #{:line_at}))
-    (doseq [id (into (set (map #(str (:id %)) submitted)) (marked-change-ids eng))]
-      (write! :change id (merge blank-change (get (:changes marks) id)) #{}))
-    @wrote))
+  cleared. With `repos` (`in-scope?`), only the rows of those
+  repositories are written, and every other row keeps its marks: a
+  woken pass's marks map names no other line (ticket 26a8d561).
+  → how many rows were written."
+  ([eng marks submitted] (mark-lines! eng marks submitted nil))
+  ([eng marks submitted repos]
+   (let [now (if-some [f (:now-fn eng)] (f) (Instant/now))
+         blank-policy (zipmap line-policy-fields (repeat nil))
+         blank-change (zipmap line-change-fields (repeat nil))
+         wrote (volatile! 0)
+         write! (fn [kind id m quiet]
+                  (when (mark-row! eng kind id m quiet) (vswap! wrote inc)))]
+     (doseq [p (policies eng :active)
+             :let [repo (str (get-in p [:data :repository]))
+                   m (get (:policies marks) repo)]
+             :when (in-scope? repos repo)]
+       (write! :repo_policy (str (:id p))
+               (merge blank-policy m (when (seq m) {:line_at now}))
+               #{:line_at}))
+     (doseq [id (into (set (map #(str (:id %))
+                                (filter #(in-scope? repos (get-in % [:data :repository]))
+                                        submitted)))
+                      (marked-change-ids eng repos))]
+       (write! :change id (merge blank-change (get (:changes marks) id)) #{}))
+     @wrote)))
 
 ;; ── one deploy at a time (ticket 47217098) ────────────────────────────
 ;;
@@ -1502,12 +1521,18 @@
 (defn- mark-held-tickets!
   "Write `merge_waits` on the ticket of every submitted change, and
   clear it on the tickets the last pass held that nothing holds now.
-  `seen` keeps the held tickets under `:held-tickets`."
-  [eng seen changes holds]
-  (doseq [tid (into (set (get @seen :held-tickets)) (keep born-ticket changes))]
-    (mark-row! eng :ticket tid
-               {:merge_waits (some-> (get holds tid) held-reason)} #{}))
-  (swap! seen assoc :held-tickets (set (keys holds))))
+  `seen` keeps the held tickets under `:held-tickets`. A scoped pass
+  (`whole?` false) writes only the tickets of its own `changes`, and
+  keeps the others in `seen` for the next whole pass."
+  ([eng seen changes holds] (mark-held-tickets! eng seen changes holds true))
+  ([eng seen changes holds whole?]
+   (let [mine (set (keep born-ticket changes))
+         before (set (get @seen :held-tickets))]
+     (doseq [tid (into mine (if whole? before (filter mine before)))]
+       (mark-row! eng :ticket tid
+                  {:merge_waits (some-> (get holds tid) held-reason)} #{}))
+     (swap! seen assoc :held-tickets
+            (into (set (keys holds)) (when-not whole? (remove mine before)))))))
 
 ;; ── a merge refused as not mergeable (ticket 0b564d2d) ───────────────
 ;;
@@ -1595,12 +1620,17 @@
   change its place and why it is not merging. A change whose ticket
   still waits on another to merge (`merge-holds`) is held out of all
   of it, and says so. A repository whose last house merge is not yet
-  deployed (`deploy-held`) is offered nothing. Throws nothing.
+  deployed (`deploy-held`) is offered nothing. With `repos`, a set of
+  repository names, the pass works only those repositories: no other
+  is offered a merge and no other's marks are written (a woken pass,
+  ticket 26a8d561). Throws nothing.
   → the number of `merge` calls made."
-  [eng seen]
-  (let [deploy-holds (deploy-held eng (policies-by-repo eng))
-        by-repo (policies-by-repo eng)
-        changes (submitted-changes eng)
+  ([eng seen] (merge-green! eng seen nil))
+  ([eng seen repos]
+  (let [by-repo (into {} (filter #(in-scope? repos (key %))) (policies-by-repo eng))
+        deploy-holds (deploy-held eng by-repo)
+        changes (filterv #(in-scope? repos (get-in % [:data :repository]))
+                         (submitted-changes eng))
         house? #(some-> (get by-repo (str (get-in % [:data :repository])))
                         house-pass-merges?)
         holds (merge-holds eng (filter house? changes))
@@ -1644,12 +1674,12 @@
                                           :line_reason (held-reason
                                                         (get holds (born-ticket c)))}]))
                                  held))
-                   changes)
-      (mark-held-tickets! eng seen changes holds)
+                   changes repos)
+      (mark-held-tickets! eng seen changes holds (nil? repos))
       (catch Exception e
         (warn! "the merge line was not written on the rows (" (ex-message e)
                "); the next pass writes it")))
-    asked))
+    asked)))
 
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 ;;
@@ -1903,13 +1933,14 @@
 (defn house-beat!
   "One tick of the sweeper. When `clock?`, the clock's passes
   (`clock-pass!`), which merge every line and so answer any wake due
-  now; otherwise the merge pass (`merge-pass!`) when a repository's wake
-  is due. → {:clock? … :woken #{repo}}."
+  now; otherwise the merge pass (`merge-pass!`), given the set of the
+  repositories whose wake is due, so it works only those (ticket
+  26a8d561). → {:clock? … :woken #{repo}}."
   [board ^Instant now clock? clock-pass! merge-pass!]
   (let [woken (due-wakes! board now)]
     (cond
       clock? (clock-pass!)
-      (seq woken) (merge-pass!))
+      (seq woken) (merge-pass! woken))
     {:clock? (boolean clock?) :woken woken}))
 
 (defn start-enrol-sweeper!
@@ -1931,10 +1962,13 @@
         waiting (atom {})
         every-ms (* 1000 (long every-seconds))
         tick (max 1 (min (long every-seconds) (long house-tick-seconds)))
-        merge-pass! #(try (merge-green! eng seen)
-                          (catch Exception e
-                            (warn! "the merge pass failed ("
-                                   (ex-message e) ")")))
+        merge-pass! (fn merge-pass!
+                      ([] (merge-pass! nil))
+                      ([repos]
+                       (try (merge-green! eng seen repos)
+                            (catch Exception e
+                              (warn! "the merge pass failed ("
+                                     (ex-message e) ")")))))
         clock-pass! (fn []
                       (try (enroll-unenrolled! eng)
                            (catch Exception e
