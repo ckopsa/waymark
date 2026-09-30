@@ -284,15 +284,22 @@
   ;; fingerprint (create.guards, absent when a kind declares none), so
   ;; the ask's create walls now show in its hash — and the edit above,
   ;; which never moved it, finally does. Re-pinned from CI (PR #298).
+  ;;
+  ;; THE LAW MOVED AGAIN (waymark-ti0): scope-omits-private-kinds, a
+  ;; create wall here and on :grant, reads :own-surface :grantable off
+  ;; the registry instead of a literal naming three app kinds — same
+  ;; refusals, new body, new hash. Re-pin from CI: the failure's
+  ;; message prints the value.
   "7bc24c757b70be6a91bf17546f60151f9c158e6d6b7dfe0af6d3cecc077ffe38")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
          (fp/fingerprint-hash (r/fingerprint grants/approval-request)))
       "byte-identical fingerprint hashes: two spellings, one law")
-  (is (= the-canonical-hash
-         (fp/fingerprint-hash (r/fingerprint grants/approval-request)))
-      "…and the hash is the one the hand-written machine always had"))
+  (let [actual (fp/fingerprint-hash (r/fingerprint grants/approval-request))]
+    (is (= the-canonical-hash actual)
+        (str "…and the hash is the one the hand-written machine always had"
+             " (re-pin to " actual " only for a deliberate law change)"))))
 
 ;; ── the sugar's own refusals ────────────────────────────────────────
 ;; Each is a sentence the declaration surface owes an author, checked

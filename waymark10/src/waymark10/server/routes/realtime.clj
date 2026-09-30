@@ -81,7 +81,7 @@
         (let [rdef (some (fn [[_ r]] (when (= (nth parts 2) (:plural r)) r))
                          (inv/resources eng))]
           (or (nil? rdef)
-              (not (grants/private-kind? (:kind rdef)))
+              (not (grants/private-kind? rdef))
               (boolean ((presence/self-visible? eng (router/visibility-of req)) s)))))))
 
 (defn- presence-registry
