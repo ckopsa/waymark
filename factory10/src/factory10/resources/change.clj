@@ -1081,6 +1081,7 @@
               :help "The pull request title, exactly as it stands on GitHub. This is what the card reads."}}
      [:maybe [:string {:max 400}]]]
     [:author {:optional true
+              :not-a-ref "bare today; swept by 5cb6a0c7"
               :x-display
               {:label "Who opened it"
                :help "The GitHub login of the person or the seat that opened the pull request."}}
@@ -1293,7 +1294,8 @@
      [:maybe [:string {:max 250}]]]
     ;; the merged change a duplicate was closed for (ticket 3ec37f66):
     ;; written by `supersede` and by nothing else. Hidden, as the url is.
-    [:superseded_by {:optional true :x-display {:hidden true}}
+    [:superseded_by {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+                     :x-display {:hidden true}}
      [:maybe [:string {:max 500}]]]]
    ;; THE BIRTH DOOR IS THE MIRROR'S, AND IT IS HIDDEN. A person meets
    ;; no create form for this kind. The source mints the row with what
@@ -1314,7 +1316,8 @@
      [:maybe [:int {:min 1}]]]
     [:title {:optional true :x-display {:raw true :label "Title"}}
      [:maybe [:string {:max 400}]]]
-    [:author {:optional true :x-display {:label "Who opened it"}}
+    [:author {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+              :x-display {:label "Who opened it"}}
      [:maybe [:string {:max 120}]]]
     [:base_branch {:optional true :x-display {:label "The base branch"}}
      [:maybe [:string {:max 200}]]]
@@ -1495,7 +1498,8 @@
      :guards [the-mirror-writes-this-row]
      :handler write-what-superseded-it
      :input [:map
-             [:superseded_by {:x-display {:hidden true}}
+             [:superseded_by {:not-a-ref "bare today; swept by 5cb6a0c7"
+                              :x-display {:hidden true}}
               [:string {:min 1 :max 500}]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false

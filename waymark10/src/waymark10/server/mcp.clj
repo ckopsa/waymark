@@ -2660,6 +2660,48 @@
                      " the window rolls.")
        "lifts_at" (some-> (seat-routes/lifts-at eng seat now) str)})))
 
+(defn- walked-nothing-why
+  "One sentence for a sitting its walk handed no rows (ticket
+  ae64b57c): the queue rows the walk left out, each with its reason —
+  the `withheld` the sit already answers — or that the queue had no
+  rows under the walk's filter, or that no queue was read at all. The
+  sit keeps it on the sitting as `walked_nothing_why`."
+  [walk]
+  (let [withheld (get walk "withheld")
+        total (get walk "total")
+        s (cond
+            (nil? walk)
+            "No queue was read: the seat walks no kind, or its grant does not admit the one it names."
+
+            (seq withheld)
+            (str "Every row the queue offered was left out: "
+                 (str/join "; " (map #(str (get % "id") " (" (get % "reason") ")")
+                                     withheld))
+                 ".")
+
+            (and (number? total) (pos? total))
+            (str "The queue held " total " rows under the walk's filter, and "
+                 "none was free to hand.")
+
+            :else
+            "The queue held no rows under the walk's filter and the seat's grant.")]
+    (subs s 0 (min 480 (count s)))))
+
+(def ^:private graced-reason
+  "a sitting of this seat closed within the seat's release grace (release_grace_seconds) and still holds it")
+
+(defn- with-graced-reasons
+  "The walk, its `withheld` rows that a closed sitting's release grace
+  holds named for the grace rather than for an open sitting (ticket
+  ae64b57c): both are `claimed`, and only one is another run."
+  [walk graced]
+  (cond-> walk
+    (and (seq graced) (seq (get walk "withheld")))
+    (update "withheld"
+            (partial mapv #(cond-> %
+                             (contains? graced (get % "id"))
+                             (assoc "reason" graced-reason))))))
+
 (def ^:private change-beside-the-walk-note
   "What a seat whose rows are ASKS does with the change beside them
   (R-12.32). The row it works is the ask; the door that ends the
@@ -2726,6 +2768,8 @@
         ;; read once for the sit: the tickets beside a stuck change
         ;; are out of the walk whichever try claims (ticket 6bdaf6fe)
         stuck (seats/stuck-walk-reasons eng (get-in seat [:data :walk]))
+        ;; the claimed rows a closed sitting's grace holds, named apart
+        graced (seats/graced-row-ids eng seat-id (:id sitting))
         walk-past (fn [taken only]
                     (walk-of eng call sitter-sees seat taken held only stuck))]
     (loop [n 1
@@ -2741,7 +2785,7 @@
                     {:claimed? true :taken taken})
             seen (into (set taken) (:taken claim))
             said (fn [w]
-                   {:walk w
+                   {:walk (with-graced-reasons w graced)
                     :named-held? (boolean (and named (contains? seen named)))
                     ;; named, held by nobody, and still not handed: the
                     ;; walk withheld it and the queue's rows stand in
@@ -4051,7 +4095,13 @@
                 (seats/stamp-walked-nothing!
                  eng (:id sitting)
                  (and (empty? (get walk "rows"))
-                      (empty? (get-in sitting [:data :walked_rows])))))
+                      (empty? (get-in sitting [:data :walked_rows])))
+                 ;; … with the reason it was empty, and a seat at a
+                 ;; wall stamped with the wall instead (ticket ae64b57c)
+                 {:why (walked-nothing-why walk) :halted halted}))
+            ;; … and the schedule says the wall too, beside the wake
+            ;; it holds back
+            _ (seats/stamp-halted-schedule! eng seat-id halted)
             ;; i' · the change this firing submits: the walk's own
             ;; first row for a code seat (R-12.29), and the row the
             ;; engine finds or mints for a seat that walks a queue of
