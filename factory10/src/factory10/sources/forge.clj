@@ -1303,15 +1303,15 @@
         [(get-in row [:data :born_from]) (get-in row [:data :change_id])]))
 
 (defn- merged-beside?
-  "Whether another change built for the same ticket, on the same
-  branch, has merged."
-  [eng row repo branch ticket-id]
+  "Whether another change built for the same ticket, on any branch of
+  the repository, has merged."
+  [eng row repo ticket-id]
   (let [born (str "ticket:" ticket-id)]
     (boolean
      (some #(and (not= (str (:id %)) (str (:id row)))
                  (= :merged (state-of %))
                  (= born (str (get-in % [:data :born_from]))))
-           (rows-by eng :change {:repository repo :head_branch branch} 100)))))
+           (rows-by eng :change {:repository repo :born_from born} 100)))))
 
 (defn unopened-note
   "The words a submitted change carries when no pull request ever came
@@ -1334,7 +1334,7 @@
             note (unopened-note repo branch)]
         (cond
           (or (#{:done :dropped} (state-of t))
-              (merged-beside? eng row repo branch tid))
+              (merged-beside? eng row repo tid))
           [:supersede {:superseded_by
                        (str "closed: ticket " tid " ended; this change "
                             "never opened a pull request")}]
@@ -1641,7 +1641,8 @@
 
 (defn- note-base-read!
   "The policy's `source_note` after one base read: `why` nil clears a
-  base note, and a reason writes one."
+  base note, and a reason writes one — on a policy whose base read
+  matters, one naming `required_checks` or a `deploy_check`."
   [eng policy base why]
   (let [id (str (:id policy))
         stored (str (get-in (row-by-id eng :repo_policy id)
@@ -1651,7 +1652,8 @@
       (when (base-note? stored)
         (bench/mark-row! eng :repo_policy id {:source_note nil} #{}))
 
-      (empty? (bench/required-checks-of policy))
+      (and (empty? (bench/required-checks-of policy))
+           (nil? (bench/deploy-check-of policy)))
       nil
 
       (or (str/blank? stored)
