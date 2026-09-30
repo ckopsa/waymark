@@ -205,8 +205,9 @@ jobs:
       calendar10: ${{ steps.detect.outputs.calendar10 }}
       factory10: ${{ steps.detect.outputs.factory10 }}
       localfire: ${{ steps.detect.outputs.localfire }}
-      # Whether the diff touches .github/workflows/ — true too whenever
-      # there is no diff to read. `actionlint` runs on it.
+      # Whether the diff touches .github/workflows/ or a shell script
+      # the workflows and hooks call — true too whenever there is no
+      # diff to read. `actionlint` (and its shellcheck step) runs on it.
       workflows: ${{ steps.detect.outputs.workflows }}
       quick: ${{ steps.select.outputs.quick }}
       factory: ${{ steps.select.outputs.factory }}
@@ -308,7 +309,7 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              .github/workflows/*) workflows=true ;;
+              .github/workflows/*|.github/scripts/*.sh|scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
             esac
             case "$f" in
               waymark10/*|calendar10/*|workqueue10/*|factory10/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
@@ -906,6 +907,10 @@ jobs:
   # is. Its shellcheck and pyflakes passes are off: the run: blocks
   # predate this job and were never held to them, so turning them on is
   # its own change.
+  #
+  # The standalone scripts the workflows and the seat's hook execute are
+  # outside actionlint's reach, so a second step shellchecks them at
+  # warning severity; the diff that touches one sets `workflows` too.
   actionlint:
     needs: [changes]
     if: ${{ needs.changes.outputs.workflows == 'true' }}
@@ -919,6 +924,12 @@ jobs:
           set -euo pipefail
           bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
           ./actionlint -color -shellcheck= -pyflakes=
+      - name: shellcheck the scripts
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          shellcheck -S warning .github/scripts/*.sh scripts/*.sh .claude/hooks/sitting-close.sh
 
   # ── THE ONE CHECK BRANCH PROTECTION NAMES ───────────────────────────
   #
