@@ -288,9 +288,8 @@
   ;; THE LAW MOVED AGAIN (waymark-ti0): scope-omits-private-kinds, a
   ;; create wall here and on :grant, reads :own-surface :grantable off
   ;; the registry instead of a literal naming three app kinds — same
-  ;; refusals, new body, new hash. Re-pin from CI: the failure's
-  ;; message prints the value.
-  "7bc24c757b70be6a91bf17546f60151f9c158e6d6b7dfe0af6d3cecc077ffe38")
+  ;; refusals, new body, new hash. Re-pinned from CI (PR #531).
+  "3d25b716c8193b5347bd234f410bc4f170cd484604b112b597e90a87a8bb7007")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
