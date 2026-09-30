@@ -1479,6 +1479,25 @@
     (is (= check (:check (sent 1)))
         "the restate carries the check step to the rig's enrollment")))
 
+(deftest a-patch-restate-leaves-the-groom-floor-as-it-stood
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:groom_floor 4 :groom_floor_settle_seconds 7200})
+        current (policy-row eng (:id row))]
+    (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                 {:patch true
+                  :check {:command "cd workqueue10 && clojure -M:check"}}
+                 {:principal person
+                  :if-match (inv/etag :repo_policy (:id row)
+                                      (:version current))})
+    (let [after (:data (policy-row eng (:id row)))]
+      (is (= {:command "cd workqueue10 && clojure -M:check"} (:check after))
+          "the patch writes what it names")
+      (is (= 4 (:groom_floor after))
+          "a patch that does not name the floor leaves it as it stood")
+      (is (= 7200 (:groom_floor_settle_seconds after))
+          "and its settle the same"))))
+
 (deftest a-select-pattern-keeps-to-what-the-python-rig-compiles
   ;; ticket 3052cdf2: the rig compiles select_pattern with Python's re
   (let [st (state)
