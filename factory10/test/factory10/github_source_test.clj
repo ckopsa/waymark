@@ -244,6 +244,52 @@
         _ (pass! r)]
     (is (= :merged (:state (the-change engine))))))
 
+(deftest a-refused-row-is-read-again-by-number
+  ;; ticket 365043a6: the change pass refused the row, the cursor moved
+  ;; past its stamp, so only the source's retry offers it again
+  (let [{:keys [state source engine] :as r} (rig)
+        a-later-head "9e8d7c6b5a4f30211203f4e5d6c7b8a9f0e1d2c3"
+        merged (assoc a-pull-request
+                      :state "closed"
+                      :merged_at "2026-09-18T15:00:00Z"
+                      :updated_at "2026-09-18T15:00:00Z")
+        move @#'forge/move-change!
+        refused? (atom false)
+        pull-reads #(filterv (fn [q] (= (str "/repos/" repo "/pulls/31") (:path q)))
+                             (gh/requests state))]
+    (gh/seed-pull! state repo merged {:files the-files :reviews the-reviews})
+    (let [census (with-redefs [forge/move-change!
+                               (fn [& args]
+                                 (if (compare-and-set! refused? false true)
+                                   (throw (ex-info "refused by the test" {}))
+                                   (apply move args)))]
+                   (pass! r))]
+      (is (= 1 (:refused census)) "the row refused its move")
+      (is (not= :merged (:state (the-change engine))))
+      (is (= #{31} (get @(:retry source) repo))
+          "the refused pull request is held for the next pass"))
+
+    ;; the cursor moves past the pull request, and its head moves on
+    ;; without a new stamp, so the listing no longer answers it
+    (reset! (:cursor source) "2026-09-18T16:00:00Z")
+    (gh/seed-pull! state repo (assoc-in merged [:head :sha] a-later-head)
+                   {:files the-files :reviews the-reviews})
+
+    (testing "a retry whose repository did not answer is kept"
+      (gh/down! state true)
+      (is (false? (:complete? (forge/forge-poll source))))
+      (is (= #{31} (get @(:retry source) repo))
+          "the retry waits for the next pass")
+      (gh/down! state false))
+
+    (swap! state assoc :requests [])
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (seq (pull-reads)) "the pull request is read by its number")
+      (is (= :merged (:state row)))
+      (is (= a-later-head (get-in row [:data :head_sha])))
+      (is (empty? (get @(:retry source) repo)) "the retry is spent"))))
+
 
 ;; ── the adoption (bead waymark-fp62.6.3.10, R-12.32) ────────────────
 ;;

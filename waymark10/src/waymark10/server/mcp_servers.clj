@@ -805,8 +805,14 @@
 ;; ── handlers ────────────────────────────────────────────────────────
 
 (defhandler discover-server [row _inp ctx]
-  (mirror row (fetch-tools! (get-in ctx [:services :mcp-servers]) row)
-          (:now ctx)))
+  (let [seen (fetch-tools! (get-in ctx [:services :mcp-servers]) row)
+        d (:data row)]
+    ;; it asks every time, and an answer equal to the mirror writes
+    ;; nothing: no version bump, no history entry, no discovered_at
+    (if (and (= (:hash seen) (:tools_hash d))
+             (nil? (:last_error d)) (nil? (:dark_by d)))
+      (inv/unchanged row)
+      (mirror row seen (:now ctx)))))
 
 (def restatable
   "The fields a restate states again (R-8)."
