@@ -224,6 +224,22 @@
 (deftest faceted
   (breaks :faceted (assoc base :faceted [:name])))
 
+(deftest computed
+  (let [score {:schema :int :fn (fn [_row _ctx] 1)}
+        with-score (assoc base :computed {:score score})]
+    (testing "a well-formed computed field is green"
+      (is (some? (load-quietly with-score))))
+    (testing "a computed field names no schema field"
+      (breaks :computed (assoc base :computed {:name score})))
+    (testing "a computed field declares :fn and :schema"
+      (breaks :computed (assoc base :computed {:score (dissoc score :fn)}))
+      (breaks :computed (assoc base :computed {:score (dissoc score :schema)})))
+    (testing "a computed field is on no stored-row surface"
+      (breaks :computed (assoc with-score :filterable {:score #{:eq}}))
+      (breaks :computed (assoc with-score :sortable {:fields [:score]}))
+      (breaks :computed (assoc with-score :faceted [:score]))
+      (breaks :computed (assoc with-score :summary "{data.score} · {state}")))))
+
 (deftest oneof
   (breaks :oneof (assoc base :one-of {:naming {:arms {:a [:name] :b [:name]}}})))
 
