@@ -593,7 +593,7 @@
         (assoc-in [:data :last_run_url] (:last_run_url inp)))
       (cond-> (:last_runner inp)
         (assoc-in [:data :last_runner] (:last_runner inp)))
-      (update :data dissoc :note :retry_after :wake_pending :wake_due_at)))
+      (update :data dissoc :note :retry_after :wake_pending :wake_due_at :wake_text)))
 
 (defhandler hold-throttle
   [row inp _ctx]
@@ -752,6 +752,15 @@
                    {:label "The wake is due"
                     :help "When the waiting wake may go out. The engine writes it when a transition matched a wake_on entry that settles, and a later match moves it forward. The wake goes out after this moment has passed. Engine-written."}}
      [:maybe :waymark/instant]]
+    ;; The words a deferred fire carries (ticket afb445d4). A fire whose
+    ;; text names a row still in a closed sitting's release grace does
+    ;; not go out: it waits as `wake_pending` until `wake_due_at`, and
+    ;; the release fires it with this text rather than with none.
+    [:wake_text {:optional true
+                 :x-display
+                 {:label "The waiting fire's text"
+                  :help "The text of a fire that named a row still in its release grace. The fire waits until the grace lifts, and then goes out with this text. Engine-written."}}
+     [:maybe :string]]
     ;; The replay's mark (waymark-fp62.21). The drain delivers at
     ;; least once, and a damped match carries no idempotency key, so
     ;; the wake remembers the last transitions it heard and a replay
@@ -1838,6 +1847,25 @@
                                   (catch Exception _ nil))
     :else nil))
 
+(defn- defer-fire!
+  "Keep a fire that must wait for a release grace (ticket afb445d4) the
+  way a deferred wake is kept: `wake_pending`, `wake_due_at` at the
+  lift — forward only, as `wakes/due-at` holds it — and the fire's text
+  as `wake_text`, so `wakes/release!` sends it then with its words. One
+  maintenance write, and no transition."
+  [eng schedule-row ^Instant lift text]
+  (let [held (instant-of (get-in schedule-row [:data :wake_due_at]))
+        due (if (and held (.isAfter ^Instant held lift)) held lift)]
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                            (assoc (:data schedule-row)
+                                   :wake_pending true
+                                   :wake_due_at (str due)
+                                   :wake_text text)
+                            (:next-flip-at schedule-row)))))
+  nil)
+
 (defn already-fired?
   "Has this row already been fired FOR this transition? `last_fired_at`
   is stamped after the provider answered, so a stamp at or after the
@@ -2375,8 +2403,18 @@
             ;; seat's instructions around it, so a firing cannot run
             ;; on instructions nobody in this house can read. And the
             ;; link is this row's, or else the chair's (R-5).
+            ;; A FIRE NAMING A ROW STILL IN ITS GRACE WAITS (ticket
+            ;; afb445d4): a run sent now would be told the row is held
+            ;; and stop, and the fire's text would be spent. The row
+            ;; keeps the fire as a deferred wake, text and all, and the
+            ;; tick's release sends it when the grace lifts.
             (when-some [row (schedule-for-seat eng (:resource-id t))]
               (when-not (already-fired? row (:at t))
+               (if-some [lift (when-some [text (some-> (get-in t [:inputs :text])
+                                                       str not-empty)]
+                                (seats/fire-deferred-until
+                                 eng seat-row text ((:now-fn eng))))]
+                (defer-fire! eng row lift (str (get-in t [:inputs :text])))
                 ;; AND THE KEY OF THIS ONE FIRING (R-12.37), minted
                 ;; here because here is where the text is composed. The
                 ;; engine mints 128 bits, the seat row keeps the hash,
@@ -2398,7 +2436,7 @@
                                    (some-> (get-in t [:inputs :text])
                                            str not-empty)))
                        (:at t)
-                       seat-row))))))
+                       seat-row)))))))
 
       (and (= :schedule kind) (= :restate action))
       (when-some [row (raw-row eng :schedule (:resource-id t))]

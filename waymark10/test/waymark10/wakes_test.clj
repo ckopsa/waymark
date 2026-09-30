@@ -1981,6 +1981,88 @@
           (is (= 1 (count (seat-fires seat))) "and it fires once"))
         (seat-do! seat :retire)))))
 
+;; ── the fire that names a row still in its grace ────────────────────
+;;
+;; Production, 2026-09-30: qa's sitting closed at 17:33:46 and qa was
+;; fired at 17:34 with text naming the row that sitting walked. The run
+;; sat, was told the row was held, and stopped, and the fire's text was
+;; spent. Such a fire now waits for the grace to lift, and goes out then
+;; with its own text (ticket afb445d4).
+
+(defn- fire-with! [seat-id text]
+  (inv/invoke! *eng* :seat (str seat-id) :fire {:text text}
+               {:principal elena
+                :idempotency-key (str "grace-fire:" (random-uuid))}))
+
+(deftest a-fire-naming-a-row-in-its-grace-waits-for-the-grace-to-lift
+  (let [fn' :fire-grace-fires
+        _ (drain-fires! fn')
+        item (item! "grace-fired")
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))
+        text (str "Walk " item " again.")]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "gracefired"
+                          {:walk "wake_item"
+                           :scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                    :filter {:batch "grace-fired"}}]}
+                          fn')
+            closed (sitting! seat)]
+        (close-sitting! closed)
+        (walked-and-ended! closed [item] t0)
+        (drain-fires! fn')
+
+        (testing "a fire 10 s after the close sends nothing, and waits with
+                  its text until the grace ends"
+          (at 10)
+          (fire-with! seat text)
+          (drain-fires! fn')
+          (is (empty? (fires-of token)))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+          (is (= text (get-in (sched-of seat) [:data :wake_text])))
+          (is (= (.plusSeconds t0 120) (due-of seat))))
+
+        (testing "inside the grace the tick still sends nothing"
+          (at 60)
+          (wakes/tick! *eng*)
+          (drain-fires! fn')
+          (is (empty? (fires-of token))))
+
+        (testing "when the grace lifts the run starts, with the fire's text"
+          (at 121)
+          (wakes/tick! *eng*)
+          (drain-fires! fn')
+          (let [fs (fires-of token)]
+            (is (= 1 (count fs)))
+            (is (clojure.string/includes? (str (:text (first fs))) (str item))))
+          (is (= text (get-in (last (seat-fires seat)) [:inputs :text])))
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (nil? (get-in (sched-of seat) [:data :wake_text]))))
+        (seat-do! seat :retire)))))
+
+(deftest a-fire-naming-a-free-row-starts-at-once
+  (let [fn' :fire-free-fires
+        _ (drain-fires! fn')
+        held (item! "grace-free")
+        free (item! "grace-free")
+        {:keys [seat token]}
+        (linked-seat! "gracefree"
+                      {:walk "wake_item"
+                       :scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                :filter {:batch "grace-free"}}]}
+                      fn')
+        closed (sitting! seat)]
+    (close-sitting! closed)
+    (walked-and-ended! closed [held] (Instant/now))
+    (drain-fires! fn')
+    (fire-with! seat (str "Walk " free "."))
+    (drain-fires! fn')
+    (is (= 1 (count (fires-of token))))
+    (is (not (get-in (sched-of seat) [:data :wake_pending])))
+    (seat-do! seat :retire)))
+
 ;; ── the fuel wall holds the wake ─────────────────────────────────────
 ;;
 ;; Production, 2026-09-27: code-seat was past its week's fuel and a
