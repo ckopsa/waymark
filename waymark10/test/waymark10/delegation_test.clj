@@ -444,7 +444,11 @@
         held-id (:held_call (json asked))]
     (is (= 202 (:status asked)) (pr-str (json asked)))
     (testing "the held call names only scope, keeps the body once, and is small"
-      (let [data (:data (get-row h "held_calls" held-id person))
+      ;; the STORED row is what #549 keeps small; the envelope also
+      ;; carries the computed `call` (#558), so it is not measured
+      (let [data (:data (store/with-tx (:storage eng)
+                          (fn [tx] (store/load-row (:storage eng) tx :held_call
+                                                   (str held-id) {}))))
             size (count (.getBytes ^String (wire/write-json data) "UTF-8"))]
         (is (= ["scope"] (mapv name (keys (:changes data)))))
         (is (nil? (:input data)))
