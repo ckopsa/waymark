@@ -811,6 +811,41 @@
     (seat-do! linked-id :retire)
     (seat-do! new-id :retire)))
 
+(deftest the-link-form-prefills-the-chairs-url
+  ;; waymark ticket 7152184d: the form offered whatever URL the row
+  ;; last held, and code-seat was relinked to inbox-clerk's Routine
+  (let [cn :sched-link-prefill
+        _ (drain! cn)
+        chair (model! "claude-chair-prefill")
+        _ (link-model! chair a-chair-url a-chair-token)
+        held-id (seat! "prefill-held" 3600 [chair])
+        bare-id (seat! "prefill-bare" 3600 [])
+        _ (drain! cn)
+        link (get-in (inv/resources *eng*) [:schedule :actions :link])
+        prefill #(render/prefill-values link (sched-of %)
+                                        (inv/render-hooks *eng*))]
+    (link-schedule! (:id (sched-of held-id)) a-seat-url a-seat-token)
+    (link-schedule! (:id (sched-of bare-id)) a-seat-url a-seat-token)
+
+    (testing "a schedule held for a model, naming another Routine, prefills the model's fire_url"
+      (is (= {:fire_url a-chair-url} (prefill held-id))))
+
+    (testing "a schedule with no chair prefills its own"
+      (is (= {:fire_url a-seat-url} (prefill bare-id))))
+
+    (testing "the token is never prefilled"
+      (is (not-any? #(contains? (prefill %) :fire_token) [held-id bare-id]))
+      (is (not-any? #(contains? (prefill %) :token) [held-id bare-id])))
+
+    (testing "a door with no :prefill-fn prefills the row's own values"
+      (is (= {:model (get-in (sched-of held-id) [:data :model])}
+             (render/prefill-values
+              (get-in (inv/resources *eng*) [:schedule :actions :restate])
+              (sched-of held-id) {}))))
+
+    (seat-do! held-id :retire)
+    (seat-do! bare-id :retire)))
+
 (deftest a-broken-schedule-goes-back-to-its-model
   ;; waymark ticket 1cdf9362: no token is pasted on the way back.
   (let [cn :sched-relink-model
