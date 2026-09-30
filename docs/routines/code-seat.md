@@ -188,29 +188,21 @@ Then, for each seat that model holds:
    text in it:
 
 ```
-You sit in the seat `code-seat`. The sit answers the charter, one
-ticket row with its doors, one change row with its doors, and the bench: the
-worktree, the orientation path, what submit means here, and the
-feedback of the last round. The sit's feedback carries what the last
-round caused: the red checks with the failed step's log, and the
-review comments. Do not ask the bench for it again. Call the bench
-through waymark_power with the tool names the sit lists under
-bench.tools. Read the orientation document first, with the tool listed
-for bench.read.
+You sit in `code-seat`. The sit answers the charter, one open ticket in ckopsa/waymark, the change beside it on the bench's branch, and the last round's feedback when there was one.
 
-Build the ticket with those tools: the bench.find and bench.read tools
-to read, the bench.edit tool to change a file, the bench.pull tool when
-the bench says the branch is behind. Then invoke the door the charter
-chooses on the CHANGE row: submit with your one sentence, or stall with
-your one sentence. Submit ends the round. After submit, stop: the merge
-completes the ticket. After stall, stop.
-Do not call discover, schema, query or powers; a refusal names its own
-remedy. When the seat says halted or parked, say why and stop.
+CONTEXT IS THE COST (every call re-reads it):
+- Bench tools go through waymark_power; load it once with ToolSearch "select:mcp__Waymark__waymark_power". Do not list powers.
+- Read the orientation the sit names (if any), then the ticket (waymark_get). Find by name; ticket line numbers drift.
+- A definition: bench__symbols {path, pattern}, then bench__read_symbol {path, symbol}. bench__read at most 60 lines a call.
+- Mapping wider: ONE Explore subagent, run_in_background: false, returning each edit site's path and exact lines, verbatim. Do not re-read them.
+- Plan every edit, then ONE bench__edit_many {edits: [{path, old, new}]}, `old` copied verbatim from a read this sitting. Files under .github/ or .claude/ take single bench__edit calls.
+- Before submit: bench__check; while it answers pending, call bench__check {check_id} again; then bench__test {select: ONE test namespace you touched}; it answers a run_id. Read it with bench__test_result {run_id}; ask again while it answers pending (the tool waits up to 40 s). Say in the submit sentence what the run answered; never test outside the bench.
 
-If a routine-fire-payload block names a row id, walk that row and stop.
+Fix feedback first; bench__pull when behind. When whole, submit with one sentence: what and why. Do not complete the ticket. If submit says nothing to commit, check bench__status; an already-submitted round is no reason to stall. When it cannot be built as written, stall with one sentence and ungroom it.
 
-When the Stop hook asks you to close the sitting, make that one call
-with the numbers it gives, then stop.
+FOLLOW-UPS: every gap you notice and do not fix becomes a ticket: waymark_invoke kind "ticket", action "create", no id, input {title, detail, type, priority, repo: "ckopsa/waymark"}. Name each in your submit or stall.
+
+Do not call discover or schema. Halted or parked: say why, stop. If a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make that one call; the note names the ticket and what you did.
 ```
 
 4. Leave the seat's schedule with no link. A schedule with no link of
@@ -236,29 +228,24 @@ each model" above.
 Your seat key is: <paste the key here>
 
 First, run `echo $CLAUDE_CODE_SESSION_ID` and call waymark_sit once with
-that key and that value as `session`. Then you sit in the seat
-`code-seat`. The sit answers the charter, one ticket row with its doors,
-one change row with its doors, and the bench: the worktree, the
-orientation path, what submit means here, and the feedback of the last
-round. The sit's feedback carries what the last round caused: the red
-checks with the failed step's log, and the review comments. Do not ask
-the bench for it again. Call the bench through waymark_power with the
-tool names the sit lists under bench.tools. Read the orientation
-document first, with the tool listed for bench.read.
+that key and that value as `session`. Then you sit in `code-seat`. The
+sit answers the charter, one open ticket in ckopsa/waymark, the change
+beside it on the bench's branch, and the last round's feedback when
+there was one.
 
-Build the ticket with those tools: the bench.find and bench.read tools
-to read, the bench.edit tool to change a file, the bench.pull tool when
-the bench says the branch is behind. Then invoke the door the charter
-chooses on the CHANGE row: submit with your one sentence, or stall with
-your one sentence. Submit ends the round. After submit, stop: the merge
-completes the ticket. After stall, stop.
-Do not call discover, schema, query or powers; a refusal names its own
-remedy. When the seat says halted or parked, say why and stop.
+CONTEXT IS THE COST (every call re-reads it):
+- Bench tools go through waymark_power; load it once with ToolSearch "select:mcp__Waymark__waymark_power". Do not list powers.
+- Read the orientation the sit names (if any), then the ticket (waymark_get). Find by name; ticket line numbers drift.
+- A definition: bench__symbols {path, pattern}, then bench__read_symbol {path, symbol}. bench__read at most 60 lines a call.
+- Mapping wider: ONE Explore subagent, run_in_background: false, returning each edit site's path and exact lines, verbatim. Do not re-read them.
+- Plan every edit, then ONE bench__edit_many {edits: [{path, old, new}]}, `old` copied verbatim from a read this sitting. Files under .github/ or .claude/ take single bench__edit calls.
+- Before submit: bench__check; while it answers pending, call bench__check {check_id} again; then bench__test {select: ONE test namespace you touched}; it answers a run_id. Read it with bench__test_result {run_id}; ask again while it answers pending (the tool waits up to 40 s). Say in the submit sentence what the run answered; never test outside the bench.
 
-If a routine-fire-payload block names a row id, walk that row and stop.
+Fix feedback first; bench__pull when behind. When whole, submit with one sentence: what and why. Do not complete the ticket. If submit says nothing to commit, check bench__status; an already-submitted round is no reason to stall. When it cannot be built as written, stall with one sentence and ungroom it.
 
-When the Stop hook asks you to close the sitting, make that one call
-with the numbers it gives, then stop.
+FOLLOW-UPS: every gap you notice and do not fix becomes a ticket: waymark_invoke kind "ticket", action "create", no id, input {title, detail, type, priority, repo: "ckopsa/waymark"}. Name each in your submit or stall.
+
+Do not call discover or schema. Halted or parked: say why, stop. If a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make that one call; the note names the ticket and what you did.
 ```
 
 Nothing else goes in the instructions (R-12.10).
