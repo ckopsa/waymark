@@ -707,13 +707,20 @@
 ;; ── the field projection (batch B) ──────────────────────────────────
 
 (defn- redacted-fields
-  "The declared data fields this visibility hides for the kind — nil
-  when the request is unscoped or hides nothing."
+  "The declared data fields — stored and :computed — this visibility
+  hides for the kind — nil when the request is unscoped or hides
+  nothing."
   [rdef visibility]
   (when-some [field? (:field? visibility)]
-    (not-empty
-     (into #{} (remove #(field? (:kind rdef) %))
-           (schema/entry-keys (:schema rdef))))))
+    (let [hashed? (or (:hashed? visibility) (constantly false))]
+      (not-empty
+       (-> (into #{} (remove #(field? (:kind rdef) %))
+                 (schema/entry-keys (:schema rdef)))
+           ;; a :computed field the grant admits only as a token is
+           ;; concealed whole: there is no stored value to tokenize
+           (into (remove #(and (field? (:kind rdef) %)
+                               (not (hashed? (:kind rdef) %))))
+                 (keys (:computed rdef))))))))
 
 (defn- hashed-fields
   "The declared data fields this visibility admits ONLY as tokens
@@ -771,7 +778,12 @@
                                      (not (get-in properties
                                                   [:x-display :teaser]))))
                     f))))
-        (schema/entry-map (:schema rdef))))
+        (concat (schema/entry-map (:schema rdef))
+                ;; a :computed field rides the same rule, its
+                ;; :x-display standing where an entry's properties do
+                (map (fn [[f {:keys [x-display] s :schema}]]
+                       [f {:properties {:x-display x-display} :schema s}])
+                     (:computed rdef)))))
 
 (defn teaser-fields
   "The teaser-flagged prose fields of a kind — the ones :fields
@@ -841,6 +853,33 @@
     (seq redacted) (update :data #(apply dissoc % redacted))))
 
 ;; ── the envelope ────────────────────────────────────────────────────
+
+;; ── computed fields ─────────────────────────────────────────────────
+
+(defn- computed-data
+  "The kind's :computed fields for one DECODED row, encoded as a
+  stored field of the same schema would be; the ones this request
+  conceals (redacted) are never computed. Each fn reads the row and a
+  read-only ctx (:read/:find — no writes, no invoke). A throw prints
+  one warning and the field renders nil: a read never fails because
+  of it."
+  [rdef row ctx-opts redacted]
+  (when-some [computed (not-empty (apply dissoc (:computed rdef) redacted))]
+    (let [hooks (:evidence-reads ctx-opts)
+          cctx {:read (or (:read ctx-opts) (:read hooks))
+                :find (or (:find ctx-opts) (:find hooks))}]
+      (into {}
+            (map (fn [[f {s :schema compute :fn}]]
+                   [f (when-some [v (try (compute row cctx)
+                                         (catch Exception e
+                                           (binding [*out* *err*]
+                                             (println (str "waymark10 computed field ["
+                                                           (name (:kind rdef)) "." (name f)
+                                                           "] failed on " (:id row) ": "
+                                                           (ex-message e))))
+                                           nil))]
+                        (get (schema/encode [:map [f s]] {f v}) f))]))
+            computed))))
 
 (defn envelope
   "The v10 wire document (snake string keys, JSON-ready values) for a
@@ -963,7 +1002,11 @@
         ;; data — a token is not a date — in enc-data below. The
         ;; redacted view (batch B): absent from data and from the link
         ;; pass; guards above judged the full row
-        enc-data (cond-> (schema/encode (:schema rdef) (:data row))
+        ;; the :computed fields join the stored ones here — after
+        ;; decode, before the projection — so redaction and the grid
+        ;; treat them by name like any data field
+        enc-data (cond-> (merge (schema/encode (:schema rdef) (:data row))
+                                (computed-data rdef row ctx-opts redacted))
                    (seq redacted) (as-> d (apply dissoc d redacted))
                    (seq hashed)
                    (as-> d (reduce (fn [m f]

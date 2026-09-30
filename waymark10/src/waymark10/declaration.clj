@@ -101,6 +101,11 @@
    :answered-at-a-door
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
+   ;; read-only fields the server computes at read time: {field {:schema
+   ;; <malli> :x-display {…} :fn (fn [row ctx] value)}} — never stored,
+   ;; never an input, never in the fingerprint (its whitelist does not
+   ;; name them), rendered by render/envelope before the projection
+   :computed
    ;; collection surface
    :filterable :sortable :faceted :worksheet :default-filters :views
    ;; edges

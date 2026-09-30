@@ -666,7 +666,9 @@
                           (grants/project-json-schema
                            (visibility-of req) (:kind rdef)
                            (schema/conceal
-                            (schema/json-schema (:schema rdef))
+                            (schema/with-computed
+                             (schema/json-schema (:schema rdef))
+                             (:computed rdef))
                             (schema/secret-fields (:schema rdef)))))))))
 
 (defn- rows-of
