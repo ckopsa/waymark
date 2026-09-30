@@ -770,6 +770,16 @@
                         {:label "A wake the budget held"
                          :help "When a matching transition last found this seat's week of fuel spent. The wake waits, and it goes out when the window rolls. Engine-written."}}
      [:maybe :waymark/instant]]
+    ;; The wall itself (waymark ticket ae64b57c): what the last sit
+    ;; past the wall answered — which wall, why, and when it lifts — so
+    ;; the schedule says "halted: budget, lifts <date>" and not only
+    ;; that a wake waits. A sit clear of the wall takes it off.
+    [:halted {:optional true
+              :x-display
+              {:raw true
+               :label "The wall the seat is against"
+               :help "Which wall the seat's last sit found, the sentence that says why, and when it lifts. Cleared by the next sit clear of the wall. Engine-written."}}
+     [:maybe seats/halt-mark]]
     ;; A throttle's mark (waymark ticket 48dc648c). The provider said
     ;; the Routine has no free run and named a time; the row stays
     ;; live, the wake stays pending, and nothing fires before this.
@@ -1857,15 +1867,20 @@
 ;;
 ;; One question every provider answers the same way, whatever its wire:
 ;; start a run through this link, with this text. The answer is exactly
-;; one of three — started, throttled, or the link is bad — so a caller
-;; (a schedule, a runner link) lands it without knowing the provider.
+;; one of four — started, throttled, transient, or the link is bad — so
+;; a caller (a schedule, a runner link) lands it without knowing the
+;; provider.
 
 (defprotocol Provider
-  "One provider's fire, answered in one of three words."
+  "One provider's fire, answered in one of four words."
   (fire [p link text]
     "Start one run through `link` ({:fire_url :fire_token}) with `text`
-    → exactly one of {:started run-url}, {:throttled retry-after} or
-    {:bad-link reason}; `run-url` and `retry-after` may be nil. The
+    → exactly one of {:started run-url}, {:throttled retry-after},
+    {:transient reason} or {:bad-link reason}; `run-url` and
+    `retry-after` may be nil. `bad-link` is the link itself refused (a
+    401, 403 or 404); `transient` is anything else that started no run
+    (a 5xx, an unreachable provider, another 4xx), and leaves the link
+    live and the fire unspent. The
     answer may carry more beside its one word (`:session-id`, `:body`,
     `:status`) for a caller that says more. Nothing throws."))
 
@@ -1880,13 +1895,18 @@
         {:started (some-> (:session-url answer) str not-empty)
          :session-id (:session-id answer)})
       (catch Exception e
-        (let [{:keys [status retry-after body]} (ex-data e)]
-          (if (throttle? status retry-after body)
+        (let [{:keys [status retry-after body]} (ex-data e)
+              reason (or (provider-note status retry-after)
+                         (not-empty (str (ex-message e)))
+                         "The adapter could not reach the provider.")]
+          (cond
+            (throttle? status retry-after body)
             {:throttled retry-after :body body}
-            {:bad-link (or (provider-note status retry-after)
-                           (not-empty (str (ex-message e)))
-                           "The adapter could not reach the provider.")
-             :status status}))))))
+
+            (contains? link-refusals (some-> status long))
+            {:bad-link reason :status status}
+
+            :else {:transient reason :status status}))))))
 
 (defn claude-routine
   "The claude_routine provider, firing through `adapter` — the real
@@ -2009,14 +2029,14 @@
          (case (:state schedule-row)
            :live (try-act! eng schedule-row :pause nil)
            :paused nil
-           (throttle! eng schedule-row nil nil (:bad-link answer)))
+           (throttle! eng schedule-row nil nil (:transient answer)))
 
          ;; only the link itself breaks the row
          (contains? link-refusals status)
          (note! eng schedule-row (:bad-link answer))
 
          ;; a transient refusal: the row stays live and tries again
-         :else (throttle! eng schedule-row nil nil (:bad-link answer)))))))
+         :else (throttle! eng schedule-row nil nil (:transient answer)))))))
 
 ;; ── the runner pool (waymark ticket d16b71bf) ──────────────────────
 
@@ -2045,14 +2065,16 @@
   "Fire through the pool `ids` and land the answer on the schedule. The
   run that started stamps `fired` with `last_runner`; a pool whose
   every link is waiting keeps the wake pending until the earliest of
-  them is free (48dc648c's rule, across the pool); a pool with no link
-  that can fire says so. `provider-of` answers a link row's Provider.
+  them is free (48dc648c's rule, across the pool); a pool a transient
+  refusal left unstarted keeps the wake pending and tries again in a
+  minute, as `fire!` does; a pool with no link that can fire says so.
+  `provider-of` answers a link row's Provider.
 
   runner-links requires this namespace, so its `fire-pool!` is
   resolved at the call."
   [eng provider-of schedule-row text at ids & [order]]
   (let [fire-pool! (requiring-resolve 'waymark10.server.runner-links/fire-pool!)
-        {:keys [runner answer retry-at]} (fire-pool! eng provider-of ids text order)]
+        {:keys [runner answer retry-at transient]} (fire-pool! eng provider-of ids text order)]
     (cond
       runner
       (try-act! eng schedule-row :fired
@@ -2060,6 +2082,10 @@
                          :last_runner runner}
                   (:started answer)
                   (assoc :last_run_url (str (:started answer)))))
+
+      ;; a transient refusal: the row stays live and tries again
+      transient
+      (throttle! eng schedule-row nil nil transient)
 
       retry-at
       (try-act! eng schedule-row :throttle

@@ -168,8 +168,29 @@
         "a second inputless discover reads the moved list, not the last answer")
     (is (= 3 (count (filter #(= "tools/list" (:method %)) @log)))
         "the create and each discover asked the server")
-    (is (= 2 (discovers))
-        "each discover lands in the row's history")))
+    (is (= 1 (discovers))
+        "only the discover whose list moved lands in the row's history")))
+
+(deftest an-unchanged-discover-leaves-the-version-alone
+  (let [log (atom [])
+        eng (fresh-engine {:clients {"emila" (fake-server (atom three-tools) log)}})
+        row (a-server! eng {:name "emila" :powers emila-powers})
+        history #(count (store/with-tx (:storage eng)
+                          (fn [tx]
+                            (store/transitions (:storage eng) tx
+                                               {:kind :mcp_server :resource-id (:id row)}
+                                               {:newest-first true :limit 100}))))
+        before (history)
+        res (inv/invoke! eng :mcp_server (str (:id row)) :discover {}
+                         {:principal colton})]
+    (is (= 2 (count (filter #(= "tools/list" (:method %)) @log)))
+        "the discover still asked the server")
+    (is (= (:version row) (:version (:row res)))
+        "the answer carries the version it read")
+    (is (= (:version row) (:version (servers/row-by-name eng "emila")))
+        "an equal list bumps no version")
+    (is (= before (history))
+        "and lands no history entry")))
 
 ;; ── the grant world: a sitter wearing a leash, through the MCP door ─
 

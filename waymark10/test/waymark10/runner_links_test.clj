@@ -165,6 +165,17 @@
         (rl/fire-link! *eng* (stub {:started nil}) (row-of id) nil)
         (is (= "live" (name (:state (row-of id)))))
         (is (nil? (get-in (row-of id) [:data :note]))))))
+  (testing "transient leaves the link live and the fire unspent"
+    (let [id (:id (make-link! colton))]
+      (restate! id {:cap {:runs 5 :window_seconds 18000}} colton)
+      (rl/fire-link! *eng* (stub {:transient "The provider answered 503."})
+                     (row-of id) nil)
+      (let [row (row-of id)]
+        (is (= "live" (name (:state row))))
+        (is (nil? (get-in row [:data :note])))
+        (is (nil? (get-in row [:data :retry_after])))
+        (is (nil? (get-in row [:data :last_fired_at])))
+        (is (not (pos? (or (get-in row [:data :runs_in_window]) 0)))))))
   (testing "no person may write the live state"
     (let [id (:id (make-link! colton))]
       (is (some? (refusal #(inv/invoke! *eng* :runner_link id :break nil
@@ -185,14 +196,44 @@
     (testing "a 401 is a bad link, with the provider's sentence"
       (sch/answer! fake 401)
       (is (= "The Routine refused the token." (:bad-link (sch/fire p link nil)))))
-    (testing "exactly one of the three words"
+    (testing "a 404 is a bad link"
       (sch/answer! fake 404)
-      (is (= 1 (count (select-keys (sch/fire p link nil)
-                                   [:started :throttled :bad-link])))))))
+      (is (= "No Routine answers the fire URL." (:bad-link (sch/fire p link nil)))))
+    (testing "a 503 is transient, not a bad link"
+      (sch/answer! fake 503)
+      (let [answer (sch/fire p link nil)]
+        (is (contains? answer :transient))
+        (is (not (contains? answer :bad-link)))))
+    (testing "an unreachable provider is transient"
+      (let [down (reify sch/FireAdapter
+                   (fire-routine [_ _ _ _]
+                     (throw (ex-info "connection refused" {}))))]
+        (is (= "connection refused"
+               (:transient (sch/fire (sch/claude-routine down) link nil))))))
+    (testing "exactly one of the four words"
+      (doseq [status [404 503 418]]
+        (sch/answer! fake status)
+        (is (= 1 (count (select-keys (sch/fire p link nil)
+                                     [:started :throttled :transient :bad-link]))))))))
 
 (deftest an-agent-does-not-make-a-link
   (is (= :a-person-makes-the-link
          (:guard (refusal #(make-link! clerk))))))
+
+(deftest only-the-engine-writes-seeded-from
+  (let [body {:provider "claude_routine"
+              :fire_url a-url
+              :fire_token a-token
+              :seeded_from "model:planted"}]
+    (testing "a person's create with seeded_from is refused"
+      (is (= :the-engine-writes-the-seed
+             (:guard (refusal #(inv/create! *eng* :runner_link body
+                                            {:principal colton}))))))
+    (testing "the seed's create passes"
+      (let [seed (t/principal {:id "waymark10-runner-links" :type :system
+                               :display "Runner links"})
+            row (:row (inv/create! *eng* :runner_link body {:principal seed}))]
+        (is (= "model:planted" (get-in (row-of (:id row)) [:data :seeded_from])))))))
 
 (defn- counting
   "A provider that answers `answer` to every fire and counts them in `n`."
@@ -311,6 +352,21 @@
       (is (= [a b b]
              (vec (repeatedly 3 #(:runner (rl/fire-pool! *eng* (constantly (stub {:started nil}))
                                                          [a b] nil))))))))
+  (testing "a transient refusal tries the next link, and a pool it leaves unstarted says so"
+    (let [a (link-id!) b (link-id!)
+          fires {a (atom 0) b (atom 0)}
+          providers {a (counting (fires a) {:transient "The provider answered 503."})
+                     b (counting (fires b) {:started nil})}
+          provider-of #(providers (str (:id %)))]
+      (is (= b (:runner (rl/fire-pool! *eng* provider-of [a b] "go" "prefer"))))
+      (is (= [1 1] [@(fires a) @(fires b)]))
+      (is (= "live" (name (:state (row-of a))))))
+    (let [a (link-id!)
+          out (rl/fire-pool! *eng* (constantly (stub {:transient "The provider answered 503."}))
+                             [a] nil)]
+      (is (nil? (:runner out)))
+      (is (= "The provider answered 503." (:transient out)))
+      (is (= "live" (name (:state (row-of a)))))))
   (testing "a broken or missing link is skipped, and a pool with none to fire names no time"
     (let [a (link-id!)]
       (rl/fire-link! *eng* (stub {:bad-link "no"}) (row-of a) nil)

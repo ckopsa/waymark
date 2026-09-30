@@ -715,6 +715,64 @@
                                          {:limit failing-scan-limit}))
               ["submitted" "failing"])))))
 
+;; ── a stale `unknown` is read again (ticket 544d36dd) ────────────────
+;;
+;; GitHub computes mergeability after the push without moving
+;; `updated_at`, so the window never offers a pull request first read
+;; as `unknown` again. Where the house merges, the merge call's refusal
+;; corrects it; where GitHub merges, nothing did. So each pass asks for
+;; a handful of them by number, oldest first, and writes the answer
+;; through the change pass: a `conflicted` answer then moves the change
+;; the way a conflict already does.
+
+(def unknown-reread-limit
+  "How many `unknown` changes one pass reads again by number, so a
+  burst of them cannot eat the API budget."
+  5)
+
+(defn- unknown-changes
+  "The open and submitted changes with a number whose stored
+  `mergeable` is `unknown` and whose `change_id` is not in `seen` (the
+  window already read them), least recently written first."
+  [eng seen]
+  (let [st (:storage eng)]
+    (->> (store/with-tx st
+           (fn [tx]
+             (into []
+                   (mapcat #(store/query-rows st tx :change {:state %}
+                                              {:limit failing-scan-limit}))
+                   ["submitted" "open"])))
+         (filter #(and (= "unknown" (str (get-in % [:data :mergeable])))
+                       (some? (get-in % [:data :number]))
+                       (not (contains? seen
+                                       (str (get-in % [:data :change_id]))))))
+         (sort-by #(str (:updated-at %)))
+         (take unknown-reread-limit))))
+
+(defn- unknown-pass!
+  "Each stale `unknown` change → its pull request read by number and
+  handed to the change pass. A forge that will not answer costs that
+  change one pass and nothing else."
+  [eng source changes census log-fn]
+  (if-not (satisfies? ForgePull source)
+    census
+    (let [seen (into #{} (map #(str (:change_id %))) changes)]
+      (reduce
+       (fn [census row]
+         (let [repo (str (get-in row [:data :repository]))
+               number (get-in row [:data :number])
+               doc (try (forge-pull source repo number)
+                        (catch Exception e
+                          (log-fn "the pull request #" number " of " repo
+                                  " could not be read again ("
+                                  (ex-message e) ")")
+                          nil))]
+           (if (map? doc)
+             (change-pass! eng [doc] census log-fn)
+             census)))
+       census
+       (unknown-changes eng seen)))))
+
 (defn- head-reader
   "The checks of each head, read once for the whole pass (ticket
   3aca3ae8): the run pass and the failing pass ask the same heads, and
@@ -1291,7 +1349,9 @@
 ;; A submitted change with no number whose bench names no pull request
 ;; either has an ended ticket, and is closed so the submitted list is
 ;; the real queue, or has a live one, and goes stuck once the window
-;; has passed so a person sees it. Close only: the branch is untouched.
+;; has passed so a person sees it. One already stuck for that is still
+;; closed when its ticket later ends (ticket 91694681). Close only: the
+;; branch is untouched.
 
 (defn- ticket-of
   "The id of the ticket a seat-born change was built for, or nil."
@@ -1320,6 +1380,45 @@
   (str "submitted on " repo " but never opened a pull request and no"
        " pull request row adopted it; head " branch))
 
+(defn- unopened-ended?
+  "Whether the ticket `t` (id `tid`) of a change with no pull request
+  ended, or another change built for it merged."
+  [eng row repo tid t]
+  (boolean (or (#{:done :dropped} (state-of t))
+               (merged-beside? eng row repo tid))))
+
+(defn- unopened-close
+  "The `supersede` door and input closing a change with no pull request
+  whose ticket `tid` ended."
+  [tid]
+  [:supersede {:superseded_by
+               (str "closed: ticket " tid " ended; this change "
+                    "never opened a pull request")}])
+
+(defn- stuck-unopened-move
+  "The `supersede` door and input for a change already stuck for
+  having no pull request, once its ticket ended; else nil. A change
+  whose ticket is not known is left."
+  [eng row repo]
+  (when-some [tid (ticket-of row)]
+    (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
+      (when (unopened-ended? eng row repo tid t)
+        (unopened-close tid)))))
+
+(defn- stuck-unopened-changes
+  "Every change stuck because it never opened a pull request: no
+  number, and `no pull request` among its failing checks."
+  [eng]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (into []
+              (filter #(and (nil? (get-in % [:data :number]))
+                            (some #{"no pull request"}
+                                  (get-in % [:data :failing_checks]))))
+              (store/query-rows st tx :change {:state "stuck"}
+                                {:limit failing-scan-limit}))))))
+
 (defn- unopened-move
   "The door and input for a submitted change with no number whose bench
   names no pull request, or nil: closed when its ticket ended or another
@@ -1333,11 +1432,8 @@
                    (try (Instant/parse stamp) (catch Exception _ nil)))
             note (unopened-note repo branch)]
         (cond
-          (or (#{:done :dropped} (state-of t))
-              (merged-beside? eng row repo tid))
-          [:supersede {:superseded_by
-                       (str "closed: ticket " tid " ended; this change "
-                            "never opened a pull request")}]
+          (unopened-ended? eng row repo tid t)
+          (unopened-close tid)
 
           (nil? seen) [:note_adoption {:unadopted_since (str now)}]
 
@@ -1444,8 +1540,10 @@
   "Every submitted change of a repository with an active policy that
   has no number → the pull request its landing opened, adopted when
   the forge answers it by number, else at most one `note_adoption`;
-  when its landing opened none, the `unopened-move`. The first-sight
-  stamp never stands in the adoption's way: the adopt door clears it.
+  when its landing opened none, the `unopened-move`. A change already
+  stuck for having no pull request is closed once its ticket ends. The
+  first-sight stamp never stands in the adoption's way: the adopt door
+  clears it.
   A rig that does not answer, or a door the engine refuses, costs that
   change one pass and nothing else."
   [eng source census log-fn]
@@ -1461,19 +1559,22 @@
        (let [repo (str (get-in row [:data :repository]))
              policy (get by-repo repo)]
          (if-not (and policy
-                      (= :submitted (state-of row))
+                      (#{:submitted :stuck} (state-of row))
                       (nil? (get-in row [:data :number])))
            census
            (try
-             (let [pr (landed-pull-request eng row policy)
+             (let [stuck? (= :stuck (state-of row))
+                   pr (when-not stuck? (landed-pull-request eng row policy))
                    branch (bench/branch-of row policy)]
                (if-some [doc (when pr (forge-doc-of source row repo pr log-fn))]
                  (change-pass! eng [doc] census log-fn)
-                 (let [[door input] (if pr
-                                      (some->> (adoption-move row repo branch
-                                                              pr now)
-                                               (vector :note_adoption))
-                                      (unopened-move eng row repo branch now))]
+                 (let [[door input] (cond
+                                      stuck? (stuck-unopened-move eng row repo)
+                                      pr (some->> (adoption-move row repo branch
+                                                                 pr now)
+                                                  (vector :note_adoption))
+                                      :else (unopened-move eng row repo branch
+                                                           now))]
                    (if (nil? input)
                      census
                      (do (inv/invoke! eng :change (str (:id row)) door input
@@ -1487,7 +1588,7 @@
                        " was refused its adoption note (" (ex-message e) ")")
                (update census :refused inc))))))
      census
-     (live-changes eng))))
+     (into (live-changes eng) (stuck-unopened-changes eng)))))
 
 ;; ── a red base opens one ticket (ticket ade81ae9) ────────────────────
 ;;
@@ -1839,24 +1940,29 @@
         repo (blank->nil (get-in policy [:data :repository]))
         ^Instant now (now-of eng)
         ^Instant noted (as-instant (get-in policy [:data :floor_noted_at]))
+        line (long (or (get-in policy [:data :groom_floor_max_priority]) 4))
+        within? #(<= (long (or (get-in % [:data :priority]) 4)) line)
         in-state #(rows-by eng :ticket {:repo repo :state %} floor-scan-limit)]
     (when (and repo (pos? floor)
                (or (nil? noted)
                    (not (.isBefore now (.plusSeconds noted settle)))))
       (let [opened (in-state :open)
-            n (count opened)]
+            n (count (filter within? opened))]
         (when (< n floor)
-          (let [drafts (in-state :draft)]
-            (when-not (some #(floor-ticket? repo %) (concat drafts opened))
+          (let [drafts (in-state :draft)
+                waiting (count (filter #(and (within? %)
+                                             (contains? groomable-types
+                                                        (str (get-in % [:data :type]))))
+                                       drafts))]
+            ;; under a line, the floor asks only when a draft at or
+            ;; above it waits; the default 4 asks as it always did
+            (when-not (or (and (< line 4) (zero? waiting))
+                          (some #(floor-ticket? repo %) (concat drafts opened)))
               (inv/create! eng :ticket
                            {:title (cut (str floor-title-prefix repo ": " n
                                              " open, floor " floor)
                                         200)
-                            :detail (floor-detail
-                                     repo n floor
-                                     (count (filter #(contains? groomable-types
-                                                                (str (get-in % [:data :type])))
-                                                    drafts)))
+                            :detail (floor-detail repo n floor waiting)
                             :type "chore"
                             :priority 1
                             :repo repo}
@@ -2030,6 +2136,7 @@
                   refused (volatile! [])
                   census (change-pass! eng changes census log-fn refused)
                   _ (retry-refused! source @refused log-fn)
+                  census (unknown-pass! eng source changes census log-fn)
                   read-checks (head-reader source)
                   census (run-pass! eng source
                                     (into (vec checks)

@@ -542,6 +542,12 @@
     (assoc :json-schema/contentMediaType "text/markdown")
     (:kind props)
     (assoc :json-schema/x-ref (ref-props props))
+    ;; the forms whose target the VALUE names (8ca09ba7): a principal,
+    ;; a typed `<kind>:<id>` address, a kind read off a sibling field
+    (and (:x-ref props) (not (:kind props)))
+    (assoc :json-schema/x-ref
+           (cond-> (:x-ref props)
+             (:kind-from (:x-ref props)) (update :kind-from name)))
     (contains? props :open)
     (assoc :json-schema/x-vocab
            (into {} (filter (comp some? val))

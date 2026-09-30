@@ -55,16 +55,32 @@
 
 (g/defguard a-person-makes-the-link
   {:reads [:principal]
-   :explain "A runner link is a person's to make. A person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes its fire URL and its token here. An agent does not make a link; the engine copies only a link a person already pasted onto a model or a schedule."}
+   :explain "A runner link is a person's to make. A person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes its fire URL and its token here. An agent does not make a link; the engine copies only a link a person already pasted onto a model or a schedule."
+   :open "No door changes who the caller is: ask the person to make the Routine and paste its link here."}
   [_row _inp ctx]
   (if (or (a-persons-hand? ctx)
           (= :system (get-in ctx [:principal :type])))
     (t/allow) (t/deny)))
 
+;; THE SEED'S MARK HAS ONE WRITER, seats.clj's `link-not-written-by-hand`
+;; in this kind's shape: `seeded_from` is on the create-schema so the
+;; boot seed can record its source, and a planted value would make
+;; `ensure-seeded-links!` skip that model or schedule for good.
+(g/defguard the-engine-writes-the-seed
+  {:judges [:seeded_from]
+   :reads [:principal]
+   :explain "Where a link was copied from is written by the engine's boot seed alone, never by hand. Make the link without seeded_from."}
+  [_row inp ctx]
+  (if (or (nil? (:seeded_from inp))
+          (= :system (get-in ctx [:principal :type])))
+    (t/allow)
+    (t/deny)))
+
 (g/defguard a-person-writes-the-token
   {:judges [:token]
    :reads [:principal]
-   :explain "A new token is a person's to paste. Restate the link without a token, and the one it holds stays."}
+   :explain "A new token is a person's to paste. Restate the link without a token, and the one it holds stays."
+   :remedies [:runner_link/restate]}
   [_row inp ctx]
   (if (or (nil? (:token inp)) (a-persons-hand? ctx))
     (t/allow)
@@ -211,7 +227,7 @@
                 :provider #{:eq :in}
                 :seeded_from #{:eq}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
-   :create-guards [a-person-makes-the-link]
+   :create-guards [a-person-makes-the-link the-engine-writes-the-seed]
    :actions
    {:restate
     {:from #{:live :broken} :to :live
@@ -540,8 +556,9 @@
   "Fire one run through `link-row` by `provider` (a schedules/Provider),
   with `text`, and write what it answered onto the link: `started`
   stamps `last_fired_at` and counts the run in the window, `throttled`
-  records `retry_after`, and `bad-link` marks the link broken. Answers
-  the provider's answer.
+  records `retry_after`, `transient` writes nothing (the link stays
+  live and the fire is not spent), and `bad-link` marks the link
+  broken. Answers the provider's answer.
 
   A started run also counts in the window of the link's provider row,
   and a throttle that names the account (`account-throttle?`) holds the
@@ -564,6 +581,10 @@
         (if-some [p (when (account-throttle? answer) @account)]
           (act! eng :runner_provider p :throttle until)
           (act! eng link-row :throttle until)))
+
+      ;; a 5xx, an unreachable provider, another 4xx: not the link's fault
+      (contains? answer :transient)
+      nil
 
       :else
       (let [reason (or (not-empty (str (:bad-link answer)))
@@ -665,18 +686,25 @@
   Answers {:runner id :answer answer} for the link a run started
   through; else {:retry-at instant}, the earliest instant a live link
   of the pool is free again — nil when none will be (every link
-  broken, retired or missing)."
+  broken, retired or missing) — with `:transient`, the provider's
+  sentence, when a link answered a transient refusal."
   [eng provider-of ids text & [order]]
   (let [at (or (instant-of ((:now-fn eng))) (Instant/now))
-        pool (keep (links-by-id eng) (map str ids))]
+        pool (keep (links-by-id eng) (map str ids))
+        transient (volatile! nil)]
     (or (some (fn [row]
                 (when (nil? (provider-waiting eng row at))
                   (let [answer (fire-link! eng (provider-of row) row text)]
+                    (when (contains? answer :transient)
+                      (vreset! transient
+                               (or (not-empty (str (:transient answer)))
+                                   "The provider could not start a run.")))
                     (when (contains? answer :started)
                       {:runner (str (:id row)) :answer answer}))))
               (pool-order pool at order))
         (let [fresh (links-by-id eng)]
-          {:retry-at (->> pool
+          (cond->
+           {:retry-at (->> pool
                           (keep #(get fresh (str (:id %))))
                           (filter live?)
                           (keep (fn [r]
@@ -685,4 +713,5 @@
                                            (remove nil?)
                                            seq sort last)))
                           sort
-                          first)}))))
+                          first)}
+            @transient (assoc :transient @transient))))))

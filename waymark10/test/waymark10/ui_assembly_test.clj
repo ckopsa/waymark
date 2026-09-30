@@ -6,7 +6,7 @@
   waymark10.ui-test through the real handler."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is]]
+            [clojure.test :refer [deftest is testing]]
             [waymark10.server.ui-assembly :as sut]))
 
 (deftest every-fragment-is-on-the-classpath
@@ -470,3 +470,24 @@
         "scrolling the list never drags the page behind it")
     (is (contains? (block css ".nav-menu {") "overflow-y: auto")
         "…and the menu it grew out of stays capped too")))
+
+(deftest refs-the-value-names-label-like-a-kind-ref
+  ;; 8ca09ba7. The page is not executed here, so this pins the seams:
+  ;; each x-ref form reaches the live-summary path a :kind ref takes,
+  ;; and a read that fails leaves the bare value
+  (let [page (sut/assemble)]
+    (testing "principal: member:/seat: or a bare member id"
+      (is (str/includes? page "/^(member|seat):"))
+      (is (str/includes? page "if (ref.principal) return principalRef(value);")))
+    (testing "typed address: a served kind, a pull request, else text"
+      (is (str/includes? page "if (ref.address) return typedAddressCell(value);"))
+      (is (str/includes? page "\"/pull/\""))
+      (is (str/includes? page "collectionHref(wellKnownNow, m[1])")))
+    (testing "kind-from: the sibling's value is the kind"
+      (is (str/includes? page "row[ref[\"kind-from\"]]"))
+      (is (str/includes? page "fieldCell(schema, k, v, obj)")))
+    (testing "nested maps label their own entries' refs"
+      (is (str/includes? page "return kvTable(value, inner);"))
+      (is (str/includes? page "fieldCell(schema, c, r[c], r)")))
+    (testing "a target the reader cannot read stays the bare value"
+      (is (str/includes? page "if (s) span.replaceWith(resourceRef(kind, id, s));")))))

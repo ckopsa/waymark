@@ -514,6 +514,14 @@
                                  {:label "How often the floor may ask"
                                   :help "The engine files at most one floor ticket in this many seconds, and none while the last one is still draft or open."}}
     [:int {:min 60 :max 604800}]]
+   ;; ticket 08efd286: OPTIONAL, and 4 (every priority) when absent
+   [:groom_floor_max_priority {:optional true
+                               :default 4
+                               :examples [3]
+                               :x-display
+                               {:label "The floor's priority line"
+                                :help "The floor counts and offers only tickets at this priority or more urgent (0 is most urgent)."}}
+    [:int {:min 0 :max 4}]]
    [:formatter {:default "runner"
                 :x-display
                 {:label "What formats the code"
@@ -812,13 +820,11 @@
      ;; the form opens on the policy that stands, so a person changes
      ;; one number and restates the rest as it was. The engine's own
      ;; two fields are absent here for the reason they are absent from
-     ;; the create form: a person does not state them.
-     :edit {:prefill [:repository :clone_url :branch_pattern :base :max_lines
-                      :opens_pr :auto_merge :merge_by :required_checks
-                      :merge_method :merge_wait_seconds
-                      :deploy_check :deploy_wait_seconds
-                      :rounds_per_change :merge_strategy :train_size :formatter
-                      :deny :test :check :orientation]}
+     ;; the create form: a person does not state them. The prefill IS
+     ;; the input's fields, read from them, so a field added to the
+     ;; policy is never left out of it (ticket e3423674: a patch that
+     ;; named `check` reset groom_floor to its default)
+     :edit {:prefill (mapv first policy-fields)}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
                :description "State what submit means in this repository again, whole"}}

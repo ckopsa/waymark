@@ -1350,7 +1350,8 @@
                 entries (cond-> [[ask-field {:x-display (ask-display asks)
                                              :not-a-ref "The question, in words: never a row id, whatever the field is called."}
                                   [:string {:min 1 :max ask-max}]]
-                                 [by {:optional true :x-display {:raw true}}
+                                 [by {:optional true :x-display {:raw true}
+                                      :not-a-ref "bare today; swept by 5cb6a0c7"}
                                   [:maybe [:string {:max 128}]]]]
                           exp-field
                           (conj [exp-field {:optional true
@@ -1358,7 +1359,8 @@
                                  [:maybe :waymark/instant]])
                           decided-by
                           (conj [decided-by {:optional true
-                                             :x-display {:raw true}}
+                                             :x-display {:raw true}
+                                             :not-a-ref "bare today; swept by 5cb6a0c7"}
                                  [:maybe [:string {:max 128}]]]))
                 entries (into entries
                               (map (fn [n]
