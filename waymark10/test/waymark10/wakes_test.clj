@@ -1903,6 +1903,82 @@
         (is (= 1 (count (fires-of token))))
         (seat-do! seat :retire)))))
 
+;; ── the wake that meets a row still in its grace ────────────────────
+;;
+;; Production, 2026-09-29, three times: a reopen landed seconds after
+;; the seat's last sitting closed. That sitting still held the row
+;; through `release_grace_seconds`, so the walk read as empty and the
+;; wake was spent on nothing. The wake is now due when the grace ends,
+;; and the tick fires it then, once, into a walk that hands the row.
+
+(defn- walked-and-ended!
+  "Write what a real sit and close leave on a sitting: the rows it
+  walked and the moment it ended."
+  [sitting-id row-ids ^Instant ended]
+  (let [st (:storage *eng*)
+        row (raw :sitting sitting-id)]
+    (store/with-tx st
+      (fn [tx]
+        (store/update-data! st tx :sitting (str sitting-id)
+                            (assoc (:data row)
+                                   :walked_rows (mapv str row-ids)
+                                   :ended_at (str ended))
+                            (:next-flip-at row))))))
+
+(deftest a-wake-inside-the-release-grace-is-deferred-to-its-end
+  (let [wn :wake-grace
+        fn' :wake-grace-fires
+        _ (drain-fires! fn')
+        item (item! "grace-reopened")
+        _ (drain-wakes! wn)
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "graceclerk"
+                          {:walk "wake_item"
+                           :scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                    :filter {:batch "grace-reopened"}}]
+                           :wake_on [{:kind "wake_item" :actions ["touch"]
+                                      :filter {:batch "grace-reopened"}}]}
+                          fn')
+            closed (sitting! seat)]
+        (close-sitting! closed)
+        (drain-wakes! wn)
+        (walked-and-ended! closed [item] t0)
+
+        (testing "a reopen 10 s after the close fires nothing, and the
+                  wake is due when the grace ends"
+          (at 10)
+          (item-do! item :touch)
+          (drain-wakes! wn)
+          (is (empty? (seat-fires seat)))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+              "the wake is remembered, not spent")
+          (is (= (.plusSeconds t0 120) (due-of seat))))
+
+        (testing "inside the grace the tick still fires nothing"
+          (at 60)
+          (wakes/tick! *eng*)
+          (is (empty? (seat-fires seat))))
+
+        (testing "at the grace's end one fire goes out, naming no row, and
+                  the walk hands the row"
+          (at 121)
+          (wakes/tick! *eng*)
+          (let [ts (seat-fires seat)]
+            (is (= 1 (count ts)))
+            (is (nil? (get-in (first ts) [:inputs :text]))))
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (not (contains? (seats/unwalkable-rows *eng* (raw :seat seat) nil)
+                              (str item))))
+          (drain-fires! fn')
+          (is (= 1 (count (fires-of token))))
+          (wakes/tick! *eng*)
+          (is (= 1 (count (seat-fires seat))) "and it fires once"))
+        (seat-do! seat :retire)))))
+
 ;; ── the fuel wall holds the wake ─────────────────────────────────────
 ;;
 ;; Production, 2026-09-27: code-seat was past its week's fuel and a
