@@ -1590,6 +1590,55 @@
      census
      (into (live-changes eng) (stuck-unopened-changes eng)))))
 
+(defn- ended-ticket-close
+  "The `supersede` input closing a change with no pull request whose
+  ticket has ended, else nil. A pull request is GitHub's to end."
+  [eng row]
+  (when-some [tid (when (nil? (get-in row [:data :number]))
+                    (ticket-of row))]
+    (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
+      (when-some [ending (#{:done :dropped} (state-of t))]
+        {:superseded_by (ticket/ending-sentence
+                         ending (get-in t [:data :close_reason]))}))))
+
+(defn sweep-ended-tickets!
+  "THE LEFTOVERS, SWEPT ONCE A DEPLOY (ticket 458d65c5). A ticket's
+  ending closes its unmerged changes now, but the changes left open,
+  stuck or failing beside a ticket that ended before it did not move.
+  This closes each that has no pull request through `supersede`,
+  naming the ending, and leaves every change whose ticket is still
+  live. `start-passes!` runs it on
+  its first beat. → how many it closed."
+  [eng log-fn]
+  (let [closed (reduce
+                (fn [n row]
+                  (if-some [input (ended-ticket-close eng row)]
+                    (try
+                      (inv/invoke! eng :change (str (:id row)) :supersede input
+                                   (as-opts))
+                      (inc (long n))
+                      (catch Exception e
+                        (log-fn "the change " (:id row) " was not swept ("
+                                (ex-message e) ")")
+                        n))
+                    n))
+                0
+                (mapcat #(rows-by eng :change {:state %} failing-scan-limit)
+                        ["open" "stuck" "failing"]))]
+    (log-fn closed " changes of ended tickets swept")
+    closed))
+
+(defn- sweep-at-boot!
+  "The sweep, on the first beat that has an engine. → true once it has
+  run, whatever it closed or refused."
+  [{:keys [engine engine-ref log-fn]}]
+  (if-some [eng (or engine (some-> engine-ref deref))]
+    (do (try (sweep-ended-tickets! eng (or log-fn warn!))
+             (catch Exception e
+               (warn! "the sweep of ended tickets failed (" (ex-message e) ")")))
+        true)
+    false))
+
 ;; ── a red base opens one ticket (ticket ade81ae9) ────────────────────
 ;;
 ;; A base branch that goes red stops every pull request on it, and
@@ -2205,15 +2254,16 @@
   (let [stop (CountDownLatch. 1)
         t (Thread. ^Runnable
                    (fn []
-                     (loop []
-                       (try (pass! config)
-                            (catch Exception e
-                              (warn! "pass failed (" (ex-message e)
-                                     "); the stored rows keep serving and "
-                                     "the next beat still runs")))
-                       (when-not (.await stop (long (* 1000 every-seconds))
-                                         TimeUnit/MILLISECONDS)
-                         (recur))))
+                     (loop [swept? false]
+                       (let [swept? (or swept? (sweep-at-boot! config))]
+                         (try (pass! config)
+                              (catch Exception e
+                                (warn! "pass failed (" (ex-message e)
+                                       "); the stored rows keep serving and "
+                                       "the next beat still runs")))
+                         (when-not (.await stop (long (* 1000 every-seconds))
+                                           TimeUnit/MILLISECONDS)
+                           (recur swept?)))))
                    "factory10-forge")]
     (doto ^Thread t (.setDaemon true) (.start))
     {:thread t :stop stop}))
