@@ -13,7 +13,7 @@ const dlgStamp = t => new Date(t || Date.now())
   .toTimeString().slice(0, 8);
 
 async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
-                             idemKey: callerKey}) {
+                             idemKey: callerKey, suggest, invitation}) {
   const safety = entry.safety || {};
   const input = entry.input || null;
   /* rule 3 (Part IV): a non-idempotent action gets its key at dialog
@@ -64,6 +64,9 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
        not hold. Never for a bulk write, as above. */
     (!bulkIds && entry.prefill_values) || {},
     prefill || {},
+    /* an invitation's suggestions: in the form, marked, and sent only
+       by the person's own submit */
+    suggest || {},
     (draftView || {}).prefill || {},
     (draftView || {}).values || {});
   const kind = (doc.kind || "").replace("_collection", "");
@@ -120,6 +123,10 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       }}, "Discard draft") : null,
       input && dryRunnable(entry.href)
         ? el("button", {onclick: () => check()}, "Check") : null,
+      invitation && (invitation.doc.actions || {}).decline
+        ? el("button", {class: "danger", "data-invite-decline": "",
+                        onclick: () => declineInvitation()}, "Decline")
+        : null,
       el("button", {onclick: () => closeDlg()}, "Cancel"),
       el("button", {class: safety.confirm ? "danger" : "primary",
                     onclick: () => submit()},
@@ -380,6 +387,15 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       }
     } else showErrors(res.body);
   }
+  /* decline is one door, the invitation's own: no form between */
+  async function declineInvitation() {
+    const res = await invokeBare(invitation.doc.actions.decline, invitation.doc);
+    if (!res.ok) { showErrors(res.body); return; }
+    disarmDraft();
+    closeDlg();
+    toast("Declined");
+    onDone && onDone(res.body);
+  }
   async function submit() {
     clearTimeout(dryTimer);          /* a pending blur judge must not
                                         speak over the landing */
@@ -424,9 +440,34 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     showErrors(problem);
   }
 
+  /* an invitation (docs/spec-guided-follow.md §3): the suggested
+     values wear their mark until the person types over them; the
+     invited field scrolls into view, lit, with the author's note
+     beside it */
+  for (const k of Object.keys(suggest || {})) {
+    const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
+    if (!node) continue;
+    node.classList.add("suggested-value");
+    node.title = "suggested — yours to change";
+    node.addEventListener("input",
+      () => node.classList.remove("suggested-value"), {once: true});
+  }
   document.body.append(dlg);
   dlg.addEventListener("close", () => dlg.remove());
   dlg.showModal();
+  if (invitation) {
+    const node = invitation.field &&
+      form.querySelector(`[name="${CSS.escape(invitation.field)}"]`);
+    const spot = node ? (node.closest("label") || node.parentElement) : null;
+    const note = el("p", {class: "invite-note", "data-invite-note": ""},
+      invitation.note || "");
+    if (spot) { spot.after(note); spot.classList.add("invited"); }
+    else form.prepend(note);
+    requestAnimationFrame(() => {
+      (spot || note).scrollIntoView({behavior: "smooth", block: "center"});
+      if (node) node.focus({preventScroll: true});
+    });
+  }
 }
 
 /* ── the bulk report: N inputs → N verdicts, honestly partial ──────── */
@@ -457,6 +498,28 @@ function reportDialog(report) {
       el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
   document.body.append(dlg);
   dlg.showModal();
+}
+
+/* ── an invitation, opened in the person's own hand: the invited row,
+   its door's dialog with the inputs live, and the engine answering the
+   invitation when the person submits — the page does nothing extra ── */
+async function openInvitation(inv) {
+  const d = inv.data || {};
+  const res = await api(d.self);
+  if (!res.ok) {
+    toast(`The invited row cannot be read: ${(res.body || {}).detail || res.status}`);
+    return;
+  }
+  const target = res.body;
+  const entry = (target.actions || {})[d.action];
+  go(target.self);
+  if (!entry) {
+    toast(`${pretty(d.action)} is not open to you on this row right now`);
+    return;
+  }
+  actionDialog({name: d.action, entry, doc: target, suggest: d.suggest || {},
+                invitation: {doc: inv, field: d.field, note: d.note},
+                onDone: () => render()});
 }
 
 /* ── undo: an inverse action present in the post-action document ───── */

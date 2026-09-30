@@ -135,6 +135,28 @@
     (is (not (str/includes? body "wmk_"))
         "no minted bearer-token vocabulary on wire 10")))
 
+(deftest ui-renders-an-invitation-from-its-row
+  ;; docs/spec-guided-follow.md §3: the invitation's row page offers the
+  ;; step to its subject; the dialog opens on the invited row with the
+  ;; suggestions marked, the field scrolled to and lit, the note beside it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "kind === \"invitation\""))
+    (is (str/includes? body "onclick: () => openInvitation(doc)"))
+    (is (str/includes? body "async function openInvitation(inv)"))
+    (is (str/includes? body "suggest: d.suggest || {}"))
+    (is (str/includes? body "suggested-value"))
+    (is (str/includes? body "scrollIntoView({behavior: \"smooth\", block: \"center\"})"))
+    (is (str/includes? body "data-invite-note"))
+    (is (str/includes? body "@keyframes invited"))))
+
+(deftest ui-decline-invokes-the-decline-door
+  ;; decline is one button on the dialog, straight through the
+  ;; invitation's own decline door
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "data-invite-decline"))
+    (is (str/includes? body
+                       "invokeBare(invitation.doc.actions.decline, invitation.doc)"))))
+
 (defn- render! [headers body]
   (let [resp (*h* {:request-method :post :uri "/api/-/render/markdown"
                    :headers (merge {"content-type" "application/json"} headers)
