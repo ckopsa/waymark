@@ -174,6 +174,37 @@ honest way to say *this door opens for another kind's own handler and for
 nobody's hand*: `composition_request`'s `answer` admits `outcome`'s create
 and refuses everything else by name.
 
+A remedy may name the row it acts on. Beside the bare token
+(`:meal/accept`), `:remedies` takes a map `{:door :kind/action :id
+binding :input {field binding}}`, where a binding is one of three reads:
+`(input :f)` off the refused call's input, `(data :f)` off the refused
+row, or `(evidence :f)` off what the refusing guard found. The guard
+declares what it can find with `:evidence` — a vector of names its
+`:check` returns as `(t/deny {:evidence {name value}})`, or a map
+`{name (fn [row ctx] → value)}` the engine calls only when the guard
+refuses (a nil value is left out; on the render probe, which carries no
+`:find`, the router lends read hooks as `:evidence-reads` so the
+envelope can still name what it found):
+
+```clojure
+{:remedies [{:door :plan_day/assign_meal :id (evidence :plan_day_id)}]
+ :evidence {:plan_day_id (fn [row ctx] …)}}
+```
+
+The battery (`checks/check-remedy-bindings`) makes a binding naming no
+field an ERROR: `(input :f)` must be a field of the guarded door's input
+(the create schema at the create door), `(data :f)` a field of the row,
+`(evidence :f)` a name the guard's `:evidence` declares. On the wire a
+refusal (`guard-refused`, 409) and the envelope's `unavailable` entry
+both carry `evidence` (the `{name value}` the guard found) and
+`resolved_remedies` (each remedy's `door` with the `id` and `input` its
+bindings resolved to), each only when non-empty — so a guard with bare
+remedies reads as it always did. The envelope's entry is judged with no
+input, so there only `(data …)` and `(evidence …)` bindings resolve.
+`client/pursue!` follows a bound remedy to its row; its `:choices`
+`{door {:id … :input {…}}}` input fills the fields the binding left
+unset.
+
 An acceptance-set guard (`guard` with `:accepts (fn [row ctx] …)` and
 `:reads`) does the same through its set: the rendered enum, the picker, and
 the enforcement are one declaration.
