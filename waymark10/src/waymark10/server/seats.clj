@@ -4683,6 +4683,41 @@
                                 {:limit open-sitting-page
                                  :newest-first true}))))))
 
+(defn grace-lifts-at
+  "The moment the first of `ids` that a CLOSED sitting of this seat
+  still holds through its grace (`graced-rows`) is handed on: that
+  sitting's `ended_at` plus the seat's `release_grace_seconds`. A wake
+  that finds its walk empty only because its row rests there is
+  deferred to this moment, not spent on a run that sits and finds
+  nothing (ticket 1a4038bf). → an Instant after `now`, or nil when
+  none of `ids` is held by a grace."
+  [eng seat-row ids now]
+  (let [ids (into #{} (keep #(some-> % str not-empty)) ids)
+        grace (long (or (get-in seat-row [:data :release_grace_seconds])
+                        release-grace-default))
+        now (instant-of now)
+        st (:storage eng)]
+    (when (and seat-row now (pos? grace) (seq ids)
+               (get (inv/resources eng) :sitting))
+      (store/with-tx st
+        (fn [tx]
+          (let [held (into #{} (filter ids)
+                           (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                                        nil now))]
+            (when (seq held)
+              (->> (store/query-rows st tx :sitting
+                                     {:seat (str (:id seat-row)) :state :closed}
+                                     {:limit open-sitting-page
+                                      :newest-first true})
+                   (keep (fn [s]
+                           (when (some #(contains? held (str %))
+                                       (get-in s [:data :walked_rows]))
+                             (some-> (instant-of (get-in s [:data :ended_at]))
+                                     (.plusSeconds grace)))))
+                   (filter #(.isAfter ^Instant % ^Instant now))
+                   sort
+                   first))))))))
+
 (defn claimed-rows
   "The walk row ids the OTHER open sittings of this seat were handed:
   the rows a second run of the seat must not walk again. A fire and a
