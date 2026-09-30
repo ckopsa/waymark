@@ -1834,34 +1834,51 @@
            (:next-flip-at raw))))))
   0)
 
+(defn- no-carrier!
+  "A member holding quiet-hours notices whose `notify` names no
+  notifier, or one that is gone: that is not a failed send. The lines
+  stay queued, nothing is counted and nothing is warned; the row is
+  marked once, so the roster says \"no carrier\". → 0."
+  [eng member]
+  (let [st (:storage eng)
+        id (str (:id member))]
+    (when-not (= "no carrier" (get-in member [:data :quiet_digest_carrier]))
+      (store/with-tx st
+        (fn [tx]
+          (when-some [raw (store/load-row st tx :member id {:for-update true})]
+            (store/update-data! st tx :member id
+                                (assoc (:data raw) :quiet_digest_carrier "no carrier")
+                                (:next-flip-at raw))))))
+    0))
+
 (defn- digest!
-  "One member's digest, once their window has closed: the held lines
-  are taken off the row under its lock, then sent outside it through
-  the member's own `notify`, over the carrier's template. A send that
-  fails puts them back (digest-failed!). → 1 when a digest went out,
-  else 0; never throws."
+  "One member's digest, once their window has closed: with a carrier
+  in hand, the held lines are taken off the row under its lock, then
+  sent outside it through the member's own `notify`, over the
+  carrier's template. No carrier is not a failure: the lines stay
+  (no-carrier!). A send that fails puts them back (digest-failed!).
+  → 1 when a digest went out, else 0; never throws."
   [eng member now]
   (let [st (:storage eng)
         id (str (:id member))
         notify (get-in member [:data :notify])]
     (if (quiet? notify now)
       0
-      (let [held (store/with-tx st
-                   (fn [tx]
-                     (when-some [raw (store/load-row st tx :member id {:for-update true})]
-                       (let [held (vec (get-in raw [:data :quiet_held]))]
-                         (when (seq held)
-                           (store/update-data! st tx :member id
-                                               (dissoc (:data raw) :quiet_held)
-                                               (:next-flip-at raw))
-                           held)))))
-            carrier (some->> (:notifier notify) str not-empty (decoded-row eng :notifier))]
+      (let [carrier (some->> (:notifier notify) str not-empty (decoded-row eng :notifier))
+            held (when carrier
+                   (store/with-tx st
+                     (fn [tx]
+                       (when-some [raw (store/load-row st tx :member id {:for-update true})]
+                         (let [held (vec (get-in raw [:data :quiet_held]))]
+                           (when (seq held)
+                             (store/update-data! st tx :member id
+                                                 (dissoc (:data raw) :quiet_held
+                                                         :quiet_digest_carrier)
+                                                 (:next-flip-at raw))
+                             held))))))]
         (cond
+          (nil? carrier) (no-carrier! eng member)
           (empty? held) 0
-          (nil? carrier)
-          (digest-failed! eng id held
-                          (str "held " (count held)
-                               " notices and names no notifier to send the digest"))
           :else
           (try
             (let [args (merge (render-notice (get-in carrier [:data :input_template]) {})
