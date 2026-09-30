@@ -195,7 +195,42 @@
      :shove {:from #{:shut} :to :open :safety one-way}
      :close {:from #{:ajar :open} :to :shut :safety one-way}}}))
 
-(def resources [fx/meal plan-day plan grocery-list latch hatch gate])
+;; pure over the row, so the render probe judges it — and its remedy
+;; binds (data :latch_id), so the probe itself names which latch
+(def crate-unlatched
+  (g/expr {:name :crate-unlatched
+           :when '(= (data :unlatched) true)
+           :explain "The crate's latch is still down."
+           :remedies [{:door :latch/lift :id '(data :latch_id)}]}))
+
+;; the same, bound only to the call's input: a probe has none
+(def crate-keyed
+  (g/expr {:name :crate-keyed
+           :when '(= (data :keyed) true)
+           :explain "The crate wants its key."
+           :remedies [{:door :latch/lift :id '(input :latch_id)}]}))
+
+(def crate
+  (r/resource
+   {:kind :crate
+    :states [:shut :open]
+    :initial :shut
+    :summary "Crate · {state}"
+    :schema [:map
+             [:latch_id [:string {:max 80}]]
+             [:unlatched {:optional true} [:maybe :boolean]]
+             [:keyed {:optional true} [:maybe :boolean]]]
+    :actions
+    {:pry {:from #{:shut} :to :open
+           :guards [crate-unlatched]
+           :safety fx/routine}
+     :unlock {:from #{:shut} :to :open
+              :input [:map [:latch_id [:string {:min 1 :max 80}]]]
+              :guards [crate-keyed]
+              :safety fx/routine}
+     :close {:from #{:open} :to :shut :safety fx/routine}}}))
+
+(def resources [fx/meal plan-day plan grocery-list latch hatch gate crate])
 
 (def ^:dynamic *session* nil)
 
@@ -324,6 +359,35 @@
   (let [lt (make! :latch {:free false})
         res (c/act! *session* (c/get-doc *session* (:self lt)) :lift nil)]
     (is (nil? (get-in res [:problem :resolved_remedies])) (pr-str res))))
+
+;; ── the probe binds too: an unavailable entry's resolved remedies
+
+(defn- crate! [latch]
+  (make! :crate {:latch_id (id-of latch) :unlatched false :keyed false}))
+
+(deftest the-probe-carries-its-resolved-remedies
+  (let [lt (make! :latch {:free true})
+        doc (c/get-doc *session* (:self (crate! lt)))]
+    (is (= ["latch.lift"] (get-in doc [:unavailable :pry :remedies])) (pr-str doc))
+    (is (= [{:door "latch.lift" :id (id-of lt)}]
+           (get-in doc [:unavailable :pry :resolved_remedies])))))
+
+(deftest an-input-bound-remedy-stays-bare-on-the-probe
+  (let [doc (c/get-doc *session* (:self (crate! (make! :latch {:free true}))))]
+    (is (= ["latch.lift"] (get-in doc [:unavailable :unlock :remedies])) (pr-str doc))
+    (is (= [{:door "latch.lift"}]
+           (get-in doc [:unavailable :unlock :resolved_remedies]))
+        "no :id — a probe has no input to read it from")))
+
+(deftest pursue-follows-the-probe's-bound-remedy-without-resolve
+  (let [lt (make! :latch {:free true})
+        cr (crate! lt)
+        res (c/pursue! *session* cr :pry nil {:dry-run true})]
+    (is (empty? (:blocked-on res)) (pr-str res))
+    (is (= ["latch.lift" "crate.pry"] (mapv :door (:writes res))))
+    (is (= (:self lt) (:row (first (:writes res))))
+        "the probe's binding named the latch; nobody was asked")
+    (is (= "shut" (state-of lt)))))
 
 (deftest a-binding-naming-no-input-field-fails-the-battery
   (is (thrown-with-msg?
