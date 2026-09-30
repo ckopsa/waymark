@@ -736,7 +736,8 @@
             [:quiet_digest_carrier {:optional true
                                     :x-display {:raw true
                                                 :label "Digest carrier"
-                                                :help "\"no carrier\" when quiet-hours notices are held but no notifier is named, or the one named is gone: they wait, and no digest is tried or counted. Written by the engine."}}
+                                                :help "\"no carrier\" when quiet-hours notices are held but no notifier is named, or the one named is gone: they wait, and no digest is tried or counted. Written by the engine."
+                                                :choices {"no carrier" "No carrier — notices are held, but no notifier can send the digest"}}}
              [:maybe [:enum "no carrier"]]]
             [:invited_by {:optional true
                           :x-display {:raw true
