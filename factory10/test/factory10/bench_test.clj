@@ -1457,6 +1457,28 @@
            (:test (sent 1)))
         "the restate carries the pattern to the rig's enrollment")))
 
+(deftest a-policy-restated-with-a-check-enrolls-with-it
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))
+        check {:command "cd workqueue10 && clojure -M:check" :timeout 600}]
+    (is (not (contains? (sent 0) :check))
+        "a policy without a check sends none, so the rig keeps its own")
+    (let [current (policy-row eng (:id row))]
+      (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                   (assoc (select-keys (:data current)
+                                       [:repository :branch_pattern :base
+                                        :max_lines :opens_pr :auto_merge
+                                        :rounds_per_change :formatter
+                                        :deny :orientation])
+                          :check check)
+                   {:principal person
+                    :if-match (inv/etag :repo_policy (:id row)
+                                        (:version current))}))
+    (is (= check (:check (sent 1)))
+        "the restate carries the check step to the rig's enrollment")))
+
 (deftest a-select-pattern-keeps-to-what-the-python-rig-compiles
   ;; ticket 3052cdf2: the rig compiles select_pattern with Python's re
   (let [st (state)
