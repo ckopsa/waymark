@@ -12,9 +12,12 @@
   asset is off the classpath."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
+            [waymark10.markdown :as markdown]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
-            [waymark10.server.ui-assembly :as ui-assembly]))
+            [waymark10.server.ui-assembly :as ui-assembly]
+            [waymark10.types :as t])
+  (:import (java.nio.charset StandardCharsets)))
 
 (set! *warn-on-reflection* true)
 
@@ -66,10 +69,49 @@
         (throw (p/problem :not-found 404 "Not found"
                           {:detail "The UI asset is not on the classpath."}))))))
 
+(def render-max-texts
+  "The most texts one render call carries."
+  50)
+
+(def render-max-bytes
+  "The most UTF-8 bytes, all texts together, one render call carries."
+  (* 200 1024))
+
+(defn- utf8-length [^String s]
+  (alength (.getBytes s StandardCharsets/UTF_8)))
+
+(defn- render-markdown
+  "POST /api/-/render/markdown {texts: [string …]} → {html: [string …]}
+  in the same order: the prose fields' markdown as safe HTML
+  (waymark10.markdown). A batch, so a page asks once for all its prose
+  fields. It reads no rows, only the texts it is handed, so any
+  signed-in principal may call it; anonymous gets the concealment 404
+  the other doors give. The row envelope itself carries no HTML."
+  [_eng]
+  (fn [req]
+    (let [principal (router/principal-of req)]
+      (when (or (nil? principal)
+                (= (:id principal) (:id t/anonymous)))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."})))
+      (let [texts (:texts (router/read-body req))]
+        (when-not (and (sequential? texts) (every? string? texts))
+          (throw (p/problem :invalid-params 422 "Invalid parameters"
+                            {:detail "texts must be a list of strings."})))
+        (when (or (> (count texts) (long render-max-texts))
+                  (> (long (reduce + 0 (map utf8-length texts)))
+                     (long render-max-bytes)))
+          (throw (p/problem :too-large 413 "Too large"
+                            {:detail (str "One call renders at most " render-max-texts
+                                          " texts and " render-max-bytes
+                                          " bytes. Send the rest in another call.")})))
+        (router/json-response 200 {:html (mapv markdown/render texts)})))))
+
 (defn routes
   "Three static addresses for one page: the page assembles ONCE here,
   as it always did, and the root and /api/-/ui share the very same
-  handler."
+  handler. Beside them, the render door the page calls for its prose
+  fields."
   [eng]
   (let [ui (ui-page eng (ui-assembly/assemble))]
     {:module :ui
@@ -77,4 +119,5 @@
               ["/api/-/ui" {:get ui}]
               ["/api/-/ui-lite"
                {:get (ui-page eng (some-> (io/resource "waymark10/ui_lite.html")
-                                          slurp))}]]}))
+                                          slurp))}]
+              ["/api/-/render/markdown" {:post (render-markdown eng)}]]}))
