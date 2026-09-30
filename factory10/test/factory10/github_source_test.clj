@@ -1534,6 +1534,33 @@
     (is (nil? (get-in (the-unadopted engine) [:data :landed_at])))
     (is (nil? (get-in (the-unadopted engine) [:data :adoption_note])))))
 
+(deftest a-landed-pull-request-the-window-missed-is-adopted-by-number
+  ;; ticket 949d18c5: the landing reported, the pass stamped the row,
+  ;; and the listing's window had already passed the pull request
+  (let [{:keys [state engine]}
+        (unadopted-world {:number 7 :state "open"
+                          :url "https://github.com/ckopsa/waymark/pull/7"})
+        r {:source (gh/fake-source state {:cursor "2026-09-18T13:00:00Z"})
+           :engine engine}
+        id (str (:id (the-unadopted engine)))]
+    (gh/seed-pull! state repo
+                   {:number 7 :state "open" :title "A landed change"
+                    :user {:login "ckopsa"} :base {:ref "main"}
+                    :head {:ref a-landed-branch :sha "sha7"}
+                    :html_url "https://github.com/ckopsa/waymark/pull/7"
+                    :updated_at "2026-09-18T12:00:00Z" :labels []})
+    (rewrite-unadopted! engine
+                        #(assoc-in % [:data :landed_at] "2026-09-18T12:05:00Z"))
+    (let [census (pass! r)
+          row (one-row engine :change {:change_id "github:ckopsa/waymark#7"})]
+      (is (= 1 (:adopted census)) "the pull request is adopted by number")
+      (is (= id (str (:id row))) "onto the row that asked for it")
+      (is (= 7 (get-in row [:data :number])))
+      (is (= :submitted (:state row)))
+      (is (nil? (get-in row [:data :landed_at]))
+          "the first-sight stamp goes with the adoption")
+      (is (nil? (get-in row [:data :adoption_note]))))))
+
 ;; ── a submitted change that never opened a pull request (ticket 226d2b85)
 
 (defn- a-ticket-at!
