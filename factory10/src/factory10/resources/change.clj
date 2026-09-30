@@ -1150,6 +1150,10 @@
     ;; merge line trusts them only while it is still the row's head_sha
     [:missing_checks_head {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
+    ;; the head the forge pass last read green on every required check
+    ;; (ticket baf76388): the merge line does not take a rig's red for it
+    [:green_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
     ;; ── the bench's three (waymark-fp62.6.3.2, R-4) ──────────────
     [:branch {:optional true
               :x-display

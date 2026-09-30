@@ -1039,6 +1039,16 @@
                              :running (when (conflicted? row)
                                         (with-conflict nil row))
                              (with-conflict checked row))
+                   ;; the mirror's own read of a submitted head, stamped
+                   ;; for the merge line: a rig's red on a head read green
+                   ;; here is the failing round's (ticket baf76388)
+                   _ (when (= :submitted (state-of row))
+                       (case (:verdict verdict)
+                         :green (bench/mark-row! eng :change (str (:id row))
+                                                 {:green_head head} #{})
+                         :red (bench/mark-row! eng :change (str (:id row))
+                                               {:green_head nil} #{})
+                         nil))
                    ;; a head whose run died without a verdict is re-run
                    ;; once, and the re-run is its move for this pass
                    ;; (ticket 22f91244)
