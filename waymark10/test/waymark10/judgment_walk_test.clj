@@ -816,6 +816,11 @@
     (is (some? refused) "the restate is refused")
     (is (str/includes? (pr-str (ex-data refused)) (str (:id successor)))
         "and the refusal names the successor")
+    (is (= :walk-judgment-not-superseded (:guard (ex-data refused)))
+        "the guard that judged it is the superseded one, not the walk's")
+    (is (not-any? #(str/includes? (str %) "promote")
+                  (:remedies (ex-data refused)))
+        "and it offers no promote: a superseded judgment cannot be promoted")
     (is (= (str (:id successor))
            (str (get-in (raw-row eng :seat (:id seat)) [:data :judgment]))))))
 
