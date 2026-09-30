@@ -72,10 +72,10 @@ else
   [ -r "$SECRETS" ] || { echo "no client given and $SECRETS is unreadable" >&2; usage; }
   client_id="$(jq -r '.calendar10_google_client_id // empty' "$SECRETS")"
   client_secret="$(jq -r '.calendar10_google_client_secret // empty' "$SECRETS")"
-  [ -n "$client_id" ] && [ -n "$client_secret" ] || {
+  if [ -z "$client_id" ] || [ -z "$client_secret" ]; then
     echo "$SECRETS holds no calendar10_google_client_id/_secret pair" >&2
     usage
-  }
+  fi
   echo "using the stored OAuth client (…${client_id: -28})"
 fi
 # space-separated is Google's spelling for "one token, several scopes";

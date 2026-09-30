@@ -345,7 +345,7 @@
                       (assoc-in row [:data :derived_from]
                                 (get-in row [:data :asked_by])))))
           born ((:on-create r) {:data {:ask "may I"}}
-                {:principal {:id "iris"} :now (java.time.Instant/EPOCH)})]
+                {:principal {:id "iris"} :now java.time.Instant/EPOCH})]
       (is (= "iris" (get-in born [:data :asked_by]))
           "the decision's own stamp still lands")
       (is (= "iris" (get-in born [:data :derived_from]))

@@ -1075,6 +1075,27 @@
                          (str "https://work.example.org/api/blocks/" (:id b)))))
     (is (= 1 (:sent (notice-rule-data eng (:id r)))))))
 
+(deftest an-at-rule-stored-before-the-wall-reports-its-field-once
+  (let [{:keys [eng log clock storage] :as w} (at-world)
+        jack (notice-member! w "Jack" true)
+        r (at-rule! w)
+        id (str (:id r))
+        _ (at-block! eng jack "2026-09-29T10:00:00Z")]
+    ;; a row the wall never judged: its `at` names a string field
+    (store/with-tx storage
+      (fn [tx]
+        (let [raw (store/load-row storage tx :notice_rule id {:for-update true})]
+          (store/update-data! storage tx :notice_rule id
+                              (assoc (:data raw) :at {:field "name"})
+                              (:next-flip-at raw)))))
+    (reset! clock (instant "2026-09-29T10:30:00Z"))
+    (is (= 0 (held/sweep-notice-instants! eng)))
+    (is (= 0 (held/sweep-notice-instants! eng)))
+    (is (= [] (chat-sends log)))
+    (let [data (notice-rule-data eng id)]
+      (is (re-find #"block\.name is not a datetime" (str (:last_error data))))
+      (is (= 1 (:failed data)) "counted once, not once a sweep"))))
+
 (deftest editing-the-instant-moves-the-notice
   (let [{:keys [eng log clock] :as w} (at-world)
         jack (notice-member! w "Jack" true)
@@ -1280,3 +1301,61 @@
                               (:id ask)))
           "no public origin: the notifier's link_base and the API path"))
     (is (= 1 (:sent (notice-rule-data eng (:id r)))))))
+
+;; ── quiet hours ─────────────────────────────────────────────────────
+
+(defn- quiet-member! [{:keys [eng notifier-id]} display]
+  (let [m (:row (inv/create! eng :member {:display display :actor_type "human"}
+                             {:principal colton}))]
+    (inv/invoke! eng :member (str (:id m)) :set_notify
+                 {:notify {:notifier notifier-id :input {:chat_id "42"}
+                           :quiet {:from "22:00" :to "07:00" :zone "UTC"}}}
+                 {:principal (t/principal {:id (str (:id m)) :display display})
+                  :if-match (inv/etag :member (:id m) (:version m))})
+    (str (:id m))))
+
+(deftest a-quiet-window-is-read-in-its-zone-and-may-span-midnight
+  (let [night {:quiet {:from "22:00" :to "07:00" :zone "UTC"}}
+        day {:quiet {:from "09:00" :to "17:00" :zone "America/Denver"}}]
+    (is (held/quiet? night (instant "2026-09-29T23:30:00Z")))
+    (is (held/quiet? night (instant "2026-09-30T06:59:00Z")))
+    (is (not (held/quiet? night (instant "2026-09-30T07:00:00Z"))) "the end is open")
+    (is (not (held/quiet? night (instant "2026-09-29T12:00:00Z"))))
+    (is (held/quiet? day (instant "2026-09-29T16:00:00Z")) "10:00 in Denver")
+    (is (not (held/quiet? day (instant "2026-09-29T08:00:00Z"))) "02:00 in Denver")
+    (is (not (held/quiet? {} (instant "2026-09-29T23:30:00Z"))) "no window, never quiet")))
+
+(deftest quiet-hours-hold-three-notices-and-send-one-digest-when-the-window-closes
+  (let [{:keys [eng log clock] :as w} (notice-world (atom (instant "2026-09-29T23:00:00Z")))
+        jack (quiet-member! w "Jack")
+        r (notice-rule! w "assignee")
+        chores (vec (repeatedly 3 #(notice-chore! eng jack)))]
+    (drain-notices! eng)
+    (doseq [c chores] (queue-chore! eng c colton))
+    (drain-notices! eng)
+    (is (= [] (chat-sends log)) "nothing is sent inside the window")
+    (is (= 3 (:held (notice-rule-data eng (:id r)))))
+    (is (= 0 (held/sweep-quiet-digests! eng)) "the window is still open")
+    (reset! clock (instant "2026-09-30T07:00:00Z"))
+    (is (= 1 (held/sweep-quiet-digests! eng)))
+    (is (= 0 (held/sweep-quiet-digests! eng)) "once")
+    (let [s (chat-sends log)
+          args (get-in (first s) [:params :arguments])]
+      (is (= 1 (count s)) "one digest")
+      (is (= "42" (str (:chat_id args))) "the member says where")
+      (is (str/starts-with? (str (:text args)) "3 notices"))
+      (doseq [c chores]
+        (is (str/includes? (str (:text args))
+                           (str "https://work.example.org/api/chores/" (:id c))))))))
+
+(deftest a-notice-outside-the-quiet-window-sends-at-once
+  (let [{:keys [eng log] :as w} (notice-world (atom (instant "2026-09-29T12:00:00Z")))
+        jack (quiet-member! w "Jack")
+        r (notice-rule! w "assignee")
+        c (notice-chore! eng jack)]
+    (drain-notices! eng)
+    (queue-chore! eng c colton)
+    (drain-notices! eng)
+    (is (= 1 (count (chat-sends log))))
+    (is (= 1 (:sent (notice-rule-data eng (:id r)))))
+    (is (= 0 (held/sweep-quiet-digests! eng)) "nothing held, no digest")))

@@ -30,7 +30,7 @@ LOC=$(curl -sf -D - -o /tmp/smoke10-plan.json "${P[@]}" \
   | awk 'tolower($1)=="location:"{print $2}' | tr -d '\r')
 PID="${LOC##*/}"
 echo "  plan: $PID"
-cat /tmp/smoke10-plan.json | body
+body < /tmp/smoke10-plan.json
 
 say "the envelope: finalize is unavailable with a reason + remedies"
 curl -sf "${P[@]}" "$BASE/api/plans/$PID" | body
