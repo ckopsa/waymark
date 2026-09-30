@@ -719,6 +719,18 @@
                                       :label "Held for quiet hours"
                                       :help "The notices that arrived during quiet hours, each a summary and a link, sent as one digest when the window closes. Written by the engine."}}
              [:maybe [:vector [:map [:summary :string] [:link :string]]]]]
+            ;; a digest that did not go out: its lines stay in
+            ;; :quiet_held for the next sweep, and it is counted here
+            [:quiet_digest_failed {:optional true
+                                   :x-display {:raw true
+                                               :label "Digests that failed"
+                                               :help "How many times a quiet-hours digest could not be sent; its notices were kept for the next try. Written by the engine."}}
+             [:maybe :int]]
+            [:quiet_digest_error {:optional true
+                                  :x-display {:raw true
+                                              :label "Last digest failure"
+                                              :help "Why the last quiet-hours digest could not be sent. Written by the engine."}}
+             [:maybe [:string {:max 500}]]]
             [:invited_by {:optional true
                           :x-display {:raw true
                                       :label "Invited by"
