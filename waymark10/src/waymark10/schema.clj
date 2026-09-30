@@ -639,3 +639,18 @@
       (json-schema/transform options)
       inline-definitions
       ref-items))
+
+(defn with-computed
+  "The published schema with a kind's :computed fields beside the
+  stored ones: each field's own JSON Schema marked `readOnly: true`
+  and never required — the server computes it at read time, so no
+  body names it and it is no create or action input."
+  [js computed]
+  (reduce (fn [js [f {:keys [x-display] s :schema}]]
+            (assoc-in js [:properties f]
+                      (-> (json-schema [:map [f (cond-> {:optional true}
+                                                  x-display (assoc :x-display x-display))
+                                              s]])
+                          (get-in [:properties f])
+                          (assoc :readOnly true))))
+          js computed))

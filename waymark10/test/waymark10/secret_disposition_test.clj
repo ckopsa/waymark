@@ -397,3 +397,111 @@
     (testing "the reason renders over the concealed row — no secret value"
       (is (not (str/includes? (str reason) secret-value)))
       (is (not (str/includes? (wire/write-json env) secret-value))))))
+
+;; ── computed fields ──────────────────────────────────────────────────
+;; A kind's :computed field: read-only, computed at read time from the
+;; decoded stored row. It shows in data, the grid fields, collection
+;; items and the published schema (readOnly); no body may name it; a
+;; grant that omits it never sees it; a throwing fn renders nil and
+;; warns once.
+
+(r/defhandler shout-rename-handler [row inp _ctx]
+  (assoc-in row [:data :name] (:name inp)))
+
+(defn- shouting
+  "A small kind whose :echo is computed by `compute`."
+  [kind compute]
+  (r/resource
+   {:kind kind
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.name} · {state}"
+    :schema [:map [:name [:string {:min 1 :max 80}]]]
+    :computed {:echo {:schema [:maybe :string]
+                      :x-display {:label "Echo"}
+                      :fn compute}}
+    :actions
+    {:rename {:from #{:open} :to :open
+              :input [:map [:name [:string {:min 1 :max 80}]]]
+              :waives #{:edit-shape}
+              :safety quiet
+              :handler shout-rename-handler}
+     :close {:from #{:open} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A closed shout stays closed."}}}}))
+
+(def shout
+  (shouting :shout (fn [row _ctx]
+                     (some-> (get-in row [:data :name]) str/upper-case))))
+
+(def broken
+  (shouting :broken (fn [_row _ctx] (throw (ex-info "boom" {})))))
+
+(defn- shouts [] (inv/engine {:storage (memory/storage)
+                              :resources [shout broken]}))
+
+(defn- create-shout! [eng kind]
+  (:row (inv/create! eng kind {:name "hello"} {:principal ana})))
+
+(deftest a-computed-field-shows-in-get
+  (let [row (create-shout! (shouts) :shout)
+        env (render/envelope shout row {:now (Instant/now)})]
+    (testing "never stored"
+      (is (not (contains? (:data row) :echo))))
+    (testing "in data and in the grid fields"
+      (is (= "HELLO" (get-in env ["data" "echo"])))
+      (is (= "HELLO" (get-in env ["fields" "echo"]))))
+    (testing "no action input names it"
+      (is (not (contains? (get-in env ["actions" "rename" "input" "properties"])
+                          "echo"))))))
+
+(deftest a-computed-field-shows-in-query-items
+  (let [eng (shouts)
+        _ (create-shout! eng :shout)
+        col (collections/envelope eng shout {} {:now (Instant/now)})
+        items (get-in col ["data" "items"])]
+    (is (= 1 (count items)))
+    (is (= "HELLO" (get-in (first items) ["fields" "echo"])))
+    (testing "the create input does not name it"
+      (is (not (contains? (get-in col ["actions" "create" "input" "properties"])
+                          "echo"))))))
+
+(deftest a-computed-field-is-published-read-only
+  (let [js (schema/with-computed (schema/json-schema (:schema shout))
+             (:computed shout))]
+    (is (true? (get-in js [:properties :echo :readOnly])))
+    (is (not (some #{"echo" :echo} (:required js))))
+    (is (contains? (:properties js) :name))))
+
+(deftest a-body-naming-a-computed-field-is-refused
+  (let [eng (shouts)]
+    (testing "create"
+      (is (thrown? Exception
+                   (inv/create! eng :shout {:name "x" :echo "X"}
+                                {:principal ana}))))
+    (testing "an action"
+      (let [row (create-shout! eng :shout)]
+        (is (thrown? Exception
+                     (inv/invoke! eng :shout (:id row) :rename
+                                  {:name "y" :echo "Y"} {:principal ana})))))))
+
+(deftest a-grant-that-omits-a-computed-field-never-sees-it
+  (let [row (create-shout! (shouts) :shout)
+        vis {:kind? (constantly true)
+             :action? (constantly true)
+             :arg? (constantly true)
+             :field? (fn [_kind f] (not= "echo" (name f)))}
+        env (render/envelope shout row {:now (Instant/now) :visibility vis})]
+    (is (= "hello" (get-in env ["data" "name"])))
+    (is (not (contains? (get env "data") "echo")))
+    (is (not (contains? (get env "fields") "echo")))))
+
+(deftest a-throwing-computed-fn-renders-nil-and-warns-once
+  (let [row (create-shout! (shouts) :broken)
+        err (java.io.StringWriter.)
+        env (binding [*err* err]
+              (render/envelope broken row {:now (Instant/now)}))]
+    (is (= "hello" (get-in env ["data" "name"])))
+    (is (nil? (get-in env ["data" "echo"])))
+    (is (= 1 (count (re-seq #"computed field \[broken\.echo\]" (str err)))))))
