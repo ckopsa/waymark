@@ -781,7 +781,8 @@
   or a count wake's count).
 
   No schedule, and no Routine to fire — the row's own link or the
-  chair's (waymark-fp62.7.23) — is silence, and the link is asked
+  chair's (waymark-fp62.7.23), or a runner pool (waymark ticket
+  102d00d2) — is silence, and the link is asked
   BEFORE the damper. The `fire` door would refuse an unlinked seat
   with its own sentence, and a refusal logged per matching transition
   is that sentence a hundred times; remembering the match instead
@@ -809,7 +810,7 @@
   → true when a fire went out."
   [eng seat t ^Instant at {:keys [text settle]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
-    (when (and (schedules/linked? eng row)
+    (when (and (schedules/fires-out? eng row)
                (not (heard? row t)))
       (let [row (remember-heard! eng row t)]
        (cond
@@ -892,19 +893,24 @@
   (`keep_transcripts` fired), so this is the fired sittings still
   waiting on the judge. The newest `judgments/judged-page` sealed transcripts
   are read, the unjudged being the fresh end of the table; the entry's
-  filter is read as equality, and its own `state` replaces `sealed`."
+  filter is read through `collections/parse-query`, as `count-under`
+  reads it — so a comma value is any-of — and its own `state` replaces
+  `sealed`."
   [eng judgment-id filter-map]
-  (when (serves? eng :transcript)
+  (when-some [rdef (when (serves? eng :transcript)
+                     (get (inv/resources eng) :transcript))]
     (try
-      (let [where (merge {:state "sealed"}
-                         (into {} (map (fn [[f v]] [(keyword (name f)) (str v)]))
-                               filter-map))
+      (let [params (merge {"state" "sealed"}
+                          (into {} (map (fn [[f v]] [(name f) (str v)]))
+                                filter-map))
+            conds (:conds (collections/parse-query rdef params
+                                                   {:defaults? false}))
             judged (judgments/judged-subjects eng judgment-id)
             st (:storage eng)]
         (->> (store/with-tx st
-               (fn [tx] (store/query-rows st tx :transcript where
-                                          {:limit judgments/judged-page
-                                           :newest-first true})))
+               (fn [tx] (store/search-rows st tx :transcript conds
+                                           {:limit judgments/judged-page
+                                            :desc true})))
              (remove #(contains? judged (str (get-in % [:data :sitting]))))
              count))
       (catch Exception e
@@ -969,8 +975,9 @@
 
   Silence when there is nothing pending, when the seat is not active,
   when a sitting is still open, when the gap has not passed, when the
-  settle has not passed (`settled?`, waymark-fp62.17), or when nobody
-  linked the row or its chair. The flag is cleared only after a fire
+  settle has not passed (`settled?`, waymark-fp62.17), or when the row
+  has no way out — no link of its own or its chair's, and no runner
+  pool (`schedules/fires-out?`). The flag is cleared only after a fire
   went out, so a seat behind a wall keeps its pending wake until the
   wall lifts.
 
@@ -990,7 +997,7 @@
              (= :active (:state seat-row))
              (or (get-in schedule-row [:data :wake_pending])
                  (and slot? (free-slot? eng seat-row at)))
-             (schedules/linked? eng schedule-row)
+             (schedules/fires-out? eng schedule-row)
              (not (schedules/held? eng schedule-row seat-row))
              (settled? schedule-row at)
              (not (throttled? schedule-row at))

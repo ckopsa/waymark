@@ -1270,6 +1270,29 @@
         (t/allow)))
     (t/allow)))
 
+(g/defguard at-names-a-datetime
+  {:reads [:services]
+   :vars [:kind :field :why]
+   :open "The kinds and their fields are each kind's published schema, one GET away; enumerating them into this form would duplicate it."
+   :explain "A notice rule's `at` names a datetime field of the kind it hears; {kind}.{field} {why}."}
+  [row inp ctx]
+  (let [kind (str (or (:kind inp) (get-in row [:data :kind])))
+        field (some-> (or (:at inp) (get-in row [:data :at])) :field str not-empty)
+        rd (when (and field (not (str/blank? kind)))
+             (some-> (:rdef-of ctx) (#(% kind))))]
+    ;; an unknown kind is address-names-a-member's sentence, not this one's
+    (if (and rd field)
+      (let [s (schema/field-schema (:schema rd) (keyword field))
+            head (if (vector? s) (first s) s)]
+        (cond
+          (nil? s) (t/deny {:vars {:kind kind :field field
+                                   :why "is not a field of that kind"}})
+          (not= :waymark/instant head)
+          (t/deny {:vars {:kind kind :field field
+                          :why "is not a datetime, so it would never tell"}})
+          :else (t/allow)))
+      (t/allow))))
+
 (def ^:private notice-rule-when
   [:map
    [:action {:optional true
@@ -1359,12 +1382,12 @@
    :create-schema (into [:map] notice-rule-person-fields)
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:created_at] :default "-created_at"}
-   :create-guards [a-person-tells address-names-a-member]
+   :create-guards [a-person-tells address-names-a-member at-names-a-datetime]
    :actions
    {:restate
     {:from #{:active :paused} :to :active
      :input notice-rule-restate-input
-     :guards [a-person-tells address-names-a-member]
+     :guards [a-person-tells address-names-a-member at-names-a-datetime]
      :edit {:prefill [:name :kind :when :at :address :notifier]}
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-notice-rule
