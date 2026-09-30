@@ -1199,25 +1199,19 @@
 (defn- adoption-move
   "The `note_adoption` input this pass writes on the row, or nil: the
   first sight stamped, or the note once the window has passed and the
-  stored note says something else, or a stamp under the old name
-  `landed_at` carried over to `unadopted_since` (ticket 8f2fac64)."
+  stored note says something else."
   [row repo branch pr ^Instant now]
-  (let [legacy (text-of (get-in row [:data :landed_at]))
-        stamp (or (text-of (get-in row [:data :unadopted_since])) legacy)
+  (let [stamp (text-of (get-in row [:data :unadopted_since]))
         seen (when stamp
                (try (Instant/parse stamp) (catch Exception _ nil)))
-        note (adoption-note repo branch pr)
-        stored (text-of (get-in row [:data :adoption_note]))]
+        note (adoption-note repo branch pr)]
     (cond
       (nil? seen) {:unadopted_since (str now)}
 
       (and (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
               (long adoption-note-window-ms))
            (not= note (str (get-in row [:data :adoption_note]))))
-      {:unadopted_since stamp :adoption_note note}
-
-      legacy (cond-> {:unadopted_since stamp}
-               stored (assoc :adoption_note stored)))))
+      {:unadopted_since stamp :adoption_note note})))
 
 ;; ── a submitted change that never opened a pull request (ticket 226d2b85)
 ;;
@@ -1261,8 +1255,7 @@
   [eng row repo branch ^Instant now]
   (when-some [tid (ticket-of row)]
     (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
-      (let [legacy (text-of (get-in row [:data :landed_at]))
-            stamp (or (text-of (get-in row [:data :unadopted_since])) legacy)
+      (let [stamp (text-of (get-in row [:data :unadopted_since]))
             seen (when stamp
                    (try (Instant/parse stamp) (catch Exception _ nil)))
             note (unopened-note repo branch)]
@@ -1275,13 +1268,65 @@
 
           (nil? seen) [:note_adoption {:unadopted_since (str now)}]
 
-          ;; a stamp under the old name (ticket 8f2fac64) moves first
-          legacy [:note_adoption {:unadopted_since stamp}]
-
           (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
              (long adoption-note-window-ms))
           [:stick {:why (subs note 0 (min (count note) why-chars))
                    :failing_checks ["no pull request"]}])))))
+
+;; ── the old name's last rows (ticket 2d216859) ──────────────────────
+;;
+;; Ticket 8f2fac64 renamed `landed_at` to `unadopted_since`, and the
+;; rows the forge pass no longer looks at kept the old name. The boot
+;; clears them once, beneath the doors because the field is no longer
+;; law, and a boot after that finds nothing to write.
+
+(def ^:private legacy-limit
+  "The most change rows one boot reads for the old name."
+  100000)
+
+(defn- without-landed-at
+  "The row with `landed_at` gone. A submitted change with no number
+  keeps its stamp as `unadopted_since` when it has none of its own."
+  [row]
+  (let [legacy (text-of (get-in row [:data :landed_at]))]
+    (cond-> (update row :data dissoc :landed_at)
+      (and legacy
+           (= :submitted (state-of row))
+           (nil? (get-in row [:data :number]))
+           (nil? (text-of (get-in row [:data :unadopted_since]))))
+      (assoc-in [:data :unadopted_since] legacy))))
+
+(defn clear-landed-at!
+  "Every change row still carrying `landed_at` rewritten without it
+  (ticket 2d216859); the count of rows written. Idempotent: a row
+  without the field is not touched, and a row another process moved
+  first is left to the next boot."
+  [eng]
+  (let [st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx] (store/query-rows st tx :change {}
+                                          {:limit legacy-limit})))]
+    (reduce
+     (fn [n row]
+       (if-not (contains? (:data row) :landed_at)
+         n
+         (try
+           (if (store/with-tx st
+                 (fn [tx]
+                   (let [now (store/load-row st tx :change (str (:id row)) {})]
+                     (when (contains? (:data now) :landed_at)
+                       (store/save-row! st tx :change
+                                        (assoc (without-landed-at now)
+                                               :version (inc (long (:version now))))
+                                        (:version now))
+                       true))))
+             (inc n)
+             n)
+           (catch Exception e
+             (warn! "the old landed_at of change " (:id row)
+                    " was not cleared (" (ex-message e) ")")
+             n))))
+     0 rows)))
 
 (defn- adoption-note-pass!
   "Every submitted change of a repository with an active policy that

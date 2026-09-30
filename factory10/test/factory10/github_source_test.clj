@@ -1534,20 +1534,38 @@
     (is (nil? (get-in (the-unadopted engine) [:data :unadopted_since])))
     (is (nil? (get-in (the-unadopted engine) [:data :adoption_note])))))
 
-(deftest a-stamp-under-the-old-name-moves-to-unadopted-since
-  ;; ticket 8f2fac64: `landed_at` was renamed, and the pass migrates it
-  (let [{:keys [engine] :as r}
-        (unadopted-world {:number 7 :state "open"
-                          :url "https://github.com/ckopsa/waymark/pull/7"})
-        stamp (str (.minus (java.time.Instant/now)
-                           (java.time.Duration/ofMinutes 5)))]
+(deftest the-boot-clears-the-old-name-once
+  ;; ticket 2d216859: `landed_at` (renamed by ticket 8f2fac64) is
+  ;; cleared at boot, and a stamp that still means something moves
+  (let [{:keys [engine]} (unadopted-world nil)
+        st (:storage engine)
+        stamp "2026-09-20T10:00:00Z"
+        _ (inv/create! engine :change {:change_id "ticket:5e7ded00"
+                                       :repository repo
+                                       :title "A superseded change"
+                                       :base_branch "main"
+                                       :head_branch "bench/5e7ded00"}
+                       {:principal mirror/source-principal})
+        old (one-row engine :change {:change_id "ticket:5e7ded00"})]
     (rewrite-unadopted! engine #(assoc-in % [:data :landed_at] stamp))
-    (pass! r)
-    (let [row (the-unadopted engine)]
+    (store/with-tx st
+      (fn [tx]
+        (store/save-row! st tx :change
+                         (-> old
+                             (assoc :state :superseded)
+                             (assoc-in [:data :landed_at] stamp)
+                             (assoc :version (inc (long (:version old)))))
+                         (:version old))))
+    (is (= 2 (forge/clear-landed-at! engine)))
+    (is (= 0 (forge/clear-landed-at! engine)) "a second boot writes nothing")
+    (let [row (the-unadopted engine)
+          gone (one-row engine :change {:change_id "ticket:5e7ded00"})]
       (is (= stamp (get-in row [:data :unadopted_since]))
-          "the first sight stands, under its new name")
-      (is (nil? (get-in row [:data :landed_at])) "the old name is cleared")
-      (is (nil? (get-in row [:data :adoption_note]))))))
+          "the submitted change keeps its stamp under the new name")
+      (is (not (contains? (:data row) :landed_at)))
+      (is (not (contains? (:data gone) :landed_at)))
+      (is (nil? (get-in gone [:data :unadopted_since]))
+          "the superseded change loses the value"))))
 
 (deftest a-landed-pull-request-the-window-missed-is-adopted-by-number
   ;; ticket 949d18c5: the landing reported, the pass stamped the row,
