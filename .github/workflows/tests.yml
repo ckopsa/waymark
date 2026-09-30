@@ -1130,7 +1130,7 @@ jobs:
         run: cat "$RUNNER_TEMP/access-dev.log" || true
 
   gate:
-    needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue]
+    needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue, ui-access]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1142,6 +1142,7 @@ jobs:
           TEST_FACTORY: ${{ needs.test-factory.result }}
           TEST10: ${{ needs.test10.result }}
           TEST_QUEUE: ${{ needs.test-queue.result }}
+          UI_ACCESS: ${{ needs.ui-access.result }}
           DISCOVER: ${{ needs.discover.result }}
           ONLY: ${{ inputs.only }}
           ORDER: ${{ inputs.order }}
@@ -1193,7 +1194,8 @@ jobs:
           for job in "quick $QUICK $quick_sel" \
                      "test-factory $TEST_FACTORY ${RUN_FACTORY10:-}" \
                      "test10 $TEST10 ${RUN_WAYMARK10:-}" \
-                     "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}"; do
+                     "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}" \
+                     "ui-access $UI_ACCESS ${RUN_WAYMARK10:-}"; do
             read -r name r selected <<< "$job"
             if [ -n "${ONLY:-}${ORDER:-}" ] && [ "$r" = "skipped" ]; then
               continue
@@ -1203,7 +1205,7 @@ jobs:
               continue
             fi
             if [ "$r" != "success" ]; then
-              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE)."
+              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE ui-access=$UI_ACCESS)."
               exit 1
             fi
           done
