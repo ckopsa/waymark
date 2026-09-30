@@ -1399,6 +1399,60 @@
       (is (str/starts-with? (str (get-in (first s) [:params :arguments :text]))
                             "2 notices")))))
 
+(defn- orphan-notify!
+  "Point the member's notify at a notifier row that is not there."
+  [eng id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [raw (store/load-row st tx :member (str id) {:for-update true})]
+          (store/update-data! st tx :member (str id)
+                              (assoc-in (:data raw) [:notify :notifier]
+                                        (str (random-uuid)))
+                              (:next-flip-at raw)))))))
+
+(deftest a-quiet-member-with-no-carrier-is-skipped-not-failed
+  (let [{:keys [eng log clock] :as w} (notice-world (atom (instant "2026-09-29T23:00:00Z")))
+        jack (quiet-member! w "Jack")
+        _ (notice-rule! w "assignee")
+        chores (vec (repeatedly 2 #(notice-chore! eng jack)))]
+    (drain-notices! eng)
+    (doseq [c chores] (queue-chore! eng c colton))
+    (drain-notices! eng)
+    (orphan-notify! eng jack)
+    (reset! clock (instant "2026-09-30T07:00:00Z"))
+    (let [err (java.io.StringWriter.)]
+      (binding [*err* err]
+        (is (= 0 (held/sweep-quiet-digests! eng)))
+        (reset! clock (instant "2026-09-30T07:05:00Z"))
+        (is (= 0 (held/sweep-quiet-digests! eng))))
+      (is (not (str/includes? (str err) "digest")) "no warning"))
+    (let [data (member-data eng jack)]
+      (is (= 2 (count (:quiet_held data))) "the lines stay queued")
+      (is (nil? (:quiet_digest_failed data)) "no carrier is not a failure")
+      (is (nil? (:quiet_digest_error data)))
+      (is (= "no carrier" (:quiet_digest_carrier data)) "the roster says so"))
+    (is (= [] (chat-sends log)))))
+
+(deftest a-send-that-errors-counts-once-per-sweep
+  (let [{:keys [eng clock] :as w}
+        (notice-world (atom (instant "2026-09-29T23:00:00Z"))
+                      #(throw (ex-info "the chat is down" {})))
+        jack (quiet-member! w "Jack")
+        _ (notice-rule! w "assignee")
+        c (notice-chore! eng jack)]
+    (drain-notices! eng)
+    (queue-chore! eng c colton)
+    (drain-notices! eng)
+    (reset! clock (instant "2026-09-30T07:00:00Z"))
+    (binding [*err* (java.io.StringWriter.)]
+      (is (= 0 (held/sweep-quiet-digests! eng)))
+      (is (= 1 (:quiet_digest_failed (member-data eng jack))))
+      (reset! clock (instant "2026-09-30T07:05:00Z"))
+      (is (= 0 (held/sweep-quiet-digests! eng)))
+      (is (= 2 (:quiet_digest_failed (member-data eng jack)))))
+    (is (= 1 (count (:quiet_held (member-data eng jack)))))))
+
 (deftest a-notice-outside-the-quiet-window-sends-at-once
   (let [{:keys [eng log] :as w} (notice-world (atom (instant "2026-09-29T12:00:00Z")))
         jack (quiet-member! w "Jack")
