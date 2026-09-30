@@ -2918,6 +2918,43 @@
                {:principal person
                 :if-match (inv/etag :ticket id (:version (ticket-by-id w id)))}))
 
+;; ── a merge before the children end (ticket 499bcd72) ────────────────
+
+(defn- a-child!
+  "One groomed ticket under the world's own ticket. → its id."
+  [w title]
+  (let [row (:row (inv/create! (:eng w) :ticket
+                               {:title title :type "feature"
+                                :repo a-repository
+                                :parent (str (:id (:ticket w)))}
+                               {:principal person}))]
+    (inv/invoke! (:eng w) :ticket (str (:id row)) :groom {}
+                 {:principal person})
+    (str (:id row))))
+
+(deftest a-parent-merged-before-its-child-ends-when-the-child-does
+  (let [w (ticket-world)
+        child (a-child! w "The quiet hours")
+        url (submitted-and-adopted! w 85)]
+    (mirror-moves-change! w :merge nil)
+    (let [row (ticket-row w)]
+      (is (= "in_review" (name (:state row))) "a parent ends after its children")
+      (is (= url (get-in row [:data :merged_change])) "the merge is written on it"))
+    (end-ticket! w child :complete)
+    (let [row (ticket-row w)]
+      (is (= "done" (name (:state row))) "the last child's ending ends it")
+      (is (= (str "Merged: " url "; children done.")
+             (get-in row [:data :close_reason])))
+      (is (= :finish (:action (last-ticket-move w)))))))
+
+(deftest a-parent-with-no-merged-change-is-untouched-by-its-child
+  (let [w (ticket-world)
+        child (a-child! w "The quiet hours")]
+    (submitted-and-adopted! w 86)
+    (end-ticket! w child :complete)
+    (is (= "in_review" (ticket-state w)) "nothing merged, so nothing ends it")
+    (is (nil? (get-in (ticket-row w) [:data :merged_change])))))
+
 (defn- held-world
   "A house-merged world (or one under `policy`) whose change is
   submitted and adopted as #91, and whose ticket was then told to merge

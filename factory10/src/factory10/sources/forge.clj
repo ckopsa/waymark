@@ -1338,6 +1338,45 @@
              n))))
      0 rows)))
 
+;; ── a merge before the children (ticket 499bcd72) ───────────────────
+;;
+;; A parent whose pull request merged while a child was open stayed in
+;; review with no door left (c8bc5a6a). The last child's ending now
+;; ends it; the boot ends the ones already stranded, once, through the
+;; merged change's own `land`, and a boot after that finds nothing.
+
+(defn finish-merged-parents!
+  "Every ticket in review with children, all ended, and a merged change
+  born from it, ended through `land`; the count ended. A ticket with an
+  unfinished child or no merged change is left."
+  [eng]
+  (let [merged (into {}
+                     (keep (fn [c]
+                             (when-some [born (text-of (get-in c [:data :born_from]))]
+                               [born c])))
+                     (rows-by eng :change {:state :merged} legacy-limit))
+        waiting? #(contains? #{:open :in_review :blocked :deferred} (state-of %))]
+    (reduce
+     (fn [n t]
+       (let [id (str (:id t))
+             c (get merged (str "ticket:" id))
+             kids (when c (rows-by eng :ticket {:parent id} legacy-limit))]
+         (if (or (empty? kids) (some waiting? kids))
+           n
+           (try
+             (inv/invoke! eng :ticket id :land
+                          {:close_reason (str "Merged: "
+                                              (or (text-of (get-in c [:data :url]))
+                                                  (get-in c [:data :change_id]))
+                                              "; children done.")}
+                          (assoc (as-opts) :within {:kind :change :action :merge}))
+             (inc n)
+             (catch Exception e
+               (warn! "the merged parent " id " was not ended ("
+                      (ex-message e) ")")
+               n)))))
+     0 (rows-by eng :ticket {:state :in_review} legacy-limit))))
+
 (defn- adoption-note-pass!
   "Every submitted change of a repository with an active policy that
   has no number → the pull request its landing opened, adopted when

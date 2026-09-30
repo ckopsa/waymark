@@ -150,6 +150,13 @@
 
 ;; ── the merge finishes the task the change was born from ────────────
 
+(defn- pull-request-of
+  "The pull request's url, which a reader opens; its id when the mirror
+  read no url."
+  [change]
+  (or (not-empty (str (get-in change [:data :url])))
+      (get-in change [:data :change_id])))
+
 (def ^:private born-kinds
   "What `born_from` may read as its kind, and how each one is
   finished. The merge opens these doors and no other: a kind this
@@ -171,12 +178,21 @@
              :finished? (fn [row] (contains? #{:done :dropped}
                                              (some-> (:state row) name keyword)))
              :input (fn [change]
-                      ;; the pull request's url, which a reader opens;
-                      ;; its id when the mirror read no url
-                      {:close_reason (str "Merged: "
-                                          (or (not-empty (str (get-in change [:data :url])))
-                                              (get-in change [:data :change_id]))
-                                          ".")})}})
+                      {:close_reason (str "Merged: " (pull-request-of change) ".")})}})
+
+(defn- waits-on-its-children?
+  "True when the ticket this change was born from is in review over a
+  child that has not ended (ticket 499bcd72): `land` would refuse it,
+  so the merge is written on it instead, and its last child's ending
+  ends it (ticket's `finish-the-parent!`)."
+  [entry id walk-row ctx]
+  (boolean
+   (and (= :ticket (:kind entry))
+        (= :in_review (some-> (:state walk-row) name keyword))
+        (:find ctx)
+        (some #(contains? #{:open :in_review :blocked :deferred}
+                          (some-> (:state %) name keyword))
+              ((:find ctx) :ticket {:parent id} {:limit 500})))))
 
 (defn- born-of
   "The walk row this change was born from — [kind-entry id row] — or
@@ -256,7 +272,10 @@
                (not ((:finished? entry) walk-row))
                (:invoke ctx))
       (try
-        ((:invoke ctx) (:kind entry) id (:action entry) ((:input entry) row))
+        (if (waits-on-its-children? entry id walk-row ctx)
+          ((:invoke ctx) :ticket id :note_merge
+                         {:merged_change (pull-request-of row)})
+          ((:invoke ctx) (:kind entry) id (:action entry) ((:input entry) row)))
         (catch Exception e
           (binding [*out* *err*]
             (println "factory10 change merge: the" (name (:kind entry)) id
