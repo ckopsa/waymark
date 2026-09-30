@@ -1501,17 +1501,17 @@
                               (java.time.Duration/ofMinutes 20)))]
     (let [census (pass! r)
           row (the-unadopted engine)]
-      (is (some? (get-in row [:data :landed_at]))
+      (is (some? (get-in row [:data :unadopted_since]))
           "the pass stamps the first time it saw the pull request")
       (is (nil? (get-in row [:data :adoption_note]))
           "and says nothing inside the window")
       (is (= 0 (:adoption-noted census))))
-    (rewrite-unadopted! engine #(assoc-in % [:data :landed_at] long-ago))
+    (rewrite-unadopted! engine #(assoc-in % [:data :unadopted_since] long-ago))
     (let [census (pass! r)
           row (the-unadopted engine)]
       (is (= note (get-in row [:data :adoption_note]))
           "after the window the row says what landed and where")
-      (is (= long-ago (get-in row [:data :landed_at]))
+      (is (= long-ago (get-in row [:data :unadopted_since]))
           "the first sight stands")
       (is (= 1 (:adoption-noted census))))
     (testing "a second pass does not write the same note again"
@@ -1526,13 +1526,28 @@
       (let [row (one-row engine :change {:change_id "github:ckopsa/waymark#7"})]
         (is (= 7 (get-in row [:data :number])))
         (is (nil? (get-in row [:data :adoption_note])))
-        (is (nil? (get-in row [:data :landed_at])))))))
+        (is (nil? (get-in row [:data :unadopted_since])))))))
 
 (deftest a-change-with-no-landed-pull-request-is-not-noted
   (let [{:keys [engine] :as r} (unadopted-world nil)]
     (pass! r)
-    (is (nil? (get-in (the-unadopted engine) [:data :landed_at])))
+    (is (nil? (get-in (the-unadopted engine) [:data :unadopted_since])))
     (is (nil? (get-in (the-unadopted engine) [:data :adoption_note])))))
+
+(deftest a-stamp-under-the-old-name-moves-to-unadopted-since
+  ;; ticket 8f2fac64: `landed_at` was renamed, and the pass migrates it
+  (let [{:keys [engine] :as r}
+        (unadopted-world {:number 7 :state "open"
+                          :url "https://github.com/ckopsa/waymark/pull/7"})
+        stamp (str (.minus (java.time.Instant/now)
+                           (java.time.Duration/ofMinutes 5)))]
+    (rewrite-unadopted! engine #(assoc-in % [:data :landed_at] stamp))
+    (pass! r)
+    (let [row (the-unadopted engine)]
+      (is (= stamp (get-in row [:data :unadopted_since]))
+          "the first sight stands, under its new name")
+      (is (nil? (get-in row [:data :landed_at])) "the old name is cleared")
+      (is (nil? (get-in row [:data :adoption_note]))))))
 
 (deftest a-landed-pull-request-the-window-missed-is-adopted-by-number
   ;; ticket 949d18c5: the landing reported, the pass stamped the row,
@@ -1550,14 +1565,14 @@
                     :html_url "https://github.com/ckopsa/waymark/pull/7"
                     :updated_at "2026-09-18T12:00:00Z" :labels []})
     (rewrite-unadopted! engine
-                        #(assoc-in % [:data :landed_at] "2026-09-18T12:05:00Z"))
+                        #(assoc-in % [:data :unadopted_since] "2026-09-18T12:05:00Z"))
     (let [census (pass! r)
           row (one-row engine :change {:change_id "github:ckopsa/waymark#7"})]
       (is (= 1 (:adopted census)) "the pull request is adopted by number")
       (is (= id (str (:id row))) "onto the row that asked for it")
       (is (= 7 (get-in row [:data :number])))
       (is (= :submitted (:state row)))
-      (is (nil? (get-in row [:data :landed_at]))
+      (is (nil? (get-in row [:data :unadopted_since]))
           "the first-sight stamp goes with the adoption")
       (is (nil? (get-in row [:data :adoption_note]))))))
 
@@ -1604,8 +1619,8 @@
     (pass! r)
     (let [row (the-unadopted engine)]
       (is (= "submitted" (name (:state row))) "inside the window it waits")
-      (is (some? (get-in row [:data :landed_at])) "the first sight is stamped"))
-    (rewrite-unadopted! engine #(assoc-in % [:data :landed_at] long-ago))
+      (is (some? (get-in row [:data :unadopted_since])) "the first sight is stamped"))
+    (rewrite-unadopted! engine #(assoc-in % [:data :unadopted_since] long-ago))
     (let [census (pass! r)
           row (the-unadopted engine)]
       (is (= "stuck" (name (:state row))) "after the window a person sees it")
