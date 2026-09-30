@@ -99,9 +99,12 @@ on:
         default: ''
       order:
         description: >-
-          Run exactly these waymark10 test namespaces, in this order, in
-          one JVM, on the same database fixture as a test10 shard;
-          space-separated. For reproducing an order-dependent failure:
+          Run exactly these test namespaces, in this order, in one JVM,
+          on the same database fixture as a shard of their suite;
+          space-separated. All `waymark10.` names run in a test10 shard,
+          all `workqueue10.` names in a test-queue shard; a list mixing
+          the two, or naming anything else, is refused. For reproducing
+          an order-dependent failure:
           kaocha's --focus keeps the tree's order and shuffles it, so
           `only` cannot say what runs after what. Every other suite is
           skipped. Give `only` or `order`, not both.
@@ -408,19 +411,32 @@ jobs:
           suites = {r: namespaces(r) for r in
                     ("waymark10", "workqueue10", "calendar10", "localfire", "factory10")}
 
-          # An ordered run: whole waymark10 namespaces only, since the
-          # test10 shard is the fixture it reproduces. Each name ends up
-          # inside a kaocha config, so it must also be a plain name.
+          # An ordered run: whole namespaces of ONE sharded suite, since
+          # that suite's shard is the fixture it reproduces. The prefix
+          # routes it: all waymark10. names to test10, all workqueue10.
+          # names to test-queue; a mix, or anything else, is refused.
+          # Each name ends up inside a kaocha config, so it must also be
+          # a plain name.
           if order:
               if tokens:
                   refuse("give `only` or `order`, not both")
+              jobs = {"waymark10": "test10", "workqueue10": "test-queue"}
+              other = [t for t in order if t.split(".", 1)[0] not in jobs]
+              if other:
+                  refuse(f"order: {', '.join(repr(t) for t in other)} names no waymark10. or"
+                         " workqueue10. namespace (order runs one sharded suite)")
+              suite = order[0].split(".", 1)[0]
+              mixed = [t for t in order if t.split(".", 1)[0] != suite]
+              if mixed:
+                  refuse(f"order: {', '.join(repr(t) for t in mixed)} is not in {suite}, as"
+                         f" {order[0]!r} is (order runs one suite's namespaces in one JVM)")
               bad = [t for t in order
-                     if t not in suites["waymark10"]
+                     if t not in suites[suite]
                      or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", t)]
               if bad:
-                  refuse(f"order: {', '.join(repr(t) for t in bad)} is not a waymark10 test namespace"
-                         " (order runs whole namespaces in one test10 shard)")
-              print(f"order: {' '.join(order)}, in one test10 JVM", file=sys.stderr)
+                  refuse(f"order: {', '.join(repr(t) for t in bad)} is not a {suite} test namespace"
+                         f" (order runs whole namespaces in one {jobs[suite]} shard)")
+              print(f"order: {' '.join(order)}, in one {jobs[suite]} JVM", file=sys.stderr)
               print("quick=false")
               print("factory=false")
               sys.exit(0)
@@ -538,7 +554,7 @@ jobs:
           N_WORKQUEUE10: ${{ env.SHARDS_WORKQUEUE10 }}
           # Checked by `changes` already: test ids, or empty.
           ONLY: ${{ inputs.only }}
-          # Checked there too: waymark10 namespaces, or empty.
+          # Checked there too: namespaces of one suite, or empty.
           ORDER: ${{ inputs.order }}
         run: |
           set -euo pipefail
@@ -624,14 +640,17 @@ jobs:
           import re
           only = [t for t in re.split(r"[\s,]+", os.environ.get("ONLY", "")) if t]
 
-          # An ordered dispatch: one test10 shard carrying the list as
-          # given, which the shard turns into its own kaocha config;
-          # workqueue10 runs nothing.
+          # An ordered dispatch: one shard of the suite the names' prefix
+          # routes to (`changes` held them to one), carrying the list as
+          # given, which the shard turns into its own kaocha config; the
+          # other suite runs nothing.
           order = [t for t in re.split(r"[\s,]+", os.environ.get("ORDER", "")) if t]
           if order:
-              print(f"waymark10={json.dumps([{'id': 1, 'nses': '', 'order': ' '.join(order)}])}")
-              print("workqueue10=[]")
-              print(f"# order: {' '.join(order)}, one test10 shard", file=__import__("sys").stderr)
+              suite = order[0].split(".", 1)[0]
+              for key in ("waymark10", "workqueue10"):
+                  m = [{"id": 1, "nses": "", "order": " ".join(order)}] if key == suite else []
+                  print(f"{key}={json.dumps(m)}")
+              print(f"# order: {' '.join(order)}, one {suite} shard", file=__import__("sys").stderr)
               raise SystemExit(0)
 
           for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
@@ -920,6 +939,7 @@ jobs:
           # choice, not a copy-paste slip.
           WAYMARK10_TEST_DSN: jdbc:postgresql://${{ env.PGHOST }}:${{ env.PGPORT }}/waymark10_test?user=ckopsa
           FOCUS_NS: ${{ matrix.shard.nses }}
+          ORDER_NS: ${{ matrix.shard.order || '' }}
           PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
@@ -929,6 +949,25 @@ jobs:
           while IFS= read -r ns; do
             [ -n "$ns" ] && args+=(--focus "$ns")
           done <<< "$FOCUS_NS"
+          # An ordered dispatch, as in test10's Run shard: one suite per
+          # namespace, in the order given, shuffle off, one JVM.
+          if [ -n "${ORDER_NS:-}" ]; then
+            cfg="$RUNNER_TEMP/order-tests.edn"
+            {
+              echo '#kaocha/v1'
+              echo '{:tests ['
+              i=0
+              read -ra names <<< "$ORDER_NS"
+              for ns in "${names[@]}"; do
+                i=$((i + 1))
+                printf '  {:id :order-%d :test-paths ["test"] :ns-patterns ["^\\\\Q%s\\\\E$"]}\n' "$i" "$ns"
+              done
+              echo ']}'
+            } > "$cfg"
+            echo "ordered run:"
+            cat "$cfg"
+            args+=(--config-file "$cfg" --no-randomize)
+          fi
           if [ "${PROFILE:-false}" = "true" ]; then
             args+=(--plugin kaocha.plugin/profiling --profiling-count 500)
           fi
