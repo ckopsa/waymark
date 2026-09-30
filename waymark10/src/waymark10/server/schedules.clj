@@ -410,6 +410,43 @@
            (read' :model)
            whole-link))
 
+(defn- routine-id-of
+  "The Routine id a fire URL names — the segment after `routines/` —
+  or the URL whole when it names none (waymark ticket 360d207d)."
+  [url]
+  (or (second (re-find #"/routines/([^/?#]+)" url)) url))
+
+(defn fires-through
+  "One line saying which Routine ONE fire of this schedule goes out
+  through (waymark ticket 360d207d), so a person sees a mislink before
+  it fires: a runner pool, the row's own link, the chair's link, or
+  none — in `pool-of` and `link-of`'s order. `read'` is a render ctx's
+  `:read`, (read' kind id); with none, the chair is not consulted."
+  [read' schedule-row]
+  (let [url-of #(some-> (get-in % [:data :fire_url]) str not-empty)
+        chair (when read'
+                (some->> (get-in schedule-row [:data :seat]) str not-empty
+                         (read' :seat)
+                         seats/chair-of
+                         (read' :model)))
+        own-url (url-of schedule-row)
+        pool (or (runners-of-row schedule-row)
+                 (when-not own-url (some-> chair runners-of-row)))]
+    (cond
+      pool (str "runner pool (" (count pool) " links)")
+      own-url (str "own link · Routine " (routine-id-of own-url))
+      (some-> chair url-of)
+      (str "model " (or (some-> (get-in chair [:data :name]) str not-empty)
+                        (:id chair))
+           "'s link · Routine " (routine-id-of (url-of chair)))
+      :else "no link")))
+
+(defn- fires-through-field
+  "The schedule's :computed `fires_through`: `fires-through` over the
+  read the render ctx lends."
+  [row ctx]
+  (fires-through (:read ctx) row))
+
 (defn- link-to-copy
   "The link `link_like` copies from the row `like-id` names, or nil
   (waymark ticket 1cdf9362): a live schedule's own link; else, for a
@@ -593,6 +630,12 @@
    :nav :system
    :summary "{data.provider} · {state}"
    :label-template "{data.provider} schedule"
+   :computed {:fires_through
+              {:schema :string
+               :x-display
+               {:label "Fires through"
+                :help "Which Routine one fire goes out on, worked out at read time: this row's own link, its model's link, a runner pool, or no link. A Routine id here that is not this seat's own is a mislink to fix before it fires."}
+               :fn fires-through-field}}
    ;; a sitter reads the seat it sits in (R-4.9); the schedule is the
    ;; engine's own record of how that seat wakes, and nothing on it is
    ;; a sitter's to read or write — so no own-surface here.
