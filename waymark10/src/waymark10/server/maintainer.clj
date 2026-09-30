@@ -457,7 +457,8 @@
 (defn start-sweeper!
   "The clock daemon: sweep-clocks! every interval-ms (default 30s) on
   a daemon thread, then the notice rules whose instant has come
-  (held-calls/sweep-notice-instants!). Engine start! owns the
+  (held-calls/sweep-notice-instants!) and the digests of quiet hours
+  that have closed (held-calls/sweep-quiet-digests!). Engine start! owns the
   lifecycle; tests call both directly."
   [eng {:keys [interval-ms] :or {interval-ms 30000}}]
   (let [stop (CountDownLatch. 1)
@@ -470,6 +471,7 @@
                               (catch Exception e
                                 (warn! "clock sweep failed: " (ex-message e))))
                          (held-calls/sweep-notice-instants! eng)
+                         (held-calls/sweep-quiet-digests! eng)
                          (recur))))
                    "waymark10-clock-sweeper")]
     (doto ^Thread t (.setDaemon true) (.start))

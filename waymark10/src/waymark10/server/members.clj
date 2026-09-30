@@ -565,7 +565,21 @@
              :x-display {:label "Where"
                          :help "The tool's arguments for this person, laid over the rule's text, e.g. {\"chat_id\": \"42\"}."
                          :spelled-by-hand "The notifier's tool's own arguments for this person as JSON, e.g. {\"chat_id\": \"42\"}; each tool names its own keys, so a form cannot list them."}}
-     [:maybe [:map-of :keyword :any]]]]])
+     [:maybe [:map-of :keyword :any]]]
+    ;; quiet hours: a notice inside the window is held, and one digest
+    ;; goes out when it closes (held-calls/sweep-quiet-digests!)
+    [:quiet {:optional true
+             :x-display {:label "Quiet hours"
+                         :help "A daily window when notices wait: from and to are local times (HH:mm) in zone, e.g. 22:00 to 07:00 in America/Denver. What arrives inside it is sent as one digest when it closes."}}
+     [:maybe
+      [:map
+       [:from {:x-display {:label "From" :help "When the quiet starts, HH:mm local."}}
+        [:string {:min 4 :max 5}]]
+       [:to {:x-display {:label "To" :help "When the quiet ends, HH:mm local; before from spans midnight."}}
+        [:string {:min 4 :max 5}]]
+       [:zone {:optional true
+               :x-display {:label "Zone" :help "The time zone the times are read in, e.g. America/Denver; UTC when empty."}}
+        [:maybe [:string {:max 64}]]]]]]]])
 
 (defresource member
   {:kind :member
@@ -698,6 +712,13 @@
                                   :label "How to reach them"
                                   :help "The notifier and the tool's input a notice rule sends through. Empty: a rule addressing this member skips them."}}
              notify-schema]
+            ;; the notices quiet hours hold for the digest: written in
+            ;; place by the engine, emptied when the digest goes out.
+            [:quiet_held {:optional true
+                          :x-display {:raw true
+                                      :label "Held for quiet hours"
+                                      :help "The notices that arrived during quiet hours, each a summary and a link, sent as one digest when the window closes. Written by the engine."}}
+             [:maybe [:vector [:map [:summary :string] [:link :string]]]]]
             [:invited_by {:optional true
                           :x-display {:raw true
                                       :label "Invited by"
