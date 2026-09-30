@@ -40,7 +40,8 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 ;; ── the world ───────────────────────────────────────────────────────
 
@@ -1109,3 +1110,28 @@
           "with no read the chair is not consulted"))
     (testing "it rides the schedule's grid fields"
       (is (contains? (render/grid-fields (get (inv/resources *eng*) :schedule)) :fires_through)))))
+
+;; ── 11 · fires_through on an action's own answer (ticket 82589f6e) ──
+
+(deftest an-action-answer-says-which-routine-it-fires-through
+  (let [cn :sched-answer-fires-through
+        _ (drain! cn)
+        chair (model! "claude-chair-answer")
+        _ (link-model! chair a-chair-url a-chair-token)
+        seat-id (seat! "answer-fires-through" 3600 [chair])
+        _ (drain! cn)
+        sid (str (:id (sched-of seat-id)))
+        opts {:principal mayor :idempotency-key "relink-answer-fires-through"}]
+    (testing "the bytes an action answers with read the model in the write's own transaction"
+      (inv/invoke! *eng* :schedule sid :relink_model nil opts)
+      (let [replay (inv/invoke! *eng* :schedule sid :relink_model nil opts)]
+        (is (= :idempotency (:replayed? replay)))
+        (is (= "model claude-chair-answer's link · Routine trig_01CHAIR"
+               (get-in (wire/read-json (get-in replay [:response :response]))
+                       [:data :fires_through])))))
+    (testing "a render with no read hooks leaves a :reads? field absent and computes a read-free one"
+      (let [plain (assoc-in (get (inv/resources *eng*) :schedule) [:computed :plain]
+                            {:schema :string :fn (fn [_row _ctx] "plain")})
+            doc (wire/read-json ((:render-fn *eng*) plain (sched-of seat-id)))]
+        (is (nil? (get-in doc [:data :fires_through])))
+        (is (= "plain" (get-in doc [:data :plain])))))))

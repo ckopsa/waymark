@@ -267,11 +267,20 @@
                     :mcp-sessions (atom {})
                     :runtime (atom nil)})
         eng (assoc eng :render-fn
-                   (fn [rdef row]
-                     (wire/write-json
-                      (render/envelope rdef row {:principal t/anonymous
+                   ;; `reads` is the write's own ctx :read/:find, lent
+                   ;; as the live answer lends render-hooks, so a
+                   ;; :computed field reads what the write left
+                   ;; (ticket 82589f6e); none, and a :reads? field
+                   ;; renders nil
+                   (fn render-fn
+                     ([rdef row] (render-fn rdef row nil))
+                     ([rdef row reads]
+                      (wire/write-json
+                       (render/envelope rdef row
+                                        (cond-> {:principal t/anonymous
                                                  :now ((:now-fn eng))
-                                                 :services (:services eng)}))))]
+                                                 :services (:services eng)}
+                                          reads (assoc :evidence-reads reads)))))))]
     (doseq [[_ rdef] (:kinds reg)]
       (store/ensure-kind! storage rdef))
     (migrate-gate! storage reg opts)

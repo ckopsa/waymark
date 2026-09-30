@@ -234,6 +234,9 @@
     (testing "a computed field declares :fn and :schema"
       (breaks :computed (assoc base :computed {:score (dissoc score :fn)}))
       (breaks :computed (assoc base :computed {:score (dissoc score :schema)})))
+    (testing ":reads? is an optional boolean"
+      (is (some? (load-quietly (assoc base :computed {:score (assoc score :reads? true)}))))
+      (breaks :computed (assoc base :computed {:score (assoc score :reads? "yes")})))
     (testing "a computed field is on no stored-row surface"
       (breaks :computed (assoc with-score :filterable {:score #{:eq}}))
       (breaks :computed (assoc with-score :sortable {:fields [:score]}))

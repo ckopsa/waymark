@@ -262,10 +262,12 @@
   cross-row code guard tells its real verdict instead of advertising
   optimistically. A per-instance cache (one instance per request)
   keeps the repeated probes — the same plan read by every action's
-  gate — to one query each. The invoke-side :render-fn takes NO hooks
-  either way: it runs inside the write's own transaction (engine
-  docstring), so an action response's envelope still advertises
-  optimistically — the follow-up GET tells the folded truth."
+  gate — to one query each. The invoke-side :render-fn takes none of
+  THESE: it runs inside the write's own transaction (engine
+  docstring), so it is lent that write's own ctx :read/:find instead
+  — its :computed fields read what the write left (ticket 82589f6e) —
+  and its doors still advertise optimistically; the follow-up GET
+  tells the folded truth."
   [engine]
   (let [st (:storage engine)
         cache (atom {})
@@ -907,7 +909,8 @@
        200 (if-some [render-fn (:render-fn engine)]
              ;; the render seam (phase 3): replay serves the same
              ;; envelope bytes the first execution answered with
-             (render-fn rdef (decode-row rdef saved))
+             (render-fn rdef (decode-row rdef saved)
+                        {:read (:read ctx) :find (:find ctx)})
              (wire/write-json {:id (:id saved) :state (name (:state advanced))
                                :version (:version advanced)
                                :summary (:summary advanced)}))
@@ -2238,7 +2241,8 @@
              201 (if-some [render-fn (:render-fn engine)]
                    ;; row is already decoded; the same envelope the
                    ;; live 201 answers with
-                   (render-fn rdef (dissoc row :summary))
+                   (render-fn rdef (dissoc row :summary)
+                              {:read (:read ctx) :find (:find ctx)})
                    (wire/write-json {:id (:id row)
                                      :state (name (:state row))
                                      :version (:version row)

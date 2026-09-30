@@ -927,6 +927,12 @@
       (when-not (fn? (:fn c))
         (err r :computed (str "computed field " f " declares no :fn — "
                               "(fn [row ctx] value) is what computes it")))
+      (when (and (map? c) (contains? c :reads?) (not (boolean? (:reads? c))))
+        (err r :computed (str "computed field " f " declares :reads? "
+                              (pr-str (:reads? c)) " — it is true when "
+                              "the :fn reads other rows through the ctx's "
+                              ":read/:find, and then renders nil where "
+                              "no :read is lent")))
       (when (contains? dkeys f)
         (err r :computed (str "computed field " f " collides with the schema "
                               "field of the same name — a field is stored "

@@ -635,6 +635,9 @@
                :x-display
                {:label "Fires through"
                 :help "Which Routine one fire goes out on, worked out at read time: this row's own link, its model's link, a runner pool, or no link. A Routine id here that is not this seat's own is a mislink to fix before it fires."}
+               ;; it reads the chair: with no :read it is absent,
+               ;; never a false \"no link\" (ticket 82589f6e)
+               :reads? true
                :fn fires-through-field}}
    ;; a sitter reads the seat it sits in (R-4.9); the schedule is the
    ;; engine's own record of how that seat wakes, and nothing on it is
