@@ -19,6 +19,7 @@
   check-compounds — :touches and compound-input declarations have no
   v10 spelling yet; each check arrives with its feature."
   (:require [clojure.string :as str]
+            [waymark10.checks :as checks]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -718,6 +719,15 @@
 ;; punt: check-compounds (compound inputs) — its declaration shape is
 ;; unported; the check arrives with the feature.
 
+(defn- check-unref'd-ids
+  "Every kind through waymark10.checks/check-unref'd-ids: a string field
+  named after a registered kind must be a ref or say why not. Judged
+  here because only the registry knows which names are kinds."
+  [reg]
+  (let [kinds (set (keys (:kinds reg)))]
+    (doseq [[_ r] (sort-by key (:kinds reg))]
+      (checks/check-unref'd-ids r kinds))))
+
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
@@ -729,4 +739,4 @@
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
-          check-link-where])})
+          check-link-where check-unref'd-ids])})

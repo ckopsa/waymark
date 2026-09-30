@@ -138,15 +138,51 @@
   (breaks :refs #(reg-of (res ticket) (res calendar-day))))
 
 (deftest refs-naming-convention-warning
+  ;; a STRING ticket_id is refused outright (unref'd-ids, below); the
+  ;; lint still speaks for any other shape the name misleads about
   (let [g (assemble :p (update project :schema conj
                                [:ticket_id {:optional true}
-                                [:maybe [:string {:max 40}]]]))]
+                                [:maybe :int]]))]
     (is (some #(and (str/includes? % "[refs]")
                     (str/includes? % "data.ticket_id")
                     (str/includes? % ":waymark/ref"))
               (:waymark10/warnings (meta g))))))
 
 ;; ── owns ────────────────────────────────────────────────────────────
+
+(deftest unrefd-ids-plain-string-named-after-a-kind
+  (breaks :unref'd-ids
+          #(assemble :c (update calendar-day :schema conj
+                                [:project {:optional true}
+                                 [:maybe [:string {:max 40}]]]))))
+
+(deftest unrefd-ids-kind-id-string-in-an-action-input
+  (breaks :unref'd-ids
+          #(assemble :c (assoc-in calendar-day [:actions :pass :input]
+                                  [:map [:ticket_id [:string {:max 40}]]]))))
+
+(deftest unrefd-ids-in-a-nested-map
+  (breaks :unref'd-ids
+          #(assemble :c (update calendar-day :schema conj
+                                [:owner {:optional true}
+                                 [:maybe [:map [:project [:string {:max 40}]]]]]))))
+
+(deftest unrefd-ids-a-ref-passes
+  (is (assemble :c (update calendar-day :schema conj
+                           [:project {:optional true :kind :project}
+                            [:maybe :waymark/ref]]))))
+
+(deftest unrefd-ids-a-waiver-passes
+  (is (assemble :c (update calendar-day :schema conj
+                           [:project {:optional true
+                                      :not-a-ref "The project's name, typed by hand."}
+                            [:maybe [:string {:max 40}]]]))))
+
+(deftest unrefd-ids-a-blank-waiver-does-not
+  (breaks :unref'd-ids
+          #(assemble :c (update calendar-day :schema conj
+                                [:project {:optional true :not-a-ref " "}
+                                 [:maybe [:string {:max 40}]]]))))
 
 (deftest owns-child-unregistered
   (breaks :owns #(reg-of (res project) (res calendar-day))))
