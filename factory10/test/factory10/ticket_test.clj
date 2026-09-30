@@ -321,6 +321,43 @@
       (is (re-find #"parent" reason) "the sentence names the field")
       (is (re-find #"ticket" reason) "and the kind it expected"))))
 
+;; ── a fired seat's ticket lands at 4 (ticket b0ec4d47) ─────────────────
+
+(def ^:private the-sittings
+  [{:kind :sitting :id "S-fired" :state :open
+    :data {:grant "G-code-seat" :mode "fired"}}
+   {:kind :sitting :id "S-mayor" :state :open
+    :data {:grant "G-mayor" :mode "interactive"}}])
+
+(defn- born
+  "The row the birth hook makes of a create at `priority`, by `principal`
+  wearing `grant-id` (nil for none), over a fake store of `the-sittings`."
+  [principal grant-id priority]
+  ((:on-create ticket)
+   (at :draft {:priority priority})
+   (cond-> (assoc (ctx principal)
+                  :find (fn [kind where _opts]
+                          (if (= :sitting kind)
+                            (filterv #(= (str (:grant where))
+                                         (get-in % [:data :grant]))
+                                     the-sittings)
+                            [])))
+     grant-id (assoc :grant {:id grant-id}))))
+
+(deftest a-fired-seats-ticket-lands-at-four
+  (testing "a fired seat's create at 1 lands at 4 and keeps what it asked"
+    (let [{:keys [data]} (born the-seat "G-code-seat" 1)]
+      (is (= 4 (:priority data)))
+      (is (= 1 (:asked_priority data)))))
+  (testing "a person's create at 2 lands at 2"
+    (let [{:keys [data]} (born the-person nil 2)]
+      (is (= 2 (:priority data)))
+      (is (nil? (:asked_priority data)))))
+  (testing "mayor's interactive create at 2 lands at 2"
+    (let [{:keys [data]} (born {:id "mayor" :type :agent :roles #{}} "G-mayor" 2)]
+      (is (= 2 (:priority data)))
+      (is (nil? (:asked_priority data))))))
+
 ;; ── the shape the walker and the import both read ───────────────────
 
 (deftest the-declaration-says-what-the-walker-needs

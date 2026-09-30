@@ -740,7 +740,7 @@
                :examples [2]
                :x-display
                {:label "Priority (0 first, 4 last)"
-                :help "The queue's own order. A walker takes the lowest number first, so 0 is the ask the house wants next and 4 is the one it can wait for."}}
+                :help "The queue's own order. A walker takes the lowest number first, so 0 is the ask the house wants next and 4 is the one it can wait for. A fired seat's ticket lands at 4; the groomer raises it."}}
     [:int {:min 0 :max 4}]]
    [:parent {:optional true :kind :ticket
              :x-display
@@ -812,7 +812,46 @@
                     {:raw true
                      :label "Merged before its children"
                      :help "The pull request that merged while a child of this ticket was still open. The ticket ends when its last child does. Empty for every other ticket."}}
-    [:maybe [:string {:max 400}]]]])
+    [:maybe [:string {:max 400}]]]
+   ;; ticket b0ec4d47: written by the birth when a fired seat filed the
+   ;; ticket, beside the 4 the birth stamped over what it asked
+   [:asked_priority {:optional true
+                     :x-display
+                     {:label "Priority the seat asked for"
+                      :help "The priority a fired seat named when it filed this ticket. Its birth lands at 4 whatever it asked, so a groomer reads the seat's own judgment here and raises the ticket when it earns it. Empty for a ticket a person or an interactive seat filed."}}
+    [:maybe [:int {:min 0 :max 4}]]]])
+
+;; ── a fired seat's ticket lands at the back (ticket b0ec4d47) ───────
+
+(def ^:private fired-seat-priority
+  "Where a fired seat's ticket lands, whatever it asked: the owner's
+  ruling, 2026-09-30. A seat files follow-ups after each merge or
+  stall, and the queue drains only if they wait for a groomer."
+  4)
+
+(defn- filed-by-a-fired-seat?
+  "Whether this birth's hand is a seat in a FIRED sitting: an open
+  sitting under the grant the request wore, of the fired mode. A
+  person, an interactive seat and the engine's own hand hold no fired
+  sitting, and a ctx with no `:find` hook declines to guess. A sitting
+  written before `mode` existed reads fired, which every seat was."
+  [ctx]
+  (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
+    (when-some [find' (:find ctx)]
+      (some #(= "fired" (str (or (get-in % [:data :mode]) "fired")))
+            (find' :sitting {:grant gid :state :open}
+                   {:limit 50 :newest-first true})))))
+
+(defn- land-a-fired-seats-ticket-at-four
+  "The birth's stamp: a fired seat's ticket keeps the priority it asked
+  in `asked_priority` and lands at `fired-seat-priority`. Every other
+  birth is left as it was asked."
+  [row ctx]
+  (if (filed-by-a-fired-seat? ctx)
+    (-> row
+        (assoc-in [:data :asked_priority] (get-in row [:data :priority]))
+        (assoc-in [:data :priority] fired-seat-priority))
+    row))
 
 (def ^:private close-input
   [:map
@@ -877,6 +916,9 @@
    :create-schema (into [:map] (concat stated-fields birth-fields))
    :create-guards [the-parent-is-open-at-birth the-merge-order-makes-no-cycle
                    the-parent-is-not-waited-on]
+   ;; a fired seat's follow-up lands at 4 and a groomer raises it; a
+   ;; person or an interactive seat is born at what it named
+   :on-create land-a-fired-seats-ticket-at-four
    :actions
    {:restate
     {:from #{:draft} :to :draft
