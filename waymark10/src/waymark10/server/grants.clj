@@ -512,30 +512,35 @@
 ;; :extend too — defense in depth for the approval effect's mint).
 ;; Own-surface (owner sees own) is untouched — it never goes through a
 ;; grant.
-(def ^:private private-own-surface-kinds
-  "Kinds that live ONLY on the own-surface and can never be granted."
-  #{"self" "journal" "letter"})
-
+;;
+;; Which kinds are private is read off the registry (waymark-ti0): each
+;; declares `:own-surface {… :grantable false}`, the same declaration
+;; that says who owns its rows. Core used to carry the literal set
+;; #{"self" "journal" "letter"}, naming three kinds an APP declares.
 (defn private-kind?
-  "Is this kind one of the private own-surface trio? The ephemeral
-  surfaces ask (waymark-tti.3 L7): a reported presence/intent self
-  naming one of these rows must pass the REPORTER's own sight, or a
-  stranger could name a letter it 404s and have the frame delivered
-  to exactly the two people who can read it."
-  [kind]
-  (contains? private-own-surface-kinds (name kind)))
+  "Does this rdef declare its own-surface the only path to its rows
+  (`:own-surface {:grantable false}`)? The ephemeral surfaces ask
+  (waymark-tti.3 L7): a reported presence/intent self naming one of
+  these rows must pass the REPORTER's own sight, or a stranger could
+  name a letter it 404s and have the frame delivered to exactly the
+  two people who can read it."
+  [rdef]
+  (false? (get-in rdef [:own-surface :grantable])))
 
 (g/defguard scope-omits-private-kinds
   {:judges [:scope]
+   :reads [:services]
    :vars [:kind]
-   :open "The private kinds are the own-surface-only trio (self, journal, letter); enumerating them into every scope form would duplicate a house rule the refusal already spells."
-   :explain "self, journal and letter are private to their own members and cannot be granted; the {kind} entry is refused (these kinds ride the own-surface, where owner sees own, with no grant path)."}
-  [_row inp _ctx]
-  (if-some [bad (some (fn [e]
-                        (let [k (str (:kind e))]
-                          (when (contains? private-own-surface-kinds k) k)))
-                      (:scope inp))]
-    (t/deny {:vars {:kind bad}})
+   :open "A private kind says so on its own declaration (:own-surface :grantable false); the refusal names the entry it refuses."
+   :explain "{kind} is private to its own members and cannot be granted; the entry is refused (the kind rides the own-surface, where owner sees own, with no grant path)."}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (if-some [bad (some (fn [e]
+                          (let [k (str (:kind e))]
+                            (when (some-> (rdef-of k) private-kind?) k)))
+                        (:scope inp))]
+      (t/deny {:vars {:kind bad}})
+      (t/allow))
     (t/allow)))
 
 (g/defguard not-a-substitute

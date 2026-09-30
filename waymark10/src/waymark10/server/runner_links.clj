@@ -18,7 +18,8 @@
   `ensure-seeded-links!` (piece 1c) is the boot seed: one link for
   each model and each schedule that holds its own fire URL and token,
   recorded by `seeded_from` so a second boot makes none. The source
-  rows keep their own links; nothing fires through a seeded link yet.
+  rows keep their own links, and a source row that names no runners
+  is given its seeded link as its list (4e42b3d4), so fires go through it.
 
   `fire-pool!` (d16b71bf) chooses among a pool's links: it skips a
   link that is waiting and takes the least-used of the rest, or, in
@@ -436,7 +437,9 @@
   fire URL and token, one runner link with provider claude_routine,
   that URL and a copy of the token, recorded by `seeded_from`
   (`model:<id>` or `schedule:<id>`) so running it again makes none.
-  The source rows keep their own links untouched."
+  The source rows keep their own links untouched. A source row whose
+  `runners` is empty — an active model, a live schedule — is given
+  that link as its list; a list a person set is never overwritten."
   [eng]
   (when (contains? (inv/resources eng) :runner_link)
     (doseq [kind [:model :schedule]
@@ -444,15 +447,22 @@
             :let [url (some-> (get-in r [:data :fire_url]) str not-empty)
                   token (some-> (get-in r [:data :fire_token]) str not-empty)
                   from (str (name kind) ":" (:id r))]
-            :when (and url token
-                       (empty? (rows-of eng :runner_link {:seeded_from from})))]
+            :when (and url token)]
       (try
-        (inv/create! eng :runner_link
-                     {:provider "claude_routine"
-                      :fire_url url
-                      :fire_token token
-                      :seeded_from from}
-                     {:principal seed-actor})
+        (when (empty? (rows-of eng :runner_link {:seeded_from from}))
+          (inv/create! eng :runner_link
+                       {:provider "claude_routine"
+                        :fire_url url
+                        :fire_token token
+                        :seeded_from from}
+                       {:principal seed-actor}))
+        (when-let [link (first (rows-of eng :runner_link {:seeded_from from}))]
+          (when (and (nil? (sch/runners-of-row r))
+                     (= (if (= kind :model) "active" "live")
+                        (name (:state r))))
+            (inv/invoke! eng kind (str (:id r)) :seed_runners
+                         {:runners [(str (:id link))]}
+                         {:principal seed-actor})))
         (catch Exception e
           (binding [*out* *err*]
             (println (str "waymark10 runner links: seed from " from

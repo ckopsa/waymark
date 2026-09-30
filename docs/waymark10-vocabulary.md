@@ -479,6 +479,9 @@ decision's own `:by` field, with the verdict doors". `:all true` is the
 vocabulary posture — every row is everyone's words, not anyone's data (the
 `:capability` registry) — deliberately a separate key from an empty `:by`,
 so *owned by nobody* and *owned by everybody* are not one typo apart.
+`:grantable false` makes the own-surface the ONLY path to the kind's rows:
+no grant or ask scope may name it (`scope-omits-private-kinds`), because a
+grant carries no owner filter. `:self`, `:journal` and `:letter` say it.
 `:actions` names what the courtesy makes VISIBLE; the guards still judge
 every invoke, so a self-judging asker meets the wall's honest 409 rather
 than a mute 404. Neither key is law: `fingerprint-of` names neither, so
