@@ -845,9 +845,9 @@
             [:owner {:optional true :kind :member
                      :x-display {:label "Whose"}}
              [:maybe :waymark/ref]]
-            [:starts_at {:x-display {:label "Starts at"}} [:string {:min 1 :max 64}]]]
+            [:starts_at {:x-display {:label "Starts at"}} :waymark/instant]]
    :actions {:retime {:from #{:planned} :to :planned
-                      :input [:map [:starts_at [:string {:min 1 :max 64}]]]
+                      :input [:map [:starts_at :waymark/instant]]
                       :safety {:idempotent true :reversible true :confirm false}
                       :handler retime-block
                       :display {:label "Retime"}}
@@ -1030,6 +1030,22 @@
                       :address {:field "owner"}
                       :notifier notifier-id}
                      {:principal colton})))
+
+(deftest an-at-rule-naming-a-missing-or-non-datetime-field-refuses-with-a-sentence
+  (let [{:keys [eng notifier-id]} (at-world)]
+    (doseq [field ["name" "nowhere"]]
+      (testing field
+        (let [e (refused #(inv/create! eng :notice_rule
+                                       {:name "tell at the start"
+                                        :kind "block"
+                                        :when {:to_state "planned"}
+                                        :at {:field field}
+                                        :address {:field "owner"}
+                                        :notifier notifier-id}
+                                       {:principal colton}))]
+          (is (some? e))
+          (is (re-find #"not a datetime|not a field|at-names-a-datetime"
+                       (str (ex-message e) " " (pr-str (ex-data e))))))))))
 
 (defn- at-block! [eng owner starts-at]
   (:row (inv/create! eng :block {:name "focus" :owner owner :starts_at starts-at}
