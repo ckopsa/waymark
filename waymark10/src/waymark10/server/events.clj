@@ -379,6 +379,21 @@
       :law-revision (:law-revision t)
       :summary (:summary t)})))
 
+(defn visible-transition
+  "One transition payload as a viewer may see it: the payload when
+  `vis` admits the row its `self` names, nil otherwise. The rule is
+  :row? on that row, the one router/check-row! holds the per-resource
+  stream to. nil `vis` is an unscoped viewer and sees it whole. The
+  payload is `transition-payload`'s, read by wire key or by keyword."
+  [vis payload]
+  (let [field (fn [k] (or (get payload k) (get payload (keyword k))))
+        kind (some-> (field "kind") name keyword)
+        [_ id] (re-matches #"/api/[^/?#]+/([^/?#]+)" (str (field "self")))]
+    (cond
+      (nil? vis) payload
+      (and kind id ((:row? vis) kind id)) payload
+      :else nil)))
+
 (defn derivation-payload
   "One observation as wire JSON — the derivation frame's data. self is
   nil for a kind-wide observation (a bulk restamp names no row)."

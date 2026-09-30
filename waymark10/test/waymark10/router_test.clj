@@ -171,6 +171,16 @@
       (is (= "/api/-/render/markdown" (get-in full [:render_markdown :href])))
       (is (= "POST" (get-in full [:render_markdown :method]))))))
 
+;; the engine's own name rides beside the protocol version, so a walk's
+;; export header and a reader can both tell a demo engine from a real one
+(deftest well-known-answers-the-engines-name
+  (is (string? (:name *eng*)))
+  (is (= (:name *eng*) (:name (json (req :get "/api/.well-known/waymark")))))
+  (let [demo (engine/handler (assoc *eng* :name "demo"))]
+    (is (= "demo" (:name (json (demo {:request-method :get
+                                      :uri "/api/.well-known/waymark"
+                                      :headers {"x-waymark-principal" "colton"}})))))))
+
 (deftest published-schema
   (let [resp (req :get "/api/schemas/plan")
         b (json resp)]
