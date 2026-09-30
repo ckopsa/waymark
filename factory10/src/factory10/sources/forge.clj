@@ -1469,9 +1469,13 @@
 
 (defn- red-main-detail
   "The body a code seat reads: what is red, where, the log, and what to
-  do about it."
-  [source repo base head red-from red-checks]
-  (let [tails (for [c (take base-log-tails red-checks)]
+  do about it. `failed` are the checks on the head that are not
+  required and went red too — the suites a required `gate` only names
+  (`quick=failure`) — and their logs come first, because the cause is
+  in them (ticket 9a14577e)."
+  [source repo base head red-from red-checks failed]
+  (let [tails (for [c (concat (take base-log-tails failed)
+                              (take base-log-tails red-checks))]
                 (let [{:keys [excerpt note]}
                       (try (forge-log-tail source (assoc c :repository repo))
                            (catch Exception e {:note (ex-message e)}))]
@@ -1486,6 +1490,14 @@
                                         (when-some [u (:url %)] (str " — " u)))
                                   red-checks))
               "\n\n"
+              (when (seq failed)
+                (str "Beneath them, these checks on the same head failed "
+                     "too, and their logs come first below:\n\n"
+                     (str/join "\n" (map #(str "- " (:check_name %)
+                                               (when-some [u (:url %)]
+                                                 (str " — " u)))
+                                         failed))
+                     "\n\n"))
               (when red-from
                 (str "The first red head after a green one was `" red-from
                      "`: that commit, or the merge that made it, is the "
@@ -1504,13 +1516,14 @@
 (defn- open-red-ticket!
   "One groomed p0 bug in the policy's repository, with the red head
   written on it. → its id."
-  [eng source repo base head red-from red-checks names]
+  [eng source repo base head red-from red-checks failed names]
   (let [row (:row (inv/create! eng :ticket
                                {:title (cut (str base " is red: "
                                                  (str/join ", " names))
                                             200)
                                 :detail (red-main-detail source repo base head
-                                                         red-from red-checks)
+                                                         red-from red-checks
+                                                         failed)
                                 :type "bug"
                                 :priority 0
                                 :repo repo}
@@ -1618,6 +1631,16 @@
                                       (contains? red-conclusions
                                                  (str (:conclusion %))))
                                 (:checks base-read))
+            ;; the red checks the policy does not require: the suites
+            ;; behind an aggregating `gate`, newest run of each name
+            failed (->> (:checks base-read)
+                        (group-by #(str (:check_name %)))
+                        vals
+                        (mapcat newest-runs)
+                        (filterv #(and (not (some #{(str (:check_name %))}
+                                                  names))
+                                       (contains? red-conclusions
+                                                  (str (:conclusion %))))))
             stored {:verdict (blank->nil (:base_state data))
                     :head (blank->nil (:base_head data))
                     :red_from (blank->nil (:base_red_from data))
@@ -1662,7 +1685,7 @@
                 :else
                 [(update census :base-opened inc)
                  (open-red-ticket! eng source repo base head red-from
-                                   red-checks names)])
+                                   red-checks failed names)])
               (catch Exception e
                 (log-fn "the base of " repo " was read and written, but its "
                         "ticket did not move (" (ex-message e) ")")
