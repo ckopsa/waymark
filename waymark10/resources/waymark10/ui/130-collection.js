@@ -439,10 +439,37 @@ function sortSelect(query, currentSort, onSort, hints) {
    means (go() for a top-level collection, an embed.<rel>.sort
    override for an embedded table), itemTable only knows "a header
    was clicked." */
+/* an open invitation addressed to this viewer, as a collection row: the
+   subject, when the row carries it, must be the viewer (the full
+   envelope is judged again before the dialog opens) */
+function invitationRowOpen(item) {
+  const isInvitation = item.kind === "invitation" ||
+    /\/invitations\/[^/?#]+$/.test(item.self || "");
+  const subject = (item.fields || {}).subject;
+  return isInvitation && item.state === "open" &&
+    (!subject || subject === principalId());
+}
+
+/* one tap from the collection: summaries drop data, so read the whole
+   envelope first, then hand it to openInvitation (180-action-dialog.js) */
+async function openInvitationRow(item) {
+  const res = await api(item.self);
+  if (!res.ok) {
+    toast(`The invitation cannot be read: ${(res.body || {}).detail || res.status}`);
+    return;
+  }
+  const doc = res.body;
+  if (doc.state !== "open" || (doc.data || {}).subject !== principalId()) {
+    toast("This invitation is not open to you");
+    return;
+  }
+  openInvitation(doc);
+}
+
 function itemTable(items, opts) {
   opts = opts || {};
   if (!items.length) return el("p", {class:"muted"}, "No rows.");
-  const anyActions = !!opts.rowAction ||
+  const anyActions = !!opts.rowAction || items.some(invitationRowOpen) ||
     items.some(i => (i.actions && Object.keys(i.actions).length) ||
                     Object.values(i.links || {}).some(l => l && (l.download || l.external)));
   const cols = fieldColumns(items, opts.query, opts.hints);
@@ -525,6 +552,10 @@ function itemTable(items, opts) {
     }
     if (anyActions) {
       const cell = el("td", {class:"rowactions partactions"});
+      if (invitationRowOpen(item))
+        cell.append(el("button", {class: "primary small", "data-invite-open": "",
+          onclick: e => { e.stopPropagation(); openInvitationRow(item); }},
+          "Take this step"));
       const extra = opts.rowAction ? opts.rowAction(item) : null;
       if (extra) cell.append(extra);
       for (const [name, entry] of Object.entries(item.actions || {}))

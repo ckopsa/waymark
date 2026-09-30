@@ -149,6 +149,15 @@
     (is (str/includes? body "data-invite-note"))
     (is (str/includes? body "@keyframes invited"))))
 
+(deftest ui-opens-an-invitation-from-the-collection
+  ;; the collection row of an open invitation to the viewer takes the
+  ;; step in one tap, reading the full envelope first (summaries drop data)
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function invitationRowOpen(item)"))
+    (is (str/includes? body "async function openInvitationRow(item)"))
+    (is (str/includes? body "const res = await api(item.self);"))
+    (is (str/includes? body "openInvitationRow(item); }"))))
+
 (deftest ui-decline-invokes-the-decline-door
   ;; decline is one button on the dialog, straight through the
   ;; invitation's own decline door
