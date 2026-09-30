@@ -210,7 +210,8 @@
                         :label "The field"
                         :help "The argument of that action the person is pointed at. A secret argument is refused."}}
     [:string {:min 1 :max 60}]]
-   [:note {:x-display {:widget "prose"
+   [:note {:examples ["Pick the repository this ticket belongs to."]
+           :x-display {:widget "prose"
                        :label "Note"
                        :help "One sentence shown beside the field: pick the repository here."}}
     [:string {:min 1 :max 240}]]
