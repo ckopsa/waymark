@@ -82,7 +82,8 @@
   ["pres_widgets" "letters" "definitions" "members" "roles" "grants"
    "approval_requests" "attachments" "subscriptions" "jobs"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
-   "waymark10_cursors" "waymark10_job_leases" "waymark10_observations"])
+   "waymark10_cursors" "waymark10_job_leases" "waymark10_observations"
+   "pres_notes"])
 
 (defn- fresh! []
   (let [st (pg/storage dsn)]
@@ -888,3 +889,189 @@
             (is (= "application/problem+json"
                    (get-in resp [:headers "Content-Type"]))))))
       (finally (pg/close! st)))))
+
+;; ── guided follow: the ui frame (docs/spec-guided-follow.md §1–2) ──
+
+(def ^:private note
+  "A row with one door: two plain arguments and one secret."
+  (r/resource
+   {:kind :pres_note
+    :plural "pres_notes"
+    :states [:open]
+    :initial :open
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 80}]]]
+    :actions
+    {:assign {:from #{:open} :to :open
+              :input [:map
+                      [:assignee [:string {:max 400}]]
+                      [:note {:optional true} [:maybe [:string {:max 8000}]]]
+                      [:pin {:optional true :x-secret true}
+                       [:maybe [:string {:max 12}]]]]
+              :handler (fn [row _inp _ctx] row)
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Assign" :order 1}}}}))
+
+(def ^:private assigning
+  {:dialog {:self "/api/pres_notes/n1" :action "assign"}
+   :fields {:assignee "marco" :note "Take this one"}
+   :collection {:self "/api/pres_notes" :filter {:title "x"} :sort "-title" :page 2}
+   :focus "/api/pres_notes/n1"})
+
+(defn- ui-of? [pid]
+  #(and (= "ui" (:event %)) (= pid (get-in % [:principal :id]))))
+
+(defn- with-ui-reg
+  "One engine and one registry over the presence database; f gets
+  [eng reg]."
+  [opts f]
+  (fresh!)
+  (let [st (pg/storage dsn)]
+    (try
+      (let [eng (engine/engine {:storage st :resources [widget note]})
+            ;; a heartbeat long enough that no wait below evicts (an
+            ;; eviction is a leave, and a leave clears the ui)
+            reg (presence/start! eng (merge {:hb-ms 5000} opts))]
+        (try (f eng reg)
+             (finally (presence/stop! reg))))
+      (finally (pg/close! st)))))
+
+(deftest ui-frames-cross-only-to-a-follower-that-asked
+  (with-ui-reg {}
+    (fn [eng reg]
+      (let [follower (presence/subscribe reg nil {:ui "elena"
+                                                  :redact (presence/ui-redactor eng nil)})
+            other (presence/subscribe reg nil {:ui "marco"
+                                               :redact (presence/ui-redactor eng nil)})
+            plain (presence/subscribe reg nil)]
+        (presence/report! reg elena "/api/pres_notes/n1" assigning)
+        (let [f (next-frame follower (ui-of? "elena"))]
+          (is (some? f))
+          (is (= "/api/pres_notes/n1" (:self f)))
+          (is (= {:self "/api/pres_notes/n1" :action "assign"} (get-in f [:ui :dialog])))
+          (is (= {:assignee "marco" :note "Take this one"} (get-in f [:ui :fields])))
+          (is (= "/api/pres_notes/n1" (get-in f [:ui :focus])))
+          (testing "seq counts up per principal"
+            (presence/report! reg elena "/api/pres_notes/n1" (assoc assigning :focus nil))
+            (let [g (next-frame follower (ui-of? "elena"))]
+              (is (< (long (:seq f)) (long (:seq g))))
+              (is (nil? (get-in g [:ui :focus]))))))
+        (testing "a stream that asked for another pid, or for none, gets no ui frame"
+          (is (nil? (next-frame other #(= "ui" (:event %)) 500)))
+          (is (nil? (next-frame plain #(= "ui" (:event %)) 500))))
+        (testing "a plain beat keeps the last ui; a late follower's snapshot carries it"
+          (presence/report! reg elena "/api/pres_notes/n2")
+          (let [[e] (presence/snapshot reg (constantly true)
+                                       {:ui "elena" :redact (presence/ui-redactor eng nil)})]
+            (is (= "/api/pres_notes/n2" (:self e)))
+            (is (= "assign" (get-in e [:ui :dialog :action])))
+            (is (some? (:seq e)))))))))
+
+(deftest a-stream-without-ui-is-byte-for-byte-today
+  (with-ui-reg {}
+    (fn [_eng reg]
+      (let [plain (presence/subscribe reg nil)]
+        (presence/report! reg elena "/api/pres_notes/n1" assigning)
+        (let [f (next-frame plain #(= "join" (:event %)))]
+          (is (= #{:event :principal :self :source :at} (set (keys f))))
+          (is (not (str/includes? (presence/frame f) "assign"))))
+        (presence/report! reg elena "/api/pres_notes/n1" (assoc assigning :focus nil))
+        (is (nil? (next-frame plain some? 500))
+            "a ui-only change enqueues nothing on a stream that did not ask")
+        (let [snap (presence/snapshot reg (constantly true))]
+          (is (= [#{:principal :self :source :at}] (mapv (comp set keys) snap)))
+          (is (not (str/includes? (presence/frame {:event "snapshot" :presences snap})
+                                  "assign"))))))))
+
+(deftest ui-fields-the-follower-cannot-read-are-absent
+  (with-ui-reg {}
+    (fn [eng reg]
+      (let [vis (fn [{:keys [rows actions args fields whole]}]
+                  {:row? (fn [_k id] (contains? rows id))
+                   :action? (fn [_k a] (contains? actions (name a)))
+                   :arg? (fn [_k _a arg] (contains? args (name arg)))
+                   :field? (fn [_k f] (contains? fields (name f)))
+                   :whole-kind? (fn [_k] whole)})
+            frame {:event "ui" :principal {:id "elena" :display "Elena" :type "human"}
+                   :self "/api/pres_notes/n1" :source "heartbeat" :at "t" :seq 7
+                   :ui assigning}
+            redact #((presence/ui-redactor eng (vis %)) frame)]
+        (testing "a key :arg? refuses is removed, not blanked"
+          (let [f (redact {:rows #{"n1"} :actions #{"assign"} :args #{"assignee"}
+                           :fields #{"title"} :whole true})]
+            (is (= "ui" (:event f)))
+            (is (= {:assignee "marco"} (get-in f [:ui :fields])))
+            (is (not (contains? (get-in f [:ui :fields]) :note)))
+            (is (= {:title "x"} (get-in f [:ui :collection :filter])))
+            (is (= "-title" (get-in f [:ui :collection :sort])))))
+        (testing "a dialog :action? refuses is null, and its fields go with it"
+          (let [f (redact {:rows #{"n1"} :actions #{} :args #{"assignee" "note"}
+                           :fields #{} :whole true})]
+            (is (nil? (get-in f [:ui :dialog])))
+            (is (nil? (get-in f [:ui :fields])))
+            (is (= {} (get-in f [:ui :collection :filter])))
+            (is (not (contains? (get-in f [:ui :collection]) :sort)))
+            (is (= "/api/pres_notes/n1" (get-in f [:ui :focus])))))
+        (testing "a frame redacted whole crosses as a plain move"
+          (is (= {:event "move" :principal (:principal frame)
+                  :self "/api/pres_notes/n1" :source "heartbeat" :at "t"}
+                 (redact {:rows #{} :actions #{"assign"} :args #{} :fields #{}
+                          :whole false}))))
+        (testing "on the stream, under the follower's own visibility"
+          (let [v (vis {:rows #{"n1"} :actions #{"assign"} :args #{"assignee"}
+                        :fields #{} :whole true})
+                sub (presence/subscribe reg (presence/self-visible? eng v)
+                                        {:ui "elena" :redact (presence/ui-redactor eng v)})]
+            (presence/report! reg elena "/api/pres_notes/n1" assigning)
+            (let [f (next-frame sub (ui-of? "elena"))]
+              (is (= {:assignee "marco"} (get-in f [:ui :fields])))
+              (is (not (str/includes? (presence/frame f) "Take this one"))))))))))
+
+(deftest secret-fields-never-reach-the-registry
+  (with-ui-reg {}
+    (fn [eng reg]
+      (let [follower (presence/subscribe reg nil {:ui "elena"
+                                                  :redact (presence/ui-redactor eng nil)})]
+        (presence/report! reg elena "/api/pres_notes/n1"
+                          (assoc-in assigning [:fields :pin] "8675309"))
+        (let [f (next-frame follower (ui-of? "elena"))]
+          (is (= {:assignee "marco" :note "Take this one"} (get-in f [:ui :fields])))
+          (is (not (str/includes? (presence/frame f) "8675309"))))
+        (is (not (str/includes? (pr-str @(:local reg)) "8675309"))
+            "removed at report time: never stored, so never notified")
+        (is (not (str/includes? (pr-str @(:published reg)) "8675309")))))))
+
+(deftest ui-over-the-cap-elides-longest-first
+  (with-ui-reg {}
+    (fn [_eng reg]
+      (let [long-note (apply str (repeat 7000 "x"))
+            mid (apply str (repeat 300 "y"))]
+        (presence/report! reg elena "/api/pres_notes/n1"
+                          (assoc assigning :fields {:assignee mid :note long-note}))
+        (let [fields (get-in @(:local reg) ["elena" :entry :ui :fields])]
+          (is (= {:elided true} (:note fields)) "the longest value elides first")
+          (is (= mid (:assignee fields)) "and only as many as it takes"))
+        (testing "422 when even empty fields do not fit"
+          (let [e (try (presence/report! reg elena "/api/pres_notes/n1"
+                                         (assoc-in assigning [:collection :filter :title]
+                                                   long-note))
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+            (is (some? e))
+            (is (str/includes? (pr-str (ex-data e)) "422"))))))))
+
+(deftest ui-frames-honour-the-curtain
+  (with-ui-reg {:curtained? #(= "elena" %)}
+    (fn [eng reg]
+      (let [follower (presence/subscribe reg nil {:ui "elena"
+                                                  :redact (presence/ui-redactor eng nil)})]
+        (presence/report! reg elena "/api/pres_notes/n1" assigning)
+        (presence/report! reg marco "/api/pres_notes/n1" assigning)
+        (is (= "marco" (get-in (next-frame follower #(contains? #{"elena" "marco"}
+                                                                (get-in % [:principal :id])))
+                               [:principal :id]))
+            "the curtained principal's frames, ui and all, never cross")
+        (is (nil? (get @(:local reg) "elena")))
+        (is (empty? (filter #(= "elena" (get-in % [:principal :id]))
+                            (presence/snapshot reg (constantly true) {:ui "elena"}))))))))
