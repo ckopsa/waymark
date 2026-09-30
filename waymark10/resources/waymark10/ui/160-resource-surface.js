@@ -110,7 +110,7 @@ async function renderResource(view, doc, hints) {
   /* an open invitation addressed to this viewer: one tap lands on the
      invited row with its door open in their own hand */
   if (kind === "invitation" && doc.state === "open" &&
-      doc.data?.subject && doc.data.subject === principalId())
+      doc.data?.subject && doc.data.subject === viewerId())
     bar.prepend(el("button", {class: "primary", "data-invite-open": "",
       onclick: () => openInvitation(doc)}, "Take this step"));
   /* the follow affordance: a member envelope names a principal —
