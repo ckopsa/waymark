@@ -892,19 +892,24 @@
   (`keep_transcripts` fired), so this is the fired sittings still
   waiting on the judge. The newest `judgments/judged-page` sealed transcripts
   are read, the unjudged being the fresh end of the table; the entry's
-  filter is read as equality, and its own `state` replaces `sealed`."
+  filter is read through `collections/parse-query`, as `count-under`
+  reads it — so a comma value is any-of — and its own `state` replaces
+  `sealed`."
   [eng judgment-id filter-map]
-  (when (serves? eng :transcript)
+  (when-some [rdef (when (serves? eng :transcript)
+                     (get (inv/resources eng) :transcript))]
     (try
-      (let [where (merge {:state "sealed"}
-                         (into {} (map (fn [[f v]] [(keyword (name f)) (str v)]))
-                               filter-map))
+      (let [params (merge {"state" "sealed"}
+                          (into {} (map (fn [[f v]] [(name f) (str v)]))
+                                filter-map))
+            conds (:conds (collections/parse-query rdef params
+                                                   {:defaults? false}))
             judged (judgments/judged-subjects eng judgment-id)
             st (:storage eng)]
         (->> (store/with-tx st
-               (fn [tx] (store/query-rows st tx :transcript where
-                                          {:limit judgments/judged-page
-                                           :newest-first true})))
+               (fn [tx] (store/search-rows st tx :transcript conds
+                                           {:limit judgments/judged-page
+                                            :desc true})))
              (remove #(contains? judged (str (get-in % [:data :sitting]))))
              count))
       (catch Exception e
