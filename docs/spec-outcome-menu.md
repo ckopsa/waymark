@@ -110,6 +110,8 @@ string, a number, an **array** (`[:vector [:enum …]]` included — `:items` is
 never inspected), an object → **recall**. `feed/card-ceiling` is `"selection"`,
 so anything at `recall` or above leaves the card for `heavier`.
 
+Retired 2026-09-26 in dbf6358a with the feed; kept as history, not built.
+
 **`feed.clj`** — `census [:do_now :decide :fuel :seam :archive]` (a literal,
 and the `:section` enum of `feed_recipe/order-schema` is generated from it);
 `populations`, a closed map of twelve `(fn [ctx])`s answering **candidates**
@@ -2386,7 +2388,8 @@ underneath.
 
 `feed_view` is the precedent and the reasoning is its own
 (waymark-8um.1): a record a **screen** posts, about cards the feed
-itself minted, named in `server/feed.clj` as a keyword and enrolled
+itself minted, named in `server/feed.clj` (retired 2026-09-26 in
+dbf6358a with the feed) as a keyword and enrolled
 `:always`. The chips are drawn by `135-feed-screen.js`, which is the
 generic page and knows no application's kind names — an application
 kind would have made the framework's own screen reach for a name only
@@ -2736,6 +2739,8 @@ that kind's line changing and no other.
 
 ## Built — jfv.17, the impact line (2026-08-25, waymark-jfv.17)
 
+Retired 2026-09-26 in dbf6358a with the feed; kept as history, not built.
+
 The owner's discomfort, verbatim, is what this bead is downstream of:
 *I'm not yet comfortable using the crown because I'm not sure what
 impact the actions will have.* Every piece card carried the
@@ -2993,7 +2998,8 @@ paragraph is the record of asking.
   read *This will create one thing — in this house's own record.
   Nothing else.* rather than crashing or lying, and that is the
   correct failure: less said, nothing false.
-- **`offered?` is now spelled once in `feed.clj`** and read by three
+- **`offered?` is now spelled once in `feed.clj`** (retired 2026-09-26
+  in dbf6358a with the feed) and read by three
   things about one card: the bundle's candidacy, its union line, and
   whether a piece's line has a tap left to describe. It was inline
   before and would have been inline three times after.
@@ -3108,6 +3114,8 @@ Every word of that sentence is read off a declaration. `Yes` is
 `impact` is out of the create model, so a composer that supplies one gets 422.
 
 ### The impact line: one new arm, no new key, no new mechanism
+
+Retired 2026-09-26 in dbf6358a with the feed; kept as history, not built.
 
 `feed/piece-impact` was written by jfv.17 as *an arm rather than the whole
 function*, with the seat beside it named and left warm. This is what sat down in
@@ -5815,7 +5823,8 @@ waymark-8um.7 as well, which asked for exactly that text.
   table, no DDL, an empty migrate plan.
 - **Files:** `waymark10/src/waymark10/server/diagnosis.clj` (the tally, the
   rank reading, the recipe opt, the N decision in `lesson`'s docstring);
-  `waymark10/src/waymark10/server/feed.clj` (`crown-inputs` extracted and
+  `waymark10/src/waymark10/server/feed.clj` (retired 2026-09-26 in
+  dbf6358a with the feed, as was `diagnosis.clj`; `crown-inputs` extracted and
   public; `outcomes` reads through it); `waymark10/src/waymark10/server/routes/feed.clj`
   (the diagnosis door resolves the household's recipe);
   `waymark10/src/waymark10/test/packs.clj` (the claims above, the corrected
