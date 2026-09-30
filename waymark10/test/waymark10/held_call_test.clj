@@ -891,8 +891,12 @@
                               :one-way "A queued step stays queued in this rig."}
                      :display {:label "Queue"}}}})
 
-(defn- notice-engine [storage log clock]
-  (let [fake (fake-chat log (atom false))]
+(defn- notice-engine [storage log clock & [gate]]
+  (let [chat (fake-chat log (atom false))
+        ;; `gate`, when given, runs before each send: a send that waits
+        fake (fn [method params]
+               (when (and gate (= "tools/call" method)) (gate))
+               (chat method params))]
     (engine/engine (cond-> {:storage storage
                             :resources [caps/capability notice-chore at-block
                                         notice-plan notice-step]
@@ -903,10 +907,10 @@
                                                        fake))}}}
                      clock (assoc :now-fn #(deref clock))))))
 
-(defn- notice-world [& [clock]]
+(defn- notice-world [& [clock gate]]
   (let [log (atom [])
         storage (memory/storage)
-        eng (notice-engine storage log clock)
+        eng (notice-engine storage log clock gate)
         _ (inv/create! eng :capability
                        {:token "chat.send"
                         :description "chat.send through a server row."
@@ -1107,6 +1111,44 @@
       (reset! clock (instant "2026-09-29T11:30:00Z"))
       (is (= 1 (held/sweep-notice-instants! eng2)) "the second, due while down, is told")
       (is (= 2 (count (chat-sends log)))))))
+
+(deftest a-due-set-past-both-caps-is-told-once-each
+  (let [{:keys [eng log clock] :as w} (at-world)
+        jack (notice-member! w "Jack" true)
+        r (at-rule! w)
+        n (inc (max @#'held/sweep-cap @#'held/told-cap))]
+    (dotimes [_ n] (at-block! eng jack "2026-09-29T10:00:00Z"))
+    (reset! clock (instant "2026-09-29T10:00:00Z"))
+    (is (= n (held/sweep-notice-instants! eng)) "every due row, past one page")
+    (is (= 0 (held/sweep-notice-instants! eng)) "none twice, past the mark cap")
+    (is (= n (count (chat-sends log))))
+    (let [data (notice-rule-data eng (:id r))]
+      (is (= n (:sent data)))
+      (is (= n (count (:told data))) "a mark on a row still due is kept"))))
+
+(deftest a-slow-send-does-not-hold-the-rules-lock
+  (let [entered (promise)
+        release (promise)
+        {:keys [eng storage clock] :as w}
+        (notice-world (atom (instant "2026-09-29T09:00:00Z"))
+                      (fn [] (deliver entered true) @release))
+        jack (notice-member! w "Jack" true)
+        r (at-rule! w)
+        _ (at-block! eng jack "2026-09-29T10:00:00Z")
+        _ (reset! clock (instant "2026-09-29T10:00:00Z"))
+        sweep (future (held/sweep-notice-instants! eng))]
+    (try
+      (is (true? (deref entered 5000 false)) "the send has begun")
+      (let [locked (future
+                     (store/with-tx storage
+                       #(some? (store/load-row storage % :notice_rule (str (:id r))
+                                               {:for-update true}))))]
+        (is (true? (deref locked 5000 :held)) "the rule's row is free while the send waits"))
+      (is (= 1 (count (:told (notice-rule-data eng (:id r)))))
+          "the mark is claimed before the send")
+      (finally (deliver release true)))
+    (is (= 1 (deref sweep 5000 :stuck)))
+    (is (= 1 (:sent (notice-rule-data eng (:id r)))) "the count lands after")))
 
 (defn- step-rule! [{:keys [eng notifier-id]} address]
   (:row (inv/create! eng :notice_rule
