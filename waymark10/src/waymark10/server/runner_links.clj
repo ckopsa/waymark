@@ -55,7 +55,8 @@
 
 (g/defguard a-person-makes-the-link
   {:reads [:principal]
-   :explain "A runner link is a person's to make. A person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes its fire URL and its token here. An agent does not make a link; the engine copies only a link a person already pasted onto a model or a schedule."}
+   :explain "A runner link is a person's to make. A person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes its fire URL and its token here. An agent does not make a link; the engine copies only a link a person already pasted onto a model or a schedule."
+   :open "No door changes who the caller is: ask the person to make the Routine and paste its link here."}
   [_row _inp ctx]
   (if (or (a-persons-hand? ctx)
           (= :system (get-in ctx [:principal :type])))
@@ -78,7 +79,8 @@
 (g/defguard a-person-writes-the-token
   {:judges [:token]
    :reads [:principal]
-   :explain "A new token is a person's to paste. Restate the link without a token, and the one it holds stays."}
+   :explain "A new token is a person's to paste. Restate the link without a token, and the one it holds stays."
+   :remedies [:runner_link/restate]}
   [_row inp ctx]
   (if (or (nil? (:token inp)) (a-persons-hand? ctx))
     (t/allow)
