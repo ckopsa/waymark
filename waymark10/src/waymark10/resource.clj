@@ -1346,7 +1346,8 @@
                 ;; the stamped names are optional and :raw, because
                 ;; they are principal ids and a display layer must not
                 ;; dress them up as words
-                entries (cond-> [[ask-field {:x-display (ask-display asks)}
+                entries (cond-> [[ask-field {:x-display (ask-display asks)
+                                             :not-a-ref "The question, in words: never a row id, whatever the field is called."}
                                   [:string {:min 1 :max ask-max}]]
                                  [by {:optional true :x-display {:raw true}}
                                   [:maybe [:string {:max 128}]]]]

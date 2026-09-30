@@ -778,20 +778,22 @@
   assembly (waymark10.checks-assembly) over every surface
   `kind-surfaces` walks."
   [r kinds]
-  (doseq [[where form] (kind-surfaces r)
-          [k {:keys [properties schema]}] (schema/entry-map form)
-          :when (and (contains? kinds (named-kind k))
-                     (string-shape? schema)
-                     (nil? (:kind properties)))
-          :let [why (:not-a-ref properties)]
-          :when (not (and (string? why) (not (str/blank? why))))]
-    (err r :unref'd-ids
-         (str where " field " k " is named after kind " (named-kind k)
-              " and holds a string, so it reads as that kind's row id, "
-              "but nothing declares it a ref. Declare it :waymark/ref "
-              "with :kind " (named-kind k) ", or, when it holds no id "
-              "(a name, say), waive it with {:not-a-ref \"why\"} in its "
-              "properties."))))
+  (let [hits (for [[where form] (kind-surfaces r)
+                   [k {:keys [properties schema]}] (schema/entry-map form)
+                   :when (and (contains? kinds (named-kind k))
+                              (string-shape? schema)
+                              (nil? (:kind properties)))
+                   :let [why (:not-a-ref properties)]
+                   :when (not (and (string? why) (not (str/blank? why))))]
+               (str where " field " k " (kind " (named-kind k) ")"))]
+    (when (seq hits)
+      (err r :unref'd-ids
+           (str (str/join "; " hits)
+                ": each is named after a kind and holds a string, so it "
+                "reads as that kind's row id, but nothing declares it a "
+                "ref. Declare it :waymark/ref with that :kind, or, when "
+                "it holds no id (a name, say), waive it with "
+                "{:not-a-ref \"why\"} in its properties.")))))
 
 ;; ── the query surface ───────────────────────────────────────────────
 

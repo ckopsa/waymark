@@ -67,7 +67,8 @@
                         :x-display {:label "Widen this grant"
                                     :help "The grant you already hold and want more of. Leave it empty for the bootstrap ask — an approval then mints a fresh grant in your name."}}
              [:maybe :waymark/ref]]
-            [:task {:x-display
+            [:task {:not-a-ref "The question, in words: never a row id, whatever the field is called."
+                    :x-display
                     {:label "What you need it for"
                      :help "The work this access is for, in one sentence. The approver is deciding about the TASK as much as the scope — 'file the week's receipts' earns a yes that 'admin' does not."}}
              [:string {:min 1 :max 240}]]
@@ -80,6 +81,7 @@
             ;; the seat pair (spec-seat.md R-5.4) — the ask spells the
             ;; office's NAME and the mint resolves it to the ref
             [:seat {:optional true
+                    :not-a-ref "The seat's NAME, spelled out loud; the mint resolves it to the row and writes the ref on the grant."
                     :x-display {:raw true
                                 :label "The seat you are asking to sit in"
                                 :help "The name of an office somebody already opened — \"inbox-clerk\", say. What it opens is the seat's own scope, read fresh at every request, so a restate of the seat moves your leash with it and you never ask again for the same office."}}
@@ -107,7 +109,8 @@
                                :x-display {:label "Widen this grant"
                                            :help "The grant you already hold and want more of. Leave it empty for the bootstrap ask — an approval then mints a fresh grant in your name."}}
                     [:maybe :waymark/ref]]
-                   [:task {:x-display
+                   [:task {:not-a-ref "The question, in words: never a row id, whatever the field is called."
+                           :x-display
                            {:label "What you need it for"
                             :help "The work this access is for, in one sentence. The approver is deciding about the TASK as much as the scope — 'file the week's receipts' earns a yes that 'admin' does not."}}
                     [:string {:min 1 :max 240}]]
@@ -118,6 +121,7 @@
                                         :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this. Leave it empty when you are asking to sit in a seat: the office's scope is the ask."}}
                     grants/scope-schema]
                    [:seat {:optional true
+                           :not-a-ref "The seat's NAME, spelled out loud; the mint resolves it to the row and writes the ref on the grant."
                            :x-display {:raw true
                                        :label "The seat you are asking to sit in"
                                        :help "The name of an office somebody already opened — \"inbox-clerk\", say. What it opens is the seat's own scope, read fresh at every request, so a restate of the seat moves your leash with it and you never ask again for the same office."}}

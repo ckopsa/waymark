@@ -724,9 +724,15 @@
   named after a registered kind must be a ref or say why not. Judged
   here because only the registry knows which names are kinds."
   [reg]
-  (let [kinds (set (keys (:kinds reg)))]
-    (doseq [[_ r] (sort-by key (:kinds reg))]
-      (checks/check-unref'd-ids r kinds))))
+  (let [kinds (set (keys (:kinds reg)))
+        failures (into []
+                       (keep (fn [[_ r]]
+                               (try (checks/check-unref'd-ids r kinds) nil
+                                    (catch clojure.lang.ExceptionInfo e e))))
+                       (sort-by key (:kinds reg)))]
+    (when (seq failures)
+      (throw (ex-info (str/join "\n" (map ex-message failures))
+                      (ex-data (first failures)))))))
 
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
