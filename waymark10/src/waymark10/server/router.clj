@@ -123,6 +123,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.walks :as walks]
             [waymark10.server.history :as history]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
@@ -1144,14 +1145,18 @@
                     ;; …and a person's purge of a transcript deletes
                     ;; its lines out here (transcripts/after-purge!,
                     ;; docs/spec-transcript.md R-9.5), thousands of
-                    ;; deletes kept out of the transition's own commit
-                    (transcripts/after-purge!
+                    ;; deletes kept out of the transition's own commit,
+                    ;; and a recorder's purge of a walk its frames
+                    ;; (walks/after-purge!, spec-guided-follow § 4)
+                    (walks/after-purge!
                      eng rdef (keyword action)
-                     (held/after-allow!
+                     (transcripts/after-purge!
                       eng rdef (keyword action)
-                      (grants/approval-effects!
+                      (held/after-allow!
                        eng rdef (keyword action)
-                       (inv/invoke! eng (:kind rdef) id (keyword action) body opts)))))
+                       (grants/approval-effects!
+                        eng rdef (keyword action)
+                        (inv/invoke! eng (:kind rdef) id (keyword action) body opts))))))
                    (catch Exception e
                      (let [d (ex-data e)
                            held (held-instead eng opts (:kind rdef)

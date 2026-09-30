@@ -2168,6 +2168,7 @@
                               :help ignore-budget-help}}
      [:maybe :boolean]]
     [:walk {:optional true
+            :not-a-ref "It holds the name of the kind this seat walks, never a row id."
             :x-options {:from :kinds}
             :x-display
             {:label "The queue it walks"
@@ -2434,6 +2435,7 @@
                               :help ignore-budget-help}}
      :boolean]
     [:walk {:optional true
+            :not-a-ref "It holds the name of the kind this seat walks, never a row id."
             :x-options {:from :kinds}
             :x-display
             {:label "The queue it walks"
@@ -2613,6 +2615,7 @@
                                        :help ignore-budget-help}}
               :boolean]
              [:walk {:optional true
+                     :not-a-ref "It holds the name of the kind this seat walks, never a row id."
                      :x-options {:from :kinds}
                      :x-display
                      {:label "The queue it walks"
