@@ -309,6 +309,9 @@
   write's own transaction."
   [:services :verdict-guards])
 
+;; The sit's answer takes the app's own sections the same way, under
+;; `[:services :sit-sections]`: see waymark10.server.mcp/sit-sections-key.
+
 (g/defguard the-house-admits-this-verdict
   {:judges [:judgment :subject_id]
    :reads [:judgment :services]
@@ -606,13 +609,15 @@
                      :not-a-ref "It holds a word of the judgment's vocabulary, not a verdict's id."}
            [:string {:min 1 :max 40}])
     (entry :remedy {} [:string {:min 1 :max 1000}])
-    (entry :said_by {:optional true :filter #{:eq}}
+    (entry :said_by {:optional true :filter #{:eq}
+                     :not-a-ref "bare today; swept by 5cb6a0c7"}
            [:maybe [:string {:max 128}]])
     (entry :corrects {:optional true :kind :verdict :filter #{:eq}}
            [:maybe :waymark/ref])
     ;; written by `reopen` and by nothing else — not in the create
     ;; model, so no body may name them
-    (entry :reopened_by {:optional true :filter #{:eq}}
+    (entry :reopened_by {:optional true :filter #{:eq}
+                         :not-a-ref "bare today; swept by 5cb6a0c7"}
            [:maybe [:string {:max 128}]])
     (entry :reopen_note {:optional true} [:maybe [:string {:max 240}]])]
    ;; :said_by is NOT in the create model, and that is the difference

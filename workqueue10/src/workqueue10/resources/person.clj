@@ -618,11 +618,13 @@
             ;; beside a date is a second answer waiting to disagree
             ;; with the first.
             (entry :born {:optional true} [:maybe :waymark/date])
-            (entry :written_by {:optional true :filter #{:eq}}
+            (entry :written_by {:optional true :filter #{:eq}
+                                :not-a-ref "bare today; swept by 5cb6a0c7"}
                    [:maybe [:string {:max 128}]])
             (entry :affirmed_at {:optional true :sort true}
                    [:maybe :waymark/instant])
-            (entry :affirmed_by {:optional true :filter #{:eq}}
+            (entry :affirmed_by {:optional true :filter #{:eq}
+                                 :not-a-ref "bare today; swept by 5cb6a0c7"}
                    [:maybe [:string {:max 128}]])]
    ;; the client states who somebody is; the WRITER and the answer
    ;; stamps are the engine's, and so is the `through_name` garnish

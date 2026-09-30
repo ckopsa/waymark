@@ -73,7 +73,8 @@
     :summary "{data.topic} · {state}"
     :schema [:map
              [:topic [:string {:min 1 :max 60}]]
-             [:owner [:string {:min 1 :max 60}]]]
+             [:owner {:not-a-ref "A fixture's bare principal id."}
+              [:string {:min 1 :max 60}]]]
     :filterable {:state #{:eq :in}
                  :owner #{:eq}}
     :sortable {:fields [:created_at] :default "-created_at"}

@@ -201,6 +201,23 @@
   #{"seat_not_active" "model_not_held" "budget_reached"
     "sitting_budget_reached"})
 
+(def halt-mark
+  "The wall a sit found its seat against, as the sit answered it:
+  `wall`, `detail`, and `lifts_at` (absent when no roll of the window
+  lifts it). Stamped on the sitting and on the seat's schedule (ticket
+  ae64b57c), so a halted wake does not read as one that walked nothing."
+  [:map
+   [:wall [:string {:max 64}]]
+   [:detail {:optional true} [:maybe [:string {:max 480}]]]
+   [:lifts_at {:optional true} [:maybe [:string {:max 64}]]]])
+
+(defn- halt-mark-of
+  "The sit's `halted` block, string-keyed as it answers it, in
+  `halt-mark`'s spelling. → a map, or nil."
+  [halted]
+  (when (seq halted)
+    (into {} (keep (fn [[k v]] (when (some? v) [(keyword k) v]))) halted)))
+
 (def seat-modes
   "The two ways a seat is sat in (R-10.8). A FIRED seat is the seat's
   work day: a cadence, a wake or a person's `fire` starts a run, and
@@ -2233,6 +2250,7 @@
                     :spelled-by-hand "Written at birth when a delegating seat opens this one; never typed."}}
      [:maybe :waymark/ref]]
     [:owner {:optional true
+             :not-a-ref "bare today; swept by 5cb6a0c7"
              :x-display
              {:raw true
               :label "For whom"
@@ -2241,6 +2259,7 @@
     ;; INVARIANT 4's record: the person's first unpark of an authored
     ;; seat, written by `unpark` and by nothing else
     [:approved_by {:optional true
+                   :not-a-ref "bare today; swept by 5cb6a0c7"
                    :x-display
                    {:raw true
                     :label "Approved by"
@@ -3635,8 +3654,26 @@
     [:walked_nothing {:optional true
                       :x-display
                       {:label "Walked nothing"
-                       :spelled-by-hand "Written by the sit when the walk it handed had no rows at all: the queue was empty, every row in it was held, or the seat was at a wall. A sitting that was handed a row does not carry it."}}
+                       :spelled-by-hand "Written by the sit when the walk it handed had no rows at all: the queue was empty, or every row in it was held. A sitting that was handed a row does not carry it, and a seat at a wall carries `halted` instead."}}
      :boolean]
+    ;; WHY IT WAS EMPTY (ticket ae64b57c). The rows the walk left out,
+    ;; each with the rule that left it out — the sit's own `withheld` —
+    ;; or that the queue itself was empty, so an empty walk over a
+    ;; queue that is not empty is not read as a walk bug.
+    [:walked_nothing_why {:optional true
+                          :x-display
+                          {:label "Why it walked nothing"
+                           :spelled-by-hand "Written by the sit beside `walked_nothing`: the rows the walk left out and the rule that left out each one (another open sitting holds it, the release grace holds it, its change waits for a person), or that the queue had no rows under the walk's filter."}}
+     [:maybe [:string {:max 480}]]]
+    ;; A WAKE THE WALL HELD (ticket ae64b57c). The sit's `halted`
+    ;; block, kept: a halted sit was not let walk, so it is not stamped
+    ;; `walked_nothing`, and this says which wall and when it lifts.
+    [:halted {:optional true
+              :x-display
+              {:raw true
+               :label "Halted at a wall"
+               :spelled-by-hand "Written by the sit when the seat was against a wall: which wall, the sentence that says why, and when it lifts."}}
+     [:maybe halt-mark]]
     ;; A FIRE NOBODY SAT IN. The clock sweep writes this row, already
     ;; closed, when a firing's key is still unspent past the sit
     ;; deadline (`wakes/sweep-missed!`), so an audit that reads the
@@ -4745,6 +4782,21 @@
                                    :newest-first true})))))
     #{}))
 
+(defn graced-row-ids
+  "The part of `claimed-rows` a CLOSED sitting of this seat holds
+  through the seat's release grace (`graced-rows`), the sitting
+  `sitting-id` left out, so a walk the grace emptied can say so
+  (ticket ae64b57c). → a set of ids."
+  [eng seat-id sitting-id]
+  (if (and seat-id (get (inv/resources eng) :sitting))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (let [seat-row (store/load-row st tx :seat (str seat-id) {})]
+            (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                         sitting-id ((:now-fn eng)))))))
+    #{}))
+
 ;; ── the rows a sit leaves out of its walk ───────────────────────────
 
 (def ^:private stuck-scan-limit
@@ -5023,22 +5075,54 @@
   claim never wrote to carries too. A re-sit that IS handed a row takes
   the stamp back off. A MAINTENANCE write, `claim-rows!`'s spelling:
   only an OPEN sitting takes it, and only a change is written.
-  → true when it was written."
-  [eng sitting-id nothing?]
-  (when (and sitting-id (get (inv/resources eng) :sitting))
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (when-some [row (store/load-row (:storage eng) tx :sitting
-                                        (str sitting-id) {:for-update true})]
-          (when (and (= :open (:state row))
-                     (not= (boolean nothing?)
-                           (boolean (get-in row [:data :walked_nothing]))))
-            (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                (if nothing?
-                                  (assoc (:data row) :walked_nothing true)
-                                  (dissoc (:data row) :walked_nothing))
-                                nil)
-            true))))))
+
+  `why` rides beside the stamp as `walked_nothing_why`: the rule that
+  left each row out. `halted` is the sit's own `halted` block, and a
+  halted sit is stamped with IT and not `walked_nothing` — it was not
+  let walk, and a reader must not take the wall for a walk bug (ticket
+  ae64b57c). → true when it was written."
+  ([eng sitting-id nothing?]
+   (stamp-walked-nothing! eng sitting-id nothing? nil))
+  ([eng sitting-id nothing? {:keys [why halted]}]
+   (when (and sitting-id (get (inv/resources eng) :sitting))
+     (store/with-tx (:storage eng)
+       (fn [tx]
+         (when-some [row (store/load-row (:storage eng) tx :sitting
+                                         (str sitting-id) {:for-update true})]
+           (let [mark (cond
+                        (seq halted) {:halted (halt-mark-of halted)}
+                        nothing? (cond-> {:walked_nothing true}
+                                   why (assoc :walked_nothing_why why))
+                        :else {})
+                 data (merge (dissoc (:data row) :walked_nothing
+                                     :walked_nothing_why :halted)
+                             mark)]
+             (when (and (= :open (:state row)) (not= data (:data row)))
+               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                   data nil)
+               true))))))))
+
+(defn stamp-halted-schedule!
+  "The seat's schedule, told the wall its sit found (ticket ae64b57c):
+  `halted` beside `last_halted_wake`, so the schedule says which wall
+  held the seat and when it lifts, and not only that a wake waits. A
+  sit clear of the wall takes it off. A MAINTENANCE write, as
+  `stamp-walked-nothing!`. → true when it was written."
+  [eng seat-id halted]
+  (when (and seat-id (get (inv/resources eng) :schedule))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (when-some [row (first (store/query-rows st tx :schedule
+                                                   {:seat (str seat-id)}
+                                                   {:limit 1}))]
+            (let [data (if (seq halted)
+                         (assoc (:data row) :halted (halt-mark-of halted))
+                         (dissoc (:data row) :halted))]
+              (when (not= data (:data row))
+                (store/update-data! st tx :schedule (:id row) data
+                                    (:next-flip-at row))
+                true))))))))
 
 (defn open-sitting-count
   "How many sittings of this seat are OPEN now: the runs the seat's

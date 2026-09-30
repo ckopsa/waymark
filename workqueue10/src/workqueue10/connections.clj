@@ -108,7 +108,8 @@
   [:map
    ;; a credential input: tell the UI never to render it in the clear
    [:refresh_token {:x-display {:hidden true}} [:string {:min 1 :max 512}]]
-   [:reconsented_by {:optional true} [:maybe [:string {:max 200}]]]])
+   [:reconsented_by {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"}
+    [:maybe [:string {:max 200}]]]])
 
 (def ^:private receive-token-edit
   {:fence false
@@ -144,7 +145,8 @@
             ;; is spent by the mint-time token-fn, never rendered
             [:refresh_token {:optional true :secret true}
              [:maybe [:string {:max 512}]]]
-            [:reconsented_by {:optional true} [:maybe [:string {:max 200}]]]
+            [:reconsented_by {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"}
+             [:maybe [:string {:max 200}]]]
             [:reconsented_at {:optional true} [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in} :tag #{:eq} :provider #{:eq}
                 :mode #{:eq}}
