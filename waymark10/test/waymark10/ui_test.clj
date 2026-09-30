@@ -13,7 +13,8 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
-            [waymark10.test.db :as db]))
+            [waymark10.test.db :as db]
+            [waymark10.wire :as wire]))
 
 (def ^:dynamic *h* nil)
 
@@ -133,3 +134,29 @@
         "the waymark9 dev headers do not survive the port")
     (is (not (str/includes? body "wmk_"))
         "no minted bearer-token vocabulary on wire 10")))
+
+(defn- render! [headers body]
+  (let [resp (*h* {:request-method :post :uri "/api/-/render/markdown"
+                   :headers (merge {"content-type" "application/json"} headers)
+                   :body (wire/write-json body)})]
+    (assoc resp :parsed (some-> (:body resp) wire/read-json))))
+
+(deftest render-door-answers-in-order
+  (let [resp (render! {"x-waymark-principal" "reader"}
+                      {:texts ["# One" "two *words*"]})]
+    (is (= 200 (:status resp)))
+    (is (= ["<h1>One</h1>\n" "<p>two <em>words</em></p>\n"]
+           (get-in resp [:parsed :html])))))
+
+(deftest render-door-refuses-over-the-cap
+  (testing "too many texts"
+    (is (= 413 (:status (render! {"x-waymark-principal" "reader"}
+                                 {:texts (vec (repeat 51 "x"))})))))
+  (testing "too many bytes"
+    (is (= 413 (:status (render! {"x-waymark-principal" "reader"}
+                                 {:texts [(apply str (repeat (inc (* 200 1024)) "x"))]})))))
+  (testing "not a list of strings"
+    (is (= 422 (:status (render! {"x-waymark-principal" "reader"}
+                                 {:texts "# One"})))))
+  (testing "anonymous is not let in"
+    (is (= 404 (:status (render! {} {:texts ["# One"]}))))))
