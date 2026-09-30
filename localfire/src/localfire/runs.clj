@@ -94,10 +94,18 @@
 
 ;; ── the record ──────────────────────────────────────────────────────
 
-(defn write-run-edn! [runs-dir id m]
-  (let [f (run-edn-file runs-dir id)]
+(defn write-run-edn!
+  "Write the record beside itself and move it into place, so a reader —
+  the run page, the list — never finds it truncated mid-rewrite while
+  `finish!` or `note-close!` replaces it."
+  [runs-dir id m]
+  (let [f   (run-edn-file runs-dir id)
+        tmp (io/file (.getParentFile f) (str "run.edn." (random-uuid) ".tmp"))]
     (io/make-parents f)
-    (spit f (with-out-str (pprint/pprint m)))))
+    (spit tmp (with-out-str (pprint/pprint m)))
+    (Files/move (.toPath tmp) (.toPath f)
+                (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
+                                        StandardCopyOption/REPLACE_EXISTING]))))
 
 (defn read-run-edn
   "One run's record, or nil. A record a half-written restart left
