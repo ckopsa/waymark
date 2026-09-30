@@ -751,6 +751,50 @@
                 "[:maybe :waymark/ref] or [:vector :waymark/ref]. It "
                 "declares " (pr-str schema) ", which holds no id.")))))
 
+(defn- string-shape?
+  "Is this schema form a string — bare, nilable, or a list of them?"
+  [form]
+  (case (if (vector? form) (first form) form)
+    :string true
+    (:maybe :vector) (string-shape? (last form))
+    false))
+
+(defn- named-kind
+  "The kind a field's NAME says it holds: `seat` or `seat_id` → :seat."
+  [k]
+  (let [n (name k)]
+    (if (and (str/ends-with? n "_id") (< 3 (count n)))
+      (keyword (subs n 0 (- (count n) 3)))
+      k)))
+
+(defn check-unref'd-ids
+  "A plain string field named after a kind the registry serves, or
+  `<kind>_id`, holds that kind's row id — and without `:kind` nothing
+  says so: the form draws a free-text box and the dangling-ref wall
+  never resolves it. member's notify.notifier was one, and a saved
+  `\"Telegram\"` silently skipped every notice rule. So such a field is
+  a ref, or it says why not with `{:not-a-ref \"why\"}` (a field that
+  holds a name, not an id). Needs the registry's kinds, so it runs at
+  assembly (waymark10.checks-assembly) over every surface
+  `kind-surfaces` walks."
+  [r kinds]
+  (let [hits (for [[where form] (kind-surfaces r)
+                   [k {:keys [properties schema]}] (schema/entry-map form)
+                   :when (and (contains? kinds (named-kind k))
+                              (string-shape? schema)
+                              (nil? (:kind properties)))
+                   :let [why (:not-a-ref properties)]
+                   :when (not (and (string? why) (not (str/blank? why))))]
+               (str where " field " k " (kind " (named-kind k) ")"))]
+    (when (seq hits)
+      (err r :unref'd-ids
+           (str (str/join "; " hits)
+                ": each is named after a kind and holds a string, so it "
+                "reads as that kind's row id, but nothing declares it a "
+                "ref. Declare it :waymark/ref with that :kind, or, when "
+                "it holds no id (a name, say), waive it with "
+                "{:not-a-ref \"why\"} in its properties.")))))
+
 ;; ── the query surface ───────────────────────────────────────────────
 
 (defn- check-filterable [r]

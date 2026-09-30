@@ -1050,7 +1050,8 @@
     ;; serves reads as a reference by convention (checks-assembly's
     ;; id-target), and this one is not a reference to another change —
     ;; it is THIS row's own address at GitHub.
-    [:change_id {:x-display
+    [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+                 :x-display
                  {:raw true
                   :label "The pull request's own id"
                   :help "The address GitHub knows this pull request by, as github:owner/repo#number. The source reads it back to see whether this pull request is already a row here. A change a seat built from an ask carries the ask's own address instead — the walk kind, a colon and the row id — until the push opens the pull request and the source adopts the row."}}
@@ -1303,7 +1304,8 @@
    [:map
     ;; github:owner/repo#number from the source, and <kind>:<row id>
     ;; from a seat's own sit (spec-seat.md R-12.32)
-    [:change_id {:x-display {:label "The pull request's own id"}}
+    [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+                 :x-display {:label "The pull request's own id"}}
      [:string {:min 1 :max 250}]]
     [:repository {:x-display {:label "The repository"}}
      [:string {:min 1 :max 140}]]
@@ -1524,7 +1526,8 @@
      :guards [the-mirror-writes-this-row]
      :handler adopt-the-pull-request
      :input [:map
-             [:change_id {:x-display {:raw true}}
+             [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+                          :x-display {:raw true}}
               [:string {:min 1 :max 250}]]
              [:number {:optional true} [:maybe [:int {:min 1}]]]
              ;; :hidden, as the field is on the document — a url has
@@ -1549,7 +1552,8 @@
      :guards [the-mirror-writes-this-row]
      :handler adopt-the-pull-request
      :input [:map
-             [:change_id {:x-display {:raw true}}
+             [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+                          :x-display {:raw true}}
               [:string {:min 1 :max 250}]]
              [:number {:optional true} [:maybe [:int {:min 1}]]]
              ;; :hidden, as the field is on the document — a url has
@@ -1575,7 +1579,8 @@
      :guards [the-mirror-writes-this-row]
      :handler adopt-the-pull-request
      :input [:map
-             [:change_id {:x-display {:raw true}}
+             [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+                          :x-display {:raw true}}
               [:string {:min 1 :max 250}]]
              [:number {:optional true} [:maybe [:int {:min 1}]]]
              [:url {:optional true :x-display {:hidden true}}
@@ -1590,7 +1595,8 @@
      :guards [the-mirror-writes-this-row]
      :handler adopt-the-pull-request
      :input [:map
-             [:change_id {:x-display {:raw true}}
+             [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+                          :x-display {:raw true}}
               [:string {:min 1 :max 250}]]
              [:number {:optional true} [:maybe [:int {:min 1}]]]
              [:url {:optional true :x-display {:hidden true}}

@@ -1220,6 +1220,7 @@
       (assoc :input (or input
                         [:map [note-field
                                {:optional true
+                                :not-a-ref "The verdict's reason, in words: never a row id, whatever the field is called."
                                 :x-display
                                 {:label (str/capitalize
                                          (str/replace
@@ -1346,7 +1347,8 @@
                 ;; the stamped names are optional and :raw, because
                 ;; they are principal ids and a display layer must not
                 ;; dress them up as words
-                entries (cond-> [[ask-field {:x-display (ask-display asks)}
+                entries (cond-> [[ask-field {:x-display (ask-display asks)
+                                             :not-a-ref "The question, in words: never a row id, whatever the field is called."}
                                   [:string {:min 1 :max ask-max}]]
                                  [by {:optional true :x-display {:raw true}}
                                   [:maybe [:string {:max 128}]]]]
@@ -1360,7 +1362,8 @@
                                  [:maybe [:string {:max 128}]]]))
                 entries (into entries
                               (map (fn [n]
-                                     [n {:optional true}
+                                     [n {:optional true
+                                         :not-a-ref "The verdict's reason, in words: never a row id, whatever the field is called."}
                                       [:maybe [:string {:max 240}]]]))
                               (sort note-fields))
                 schema (add-entries (:schema rmap) entries)

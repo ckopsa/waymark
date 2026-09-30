@@ -52,7 +52,8 @@
    :input [:map
            [:ratio {:optional true :x-display ratio-display}
             [:maybe [:decimal {:gt 0 :max 100}]]]
-           [:context {:optional true :x-display context-display}
+           [:context {:optional true :x-display context-display
+                      :not-a-ref "It holds prose on when the swap works, not a context's id."}
             [:maybe [:string {:max 200}]]]]
    :edit {:prefill [:ratio :context]}
    :safety overwrite
@@ -99,7 +100,8 @@
             [:ratio {:optional true :default 1M
                      :x-display ratio-display}
              [:maybe [:decimal {:gt 0 :max 100}]]]
-            [:context {:optional true :x-display context-display}
+            [:context {:optional true :x-display context-display
+                       :not-a-ref "It holds prose on when the swap works, not a context's id."}
              [:maybe [:string {:max 200}]]]
             [:distinct {:optional true :derived distinct-fact}
              [:maybe :boolean]]]

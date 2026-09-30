@@ -599,7 +599,9 @@
                ;; product's name, store, and ref — compiler-stamped,
                ;; nil when nothing tracked resolves; :name stays the
                ;; ingredient, the part key
-               [:product {:optional true} [:maybe [:string {:max 200}]]]
+               [:product {:optional true
+                          :not-a-ref "The product's name as the shopper reads it; product_id beside it is the ref."}
+                [:maybe [:string {:max 200}]]]
                [:store {:optional true} [:maybe [:string {:max 50}]]]
                [:product_id {:optional true :kind :product}
                 [:maybe :waymark/ref]]

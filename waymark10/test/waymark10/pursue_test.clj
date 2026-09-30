@@ -113,10 +113,12 @@
     :summary "{data.label} · {state}"
     :schema [:map
              [:label [:string {:max 40}]]
-             [:meal_id {:optional true} [:maybe [:string {:max 80}]]]]
+             [:meal_id {:optional true :not-a-ref "pursue fixture: a ref's wall would judge ahead of meal-is-listed, whose remedy is under test"}
+              [:maybe [:string {:max 80}]]]]
     :actions
     {:assign_meal {:from #{:undecided} :to :planned
-                   :input [:map [:meal_id [:string {:min 1 :max 80}]]]
+                   :input [:map [:meal_id {:not-a-ref "pursue fixture: meal-is-listed judges it"}
+                                 [:string {:min 1 :max 80}]]]
                    :guards [meal-is-listed]
                    :safety fx/routine
                    :handler assign-meal-handler}
@@ -145,7 +147,8 @@
     :states [:draft :done]
     :initial :draft
     :summary "Groceries · {state}"
-    :schema [:map [:plan_id [:string {:max 80}]]]
+    :schema [:map [:plan_id {:not-a-ref "pursue fixture: plan-is-planned judges it"}
+                   [:string {:max 80}]]]
     :create-guards [plan-is-planned]
     :actions
     {:finish {:from #{:draft} :to :done :safety fx/routine}
@@ -222,7 +225,8 @@
     :initial :shut
     :summary "Crate · {state}"
     :schema [:map
-             [:latch_id [:string {:max 80}]]
+             [:latch_id {:not-a-ref "pursue fixture: crate-unlatched binds its remedy to it"}
+              [:string {:max 80}]]
              [:unlatched {:optional true} [:maybe :boolean]]
              [:keyed {:optional true} [:maybe :boolean]]]
     :actions
@@ -230,7 +234,8 @@
            :guards [crate-unlatched]
            :safety fx/routine}
      :unlock {:from #{:shut} :to :open
-              :input [:map [:latch_id [:string {:min 1 :max 80}]]]
+              :input [:map [:latch_id {:not-a-ref "pursue fixture: crate-keyed binds its remedy to it"}
+                            [:string {:min 1 :max 80}]]]
               :guards [crate-keyed]
               :safety fx/routine}
      :close {:from #{:open} :to :shut :safety fx/routine}}}))

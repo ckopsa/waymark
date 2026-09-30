@@ -1456,6 +1456,7 @@
             ;; script all already say; a ref would make the ask
             ;; unwritable without a prior GET
             [:seat {:optional true
+                    :not-a-ref "The seat's NAME, spelled out loud; the mint resolves it to the row and writes the ref on the grant."
                     :x-display {:raw true
                                 :label "The seat you are asking to sit in"
                                 :help "The name of an office somebody already opened — \"inbox-clerk\", say. What it opens is the seat's own scope, read fresh at every request, so a restate of the seat moves your leash with it and you never ask again for the same office."}}

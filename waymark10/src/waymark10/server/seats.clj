@@ -2642,6 +2642,7 @@
              ;; THE STEP'S RECORD (R-11.2). A transition input, so the
              ;; log's `inputs` column holds it and no column is added.
              [:note {:optional true
+                     :not-a-ref "A person's sentence about the step, never a note row's id."
                      :examples ["Down from the frontier tier: five sittings read, the dismissals held, and the two corrections were both mine changing my mind."]
                      :x-display
                      {:label "Why, if the models changed"
@@ -2861,7 +2862,8 @@
                       {:label "The entries that stopped resolving"
                        :spelled-by-hand "The failing scope entries, written by the boot sweep."}}
               grants/scope-schema]
-             [:note {:x-display {:label "What the guard said"}}
+             [:note {:not-a-ref "The guard's sentence, never a note row's id."
+                     :x-display {:label "What the guard said"}}
               [:string {:min 1 :max 240}]]]
      :record true
      ;; :edit-shape — the sweep welds a first stale list onto a seat
@@ -3329,6 +3331,7 @@
                         :help "How many turns the model took."}}
     [:int {:min 0 :max 100000}]]
    [:note {:optional true
+           :not-a-ref "The sitting's own sentence, never a note row's id."
            :examples ["Walked nine messages; two became tasks and seven were receipts."]
            :x-display {:label "What the sitting did"
                        :help "One sentence on what this wake actually moved."}}
@@ -3525,6 +3528,7 @@
               [:cache_read {:x-display {:label "Cache read, $ per million tokens"}} price-entry]
               [:cache_write {:x-display {:label "Cache write, $ per million tokens"}} price-entry]]]]
     [:note {:optional true
+            :not-a-ref "The sitting's own sentence, never a note row's id."
             :x-display
             {:label "What the sitting did"
              :help "One sentence, written at the close — what this wake actually moved. Read beside the counts when a step down the ladder is being judged."}}
@@ -3555,6 +3559,7 @@
              :spelled-by-hand "Copied from the seat at birth; a sitting's mode is the seat's, and no hand writes it."}}
      [:maybe (into [:enum] seat-modes)]]
     [:person {:optional true
+              :not-a-ref "A member's principal id, not a person row's: the member kind owns it."
               :x-display
               {:raw true
                :label "The person in the chair"
