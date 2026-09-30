@@ -1190,7 +1190,7 @@
 
 (g/defguard linked-for-fire
   {:reads [:schedule :model :runner_link]
-   :explain "Link the Routine's fire URL and token first — to this seat's schedule, or to the model it is held for."}
+   :explain "Link the Routine's fire URL and token first — to this seat's schedule, or to the model it is held for — or bring a runner in the schedule's or the model's pool live."}
   [row _inp ctx]
   ;; The schedule is read through the ctx `:find` hook — the write's
   ;; own transaction, `schedules/one-per-seat?`'s spelling exactly. A
