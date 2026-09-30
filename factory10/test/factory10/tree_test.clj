@@ -474,6 +474,7 @@
                :deploy_waiting_since :deployed_head :deployed_at
                :deploy_state :deploy_note
                :groom_floor :groom_floor_settle_seconds
+               :groom_floor_max_priority
                :floor_noted_at :floor_count}
              fields)
           "every number a submit obeys, where the bench clones it from,

@@ -1839,24 +1839,29 @@
         repo (blank->nil (get-in policy [:data :repository]))
         ^Instant now (now-of eng)
         ^Instant noted (as-instant (get-in policy [:data :floor_noted_at]))
+        line (long (or (get-in policy [:data :groom_floor_max_priority]) 4))
+        within? #(<= (long (or (get-in % [:data :priority]) 4)) line)
         in-state #(rows-by eng :ticket {:repo repo :state %} floor-scan-limit)]
     (when (and repo (pos? floor)
                (or (nil? noted)
                    (not (.isBefore now (.plusSeconds noted settle)))))
       (let [opened (in-state :open)
-            n (count opened)]
+            n (count (filter within? opened))]
         (when (< n floor)
-          (let [drafts (in-state :draft)]
-            (when-not (some #(floor-ticket? repo %) (concat drafts opened))
+          (let [drafts (in-state :draft)
+                waiting (count (filter #(and (within? %)
+                                             (contains? groomable-types
+                                                        (str (get-in % [:data :type]))))
+                                       drafts))]
+            ;; under a line, the floor asks only when a draft at or
+            ;; above it waits; the default 4 asks as it always did
+            (when-not (or (and (< line 4) (zero? waiting))
+                          (some #(floor-ticket? repo %) (concat drafts opened)))
               (inv/create! eng :ticket
                            {:title (cut (str floor-title-prefix repo ": " n
                                              " open, floor " floor)
                                         200)
-                            :detail (floor-detail
-                                     repo n floor
-                                     (count (filter #(contains? groomable-types
-                                                                (str (get-in % [:data :type])))
-                                                    drafts)))
+                            :detail (floor-detail repo n floor waiting)
                             :type "chore"
                             :priority 1
                             :repo repo}

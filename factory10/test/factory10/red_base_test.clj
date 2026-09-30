@@ -406,3 +406,40 @@
     (is (zero? (floor-pass! eng)))
     (is (empty? (floor-tickets eng)))
     (is (nil? (get-in (policy-of eng) [:data :floor_noted_at])))))
+
+;; ── the floor's priority line (ticket 08efd286) ─────────────────────
+
+(defn- line-world
+  "An engine holding one policy at floor 4 with this priority `line`
+  (none states the default), no open ticket, and one draft bug at each
+  of `priorities`."
+  [line priorities]
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})]
+    (inv/create! eng :repo_policy
+                 (cond-> {:repository repo :required_checks ["gate"]
+                          :groom_floor 4}
+                   line (assoc :groom_floor_max_priority line))
+                 {:principal a-person})
+    (doseq [p priorities]
+      (inv/create! eng :ticket {:title (str "A P" p " draft bug") :type "bug"
+                                :priority p :repo repo}
+                   {:principal a-person}))
+    eng))
+
+(deftest only-p4-drafts-under-a-line-of-3-file-none
+  (let [eng (line-world 3 [4 4])]
+    (is (zero? (floor-pass! eng)))
+    (is (empty? (floor-tickets eng)))))
+
+(deftest a-p3-draft-under-a-line-of-3-files-one
+  (let [eng (line-world 3 [3 4])]
+    (is (= 1 (floor-pass! eng)))
+    (is (str/includes? (str (get-in (first (floor-tickets eng)) [:data :detail]))
+                       "1 draft bugs, tasks and chores"))))
+
+(deftest the-default-line-keeps-every-priority
+  (let [eng (line-world nil [4 4])]
+    (is (= 1 (floor-pass! eng)))
+    (is (str/includes? (str (get-in (first (floor-tickets eng)) [:data :detail]))
+                       "2 draft bugs, tasks and chores"))))
