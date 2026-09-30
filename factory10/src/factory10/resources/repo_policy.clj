@@ -887,10 +887,10 @@
                          :x-display {:hidden true :raw true
                                      :label "The first red head"}}
               [:maybe [:string {:max 64}]]]
-             [:ticket {:optional true
+             [:ticket {:optional true :kind :ticket
                        :x-display {:hidden true :raw true
                                    :label "The red-base ticket"}}
-              [:maybe [:string {:max 64}]]]]
+              [:maybe :waymark/ref]]]
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Base noted" :order 6
                :description "The GitHub source says what the base branch's checks say"}}}

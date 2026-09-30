@@ -572,7 +572,9 @@
     (entry :judgment {:kind :judgment :filter #{:eq :in}} :waymark/ref)
     (entry :subject_kind {:filter #{:eq}} [:string {:min 1 :max 64}])
     (entry :subject_id {:filter #{:eq}} [:string {:min 1 :max 64}])
-    (entry :verdict {:filter #{:eq :in}} [:string {:min 1 :max 40}])
+    (entry :verdict {:filter #{:eq :in}
+                     :not-a-ref "It holds a word of the judgment's vocabulary, not a verdict's id."}
+           [:string {:min 1 :max 40}])
     (entry :remedy {} [:string {:min 1 :max 1000}])
     (entry :said_by {:optional true :filter #{:eq}}
            [:maybe [:string {:max 128}]])
@@ -594,7 +596,8 @@
     (entry :judgment {:kind :judgment} :waymark/ref)
     (entry :subject_kind {} [:string {:min 1 :max 64}])
     (entry :subject_id {} [:string {:min 1 :max 64}])
-    (entry :verdict {} [:string {:min 1 :max 40}])
+    (entry :verdict {:not-a-ref "It holds a word of the judgment's vocabulary, not a verdict's id."}
+           [:string {:min 1 :max 40}])
     (entry :remedy {} [:string {:min 1 :max 1000}])
     (entry :corrects {:optional true :kind :verdict} [:maybe :waymark/ref])]
    :filterable {:state #{:eq :in}}
