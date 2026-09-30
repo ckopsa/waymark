@@ -130,6 +130,31 @@
     (is (empty? (tickets engine)))
     (is (= "green" (str (get-in (policy-of engine) [:data :base_state]))))))
 
+(deftest a-red-gate-carries-the-log-of-the-suite-that-failed
+  ;; ticket 9a14577e: `gate` only says `quick=failure`; the `quick`
+  ;; job's own log is what names the red step
+  (let [{:keys [state engine] :as w} (world)]
+    (gh/seed-branch! state repo "main" head-1)
+    (gh/seed-check! state repo head-1 (a-check 701 head-1 "failure"))
+    (gh/seed-log! state "701" "quick=failure")
+    (gh/seed-check! state repo head-1
+                    (assoc (a-check 702 head-1 "failure") :name "quick"))
+    (gh/seed-log! state "702" "Run make check-queue\nFAIL in (calendar10-clash)")
+    (gh/seed-check! state repo head-1
+                    (assoc (a-check 703 head-1 "success") :name "slow"))
+    (gh/seed-log! state "703" "all green here")
+    (pass! w)
+    (is (= 1 (:base-opened (pass! w))))
+    (let [tk (first (tickets engine))
+          detail (str (get-in tk [:data :detail]))]
+      (is (= "main is red: gate" (get-in tk [:data :title])))
+      (is (str/includes? detail "quick=failure") "the gate's log still rides")
+      (is (str/includes? detail "- quick"))
+      (is (str/includes? detail "FAIL in (calendar10-clash)")
+          "the failed suite's own log rides in the body")
+      (is (not (str/includes? detail "all green here"))
+          "a suite that passed is not quoted"))))
+
 (deftest a-red-after-green-names-the-head-that-turned-it
   (let [{:keys [engine] :as w} (world)]
     (head-at! w head-1 701 "success")
