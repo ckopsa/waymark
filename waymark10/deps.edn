@@ -10,7 +10,12 @@
          ;; phase 9a: JWT verification for the OIDC relying party —
          ;; latest Clojars release (2024), Apache-2.0, brings
          ;; buddy-core's JWK↔Java-key conversions
-         buddy/buddy-sign                   {:mvn/version "3.6.1-359"}}
+         buddy/buddy-sign                   {:mvn/version "3.6.1-359"}
+         ;; the prose fields' one markdown renderer (waymark10.markdown):
+         ;; CommonMark, plus GFM tables and task lists, BSD-2
+         org.commonmark/commonmark                     {:mvn/version "0.24.0"}
+         org.commonmark/commonmark-ext-gfm-tables      {:mvn/version "0.24.0"}
+         org.commonmark/commonmark-ext-task-list-items {:mvn/version "0.24.0"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
