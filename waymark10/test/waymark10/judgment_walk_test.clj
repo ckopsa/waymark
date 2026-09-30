@@ -840,3 +840,54 @@
     (is (true? (:isError r)) (text-of r))
     (is (str/includes? (str (text-of r)) (str (:id successor)))
         "the refusal names the successor")))
+
+(deftest a-superseded-judgment-sit-leaves-the-firings-key-unspent
+  ;; ticket 017814ab: the refusal is judged before the spend, so the
+  ;; same fire's key opens the sit once the seat is restated
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        old (promoted-judgment! eng {})
+        successor (promoted-judgment! eng {:name "kitchen-spend-2"})
+        seat (open-judge-seat! eng old {})
+        _ (supersede! eng old successor)
+        raw (raw-row eng :seat (:id seat))
+        _ (store/with-tx (:storage eng)
+            (fn [tx]
+              (store/save-row! (:storage eng) tx :seat
+                               (assoc-in raw [:data :judgment] (str (:id old)))
+                               (:version raw))))
+        ;; a seat with instructions is what a fire mints a key for
+        fire-key (seats/hold-fire-key!
+                  eng (assoc-in (raw-row eng :seat (:id seat))
+                                [:data :instructions] "Judge the expenses.")
+                  nil)
+        sit-args {:key fire-key :seat "expense-judge"}
+        refused (call! h (with-session (initialize! h)) "waymark_sit" sit-args)]
+    (is (some? fire-key) "the fire minted a key")
+    (is (true? (:isError refused)) (text-of refused))
+    (is (str/includes? (str (text-of refused)) (str (:id successor)))
+        "the refusal names the successor")
+    (is (seats/fire-key-held? eng (raw-row eng :seat (:id seat)) fire-key)
+        "the refused sit spent nothing")
+    (let [raw (raw-row eng :seat (:id seat))]
+      (inv/invoke! eng :seat (str (:id seat)) :restate
+                   {:charter charter
+                    :scope [{:kind "expense" :actions []}
+                            {:kind "verdict" :actions ["judge"]}]
+                    :substitute_drop []
+                    :held_for (vec (get-in raw [:data :held_for]))
+                    :substitute_for []
+                    :standing_ttl_seconds 604800
+                    :cadence_seconds 3600
+                    :budget_usd_per_week 5M
+                    :sitting_budget_tokens 60000
+                    :rows_per_firing 20
+                    :walk "expense"
+                    :judgment (str (:id successor))}
+                   {:principal person
+                    :if-match (inv/etag :seat (str (:id seat)) (:version raw))}))
+    (let [r (call! h (with-session (initialize! h)) "waymark_sit" sit-args)]
+      (is (false? (:isError r)) (text-of r))
+      (is (some? (:sitting (doc-of r))) "the same key opens the sit")
+      (is (not (seats/fire-key-held? eng (raw-row eng :seat (:id seat)) fire-key))
+          "and that sit is the one that spent it"))))
