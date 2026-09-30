@@ -22,7 +22,9 @@
     never silently does nothing. One rule for every kind: no keyed or
     partial match of map entries.
   - MAPS MERGE. A prefill field whose schema is a map takes the given
-    keys over the stored ones, nested maps the same way.
+    keys over the stored ones, nested maps the same way, to any depth.
+    A nested {\"add\", \"remove\"} over a stored list is a list delta
+    and resolves as a top-level one does, `patch-miss` and all.
   - THE FENCE NAMES THE FIELDS. A caller that presents the version it
     read (If-Match, `if_version`) and is stale refuses `stale`, naming
     the prefill fields that moved since, read from the retained
@@ -114,10 +116,21 @@
                      (listed action field (pick :remove)))]
     (into kept (listed action field (pick :add)))))
 
-(defn- merged [stored given]
-  (if (and (map? stored) (map? given))
-    (merge-with merged stored given)
-    given))
+(defn- merged
+  "The stored value with the given one over it: maps key by key, to any
+  depth, and a delta over a stored list resolved in place. `path` names
+  the field down to here, for a miss to say where."
+  [action path stored given]
+  (cond
+    (and (sequential? stored) (delta? given))
+    (resolve-list action (str/join "." (map name path)) stored given)
+
+    (and (map? stored) (map? given))
+    (reduce-kv (fn [m k v] (assoc m k (merged action (conj path k) (get stored k) v)))
+               stored
+               given)
+
+    :else given))
 
 (defn resolve-input
   "The whole input an edit door's patch means, against the row's stored
@@ -138,7 +151,7 @@
                         :list (cond-> b
                                 (delta? v) (assoc f (resolve-list action f s v)))
                         :map (cond-> b
-                               (and (map? v) (map? s)) (assoc f (merged s v)))
+                               (and (map? v) (map? s)) (assoc f (merged action [f] s v)))
                         b)))))
               body
               (prefill defn')))))
