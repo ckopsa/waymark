@@ -154,6 +154,7 @@
             [waymark10.server.decision :as decision]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.judgment :as judgment]
+            [waymark10.server.patch :as patch]
             [waymark10.server.predecessor :as predecessor]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
@@ -1172,13 +1173,32 @@
             ;; replay (200) — the wire answers 404 first
             (when (probe-hidden-only? defn row guard-ctx)
               (throw (p/not-found kind id)))
-            ;; 6. the fence
-            (when (get-in defn [:safety :fence])
-              (let [current (etag kind id (:version row))]
-                (when (not= (some-> if-match str/trim) current)
-                  (throw (p/version-conflict action-name
-                                             {:kind kind :id id
-                                              :etag current})))))
+            ;; 6. the fence. An edit door (ticket 5120da15) is fenced
+            ;; whenever its caller names the version it read, as the
+            ;; etag or the bare number (`if_version` over MCP), and a
+            ;; stale one refuses naming which of its fields moved since
+            (let [patch? (and (patch/prefill defn) (patch/patch? body))
+                  current (etag kind id (:version row))
+                  given (some-> if-match str str/trim not-empty)
+                  given (if (and given (re-matches #"\d+" given))
+                          (etag kind id given)
+                          given)]
+              (cond
+                (and patch? given (not= given current))
+                (throw (patch/stale action-name
+                                    {:kind kind :id id :etag current}
+                                    (patch/moved defn
+                                                 (store/transitions
+                                                  (:storage engine) tx
+                                                  {:kind kind :resource-id (:id row)}
+                                                  {})
+                                                 (patch/read-version given)
+                                                 (:version row)
+                                                 (:data raw))))
+                (and (get-in defn [:safety :fence]) (not= given current))
+                (throw (p/version-conflict action-name
+                                           {:kind kind :id id
+                                            :etag current}))))
             ;; 7. input validation — decode first (validation
             ;; speaks schema types), closed maps refuse unknowns.
             ;; The partial rehearsal (:dry-run :partial, design §23)
@@ -1187,6 +1207,18 @@
             ;; but a provided field's errors (and an unknown key)
             ;; refuse exactly as ever
             (let [partial? (= :partial dry-run)
+                  ;; an edit door takes a patch when the caller asks
+                  ;; for one with `patch: true` (ticket 5120da15): what
+                  ;; the caller left out keeps its stored value and a
+                  ;; list may arrive as {add, remove}, resolved here so
+                  ;; validation, the guards, the handler and the log
+                  ;; all read the whole input. Without the flag the
+                  ;; input is wholesale, as ever
+                  patch? (and (patch/prefill defn) (patch/patch? body))
+                  body (cond-> body
+                         (patch/prefill defn) patch/strip
+                         (and patch? (not partial?))
+                         (->> (patch/resolve-input defn (:data raw))))
                   inp (if (:input defn)
                         (let [decoded (schema/apply-defaults
                                        (:input defn)

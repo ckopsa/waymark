@@ -995,6 +995,12 @@
                                                 "all back. May only tighten the declaration.")}
                    :action {:type "string"
                             :description "An action name this row advertises."}
+                   :if_version {:type "string"
+                                :description (str "The version you read: the row's etag or "
+                                                  "meta.version. An edit door then refuses "
+                                                  "stale, naming the fields that moved, if "
+                                                  "the row changed since. An edit door also "
+                                                  "takes a patch: name only what changes.")}
                    :input {:type "object"
                            :description "The action's input, per its declared input schema."}
                    :dry_run {:type "boolean"
@@ -1369,10 +1375,11 @@
   envelope's own entry wears)."
   [vis rdef a]
   (let [input-js (when (:input a)
-                   (render/project-input-js
-                    (schema/json-schema (:input a))
-                    (when-some [arg? (:arg? vis)]
-                      #(arg? (:kind rdef) (:name a) %))))]
+                   (-> (render/project-input-js
+                        (schema/json-schema (:input a))
+                        (when-some [arg? (:arg? vis)]
+                          #(arg? (:kind rdef) (:name a) %)))
+                       (render/edit-input-js a)))]
     (cond-> {:name (name (:name a))
              :from (mapv name (sort (:from a)))
              :to (name (:to a))
@@ -1753,7 +1760,7 @@
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
   [eng call session {:keys [kind id ids items action input dry_run acknowledge
-                            acknowledge_warnings] :as args}]
+                            acknowledge_warnings if_version] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))]
@@ -1808,10 +1815,15 @@
                                      (or (:href entry) (str self "/-/" (name aname)))
                                      {:body (or input {})
                                       :query (when dry_run "dry_run=1")
-                                      :headers (invoke-headers
-                                                session fenced?
-                                                (get-in env-resp [:headers "ETag"])
-                                                acknowledge_warnings)})
+                                      :headers (cond-> (invoke-headers
+                                                        session fenced?
+                                                        (get-in env-resp [:headers "ETag"])
+                                                        acknowledge_warnings)
+                                                 ;; the version the CALLER read, not
+                                                 ;; this read's: an edit door holds
+                                                 ;; the write to it (ticket 5120da15)
+                                                 (some? if_version)
+                                                 (assoc "if-match" (str if_version)))})
                             :waymark10/sitting
                             (bound-sitting eng (:mcp-session-id session))))
                return
