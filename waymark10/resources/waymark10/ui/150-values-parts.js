@@ -131,8 +131,6 @@ function proseEditor(ta) {
     preview.style.display = on ? "" : "none";
     write.setAttribute("aria-pressed", String(!on));
     look.setAttribute("aria-pressed", String(on));
-    write.style.fontWeight = on ? "" : "600";
-    look.style.fontWeight = on ? "600" : "";
     if (!on) return;
     const seq = ++asked, text = ta.value;
     preview.classList.remove("md");
