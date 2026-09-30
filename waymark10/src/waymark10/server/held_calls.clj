@@ -366,6 +366,16 @@
    ;; meets the wall's honest 409 rather than a mute 404 when it
    ;; tries.
    :own-surface {:by :caller :actions #{}}
+   ;; THE CALL A PERSON DECIDES ABOUT, read at render (ticket
+   ;; cec5bb7a): a power hold keeps it in `input`, a door hold only in
+   ;; `forward` (2fb8d70a stores the body once), so the view shows
+   ;; this one field and both stored ones stay hidden
+   :computed {:call {:schema :any
+                     :x-display {:label "The call"
+                                 :help "The call's arguments: what a person is deciding about, and what the allow replays."}
+                     :fn (fn [row _]
+                           (or (get-in row [:data :input])
+                               (get-in row [:data :forward])))}}
    :schema
    [:map
     [:server {:optional true
@@ -378,7 +388,8 @@
                         :help "The prefixed tool name the caller asked for, as the power door resolved it."}}
      [:string {:min 1 :max 120}]]
     [:input {:optional true
-             :x-display {:label "The call"
+             :x-display {:hidden true
+                         :label "The call"
                          :help "The call's arguments, as the caller gave them. This is what a person is deciding about."}}
      [:maybe [:map-of :keyword :any]]]
     ;; WHAT THE SERVER WOULD RECEIVE, which is not always what the
