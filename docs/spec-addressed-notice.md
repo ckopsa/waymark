@@ -129,7 +129,10 @@ nobody.
 The notice's `{link}` is the UI's page for the row,
 `<public origin>/#/api/<plural>/<id>`, when the engine is configured
 with `[:services :transcripts :public-origin]`. Without one it falls
-back to the notifier's `link_base` and the row's API path.
+back to the same page at the notifier's `link_base`,
+`<link_base>/#/api/<plural>/<id>` — a `link_base` is the instance's
+address, the same thing the public origin names. A notice never links
+to the row's raw JSON.
 
 **Delivery reuses the deliverer verbatim** — one cursor per rule, at-least-once,
 park on throw. Nothing new about the hard part.
