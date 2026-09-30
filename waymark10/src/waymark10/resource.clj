@@ -1804,7 +1804,7 @@
                  views))
     rmap))
 
-(def ^:private own-surface-keys #{:by :actions :all})
+(def ^:private own-surface-keys #{:by :actions :all :grantable})
 
 (defn- normalize-own-surface
   "The own-surface declaration, canonicalized (spec-decision-kind seam
@@ -1831,7 +1831,15 @@
 
   :actions names what the courtesy confers WITHOUT a grant. The
   guards still judge every invoke; this only decides which doors are
-  visible enough to be knocked on."
+  visible enough to be knocked on.
+
+  :grantable false says the own-surface is the ONLY path to these
+  rows: no grant or ask scope may name the kind (grants'
+  scope-omits-private-kinds), because a grant carries no owner filter
+  and would expose every owner's rows. The declaration that says who
+  owns a row says whether it may be leashed to anyone else — this used
+  to be a second literal in grants.clj naming three app kinds. It is
+  kept only when false, so a kind that says nothing hashes as before."
   [rmap]
   (if-some [os (:own-surface rmap)]
     (let [kind (:kind rmap)]
@@ -1841,6 +1849,8 @@
         (sugar-err kind ":own-surface"
                    (str "unknown key(s) " (vec unknown) "; it speaks "
                         (vec (sort own-surface-keys)))))
+      (when-not (boolean? (:grantable os true))
+        (sugar-err kind ":own-surface" ":grantable is true or false"))
       (when-not (or (:by os) (:all os))
         (sugar-err kind ":own-surface"
                    (str "names neither :by (whose id the row carries) nor "
@@ -1853,9 +1863,10 @@
                        :else (sugar-err kind ":own-surface"
                                         ":by is a field, or a vector of fields and paths"))]
         (assoc rmap :own-surface
-               {:by branches
-                :all (boolean (:all os))
-                :actions (into #{} (map name) (:actions os))})))
+               (cond-> {:by branches
+                        :all (boolean (:all os))
+                        :actions (into #{} (map name) (:actions os))}
+                 (false? (:grantable os)) (assoc :grantable false)))))
     rmap))
 
 (defn normalize-resource
