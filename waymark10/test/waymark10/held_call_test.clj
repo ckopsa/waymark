@@ -1301,7 +1301,7 @@
 (deftest an-ask-a-seat-files-tells-the-person-who-approves
   (let [{:keys [eng log] :as w} (notice-world)
         jack (notice-member! w "Jack" true)
-        jill (notice-member! w "Jill" true)
+        _ (notice-member! w "Jill" true)
         _ (members/ensure-sitter! eng "seat:dishes" "dishes" jack)
         r (waits-on-rule! w "approval_request" "offered")
         _ (drain-notices! eng)
@@ -1309,11 +1309,10 @@
                       :acts-for jack)
         ask (:row (inv/create! eng :approval_request
                                {:task "Queue the week's chores."
-                                :waits_on jill
                                 :scope [{:kind "chore" :actions ["queue"]}]}
                                {:principal sitter}))]
     (is (= jack (get-in ask [:data :waits_on]))
-        "the engine stamps the person; the body's value is dropped")
+        "the engine stamps the person; the create model has no waits_on")
     (drain-notices! eng)
     (let [s (chat-sends log)]
       (is (= 1 (count s)))
