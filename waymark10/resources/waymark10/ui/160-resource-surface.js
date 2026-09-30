@@ -107,6 +107,12 @@ async function renderResource(view, doc, hints) {
                        toast(`following ${aud}`); }},
       `👁 Follow ${aud}`));
   }
+  /* an open invitation addressed to this viewer: one tap lands on the
+     invited row with its door open in their own hand */
+  if (kind === "invitation" && doc.state === "open" &&
+      doc.data?.subject && doc.data.subject === principalId())
+    bar.prepend(el("button", {class: "primary", "data-invite-open": "",
+      onclick: () => openInvitation(doc)}, "Take this step"));
   /* the follow affordance: a member envelope names a principal —
      follow them and this screen goes where they LOOK (the presence
      stream) as well as where they write (the firehose) */
