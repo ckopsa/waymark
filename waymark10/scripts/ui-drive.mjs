@@ -57,14 +57,16 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs access
 
-   HELD-CALL (a held seat-restate's people labelled by name, against
-   a memory engine — no database):
+   INVITATION (an open invitation taken from its collection in one
+   tap, and another declined from the dialog; docs/spec-guided-follow.md
+   § 3. The invitation kind is core's, so a memory engine — no
+   database — serves it beside the meal fixture):
    1. clojure -Sdeps '{:aliases {:fx {:extra-paths ["test"]}}}' -M:fx -e \
         "(do ((requiring-resolve 'waymark10.batch-a-dev/start-held-call!) 8124) nil) @(promise)"
-      (boot fresh per drive run — the drive seeds the mayor, its child
-       and the held restate through the API)
+      (boot fresh per drive run — the drive seeds its meal and
+       invitations through the API)
    2. the same chromium
-   3. node waymark10/scripts/ui-drive.mjs held-call
+   3. node waymark10/scripts/ui-drive.mjs invitation
 
    GUIDED (guided follow, two people in two browser contexts, against
    the batch-a engine — the recipe door's shared draft needs a real
@@ -81,12 +83,12 @@
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = ["batch-a", "access", "held-call", "guided"].includes(process.argv[2])
+const MODE = ["batch-a", "access", "invitation", "guided"].includes(process.argv[2])
   ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
-  (MODE === "batch-a" || MODE === "guided" ? "http://localhost:8123"
-   : MODE === "access" || MODE === "held-call" ? "http://localhost:8124"
+  (["batch-a", "guided"].includes(MODE) ? "http://localhost:8123"
+   : ["access", "invitation"].includes(MODE) ? "http://localhost:8124"
    : "http://localhost:8010");
 
 const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json();
@@ -822,6 +824,12 @@ async function accessStory() {
   ok("the member and the seat each have a name to show",
      !!names.member && !!names.seat &&
      names.member !== held.owner && names.seat !== sid);
+  /* each name is its row's own summary, read off the API — never
+     spelled here */
+  const api = {member: (await get("/api/members/" + held.owner)).summary,
+               seat: (await get("/api/seats/" + sid)).summary};
+  ok("each name is the row's summary as the API reads it",
+     names.member === api.member && names.seat === api.seat);
 
   console.log("· the held call's row page");
   await evaljs(`location.hash = ${JSON.stringify(self)}; true`);
@@ -850,16 +858,18 @@ async function accessStory() {
   }
   ok("no bare uuid is left where a name belongs",
      await evaljs(`![...document.querySelectorAll("span.mono")].some(s =>
-       [${JSON.stringify(held.owner)}, ${JSON.stringify("seat:" + sid)}].includes(s.title))`));
+       [${JSON.stringify(held.owner)}, ${JSON.stringify("seat:" + sid)},
+        ${JSON.stringify(sid)}].includes(s.title))`));
 }
 
-/* ════ held call: a held seat-restate names its people ════════════════
-   Against waymark10.batch-a-dev/start-held-call!. held-call-test pins the published
-   x-refs and ui_assembly_test pins principalRef in the page; this
-   executes the page: the held row's owner, caller and door author
-   render as their member/seat rows' summaries, and door.id as the
-   restated seat's summary — each read off the API, never spelled here. */
-async function heldCallStory() {
+/* ════ invitation: one tap from the collection, and a decline ═════════
+   Against waymark10.batch-a-dev/start-held-call!. ui_test pins the
+   page's strings; this executes them: "Take this step" on an open
+   invitation opens the invited row with the door's dialog, the
+   suggested value in its field and marked, the field scrolled to, lit
+   and focused with the author's note beside it — and the dialog's
+   Decline moves another invitation to declined, read off the API. */
+async function invitationStory() {
   const person = {"x-waymark-principal": "colton"};
   const call = async (method, path, body, headers) => {
     const res = await fetch(BASE + path,
@@ -873,50 +883,24 @@ async function heldCallStory() {
       throw new Error(what + ": " + r.status + " " + JSON.stringify(r.body));
     return r;
   };
-  const scope = [{kind: "meal", actions: ["create"]}];
-  const seatBody = extra => ({
-    charter: "Decide which meal is next.", scope,
-    standing_ttl_seconds: 604800, cadence_seconds: 3600,
-    budget_usd_per_week: 2, sitting_budget_tokens: 60000, ...extra});
 
-  /* seed through the API, like delegation-test's mayor */
-  console.log("· seeding a mayor, its child and a held restate");
-  const mayor = idOf(must(await call("POST", "/api/seats", seatBody({
-    name: "mayor",
-    scope: [{kind: "seat", actions: ["create", "restate", "park", "unpark"]}],
-    delegates: {scope, budget_usd_per_week: 5, sitting_budget_tokens: 100000}}),
-    person), 201, "the person opens the mayor"));
-  const sitter = "seat:" + mayor;
-  const agent = {"x-waymark-principal": sitter, "x-waymark-actor-type": "agent",
-                 "x-waymark-acts-for": "colton"};
-  const asked = must(await call("POST", "/api/approval_requests",
-    {task: "Keep the house's seats.", seat: "mayor"}, agent), 201, "the sitter asks");
-  const approved = must(await call("POST",
-    "/api/approval_requests/" + idOf(asked) + "/-/approve", null, person),
-    200, "the person approves");
-  const as = {...agent, "x-waymark-grant": approved.body.data.grant_id};
-  const child = idOf(must(await call("POST", "/api/seats",
-    seatBody({name: "meal-clerk"}), as), 201, "the mayor authors a child"));
-  must(await call("POST", "/api/seats/" + child + "/-/unpark", null, person),
-       200, "the person unparks the child");
-  const etag = (await call("GET", "/api/seats/" + child, null, as)).body.meta.etag;
-  const held = must(await call("POST", "/api/seats/" + child + "/-/restate",
-    seatBody({budget_usd_per_week: 9}), {...as, "if-match": etag}),
-    202, "the restate past the ceiling is held").body.held_call;
-  const row = must(await call("GET", "/api/held_calls/" + held, null, person),
-                   200, "the person reads the held call").body;
-
-  /* what each value must read as: its row's own summary */
-  const summaryOf = async v => {
-    const m = /^(member|seat):(.+)$/.exec(v);
-    const path = m ? "/api/" + m[1] + "s/" + m[2] : "/api/members/" + v;
-    return must(await call("GET", path, null, person), 200, "read " + v).body.summary;
-  };
-  const refs = [["owner", row.data.owner], ["caller", row.data.caller],
-                ["door author", row.data.door.author]];
-  for (const [f, v] of refs) ok(`the held call carries its ${f}`, typeof v === "string" && v);
-  ok("the held call's door is the child's restate",
-     row.data.door.kind === "seat" && row.data.door.id === child);
+  console.log("· seeding a meal on the list and two invitations onto it");
+  const meal = idOf(must(await call("POST", "/api/meals",
+    {name: "Invited soup " + Date.now(), themes: []}, person),
+    201, "the person adds a meal"));
+  must(await call("POST", "/api/meals/" + meal + "/-/accept", null, person),
+       200, "the meal joins the list");
+  const suggestion = "Simmer the stock an hour, then season.";
+  const invite = async note => idOf(must(await call("POST", "/api/invitations",
+    {subject: "colton", self: "/api/meals/" + meal, action: "update_recipe",
+     field: "recipe", note, suggest: {recipe: suggestion}}, person),
+    201, "the invitation \"" + note + "\""));
+  const takeNote = "Write the soup's recipe here.";
+  const declineNote = "Or say you would rather not write it.";
+  const taken = await invite(takeNote);
+  const declined = await invite(declineNote);
+  const stateOf = async id => must(await call("GET", "/api/invitations/" + id,
+    null, person), 200, "read the invitation").body.state;
 
   console.log("· boot + principal");
   await send("Page.navigate", {url: BASE + "/api/-/ui"});
@@ -924,19 +908,54 @@ async function heldCallStory() {
   await evaljs(`localStorage.setItem("wm10.principal", "colton"); location.reload(); true`);
   await sleep(1200);
 
-  console.log("· the held call's people, labelled");
-  await evaljs(`location.hash = ${JSON.stringify("/api/held_calls/" + held)}; true`);
-  const labelled = (raw, label) => `!document.querySelector(${JSON.stringify(
-      'span.mono[title="' + raw + '"]')}) &&
-    [...document.querySelectorAll("a")].some(a => a.textContent.includes(${JSON.stringify(label)}))`;
-  for (const [f, v] of refs) {
-    const label = await summaryOf(v);
-    await waitFor(labelled(v, label), `${f} ${v} labelled "${label}"`);
-    ok(`the ${f} (${v}) renders as its row's name, "${label}"`, true);
-  }
-  const target = await summaryOf("seat:" + child);
-  await waitFor(labelled(child, target), `door.id labelled "${target}"`);
-  ok(`door.id renders as the restated seat's summary, "${target}"`, true);
+  /* the row's own "Take this step", found by the invitation's note */
+  const takeButton = note => `[...document.querySelectorAll("tbody tr")]
+    .find(r => r.textContent.includes(${JSON.stringify(note)}))
+    ?.querySelector("[data-invite-open]")`;
+  const dialog = `document.querySelector("dialog[open]")`;
+  const field = `${dialog}?.querySelector('[name="recipe"]')`;
+
+  console.log("· the invitation collection: take this step");
+  await evaljs(`location.hash = "/api/invitations"; true`);
+  await waitFor(`!!(${takeButton(takeNote)})`, "Take this step on the invitation's row");
+  ok("an open invitation to the viewer offers Take this step", true);
+  await evaljs(`${takeButton(takeNote)}.click(); true`);
+  await waitFor(`!!(${field})`, "the invited door's dialog");
+  ok("the invited row opens",
+     await evaljs(`decodeURIComponent(location.hash).includes(${JSON.stringify("/api/meals/" + meal)})`));
+  ok("with the invited door's dialog",
+     await evaljs(`${dialog}.querySelector("h3").textContent.toLowerCase().includes("recipe")`));
+  ok("the suggested value stands in the field",
+     await evaljs(`${field}.value === ${JSON.stringify(suggestion)}`));
+  ok("and is marked as a suggestion",
+     await evaljs(`${field}.classList.contains("suggested-value")`));
+  ok("the invited field is lit", await evaljs(`!!${field}.closest(".invited")`));
+  ok("the author's note sits beside it",
+     await evaljs(`(() => { const n = ${field}.closest(".invited").nextElementSibling;
+       return !!n && n.matches("[data-invite-note]") &&
+              n.textContent === ${JSON.stringify(takeNote)}; })()`));
+  await waitFor(`(() => { const r = ${field}.closest(".invited").getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= innerHeight; })()`, "the invited field scrolled into view");
+  ok("the invited field is scrolled into view", true);
+  await waitFor(`document.activeElement === ${field}`, "the invited field focused");
+  ok("and focused", true);
+  await evaljs(`[...${dialog}.querySelectorAll(".dlgfoot button")]
+    .find(b => b.textContent === "Cancel").click(); true`);
+  await waitFor(`!${dialog}`, "the dialog closes on Cancel");
+  ok("opening the step and cancelling leaves the invitation open",
+     await stateOf(taken) === "open");
+
+  console.log("· decline from the dialog");
+  await evaljs(`location.hash = "/api/invitations"; true`);
+  await waitFor(`!!(${takeButton(declineNote)})`, "Take this step on the second invitation");
+  await evaljs(`${takeButton(declineNote)}.click(); true`);
+  await waitFor(`!!${dialog}?.querySelector("[data-invite-decline]")`, "the dialog's Decline");
+  ok("the invitation's dialog offers Decline", true);
+  await evaljs(`${dialog}.querySelector("[data-invite-decline]").click(); true`);
+  await waitFor(`!${dialog}`, "the dialog closes on Decline");
+  const t0 = Date.now();
+  while (await stateOf(declined) !== "declined" && Date.now() - t0 < 6000) await sleep(150);
+  ok("Decline moves the invitation to declined", await stateOf(declined) === "declined");
 }
 
 /* ════ guided follow: two people, two browser contexts ═══════════════
@@ -1223,7 +1242,7 @@ async function guidedStory() {
 
 if (MODE === "batch-a") await batchAStory();
 else if (MODE === "access") await accessStory();
-else if (MODE === "held-call") await heldCallStory();
+else if (MODE === "invitation") await invitationStory();
 else if (MODE === "guided") await guidedStory();
 else await mealplanStory();
 
