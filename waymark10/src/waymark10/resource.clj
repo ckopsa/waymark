@@ -1220,6 +1220,7 @@
       (assoc :input (or input
                         [:map [note-field
                                {:optional true
+                                :not-a-ref "The verdict's reason, in words: never a row id, whatever the field is called."
                                 :x-display
                                 {:label (str/capitalize
                                          (str/replace
@@ -1361,7 +1362,8 @@
                                  [:maybe [:string {:max 128}]]]))
                 entries (into entries
                               (map (fn [n]
-                                     [n {:optional true}
+                                     [n {:optional true
+                                         :not-a-ref "The verdict's reason, in words: never a row id, whatever the field is called."}
                                       [:maybe [:string {:max 240}]]]))
                               (sort note-fields))
                 schema (add-entries (:schema rmap) entries)

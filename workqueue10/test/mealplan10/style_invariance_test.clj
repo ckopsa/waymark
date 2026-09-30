@@ -554,7 +554,8 @@
                                         :x-display {:widget "money"
                                                     :label "Est. cost"}}
                        [:maybe [:int {:min 0}]]]
-                      [:product {:optional true}
+                      [:product {:optional true
+                                 :not-a-ref "The product's name as the shopper reads it; product_id beside it is the ref."}
                        [:maybe [:string {:max 200}]]]
                       [:store {:optional true} [:maybe [:string {:max 50}]]]
                       [:product_id {:optional true :kind :product}

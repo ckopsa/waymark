@@ -3555,6 +3555,7 @@
              :spelled-by-hand "Copied from the seat at birth; a sitting's mode is the seat's, and no hand writes it."}}
      [:maybe (into [:enum] seat-modes)]]
     [:person {:optional true
+              :not-a-ref "A member's principal id, not a person row's: the member kind owns it."
               :x-display
               {:raw true
                :label "The person in the chair"
