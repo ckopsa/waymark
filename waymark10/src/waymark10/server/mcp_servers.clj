@@ -1063,6 +1063,7 @@
     [:maybe [:vector power-entry]]]
    [:note {:optional true
            :examples [note-example]
+           :not-a-ref "A person's prose about the server, never a note row's id."
            :x-display {:widget "prose"
                        :label "Note"
                        :help "Anything the next person should know about this server."}}
@@ -1133,6 +1134,7 @@
     [:maybe [:vector power-entry]]]
    [:note {:optional true
            :examples [note-example]
+           :not-a-ref "A person's prose about the server, never a note row's id."
            :x-display {:widget "prose" :label "Note"
                        :help "Anything the next person should know about this server."}}
     [:maybe [:string {:max 500}]]]])

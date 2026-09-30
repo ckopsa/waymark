@@ -103,7 +103,9 @@
              [:maybe [:string {:max 128}]]]
             [:approved_by {:optional true :x-display {:raw true}}
              [:maybe [:string {:max 128}]]]
-            [:note {:optional true} [:maybe [:string {:max 240}]]]]
+            [:note {:optional true
+                    :not-a-ref "The verdict's reason, in words: never a row id, whatever the field is called."}
+             [:maybe [:string {:max 240}]]]]
    :create-schema [:map
                    [:grant_id {:optional true :kind :grant
                                :x-display {:label "Widen this grant"
@@ -179,6 +181,7 @@
            ;; warning the declaration's author cannot clear, so the
            ;; hand spelling carries the very words the sugar mints
            :input [:map [:note {:optional true
+                                :not-a-ref "The verdict's reason, in words: never a row id, whatever the field is called."
                                 :x-display
                                 {:label "Note"
                                  :help (str "Optional. Say why, in a sentence "
