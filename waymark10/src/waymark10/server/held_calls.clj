@@ -405,7 +405,7 @@
            {:label "Why"
             :help "The caller's one sentence of reason. An approval that held a call and had nothing to show would be a notice with no words on it."}}
      [:string {:min 1 :max 240}]]
-    [:caller {:not-a-ref "bare today; swept by 5cb6a0c7"
+    [:caller {:x-ref {:principal true}
               :x-display {:raw true
                           :label "Who called"
                           :help "The principal whose call this is, stamped by the power door. It is the field the first wall reads."}}
@@ -439,10 +439,10 @@
      [:maybe [:map
               [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
               [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
-              [:id {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+              [:id {:optional true :x-ref {:kind-from :kind}
                     :x-display {:raw true :label "Row"}}
                [:maybe [:string {:min 1 :max 128}]]]
-              [:author {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+              [:author {:optional true :x-ref {:principal true}
                         :x-display {:raw true :label "Asked by the seat"}}
                [:maybe [:string {:min 1 :max 128}]]]
               ;; the version the author read, for a fenced door: the
@@ -456,7 +456,7 @@
               [:prefill_digests {:optional true :x-display {:hidden true}}
                [:maybe [:map-of :keyword :string]]]]]]
     [:owner {:optional true
-             :not-a-ref "bare today; swept by 5cb6a0c7"
+             :x-ref {:principal true}
              :x-display {:raw true
                          :label "Waits on"
                          :help "The person a held seat call waits on: the one its author acts for. Only they answer it."}}
@@ -486,7 +486,7 @@
                           :help "The person's sentence on a refusal, or the engine's on a wire failure."}}
      [:maybe [:string {:max 240}]]]
     [:decided_by {:optional true
-                  :not-a-ref "bare today; swept by 5cb6a0c7"
+                  :x-ref {:principal true}
                   :x-display {:raw true :label "Who decided"}}
      [:maybe [:string {:max 128}]]]
     [:decided_at {:optional true :x-display {:label "When"}}
@@ -515,7 +515,7 @@
     [:why {:x-display {:label "Why"
                        :help "The caller's one sentence of reason, which the person who taps reads."}}
      [:string {:min 1 :max 240}]]
-    [:caller {:not-a-ref "bare today; swept by 5cb6a0c7"
+    [:caller {:x-ref {:principal true}
               :x-display {:raw true :label "Who called"
                           :help "The principal whose call this is."}}
      [:string {:min 1 :max 128}]]
@@ -542,10 +542,10 @@
      [:maybe [:map
               [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
               [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
-              [:id {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+              [:id {:optional true :x-ref {:kind-from :kind}
                     :x-display {:raw true :label "Row"}}
                [:maybe [:string {:min 1 :max 128}]]]
-              [:author {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+              [:author {:optional true :x-ref {:principal true}
                         :x-display {:raw true :label "Asked by the seat"}}
                [:maybe [:string {:min 1 :max 128}]]]
               ;; the version the author read, for a fenced door: the
@@ -556,7 +556,7 @@
               [:prefill_digests {:optional true :x-display {:hidden true}}
                [:maybe [:map-of :keyword :string]]]]]]
     [:owner {:optional true
-             :not-a-ref "bare today; swept by 5cb6a0c7"
+             :x-ref {:principal true}
              :x-display {:raw true
                          :label "Waits on"
                          :help "The person a held seat call waits on: the one its author acts for. Only they answer it."}}

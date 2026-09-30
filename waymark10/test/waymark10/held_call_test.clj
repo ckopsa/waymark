@@ -18,6 +18,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
@@ -1509,3 +1510,28 @@
     (is (= 1 (count (chat-sends log))))
     (is (= 1 (:sent (notice-rule-data eng (:id r)))))
     (is (= 0 (held/sweep-quiet-digests! eng)) "nothing held, no digest")))
+
+;; ── the held seat call names its people (5cb6a0c7) ─────────────────
+
+(defn- object-arm
+  "A nilable map's published schema: the arm that carries properties."
+  [prop]
+  (some #(when (:properties %) %)
+        (concat [prop] (:oneOf prop) (:anyOf prop))))
+
+(deftest a-held-seat-restate-labels-its-owner-caller-and-author
+  ;; The page is not executed here (ui_assembly_test pins principalRef
+  ;; and the kind-from seam); this pins what it reads: a held
+  ;; seat-restate's owner, caller and door author publish the principal
+  ;; x-ref, so each `seat:`/`member:` value resolves to its row's name,
+  ;; and the door's row id reads its kind off the door's `kind`
+  (let [js (schema/json-schema (:schema held/held-call))
+        door (object-arm (get-in js [:properties :door]))]
+    (doseq [f [:owner :caller :decided_by]]
+      (is (= {:principal true} (get-in js [:properties f :x-ref])) (name f)))
+    (is (= {:principal true} (get-in door [:properties :author :x-ref])))
+    (is (= {:kind-from "kind"} (get-in door [:properties :id :x-ref])))
+    (is (= {:kind :sitting} (select-keys (get-in js [:properties :sitting :x-ref]) [:kind])))
+    (testing "no waiver of the sweep is left on the kind"
+      (is (not (str/includes? (pr-str (:schema held/held-call)) "swept by")))
+      (is (not (str/includes? (pr-str (:create-schema held/held-call)) "swept by"))))))
