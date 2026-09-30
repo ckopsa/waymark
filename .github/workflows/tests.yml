@@ -309,7 +309,7 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              .github/workflows/*|.github/scripts/*.sh|scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
+              .github/workflows/*|.github/scripts/*.sh|scripts/*.sh|waymark10/scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
             esac
             case "$f" in
               waymark10/*|calendar10/*|workqueue10/*|factory10/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
@@ -910,7 +910,8 @@ jobs:
   #
   # The standalone scripts the workflows and the seat's hook execute are
   # outside actionlint's reach, so a second step shellchecks them at
-  # warning severity; the diff that touches one sets `workflows` too.
+  # shellcheck's default severity, style findings included; the diff
+  # that touches one sets `workflows` too.
   actionlint:
     needs: [changes]
     if: ${{ needs.changes.outputs.workflows == 'true' }}
@@ -929,7 +930,7 @@ jobs:
         run: |
           set -euo pipefail
           shellcheck --version
-          shellcheck -S warning .github/scripts/*.sh scripts/*.sh .claude/hooks/sitting-close.sh
+          shellcheck .github/scripts/*.sh scripts/*.sh waymark10/scripts/*.sh .claude/hooks/sitting-close.sh
 
   # ── THE ONE CHECK BRANCH PROTECTION NAMES ───────────────────────────
   #
