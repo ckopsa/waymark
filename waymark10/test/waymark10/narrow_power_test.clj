@@ -865,7 +865,8 @@
                                 {:name "narrow-power-tickets"
                                  :charter "Build what each open ticket asks for."
                                  :scope [{:kind "capability" :actions []}
-                                         {:kind "ticket" :actions []}]
+                                         {:kind "ticket" :actions ["close"]
+                                          :filter {:state "open"}}]
                                  :walk "ticket"
                                  :standing_ttl_seconds 604800
                                  :cadence_seconds 3600
