@@ -564,46 +564,6 @@
   .feed-marks-foot button.chip:hover { background: var(--verdigris-wash);
                                        color: var(--ink); }
   .fcard .problem { margin-top: 8px; }
-  /* ── a bundle's pieces (waymark-jfv.4): sub-rows with their own
-     thumbs — an inset block inside the post, the way a timeline
-     quotes something, and each row answerable alone: the partial
-     accept is a person tapping down this list. */
-  .fcard-pieces { list-style: none; margin: 8px 0 4px; padding: 0;
-                  border: 1px solid var(--line); border-radius: 12px;
-                  overflow: hidden; background: var(--panel); }
-  .fpiece { padding: 9px 12px 7px; }
-  .fpiece + .fpiece { border-top: 1px solid var(--line); }
-  .fpiece-top { display: flex; align-items: baseline; gap: 8px;
-                flex-wrap: wrap; }
-  .fpiece-top .statechip { order: 2; margin-left: auto; font-size: 10.5px; }
-  .fpiece-say { font-family: var(--serif); font-size: 15px;
-                line-height: 1.4; color: var(--ink); flex: 1 1 12rem; }
-  .fpiece-say:hover { text-decoration: none; color: var(--verdigris-deep); }
-  /* ── the impact line (waymark-jfv.17): the ENGINE's statement of
-     what the tap does, under the composer's prose and above the
-     chips. Quieter than the say-line and in the SANS face, because
-     the difference between them is whose sentence it is — the serif
-     is somebody's writing; this is the machine reading itself back.
-     Visible rather than disclosed, which is the bead's own ruling. */
-  .fcard-impact { font-size: 12.5px; color: var(--muted); line-height: 1.45;
-                  margin: 6px 0 0; }
-  .fpiece-verbs { display: flex; flex-wrap: wrap; gap: 2px 4px;
-                  margin: 2px 0 0 -8px; align-items: center; }
-  .fpiece-verbs button.chip.verb { font-family: var(--sans);
-    font-size: 13px; min-height: 32px; padding: 4px 10px; cursor: pointer;
-    border: 1px solid transparent; border-radius: 999px;
-    background: transparent; color: var(--muted); }
-  .fpiece-verbs button.chip.verb:hover { color: var(--verdigris-deep);
-                                         background: var(--verdigris-wash); }
-  .fpiece-verbs button.chip.verb.primary { color: var(--verdigris);
-                                           font-weight: 700; }
-  .fpiece-verbs button.chip.verb:disabled { opacity: .5; cursor: default; }
-  .fpiece-verbs a.link-chip { font-family: var(--sans); font-size: 12.5px;
-    padding: 4px 10px; background: transparent; border-color: transparent;
-    color: var(--muted); border-radius: 999px; }
-  .fpiece-verbs a.link-chip:hover { color: var(--verdigris-deep);
-    background: var(--verdigris-wash); text-decoration: none; }
-  .fpiece-problem:empty { display: none; }
   /* the seam: the one structural element, and it says so quietly —
      a timeline's "you're all caught up" */
   .feed-seam { margin: 0; padding: 22px 16px 18px; text-align: center;
