@@ -1569,17 +1569,18 @@
 (defn- at-fault
   "Why the rule's `at` can never tell, judged as at-names-a-datetime
   judges it — or nil. A rule stored before that wall stood is judged
-  here, on every sweep."
+  here, on every sweep, and so is one whose kind is no longer served."
   [eng rule]
   (let [kind (str (get-in rule [:data :kind]))
         field (at-field rule)]
-    (when-some [rd (get (inv/resources eng) (keyword kind))]
+    (if-some [rd (get (inv/resources eng) (keyword kind))]
       (let [s (schema/field-schema (:schema rd) field)
             head (if (vector? s) (first s) s)
             why (cond (nil? s) "is not a field of that kind"
                       (not= :waymark/instant head) "is not a datetime, so it never tells")]
         (when why
-          (str "at: " kind "." (name field) " " why))))))
+          (str "at: " kind "." (name field) " " why)))
+      (str "kind: " kind " is not a kind this engine serves, so it never tells"))))
 
 (defn- note-at-fault!
   "Counts the fault once as failed and names it in last_error, under
