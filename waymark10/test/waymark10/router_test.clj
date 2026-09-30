@@ -130,7 +130,9 @@
             ;; row per sitting and one per line, core's beside the
             ;; sitting
             "transcript" "transcript_entry"
-            "verdict"]
+            "verdict"
+            ;; spec-guided-follow § 4: the recorded walk and its frames
+            "walk" "walk_frame"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))

@@ -167,8 +167,8 @@
              ;; nothing a person never answered runs late (R-14, R-7)
              :mcp-discover :held-call-expiry :notifier
              ;; the invitations' resolution and expiry
-             ;; (spec-guided-follow § 3)
-             :invitations :invitation-expiry
+             ;; (spec-guided-follow § 3), and the walks' retention (§ 4)
+             :invitations :invitation-expiry :walk-retention
              ;; core's sixth: the seat's clock, so a transcript seals
              ;; and an idle sitting closes between deploys
              :seat-clock
