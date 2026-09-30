@@ -58,6 +58,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-servers :as servers]
+            [waymark10.server.patch :as patch]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -407,6 +408,14 @@
              :x-display {:label "What it would do"
                          :help "The fields the powers entry marks as shown, on one line. It is the person's whole reading of the call."}}
      [:maybe [:string {:max 140}]]]
+    ;; WHAT A HELD EDIT WOULD CHANGE (ticket 5120da15): each field the
+    ;; call names, as the row held it at the hold and as the call would
+    ;; leave it, a list as its added and removed entries, so the person
+    ;; reads the change and not the whole row
+    [:changes {:optional true
+               :x-display {:label "What changes"
+                           :help "Each field the call would change: a list's added and removed entries, any other field before and after, as the row stood when the call was held."}}
+     [:maybe [:map-of :keyword :any]]]
     ;; A SEAT OR JUDGMENT DOOR THAT WAITS ON A PERSON
     ;; (server/delegation). When this is present the call is not a
     ;; tool call: it is a write a delegating seat's sitter asked for,
@@ -501,6 +510,10 @@
              :x-display {:label "What it would do"
                          :help "The fields the powers entry marks as shown, on one line."}}
      [:maybe [:string {:max 140}]]]
+    [:changes {:optional true
+               :x-display {:label "What changes"
+                           :help "Each field a held edit would change, as the row stood at the hold."}}
+     [:maybe [:map-of :keyword :any]]]
     ;; A SEAT OR JUDGMENT DOOR THAT WAITS ON A PERSON
     ;; (server/delegation). When this is present the call is not a
     ;; tool call: it is a write a delegating seat's sitter asked for,
@@ -669,19 +682,13 @@
     (when-some [raw (store/with-tx st
                       (fn [tx] (store/load-row st tx (keyword kind) (str id) {})))]
       {:version (:version raw)
+       :data (:data raw)
        :digests (into {}
                       (map (fn [f]
                              (let [f (keyword f)]
                                [f (wire/digest
                                    [(digest-value (get (:data raw) f))])])))
                       fields)})))
-
-(defn- prefill-of
-  "The fields a door's edit is about: its `:edit :prefill` list, or nil
-  for a door that declares none."
-  [eng kind action]
-  (seq (get-in (inv/resources eng)
-               [(keyword kind) :actions (keyword action) :edit :prefill])))
 
 (defn hold-door!
   "Mint the held call a delegating seat's write became
@@ -703,11 +710,25 @@
   (let [kind (name kind)
         action (name action)
         what (or (some-> (:name body) str not-empty) (some-> id str))
-        shown (str action " " kind (when what (str " " what)))
-        digests (when (and (some-> if-match str not-empty)
-                           (some-> id str not-empty))
-                  (when-some [fields (prefill-of eng kind action)]
-                    (not-empty (:digests (prefill-now eng kind id fields)))))]
+        ;; the door's own declaration, for an edit on a row: the
+        ;; prefill fields the body NAMES are what the call is about. A
+        ;; patch (ticket 5120da15) names only what it changes, so the
+        ;; fence and the diff read those and never an untouched field
+        edit (when (some-> id str not-empty)
+               (some-> (get-in (inv/resources eng)
+                               [(keyword kind) :actions (keyword action)])
+                       (assoc :name (keyword action))))
+        named (filterv #(contains? (or body {}) %) (patch/prefill edit))
+        now (when (seq named) (prefill-now eng kind id named))
+        digests (when (some-> if-match str not-empty)
+                  (not-empty (:digests now)))
+        changes (when now
+                  (not-empty (patch/changes (:data now)
+                                            (patch/resolve-input edit (:data now) body)
+                                            named)))
+        shown (str action " " kind (when what (str " " what))
+                   (when changes
+                     (str " · " (str/join ", " (map name (keys changes))))))]
     (:row (inv/create!
            eng :held_call
            (cond-> {:tool (str kind "." action)
@@ -723,6 +744,7 @@
                             (some-> author str not-empty) (assoc :author (str author))
                             (some-> if-match str not-empty) (assoc :if_match (str if-match))
                             digests (assoc :prefill_digests digests))}
+             changes (assoc :changes changes)
              (some-> owner str not-empty) (assoc :owner (str owner)))
            {:principal engine-actor}))))
 
@@ -802,7 +824,7 @@
                   (attempt opts)
                   (catch clojure.lang.ExceptionInfo e
                     (if (and id (seq prefill_digests)
-                             (= :version-conflict (:waymark10/problem (ex-data e))))
+                             (#{:version-conflict :stale} (:waymark10/problem (ex-data e))))
                       (attempt (assoc opts :if-match (refence e)))
                       (throw e))))
             written (:row res)]

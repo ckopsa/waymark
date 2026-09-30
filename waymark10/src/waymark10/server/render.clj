@@ -139,6 +139,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgment :as judgment]
+            [waymark10.server.patch :as patch]
             [waymark10.server.problems :as p]
             [waymark10.server.seams :as seams]
             [waymark10.summary :as summary]
@@ -298,6 +299,14 @@
           (merge (select-keys (:data row) (:prefill edit))
                  (when-some [f (:prefill-fn edit)] (f row ctx))))))
 
+(defn edit-input-js
+  "An edit door's advertised input (ticket 5120da15): its prefill
+  fields optional and its prose saying that an omitted field keeps its
+  value. Public beside project-input-js, and for the same reason: the
+  envelope's entry and waymark_schema wear one rule, not two."
+  [js defn']
+  (patch/door-js js defn'))
+
 (defn- action-entry [defn' rdef self row ctx arg?]
   (let [{:keys [to safety display]} defn'
         ;; per-origin consequence (batch H): a {from-state sentence}
@@ -316,7 +325,8 @@
                                         defn' row ctx)
                        (project-input-js
                         (when arg?
-                          #(arg? (:kind rdef) (:name defn') %)))))
+                          #(arg? (:kind rdef) (:name defn') %)))
+                       (edit-input-js defn')))
         key-field (when-some [place (:place defn')]
                     (get-in rdef [:part-scopes place :key]))]
     (cond-> {:method "POST"
