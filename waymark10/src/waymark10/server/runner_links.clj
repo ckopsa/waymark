@@ -624,6 +624,32 @@
   (some-> (provider-row eng (get-in link-row [:data :provider]))
           (waiting-until at)))
 
+(defn account-hold
+  "The instant before which no fire of `provider` (a provider name) goes
+  out — its row's `retry_after`, or the close of its spent window — or
+  nil when the account lets it fire. For a schedule's fire through its
+  own single link, which is no runner link (5c499772)."
+  [eng provider]
+  (some-> (provider-row eng provider)
+          (waiting-until (or (instant-of ((:now-fn eng))) (Instant/now)))))
+
+(defn count-account!
+  "Write on `provider`'s row what one fire through a schedule's own
+  single link answered (5c499772): a started run counts in its window,
+  and a throttle that names the account holds it — as `fire-link!` does
+  for a runner link."
+  [eng provider answer]
+  (when-some [p (provider-row eng provider)]
+    (let [at (or (instant-of ((:now-fn eng))) (Instant/now))]
+      (cond
+        (contains? answer :started)
+        (act! eng :runner_provider p :fired (window-after (:data p) at))
+
+        (and (contains? answer :throttled) (account-throttle? answer))
+        (act! eng :runner_provider p :throttle
+              {:retry_after (str (sch/retry-instant at (:throttled answer)
+                                                    (:body answer)))})))))
+
 (defn- links-by-id [eng]
   (into {} (map (juxt (comp str :id) identity)) (rows-of eng :runner_link {})))
 

@@ -1923,9 +1923,12 @@
   ([eng adapter schedule-row text at]
    (fire! eng adapter schedule-row text at (link-of eng schedule-row)))
   ([eng adapter schedule-row text at link]
+   (fire! eng adapter schedule-row text at link nil))
+  ([eng adapter schedule-row text at link on-answer]
    (when (some-> (:fire_url link) str not-empty)
      (let [answer (fire (claude-routine adapter) link text)
            status (some-> (:status answer) long)]
+       (when on-answer (on-answer answer))
        (cond
          (contains? answer :started)
          (try-act! eng schedule-row :fired
@@ -2017,7 +2020,20 @@
     (fire-through-pool! eng (constantly (claude-routine adapter))
                         schedule-row text at ids
                         (pool-order-of eng schedule-row seat-row))
-    (fire! eng adapter schedule-row text at (link-of eng schedule-row seat-row))))
+    ;; the one link is no runner link, but its fire still goes out on
+    ;; the claude_routine account: it waits on that row's hold and
+    ;; counts toward its cap (5c499772)
+    (let [provider "claude_routine"
+          hold ((requiring-resolve 'waymark10.server.runner-links/account-hold)
+                eng provider)]
+      (if hold
+        (try-act! eng schedule-row :throttle
+                  {:note (clip (str "The " provider " account is waiting; the wake goes out at "
+                                    hold "."))
+                   :retry_after (str hold)})
+        (fire! eng adapter schedule-row text at (link-of eng schedule-row seat-row)
+               (partial (requiring-resolve 'waymark10.server.runner-links/count-account!)
+                        eng provider))))))
 
 (defn held?
   "Does this row hold its wakes rather than fire them (waymark ticket
