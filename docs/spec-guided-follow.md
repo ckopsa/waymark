@@ -61,7 +61,10 @@ Following is three streams and a client-side filter.
   action, and inside a draft room whose members are its writers. Guided
   follow is not collab: the follower watches and does not co-edit.
   Collab's frame vocabulary (`set`, `update`, `field`, `value`) is the
-  precedent for the field part of the event below.
+  precedent for the field part of the event below. Where the open
+  dialog's action already has a shared live draft, the draft is the
+  source of `fields`: the reporter reads the draft's values rather
+  than keeping a second copy, so the two never disagree.
 
 The gap is plain. A dialog, a form value that has not been submitted,
 a filter, a sort, a page and a focused row are client state. No stream
@@ -260,7 +263,10 @@ navigates to `self`, opens the action's dialog in their own hand (the
 inputs are enabled, because this is their form now), scrolls the
 invited `field` into view with a short animation, highlights it and
 shows `note` beside it. Decline is one button. Outside guided mode,
-the invitation is an ordinary row in the person's collection.
+the invitation is an ordinary row in the person's collection, and
+opening it does the same: navigate to `self`, open the dialog in the
+person's hand, animate to the field, show the note. That is why stage 2
+stands without stage 1.
 
 ## 4. Recording
 
@@ -301,6 +307,7 @@ format `waymark-walk/1`:
 
 ```
 {"format": "waymark-walk/1", "title": "…", "recorded": "2026-09-30",
+ "engine": "demo",
  "cast": {"a1": {"display": "Planner", "type": "agent"},
           "p1": {"display": "Person", "type": "human"}}}
 {"t": 0,    "type": "move", "who": "a1", "self": "/api/tickets/…"}
@@ -325,10 +332,24 @@ from the file, on a timer. It makes no network writes, and a
 same file is the marketing artifact: it shows how the work is done,
 with only the rows its exporter could see.
 
+**Marketing walks are recorded on a demo engine.** Redaction bounds a
+recording by what its recorder could see, and that is still real data:
+real tickets, repositories and people. A walk meant for the public is
+recorded on a separate engine seeded with demo rows. The export's
+header carries `"engine"` (the engine's own name), so a reader can
+tell a demo walk from a real one. Walks recorded on a working engine
+are for onboarding inside it.
+
 ## 5. The children
 
-Each child is one PR under the bench's ceiling, in order. A stage's
-children depend only on the stages before it.
+Each child is one PR under the bench's ceiling. **Build stage 2
+first.** Its children (3 and 4) depend on nothing in stage 1: an
+invitation is an ordinary row, and child 4's dialog-open, highlight
+and note work from the row page and the person's own collection, with
+guided mode as an extra entry point once stage 1 lands. The "agent
+prepares, person taps" hand-off is most of the onboarding value, and
+held calls already prove the shape. Stage 1 follows, then stage 3,
+whose children depend on stage 1.
 
 **Stage 1: follow carries UI state**
 
