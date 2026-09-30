@@ -100,10 +100,10 @@
                            :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}
              [:maybe :waymark/instant]]
             [:requested_by {:optional true :x-display {:raw true}
-                            :not-a-ref "bare today; swept by 5cb6a0c7"}
+                            :x-ref {:principal true}}
              [:maybe [:string {:max 128}]]]
             [:approved_by {:optional true :x-display {:raw true}
-                           :not-a-ref "bare today; swept by 5cb6a0c7"}
+                           :x-ref {:principal true}}
              [:maybe [:string {:max 128}]]]
             [:note {:optional true
                     :not-a-ref "The verdict's reason, in words: never a row id, whatever the field is called."}

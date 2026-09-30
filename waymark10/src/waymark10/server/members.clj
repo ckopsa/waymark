@@ -803,7 +803,7 @@
                                                 :choices {"no carrier" "No carrier — notices are held, but no notifier can send the digest"}}}
              [:maybe [:enum "no carrier"]]]
             [:invited_by {:optional true
-                          :not-a-ref "bare today; swept by 5cb6a0c7"
+                          :x-ref {:principal true}
                           :x-display {:raw true
                                       :label "Invited by"
                                       :help "The member id of whoever minted the invite — stamped at birth by the create path, not typed."}}

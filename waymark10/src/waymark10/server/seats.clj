@@ -2250,7 +2250,7 @@
                     :spelled-by-hand "Written at birth when a delegating seat opens this one; never typed."}}
      [:maybe :waymark/ref]]
     [:owner {:optional true
-             :not-a-ref "bare today; swept by 5cb6a0c7"
+             :x-ref {:principal true}
              :x-display
              {:raw true
               :label "For whom"
@@ -2259,7 +2259,7 @@
     ;; INVARIANT 4's record: the person's first unpark of an authored
     ;; seat, written by `unpark` and by nothing else
     [:approved_by {:optional true
-                   :not-a-ref "bare today; swept by 5cb6a0c7"
+                   :x-ref {:principal true}
                    :x-display
                    {:raw true
                     :label "Approved by"
