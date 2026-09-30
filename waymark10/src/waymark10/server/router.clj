@@ -510,7 +510,29 @@
   [rdef]
   (inv/action-names rdef))
 
-(defn- well-known [eng]
+(def ^:private module-doors
+  "The doors a MODULE mounts, not core. Each is advertised only when
+  the assembled route sets serve its href: an engine assembled without
+  :realtime or :seasons would otherwise name doors that answer 404."
+  {:presence {:href "/api/-/presence"
+              :note "who is looking where (SSE / POST)"}
+   ;; one socket instead of three (waymark-p5tg)
+   :live {:href "/api/-/live"
+          :note (str "all three live surfaces on ONE "
+                     "SSE connection — dispatch on the "
+                     "frame's event name (transition, "
+                     "derivation, presence, intent); "
+                     "Last-Event-ID resumes the row "
+                     "events, and a scoped caller gets "
+                     "the presence and intent frames "
+                     "with the firehose half absent")}
+   :seasons {:href "/api/-/seasons"
+             :note "the last weeks as a shape — what moved, what ages"}})
+
+(defn- well-known
+  "`mounted` is the set of static paths the assembled modules serve;
+  a module's door rides :doors only when its href is in it."
+  [eng mounted]
   (fn [req]
     (let [vis (visibility-of req)
           principal (principal-of req)
@@ -594,22 +616,11 @@
                                :note "how sight is negotiated"}
                          :grant_check {:href "/api/-/grant-check" :method "GET"
                                        :note "capability-grant introspection"}
-                         :presence {:href "/api/-/presence"
-                                    :note "who is looking where (SSE / POST)"}
                          :events {:href "/api/-/events"
-                                  :note "the firehose (SSE; unscoped only — a recorded punt)"}
-                         ;; one socket instead of three (waymark-p5tg)
-                         :live {:href "/api/-/live"
-                                :note (str "all three live surfaces on ONE "
-                                           "SSE connection — dispatch on the "
-                                           "frame's event name (transition, "
-                                           "derivation, presence, intent); "
-                                           "Last-Event-ID resumes the row "
-                                           "events, and a scoped caller gets "
-                                           "the presence and intent frames "
-                                           "with the firehose half absent")}
-                         :seasons {:href "/api/-/seasons"
-                                   :note "the last weeks as a shape — what moved, what ages"}}
+                                  :note "the firehose (SSE; unscoped only — a recorded punt)"}}
+                  true
+                  (into (filter (fn [[_ {:keys [href]}]] (contains? mounted href)))
+                        module-doors)
                   (get-in eng [:oidc :rp])
                   (assoc :agent_session
                          {:href "/auth/agent" :method "POST"
@@ -2092,19 +2103,23 @@
   well-known document, the per-kind JSON schema, the SSE firehose, the
   welcome payload, the grant check, the agent's knock (both
   spellings), and the declared surfaces. Every one of them is the law
-  or the identity boundary talking about itself."
-  [eng]
-  [["/api/.well-known/waymark" {:get (well-known eng)}]
-   ["/api/schemas/:kind" {:get (kind-schema eng)}]
-   ["/api/-/events" {:get (firehose-events eng)}]
-   ["/api/-/welcome" {:get (welcome-doc eng)}]
-   ["/api/-/grant-check" {:get (grant-check eng)}]
-   ["/agentInvite" {:get (agent-invite-doc eng)
-                    :post (agent-invite-mint eng)}]
-   ["/api/-/agent-invite" {:get (agent-invite-doc eng)
-                           :post (agent-invite-mint eng)}]
-   ["/api/surfaces/:name" {:get (surface-view eng)}]
-   ["/api/surfaces/:name/:id" {:get (surface-view eng)}]])
+  or the identity boundary talking about itself. The well-known
+  document reads `route-sets` so its doors name only what is mounted."
+  ([eng] (core-static eng nil))
+  ([eng route-sets]
+   [["/api/.well-known/waymark"
+     {:get (well-known eng (into #{} (comp (mapcat :static) (map first))
+                                 route-sets))}]
+    ["/api/schemas/:kind" {:get (kind-schema eng)}]
+    ["/api/-/events" {:get (firehose-events eng)}]
+    ["/api/-/welcome" {:get (welcome-doc eng)}]
+    ["/api/-/grant-check" {:get (grant-check eng)}]
+    ["/agentInvite" {:get (agent-invite-doc eng)
+                     :post (agent-invite-mint eng)}]
+    ["/api/-/agent-invite" {:get (agent-invite-doc eng)
+                            :post (agent-invite-mint eng)}]
+    ["/api/surfaces/:name" {:get (surface-view eng)}]
+    ["/api/surfaces/:name/:id" {:get (surface-view eng)}]]))
 
 (defn core-plural-head
   "The plural grammar's own front door — the collection and the
@@ -2161,7 +2176,7 @@
   [eng route-sets]
   (into []
         cat
-        [(core-static eng)
+        [(core-static eng route-sets)
          (mapcat :static route-sets)
          (core-plural-head eng)
          (mapcat :plural route-sets)
