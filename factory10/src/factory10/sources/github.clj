@@ -449,6 +449,18 @@
         (recur (inc page) out)
         out))))
 
+(defn- retry-pull!
+  "One pull request whose row the last pass refused, read again by
+  number: the cursor has moved past its stamp, so the listing will not
+  answer it until it moves again (ticket 365043a6). A read that fails
+  costs the retry, never the repository's pass."
+  [this repo number]
+  (try (call! this "GET" (str "/repos/" repo "/pulls/" number) {})
+       (catch Exception e
+         (warn! "the pull request " repo "#" number
+                " could not be read again (" (ex-message e) ")")
+         nil)))
+
 (defn- detail!
   "The pull request's own route, which is the only one that carries the
   size and the mergeable state. A pull request the token cannot read
@@ -651,10 +663,12 @@
 
 (defn- repo-pass!
   "One repository's whole read: the window of pull requests, each one's
-  document, and the red check runs of every open head. A throw here is
-  one repository's failure, which the poll catches."
-  [this repo floor]
-  (let [pulls (try (list-pulls! this repo floor)
+  document, and the red check runs of every open head. `retried` names
+  the pull requests a refused row asks to read again, which the window
+  may no longer hold. A throw here is one repository's failure, which
+  the poll catches."
+  [this repo floor retried]
+  (let [listed (try (list-pulls! this repo floor)
                    (catch clojure.lang.ExceptionInfo e
                      ;; the listing is the one route that says whether
                      ;; the token reads this repository at all, so its
@@ -663,6 +677,10 @@
                                      (assoc (ex-data e)
                                             :route (pulls-route repo))
                                      e))))
+        seen (into #{} (map #(whole (:number %))) listed)
+        pulls (into (vec listed)
+                    (keep #(retry-pull! this repo %))
+                    (remove seen retried))
         changes (mapv #(pull-pass! this repo %) pulls)
         checks (into []
                      (mapcat
@@ -770,15 +788,17 @@
             (warn! no-repositories-said))
           named))))
 
-(defrecord GitHubSource [call repos-fn cursor calls said actions-only]
+(defrecord GitHubSource [call repos-fn cursor calls said actions-only retry]
   forge/ForgeSource
   (forge-poll [this]
     (reset! calls 0)
     (reset! actions-only #{})
     (let [floor (window-start @cursor)
+          pending (first (reset-vals! retry {}))
           repos (repos-now this)
           answers (mapv (fn [repo]
-                          (try (assoc (repo-pass! this repo floor)
+                          (try (assoc (repo-pass! this repo floor
+                                                  (get pending repo))
                                       :repo repo :ok? true)
                                (catch Exception e
                                  (warn! "the repository " repo
@@ -798,6 +818,9 @@
       ;; failure in the middle of a pass re-reads rather than skips
       (when complete?
         (reset! cursor (high-water @cursor (mapcat :updates answered))))
+      ;; a retry whose repository did not answer waits for the next pass
+      (swap! retry #(merge-with into %
+                                (apply dissoc pending (map :repo answered))))
       {:changes (into [] (mapcat :changes) answered)
        :checks (into [] (mapcat :checks) answered)
        :repositories (mapv :repo answers)
@@ -917,7 +940,18 @@
            (str "/repos/" repository "/actions/runs/" run-id
                 "/rerun-failed-jobs")
            {})
-    run-id))
+    run-id)
+
+  forge/ForgeRetry
+  (forge-retry! [_ docs]
+    (swap! retry
+           (fn [m]
+             (reduce (fn [m {:keys [repository number]}]
+                       (if (and repository number)
+                         (update m repository (fnil conj #{}) number)
+                         m))
+                     m docs)))
+    nil))
 
 (defn parse-repos
   "\"ckopsa/waymark, ckopsa/waymark-bench\" → the repositories to read,
@@ -950,7 +984,8 @@
                   (atom nil)
                   (atom 0)
                   (atom false)
-                  (atom #{})))
+                  (atom #{})
+                  (atom {})))
 
 (defn from-env
   "The deployed boundary off FACTORY10_GITHUB_TOKEN. nil when the token
@@ -1232,4 +1267,5 @@
                    (atom cursor)
                    (atom 0)
                    (atom false)
-                   (atom #{}))))
+                   (atom #{})
+                   (atom {}))))
