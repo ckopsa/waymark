@@ -523,3 +523,40 @@
       (is (= :a-correction-cites-what-stands (guard-of out)))
       (is (str/includes? (detail-of out) "was reopened"))
       (is (str/includes? (detail-of out) "nothing to correct")))))
+
+;; ── 5. the house's own walls ─────────────────────────────────────────
+
+(def ^:private not-yet
+  "The ticket is still open: close it first, then judge it.")
+
+(defn- wait-for-the-close
+  "An app's wall on one judgment: it reads the subject through the
+  write's own ctx, and refuses while the ticket is still open."
+  [inp ctx]
+  (let [row ((:read ctx) :vt_ticket (:subject_id inp))]
+    (when (= "open" (name (:state row)))
+      not-yet)))
+
+(deftest an-apps-verdict-guard-refuses-and-admits-a-judge
+  (let [eng (engine/engine
+             {:storage (memory/storage) :resources [ticket]
+              :services {:verdict-guards
+                         {"Why did the build go red" [wait-for-the-close]}}})
+        w {:eng eng
+           :judgment (judgment! eng "Why did the build go red")
+           :ticket (ticket! eng "The nightly build went red")
+           :seat (leash! eng seat-id)}
+        other (judgment! eng "Who broke it")]
+    (is (= [:services :verdict-guards] verdict/verdict-guards-key))
+    (testing "the app's wall refuses while its own condition does not hold"
+      (let [out (judge! eng (:seat w) (verdict-body w))]
+        (is (= 409 (:status out)))
+        (is (= :the-house-admits-this-verdict (guard-of out)))
+        (is (str/includes? (detail-of out) not-yet))))
+    (testing "a judgment the app names no wall for is not held by it"
+      (is (= 201 (:status (judge! eng (:seat w)
+                                  (verdict-body w :judgment other))))))
+    (testing "and admits the judge once it does"
+      (is (= 200 (:status (call! eng :post
+                                 (str "/api/vt_tickets/" (:ticket w) "/-/close")))))
+      (is (= 201 (:status (judge! eng (:seat w) (verdict-body w))))))))
