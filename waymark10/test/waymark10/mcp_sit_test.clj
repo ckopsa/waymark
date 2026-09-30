@@ -557,6 +557,66 @@
         (is (false? (:isError sat)) (text-of sat))
         (is (= "claude-sit-4" (:model answer)))))))
 
+(deftest a-pool-only-schedule-claims-the-seat-s-model-not-its-stale-copy
+  ;; waymark ticket 962e0aeb: a runner pool is by hand as a link is, so
+  ;; a schedule whose only way out is a pool, its own or its chair's,
+  ;; claims the seat's held_for after a step down, not the copy's model
+  (doseq [where [:schedule :chair]]
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          {:keys [seat model]} (open-seat! eng)
+          next-model (:row (inv/create! eng :model
+                                        {:name "claude-sit-4" :display "Sit 4"
+                                         :vendor "anthropic" :tier "economy"
+                                         :price_input_per_mtok 1M
+                                         :price_output_per_mtok 5M
+                                         :price_cache_read_per_mtok 0.1M
+                                         :price_cache_write_per_mtok 1.25M}
+                                        {:principal person}))
+          runner (:row (inv/create! eng :runner_link
+                                    {:provider "claude_routine"
+                                     :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                    "/routines/trig_sitpool/fire")
+                                     :fire_token "rk-test-sitpool-0123456789abcdef"}
+                                    {:principal person}))
+          sched (schedules/schedule-for-seat eng (:id seat))
+          _ (case where
+              :schedule (inv/invoke! eng :schedule (:id sched) :set_runners
+                                     {:runners [(str (:id runner))]}
+                                     {:principal person})
+              :chair (inv/invoke! eng :model (:id next-model) :set_runners
+                                  {:runners [(str (:id runner))]}
+                                  {:principal person}))
+          current (store/with-tx (:storage eng)
+                    (fn [tx] (store/load-row (:storage eng) tx :seat (:id seat) {})))]
+      (inv/invoke! eng :seat (:id seat) :restate
+                   {:charter "Decide whether a meal belongs on the list."
+                    :mode "fired"
+                    :scope [{:kind "meal" :actions ["accept"]}]
+                    :substitute_drop []
+                    :held_for [(:id next-model)]
+                    :substitute_for []
+                    :standing_ttl_seconds 604800
+                    :cadence_seconds 3600
+                    :sitting_idle_seconds 3600
+                    :budget_usd_per_week 5M
+                    :sitting_budget_tokens 60000
+                    :rows_per_firing 20
+                    :fire_interval_seconds 300
+                    :note "Stepped down for the test: the copy still names the old model."}
+                   {:principal person
+                    :if-match (inv/etag :seat (:id seat) (:version current))})
+      (testing (str "the pool is the " (name where) "'s, no link stands, and the copy is stale")
+        (let [row (schedules/schedule-for-seat eng (:id seat))]
+          (is (nil? (get-in row [:data :fire_url])))
+          (is (= (str (:id model)) (str (get-in row [:data :model]))))))
+      (testing (str "the sit claims the seat's held_for through the " (name where) "'s pool")
+        (let [[sid _] (initialize! h)
+              sat (tool h (with-session sid) "waymark_sit" {:key a-key})
+              answer (doc-of sat)]
+          (is (false? (:isError sat)) (text-of sat))
+          (is (= "claude-sit-4" (:model answer))))))))
+
 ;; ── 6. the walk rides in the sit's answer (R-12.28) ─────────────────
 ;;
 ;; Measured on production: ten calls and 34 KB before the first
