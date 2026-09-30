@@ -1,10 +1,15 @@
 (ns waymark10.pursue-test
   "GRAIL 1/3 and 2/3: pursue! reaches a goal by following refusal
   remedies — a bound one acting on the row its refusal names —
-  proven over the ring handler against a trimmed copy of mealplan10's
-  chain — grocery_list.create → plan-is-planned → plan.finalize →
-  day-is-covered → plan_day.assign_meal → meal-is-listed → meal.accept
-  — plus a latch whose remedy names its own door (the cycle).
+  proven over the ring handler against a three-kind chain shaped after
+  an early mealplan10 — grocery_list.create → plan-is-planned →
+  plan.finalize → day-is-covered → plan_day.assign_meal →
+  meal-is-listed → meal.accept — plus a latch whose remedy names its
+  own door (the cycle). It is a fixture for pursue!, not a mirror:
+  the real kinds have since moved (grocery_list.finalize carries
+  plan-is-planned, plan_day.assign_meal carries meal-fits-day, and
+  meal-is-listed guards assign_off_theme only), and
+  workqueue10/test/mealplan10/pursue_chain_test.clj pins that chain.
 
   GRAIL 3/3 at the bottom: the same chain through the MCP tool
   waymark_pursue, on memory storage, and the three walls a pursuit
