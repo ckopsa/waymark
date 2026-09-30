@@ -159,12 +159,15 @@
     (testing "core-only: core's doors stay, the modules' are absent"
       (is (= "/api/-/welcome" (get-in core-only [:welcome :href])))
       (is (= "/api/-/events" (get-in core-only [:events :href])))
-      (doseq [door [:presence :live :seasons]]
+      (doseq [door [:presence :live :seasons :render_markdown]]
         (is (not (contains? core-only door)) (str door " advertised unmounted"))))
     (testing "full modules: each module door is advertised at its href"
       (is (= "/api/-/presence" (get-in full [:presence :href])))
       (is (= "/api/-/live" (get-in full [:live :href])))
-      (is (= "/api/-/seasons" (get-in full [:seasons :href]))))))
+      (is (= "/api/-/seasons" (get-in full [:seasons :href])))
+      ;; the :ui module mounts it beside the page (routes/ui.clj)
+      (is (= "/api/-/render/markdown" (get-in full [:render_markdown :href])))
+      (is (= "POST" (get-in full [:render_markdown :method]))))))
 
 (deftest published-schema
   (let [resp (req :get "/api/schemas/plan")
