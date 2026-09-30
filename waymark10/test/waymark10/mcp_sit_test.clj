@@ -1041,6 +1041,130 @@
         (is (true? (:isError got))
             "one map says what the seat sees and what it walks")))))
 
+;; ── 6c. a change in another repository withholds no ticket ──────────
+;;
+;; Ticket 0eba219c: `seats/stuck-walk-reasons` counts only a submitted,
+;; stuck or live change whose `repository` is the ticket's `repo`. The
+;; two kinds below are the least a ticket walk reads: a ticket naming
+;; its repo, and a change born from it naming its own.
+
+(def ^:private ticket-kind
+  "A ticket that names the repository it asks a change of."
+  (r/resource
+   {:kind :ticket
+    :plural "tickets"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "What it asks"}}
+      [:string {:min 1 :max 120}]]
+     [:repo {:x-display {:label "Which repository"}}
+      [:string {:min 1 :max 120}]]]
+    :filterable {:state #{:eq :in}}
+    :sortable {:fields [:title] :default "title"}
+    :actions
+    {:close {:from #{:open} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A test kind: nothing reopens it."}
+             :display {:label "Close" :style :primary :order 1}}}}))
+
+(def ^:private change-kind
+  "A change born from a ticket, in the repository it names."
+  (r/resource
+   {:kind :change
+    :plural "changes"
+    :states [:open :submitted :stuck]
+    :initial :open
+    :terminal #{:stuck}
+    :summary "{data.repository} · {state}"
+    :schema
+    [:map
+     [:born_from {:x-display {:label "Born from"}}
+      [:string {:min 1 :max 120}]]
+     [:repository {:x-display {:label "Which repository"}}
+      [:string {:min 1 :max 120}]]]
+    :filterable {:state #{:eq :in} :born_from #{:eq}}
+    :sortable {:fields [:repository] :default "repository"}
+    :actions
+    {:submit {:from #{:open} :to :submitted
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A test kind: nothing takes a round back."}
+              :display {:label "Submit" :style :primary :order 1}}
+     :stall {:from #{:open :submitted} :to :stuck
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A test kind: nothing unsticks it."}
+             :display {:label "Stall" :order 2}}}}))
+
+(def ^:private ticket-key
+  "The ticket seat's own key, a fourth office."
+  "c2VhdC1rZXktZm9yLXRoZS10aWNrZXQtc2VhdA")
+
+(defn- open-ticket-seat!
+  "A seat that walks the open tickets."
+  [eng]
+  (let [model (:row (inv/create! eng :model
+                                 {:name "claude-ticket-5" :display "Ticket 5"
+                                  :vendor "anthropic" :tier "strong"
+                                  :price_input_per_mtok 3M
+                                  :price_output_per_mtok 15M
+                                  :price_cache_read_per_mtok 0.3M
+                                  :price_cache_write_per_mtok 3.75M}
+                                 {:principal person}))
+        seat (:row (inv/create!
+                    eng :seat
+                    {:name "ticket-builder"
+                     :charter "Build what each open ticket asks for."
+                     :scope [{:kind "ticket" :actions ["close"]
+                              :filter {:state "open"}}]
+                     :walk "ticket"
+                     :held_for [(:id model)]
+                     :standing_ttl_seconds 604800
+                     :cadence_seconds 3600
+                     :budget_usd_per_week 5M
+                     :sitting_budget_tokens 60000}
+                    {:principal person}))]
+    (schedules/ensure-schedule! eng seat)
+    (inv/invoke! eng :seat (:id seat) :offer_key {:key ticket-key}
+                 {:principal person})
+    seat))
+
+(deftest a-change-in-another-repository-withholds-no-ticket
+  (let [eng (fresh-engine [fx/meal ticket-kind change-kind])
+        h (engine/handler eng)
+        _ (open-ticket-seat! eng)
+        tk (:row (inv/create! eng :ticket {:title "Pin the repo rule"
+                                           :repo "ckopsa/one"}
+                              {:principal person}))
+        tid (str (:id tk))
+        change! (fn [repo door]
+                  (let [row (:row (inv/create! eng :change
+                                               {:born_from (str "ticket:" tid)
+                                                :repository repo}
+                                               {:principal person}))]
+                    (inv/invoke! eng :change (str (:id row)) door nil
+                                 {:principal person})
+                    row))]
+    (change! "ckopsa/other" :submit)
+    (change! "ckopsa/other" :stall)
+
+    (testing "a submitted and a stuck change in another repository count for nothing"
+      (is (= {} (seats/stuck-walk-reasons eng "ticket"))))
+
+    (testing "so the walk still hands the ticket"
+      (let [[sid _] (initialize! h)
+            r (tool h (with-session sid) "waymark_sit" {:key ticket-key})
+            walk (:walk (doc-of r))]
+        (is (false? (:isError r)) (text-of r))
+        (is (= [tid] (mapv :id (:rows walk))))
+        (is (empty? (:withheld walk)))))
+
+    (testing "while a submitted change in the ticket's own repository withholds it"
+      (change! "ckopsa/one" :submit)
+      (is (= [tid] (keys (seats/stuck-walk-reasons eng "ticket")))))))
+
 ;; ── 7. the seat may be NAMED, and its chair's key opens it ──────────
 ;;
 ;; Bead waymark-fp62.7.23, R-4: one Routine stands for one MODEL, so
