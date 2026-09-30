@@ -1101,6 +1101,27 @@
       (is (nil? (get-in row [:data :failing_checks])))
       (is (= 1 (:recovered census))))))
 
+(deftest a-merge-the-window-missed-is-read-before-a-red-moves-the-change
+  ;; ticket a24a1e01: #562 merged green at a new head the listing never
+  ;; showed, and the stored head's red returned its ticket to open
+  (let [{:keys [state engine] :as r}
+        (red-world {:required_checks ["test10 (shard 3)"]} 1)]
+    (gh/seed-pull! state repo
+                   (assoc a-pull-request
+                          :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                          :state "closed" :merged true
+                          :merged_at "2026-01-01T00:00:00Z"
+                          :updated_at "2026-01-01T00:00:00Z")
+                   {:files the-files :reviews the-reviews})
+    (let [census (pass! r)
+          row (the-change engine)]
+      (is (= :merged (:state row))
+          "the pull request read by number merges the row")
+      (is (= a-new-head (get-in row [:data :head_sha])))
+      (is (nil? (get-in row [:data :failing_checks]))
+          "the stale head's red never lands on the row")
+      (is (= 0 (:failing census))))))
+
 (defn- line-why
   "The `line_why` one merge pass would write on `change`, its rig
   answering `red` to every merge (ticket 37e838b3)."
