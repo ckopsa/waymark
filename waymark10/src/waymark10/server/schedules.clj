@@ -1588,6 +1588,19 @@
   ([schedule-row] (some? (own-link-of schedule-row)))
   ([eng schedule-row] (some? (link-of eng schedule-row))))
 
+(declare pool-of)
+
+(defn fires-out?
+  "Has ONE fire of this schedule a way out (waymark ticket 102d00d2):
+  the link `linked?` names, or a runner pool — the row's own or its
+  chair's. A pool-only schedule on a model with no link of its own
+  still fires; the seat's `fire` door judges whether a runner of the
+  pool is live."
+  [eng schedule-row]
+  (or (linked? eng schedule-row)
+      (some? (pool-of eng schedule-row
+                      (raw-row eng :seat (get-in schedule-row [:data :seat]))))))
+
 (defn- adapter-for [adapters row]
   (let [p (keyword (str (get-in row [:data :provider])))]
     (or (get adapters p)
