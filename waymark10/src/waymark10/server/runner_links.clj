@@ -61,6 +61,20 @@
           (= :system (get-in ctx [:principal :type])))
     (t/allow) (t/deny)))
 
+;; THE SEED'S MARK HAS ONE WRITER, seats.clj's `link-not-written-by-hand`
+;; in this kind's shape: `seeded_from` is on the create-schema so the
+;; boot seed can record its source, and a planted value would make
+;; `ensure-seeded-links!` skip that model or schedule for good.
+(g/defguard the-engine-writes-the-seed
+  {:judges [:seeded_from]
+   :reads [:principal]
+   :explain "Where a link was copied from is written by the engine's boot seed alone, never by hand. Make the link without seeded_from."}
+  [_row inp ctx]
+  (if (or (nil? (:seeded_from inp))
+          (= :system (get-in ctx [:principal :type])))
+    (t/allow)
+    (t/deny)))
+
 (g/defguard a-person-writes-the-token
   {:judges [:token]
    :reads [:principal]
@@ -211,7 +225,7 @@
                 :provider #{:eq :in}
                 :seeded_from #{:eq}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
-   :create-guards [a-person-makes-the-link]
+   :create-guards [a-person-makes-the-link the-engine-writes-the-seed]
    :actions
    {:restate
     {:from #{:live :broken} :to :live
