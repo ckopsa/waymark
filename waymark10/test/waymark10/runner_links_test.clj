@@ -194,6 +194,21 @@
   (is (= :a-person-makes-the-link
          (:guard (refusal #(make-link! clerk))))))
 
+(deftest only-the-engine-writes-seeded-from
+  (let [body {:provider "claude_routine"
+              :fire_url a-url
+              :fire_token a-token
+              :seeded_from "model:planted"}]
+    (testing "a person's create with seeded_from is refused"
+      (is (= :the-engine-writes-the-seed
+             (:guard (refusal #(inv/create! *eng* :runner_link body
+                                            {:principal colton}))))))
+    (testing "the seed's create passes"
+      (let [seed (t/principal {:id "waymark10-runner-links" :type :system
+                               :display "Runner links"})
+            row (:row (inv/create! *eng* :runner_link body {:principal seed}))]
+        (is (= "model:planted" (get-in (row-of (:id row)) [:data :seeded_from])))))))
+
 (defn- counting
   "A provider that answers `answer` to every fire and counts them in `n`."
   [n answer]
