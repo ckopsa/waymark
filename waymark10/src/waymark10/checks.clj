@@ -428,6 +428,11 @@
                (when (and (:draft edit) (nil? (:input a)))
                  (err r :edit (str "action " (:name a) " declares a draft but "
                                    "takes no input — there is nothing to draft")))
+               (when (and (contains? edit :prefill-fn)
+                          (not (fn? (:prefill-fn edit))))
+                 (err r :edit (str "action " (:name a) " declares a "
+                                   ":prefill-fn that is not a function of "
+                                   "(row ctx)")))
                (doseq [f (:prefill edit)]
                  (when-not (and (:input a) (contains? (input-keys a) f))
                    (err r :edit (str "action " (:name a) " prefills " f

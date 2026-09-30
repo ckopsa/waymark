@@ -280,6 +280,24 @@
                       (fn [r]
                         (some->> r (filterv #(not (contains? names (name %)))))))))))))
 
+(defn prefill-values
+  "An action's computed prefill (waymark ticket 7152184d): the row's
+  own values for its declared :edit :prefill fields, with its :edit
+  :prefill-fn's answer — a fn of (row ctx) → {field value} — merged
+  over them. The fn reads through the probe ctx's :read, or through
+  the evidence reads every engine lends when the probe carries none,
+  so a door that prefills from ANOTHER row still does on an engine
+  booted without probe reads. A nil value prefills nothing."
+  [defn' row ctx]
+  (let [edit (:edit defn')
+        ctx (if (and (nil? (:read ctx)) (:evidence-reads ctx))
+              (assoc ctx :read (:read (:evidence-reads ctx)))
+              ctx)]
+    (into {}
+          (remove (comp nil? val))
+          (merge (select-keys (:data row) (:prefill edit))
+                 (when-some [f (:prefill-fn edit)] (f row ctx))))))
+
 (defn- action-entry [defn' rdef self row ctx arg?]
   (let [{:keys [to safety display]} defn'
         ;; per-origin consequence (batch H): a {from-state sentence}
@@ -337,6 +355,12 @@
       ;; client's projection from data is sound by construction.
       (seq (get-in defn' [:edit :prefill]))
       (assoc :prefill (mapv name (get-in defn' [:edit :prefill])))
+      ;; the computed prefill: a door whose right answer is NOT the
+      ;; row's own value says so with :prefill-fn, and the values ride
+      ;; the entry, since the client's projection from data would
+      ;; offer the stale one. Doors without one render as before.
+      (get-in defn' [:edit :prefill-fn])
+      (assoc :prefill_values (prefill-values defn' row ctx))
       ;; the composition surface (phase 7): an :edit action with a
       ;; declared draft policy affords its draft sub-resource
       (get-in defn' [:edit :draft])
