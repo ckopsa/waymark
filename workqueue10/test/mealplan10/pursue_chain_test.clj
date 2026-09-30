@@ -132,6 +132,28 @@
     (is (= "draft" (state-of plan)))
     (is (= "draft" (state-of glist)))))
 
+;; with the person's confirm given, assign_off_theme is tried: its
+;; meal-is-listed refusal binds meal.accept to the chosen meal, and the
+;; off-theme landing puts the day in planned — assign_meal's effect.to
+;; on the same row — so it stands in for assign_meal, never retried
+(deftest an-unlisted-meal-routes-through-meal-accept
+  (let [{:keys [meal day plan glist] :as rows} (chain! "2026-02-03" false)
+        res (c/pursue! *session* glist :finalize nil
+                       {:choices (choices rows) :dry-run true
+                        :confirm! (constantly true)
+                        :acknowledge ["recipes-attached"]})]
+    (is (:rehearsal res))
+    (is (empty? (:blocked-on res)) (pr-str res))
+    (is (= ["meal.accept" "plan_day.assign_off_theme" "plan.finalize"
+            "grocery_list.finalize"]
+           (mapv :door (:writes res)))
+        (pr-str res))
+    (is (= (:self meal) (:row (first (:writes res)))) (pr-str res))
+    (is (= "suggested" (state-of meal)) "the rehearsal writes nothing")
+    (is (= "undecided" (state-of day)))
+    (is (= "draft" (state-of plan)))
+    (is (= "draft" (state-of glist)))))
+
 ;; GRAIL 2b: the refusal names the uncovered day — the earliest, when
 ;; two wait — and assign_meal's remedy binds it
 (deftest finalize-names-the-earlier-uncovered-day
