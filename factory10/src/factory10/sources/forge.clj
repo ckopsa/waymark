@@ -1001,6 +1001,32 @@
 (def ^:private moved-counts
   {:fail :failing :recover :recovered :stick :stuck})
 
+(defn- forge-moved!
+  "The row moved to what its pull request says NOW, read by number just
+  before the failing pass would move it (ticket a24a1e01): the poll's
+  window can miss a merge or a new round, and a verdict on the stored
+  head then judges a head that is no longer the pull request's — 1610db25
+  went back to `open` on its first round's red after #562 merged green.
+  A merged or closed pull request walks its own door (the merge completes
+  the ticket), and a new head is observed and judged on the next pass.
+  → true when the row moved; nil when the forge says what the row says,
+  or has nothing to say."
+  [eng source row log-fn]
+  (let [repo (str (get-in row [:data :repository]))
+        number (get-in row [:data :number])
+        doc (when (and (some? number) (satisfies? ForgePull source))
+              (try (forge-pull source repo number)
+                   (catch Exception e
+                     (log-fn "the pull request #" number " of " repo
+                             " could not be read again (" (ex-message e) ")")
+                     nil)))
+        head (some-> (:head_sha doc) str not-empty)]
+    (when (and (map? doc)
+               (or (contains? #{"merged" "closed"} (str (:forge_state doc)))
+                   (and head
+                        (not= head (str (get-in row [:data :head_sha]))))))
+      (second (move-change! eng row doc)))))
+
 (defn- failing-pass!
   "Every submitted or failing change of a repository with an active
   policy → its head's checks, read against the policy, and at most one
@@ -1078,9 +1104,11 @@
                (if-some [[door input] (when (and verdict (not re-ran?))
                                         (failing-move row verdict policy
                                                       conflicts))]
-                 (do (inv/invoke! eng :change (str (:id row)) door input
-                                  (as-opts))
-                     (update census (moved-counts door) inc))
+                 (if (forge-moved! eng source row log-fn)
+                   (update census :moved inc)
+                   (do (inv/invoke! eng :change (str (:id row)) door input
+                                    (as-opts))
+                       (update census (moved-counts door) inc)))
                  census))
              (catch Exception e
                (log-fn "the checks of " (get-in row [:data :change_id])

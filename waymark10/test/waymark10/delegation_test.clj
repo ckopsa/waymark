@@ -467,6 +467,31 @@
              (shape scope))
           "the replay landed, and only the notifier entry changed"))))
 
+(deftest a-patch-takes-a-list-delta-inside-a-map-field
+  (let [{:keys [h]} (world)
+        {:keys [mayor]} (open-mayor! h)
+        uri (str "/api/seats/" mayor)
+        delegates #(get-in (get-row h "seats" mayor person) [:data :delegates])
+        patch! (fn [d]
+                 (req h :post (str uri "/-/restate")
+                      {:headers (assoc person "if-match" (etag-of h uri person))
+                       :body {:patch true :delegates d}}))
+        shape (fn [xs] (mapv #(select-keys % [:kind :actions]) xs))
+        e {:kind "judgment" :actions ["revise"]}
+        before (delegates)
+        added (patch! {:scope {:add [e]}})
+        after (delegates)]
+    (is (= 200 (:status added)) (pr-str (json added)))
+    (testing "exactly e is appended to delegates.scope"
+      (is (= (conj (shape (:scope before)) e) (shape (:scope after)))))
+    (testing "every other delegates key is unchanged"
+      (is (= (dissoc before :scope) (dissoc after :scope))))
+    (testing "a nested remove of an absent entry refuses patch-miss"
+      (let [missed (patch! {:scope {:remove [{:kind "nope" :actions []}]}})]
+        (is (= 409 (:status missed)) (pr-str (json missed)))
+        (is (str/includes? (pr-str (json missed)) "delegates.scope"))
+        (is (= after (delegates)) "and nothing moved")))))
+
 (deftest an-author-does-not-restate-a-seat-it-did-not-author
   (let [{:keys [h eng]} (world)
         {:keys [as]} (open-mayor! h)

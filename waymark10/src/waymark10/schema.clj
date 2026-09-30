@@ -169,12 +169,30 @@
 (defn validate [form value]
   (m/validate (schema form) value))
 
+(def ^:private string-error
+  "malli's own :string message, except that a string over its :max
+  also says how long it WAS (ticket e527f233): \"should be at most 480
+  characters; this one is 512\". A caller that reads the refusal then
+  knows how much to cut, and the retry is right the first time."
+  (let [default (get-in me/default-errors [:string :error/fn :en])]
+    {:error/fn
+     {:en (fn [{:keys [schema value negate] :as error} opts]
+            (let [{:keys [max]} (m/properties schema)]
+              (if (and (not negate) (string? value) (number? max)
+                       (> (count value) max))
+                (str "should be at most " max " characters; this one is "
+                     (count value))
+                (default error opts))))}}))
+
+(def ^:private humane
+  {:errors (assoc me/default-errors :string string-error)})
+
 (defn errors
   "Humanized, field-keyed errors for the 422 surface; nil when valid.
   Validates DECODED values."
   [form value]
   (some-> (m/explain (schema form) value)
-          (me/humanize)))
+          (me/humanize humane)))
 
 (defn closed-errors
   "The input contract: maps are closed — an undeclared key is a
@@ -182,7 +200,7 @@
   values."
   [form value]
   (some-> (m/explain (mu/closed-schema (schema form) options) value)
-          (me/humanize)))
+          (me/humanize humane)))
 
 (defn partial-closed-errors
   "The draft contract (phase 7): closed like an input, but nothing is
@@ -192,7 +210,7 @@
   (some-> (m/explain (mu/optional-keys (mu/closed-schema (schema form) options)
                                        nil options)
                      value)
-          (me/humanize)))
+          (me/humanize humane)))
 
 ;; ── defaults (design §24) ───────────────────────────────────────────
 

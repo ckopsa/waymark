@@ -140,27 +140,6 @@
   html[data-ui="mobile"] .feed-kv { max-width: none; }
   html[data-ui="mobile"] .feed-actions button { font-size: 13px; }
 
-  /* --- feed SCREEN (mobile): the surface it was designed for -------
-     the posts go full-bleed and the verbs spread under the thumb:
-     this is the one screen in the building meant to be read standing
-     up, one thumb */
-  html[data-ui="mobile"] .feed-col { max-width: none; }
-  html[data-ui="mobile"] .feed-head { margin: 0 -10px; padding: 8px 12px 6px; }
-  html[data-ui="mobile"] .feed-verbs { margin-left: -6px; }
-  html[data-ui="mobile"] .feed-verbs button.chip.verb { min-height: 40px;
-    font-size: 14px; flex: 1 1 auto; }
-  html[data-ui="mobile"] .feed-verbs a.link-chip { min-height: 40px; flex: 1 1 auto;
-    justify-content: center; }
-  /* a reason is a thumb too (waymark-jfv.16) — quieter than a verdict,
-     never smaller than a fingertip */
-  html[data-ui="mobile"] .feed-reasons button.chip.reason { min-height: 38px;
-    font-size: 14px; flex: 1 1 auto; }
-  /* and a mark is a thumb (waymark-wxk) — the whole gesture is taps,
-     so every one of them is fingertip-sized on a phone */
-  html[data-ui="mobile"] .feed-mark-chips button.chip.mark { min-height: 38px;
-    font-size: 14px; flex: 1 1 auto; }
-  html[data-ui="mobile"] .feed-head h2 { font-size: 17px; }
-  html[data-ui="mobile"] .feed-seam-say { font-size: 16px; }
   /* the day (waymark-i89n.8), the screen a phone opens on: full-bleed
      like the posts, the one chip a whole thumb wide, the day's blocks
      rows you read down the screen */
