@@ -50,6 +50,13 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs batch-a
 
+   ACCESS (the held seat call's names, against waymark10.access-dev,
+   which seeds its own member, seat and held seat-restate; CI runs it
+   in the ui-access job of .github/workflows/tests.yml):
+   1. the same boot, naming waymark10.access-dev/start! on 8124
+   2. the same chromium
+   3. node waymark10/scripts/ui-drive.mjs access
+
    (The FEED and RECIPE drives — the day's scroll-first face and the
    recipe editor — retired with the feed, 2026-09, and so did
    feed-smoke.sh.)
@@ -58,11 +65,12 @@
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = ["batch-a"].includes(process.argv[2])
+const MODE = ["batch-a", "access"].includes(process.argv[2])
   ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
   (MODE === "batch-a" ? "http://localhost:8123"
+   : MODE === "access" ? "http://localhost:8124"
    : "http://localhost:8010");
 
 const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json();
@@ -764,7 +772,73 @@ async function batchAStory() {
   ok("the embedded rows visibly reordered (ascending points first)", true);
 }
 
+/* ════ access: a held seat call names its people ═══════════════════════
+   Against waymark10.access-dev, whose boot seeded one held
+   seat-restate: owner is a member, caller and door author are
+   `seat:<id>`, and door.id is the seat's own row. Each must render as
+   its row's name (principalRef, and door.id's kind-from ref), never
+   as the bare uuid. */
+async function accessStory() {
+  const h = {"x-waymark-principal": "priya"};
+  const get = async path => (await fetch(BASE + path, {headers: h})).json();
+
+  console.log("· the seeded held seat-restate");
+  const col = await get("/api/held_calls");
+  ok("the boot seeded one held call", (col.data?.items || []).length === 1);
+  const self = col.data.items[0].self;
+  const held = (await get(self)).data;
+  const sid = held.door.id;
+  ok("it is a seat restate whose caller and author are the seat",
+     held.door.kind === "seat" && held.door.action === "restate" &&
+     held.caller === "seat:" + sid && held.door.author === "seat:" + sid &&
+     !!held.owner);
+
+  console.log("· boot + principal");
+  await send("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await evaljs(`localStorage.setItem("wm10.principal", "priya"); location.reload(); true`);
+  await sleep(1200);
+
+  /* the names, as the page's own reader resolves them */
+  const names = await evaljs(`(async () => ({
+    member: await rowSummary("member", ${JSON.stringify(held.owner)}),
+    seat: await rowSummary("seat", ${JSON.stringify(sid)}) }))()`);
+  ok("the member and the seat each have a name to show",
+     !!names.member && !!names.seat &&
+     names.member !== held.owner && names.seat !== sid);
+
+  console.log("· the held call's row page");
+  await evaljs(`location.hash = ${JSON.stringify(self)}; true`);
+  /* the value cell beside a label holds a link reading `text` */
+  const labelled = (label, text) => `[...document.querySelectorAll("td, th, dt")]
+    .filter(c => c.textContent.trim() === ${JSON.stringify(label)} ||
+                 (c.firstChild?.textContent || "").trim() === ${JSON.stringify(label)})
+    .some(c => [...(c.nextElementSibling?.querySelectorAll("a") || [])]
+      .some(a => a.textContent.trim() === ${JSON.stringify(text)}))`;
+  const checks = [
+    ["owner renders as the member's name", "Waits on", names.member],
+    ["caller renders as the seat's name", "Who called", names.seat],
+    ["door author renders as the seat's name", "Asked by the seat", names.seat],
+    ["door.id renders as the target row's summary", "Row", names.seat]];
+  for (const [name, label, text] of checks) {
+    try { await waitFor(labelled(label, text), name); }
+    catch (e) {
+      console.log("  what sits beside " + JSON.stringify(label) + ": " + JSON.stringify(await evaljs(
+        `[...document.querySelectorAll("td, th, dt")]
+           .filter(c => c.textContent.trim() === ${JSON.stringify(label)} ||
+                        (c.firstChild?.textContent || "").trim() === ${JSON.stringify(label)})
+           .map(c => (c.nextElementSibling?.outerHTML || "(nothing)").slice(0, 400))`)));
+      throw e;
+    }
+    ok(name, true);
+  }
+  ok("no bare uuid is left where a name belongs",
+     await evaljs(`![...document.querySelectorAll("span.mono")].some(s =>
+       [${JSON.stringify(held.owner)}, ${JSON.stringify("seat:" + sid)}].includes(s.title))`));
+}
+
 if (MODE === "batch-a") await batchAStory();
+else if (MODE === "access") await accessStory();
 else await mealplanStory();
 
 console.log(`\nUI drive (${MODE}): ${passed} checks passed` +

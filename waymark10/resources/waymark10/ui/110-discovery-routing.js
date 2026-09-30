@@ -78,7 +78,10 @@ function xdisplay(schema, field) {
 function xref(prop) {
   if (!prop || typeof prop !== "object") return null;
   const sub = schemaProp(prop);
-  return prop["x-ref"] || sub["x-ref"] ||
+  const r = prop["x-ref"] || sub["x-ref"];
+  /* the wire spells the declaration's :kind-from as kind_from */
+  if (r && r.kind_from && !r["kind-from"]) return {...r, "kind-from": r.kind_from};
+  return r ||
     (prop.format === "waymark-ref" || sub.format === "waymark-ref" ? {} : null);
 }
 /* a field's human label: the declared x-display label, else — for a
