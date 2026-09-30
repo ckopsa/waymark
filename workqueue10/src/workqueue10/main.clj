@@ -931,6 +931,10 @@
         ;; capability kind's own door — and a pass over a deployment
         ;; already swept writes nothing
         _ (mcp-servers/sweep-capabilities! eng)
+        ;; the factory's old `landed_at` (ticket 2d216859), cleared
+        ;; once: a boot over rows already cleared writes nothing
+        _ (when (= "1" (System/getenv "FACTORY10"))
+            (forge/clear-landed-at! eng))
         _ (connections/ensure-connections! eng (connection-descriptors))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
