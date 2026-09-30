@@ -245,10 +245,46 @@
               (println "factory10 ticket ending: the ticket" (:id waiter)
                        "was not released -" (ex-message e)))))))))
 
+(defn- finish-the-parent!
+  "THE LAST CHILD'S ENDING ENDS A PARENT ALREADY MERGED (ticket
+  499bcd72). A parent's pull request that merged while a child was open
+  could not `land` it, so the merge wrote `merged_change` on it and left
+  it in review. When the child that is ending is the last unfinished
+  one, the parent walks `finish` in the same transaction, with the pull
+  request as its sentence. A parent with no merged change is left alone.
+
+  BEST-EFFORT, as `release-the-waiters!` is: a refusal is said in the
+  log, and the child's ending stands."
+  [row ctx]
+  (let [find' (:find ctx)
+        read' (:read ctx)
+        invoke' (:invoke ctx)
+        ending (str (:id row))
+        parent (some-> (get-in row [:data :parent]) str not-empty)]
+    (when (and find' read' invoke' parent)
+      (when-some [p (read' :ticket parent)]
+        (let [merged (some-> (get-in p [:data :merged_change]) str not-empty)]
+          (when (and merged
+                     (= :in_review (state-of p))
+                     ;; the ending child is not written yet, so it is
+                     ;; left out by its id
+                     (not-any? (fn [c]
+                                 (and (not= ending (str (:id c)))
+                                      (contains? unfinished (state-of c))))
+                               (find' :ticket {:parent parent} {:limit 500})))
+            (try
+              (invoke' :ticket parent :finish
+                       {:close_reason (str "Merged: " merged "; children done.")})
+              (catch Exception e
+                (binding [*out* *err*]
+                  (println "factory10 ticket ending: the parent" parent
+                           "was not finished -" (ex-message e)))))))))))
+
 (defhandler close-the-ticket [row inp ctx]
   ;; One handler for both endings. The machine says which ending; the
   ;; handler writes the sentence, and releases what waited on it.
   (release-the-waiters! row ctx)
+  (finish-the-parent! row ctx)
   (assoc-in row [:data :close_reason] (:close_reason inp)))
 
 (defhandler reopen-the-ticket [row _inp _ctx]
@@ -499,7 +535,7 @@
   ;; endings and for nobody's hand. The wire, the render probe and
   ;; every rehearsal answer nil, so it renders refused, which is true.
   (let [{:keys [kind action]} (:within ctx)]
-    (if (and (= :ticket kind) (contains? #{:complete :drop :land :mend} action))
+    (if (and (= :ticket kind) (contains? #{:complete :drop :land :mend :finish} action))
       (t/allow)
       (t/deny))))
 
@@ -516,6 +552,22 @@
     (t/allow)
     (t/deny)))
 
+(defguardfn only-a-childs-ending-finishes-it
+  {:reads [:within]
+   :open "No door clears this one. A ticket whose pull request merged while a child was open ends when its last child is completed or dropped; the engine moves it then, and a person who wants it sooner ends the children."
+   :explain "A ticket in review whose pull request already merged ends only when its last child ends: that ending moves it, in the same transaction, and no hand does."}
+  [row _inp ctx]
+  ;; `only-an-ending-returns-a-ticket-to-draft`'s shape (ticket
+  ;; 499bcd72), and only on a ticket its change's merge wrote on. The
+  ;; wire, the render probe and every rehearsal answer nil, so it
+  ;; renders refused, which is true.
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :ticket kind)
+             (contains? #{:complete :drop :land :mend :finish} action)
+             (some-> (get-in row [:data :merged_change]) str not-empty))
+      (t/allow)
+      (t/deny))))
+
 (defguardfn only-the-base-pass-writes-this
   {:reads [:principal :within]
    :hide true
@@ -530,6 +582,11 @@
            (= :repo_policy (:kind (:within ctx))))
     (t/allow)
     (t/deny)))
+
+(defhandler stamp-the-merge [row inp _ctx]
+  ;; The pull request that merged while a child was open, kept on the
+  ;; row so the last child's ending can end it (ticket 499bcd72).
+  (assoc-in row [:data :merged_change] (:merged_change inp)))
 
 (defhandler note-a-red-head [row inp _ctx]
   ;; One more red head of the base this ticket was opened for, kept to
@@ -747,7 +804,15 @@
                   {:widget "prose"
                    :label "Waits to merge on"
                    :help "Why this ticket's green pull request is not merging: the tickets it merges after that are not done yet, each with its state. Empty when nothing holds it."}}
-    [:maybe [:string {:max 500}]]]])
+    [:maybe [:string {:max 500}]]]
+   ;; ticket 499bcd72: written by its change's merge while a child was
+   ;; still open, and read by the last child's ending
+   [:merged_change {:optional true
+                    :x-display
+                    {:raw true
+                     :label "Merged before its children"
+                     :help "The pull request that merged while a child of this ticket was still open. The ticket ends when its last child does. Empty for every other ticket."}}
+    [:maybe [:string {:max 400}]]]])
 
 (def ^:private close-input
   [:map
@@ -1091,6 +1156,39 @@
               :one-way "The base branch is green again, and that is the ending on the record. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
      :display {:label "Base green again" :order 16
                :description "The base branch this ticket was opened for is green again"}}
+
+    ;; ── A MERGE BEFORE THE CHILDREN (ticket 499bcd72) ───────────────
+    ;; `land` refuses a parent over an open child, so its change's
+    ;; merge writes the pull request on the ticket through
+    ;; `note_merge`, and the last child's ending walks `finish`
+    ;; (`finish-the-parent!`). Neither is a hand's door.
+    :note_merge
+    {:from #{:in_review} :to :in_review
+     :guards [only-its-change-moves-it]
+     :handler stamp-the-merge
+     :input [:map
+             [:merged_change {:x-display {:hidden true :raw true
+                                          :label "The merged pull request"}}
+              [:string {:min 1 :max 400}]]]
+     ;; the engine writes a first value onto a blank field, with no
+     ;; version in hand: nothing to prefill, and an `:edit` would fence it
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Merged before its children" :order 21
+               :description "Its pull request merged while a child was open — it ends when the last child does"}}
+
+    :finish
+    {:from #{:in_review} :to :done
+     :input close-input
+     :guards [only-a-childs-ending-finishes-it]
+     :handler close-the-ticket
+     ;; `land`'s reasons: only the engine walks it, nobody composes the
+     ;; sentence in a box, and it reaches the row with no version in hand
+     :waives #{:edit-shape :large-effort}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Its pull request merged earlier and its last child ended, and that is the ending on the record. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
+     :display {:label "Merged, children done" :order 22
+               :description "Its pull request merged before its children ended, and the last one has"}}
 
     :reopen
     {:from #{:done :dropped} :to :draft

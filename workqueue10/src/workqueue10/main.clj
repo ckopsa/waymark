@@ -935,6 +935,10 @@
         ;; once: a boot over rows already cleared writes nothing
         _ (when (= "1" (System/getenv "FACTORY10"))
             (forge/clear-landed-at! eng))
+        ;; a parent left in review by a merge before its children
+        ;; ended (ticket 499bcd72), ended once they have
+        _ (when (= "1" (System/getenv "FACTORY10"))
+            (forge/finish-merged-parents! eng))
         _ (connections/ensure-connections! eng (connection-descriptors))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
