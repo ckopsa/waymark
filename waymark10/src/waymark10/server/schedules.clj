@@ -640,6 +640,7 @@
               :help "What the provider's copy says that this row does not. Reported, never repaired: a difference here is a question for a person, and the row is the truth."}}
      [:maybe [:string {:max 280}]]]
     [:note {:optional true
+            :not-a-ref "The adapter's own sentence about the provider, never a note row's id."
             :x-display
             {:widget "prose"
              :label "What the provider last said"
@@ -820,7 +821,8 @@
     :fail
     {:from #{:pending :live :paused :broken} :to :broken
      :input [:map
-             [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]]
+             [:note {:not-a-ref "The adapter's own sentence about the provider, never a note row's id."
+                     :x-display {:hidden true}} [:string {:min 1 :max 280}]]]
      :record true
      :guards [engine-writes-schedules]
      :edit {:prefill [:note] :fence false
@@ -996,7 +998,8 @@
     :throttle
     {:from #{:pending :live :paused :broken} :to :live
      :input [:map
-             [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]
+             [:note {:not-a-ref "The adapter's own sentence about the provider, never a note row's id."
+                     :x-display {:hidden true}} [:string {:min 1 :max 280}]]
              [:retry_after {:x-display {:hidden true}} :waymark/instant]]
      :record true
      :guards [engine-writes-schedules]

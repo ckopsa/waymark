@@ -189,6 +189,7 @@
                       :help "When the engine last started a run through this link. Engine-written."}}
      [:maybe :waymark/instant]]
     [:note {:optional true
+            :not-a-ref "The provider's own sentence about the refusal, not a note row's id."
             :x-display
             {:widget "prose"
              :label "Why the link broke"
@@ -297,7 +298,8 @@
     :break
     {:from #{:live} :to :broken
      :input [:map
-             [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]]
+             [:note {:not-a-ref "The provider's own sentence about the refusal, not a note row's id."
+                     :x-display {:hidden true}} [:string {:min 1 :max 280}]]]
      :record true
      :guards [the-engine-writes-the-fire]
      :edit {:prefill [:note] :fence false
