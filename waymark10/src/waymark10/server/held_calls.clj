@@ -1115,7 +1115,7 @@
      :display {:label "Retire" :style :danger :order 9}}}
    :deviations
    ["R-1 names `audience` a member ref. It is the member's principal id, the grant's own spelling of an audience, because R-4 compares it with the transition's actor and the actor is a principal id."
-    "R-3 names the link to the row. This engine has no absolute address of its own, so the row carries `link_base`, and the link is that address and the row's API path."
+    "R-3 names the link to the row. This engine has no absolute address of its own, so the row carries `link_base`, and the link is the UI's page for the row at that address, `<link_base>/#/api/<plural>/<id>` — never the row's raw JSON."
     "R-2 counts sent and failed on the row. The counts are written in place, not through a door: a door per send would be a transition per notice, and a notifier on its own kind would tell about its own tally."]})
 
 (defn- serves-kind? [eng kind] (contains? (inv/resources eng) kind))
@@ -1129,12 +1129,13 @@
   (str (if (map? actor) (:id actor) actor)))
 
 (defn notice-link
-  "The address of the moved row: the notifier's `link_base` and the
-  row's API path."
+  "The UI's page for the moved row at the notifier's `link_base`,
+  `<link_base>/#/api/<plural>/<id>`: the same hash route `ui-link`
+  builds, so a notice never links to the row's raw JSON."
   [eng notifier-row t]
   (let [plural (:plural (get (inv/resources eng) (:kind t)))
         base (str/replace (str (get-in notifier-row [:data :link_base])) #"/+$" "")]
-    (str base "/api/" plural "/" (:resource-id t))))
+    (str base "/#/api/" plural "/" (:resource-id t))))
 
 (defn ui-link
   "The UI's page for one row, `<public origin>/#/api/<plural>/<id>`
