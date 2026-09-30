@@ -788,7 +788,7 @@
          (let [{:keys [busy free]} (slots eng seat-row at)]
            (and (< (long busy) max-open) (pos? (long free)))))))
 
-(declare empty-walk?)
+(declare empty-walk? grace-lift)
 
 (defn- wake-seat!
   "One active seat, one transition it asked to be woken by, and the
@@ -871,9 +871,13 @@
         ;; wake asks the same question `release!` does, so a row the
         ;; walk withholds never fires a run that sits and finds nothing
         (empty-walk? eng (raw-row eng :seat (:id seat)))
-        (do (warn! "seat " (:id seat) " has an empty walk — its wake"
-                   " fires nothing")
-            nil)
+        (if-some [lift (grace-lift eng (raw-row eng :seat (:id seat)) at)]
+          ;; the row rests in a closed sitting's grace: the wake waits
+          ;; for the grace to end rather than being spent now
+          (mark-settling! eng row (due-at row lift 0))
+          (do (warn! "seat " (:id seat) " has an empty walk — its wake"
+                     " fires nothing")
+              nil))
 
         :else
         (if (fire! eng (:id seat) text
@@ -970,6 +974,17 @@
       :else
       (count-under eng kind (:filter e)))))
 
+(defn- grace-lift
+  "When the rows of this seat's walk that a closed sitting still holds
+  through its grace are handed on (`seats/grace-lifts-at`), or nil. An
+  empty walk with a lift ahead is not empty: its wake is deferred to
+  that moment, as `wake_due_at`, the way a settle defers one
+  (ticket 1a4038bf)."
+  [eng seat-row ^Instant at]
+  (when-some [[kind f] (walk-query eng seat-row)]
+    (when-some [queue (not-empty (ids-under eng kind f))]
+      (seats/grace-lifts-at eng seat-row queue at))))
+
 (defn- empty-walk?
   "Would a release put this seat's session in front of an empty queue?
   Only a seat with a walk is asked, and not one that wakes when its
@@ -999,7 +1014,9 @@
   A seat whose walk has NO ROW left (`empty-walk?`) is not fired: the
   wake is often the last sitting's own `complete`, and that sitting
   took the row. Its flag is cleared without a fire, and one line says
-  so.
+  so — unless a row of the walk only rests in a closed sitting's grace
+  (`grace-lift`): then the wake is due when the grace ends, and the
+  tick releases it then.
 
   A seat of several slots is held by `damped?` rather than by the two
   walls above, and `slot?` (a sitting of it closed) lets it fire with
@@ -1022,10 +1039,13 @@
                     (nil? (seats/open-sitting-for-seat eng (:id seat-row))))))
     (cond
       (empty-walk? eng seat-row)
-      (do (write-pending! eng schedule-row false)
-          (warn! "seat " (:id seat-row) " has an empty queue — its pending"
-                 " wake is cleared without a fire")
-          nil)
+      (if-some [lift (grace-lift eng seat-row at)]
+        ;; a row still in a closed sitting's grace: held until it ends
+        (mark-settling! eng schedule-row (due-at schedule-row lift 0))
+        (do (write-pending! eng schedule-row false)
+            (warn! "seat " (:id seat-row) " has an empty queue — its pending"
+                   " wake is cleared without a fire")
+            nil))
 
       ;; the fuel wall still holds: the wake keeps waiting, and the
       ;; next release after the window rolls fires it
