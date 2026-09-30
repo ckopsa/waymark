@@ -620,16 +620,16 @@
 (deftest openapi-lists-the-computed-field
   (let [[eng _] (boot-shouts)
         doc (openapi/document eng)
-        data (get-in doc [:components :schemas "cf_shout_data"])]
-    (testing "the kind's data component carries it readOnly"
+        fetch (get-in doc [:paths "/api/cf_shouts/{id}" :get :responses "200"
+                           :content "application/waymark+json" :schema])
+        data (get-in fetch [:properties :data])]
+    (testing "the fetch response's data carries it readOnly"
       (is (contains? (:properties data) :name))
       (is (true? (get-in data [:properties :echo :readOnly])))
       (is (not (some #{"echo" :echo} (:required data)))))
-    (testing "the fetch response references that component"
-      (is (= {"$ref" "#/components/schemas/cf_shout_data"}
-             (get-in doc [:paths "/api/cf_shouts/{id}" :get :responses "200"
-                          :content "application/waymark+json" :schema :allOf 1
-                          :properties :data]))))
+    (testing "the fetch response still references the shared envelope"
+      (is (= "#/components/schemas/envelope" (get fetch "$ref")))
+      (is (not (contains? (get-in doc [:components :schemas]) "cf_shout_data"))))
     (testing "the create body does not name it"
       (is (not (contains? (get-in doc [:paths "/api/cf_shouts" :post :requestBody
                                        :content "application/json" :schema
