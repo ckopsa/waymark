@@ -270,9 +270,9 @@ async function renderHome(view, seq) {
   const letterHref = collectionHref(w, "letter");
   const shelf = el("div", {class:"chips"});
   strip.after(shelf);
-  if (letterHref && principalId())
+  if (letterHref && viewerId())
     settling.push(api(mergeParams(letterHref,
-                                  {to: principalId(), state: "waiting"}))
+                                  {to: viewerId(), state: "waiting"}))
       .then(({ok, body}) => {
         if (!ok) return;
         for (const it of (body.data?.items || [])) {

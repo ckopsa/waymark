@@ -853,6 +853,55 @@ async function accessStory() {
      await evaljs(`![...document.querySelectorAll("span.mono")].some(s =>
        [${JSON.stringify(held.owner)}, ${JSON.stringify("seat:" + sid)},
         ${JSON.stringify(sid)}].includes(s.title))`));
+
+  /* signed in the way a person is: a session cookie off the magic
+     link, the dev box EMPTY. An open invitation addressed to that
+     member offers "Take this step" on its row page and in its
+     collection — the viewer is the engine's identity (viewerId), not
+     the dev box's. */
+  console.log("· signed in by session: an invitation addressed to me");
+  const admin = {"x-waymark-principal": "admin", "x-waymark-actor-type": "system"};
+  const post = async (path, body, headers) => {
+    const res = await fetch(BASE + path, {method: "POST",
+      headers: {"Content-Type": "application/json", ...headers},
+      body: JSON.stringify(body)});
+    const doc = await res.json().catch(() => null);
+    if (res.status !== 201)
+      throw new Error("POST " + path + ": " + res.status + " " + JSON.stringify(doc));
+    return doc.self.split("/").pop();
+  };
+  const tok = "guest-tok-" + Date.now();
+  const guest = await post("/api/members",
+    {display: "Guest Viewer", actor_type: "agent", bind_token: tok}, admin);
+  await post("/api/grants",
+    {audience: guest,
+     scope: [{kind: "invitation", actions: []}, {kind: "seat", actions: []}],
+     expires_at: new Date(Date.now() + 86400000).toISOString()}, admin);
+  const note = "Restate the desk's charter in your own words.";
+  const inv = await post("/api/invitations",
+    {subject: guest, self: "/api/seats/" + sid, action: "restate",
+     field: "charter", note}, h);
+
+  await evaljs(`localStorage.removeItem("wm10.principal"); true`);
+  await send("Page.navigate", {url: BASE + "/auth/guest?invite=" + encodeURIComponent(tok)});
+  await sleep(1200);
+  await send("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await waitFor(`!!window.signedinPrincipal`, "the session's identity on well-known");
+  ok("the dev box is empty and the viewer is the session's member",
+     await evaljs(`$("#who").value === "" && viewerId() === ${JSON.stringify(guest)}`));
+
+  await evaljs(`location.hash = ${JSON.stringify("/api/invitations/" + inv)}; true`);
+  await waitFor(`!!document.querySelector("[data-invite-open]")`,
+                "Take this step on the invitation's row page");
+  ok("the row page offers the signed-in viewer Take this step", true);
+
+  await evaljs(`location.hash = "/api/invitations"; true`);
+  await waitFor(`!![...document.querySelectorAll("tbody tr")]
+    .find(r => r.textContent.includes(${JSON.stringify(note)}))
+    ?.querySelector("[data-invite-open]")`,
+                "Take this step on the invitation's collection row");
+  ok("the collection offers the signed-in viewer Take this step", true);
 }
 
 /* ════ invitation: one tap from the collection, and a decline ═════════

@@ -14,7 +14,7 @@ function paintPresence() {
   const box = $("[data-presence]");
   if (!box) return;
   const here = hereHref();
-  const me = principalId();
+  const me = viewerId();
   box.replaceChildren(...[...PRESENCE.values()]
     .filter(p => p.self === here && p.principal.id !== me)
     .map(p => el("span", {class: "viewing",
@@ -109,10 +109,7 @@ presenceBeat();
    the row cannot be read we paint nothing: a chip that guesses about
    a privacy switch is worse than a blank one. ───────────────────── */
 const $curtain = $("#curtainbtn");
-function curtainId() {
-  return principalId()
-      || (window.signedinPrincipal && window.signedinPrincipal.id) || "";
-}
+function curtainId() { return viewerId(); }
 function curtainChip(drawn) {
   if (drawn !== true && drawn !== false) {   /* unknown: do not guess */
     $curtain.textContent = "⛨ ?";

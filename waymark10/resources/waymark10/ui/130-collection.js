@@ -474,7 +474,7 @@ function invitationRowOpen(item) {
     /\/invitations\/[^/?#]+$/.test(item.self || "");
   const subject = (item.fields || {}).subject;
   return isInvitation && item.state === "open" &&
-    (!subject || subject === principalId());
+    (!subject || subject === viewerId());
 }
 
 /* one tap from the collection: summaries drop data, so read the whole
@@ -486,7 +486,7 @@ async function openInvitationRow(item) {
     return;
   }
   const doc = res.body;
-  if (doc.state !== "open" || (doc.data || {}).subject !== principalId()) {
+  if (doc.state !== "open" || (doc.data || {}).subject !== viewerId()) {
     toast("This invitation is not open to you");
     return;
   }
