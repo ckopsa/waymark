@@ -1058,6 +1058,77 @@ jobs:
   # ubuntu-latest deliberately, not the CI_RUNNER expression: the gate
   # does no work, and the one check a merge waits on must not queue
   # behind the cluster's load.
+  # ── THE ACCESS UI DRIVE ──────────────────────────────────────────────
+  #
+  # waymark10.access-dev boots the access and seat kinds and seeds one
+  # held seat-restate; ui-drive.mjs's `access` mode opens its row page
+  # in headless chromium and asserts the held call's owner, caller,
+  # door author and door row render as names. On a GitHub-hosted VM,
+  # for its chrome and its loopback: the drive reaches the engine and
+  # the CDP port on localhost. batch-a's drive still runs by hand.
+  ui-access:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ckopsa
+          POSTGRES_DB: waymark10_ui_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ckopsa -d waymark10_ui_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Boot the access engine
+        working-directory: waymark10
+        env:
+          WAYMARK10_TEST_DSN: jdbc:postgresql://localhost:5432/waymark10_ui_test?user=ckopsa
+        run: |
+          # CLJ_SDEPS (setup-clojure's local repository) with the test
+          # path beside it: -Sdeps is read once, so one map carries both.
+          sdeps="${CLJ_SDEPS%\}} :aliases {:fx {:extra-paths [\"test\"]}}}"
+          nohup clojure -Sdeps "$sdeps" -M:fx -e \
+            "(do ((requiring-resolve 'waymark10.access-dev/start!) 8124) nil) @(promise)" \
+            > "$RUNNER_TEMP/access-dev.log" 2>&1 &
+          for _ in $(seq 1 120); do
+            if curl -fsS http://localhost:8124/api/-/ui > /dev/null 2>&1; then
+              cat "$RUNNER_TEMP/access-dev.log"
+              exit 0
+            fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/access-dev.log"
+          echo "the access engine never answered on 8124"
+          exit 1
+      - name: Start headless chromium
+        run: |
+          nohup google-chrome --headless=new --remote-debugging-port=9223 \
+            --no-sandbox --user-data-dir="$RUNNER_TEMP/chrome" about:blank \
+            > "$RUNNER_TEMP/chrome.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9223/json/version > /dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/chrome.log"
+          exit 1
+      - name: Drive the access UI
+        run: node waymark10/scripts/ui-drive.mjs access
+      - name: Engine log
+        if: failure()
+        run: cat "$RUNNER_TEMP/access-dev.log" || true
+
   gate:
     needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue]
     if: always()
