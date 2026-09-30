@@ -3062,6 +3062,29 @@
       (is (= 1 (bench/merge-green! eng seen)))
       (is (= 2 (count (calls-of st "bench__merge")))))))
 
+(deftest a-deploy-held-repository-still-reads-its-standing-train
+  ;; ticket 1652d0a3: merge-green! drops a deploy-held repository's line,
+  ;; and its standing train must still be read and leave the policy
+  (let [w (submitted-world deploy-policy)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:state "merged"})
+    (bench/merge-green! eng seen)
+    (bench/mark-row! eng :repo_policy (str (:id (the-policy w)))
+                     {:line_train {:branch "train/ckopsa/waymark/31" :changes []
+                                   :prs [31] :run_id "7"
+                                   :started_at "2026-09-29T12:00:00Z"}}
+                     #{})
+    (answer! st "bench__train_status" {:state "failure" :head a-commit})
+    (is (= 0 (bench/merge-green! eng seen)) "the repository is deploy-held")
+    (is (= [{:repo a-repository :run_id "7"}]
+           (mapv :arguments (calls-of st "bench__train_status")))
+        "the standing train is read all the same")
+    (is (= 1 (count (calls-of st "bench__train_delete"))))
+    (is (nil? (get-in (the-policy w) [:data :line_train]))
+        "the finished train leaves the policy")))
+
 (deftest a-red-deploy-holds-the-line-past-the-wait-and-says-so
   (let [w (submitted-world deploy-policy)
         st (:state w)
