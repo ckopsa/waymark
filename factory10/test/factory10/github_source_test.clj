@@ -1101,6 +1101,59 @@
       (is (nil? (get-in row [:data :failing_checks])))
       (is (= 1 (:recovered census))))))
 
+(defn- line-why
+  "The `line_why` one merge pass would write on `change`, its rig
+  answering `red` to every merge (ticket 37e838b3)."
+  [change]
+  (let [by-repo {repo {:data {:repository repo :merge_by "house"
+                              :required_checks ["test10 (shard 3)"]}}}
+        ctx {:services
+             {:bench-rpc
+              (fn [_ {tool :name}]
+                {:structuredContent
+                 {:result (if (= tool "bench__merge")
+                            {:state "red"}
+                            {:state "updated"})}})}}
+        seen (atom {})
+        lines (bench/merge-lines [change] by-repo (constantly nil) @seen)
+        answers (atom {})]
+    (bench/work-lines! ctx seen lines by-repo answers)
+    (get-in (bench/line-marks lines @answers @seen
+                              (bench/parked-changes [change] by-repo @seen))
+            [:changes (str (:id change)) :line_why])))
+
+(deftest a-green-resubmitted-head-is-stamped-and-leaves-red-in-the-line
+  (testing "the forge pass stamps green_head on a submitted head read green,
+            and the merge line then reads the rig's red for it as behind
+            (ticket baf76388)"
+    (let [{:keys [state engine] :as r}
+          (red-world {:required_checks ["test10 (shard 3)"]} 1)]
+      (pass! r)
+      (is (= :failing (:state (the-change engine))))
+      (is (nil? (get-in (the-change engine) [:data :green_head]))
+          "a red head is not stamped")
+      (gh/seed-pull! state repo
+                     (assoc a-pull-request
+                            :head {:ref "waymark-fp62.6.4" :sha a-new-head}
+                            :updated_at "2026-09-18T14:00:00Z")
+                     {:files the-files :reviews the-reviews})
+      (gh/seed-check! state repo a-new-head
+                      {:id 41752098500 :name "test10 (shard 3)"
+                       :status "completed" :conclusion "success"
+                       :head_sha a-new-head})
+      (pass! r)
+      (let [row (the-change engine)]
+        (is (= :submitted (:state row)))
+        (is (= a-new-head (get-in row [:data :head_sha])))
+        (is (= "red" (line-why row))
+            "before the stamp the rig's red keeps the change out of the line"))
+      (pass! r)
+      (let [row (the-change engine)]
+        (is (= a-new-head (get-in row [:data :green_head]))
+            "the next pass reads the submitted head green and stamps it")
+        (is (contains? #{"front" "behind"} (line-why row))
+            "the rig's red on the stamped head leaves `red` on the next merge pass")))))
+
 (deftest a-train-red-head-is-not-recovered-by-its-own-green
   ;; ticket 6566d32f: a merge train found this head red, so the head's
   ;; own green checks do not bring it back; a new head does
