@@ -66,6 +66,15 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs held-call
 
+   INVITATION (an open invitation taken from its collection in one
+   tap, and another declined from the dialog; docs/spec-guided-follow.md
+   § 3. The invitation kind is core's, so the held-call engine serves
+   it beside the meal fixture):
+   1. the held-call boot on 8124 (fresh per drive run — the drive
+      seeds its meal and invitations through the API)
+   2. the same chromium
+   3. node waymark10/scripts/ui-drive.mjs invitation
+
    (The FEED and RECIPE drives — the day's scroll-first face and the
    recipe editor — retired with the feed, 2026-09, and so did
    feed-smoke.sh.)
@@ -74,12 +83,12 @@
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = ["batch-a", "access", "held-call"].includes(process.argv[2])
+const MODE = ["batch-a", "access", "held-call", "invitation"].includes(process.argv[2])
   ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
   (MODE === "batch-a" ? "http://localhost:8123"
-   : MODE === "access" || MODE === "held-call" ? "http://localhost:8124"
+   : ["access", "held-call", "invitation"].includes(MODE) ? "http://localhost:8124"
    : "http://localhost:8010");
 
 const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json();
@@ -932,9 +941,106 @@ async function heldCallStory() {
   ok(`door.id renders as the restated seat's summary, "${target}"`, true);
 }
 
+/* ════ invitation: one tap from the collection, and a decline ═════════
+   Against waymark10.batch-a-dev/start-held-call!. ui_test pins the
+   page's strings; this executes them: "Take this step" on an open
+   invitation opens the invited row with the door's dialog, the
+   suggested value in its field and marked, the field scrolled to, lit
+   and focused with the author's note beside it — and the dialog's
+   Decline moves another invitation to declined, read off the API. */
+async function invitationStory() {
+  const person = {"x-waymark-principal": "colton"};
+  const call = async (method, path, body, headers) => {
+    const res = await fetch(BASE + path,
+      {method, headers: {"Content-Type": "application/json", ...headers},
+       body: body ? JSON.stringify(body) : null});
+    return {status: res.status, body: await res.json().catch(() => null)};
+  };
+  const idOf = r => r.body.self.split("/").pop();
+  const must = (r, status, what) => {
+    if (r.status !== status)
+      throw new Error(what + ": " + r.status + " " + JSON.stringify(r.body));
+    return r;
+  };
+
+  console.log("· seeding a meal on the list and two invitations onto it");
+  const meal = idOf(must(await call("POST", "/api/meals",
+    {name: "Invited soup " + Date.now(), themes: []}, person),
+    201, "the person adds a meal"));
+  must(await call("POST", "/api/meals/" + meal + "/-/accept", null, person),
+       200, "the meal joins the list");
+  const suggestion = "Simmer the stock an hour, then season.";
+  const invite = async note => idOf(must(await call("POST", "/api/invitations",
+    {subject: "colton", self: "/api/meals/" + meal, action: "update_recipe",
+     field: "recipe", note, suggest: {recipe: suggestion}}, person),
+    201, "the invitation \"" + note + "\""));
+  const takeNote = "Write the soup's recipe here.";
+  const declineNote = "Or say you would rather not write it.";
+  const taken = await invite(takeNote);
+  const declined = await invite(declineNote);
+  const stateOf = async id => must(await call("GET", "/api/invitations/" + id,
+    null, person), 200, "read the invitation").body.state;
+
+  console.log("· boot + principal");
+  await send("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await evaljs(`localStorage.setItem("wm10.principal", "colton"); location.reload(); true`);
+  await sleep(1200);
+
+  /* the row's own "Take this step", found by the invitation's note */
+  const takeButton = note => `[...document.querySelectorAll("tbody tr")]
+    .find(r => r.textContent.includes(${JSON.stringify(note)}))
+    ?.querySelector("[data-invite-open]")`;
+  const dialog = `document.querySelector("dialog[open]")`;
+  const field = `${dialog}?.querySelector('[name="recipe"]')`;
+
+  console.log("· the invitation collection: take this step");
+  await evaljs(`location.hash = "/api/invitations"; true`);
+  await waitFor(`!!(${takeButton(takeNote)})`, "Take this step on the invitation's row");
+  ok("an open invitation to the viewer offers Take this step", true);
+  await evaljs(`${takeButton(takeNote)}.click(); true`);
+  await waitFor(`!!(${field})`, "the invited door's dialog");
+  ok("the invited row opens",
+     await evaljs(`decodeURIComponent(location.hash).includes(${JSON.stringify("/api/meals/" + meal)})`));
+  ok("with the invited door's dialog",
+     await evaljs(`${dialog}.querySelector("h3").textContent.toLowerCase().includes("recipe")`));
+  ok("the suggested value stands in the field",
+     await evaljs(`${field}.value === ${JSON.stringify(suggestion)}`));
+  ok("and is marked as a suggestion",
+     await evaljs(`${field}.classList.contains("suggested-value")`));
+  ok("the invited field is lit", await evaljs(`!!${field}.closest(".invited")`));
+  ok("the author's note sits beside it",
+     await evaljs(`(() => { const n = ${field}.closest(".invited").nextElementSibling;
+       return !!n && n.matches("[data-invite-note]") &&
+              n.textContent === ${JSON.stringify(takeNote)}; })()`));
+  await waitFor(`(() => { const r = ${field}.closest(".invited").getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= innerHeight; })()`, "the invited field scrolled into view");
+  ok("the invited field is scrolled into view", true);
+  await waitFor(`document.activeElement === ${field}`, "the invited field focused");
+  ok("and focused", true);
+  await evaljs(`[...${dialog}.querySelectorAll(".dlgfoot button")]
+    .find(b => b.textContent === "Cancel").click(); true`);
+  await waitFor(`!${dialog}`, "the dialog closes on Cancel");
+  ok("opening the step and cancelling leaves the invitation open",
+     await stateOf(taken) === "open");
+
+  console.log("· decline from the dialog");
+  await evaljs(`location.hash = "/api/invitations"; true`);
+  await waitFor(`!!(${takeButton(declineNote)})`, "Take this step on the second invitation");
+  await evaljs(`${takeButton(declineNote)}.click(); true`);
+  await waitFor(`!!${dialog}?.querySelector("[data-invite-decline]")`, "the dialog's Decline");
+  ok("the invitation's dialog offers Decline", true);
+  await evaljs(`${dialog}.querySelector("[data-invite-decline]").click(); true`);
+  await waitFor(`!${dialog}`, "the dialog closes on Decline");
+  const t0 = Date.now();
+  while (await stateOf(declined) !== "declined" && Date.now() - t0 < 6000) await sleep(150);
+  ok("Decline moves the invitation to declined", await stateOf(declined) === "declined");
+}
+
 if (MODE === "batch-a") await batchAStory();
 else if (MODE === "access") await accessStory();
 else if (MODE === "held-call") await heldCallStory();
+else if (MODE === "invitation") await invitationStory();
 else await mealplanStory();
 
 console.log(`\nUI drive (${MODE}): ${passed} checks passed` +
