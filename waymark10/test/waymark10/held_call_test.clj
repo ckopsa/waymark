@@ -1372,6 +1372,41 @@
   (:data (store/with-tx (:storage eng)
            #(store/load-row (:storage eng) % :member (str id) {}))))
 
+(deftest set-notify-refuses-what-no-notice-could-send-through
+  (let [{:keys [eng notifier-id]} (notice-world)
+        set-notify! (fn [notify]
+                      (let [m (:row (inv/create! eng :member
+                                                 {:display "Nell" :actor_type "human"}
+                                                 {:principal colton}))
+                            id (str (:id m))]
+                        (inv/invoke! eng :member id :set_notify {:notify notify}
+                                     {:principal (t/principal {:id id :display "Nell"})
+                                      :if-match (inv/etag :member (:id m) (:version m))})
+                        id))]
+    (testing "a notifier naming no row refuses, naming the value and the notifiers"
+      (let [e (is (thrown? clojure.lang.ExceptionInfo
+                           (set-notify! {:notifier "Telegram" :input {:chat_id "42"}})))]
+        (is (str/includes? (pr-str (ex-data e)) "Telegram"))
+        (is (str/includes? (pr-str (ex-data e)) notifier-id))))
+    (testing "a whole notify map pasted into input refuses"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (set-notify! {:notifier notifier-id
+                                 :input {:notifier notifier-id
+                                         :input {:chat_id "42"}}}))))
+    (testing "a quiet time that is no clock time refuses"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (set-notify! {:notifier notifier-id :input {:chat_id "42"}
+                                 :quiet {:from "25:00" :to "07:00"}}))))
+    (testing "a correct notify saves, and 6:00 is stored as 06:00"
+      (let [id (set-notify! {:notifier notifier-id :input {:chat_id "42"}
+                             :quiet {:from "20:00" :to "6:00"
+                                     :zone "America/Denver"}})
+            notify (:notify (member-data eng id))]
+        (is (= notifier-id (:notifier notify)))
+        (is (= "42" (get-in notify [:input :chat_id])))
+        (is (= "20:00" (get-in notify [:quiet :from])))
+        (is (= "06:00" (get-in notify [:quiet :to])))))))
+
 (deftest a-failed-digest-keeps-its-lines-and-sends-them-on-the-next-sweep
   (let [down? (atom false)
         {:keys [eng log clock] :as w}

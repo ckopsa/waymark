@@ -505,6 +505,65 @@
   [row _inp ctx]
   (own-hand row ctx))
 
+;; what set_notify stores is read by every notice rule that addresses
+;; this member, and a wrong word there only shows as a silent skip. So
+;; the mistake is refused where it is made: a notifier that names no
+;; live notifier row, a whole notify map pasted into the input, a
+;; quiet time that is no clock time.
+(defn- retired? [row] (= "retired" (some-> (:state row) name)))
+
+(defn- live-notifiers-named
+  "The live notifiers as \"name (id)\", for a refusal to list."
+  [ctx]
+  (or (not-empty
+       (str/join ", " (for [n ((:find ctx) :notifier {} {:limit 50})
+                            :when (not (retired? n))]
+                        (str (get-in n [:data :name]) " (" (:id n) ")"))))
+      "none yet"))
+
+(g/defguard notify-names-a-notifier
+  {:reads [:notifier]
+   :vars [:notifier :notifiers]
+   :explain "{notifier} names no live notifier row; notify.notifier is a notifier's id. The notifiers: {notifiers}."}
+  [_row inp ctx]
+  (let [nid (get-in inp [:notify :notifier])
+        read' (:read ctx)]
+    (if (or (nil? nid) (nil? read') (nil? (:find ctx)))
+      (t/allow)
+      (let [n (read' :notifier (str nid))]
+        (if (and n (not (retired? n)))
+          (t/allow)
+          (t/deny {:vars {:notifier (str nid)
+                          :notifiers (live-notifiers-named ctx)}}))))))
+
+(g/defguard notify-input-is-the-tools-own
+  {:vars [:keys]
+   :explain "The input is the notifier tool's own arguments for this person, e.g. {\"chat_id\": \"42\"}, not a whole notify map; it carried {keys}."}
+  [_row inp _ctx]
+  (let [in (get-in inp [:notify :input])]
+    (if-some [ks (seq (filter #(contains? in %) [:notifier :input]))]
+      (t/deny {:vars {:keys (str/join ", " (map name ks))}})
+      (t/allow))))
+
+(def ^:private clock-time #"([01]?\d|2[0-3]):([0-5]\d)")
+
+(g/defguard quiet-hours-are-clock-times
+  {:vars [:times]
+   :explain "Quiet hours are local clock times, H:mm or HH:mm (22:00, 6:00); {times} is not."}
+  [_row inp _ctx]
+  (let [q (get-in inp [:notify :quiet])]
+    (if-some [bad (seq (remove #(re-matches clock-time (str %))
+                               (keep #(get q %) [:from :to])))]
+      (t/deny {:vars {:times (str/join ", " bad)}})
+      (t/allow))))
+
+(defn- hh-mm
+  "A clock time as HH:mm: 6:00 becomes 06:00."
+  [s]
+  (if-some [[_ h m] (re-matches clock-time (str s))]
+    (format "%02d:%s" (parse-long h) m)
+    s))
+
 (defhandler draw-curtain [row _inp _ctx]
   (assoc-in row [:data :curtain] true))
 
@@ -548,7 +607,10 @@
 
 (defhandler set-notify [row inp _ctx]
   (if-some [n (:notify inp)]
-    (assoc-in row [:data :notify] n)
+    (assoc-in row [:data :notify]
+              (cond-> n
+                (get-in n [:quiet :from]) (update-in [:quiet :from] hh-mm)
+                (get-in n [:quiet :to]) (update-in [:quiet :to] hh-mm)))
     (update row :data dissoc :notify)))
 
 ;; how to reach this member (docs/spec-addressed-notice.md R-2): a
@@ -558,9 +620,10 @@
 (def ^:private notify-schema
   [:maybe
    [:map
-    [:notifier {:x-display {:label "Notifier"
-                            :help "The id of the notifier row whose server and tool carry the send."}}
-     [:string {:min 1 :max 64}]]
+    [:notifier {:kind :notifier
+                :x-display {:label "Notifier"
+                            :help "The notifier row whose server and tool carry the send."}}
+     :waymark/ref]
     [:input {:optional true
              :x-display {:label "Where"
                          :help "The tool's arguments for this person, laid over the rule's text, e.g. {\"chat_id\": \"42\"}."
@@ -866,7 +929,8 @@
                           notify-schema]]
                  :record true
                  :edit {:prefill [:notify]}
-                 :guards [notify-is-your-own-hand]
+                 :guards [notify-is-your-own-hand notify-names-a-notifier
+                          notify-input-is-the-tools-own quiet-hours-are-clock-times]
                  :safety {:idempotent true :reversible true :confirm false}
                  :handler set-notify
                  :display {:label "Set how to reach them" :order 4}}

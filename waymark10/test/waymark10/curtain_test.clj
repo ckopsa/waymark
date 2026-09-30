@@ -157,6 +157,13 @@
                                         (:version (row-of eng "elena")))})]
     (inv/create! eng :role {:name "recovery-admin"}
                  {:principal members/registrar})
+    ;; set_notify refuses a notifier that names no row
+    (inv/create! eng :notifier {:name "the house chat" :server "srv"
+                                :tool "send_message"
+                                :input_template {:chat_id "0"}
+                                :on [{:kind "nothing_here"}]
+                                :audience "elena"}
+                 {:principal members/registrar :id "tg"})
     (member! eng "elena" "Elena" "human")
     (member! eng "stranger" "Stranger" "human")
     (member! eng "colton" "Colton" "human" {:roles ["recovery-admin"]})
