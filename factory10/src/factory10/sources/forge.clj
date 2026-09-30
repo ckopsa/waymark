@@ -1278,15 +1278,15 @@
         [(get-in row [:data :born_from]) (get-in row [:data :change_id])]))
 
 (defn- merged-beside?
-  "Whether another change built for the same ticket, on the same
-  branch, has merged."
-  [eng row repo branch ticket-id]
+  "Whether another change built for the same ticket, on any branch of
+  the repository, has merged."
+  [eng row repo ticket-id]
   (let [born (str "ticket:" ticket-id)]
     (boolean
      (some #(and (not= (str (:id %)) (str (:id row)))
                  (= :merged (state-of %))
                  (= born (str (get-in % [:data :born_from]))))
-           (rows-by eng :change {:repository repo :head_branch branch} 100)))))
+           (rows-by eng :change {:repository repo :born_from born} 100)))))
 
 (defn unopened-note
   "The words a submitted change carries when no pull request ever came
@@ -1309,7 +1309,7 @@
             note (unopened-note repo branch)]
         (cond
           (or (#{:done :dropped} (state-of t))
-              (merged-beside? eng row repo branch tid))
+              (merged-beside? eng row repo tid))
           [:supersede {:superseded_by
                        (str "closed: ticket " tid " ended; this change "
                             "never opened a pull request")}]

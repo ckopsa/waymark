@@ -1719,6 +1719,32 @@
                (get-in row [:data :superseded_by])))
         (is (= 1 (:unopened-closed census)))))))
 
+(deftest a-change-that-never-opened-a-pull-request-closes-when-another-branch-merged-its-ticket
+  (let [{:keys [engine] :as r} (unadopted-world nil)
+        tid (a-ticket-at! engine :open)
+        other (str (:id (:row (inv/create! engine :change
+                                           {:change_id "ticket:merged-elsewhere"
+                                            :repository repo
+                                            :title "The same work, merged"
+                                            :base_branch "main"
+                                            :head_branch "bench/another-branch"}
+                                           {:principal mirror/source-principal}))))
+        st (:storage engine)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :change other {})]
+          (store/save-row! st tx :change
+                           (-> row
+                               (assoc :state :merged
+                                      :version (inc (long (:version row))))
+                               (assoc-in [:data :born_from] (str "ticket:" tid)))
+                           (:version row)))))
+    (let [census (pass! r)
+          row (the-unadopted engine)]
+      (is (= "closed" (name (:state row)))
+          "a merge of the same ticket on another branch closes it")
+      (is (= 1 (:unopened-closed census))))))
+
 (deftest a-change-that-never-opened-a-pull-request-sticks-after-the-window
   (let [{:keys [engine] :as r} (unadopted-world nil)
         _ (a-ticket-at! engine :open)
