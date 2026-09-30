@@ -1629,7 +1629,9 @@
   hand and this engine has no endpoint that could write it. A
   CHAIR-LINKED row is skipped for the same reason
   (waymark-fp62.7.23): the Routine it fires through is the model's,
-  made by hand one row over."
+  made by hand one row over. A POOL-ONLY row is skipped as well
+  (waymark ticket 962e0aeb): its fires go out through runners a
+  person made, so a copy of ours would be a second Routine."
   [eng adapters schedule-row]
   (let [seat-id (get-in schedule-row [:data :seat])
         seat-row (raw-row eng :seat seat-id)]
@@ -1644,6 +1646,8 @@
           nil)
 
       (some? (chair-link-of eng seat-row)) nil
+
+      (some? (pool-of eng schedule-row seat-row)) nil
 
       :else
       (let [adapter (adapter-for adapters schedule-row)
@@ -1672,11 +1676,12 @@
   transition would 409 and park the drain. A LINKED row is left alone
   too, the chair's link included: a person manages that Routine, and
   parking the seat is already the wall the fire door refuses at
-  (R-12.18, R-12.20, and waymark-fp62.7.23's chair)."
+  (R-12.18, R-12.20, and waymark-fp62.7.23's chair) — and a runner
+  pool's, which `fires-out?` counts (waymark ticket 962e0aeb)."
   [eng adapters schedule-row]
   (when-some [xid (some-> (get-in schedule-row [:data :external_id]) str not-empty)]
     (when (and (= :live (:state schedule-row))
-               (not (linked? eng schedule-row)))
+               (not (fires-out? eng schedule-row)))
       (try
         (pause-copy (adapter-for adapters schedule-row) xid)
         (act! eng (:id schedule-row) :pause nil)
@@ -1689,9 +1694,10 @@
 
   A LINKED row is left alone (R-12.18), the paused case included: the
   row's own state there is the provider's answer to a fire, not a
-  park, and only a fire that goes out moves it."
+  park, and only a fire that goes out moves it. A pool-only row is
+  left alone the same way (`fires-out?`, waymark ticket 962e0aeb)."
   [eng adapters schedule-row]
-  (when-not (linked? eng schedule-row)
+  (when-not (fires-out? eng schedule-row)
     (case (:state schedule-row)
       :paused (if-some [xid (some-> (get-in schedule-row [:data :external_id])
                                     str not-empty)]
@@ -1710,12 +1716,13 @@
 
   A LINKED row ends too, and no adapter is called (R-12.18): the
   Routine a person made by hand stays where it is, and this row stops
-  pointing at it."
+  pointing at it. A pool-only row is the same (`fires-out?`, waymark
+  ticket 962e0aeb)."
   [eng adapters schedule-row]
   (when-not (= :ended (:state schedule-row))
     (let [xid (some-> (get-in schedule-row [:data :external_id]) str not-empty)]
       (try
-        (when (and xid (not (linked? eng schedule-row)))
+        (when (and xid (not (fires-out? eng schedule-row)))
           (delete-copy (adapter-for adapters schedule-row) xid))
         (act! eng (:id schedule-row) :end nil)
         (catch Exception e (break! eng schedule-row e))))))
