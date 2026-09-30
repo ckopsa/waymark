@@ -3844,6 +3844,47 @@
         (and (nil? made) (nil? refusal)) (assoc "bench_note"
                                                 bench-dark-note)))))
 
+;; ── the app's own sections ───────────────────────────────────────────
+
+(def sit-sections-key
+  "Where an app hands the sit its own sections, beside the bench: the
+  engine opts' `[:services :sit-sections]`, a seq of
+  `(fn [ctx seat walk-rows] → nil | {section-key value})`. `ctx` is the
+  engine, `seat` the seat row and `walk-rows` the rows the walk handed
+  this sitting. Each runs after the walk is chosen, and each map it
+  answers is merged into the sit's answer under its own keys — the
+  way `bench-of` hands a code seat its worktree, an app can hand a
+  seat whatever else it prepared. A key the engine's answer already
+  carries stays the engine's.
+
+  A fn that THROWS costs its section and never the sit: it adds
+  `{key {:error message}}`, the key being the fn's `:sit-section`
+  metadata or, lacking it, `sit_section_<n>` by its place in the seq."
+  [:services :sit-sections])
+
+(defn- section-key [k]
+  (if (keyword? k) (name k) (str k)))
+
+(defn- app-sections
+  "Every app section's answer, merged in order (see `sit-sections-key`)."
+  [eng seat walk]
+  (let [rows (get walk "rows")]
+    (reduce
+     (fn [acc [n f]]
+       (try
+         (let [out (f eng seat rows)]
+           (cond-> acc
+             (map? out) (into (map (fn [[k v]] [(section-key k) v])) out)))
+         (catch Exception e
+           (binding [*out* *err*]
+             (println "waymark10 sit section failed -" (ex-message e)))
+           (assoc acc
+                  (section-key (or (:sit-section (meta f))
+                                   (str "sit_section_" (inc n))))
+                  {"error" (or (ex-message e) (str (class e)))}))))
+     {}
+     (map-indexed vector (get-in eng sit-sections-key)))))
+
 (defn- sit
   "R-12.14, in order, and every refusal is one plain sentence an agent
   can act on.
@@ -4032,14 +4073,19 @@
             said (when (and change walk
                             (not (contains? bench-walks
                                             (str (get walk "kind")))))
-                   (change-said eng call sitter-sees change))]
+                   (change-said eng call sitter-sees change))
+            ;; i'''' · the app's own sections, after the walk is chosen
+            ;; (`sit-sections-key`): nothing for a seat at a wall
+            sections (when-not halted (app-sections eng seat walk))]
         ;; j · what the firing reads next. The walk rides as the wire
         ;; wrote it — a route's own document, string keys and all —
         ;; so the kebab→snake boundary cannot rewrite a key inside a
         ;; row's values on the way out (the summary section's rule).
         (result
          (j/write-value-as-string
-          (cond-> (p/wire-value
+          (merge
+           sections
+           (cond-> (p/wire-value
                    {:seat named
                     :sitter sitter-id
                     :model model
@@ -4084,7 +4130,7 @@
             (and (nil? bench) change-note) (assoc "bench_note" change-note)
             ;; a bench that opened on a change still stuck: the note
             ;; says why no door on it submits
-            (and (some? bench) change-note) (assoc "change_note" change-note))
+            (and (some? bench) change-note) (assoc "change_note" change-note)))
           verbatim-mapper))))))
 
 (def ^:private bodies

@@ -911,6 +911,44 @@
         (is (= [(str (:id early))] (mapv :id (get-in later [:walk :rows]))))
         (is (= [(str (:id early))] (walked (:sitting later))))))))
 
+(deftest an-apps-sit-section-rides-the-answer-and-a-throwing-one-is-an-error
+  (let [deploys (fn [_eng seat rows]
+                  {:deploys {"seat" (str (get-in seat [:data :name]))
+                             "rows" (count rows)}
+                   ;; the engine's own key is not the app's to take
+                   :sitting "not-the-sitting"})
+        silent (fn [_ _ _] nil)
+        dark (with-meta (fn [_ _ _] (throw (ex-info "the deploy door is dark" {})))
+               {:sit-section :browser_sessions})
+        unnamed (fn [_ _ _] (throw (ex-info "no name" {})))
+        eng (engine/engine {:storage (memory/storage)
+                            :resources [fx/meal post]
+                            :oidc {:issuer issuer :audience audience :jwks jwks
+                                   :app-url "https://app.test/"
+                                   :delegate-clients {"connector" "Claude"}}
+                            :services {:sit-sections
+                                       [deploys silent dark unnamed]}})
+        h (engine/handler eng)
+        _ (open-walk-seat! eng {})
+        _ (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        [r answer] (sit-walk! h)]
+    (is (= [:services :sit-sections] mcp/sit-sections-key))
+
+    (testing "the sit answers, and an app's section rides beside the walk"
+      (is (false? (:isError r)) (text-of r))
+      (is (= 1 (count (get-in answer [:walk :rows]))))
+      (is (= {:seat "post-clerk" :rows 1} (:deploys answer))
+          "the section saw the seat and the rows the walk handed"))
+
+    (testing "a key the engine answers stays the engine's"
+      (is (not= "not-the-sitting" (:sitting answer)))
+      (is (some? (sitting-row eng (:sitting answer)))))
+
+    (testing "a section that throws is reported, and the sit still answers"
+      (is (= {:error "the deploy door is dark"} (:browser_sessions answer)))
+      (is (= {:error "no name"} (:sit_section_4 answer))
+          "an unnamed fn is keyed by its place in the seq"))))
+
 (deftest a-seat-that-walks-nothing-answers-no-walk-and-a-parked-one-no-seat
   (let [eng (fresh-engine)
         h (engine/handler eng)

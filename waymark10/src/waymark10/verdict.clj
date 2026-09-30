@@ -309,6 +309,9 @@
   write's own transaction."
   [:services :verdict-guards])
 
+;; The sit's answer takes the app's own sections the same way, under
+;; `[:services :sit-sections]`: see waymark10.server.mcp/sit-sections-key.
+
 (g/defguard the-house-admits-this-verdict
   {:judges [:judgment :subject_id]
    :reads [:judgment :services]
