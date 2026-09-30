@@ -10,7 +10,6 @@
       -e \"((requiring-resolve 'waymark10.batch-a-dev/start!) 8123) @(promise)\""
   (:require [next.jdbc :as jdbc]
             [waymark10.batch-a-fixtures :as bafx]
-            [waymark10.dev :as dev]
             [waymark10.fixtures :as fx]
             [waymark10.server.engine :as engine]
             [waymark10.server.store :as store]
@@ -31,18 +30,3 @@
       (engine/start! eng port)
       (println (str "batch-a engine: http://localhost:" port "/api/-/ui"))
       eng)))
-
-(defn start-held-call!
-  "The held-call drive's engine: a memory engine (dev/scratch!, no
-  database) serving the meal fixture, so a seat's scope names a kind
-  this engine serves. Nothing is seeded here: the drive opens the
-  mayor, its child and the held restate through the API, as
-  delegation-test does over the ring handler.
-
-    clojure -Sdeps '{:aliases {:fx {:extra-paths [\"test\"]}}}' -M:fx \\
-      -e \"(do ((requiring-resolve 'waymark10.batch-a-dev/start-held-call!) 8124) nil) @(promise)\""
-  [port]
-  (let [eng (dev/scratch! [fx/meal])]
-    (engine/start! eng port)
-    (println (str "held-call engine: http://localhost:" port "/api/-/ui"))
-    eng))
