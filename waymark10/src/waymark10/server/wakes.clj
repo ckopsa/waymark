@@ -1101,7 +1101,8 @@
           (not (fired-recently? schedule-row (long cadence) at))))))
 
 (defn sweep-cadence!
-  "Every active seat whose schedule rides its chair's link, whose
+  "Every active seat whose schedule rides its chair's link or a runner
+  pool (`schedules/fires-out?`, waymark ticket 962e0aeb), whose
   cadence is owed, marked `wake_pending` so the release that follows
   fires it. A schedule with its own link is left to its provider's
   cron, and an interactive seat is fired by nobody (R-10.8). → the
@@ -1113,7 +1114,7 @@
                           (schedules/schedule-for-seat eng (:id seat-row)))]
                 (if (and row
                          (not (schedules/linked? row))
-                         (schedules/linked? eng row)
+                         (schedules/fires-out? eng row)
                          (not (schedules/held? eng row seat-row))
                          (not (true? (get-in row [:data :wake_pending])))
                          (cadence-due? seat-row row at))

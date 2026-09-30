@@ -2174,15 +2174,20 @@
 
   TWO SCHEDULES ARE NEVER PUSHED: one a person linked (R-12.18), and
   one whose seat fires through its chair's Routine
-  (waymark-fp62.7.23). The chair's row is read here anyway, so asking
-  it costs nothing. Both readings are `schedules/linked?`'s, spelled
-  here rather than required: this surface does not depend on the
-  consumer."
+  (waymark-fp62.7.23). A runner pool, the schedule's or the chair's,
+  is never pushed either (waymark ticket 962e0aeb). The chair's row is
+  read here anyway, so asking it costs nothing. The readings are
+  `schedules/fires-out?`'s, spelled here rather than required: this
+  surface does not depend on the consumer."
   [eng seat]
   (let [schedule (row-of eng :schedule (get-in seat [:data :schedule]))
         held (row-of eng :model (first (get-in seat [:data :held_for])))
         url-of (fn [row] (some-> (get-in row [:data :fire_url]) str not-empty))
-        by-hand? (boolean (or (url-of schedule) (url-of held)))
+        pool-of (fn [row] (some->> (get-in row [:data :runners])
+                                   (keep #(some-> % str not-empty))
+                                   seq))
+        by-hand? (boolean (or (url-of schedule) (url-of held)
+                              (pool-of schedule) (pool-of held)))
         copy (row-of eng :model (get-in schedule [:data :model]))]
     (if by-hand?
       (or held copy)

@@ -58,6 +58,13 @@ body { margin: 0; background: var(--bg); color: var(--ink);
   font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
+/* prose rendered by the engine's markdown door (a2037ee7) */
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md table { border-collapse: collapse; }
+.md th, .md td { border: 1px solid var(--line); padding: 2px 6px; }
+.md pre, .md code { background: var(--code); }
+.md pre { padding: 6px 8px; overflow-x: auto; }
 code, .mono { font-family: ui-monospace, "Cascadia Mono", Menlo, monospace;
   font-size: 0.92em; }
 header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
@@ -281,6 +288,82 @@ async function api(href, opts) {
   try { body = text ? JSON.parse(text) : null; } catch (_e) { body = {unparsed: text}; }
   return {status: res.status, ok: res.status < 400, body,
           etag: res.headers.get("ETag")};
+}
+/* ── prose is markdown (a2037ee7) ────────────────────────────────────
+   The ENGINE renders it, at POST /api/-/render/markdown — the one safe
+   renderer, the same door the full client calls, so the two pages show
+   the same words. One call per tick, split under the door's caps (50
+   texts, 200 KB); the raw words stand until, or unless, it answers. */
+const MD_MAX_TEXTS = 50, MD_MAX_BYTES = 200 * 1024;
+let mdQueue = null;
+function renderMarkdown(text) {
+  return new Promise(resolve => {
+    if (!mdQueue) { mdQueue = []; queueMicrotask(flushMarkdown); }
+    mdQueue.push({text: String(text), resolve});
+  });
+}
+function markdownBatches(queue) {
+  const enc = new TextEncoder(), out = [];
+  let cur = [], bytes = 0;
+  for (const q of queue) {
+    const n = enc.encode(q.text).length;
+    if (cur.length && (cur.length >= MD_MAX_TEXTS || bytes + n > MD_MAX_BYTES))
+      { out.push(cur); cur = []; bytes = 0; }
+    cur.push(q); bytes += n;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+function flushMarkdown() {
+  const queue = mdQueue; mdQueue = null;
+  for (const batch of markdownBatches(queue))
+    api("/api/-/render/markdown", {method: "POST",
+      body: JSON.stringify({texts: batch.map(q => q.text)})})
+      .then(({ok, body}) => (ok && body && Array.isArray(body.html)) ? body.html : [],
+            () => [])
+      .then(html => batch.forEach((q, i) =>
+        q.resolve(typeof html[i] === "string" ? html[i] : null)));
+}
+function showMarkdown(node, html) {
+  node.innerHTML = html;
+  node.classList.add("md");
+}
+function proseView(v) {
+  const box = el("div", {class: "prose"}, el("pre", {}, String(v)));
+  renderMarkdown(v).then(html => { if (html !== null) showMarkdown(box, html); });
+  return box;
+}
+/* Write/Preview on a prose box: Preview asks the same door the display
+   does, so what it shows is what the row will show */
+function proseEditor(ta) {
+  const preview = el("div", {class: "prose", "data-md-preview": "",
+                             style: "display:none;min-height:4em"});
+  const write = el("button", {type: "button", "aria-pressed": "true"}, "Write");
+  const look = el("button", {type: "button", "aria-pressed": "false"}, "Preview");
+  let asked = 0;
+  const show = on => {
+    ta.style.display = on ? "none" : "";
+    preview.style.display = on ? "" : "none";
+    write.setAttribute("aria-pressed", String(!on));
+    look.setAttribute("aria-pressed", String(on));
+    write.style.fontWeight = on ? "" : "600";
+    look.style.fontWeight = on ? "600" : "";
+    if (!on) return;
+    const seq = ++asked, text = ta.value;
+    preview.classList.remove("md");
+    preview.replaceChildren(text ? el("pre", {}, text)
+                                 : el("span", {class: "meta"}, "Nothing to preview."));
+    if (text) renderMarkdown(text).then(html => {
+      if (seq === asked && html !== null) showMarkdown(preview, html);
+    });
+  };
+  write.addEventListener("click", () => show(false));
+  look.addEventListener("click", () => show(true));
+  ta.before(el("div", {class: "prose-tabs",
+    style: "display:flex;gap:4px;margin-bottom:4px"}, write, look));
+  ta.after(preview);
+  show(false);
+  return preview;
 }
 function toast(msg, bad) {
   const t = el("div", {class: "toast" + (bad ? " bad" : "")}, msg);
@@ -520,7 +603,10 @@ function valueCell(v, xd) {
       v.map(x => el("span", {class: "chip static"}, String(x))));
   }
   if (typeof v === "object") return kvTable(v);
-  if ((xd || {}).widget === "prose" || (typeof v === "string" && v.includes("\n")))
+  /* declared prose is markdown; a string that merely spans lines keeps
+     its breaks and nothing more */
+  if ((xd || {}).widget === "prose") return proseView(v);
+  if (typeof v === "string" && v.includes("\n"))
     return el("pre", {}, v);
   return el("span", {}, String(v));
 }
@@ -901,6 +987,7 @@ function buildForm(schema, prefill, kind) {
       xdf.help ? el("div", {class: "meta"}, xdf.help) : "",
       errSlot,
       el("div", {class: "err srv", "data-srverr": name})));
+    if (xdf.widget === "prose" && widget.tagName === "TEXTAREA") proseEditor(widget);
   }
   return form;
 }
