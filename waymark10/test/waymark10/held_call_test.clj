@@ -715,7 +715,7 @@
                                        :text "{kind} {action}: {summary} {link}"}
                       :on on
                       :audience "colton"
-                      :link_base "https://work.example.org/"}
+                      :link_base "https://x.example"}
                      {:principal colton})))
 
 (defn- drain-notices! [eng]
@@ -750,7 +750,10 @@
         (is (= 1 (count s)))
         (is (= "send_message" (get-in (first s) [:params :name])))
         (is (str/includes? (str text)
-                           (str "https://work.example.org/api/held_calls/" (:id call))))
+                           (str "https://x.example/#/api/held_calls/" (:id call)))
+            "no public origin: the UI's page at the notifier's link_base")
+        (is (not (str/includes? (str text) "x.example/api/"))
+            "never the row's raw JSON")
         (is (= 1 (:sent (chat-notifier-data eng (:id n)))))))))
 
 (deftest a-failed-notice-counts-and-the-held-call-stands
@@ -984,7 +987,7 @@
       (is (= "send_message" (get-in (first s) [:params :name])))
       (is (= "42" (str (:chat_id args))) "the member says where")
       (is (str/includes? (str (:text args))
-                         (str "https://work.example.org/api/chores/" (:id c))))
+                         (str "https://work.example.org/#/api/chores/" (:id c))))
       (is (= 1 (:sent (notice-rule-data eng (:id r))))))))
 
 (deftest the-assignee-who-moved-the-row-is-told-nothing
@@ -1072,7 +1075,7 @@
       (is (= 1 (count s)))
       (is (= "42" (str (get-in (first s) [:params :arguments :chat_id]))))
       (is (str/includes? (str (get-in (first s) [:params :arguments :text]))
-                         (str "https://work.example.org/api/blocks/" (:id b)))))
+                         (str "https://work.example.org/#/api/blocks/" (:id b)))))
     (is (= 1 (:sent (notice-rule-data eng (:id r)))))))
 
 (deftest an-at-rule-stored-before-the-wall-reports-its-field-once
@@ -1317,7 +1320,7 @@
     (let [s (chat-sends log)]
       (is (= 1 (count s)))
       (is (str/includes? (str (get-in (first s) [:params :arguments :text]))
-                         (str "https://work.example.org/api/approval_requests/"
+                         (str "https://work.example.org/#/api/approval_requests/"
                               (:id ask)))
           "no public origin: the notifier's link_base and the API path"))
     (is (= 1 (:sent (notice-rule-data eng (:id r)))))))
@@ -1366,7 +1369,7 @@
       (is (str/starts-with? (str (:text args)) "3 notices"))
       (doseq [c chores]
         (is (str/includes? (str (:text args))
-                           (str "https://work.example.org/api/chores/" (:id c))))))))
+                           (str "https://work.example.org/#/api/chores/" (:id c))))))))
 
 (defn- member-data [eng id]
   (:data (store/with-tx (:storage eng)
