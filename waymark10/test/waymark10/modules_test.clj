@@ -92,7 +92,10 @@
            :runner_link :runner_provider
            ;; …and the invitation (docs/spec-guided-follow.md § 3),
            ;; the held call's sibling hand-off, which a grant names
-           :invitation}
+           :invitation
+           ;; …and the recorded walk and its frames (§ 4), core's
+           ;; beside the invitation
+           :walk :walk_frame}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -119,7 +122,7 @@
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
-             :judgment :verdict :invitation}
+             :judgment :verdict :invitation :walk :walk_frame}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
@@ -360,8 +363,8 @@
             ;; sits beside it: the held calls' expiry (R-14, R-7)
             :mcp-discover :held-call-expiry :notifier
             ;; the invitations' resolution and expiry
-            ;; (spec-guided-follow § 3)
-            :invitations :invitation-expiry
+            ;; (spec-guided-follow § 3), and the walks' retention (§ 4)
+            :invitations :invitation-expiry :walk-retention
             ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
             ;; R-12.25; spec-transcript.md R-9)
             :seat-clock
@@ -411,7 +414,7 @@
             ;; R-14), so a selection that names :jobs still carries
             ;; both
             :mcp-discover :held-call-expiry :notifier
-            :invitations :invitation-expiry :seat-clock
+            :invitations :invitation-expiry :walk-retention :seat-clock
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))
