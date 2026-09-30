@@ -15,10 +15,13 @@
   factory10.main/resources, so this kind is under it already.
 
   Run: cd factory10 && clojure -M:test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [factory10.resources.change :refer [change]]
             [factory10.resources.ticket :as tk :refer [ticket]]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.schema :as sch]
             [waymark10.server.render :as render])
   (:import (java.time Instant)))
 
@@ -342,3 +345,31 @@
     (is (contains? form :bead_id)
         "the import keeps the id each ask carried in beads"))
   (is (= 20000 tk/detail-chars)))
+
+;; ── the change's `why` says its limit (ticket e527f233) ─────────────
+;; A seat walking a ticket learns the 480 characters before it spends
+;; a refused submit or stall on them: the help names the limit, and an
+;; over-long sentence refuses with its own length and the limit both.
+
+(defn- why-entry
+  "The `why` entry of a change action's input form: [:why props schema]."
+  [action]
+  (some #(when (and (vector? %) (= :why (first %))) %)
+        (get-in change [:actions action :input])))
+
+(deftest the-why-help-names-the-limit
+  (doseq [action [:submit :stall]]
+    (testing (name action)
+      (let [[_ props schema] (why-entry action)]
+        (is (str/includes? (get-in props [:x-display :help]) "480"))
+        (is (= 480 (get-in schema [1 :max])) "the limit itself is unchanged")))))
+
+(deftest an-over-long-why-says-both-numbers
+  (doseq [action [:submit :stall]]
+    (testing (name action)
+      (let [form (get-in change [:actions action :input])
+            said (first (:why (sch/closed-errors form {:why (apply str (repeat 512 "x"))})))]
+        (is (string? said))
+        (is (str/includes? said "480"))
+        (is (str/includes? said "512"))
+        (is (nil? (sch/closed-errors form {:why (apply str (repeat 480 "x"))})))))))

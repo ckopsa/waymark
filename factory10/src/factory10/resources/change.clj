@@ -1767,7 +1767,7 @@
                     :x-display
                     {:widget "prose"
                      :label "What this round does"
-                     :help "One sentence for the commit message: what you changed and why. It is what a person reads in the log, and what the review reads first."}}
+                     :help "One sentence for the commit message: what you changed and why. It is what a person reads in the log, and what the review reads first. It is at most 480 characters."}}
               [:string {:min 1 :max 480}]]]
      ;; the sentence is composed, so a mis-click must not lose it
      ;; (the seat's own `restate` spelling)
@@ -1827,7 +1827,7 @@
                     :x-display
                     {:widget "prose"
                      :label "What is wrong"
-                     :help "One sentence for the person who reads this next: what you tried, and what stopped you. It rides the log beside this move."}}
+                     :help "One sentence for the person who reads this next: what you tried, and what stopped you. It rides the log beside this move. It is at most 480 characters."}}
               [:string {:min 1 :max 480}]]]
      :edit {:draft {:shared true :live true}}
      ;; a stalled change is not under review, and its ticket could not
