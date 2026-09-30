@@ -770,6 +770,16 @@
                         {:label "A wake the budget held"
                          :help "When a matching transition last found this seat's week of fuel spent. The wake waits, and it goes out when the window rolls. Engine-written."}}
      [:maybe :waymark/instant]]
+    ;; The wall itself (waymark ticket ae64b57c): what the last sit
+    ;; past the wall answered — which wall, why, and when it lifts — so
+    ;; the schedule says "halted: budget, lifts <date>" and not only
+    ;; that a wake waits. A sit clear of the wall takes it off.
+    [:halted {:optional true
+              :x-display
+              {:raw true
+               :label "The wall the seat is against"
+               :help "Which wall the seat's last sit found, the sentence that says why, and when it lifts. Cleared by the next sit clear of the wall. Engine-written."}}
+     [:maybe seats/halt-mark]]
     ;; A throttle's mark (waymark ticket 48dc648c). The provider said
     ;; the Routine has no free run and named a time; the row stays
     ;; live, the wake stays pending, and nothing fires before this.
