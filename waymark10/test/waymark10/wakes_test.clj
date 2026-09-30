@@ -2293,6 +2293,51 @@
         (sch/answer! *fire* nil)
         (seat-do! seat :retire)))))
 
+(deftest a-pending-wake-goes-out-through-the-chairs-pool-with-no-link
+  ;; waymark ticket 102d00d2: the chair model holds runners and no link
+  (let [wn :wake-pool-only
+        fn' :wake-pool-only-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        live-token "rk-test-poolonlylive-0123456789abcdef"
+        live (str (:id (:row (inv/create! *eng* :runner_link
+                                          {:provider "claude_routine"
+                                           :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                          "/routines/trig_poolonlylive/fire")
+                                           :fire_token live-token}
+                                          {:principal elena}))))
+        model (model! "pool-only-chair")
+        _ (inv/invoke! *eng* :model (str model) :set_runners
+                       {:runners [live]}
+                       {:principal elena})
+        seat (seat! "poolonlyclerk"
+                    {:held_for [(str model)]
+                     :wake_on [{:kind "wake_task" :actions ["complete"]}]
+                     :fire_interval_seconds 1})
+        _ (drain-fires! fn')]
+    (try
+      (is (not (sch/linked? *eng* (sched-of seat))) "neither the row nor its chair holds a link")
+      (task-do! (task! "the first of two, pool only") :complete)
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of live-token))) "the first match fires through the pool at once")
+
+      (task-do! (task! "the second, inside the gap") :complete)
+      (drain-wakes! wn)
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+
+      (testing "once the gap has passed, the sweep releases the wake through the pool"
+        (let [before (count (fires-of live-token))]
+          (Thread/sleep 1200)
+          (wakes/sweep-pending! *eng*)
+          (drain-fires! fn')
+          (drain-fires! fn')
+          (is (= (inc before) (count (fires-of live-token))))
+          (is (nil? (:text (last (fires-of live-token)))))
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+      (finally
+        (seat-do! seat :retire)))))
+
 ;; ── several sittings at once (max_open_sittings) ───────────────────────
 ;;
 ;; A seat of three slots runs three sittings at once, each on its own

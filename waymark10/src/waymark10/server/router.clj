@@ -513,7 +513,7 @@
 (def ^:private module-doors
   "The doors a MODULE mounts, not core. Each is advertised only when
   the assembled route sets serve its href: an engine assembled without
-  :realtime or :seasons would otherwise name doors that answer 404."
+  :realtime, :seasons or :ui would otherwise name doors that answer 404."
   {:presence {:href "/api/-/presence"
               :note "who is looking where (SSE / POST)"}
    ;; one socket instead of three (waymark-p5tg)
@@ -527,7 +527,9 @@
                      "the presence and intent frames "
                      "with the firehose half absent")}
    :seasons {:href "/api/-/seasons"
-             :note "the last weeks as a shape — what moved, what ages"}})
+             :note "the last weeks as a shape — what moved, what ages"}
+   :render_markdown {:href "/api/-/render/markdown" :method "POST"
+                     :note "prose fields' markdown as safe HTML — {texts: [...]} in, {html: [...]} out, in order"}})
 
 (defn- well-known
   "`mounted` is the set of static paths the assembled modules serve;
