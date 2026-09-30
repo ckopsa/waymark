@@ -205,8 +205,9 @@ jobs:
       calendar10: ${{ steps.detect.outputs.calendar10 }}
       factory10: ${{ steps.detect.outputs.factory10 }}
       localfire: ${{ steps.detect.outputs.localfire }}
-      # Whether the diff touches .github/workflows/ — true too whenever
-      # there is no diff to read. `actionlint` runs on it.
+      # Whether the diff touches .github/workflows/ or a shell script
+      # the workflows and hooks call — true too whenever there is no
+      # diff to read. `actionlint` (and its shellcheck step) runs on it.
       workflows: ${{ steps.detect.outputs.workflows }}
       quick: ${{ steps.select.outputs.quick }}
       factory: ${{ steps.select.outputs.factory }}
@@ -255,7 +256,7 @@ jobs:
           # ONLY a pull_request is narrowed. A push to main and a dispatch
           # run every suite whenever the diff touches code, exactly as
           # before, so a narrowed PR cannot hide a break past its merge.
-          SUITES="waymark10 workqueue10 calendar10 factory10 localfire"
+          SUITES=(waymark10 workqueue10 calendar10 factory10 localfire)
           declare -A reach=()
           suites_for () {
             case "$1" in
@@ -266,7 +267,7 @@ jobs:
               workqueue10/*)  reach[workqueue10]=1 ;;
               waymark10/*)    reach[waymark10]=1; reach[calendar10]=1
                               reach[factory10]=1; reach[workqueue10]=1 ;;
-              *)              for s in $SUITES; do reach[$s]=1; done ;;
+              *)              for s in "${SUITES[@]}"; do reach[$s]=1; done ;;
             esac
           }
 
@@ -274,7 +275,7 @@ jobs:
           # the table's answer otherwise.
           emit () {
             echo "code=$1" >> "$GITHUB_OUTPUT"
-            for s in $SUITES; do
+            for s in "${SUITES[@]}"; do
               if [ "$2" = all ] || [ -n "${reach[$s]:-}" ]; then
                 echo "$s=true" >> "$GITHUB_OUTPUT"
               else
@@ -308,7 +309,7 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              .github/workflows/*) workflows=true ;;
+              .github/workflows/*|.github/scripts/*.sh|scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
             esac
             case "$f" in
               waymark10/*|calendar10/*|workqueue10/*|factory10/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
@@ -327,7 +328,7 @@ jobs:
             # diff runs nothing.
             code=false
             echo "pull request — the suites this diff reaches:"
-            for s in $SUITES; do
+            for s in "${SUITES[@]}"; do
               if [ -n "${reach[$s]:-}" ]; then
                 code=true
                 echo "  $s: runs"
@@ -676,7 +677,7 @@ jobs:
         run: |
           host="${CI_SERVICE_HOST:-localhost}"
           case "$host" in
-            *'${'*)
+            *"\${"*)
               host="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
               host="${host:-localhost}"
               echo "::warning::CI_SERVICE_HOST arrived unresolved; using ${host}."
@@ -823,7 +824,7 @@ jobs:
         run: |
           host="${CI_SERVICE_HOST:-localhost}"
           case "$host" in
-            *'${'*)
+            *"\${"*)
               host="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
               host="${host:-localhost}"
               echo "::warning::CI_SERVICE_HOST arrived unresolved; using ${host}."
@@ -903,9 +904,13 @@ jobs:
   # unread. actionlint reads every workflow in the tree whenever a diff
   # touches .github/workflows/, and whenever `changes` had no diff to
   # narrow. The version is pinned for the same reason the Clojure CLI's
-  # is. Its shellcheck and pyflakes passes are off: the run: blocks
-  # predate this job and were never held to them, so turning them on is
-  # its own change.
+  # is. Its shellcheck and pyflakes passes are on, so the run: blocks
+  # are linted as scripts too; pyflakes reads only `shell: python`
+  # steps, and a python3 heredoc inside bash is not one.
+  #
+  # The standalone scripts the workflows and the seat's hook execute are
+  # outside actionlint's reach, so a second step shellchecks them at
+  # warning severity; the diff that touches one sets `workflows` too.
   actionlint:
     needs: [changes]
     if: ${{ needs.changes.outputs.workflows == 'true' }}
@@ -918,7 +923,13 @@ jobs:
         run: |
           set -euo pipefail
           bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
-          ./actionlint -color -shellcheck= -pyflakes=
+          ./actionlint -color
+      - name: shellcheck the scripts
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          shellcheck -S warning .github/scripts/*.sh scripts/*.sh .claude/hooks/sitting-close.sh
 
   # ── THE ONE CHECK BRANCH PROTECTION NAMES ───────────────────────────
   #

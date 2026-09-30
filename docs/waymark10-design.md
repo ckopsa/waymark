@@ -3461,3 +3461,53 @@ truth (an invented id, an id of the wrong kind, and a list with one
 unresolved item, each refused with the field named). The walker's own
 generator fills refs with rows that stand — a walk that proved a door
 took an invented id was proving a lie.
+
+# 25. GRAIL 2b — the refusal names the row its remedy acts on
+
+A bare remedy (`:meal/accept`) names a door and leaves the client to
+guess the row. A remedy map names both: `{:door :kind/action :id
+binding :input {field binding}}`, and a binding is exactly one of three
+reads (`g/binding-form?`):
+
+- `(input :f)` — a field of the refused call's input;
+- `(data :f)` — a field of the refused row;
+- `(evidence :f)` — a value the refusing guard found while judging.
+
+**Guard `:evidence`.** What a guard found rides beside its reason under
+the new guard key `:evidence`, in one of two spellings: a vector of
+names a `:check` returns itself (`(t/deny {:evidence {name value}})`),
+or a map `{name (fn [row ctx] → value)}` that `g/evaluate` calls only
+when the guard refused and the deny carried no evidence of its own. A
+nil value is left out. The render probe carries no `:find`, so the
+router lends the engine's read hooks as `:evidence-reads` — read only by
+a refusing guard's evidence fns — and an envelope names what it found
+too. Anything else under `:evidence` refuses at the def site.
+
+**The battery.** `checks/check-remedy-bindings` makes every binding
+point at something: `(input :f)` a field of the guarded door's input
+(the create schema at the create door), `(data :f)` a field of the row,
+`(evidence :f)` a name the guard's `:evidence` declares. A binding
+naming no field is an ERROR — its remedy would resolve to nothing on
+every refusal while claiming to point somewhere.
+
+**The wire.** `g/resolve-remedies` resolves the bindings against the
+refused call and the evidence: each remedy becomes `{door, id, input}`
+with whatever resolved (a bare remedy is `{door}`), and the whole list
+is nil when no remedy binds anything. Two members ride where a guard
+refuses, each only when non-empty:
+
+- the `guard-refused` problem (409) carries `evidence` and
+  `resolved_remedies` beside `remedies`;
+- the envelope's `unavailable.<action>` entry carries the same two,
+  resolved with no input — so there only `(data …)` and
+  `(evidence …)` bindings land.
+
+A refusal with bare remedies reads byte for byte as it did before.
+
+**The client.** `client/pursue!` follows a remedy the refusal bound to
+its row before asking anything. Its `:choices` option
+(`{remedy-door {:id row-id :input {…}}}`, asked before `:resolve`)
+answers the rest, and where the refusal bound the row, the choice's
+`:input` still fills the fields the binding left unset — the meal for
+the day a refusal named. The MCP `waymark_pursue` tool takes the same
+`choices`.

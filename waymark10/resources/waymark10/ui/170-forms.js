@@ -43,6 +43,16 @@ function instantToLocal(v) {
   return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
          "T" + p(d.getHours()) + ":" + p(d.getMinutes());
 }
+/* a prose textarea wears its Write/Preview toggle (proseEditor) wherever
+   a form puts it — top level, sub-form or list row — without changing
+   what fieldWidget hands back to its callers */
+new MutationObserver(() => {
+  for (const ta of document.querySelectorAll(
+         "textarea[data-markdown]:not([data-md-tabs])")) {
+    ta.setAttribute("data-md-tabs", "");
+    proseEditor(ta);
+  }
+}).observe(document.body, {childList: true, subtree: true});
 function fieldWidget(name, rawProp, value) {
   const prop = schemaProp(rawProp);
   const xd = rawProp["x-display"] || prop["x-display"] || {};
@@ -58,7 +68,9 @@ function fieldWidget(name, rawProp, value) {
         choices[String(v)] || String(v))));
   }
   if (xd.widget === "prose" || xd.widget === "textarea") {
-    const ta = el("textarea", {name, "data-prose": ""}, value ?? "");
+    const ta = el("textarea", {name, "data-prose": "",
+      /* only DECLARED prose is markdown and earns Write/Preview */
+      "data-markdown": xd.widget === "prose" ? "" : null}, value ?? "");
     /* scaffolding, never a value: the first declared example rides as
        the placeholder so a blank textarea is not a blank page */
     const ex = (prop.examples || rawProp.examples || [])[0];

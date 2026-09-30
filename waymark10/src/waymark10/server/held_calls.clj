@@ -1516,15 +1516,19 @@
 ;; A rule with `at {field}` tells once when the instant its row's field
 ;; names arrives, while the row stands in the rule's `when.to_state`.
 ;; The maintainer's clock sweep runs the pass (late by up to one sweep
-;; interval). Each send and its mark, keyed (rule, row, instant), land
-;; under the rule row's lock in one transaction, so a restart between
-;; sweeps neither loses a notice nor doubles one. Editing the field
+;; interval). Each mark, keyed (rule, row, instant), is claimed under
+;; the rule row's lock in one short transaction before its send, and
+;; the send and its count follow outside that lock, so a slow tool call
+;; never holds the rule's tallies and a restart between sweeps neither
+;; loses a notice nor doubles one (a crash mid-send loses at most the
+;; claims in flight, never tells twice). Editing the field
 ;; makes a new instant, and a new instant tells; a row that leaves the
 ;; state before its instant never matches.
 
 (def ^:private told-cap
-  "How many marks one rule keeps, the oldest dropped first. A mark that
-  old names an instant long past."
+  "How many marks one rule keeps for rows no longer due, the oldest
+  dropped first. A mark that still names a due row is always kept, so
+  a due set past this cap is never told twice."
   1000)
 
 (defn- told-mark [row-id at]
@@ -1532,17 +1536,27 @@
 
 (defn- due-rows
   "[row instant] for each row of the rule's kind in its `when.to_state`
-  whose `at` instant is at or before now."
+  whose `at` instant is at or before now — filtered on that field and
+  read a page of sweep-cap at a time, so no due row waits on the cap."
   [eng rule ^Instant now]
   (let [kind (keyword (str (get-in rule [:data :kind])))
         field (at-field rule)
         state (some-> (get-in rule [:data :when :to_state]) str not-empty)]
     (if-some [rd (get (inv/resources eng) kind)]
-      (let [st (:storage eng)]
-        (->> (store/with-tx st
-               (fn [tx] (store/query-rows st tx kind
-                                          (if state {:state (keyword state)} {})
-                                          {:limit sweep-cap})))
+      (let [st (:storage eng)
+            conds (cond-> [{:target :data :field field :cast "timestamptz"
+                            :op :<= :value (str now)}]
+                    state (conj {:target :state :op := :value state}))
+            page (fn [offset]
+                   (store/with-tx st
+                     (fn [tx] (store/search-rows st tx kind conds
+                                                 {:limit sweep-cap :offset offset}))))]
+        (->> (loop [offset 0 acc []]
+               (let [rows (page offset)
+                     acc (into acc rows)]
+                 (if (< (count rows) sweep-cap)
+                   acc
+                   (recur (+ offset sweep-cap) acc))))
              (map #(inv/decode-row rd %))
              (keep (fn [row]
                      (when-some [^Instant at (instant-of (get-in row [:data field]))]
@@ -1584,9 +1598,18 @@
                  (update :failed (fnil inc 0)))
              (:next-flip-at raw))))))))
 
+(defn- kept-marks
+  "The marks a rule keeps: every one that names a row still due, and
+  the last told-cap of the rest."
+  [marks due]
+  (let [live (set (map (fn [[row at]] (told-mark (:id row) at)) due))
+        gone (remove live marks)]
+    (into (vec (take-last told-cap gone)) (filter live marks))))
+
 (defn- tell-due!
-  "One rule's pass: each due row not yet told for its instant is told,
-  and its mark and its count land with it under the rule's lock.
+  "One rule's pass: each due row not yet told for its instant is claimed
+  — its mark lands under the rule's lock, and the lock lets go — then
+  told outside it; the counts land after in a second short lock.
   → how many were told."
   [eng rule now]
   (let [due (due-rows eng rule now)
@@ -1595,28 +1618,40 @@
         kind (keyword (str (get-in rule [:data :kind])))]
     (if (empty? due)
       0
-      (store/with-tx st
-        (fn [tx]
-          (if-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
-            (let [told (set (get-in raw [:data :told]))
-                  fresh (remove (fn [[row at]] (told (told-mark (:id row) at))) due)
-                  tell (fn [data [row at]]
-                         (let [[outcome error]
-                               (address! eng rule {:id (told-mark (:id row) at)
-                                                   :kind kind
-                                                   :resource-id (:id row)
-                                                   :actor engine-actor})]
-                           (cond-> (update data :told #(conj (vec %) (told-mark (:id row) at)))
-                             (not= :self outcome) (update outcome (fnil inc 0))
-                             error (assoc :last_error (let [s (str error)]
-                                                        (subs s 0 (min 500 (count s))))))))]
-              (when (seq fresh)
-                (store/update-data!
-                 st tx :notice_rule id
-                 (update (reduce tell (:data raw) fresh) :told #(vec (take-last told-cap %)))
-                 (:next-flip-at raw)))
-              (count fresh))
-            0))))))
+      (let [claimed
+            (store/with-tx st
+              (fn [tx]
+                (when-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
+                  (let [told (set (get-in raw [:data :told]))
+                        fresh (vec (remove (fn [[row at]] (told (told-mark (:id row) at))) due))]
+                    (when (seq fresh)
+                      (store/update-data!
+                       st tx :notice_rule id
+                       (update (:data raw) :told
+                               #(kept-marks (into (vec %) (map (fn [[row at]] (told-mark (:id row) at)))
+                                                  fresh)
+                                            due))
+                       (:next-flip-at raw)))
+                    fresh))))
+            outcomes (mapv (fn [[row at]]
+                             (address! eng rule {:id (told-mark (:id row) at)
+                                                 :kind kind
+                                                 :resource-id (:id row)
+                                                 :actor engine-actor}))
+                           claimed)
+            tally (fn [data [outcome error]]
+                    (cond-> data
+                      (not= :self outcome) (update outcome (fnil inc 0))
+                      error (assoc :last_error (let [s (str error)]
+                                                 (subs s 0 (min 500 (count s)))))))]
+        (when (seq outcomes)
+          (store/with-tx st
+            (fn [tx]
+              (when-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
+                (store/update-data! st tx :notice_rule id
+                                    (reduce tally (:data raw) outcomes)
+                                    (:next-flip-at raw))))))
+        (count claimed)))))
 
 (defn- tell-at!
   "The pass, unless the rule's `at` can never tell: then the fault is

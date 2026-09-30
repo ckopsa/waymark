@@ -619,6 +619,21 @@
                           (:next-flip-at schedule-row))))
   nil)
 
+(defn- stamp-withheld!
+  "A match withheld by name (ticket 80a8e60b): NOT pending, since the
+  row stays withheld until its change moves, but `last_withheld_wake`
+  stamped with the row the wake named, so this branch is told apart
+  from an empty walk (ticket d803df2d), which stamps nothing. One
+  maintenance write, for `write-pending!`'s reason."
+  [eng schedule-row resource-id]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                          (assoc (:data schedule-row)
+                                 :last_withheld_wake (str resource-id))
+                          (:next-flip-at schedule-row))))
+  nil)
+
 ;; ── the fire ────────────────────────────────────────────────────────
 
 (defn- fire!
@@ -850,7 +865,7 @@
         (do (warn! "seat " (:id seat) " was woken on " (:resource-id t)
                    ", which is open beside a submitted change — its wake"
                    " fires nothing")
-            nil)
+            (stamp-withheld! eng row (:resource-id t)))
 
         ;; the walk would hand nothing (ticket 87c928e9): a transition
         ;; wake asks the same question `release!` does, so a row the
@@ -1086,7 +1101,8 @@
           (not (fired-recently? schedule-row (long cadence) at))))))
 
 (defn sweep-cadence!
-  "Every active seat whose schedule rides its chair's link, whose
+  "Every active seat whose schedule rides its chair's link or a runner
+  pool (`schedules/fires-out?`, waymark ticket 962e0aeb), whose
   cadence is owed, marked `wake_pending` so the release that follows
   fires it. A schedule with its own link is left to its provider's
   cron, and an interactive seat is fired by nobody (R-10.8). → the
@@ -1098,7 +1114,7 @@
                           (schedules/schedule-for-seat eng (:id seat-row)))]
                 (if (and row
                          (not (schedules/linked? row))
-                         (schedules/linked? eng row)
+                         (schedules/fires-out? eng row)
                          (not (schedules/held? eng row seat-row))
                          (not (true? (get-in row [:data :wake_pending])))
                          (cadence-due? seat-row row at))

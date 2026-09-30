@@ -9,6 +9,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.router :as router]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.wire :as wire]))
@@ -49,6 +50,7 @@
                       :one-way "A closed task is history."}}}}))
 
 (def ^:dynamic *h* nil)
+(def ^:dynamic *eng* nil)
 
 (defn- with-handler [f]
   (let [st (pg/storage dsn)]
@@ -58,16 +60,17 @@
           (doseq [table ["plans" "meals" "tasks" "definitions"
                          "waymark10_transitions" "waymark10_idempotency"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
-      (binding [*h* (engine/handler
-                     (engine/engine {:storage st
-                                     :resources [fx/meal fx/plan task]
-                                     ;; the places hook (waymark-z8u4):
-                                     ;; an application's opinion about
-                                     ;; one kind, none about the rest
-                                     :services {:places (fn [kind _data]
-                                                          (when (= :task kind)
-                                                            ["1:19:00" "1:24:30"]))}}))]
-        (f))
+      (let [eng (engine/engine {:storage st
+                                :resources [fx/meal fx/plan task]
+                                ;; the places hook (waymark-z8u4):
+                                ;; an application's opinion about
+                                ;; one kind, none about the rest
+                                :services {:places (fn [kind _data]
+                                                     (when (= :task kind)
+                                                       ["1:19:00" "1:24:30"]))}})]
+        (binding [*eng* eng
+                  *h* (engine/handler eng)]
+          (f)))
       (finally (pg/close! st)))))
 
 (use-fixtures :once with-handler)
@@ -143,6 +146,25 @@
       (is (vector? (get-in b [:resources :plan :views])))
       (is (contains? (set (get-in b [:resources :plan :filters])) "state"))
       (is (vector? (:kinds b))))))
+
+;; a module's door rides :doors only when that module's routes are
+;; mounted — a core-only handler must not name a door that answers 404
+(deftest well-known-doors-follow-the-assembled-modules
+  (let [doors-of (fn [h]
+                   (:doors (json (h {:request-method :get
+                                     :uri "/api/.well-known/waymark"
+                                     :headers {"x-waymark-principal" "colton"}}))))
+        core-only (doors-of (router/handler *eng*))
+        full (doors-of *h*)]
+    (testing "core-only: core's doors stay, the modules' are absent"
+      (is (= "/api/-/welcome" (get-in core-only [:welcome :href])))
+      (is (= "/api/-/events" (get-in core-only [:events :href])))
+      (doseq [door [:presence :live :seasons]]
+        (is (not (contains? core-only door)) (str door " advertised unmounted"))))
+    (testing "full modules: each module door is advertised at its href"
+      (is (= "/api/-/presence" (get-in full [:presence :href])))
+      (is (= "/api/-/live" (get-in full [:live :href])))
+      (is (= "/api/-/seasons" (get-in full [:seasons :href]))))))
 
 (deftest published-schema
   (let [resp (req :get "/api/schemas/plan")

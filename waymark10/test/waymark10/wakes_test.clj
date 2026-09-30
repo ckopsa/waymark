@@ -2036,6 +2036,48 @@
 
     (seat-do! chaired :retire)))
 
+(deftest a-pool-only-seat-is-owed-its-cadence
+  ;; waymark ticket 962e0aeb: a schedule whose only way out is a runner
+  ;; pool, its own or its chair's, has no copy whose cron keeps its
+  ;; cadence, so the sweep marks it owed as it does a chair-linked one
+  (let [fn' :wake-cadence-pool
+        _ (drain-fires! fn')
+        runner! (fn [nm]
+                  (str (:id (:row (inv/create! *eng* :runner_link
+                                               {:provider "claude_routine"
+                                                :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                               "/routines/trig_" nm "/fire")
+                                                :fire_token (str "rk-test-" nm "-0123456789abcdef")}
+                                               {:principal elena})))))
+        pooled (model! "cadence-pool-chair")
+        _ (inv/invoke! *eng* :model (str pooled) :set_runners
+                       {:runners [(runner! "cadencepoolchair")]}
+                       {:principal elena})
+        bare (model! "cadence-bare-chair")
+        chair-pooled (seat! "cadencechairpool" {:held_for [(str pooled)]})
+        own-pooled (seat! "cadenceownpool" {:held_for [(str bare)]})
+        _ (drain-fires! fn')
+        _ (inv/invoke! *eng* :schedule (str (:id (sched-of own-pooled))) :set_runners
+                       {:runners [(runner! "cadenceownpool")]}
+                       {:principal elena})
+        _ (drain-fires! fn')
+        seats [chair-pooled own-pooled]
+        now (Instant/now)
+        at-now (assoc *eng* :now-fn (constantly now))]
+    (doseq [s seats] (stamp-last-fired! s (.minusSeconds now 7200)))
+    (try
+      (doseq [s seats]
+        (is (not (sch/linked? *eng* (sched-of s)))
+            "neither the row nor its chair holds a link")
+        (is (sch/fires-out? *eng* (sched-of s))))
+
+      (testing "the sweep marks the owed cadence of both pool-only schedules"
+        (wakes/sweep-cadence! at-now)
+        (doseq [s seats]
+          (is (true? (get-in (sched-of s) [:data :wake_pending])))))
+      (finally
+        (doseq [s seats] (seat-do! s :retire))))))
+
 ;; ── a broken schedule holds its wakes (waymark ticket bb19404d) ─────
 
 (deftest a-broken-schedule-holds-its-wake-until-it-is-linked-again

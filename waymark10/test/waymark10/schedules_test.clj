@@ -961,3 +961,54 @@
       (is (= :linked-for-fire (guard-of bare-id))))
 
     (doseq [s [seat-id bare-id]] (seat-do! s :retire))))
+
+;; ── 11 · the adapter leaves a pool-only schedule alone (waymark ticket 962e0aeb)
+;; A schedule whose only way out is a runner pool, its own or its
+;; chair's, fires through Routines a person made: push!, pause!,
+;; resume! and delete! ask the provider nothing for it, and the row
+;; still ends when its seat retires.
+
+(deftest the-adapter-leaves-a-pool-only-schedule-alone
+  (let [cn :sched-pool-only
+        _ (drain! cn)
+        bare (model! "claude-chair-pool-bare")
+        pooled (model! "claude-chair-pool")
+        _ (set-runners! :model pooled {:runners [(runner-link!)]})
+        own (seat! "pool-own-clerk" 3600 [bare])
+        _ (drain! cn)
+        xid (get-in (sched-of own) [:data :external_id])
+        _ (set-runners! :schedule (:id (sched-of own)) {:runners [(runner-link!)]})
+        _ (drain! cn)
+        creates (:creates (sch/counts *fake*))
+        chaired (seat! "pool-chair-clerk" 3600 [pooled])
+        _ (drain! cn)
+        asked #(dissoc (sch/counts *fake*) :reads)]
+
+    (testing "a seat whose chair holds only a pool gets no copy"
+      (is (some? xid) "the own-pool seat was pushed before its pool was set")
+      (is (not (sch/linked? *eng* (sched-of chaired))))
+      (is (= creates (:creates (sch/counts *fake*))))
+      (is (nil? (get-in (sched-of chaired) [:data :external_id]))))
+
+    (let [before (asked)]
+      (testing "restate, park and unpark ask the provider nothing"
+        (doseq [s [own chaired]]
+          (restate-cadence! s 21600)
+          (drain! cn)
+          (seat-do! s :park)
+          (drain! cn)
+          (seat-do! s :unpark)
+          (drain! cn))
+        (is (= before (asked)))
+        (is (= "0 * * * *" (:cron (copy-of (sched-of own))))
+            "the old copy is not updated")
+        (is (true? (:enabled (copy-of (sched-of own)))) "nor paused")
+        (is (= :live (:state (sched-of own)))))
+
+      (testing "retire ends both rows and deletes nothing at the provider"
+        (doseq [s [own chaired]] (seat-do! s :retire))
+        (drain! cn)
+        (is (= before (asked)))
+        (is (some? (sch/copy *fake* xid)))
+        (doseq [s [own chaired]]
+          (is (= :ended (:state (sched-of s)))))))))

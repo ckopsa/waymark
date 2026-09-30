@@ -70,6 +70,85 @@ function memberRef(id) {
   return span;
 }
 
+/* ── prose is markdown (a2037ee7) ────────────────────────────────────
+   A field declared prose holds markdown, and the ENGINE renders it:
+   POST /api/-/render/markdown is the one safe renderer (raw HTML
+   escaped, links only http/https/mailto), so this page never grows a
+   second one. Every prose value asked for in one tick rides one call,
+   split under the door's caps (50 texts, 200 KB). The raw words show
+   until the answer lands, and stay when it never does. */
+const MD_MAX_TEXTS = 50, MD_MAX_BYTES = 200 * 1024;
+let mdQueue = null;
+function renderMarkdown(text) {
+  return new Promise(resolve => {
+    if (!mdQueue) { mdQueue = []; queueMicrotask(flushMarkdown); }
+    mdQueue.push({text: String(text), resolve});
+  });
+}
+function markdownBatches(queue) {
+  const enc = new TextEncoder(), out = [];
+  let cur = [], bytes = 0;
+  for (const q of queue) {
+    const n = enc.encode(q.text).length;
+    if (cur.length && (cur.length >= MD_MAX_TEXTS || bytes + n > MD_MAX_BYTES))
+      { out.push(cur); cur = []; bytes = 0; }
+    cur.push(q); bytes += n;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+function flushMarkdown() {
+  const queue = mdQueue; mdQueue = null;
+  for (const batch of markdownBatches(queue))
+    api("/api/-/render/markdown", {method: "POST",
+      body: JSON.stringify({texts: batch.map(q => q.text)})})
+      .then(({ok, body}) => (ok && body && Array.isArray(body.html)) ? body.html : [],
+            () => [])
+      .then(html => batch.forEach((q, i) =>
+        q.resolve(typeof html[i] === "string" ? html[i] : null)));
+}
+/* the server's HTML into a node that showed the raw words till now */
+function showMarkdown(node, html) {
+  node.innerHTML = html;
+  node.classList.add("md");
+  node.style.whiteSpace = "normal";
+}
+function proseView(v, attrs) {
+  const box = el("div", attrs, String(v));
+  renderMarkdown(v).then(html => { if (html !== null) showMarkdown(box, html); });
+  return box;
+}
+/* the prose box's Write/Preview toggle: Preview asks the same door the
+   display does, so what it shows is what the row will show */
+function proseEditor(ta) {
+  const preview = el("div", {class: "prose", "data-md-preview": "",
+    style: "display:none;white-space:pre-wrap;max-width:640px;min-height:4em"});
+  const write = el("button", {type: "button", "aria-pressed": "true"}, "Write");
+  const look = el("button", {type: "button", "aria-pressed": "false"}, "Preview");
+  let asked = 0;
+  const show = on => {
+    ta.style.display = on ? "none" : "";
+    preview.style.display = on ? "" : "none";
+    write.setAttribute("aria-pressed", String(!on));
+    look.setAttribute("aria-pressed", String(on));
+    if (!on) return;
+    const seq = ++asked, text = ta.value;
+    preview.classList.remove("md");
+    preview.style.whiteSpace = "pre-wrap";
+    preview.textContent = text || "Nothing to preview.";
+    if (text) renderMarkdown(text).then(html => {
+      if (seq === asked && html !== null) showMarkdown(preview, html);
+    });
+  };
+  write.addEventListener("click", () => show(false));
+  look.addEventListener("click", () => show(true));
+  ta.before(el("div", {class: "prose-tabs",
+    style: "display:flex;gap:4px;margin-bottom:4px"}, write, look));
+  ta.after(preview);
+  show(false);
+  return preview;
+}
+
 /* ── values: honest rendering of the data document ─────────────────── */
 function valueCell(v, xd) {
   if (v === null || v === undefined) return el("span", {class:"muted"}, "—");
@@ -85,7 +164,12 @@ function valueCell(v, xd) {
          isAddress(x) ? addressCell(x) : String(x))));
   }
   if (typeof v === "object") return kvTable(v);
-  if ((xd || {}).widget === "prose" || (typeof v === "string" && v.includes("\n")))
+  /* declared prose is markdown; an undeclared string that merely spans
+     lines keeps its breaks and nothing more */
+  if ((xd || {}).widget === "prose")
+    return proseView(v, {class:"prose", style:"white-space:pre-wrap;max-width:640px;" +
+      "max-height:320px;overflow-y:auto"});
+  if (typeof v === "string" && v.includes("\n"))
     return el("div", {class:"prose", style:"white-space:pre-wrap;max-width:640px;" +
       "max-height:320px;overflow-y:auto"}, String(v));
   /* the address rule sits AFTER prose on purpose: a field declared
