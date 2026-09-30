@@ -13,7 +13,8 @@ const dlgStamp = t => new Date(t || Date.now())
   .toTimeString().slice(0, 8);
 
 async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
-                             idemKey: callerKey, suggest, invitation}) {
+                             idemKey: callerKey, suggest, invitation,
+                             guided}) {
   const safety = entry.safety || {};
   const input = entry.input || null;
   /* rule 3 (Part IV): a non-idempotent action gets its key at dialog
@@ -31,7 +32,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
      prefill, revs, authors}; the row's own current values are the
      fallback prefill for an :edit that was never drafted. */
   let draftView = null;
-  if (entry.draft && entry.draft.href) {
+  /* a guided dialog is someone else's: no draft is read or written */
+  if (entry.draft && entry.draft.href && !guided) {
     const d = await api(entry.draft.href);
     if (d.ok) draftView = d.body;
   }
@@ -175,7 +177,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     peers.textContent = others.length
       ? ` · editing with ${others.map(p => p.display || p.id).join(", ")}` : "";
   };
-  if (entry.draft && entry.draft.shared) {
+  if (entry.draft && entry.draft.shared && !guided) {
     try {
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(`${proto}//${location.host}${entry.draft.href}/collab`);
@@ -452,6 +454,50 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     node.addEventListener("input",
       () => node.classList.remove("suggested-value"), {once: true});
   }
+  /* guided follow (docs/spec-guided-follow.md §2): someone else's
+     dialog on this screen, read-only — every input disabled, only
+     Cancel left in the footer, the reporter named above the form.
+     Their typing lands through dlg.guidedSet. */
+  if (guided) {
+    dlg.setAttribute("data-guided", guided.key);
+    for (const n of form.querySelectorAll("input, select, textarea, button"))
+      n.disabled = true;
+    for (const b of dlg.querySelectorAll(".dlgfoot button"))
+      if (b.textContent !== "Cancel") b.remove();
+    form.prepend(el("p", {class: "guided-note", "data-guided-note": ""},
+      `${guided.name} is filling this in`));
+    dlg.guidedSet = fields => {
+      for (const [k, v] of Object.entries(fields || {})) {
+        const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
+        if (!node) continue;
+        if (node.type === "checkbox") node.checked = !!v;
+        else node.value = v == null ? ""
+          : typeof v === "object" ? (v.elided ? "…" : JSON.stringify(v))
+          : String(v);
+      }
+    };
+    /* closed by this person's own hand: not reopened for the same step */
+    dlg.addEventListener("close", () => {
+      if (!dlg.dataset.guidedAuto && guided.onDismiss) guided.onDismiss();
+    });
+  } else if (!bulkIds) {
+    /* share my screen: this dialog, and its values as typed (debounced
+       150 ms, secrets removed), cleared when it closes */
+    const shareFields = () => {
+      try { return input ? shareableValues(collectValues(form, input), input) : {}; }
+      catch (_e) { return {}; }
+    };
+    let shareTimer = null;
+    form.addEventListener("input", () => {
+      clearTimeout(shareTimer);
+      shareTimer = setTimeout(() => shareUi({fields: shareFields()}), 150);
+    });
+    dlg.addEventListener("close", () => {
+      clearTimeout(shareTimer);
+      shareUi({dialog: null, fields: null});
+    });
+    shareUi({dialog: {self: doc.self, action: name}, fields: shareFields()});
+  }
   document.body.append(dlg);
   dlg.addEventListener("close", () => dlg.remove());
   dlg.showModal();
@@ -512,6 +558,9 @@ async function openInvitation(inv) {
   }
   const target = res.body;
   const entry = (target.actions || {})[d.action];
+  /* an invitation addressed to this person opens in their own hand,
+     over any guided dialog (#613) */
+  closeGuided();
   go(target.self);
   if (!entry) {
     toast(`${pretty(d.action)} is not open to you on this row right now`);
