@@ -710,6 +710,26 @@
                                    jobs))]
         (some-> (or by-check by-name) :id str)))))
 
+(defn- failed-steps!
+  "The names of the steps that went red in the job behind one check run
+  (ticket c0d7ce64), read from its run's jobs listing, which carries
+  each step's conclusion. Empty when the check names no run or job."
+  [this check]
+  (let [[_ run] (some->> (:details_url check)
+                         (re-matches details-pattern))
+        job (when run (job-of this check))]
+    (if job
+      (let [jobs (:jobs (call! this "GET"
+                               (str "/repos/" (:repository check)
+                                    "/actions/runs/" run "/jobs")
+                               {:params {:per_page page-size}}))]
+        (into []
+              (comp (filter #(contains? forge/red-conclusions
+                                        (str (word (:conclusion %)))))
+                    (keep #(word (:name %))))
+              (:steps (first (filter #(= job (str (:id %))) jobs)))))
+      [])))
+
 (defn- log-answer!
   "The job log route, with its redirect followed WITHOUT the token: the
   blob is a signed URL at another host, and a bearer must not travel
@@ -871,6 +891,10 @@
                                           number)
                             {})]
       (pull-pass! this repository pull)))
+
+  forge/ForgeSteps
+  (forge-failed-steps [this check]
+    (failed-steps! this check))
 
   forge/ForgeCompare
   (forge-behind? [this repository base head-sha]

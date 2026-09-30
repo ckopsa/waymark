@@ -812,6 +812,21 @@
     (gh/seed-job! state private-repo 900 a-green-job)
     (gh/seed-log! state "7001" the-log)))
 
+(deftest the-red-steps-of-a-job-are-named-from-its-run-listing
+  ;; ticket c0d7ce64: the red-main ticket names the step that went red
+  (let [state (gh/fake-state)
+        _ (gh/seed-job! state repo 900
+                        (assoc a-red-job :steps
+                               [{:name "Set up job" :conclusion "success"}
+                                {:name "check-queue" :conclusion "failure"}
+                                {:name "calendar10" :conclusion "skipped"}]))
+        source (gh/fake-source state)]
+    (is (= ["check-queue"]
+           (forge/forge-failed-steps
+            source {:repository repo :details_url (:html_url a-red-job)})))
+    (is (= [] (forge/forge-failed-steps source {:repository repo}))
+        "a check that names no run names no step")))
+
 (deftest a-refused-check-read-is-made-through-actions
   (let [state (gh/fake-state)
         _ (private-rig state 403)

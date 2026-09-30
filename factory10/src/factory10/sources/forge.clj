@@ -203,6 +203,16 @@
     `forge-poll` answers, or nil. Throws when the forge does not
     answer or has no such pull request."))
 
+(defprotocol ForgeSteps
+  "Which steps of a red job went red (ticket c0d7ce64). A protocol of
+  its own: a source that does not implement it names no step, and the
+  red-main ticket carries the log tail alone."
+  (forge-failed-steps [s check]
+    "→ [step-name …] for one check document carrying `:repository`:
+    the steps of the job behind it that finished red, in order. Empty
+    when the check names no job. Throws when the forge does not
+    answer."))
+
 ;; ── what the two kinds take ─────────────────────────────────────────
 
 (def change-create-fields
@@ -1472,14 +1482,24 @@
   do about it. `failed` are the checks on the head that are not
   required and went red too — the suites a required `gate` only names
   (`quick=failure`) — and their logs come first, because the cause is
-  in them (ticket 9a14577e)."
+  in them (ticket 9a14577e). Each log names the steps of its job that
+  went red, so the step is named even when the tail is cut before it
+  (ticket c0d7ce64)."
   [source repo base head red-from red-checks failed]
   (let [tails (for [c (concat (take base-log-tails failed)
                               (take base-log-tails red-checks))]
                 (let [{:keys [excerpt note]}
                       (try (forge-log-tail source (assoc c :repository repo))
-                           (catch Exception e {:note (ex-message e)}))]
+                           (catch Exception e {:note (ex-message e)}))
+                      steps (when (satisfies? ForgeSteps source)
+                              (try (forge-failed-steps
+                                    source (assoc c :repository repo))
+                                   (catch Exception _ nil)))]
                   (str "### " (:check_name c) "\n\n"
+                       (when (seq steps)
+                         (str "Red steps: "
+                              (str/join ", " (map #(str "`" % "`") steps))
+                              "\n\n"))
                        (if (str/blank? (str excerpt))
                          (str "No log tail: " (or note "the forge gave none") ".")
                          (str "```\n" excerpt "\n```")))))]
