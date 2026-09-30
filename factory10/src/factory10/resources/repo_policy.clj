@@ -549,6 +549,22 @@
                                    :label "What a test selection looks like"
                                    :help "A regular expression the bench checks a seat's test selection against before it dispatches the workflow. Leave it empty for the Clojure shape: a dotted namespace ending in -test. A Python repository states its own, such as dotted module names. The bench's rig compiles it with Python 3.11 re: keep to what Java and Python 3.11 share (character classes, groups, alternation, greedy, lazy and possessive quantifiers, atomic groups, ^ and $), and not \\p{…} or \\z."}}
       [:maybe [:string {:min 1 :max 200}]]]]]
+   ;; the bench's check step (ticket 856e825c). OPTIONAL: a repository
+   ;; with no check step states none, and enroll then sends no `check`.
+   [:check {:optional true
+            :examples [{:command "cd workqueue10 && clojure -M:check"}]
+            :x-display
+            {:raw true
+             :label "The check step"
+             :help "The command the bench's check runs after its lint, in the worktree."}}
+    [:map
+     [:command {:x-display {:label "Command"
+                            :help "The shell command the bench's check runs after its lint, in the worktree."}}
+      [:string {:min 1 :max 400}]]
+     [:timeout {:optional true
+                :x-display {:label "Timeout in seconds"
+                            :help "How long the command may run, from 10 to 1800 seconds. Leave it empty for the rig's default."}}
+      [:int {:min 10 :max 1800}]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
@@ -802,7 +818,7 @@
                       :merge_method :merge_wait_seconds
                       :deploy_check :deploy_wait_seconds
                       :rounds_per_change :merge_strategy :train_size :formatter
-                      :deny :test :orientation]}
+                      :deny :test :check :orientation]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
                :description "State what submit means in this repository again, whole"}}

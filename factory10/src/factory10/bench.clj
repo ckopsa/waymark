@@ -325,9 +325,12 @@
   it. A row without one sends no key, so a rig that does not know the
   key still takes it. `select_pattern` rides inside it the same way
   (ticket efa54182): only when the row states one, so the rig keeps
-  its own Clojure default otherwise."
+  its own Clojure default otherwise. `check` rides the same way
+  (ticket 856e825c): the command the bench's check runs after its lint,
+  sent only when the row states one."
   [row]
   (let [test-block (get-in row [:data :test])
+        check-block (get-in row [:data :check])
         pattern (:select_pattern test-block)]
     (cond-> {:repo (str (get-in row [:data :repository]))
              :clone_url (clone-url-of row)
@@ -336,7 +339,8 @@
              :land (land-of row)}
       (some? test-block) (assoc :test (cond-> (select-keys test-block [:workflow :input])
                                         (not (str/blank? (str pattern)))
-                                        (assoc :select_pattern (str pattern)))))))
+                                        (assoc :select_pattern (str pattern))))
+      (some? check-block) (assoc :check (select-keys check-block [:command :timeout])))))
 
 (defn enrolled
   "The row after the engine offered this repository to the rig (R-2).
