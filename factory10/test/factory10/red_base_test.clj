@@ -307,6 +307,17 @@
       (is (str/blank? (str (get-in (policy-of engine) [:data :source_note]))))
       (is (= head-1 (get-in (policy-of engine) [:data :base_head]))))))
 
+(deftest a-deploy-only-policy-notes-a-base-it-cannot-read
+  (let [state (gh/fake-state)
+        eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})]
+    (inv/create! eng :repo_policy {:repository repo :deploy_check "deploy"}
+                 {:principal a-person})
+    (pass! {:source (gh/fake-source state {:repos repo}) :engine eng})
+    (is (str/starts-with? (str (get-in (policy-of eng) [:data :source_note]))
+                          "The base `main` was not read (")
+        "no required check, but the deploy read rides on the base")))
+
 (deftest the-base-pass-runs-when-a-pass-before-it-throws
   (let [{:keys [engine] :as w} (world)]
     (head-at! w head-1 903 "failure")
