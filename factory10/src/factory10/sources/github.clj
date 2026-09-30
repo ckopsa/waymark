@@ -47,8 +47,10 @@
   THE CURSOR is GitHub's own `updated_at`, as gtasks's is Google's.
   The pulls listing is asked sorted by `updated` descending, and the
   read stops at the first pull request older than the cursor MINUS
-  sixty seconds. The sixty seconds absorb clock skew and same-second
-  writes; re-seeing a handful of pull requests costs nothing, because
+  five minutes. The five minutes absorb clock skew, same-second writes
+  and a listing that shows a new pull request late (PR #499 never
+  appeared inside a sixty-second overlap); re-seeing a handful of pull
+  requests costs nothing, because
   the pass writes a fact only when the fact moved. The cursor advances
   only when every configured repository answered, so a failure in the
   middle of a pass makes the next pass re-read rather than skip.
@@ -135,9 +137,9 @@
 
 (def overlap-seconds
   "How far behind the cursor the window re-asks from. Wide enough for
-  clock skew and same-second writes, narrow enough that the re-read
-  set stays small."
-  60)
+  clock skew, same-second writes and GitHub's listing lagging a new
+  pull request, narrow enough that the re-read set stays small."
+  300)
 
 (def default-repos
   "The repository a STATIC list falls back to when it names none

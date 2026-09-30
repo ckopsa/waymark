@@ -721,7 +721,7 @@
 
 ;; ── the cursor ──────────────────────────────────────────────────────
 
-(deftest the-window-re-asks-from-sixty-seconds-behind
+(deftest the-window-re-asks-from-five-minutes-behind
   (let [state (gh/fake-state)
         source (gh/fake-source state {:cursor "2026-09-18T12:00:00Z"})
         pull (fn [n at]
@@ -729,12 +729,13 @@
                 :user {:login "ckopsa"} :base {:ref "main"}
                 :head {:ref (str "b" n) :sha (str "sha" n)}
                 :updated_at at :labels []})]
-    ;; inside the sixty seconds, and outside them
-    (gh/seed-pull! state repo (pull 7 "2026-09-18T11:59:30Z"))
-    (gh/seed-pull! state repo (pull 8 "2026-09-18T11:58:00Z"))
+    ;; inside the five minutes (though outside sixty seconds), and
+    ;; outside them
+    (gh/seed-pull! state repo (pull 7 "2026-09-18T11:56:00Z"))
+    (gh/seed-pull! state repo (pull 8 "2026-09-18T11:54:30Z"))
     (let [answer (forge/forge-poll source)]
       (is (= ["github:ckopsa/waymark#7"] (mapv :change_id (:changes answer)))
-          "the window re-asks from sixty seconds behind the cursor, and
+          "the window re-asks from five minutes behind the cursor, and
            stops at the first pull request older than that")
       (is (true? (:complete? answer)))
       (is (= "2026-09-18T12:00:00Z" (gh/cursor source))
