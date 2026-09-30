@@ -890,6 +890,9 @@
                    :when (and reading
                               (string-shape? schema)
                               (nil? (:kind properties))
+                              ;; a principal, an address or a kind-from
+                              ;; ref says what it holds (8ca09ba7)
+                              (nil? (:x-ref properties))
                               (not (if by-kind
                                      (plainly-no-id? properties schema)
                                      (prose-widget? properties))))
@@ -902,7 +905,9 @@
                 ": each is named after a kind or a principal, or is an "
                 "id beside a kind, and holds a string, so it reads as a "
                 "row id, but nothing declares it a ref. Declare it "
-                ":waymark/ref with its :kind, or, when it holds no id (a "
+                ":waymark/ref with its :kind, or give it an :x-ref form "
+                "({:principal true}, {:address true}, {:kind-from f}), or, "
+                "when it holds no id (a "
                 "name, say), waive it with {:not-a-ref \"why\"} in its "
                 "properties.")))))
 
