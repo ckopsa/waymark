@@ -1303,13 +1303,23 @@
 (defn- draft-view-response [view]
   (json-response 200 (p/wire-value view) media-type nil))
 
+(defn- draft-prefill
+  "The draft view's prefill, computed as the envelope's is: the row's
+  own :edit :prefill values with a door's :prefill-fn merged over
+  them, reading through this request's render hooks."
+  [eng req rdef]
+  (let [opts (render-opts eng req)]
+    (fn [defn' raw]
+      (render/prefill-values defn' (inv/decode-row rdef raw) opts))))
+
 (defn- draft-get [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)]
       (check-row! req rdef id)
       (check-action! req rdef (keyword action))
       (draft-view-response
-       (drafts/fetch eng rdef id (keyword action) (principal-of req))))))
+       (drafts/fetch eng rdef id (keyword action) (principal-of req)
+                     (draft-prefill eng req rdef))))))
 
 (defn- draft-put [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
@@ -1318,7 +1328,7 @@
       (check-action! req rdef (keyword action))
       (draft-view-response
        (drafts/save! eng rdef id (keyword action) (read-body req)
-                     (principal-of req))))))
+                     (principal-of req) (draft-prefill eng req rdef))))))
 
 (defn- draft-delete [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]

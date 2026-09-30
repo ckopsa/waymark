@@ -118,19 +118,31 @@
   (or (store/load-row (:storage eng) tx (:kind rdef) id {})
       (throw (p/not-found (:kind rdef) id))))
 
-(defn- view [defn' raw draft doc]
+(defn- row-prefill
+  "The prefill a caller lends no reader for: the row's own stored
+  values for the declared :edit :prefill fields. The router lends
+  render/prefill-values over the decoded row instead (this namespace
+  cannot require render: render → invoke → drafts), so a door's
+  :edit :prefill-fn speaks here as it does on the envelope."
+  [defn' raw]
+  (select-keys (:data raw) (get-in defn' [:edit :prefill])))
+
+(defn- view [prefill defn' raw draft doc]
   {:values (:values doc)
    :revs (:revs doc)
    :authors (:authors doc)
    :base-version (:base-version draft)
-   :prefill (select-keys (:data raw) (get-in defn' [:edit :prefill]))})
+   :prefill (prefill defn' raw)})
 
 (defn save!
   "Validate and upsert the principal's (or the shared) draft of this
   action; base_version = the row's current version. A PUT replaces
   the whole values document: each changed field's rev bumps, its
-  author restamps, and its op log clears. Returns the GET view."
-  [eng rdef id action-name body principal]
+  author restamps, and its op log clears. Returns the GET view;
+  prefill, a fn of (defn' raw-row), answers its :prefill."
+  ([eng rdef id action-name body principal]
+   (save! eng rdef id action-name body principal row-prefill))
+  ([eng rdef id action-name body principal prefill]
   (let [defn' (draftable rdef action-name)
         body (or body {})]
     (when-not (map? body)
@@ -159,12 +171,14 @@
             (store/save-draft! (:storage eng) tx (:kind rdef) id
                                action-name audience (envelope doc)
                                (:version raw))
-            (view defn' raw {:base-version (:version raw)} doc)))))))
+            (view prefill defn' raw {:base-version (:version raw)} doc))))))))
 
 (defn fetch
   "The stored draft this principal can see, with the prefill; 404 when
   none — a private draft does not exist for anyone else."
-  [eng rdef id action-name principal]
+  ([eng rdef id action-name principal]
+   (fetch eng rdef id action-name principal row-prefill))
+  ([eng rdef id action-name principal prefill]
   (let [defn' (draftable rdef action-name)
         audience (audience-of defn' principal)]
     (store/with-tx (:storage eng)
@@ -177,7 +191,7 @@
                                                         (name action-name)
                                                         " for this "
                                                         (name (:kind rdef)) ".")})))]
-          (view defn' raw draft (document (:values draft))))))))
+          (view prefill defn' raw draft (document (:values draft)))))))))
 
 (defn discard!
   "Delete the draft; discarding what does not exist is a no-op (DELETE
