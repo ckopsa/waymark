@@ -106,8 +106,9 @@
 (defn presence-source
   "Who is looking where, on presence's own terms: subscribe with the
   request's concealment predicate, open with the snapshot frame that
-  predicate filters, render with presence/frame. opts is subscribe's
-  guided-follow opt-in ({:ui pid :redact f}); nil is today's source."
+  predicate filters, render with presence/frame. opts is
+  presence/subscribe's guided-follow opt-in ({:ui pid :redact f}),
+  handed to the snapshot too; nil is the stream without ui frames."
   ([reg visible?] (presence-source reg visible? nil))
   ([reg visible? opts]
    (let [sub (presence/subscribe reg visible? opts)]
