@@ -126,10 +126,6 @@
                                  :x-display {:label "As a substitute"
                                              :help "Tick this to stand in rather than hold the seat: a substitute gets the seat's scope minus its drop list, reads the seat's memory without writing it, and is not limited to one per seat."}}
                     [:maybe :boolean]]
-                   [:waits_on {:optional true :kind :member
-                               :x-display {:label "Waits on"
-                                           :help "The member who must approve this ask: the person the requesting seat or delegate acts for, or the requester themselves. The engine stamps it at birth."}}
-                    [:maybe :waymark/ref]]
                    [:expires_at {:optional true
                                  :x-display
                                  {:label "Good until"
@@ -219,7 +215,9 @@
     (is (= (schema/entry-map (:schema split))
            (schema/entry-map (:schema sugared))))
     (is (= (schema/entry-map (:create-schema split))
-           (schema/entry-map (:create-schema sugared)))))
+           (schema/entry-map (:create-schema sugared))))
+    (is (not (contains? (schema/entry-map (:create-schema sugared)) :waits_on))
+        "an :engine-fields entry is stamped at birth, never offered at create"))
   (testing "the decider wall is one law in two objects"
     (doseq [[an a] (:actions sugared)]
       ;; both sides carry a canonical form, so callable-hash reads the
@@ -345,7 +343,7 @@
                       (assoc-in row [:data :derived_from]
                                 (get-in row [:data :asked_by])))))
           born ((:on-create r) {:data {:ask "may I"}}
-                {:principal {:id "iris"} :now java.time.Instant/EPOCH})]
+                {:principal {:id "iris"} :now (java.time.Instant/ofEpochSecond 0)})]
       (is (= "iris" (get-in born [:data :asked_by]))
           "the decision's own stamp still lands")
       (is (= "iris" (get-in born [:data :derived_from]))

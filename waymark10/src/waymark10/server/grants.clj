@@ -1378,6 +1378,8 @@
               :name :someone-else-decides
               :explain "The requester cannot judge its own ask; another principal decides."}
     :stamps  {:decided-by :approved_by}
+    ;; born-ask stamps waits_on at birth, so the create model omits it
+    :engine-fields [:waits_on]
     ;; short-lived is the DEFAULT, not an opt-in: an ask naming no
     ;; expiry gets the engine's configured TTL (24h, the leash's own
     ;; cap — waymark-h6y: a shorter default killed the minted grant
