@@ -33,11 +33,10 @@
       eng)))
 
 (defn start-held-call!
-  "The held-call drive's engine: a memory engine (dev/scratch!, no
-  database) serving the meal fixture, so a seat's scope names a kind
-  this engine serves. Nothing is seeded here: the drive opens the
-  mayor, its child and the held restate through the API, as
-  delegation-test does over the ring handler.
+  "The invitation drive's engine: a memory engine (dev/scratch!, no
+  database) serving the meal fixture beside core's invitation kind.
+  Nothing is seeded here: the drive opens its meal and invitations
+  through the API.
 
     clojure -Sdeps '{:aliases {:fx {:extra-paths [\"test\"]}}}' -M:fx \\
       -e \"(do ((requiring-resolve 'waymark10.batch-a-dev/start-held-call!) 8124) nil) @(promise)\""

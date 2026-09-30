@@ -57,21 +57,14 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs access
 
-   HELD-CALL (a held seat-restate's people labelled by name, against
-   a memory engine — no database):
-   1. clojure -Sdeps '{:aliases {:fx {:extra-paths ["test"]}}}' -M:fx -e \
-        "(do ((requiring-resolve 'waymark10.batch-a-dev/start-held-call!) 8124) nil) @(promise)"
-      (boot fresh per drive run — the drive seeds the mayor, its child
-       and the held restate through the API)
-   2. the same chromium
-   3. node waymark10/scripts/ui-drive.mjs held-call
-
    INVITATION (an open invitation taken from its collection in one
    tap, and another declined from the dialog; docs/spec-guided-follow.md
-   § 3. The invitation kind is core's, so the held-call engine serves
-   it beside the meal fixture):
-   1. the held-call boot on 8124 (fresh per drive run — the drive
-      seeds its meal and invitations through the API)
+   § 3. The invitation kind is core's, so a memory engine — no
+   database — serves it beside the meal fixture):
+   1. clojure -Sdeps '{:aliases {:fx {:extra-paths ["test"]}}}' -M:fx -e \
+        "(do ((requiring-resolve 'waymark10.batch-a-dev/start-held-call!) 8124) nil) @(promise)"
+      (boot fresh per drive run — the drive seeds its meal and
+       invitations through the API)
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs invitation
 
@@ -83,12 +76,12 @@
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = ["batch-a", "access", "held-call", "invitation"].includes(process.argv[2])
+const MODE = ["batch-a", "access", "invitation"].includes(process.argv[2])
   ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
   (MODE === "batch-a" ? "http://localhost:8123"
-   : ["access", "held-call", "invitation"].includes(MODE) ? "http://localhost:8124"
+   : ["access", "invitation"].includes(MODE) ? "http://localhost:8124"
    : "http://localhost:8010");
 
 const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json();
@@ -824,6 +817,12 @@ async function accessStory() {
   ok("the member and the seat each have a name to show",
      !!names.member && !!names.seat &&
      names.member !== held.owner && names.seat !== sid);
+  /* each name is its row's own summary, read off the API — never
+     spelled here */
+  const api = {member: (await get("/api/members/" + held.owner)).summary,
+               seat: (await get("/api/seats/" + sid)).summary};
+  ok("each name is the row's summary as the API reads it",
+     names.member === api.member && names.seat === api.seat);
 
   console.log("· the held call's row page");
   await evaljs(`location.hash = ${JSON.stringify(self)}; true`);
@@ -852,93 +851,8 @@ async function accessStory() {
   }
   ok("no bare uuid is left where a name belongs",
      await evaljs(`![...document.querySelectorAll("span.mono")].some(s =>
-       [${JSON.stringify(held.owner)}, ${JSON.stringify("seat:" + sid)}].includes(s.title))`));
-}
-
-/* ════ held call: a held seat-restate names its people ════════════════
-   Against waymark10.batch-a-dev/start-held-call!. held-call-test pins the published
-   x-refs and ui_assembly_test pins principalRef in the page; this
-   executes the page: the held row's owner, caller and door author
-   render as their member/seat rows' summaries, and door.id as the
-   restated seat's summary — each read off the API, never spelled here. */
-async function heldCallStory() {
-  const person = {"x-waymark-principal": "colton"};
-  const call = async (method, path, body, headers) => {
-    const res = await fetch(BASE + path,
-      {method, headers: {"Content-Type": "application/json", ...headers},
-       body: body ? JSON.stringify(body) : null});
-    return {status: res.status, body: await res.json().catch(() => null)};
-  };
-  const idOf = r => r.body.self.split("/").pop();
-  const must = (r, status, what) => {
-    if (r.status !== status)
-      throw new Error(what + ": " + r.status + " " + JSON.stringify(r.body));
-    return r;
-  };
-  const scope = [{kind: "meal", actions: ["create"]}];
-  const seatBody = extra => ({
-    charter: "Decide which meal is next.", scope,
-    standing_ttl_seconds: 604800, cadence_seconds: 3600,
-    budget_usd_per_week: 2, sitting_budget_tokens: 60000, ...extra});
-
-  /* seed through the API, like delegation-test's mayor */
-  console.log("· seeding a mayor, its child and a held restate");
-  const mayor = idOf(must(await call("POST", "/api/seats", seatBody({
-    name: "mayor",
-    scope: [{kind: "seat", actions: ["create", "restate", "park", "unpark"]}],
-    delegates: {scope, budget_usd_per_week: 5, sitting_budget_tokens: 100000}}),
-    person), 201, "the person opens the mayor"));
-  const sitter = "seat:" + mayor;
-  const agent = {"x-waymark-principal": sitter, "x-waymark-actor-type": "agent",
-                 "x-waymark-acts-for": "colton"};
-  const asked = must(await call("POST", "/api/approval_requests",
-    {task: "Keep the house's seats.", seat: "mayor"}, agent), 201, "the sitter asks");
-  const approved = must(await call("POST",
-    "/api/approval_requests/" + idOf(asked) + "/-/approve", null, person),
-    200, "the person approves");
-  const as = {...agent, "x-waymark-grant": approved.body.data.grant_id};
-  const child = idOf(must(await call("POST", "/api/seats",
-    seatBody({name: "meal-clerk"}), as), 201, "the mayor authors a child"));
-  must(await call("POST", "/api/seats/" + child + "/-/unpark", null, person),
-       200, "the person unparks the child");
-  const etag = (await call("GET", "/api/seats/" + child, null, as)).body.meta.etag;
-  const held = must(await call("POST", "/api/seats/" + child + "/-/restate",
-    seatBody({budget_usd_per_week: 9}), {...as, "if-match": etag}),
-    202, "the restate past the ceiling is held").body.held_call;
-  const row = must(await call("GET", "/api/held_calls/" + held, null, person),
-                   200, "the person reads the held call").body;
-
-  /* what each value must read as: its row's own summary */
-  const summaryOf = async v => {
-    const m = /^(member|seat):(.+)$/.exec(v);
-    const path = m ? "/api/" + m[1] + "s/" + m[2] : "/api/members/" + v;
-    return must(await call("GET", path, null, person), 200, "read " + v).body.summary;
-  };
-  const refs = [["owner", row.data.owner], ["caller", row.data.caller],
-                ["door author", row.data.door.author]];
-  for (const [f, v] of refs) ok(`the held call carries its ${f}`, typeof v === "string" && v);
-  ok("the held call's door is the child's restate",
-     row.data.door.kind === "seat" && row.data.door.id === child);
-
-  console.log("· boot + principal");
-  await send("Page.navigate", {url: BASE + "/api/-/ui"});
-  await sleep(1200);
-  await evaljs(`localStorage.setItem("wm10.principal", "colton"); location.reload(); true`);
-  await sleep(1200);
-
-  console.log("· the held call's people, labelled");
-  await evaljs(`location.hash = ${JSON.stringify("/api/held_calls/" + held)}; true`);
-  const labelled = (raw, label) => `!document.querySelector(${JSON.stringify(
-      'span.mono[title="' + raw + '"]')}) &&
-    [...document.querySelectorAll("a")].some(a => a.textContent.includes(${JSON.stringify(label)}))`;
-  for (const [f, v] of refs) {
-    const label = await summaryOf(v);
-    await waitFor(labelled(v, label), `${f} ${v} labelled "${label}"`);
-    ok(`the ${f} (${v}) renders as its row's name, "${label}"`, true);
-  }
-  const target = await summaryOf("seat:" + child);
-  await waitFor(labelled(child, target), `door.id labelled "${target}"`);
-  ok(`door.id renders as the restated seat's summary, "${target}"`, true);
+       [${JSON.stringify(held.owner)}, ${JSON.stringify("seat:" + sid)},
+        ${JSON.stringify(sid)}].includes(s.title))`));
 }
 
 /* ════ invitation: one tap from the collection, and a decline ═════════
@@ -1039,7 +953,6 @@ async function invitationStory() {
 
 if (MODE === "batch-a") await batchAStory();
 else if (MODE === "access") await accessStory();
-else if (MODE === "held-call") await heldCallStory();
 else if (MODE === "invitation") await invitationStory();
 else await mealplanStory();
 
