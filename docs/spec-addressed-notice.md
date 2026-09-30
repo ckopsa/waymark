@@ -70,6 +70,24 @@ rather than a URL:
 - **`:address`** names a ref field on the row whose target is `:member`. Checked
   at assembly like every other ref: unknown field, wrong target kind, or a
   non-ref field is a definition error, not a runtime surprise.
+- **`:address :then`** walks one more hop when the person is not on the row
+  itself: `{:field :plan_id :then :member}` reads the moved row's `plan_id`,
+  loads the row it names, and reads *that* row's `member`. Only `field` and
+  `then` are read — two hops at most. The guard `address-names-a-member`
+  (`server/held_calls.clj`) judges every hop, and its refusal names the whole
+  path (`plan_id.member`) and the hop that failed:
+  - the rule's kind is not served — *names no kind this engine serves*;
+  - a hop is not a ref field of the kind it lands on — *is not a ref field of
+    that kind*, or on the second hop *reaches plan, whose member is not a ref
+    field of that kind*;
+  - a hop is a list of refs — *is a list of refs, and a rule addresses one
+    member*;
+  - the first hop targets a kind the engine does not serve — *reaches …, a
+    kind this engine does not serve*;
+  - the last hop's target is not `:member` — *names a …, not a member*.
+
+  The send (`tell!`) resolves the chain at send time, hop by hop, from the
+  rows as they stand then — not as they stood when the rule was written.
 - **`:channel`** is a member-held destination, not a rule-held one — the rule
   says *notify the assignee*, the member row says *how to reach me*. This keeps
   one person's contact details in one place and out of N rules.
@@ -93,7 +111,9 @@ client, a push-certificate story, and a Telegram bot token inside waymark10.
 - **Self-notification.** The actor who caused a transition should not be told
   about it. One clause, easy to forget, deeply annoying when missing.
 - **Unaddressed rows.** A chore with no assignee matches no address and notifies
-  nobody. That is correct, and it is also how an unassigned backlog goes
+  nobody. The same holds for every hop of a `then` chain: an empty first hop,
+  a first hop naming a row that is gone, or an empty second hop is
+  unaddressed — the notice counts `:unaddressed` and nobody is told. That is correct, and it is also how an unassigned backlog goes
   unnoticed — a household-level digest is the answer, not a fallback recipient.
 - **Escalation, snoozing, per-rule preferences.** All plausible, none in the
   first cut. This is the accumulation risk named at the top.
