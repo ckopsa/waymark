@@ -861,6 +861,15 @@
                                  {})]
                (contains? #{"ahead" "identical"} (word (:status answer)))))))))
 
+  forge/ForgePull
+  (forge-pull [this repository number]
+    ;; the pull request's own route, outside the window (ticket
+    ;; 949d18c5); a 404 throws, so a number the forge lacks is no doc
+    (when-some [pull (call! this "GET" (str "/repos/" repository "/pulls/"
+                                          number)
+                            {})]
+      (pull-pass! this repository pull)))
+
   forge/ForgeCompare
   (forge-behind? [this repository base head-sha]
     ;; GitHub's compare of the base branch with the head: `behind_by`
