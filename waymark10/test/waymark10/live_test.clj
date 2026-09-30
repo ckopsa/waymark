@@ -383,6 +383,120 @@
           (finally (engine/stop! eng server))))
       (finally (pg/close! st)))))
 
+;; ── guided follow: ?ui=<pid> rides the combined stream ──────────────
+
+(deftest live-carries-ui-frames-only-when-asked
+  (fresh!)
+  (let [st (pg/storage dsn)]
+    (try
+      (let [eng (engine/engine {:storage st :resources [widget]
+                                ;; a heartbeat long enough that no wait
+                                ;; below evicts elena (a leave clears
+                                ;; the ui)
+                                :presence-heartbeat-ms 5000
+                                :sse-heartbeat-ms 500
+                                :events-poll-ms 200})
+            server (engine/start! eng 0)
+            port (http/server-port server)
+            h (engine/handler eng)]
+        (try
+          (let [beat! (fn [body]
+                        (h {:request-method :post
+                            :uri "/api/-/presence"
+                            :headers {"x-waymark-principal" "elena"}
+                            :body (wire/write-json body)}))
+                w1 (get-in (inv/create! eng :live_widget {:name "granted"}
+                                        {:principal elena})
+                           [:row :id])
+                w2 (get-in (inv/create! eng :live_widget {:name "concealed"}
+                                        {:principal elena})
+                           [:row :id])
+                seen (str "/api/live_widgets/" w1)
+                unseen (str "/api/live_widgets/" w2)
+                ;; spy sees w1 and nothing else, and no action at all
+                gid (get-in (inv/create! eng :grant
+                                         {:audience "spy"
+                                          :scope [{:kind "live_widget"
+                                                   :ids [w1] :actions []}]}
+                                         {:principal elena})
+                            [:row :id])
+                _ (inv/invoke! eng :grant gid :accept nil {:principal spy})
+                who {"x-waymark-principal" "watcher"}
+                scoped {"x-waymark-principal" "spy" "x-waymark-grant" gid}
+                ;; elena looks at the row spy may see, with a dialog
+                ;; open on the row it may not
+                ui {:dialog {:self unseen :action "spin"} :focus seen}
+                _ (doseq [pid ["watcher" "spy" "elena"]]
+                    (h {:request-method :get :uri "/api/live_widgets"
+                        :headers {"x-waymark-principal" pid}}))
+                _ (Thread/sleep 800)
+                ;; BEFORE any stream opens, so every opening snapshot
+                ;; holds elena's entry
+                _ (is (= 204 (:status (beat! {:self seen :ui ui}))))
+                live (sse-lines port "/api/-/live" who)
+                pres (sse-lines port "/api/-/presence" who)
+                live-ui (sse-lines port "/api/-/live?ui=elena" who)
+                pres-ui (sse-lines port "/api/-/presence?ui=elena" who)
+                spy-live (sse-lines port "/api/-/live?ui=elena" scoped)
+                spy-pres (sse-lines port "/api/-/presence?ui=elena" scoped)
+                streams [live pres live-ui pres-ui spy-live spy-pres]
+                ui-frame? #(has? % "\"event\":\"ui\"")]
+            (try
+              (is (every? #(= 200 (:status %)) streams))
+
+              (testing "the opening snapshot carries ui and seq only on a
+                        stream that asked"
+                (doseq [s streams]
+                  (is (some? (await-frame s #(= "event: presence" (first %))))))
+                (let [snap #(first (named (frames @(:lines %)) "presence"))]
+                  (is (has? (snap live) "elena"))
+                  (is (not (has? (snap live) "\"ui\"")))
+                  (is (not (has? (snap live) "\"seq\"")))
+                  (is (has? (snap live-ui) "\"ui\""))
+                  (is (has? (snap live-ui) "\"seq\""))
+                  (is (has? (snap live-ui) unseen)
+                      "an unscoped follower sees the dialog whole")
+                  (is (has? (snap spy-live) "\"seq\""))
+                  (is (not (has? (snap spy-live) w2))
+                      "the scoped follower's snapshot is redacted")))
+
+              ;; a ui-only change: a new frame for the followers
+              (is (= 204 (:status (beat! {:self seen
+                                          :ui (assoc ui :collection
+                                                     {:self "/api/live_widgets"})}))))
+              (is (some? (await-frame live-ui ui-frame?)))
+              (is (some? (await-frame pres-ui ui-frame?)))
+              (is (some? (await-frame spy-live ui-frame?)))
+              (is (some? (await-frame spy-pres ui-frame?)))
+              ;; let every stream settle on the same tail
+              (Thread/sleep 1500)
+
+              (testing "without ?ui= the combined stream is today's, byte
+                        for byte"
+                (let [l (named (frames @(:lines live)) "presence")]
+                  (is (= (named (frames @(:lines pres)) "presence") l))
+                  (is (not-any? ui-frame? l))
+                  (is (not (str/includes? (bytes-of live) "\"ui\"")))))
+
+              (testing "with ?ui=<pid> it carries that pid's ui frames, the
+                        presence route's own"
+                (let [l (named (frames @(:lines live-ui)) "presence")]
+                  (is (= (named (frames @(:lines pres-ui)) "presence") l))
+                  (is (some #(and (ui-frame? %) (has? % unseen)) l))))
+
+              (testing "redacted under the stream's own visibility"
+                (let [l (named (frames @(:lines spy-live)) "presence")]
+                  (is (= (named (frames @(:lines spy-pres)) "presence") l)
+                      "the same redaction /api/-/presence applies")
+                  (is (some #(and (ui-frame? %) (has? % seen)) l)
+                      "the focus spy may see crosses")
+                  (is (not (str/includes? (bytes-of spy-live) w2))
+                      "the dialog on the concealed row never crosses")))
+              (finally
+                (doseq [s streams] (close-stream! s)))))
+          (finally (engine/stop! eng server))))
+      (finally (pg/close! st)))))
+
 ;; ── the lifecycle discipline ────────────────────────────────────────
 
 (deftest live-without-start-is-503

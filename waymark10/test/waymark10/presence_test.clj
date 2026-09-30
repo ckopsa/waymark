@@ -1075,3 +1075,139 @@
         (is (nil? (get @(:local reg) "elena")))
         (is (empty? (filter #(= "elena" (get-in % [:principal :id]))
                             (presence/snapshot reg (constantly true) {:ui "elena"}))))))))
+
+;; ── the ui frame on the wire: GET ?ui=<pid> and POST {self, ui} ─────
+
+(deftest ui-on-the-wire
+  (fresh!)
+  (let [st (pg/storage dsn)]
+    (try
+      (let [eng (engine/engine {:storage st :resources [widget note letter]
+                                :presence-heartbeat-ms 3000
+                                :sse-heartbeat-ms 500
+                                :events-poll-ms 200})
+            server (engine/start! eng 0)
+            port (http/server-port server)
+            h (engine/handler eng)
+            reg (:presence @(:runtime eng))]
+        (try
+          (let [n1 (get-in (inv/create! eng :pres_note {:title "wired"}
+                                        {:principal elena})
+                           [:row :id])
+                lid (get-in (inv/create! eng :letter
+                                         {:owner "quill" :to "reed"
+                                          :title "Sealed"
+                                          :body "for reed alone"}
+                                         {:principal elena})
+                            [:row :id])
+                self (str "/api/pres_notes/" n1)
+                sealed (str "/api/letters/" lid)
+                ui (assoc assigning
+                          :dialog {:self self :action "assign"}
+                          :collection {:self "/api/pres_notes" :filter {:title "x"}}
+                          :focus self)
+                beat! (fn [headers body]
+                        (h {:request-method :post
+                            :uri "/api/-/presence"
+                            :headers headers
+                            :body (wire/write-json body)}))
+                agent-h (fn [id] {"x-waymark-principal" id
+                                  "x-waymark-actor-type" "agent"})
+                frames (fn [lines]
+                         (keep #(when (str/starts-with? % "data:")
+                                  (wire/read-json (str/trim (subs % 5))))
+                               @lines))
+                ui-line? (fn [pid]
+                           #(and (str/starts-with? % "data:")
+                                 ((ui-of? pid) (wire/read-json (str/trim (subs % 5))))))
+                close! (fn [s]
+                         (.close ^InputStream (:body s))
+                         (future-cancel (:reader s)))
+                gid (get-in (inv/create!
+                             eng :grant
+                             {:audience "spy"
+                              :scope [{:kind "pres_note"
+                                       :ids [n1] :actions []}]}
+                             {:principal elena})
+                            [:row :id])
+                _ (inv/invoke! eng :grant gid :accept nil {:principal spy})
+                plain (sse-lines port "/api/-/presence"
+                                 {"x-waymark-principal" "watcher"})
+                follower (sse-lines port "/api/-/presence?ui=elena"
+                                    {"x-waymark-principal" "watcher"})
+                scoped (sse-lines port "/api/-/presence?ui=elena"
+                                  {"x-waymark-principal" "spy"
+                                   "x-waymark-grant" gid})]
+            (Thread/sleep 300)
+            (is (= 204 (:status (beat! {"x-waymark-principal" "elena"}
+                                       {:self self :ui ui}))))
+
+            (testing "an unscoped ?ui= follower receives the frame whole"
+              (let [l (await-line (:lines follower) (ui-line? "elena") 10000)
+                    f (some-> l (subs 5) str/trim wire/read-json)]
+                (is (some? f))
+                (is (= self (:self f)))
+                (is (= {:self self :action "assign"} (get-in f [:ui :dialog])))
+                (is (= {:assignee "marco" :note "Take this one"}
+                       (get-in f [:ui :fields])))
+                (is (= self (get-in f [:ui :focus])))))
+
+            (testing "a scoped follower's ?ui= stream receives the frame redacted"
+              (let [l (await-line (:lines scoped) (ui-line? "elena") 10000)
+                    f (some-> l (subs 5) str/trim wire/read-json)]
+                (is (some? f))
+                (is (= self (get-in f [:ui :focus])) "the granted row's focus crosses")
+                (is (nil? (get-in f [:ui :dialog])) "an ungranted action's dialog is null")
+                (is (nil? (get-in f [:ui :fields])) "and its fields go with it")
+                (is (not (str/includes? (str/join "\n" @(:lines scoped)) "Take this one")))))
+
+            (testing "a stream without ?ui= is byte for byte today's"
+              (is (some? (await-line (:lines plain)
+                                     #(and (str/includes? % "\"elena\"")
+                                           (str/includes? % "\"join\""))
+                                     10000)))
+              (let [bytes' (str/join "\n" @(:lines plain))]
+                (is (not-any? #(= "ui" (:event %)) (frames (:lines plain))))
+                (is (every? #(= #{:event :principal :self :source :at} (set (keys %)))
+                            (filter #(= "join" (:event %)) (frames (:lines plain)))))
+                (is (not (str/includes? bytes' "assign")))
+                (is (not (str/includes? bytes' "Take this one")))))
+
+            (testing "an oversized ui part answers 422"
+              (is (= 422 (:status (beat! {"x-waymark-principal" "elena"}
+                                         {:self self
+                                          :ui (assoc-in ui [:collection :filter :title]
+                                                        (apply str (repeat 7000 "x")))})))))
+
+            (testing "a dialog or focus on a private row the reporter cannot see never publishes"
+              (let [watch (sse-lines port "/api/-/presence?ui=spy"
+                                     {"x-waymark-principal" "watcher"})]
+                (Thread/sleep 300)
+                (is (= 404 (:status (h {:request-method :get :uri sealed
+                                        :headers (agent-h "spy")}))))
+                (is (= 204 (:status (beat! (agent-h "spy")
+                                           {:self self
+                                            :ui {:dialog {:self sealed :action "open"}
+                                                 :fields {:body "peek"}
+                                                 :focus sealed}}))))
+                (is (= self (get-in @(:local reg) ["spy" :entry :self]))
+                    "the beat itself, on a readable row, is stored")
+                (is (nil? (get-in @(:local reg) ["spy" :entry :ui :focus])))
+                (is (nil? (get-in @(:local reg) ["spy" :entry :ui :dialog])))
+                (is (nil? (get-in @(:local reg) ["spy" :entry :ui :fields])))
+                (Thread/sleep 1500)
+                (let [bytes' (str/join "\n" @(:lines watch))]
+                  (is (not (str/includes? bytes' lid))
+                      "the private row's id never crosses the wire")
+                  (is (not (str/includes? bytes' "peek"))))
+                (close! watch))
+              (testing "the recipient's own focus on it is kept (positive control)"
+                (is (= 204 (:status (beat! (agent-h "reed")
+                                           {:self sealed :ui {:focus sealed}}))))
+                (is (= sealed (get-in @(:local reg) ["reed" :entry :ui :focus])))))
+
+            (close! plain)
+            (close! follower)
+            (close! scoped))
+          (finally (engine/stop! eng server))))
+      (finally (pg/close! st)))))
