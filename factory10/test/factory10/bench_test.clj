@@ -1651,6 +1651,33 @@
       (is (nil? (get-in (the-policy w) [:data :line_front])))
       (is (nil? (get-in (the-policy w) [:data :line_at]))))))
 
+(deftest a-woken-pass-for-one-repository-leaves-the-others-alone
+  ;; ticket 26a8d561
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})
+        elsewhere "ckopsa/elsewhere"
+        line-of (fn [] [(select-keys (:data (the-policy w))
+                                     [:line_front :line_front_pr :line_front_waiting
+                                      :line_waiting :line_at])
+                        (select-keys (:data (change-row w))
+                                     [:line_place :line_why])])]
+    (a-policy! (:eng w) (assoc house-policy :repository elsewhere))
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! (:eng w) seen)
+    (let [merges (count (calls-of st "bench__merge"))
+          before (line-of)]
+      (is (= "front" (get-in before [1 :line_why])))
+      (is (= 0 (bench/merge-green! (:eng w) seen #{elsewhere})))
+      (is (= merges (count (calls-of st "bench__merge")))
+          "a pass woken for another repository makes no merge call here")
+      (is (= before (line-of))
+          "and this repository's line marks stay as they were")
+      (testing "a pass woken for this repository works it"
+        (bench/merge-green! (:eng w) seen #{a-repository})
+        (is (= (inc merges) (count (calls-of st "bench__merge"))))))))
+
 (deftest a-merge-refused-as-out-of-date-is-brought-up-to-date
   (let [w (submitted-world house-policy)
         st (:state w)]
