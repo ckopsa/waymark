@@ -12,6 +12,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.summary :as summary]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -20,7 +21,7 @@
   (r/resource
    {:kind :chore
     :plural "chores"
-    :states [:open]
+    :states [:open :done]
     :initial :open
     :terminal #{}
     :summary "{data.title} · {state}"
@@ -41,7 +42,13 @@
               :handler (fn [row inp _ctx]
                          (update row :data merge (select-keys inp [:title :pin])))
               :safety {:idempotent true :reversible true :confirm false}
-              :display {:label "Rename" :order 1}}}}))
+              :display {:label "Rename" :order 1}}
+     :finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Finish" :order 2}}
+     :reopen {:from #{:done} :to :open
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Reopen" :order 3}}}}))
 
 (def ^:private person (t/principal {:id "colton" :display "Colton"}))
 (def ^:private other (t/principal {:id "iris" :display "Iris"}))
@@ -162,3 +169,25 @@
     (drain! eng)
     (is (= "My own title" (get-in (row-of eng :chore c) [:data :title])))
     (is (= "answered" (state-of eng :invitation (:id inv-row))))))
+
+(deftest an-invitation-to-a-door-the-row-cannot-take-now-is-refused
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")]
+    (inv/invoke! eng :chore (str c) :finish {} {:principal person})
+    (let [why (refusal #(invite! eng c {}))]
+      (is (some? why) "a done chore offers no rename")
+      (is (str/includes? (str why) "Done")
+          "the refusal quotes the row's own unavailable reason"))
+    (inv/invoke! eng :chore (str c) :reopen {} {:principal person})
+    (is (nil? (refusal #(invite! eng c {}))) "reopened, it takes the door again")))
+
+(deftest the-summary-names-the-subject
+  (let [eng (fresh-engine)
+        m (:row (inv/create! eng :member {:display "Colton Kopsa" :actor_type "human"}
+                             {:principal invitations/engine-actor}))
+        c (chore! eng "Dishes")
+        row (invite! eng c {:subject (str (:id m))})
+        line (summary/render (get-in (inv/resources eng) [:invitation :summary]) row)]
+    (is (= "Colton Kopsa" (get-in row [:data :subject_name])))
+    (is (str/includes? line "Colton Kopsa"))
+    (is (not (str/includes? line (str (:id m)))) "never the raw id")))
