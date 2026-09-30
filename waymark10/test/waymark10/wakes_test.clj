@@ -1793,6 +1793,8 @@
                   d (:data (first rows))]
               (is (= 1 (count rows)))
               (is (= :closed (:state (first rows))))
+              (is (= "missed" (some-> (:closed_by d) name))
+                  "no session sat, so the missed sweep closed it")
               (is (= "fired" (str (:mode d))))
               (is (= 0 (:input_tokens d) (:output_tokens d) (:turns d)))
               (is (= fired (Instant/parse (str (:started_at d)))))

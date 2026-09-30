@@ -442,3 +442,34 @@
           (is (= :open (:state (row-of eng :sitting
                                        (str (:sitting scheduled)))))
               "a stamped sitting waits for the hook that knows its name"))))))
+
+;; ── 8. closed_by names the hand, and filters by it ──────────────────
+
+(deftest a-closed-by-filter-answers-only-the-closes-of-that-hand
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-seat! eng)
+        sat (sit! h (initialize! h))
+        hook-id (str (:sitting sat))
+        _ (is (= 200 (:status (report! h counts))))
+        ;; a direct `close` invoke, as a person's own door makes it
+        door-id (str (:id (:row (inv/create! eng :sitting
+                                             {:seat (str (:id seat))
+                                              :model (str (:id model))
+                                              :grant (str (:grant sat))}
+                                             {:principal person}))))
+        closed-by #(some-> (row-of eng :sitting %) :data :closed_by name)]
+    (inv/invoke! eng :sitting door-id :close counts {:principal person})
+
+    (testing "each close names its own hand"
+      (is (= "hook" (closed-by hook-id)))
+      (is (= "door" (closed-by door-id)) "a direct close is the door's"))
+
+    (testing "?closed_by=hook answers the hook's close and not the door's"
+      (let [resp (h {:request-method :get :uri "/api/sittings"
+                     :query-string "closed_by=hook"
+                     :headers (bearer {:sub "colton" :name "Colton Kopsa"})})
+            ids (mapv #(str (or (:id %) (last (str/split (str (:self %)) #"/"))))
+                      (get-in (json resp) [:data :items]))]
+        (is (= 200 (:status resp)))
+        (is (= [hook-id] ids))))))
