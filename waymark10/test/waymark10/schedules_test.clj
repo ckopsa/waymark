@@ -1080,3 +1080,32 @@
         (is (some? (sch/copy *fake* xid)))
         (doseq [s [own chaired]]
           (is (= :ended (:state (sched-of s)))))))))
+
+;; ── 10 · which Routine a schedule fires through (ticket 360d207d) ───
+
+(deftest a-schedule-says-which-routine-it-fires-through
+  (let [rows {[:seat "s1"] {:id "s1" :data {:held_for ["m1"]}}
+              [:model "m1"] {:id "m1" :data {:name "claude-opus-5"
+                                              :fire_url a-chair-url}}
+              [:seat "s2"] {:id "s2" :data {:held_for ["m2"]}}
+              [:model "m2"] {:id "m2" :data {:name "claude-haiku"}}}
+        read' (fn [kind id] (get rows [kind (str id)]))
+        line (fn [data] (sch/fires-through read' {:data data}))]
+    (testing "own link, with its Routine id"
+      (is (= "own link · Routine trig_01SEAT"
+             (line {:seat "s2" :fire_url a-seat-url}))))
+    (testing "an own link that differs from the chair's wins, and says so"
+      (is (= "own link · Routine trig_01SEAT"
+             (line {:seat "s1" :fire_url a-seat-url}))))
+    (testing "the model's link, naming the model"
+      (is (= "model claude-opus-5's link · Routine trig_01CHAIR"
+             (line {:seat "s1"}))))
+    (testing "a runner pool"
+      (is (= "runner pool (2 links)"
+             (line {:seat "s1" :runners ["r1" "r2"]}))))
+    (testing "no link"
+      (is (= "no link" (line {:seat "s2"})))
+      (is (= "no link" (sch/fires-through nil {:data {:seat "s1"}}))
+          "with no read the chair is not consulted"))
+    (testing "it rides the schedule's grid fields"
+      (is (contains? (render/grid-fields (get (inv/resources *eng*) :schedule)) :fires_through)))))
