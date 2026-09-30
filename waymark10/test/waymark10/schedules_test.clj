@@ -707,6 +707,11 @@
     (fn [tx] (store/query-rows (:storage *eng*) tx :runner_link
                                {:seeded_from from} {:limit 10}))))
 
+(defn- runners-of [kind id]
+  (store/with-tx (:storage *eng*)
+    (fn [tx] (sch/runners-of-row
+              (store/load-row (:storage *eng*) tx kind (str id) {})))))
+
 (deftest the-boot-seeds-one-runner-link-from-each-own-link
   (let [cn :sched-seed-links
         _ (drain! cn)
@@ -720,8 +725,17 @@
         bare-sched (:id (sched-of bare))
         from-model (str "model:" chair)
         from-linked (str "schedule:" linked-sched)
-        from-bare (str "schedule:" bare-sched)]
+        from-bare (str "schedule:" bare-sched)
+        set-chair (model! "claude-chair-seed-set")
+        _ (link-model! set-chair a-chair-url a-chair-token)
+        person-link (str (:id (:row (inv/create! *eng* :runner_link
+                                                 {:provider "claude_routine"
+                                                  :fire_url a-seat-url
+                                                  :fire_token a-seat-token}
+                                                 {:principal elena}))))]
     (link-schedule! linked-sched a-seat-url own-token)
+    (inv/invoke! *eng* :model (str set-chair) :set_runners
+                 {:runners [person-link]} {:principal elena})
     (rl/ensure-seeded-links! *eng*)
 
     (testing "the model and the linked schedule each get exactly one"
@@ -740,10 +754,29 @@
     (testing "a schedule without its own link gets none"
       (is (empty? (seeded from-bare))))
 
+    (testing "each source with no runners names exactly its seeded link"
+      (is (= [(str (:id (first (seeded from-model))))] (runners-of :model chair)))
+      (is (= [(str (:id (first (seeded from-linked))))]
+             (runners-of :schedule linked-sched)))
+      (is (nil? (runners-of :schedule bare-sched))))
+
     (testing "a second boot adds none"
       (rl/ensure-seeded-links! *eng*)
       (is (= 1 (count (seeded from-model))))
-      (is (= 1 (count (seeded from-linked)))))
+      (is (= 1 (count (seeded from-linked))))
+      (is (= [(str (:id (first (seeded from-model))))] (runners-of :model chair)))
+      (is (= [(str (:id (first (seeded from-linked))))]
+             (runners-of :schedule linked-sched))))
+
+    (testing "a list a person set is untouched"
+      (is (= 1 (count (seeded (str "model:" set-chair)))))
+      (is (= [person-link] (runners-of :model set-chair))))
+
+    (testing "a fire goes through the seeded link"
+      (fire-seat! linked "Walk the seeded link.")
+      (drain! cn)
+      (is (= (str (:id (first (seeded from-linked))))
+             (get-in (sched-of linked) [:data :last_runner]))))
 
     (testing "the sources keep their own links"
       (is (= {:fire_url a-seat-url :fire_token own-token}

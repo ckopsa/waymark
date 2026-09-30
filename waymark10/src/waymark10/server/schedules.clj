@@ -576,6 +576,14 @@
                        (dissoc % :runner_order)))
       (update :data dissoc :note)))
 
+;; the boot seed's list (waymark ticket 4e42b3d4): seats.clj's
+;; `seed-runners`, spelled again as `write-runners` spells `set-runners`.
+(defhandler seed-runners
+  [row inp _ctx]
+  (if (runners-of-row row)
+    row
+    (assoc-in row [:data :runners] (vec (:runners inp)))))
+
 (defresource schedule
   {:kind :schedule
    :plural "schedules"
@@ -997,7 +1005,25 @@
             "Written by the fire consumer the moment the provider throttled the fire; no read preceded it to fence against."}
      :safety engine-writes
      :handler hold-throttle
-     :display {:label "Routine throttled"}}}
+     :display {:label "Routine throttled"}}
+
+    ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
+    ;; and a no-op on a row that already names a list. Only a live row:
+    ;; the seed must not wake a paused one.
+    :seed_runners
+    {:from #{:live} :to :live
+     :input [:map
+             [:runners {:x-display {:hidden true}}
+              [:vector {:min 1 :max 20} [:string {:min 1 :max 200}]]]]
+     :record true
+     :guards [engine-writes-schedules]
+     :edit {:prefill [:runners] :fence false
+            :unfenced-reason
+            "Written by the boot seed, which read the row in this pass; it writes only a list that is empty."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The engine names the link it seeded from this row; Runner links restates the list."}
+     :handler seed-runners
+     :display {:label "Runner list seeded"}}}
    :deviations
    ["The schedule is NOT declared through server/mirror, though R-12.0 names the calendar as the precedent. Three reasons: mirror's authority points inward (a pull wins; R-12.3 wants a read-back that reports and never repairs), mirror refuses a kind that declares its own :states (R-12.1 names four), and MirrorAdapter has no pause, resume or delete (calendar10 had to hang delete-event! off the side of the protocol). The seam is ScheduleAdapter instead, and the bookkeeping posture — hidden system doors over ordinary data fields — is borrowed from mirror whole."
     "R-12.1 lists four states; this kind has five. `ended` is where a retired or merged seat's schedule lands once the copy is deleted. The alternative was returning the row to `pending`, which means \"no copy yet\" and invites the next push to make one."
