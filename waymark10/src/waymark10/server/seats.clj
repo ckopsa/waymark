@@ -1406,6 +1406,22 @@
                        (assoc % :runner_order o)
                        (dissoc % :runner_order)))))
 
+;; the boot seed's pool (waymark ticket 4e42b3d4): the engine names the
+;; one link it seeded from this row, and only while the row names none —
+;; a list a person set is never overwritten, here or in the seed.
+(g/defguard the-engine-seeds-the-pool
+  {:reads [:principal]
+   :hide true
+   :explain "A seeded runner list is the engine's write at boot; a person names a pool through Runner links."}
+  [_row _inp ctx]
+  (if (= :system (get-in ctx [:principal :type]))
+    (t/allow) (t/deny)))
+
+(defhandler seed-runners [row inp _ctx]
+  (if (seq (get-in row [:data :runners]))
+    row
+    (assoc-in row [:data :runners] (vec (:runners inp)))))
+
 ;; the pool order (waymark ticket 529deb73): `least_used` spreads the
 ;; fires; `prefer` sends each to the first link that may fire, so a
 ;; later link takes only the overflow.
@@ -3238,7 +3254,24 @@
               :one-way "The new list replaces the one this model held; another restate puts it back."}
      :handler set-runners
      :display {:label "Runner links" :order 8
-               :description "Name the runner links this model's seats fire through, in order"}}}
+               :description "Name the runner links this model's seats fire through, in order"}}
+
+    ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
+    ;; and a no-op on a row that already names a list.
+    :seed_runners
+    {:from #{:active} :to :active
+     :input [:map
+             [:runners {:x-display {:hidden true}}
+              [:vector {:min 1 :max 20} [:string {:min 1 :max 200}]]]]
+     :record true
+     :guards [the-engine-seeds-the-pool]
+     :edit {:prefill [:runners] :fence false
+            :unfenced-reason
+            "Written by the boot seed, which read the row in this pass; it writes only a list that is empty."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The engine names the link it seeded from this row; Runner links restates the list."}
+     :handler seed-runners
+     :display {:label "Runner list seeded"}}}
    :deviations
    ["THE CHAIR'S TWO WRITE FENCES ARE BOTH GUARDS, where the schedule fences its link by omission. `sitter_key`, `fire_url` and `fire_token` are declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry all three. `key-not-written-by-hand` and `link-not-written-by-hand` are what refuse them, and each refusal names the door that writes the field instead. Both secrets stay `{:secret true}`, so the advertised create body drops them, no form asks, and the usability policies skip them; what a caller gains over silent omission is the sentence."
     "R-9.2 calls `name` unique and R-4.7's precedent (roles.clj's `one-spelling`) judges only ACTIVE rows. The two disagree about a retired model, so this kind takes the index's reading: `one_model_spelling` refuses any spelling already on record, active or retired, and its sentence sends the reader to `reactivate`. A second row for one identifier would split its prices, and a closed sitting costed against the wrong half would be wrong forever."]})
