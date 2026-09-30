@@ -173,7 +173,14 @@
     (testing "the call is the patch, and small"
       (is (nil? (:input data)) "the body is kept once, in forward")
       (is (true? (get-in data [:forward :patch])))
-      (is (< (count (wire/write-json data)) 1024)))))
+      (is (< (count (wire/write-json data)) 1024)))
+    (testing "the envelope's call is the forward body, and the row stores none (ticket cec5bb7a)"
+      (let [doc (wire/read-json ((:render-fn eng)
+                                 (get (inv/resources eng) :held_call)
+                                 (assoc (:row res) :kind :held_call)))]
+        (is (nil? (:call data)))
+        (is (= (wire/read-json (wire/write-json (:forward data)))
+               (get-in doc [:data :call])))))))
 
 (defn- hold-swap!
   "A held patch that swaps tag a for c, fenced at the row's birth."
