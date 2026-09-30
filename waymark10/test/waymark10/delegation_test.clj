@@ -426,6 +426,43 @@
     (is (= "failed" (:state (get-row h "held_calls" (:id call) person))))
     (is (= "sprocket" (get-in (get-row h "dl_gadgets" gid person) [:data :name])))))
 
+(deftest a-held-self-restate-from-a-patch-replays-on-allow-and-stays-small
+  (let [{:keys [h eng]} (fire-world)
+        cn :delegation-held-self-patch
+        _ (consumers/drain-consumer! eng cn (sch/consumer-fn eng))
+        {:keys [mayor as]} (open-mayor! h)
+        muted {:kind "notifier" :actions []}
+        own (restate-as! h person mayor {:scope (conj mayor-scope muted)
+                                         :delegates ceiling})
+        _ (assert (= 200 (:status own)) (pr-str (json own)))
+        _ (link-fire! eng h cn mayor)
+        asked (req h :post (str "/api/seats/" mayor "/-/restate")
+                   {:headers (assoc as "if-match" (etag-of h (str "/api/seats/" mayor) as))
+                    :body {:patch true
+                           :scope {:remove [muted]
+                                   :add [{:kind "notifier" :actions ["create"]}]}}})
+        held-id (:held_call (json asked))]
+    (is (= 202 (:status asked)) (pr-str (json asked)))
+    (testing "the held call names only scope, keeps the body once, and is small"
+      (let [data (:data (get-row h "held_calls" held-id person))
+            size (count (.getBytes ^String (wire/write-json data) "UTF-8"))]
+        (is (= ["scope"] (mapv name (keys (:changes data)))))
+        (is (nil? (:input data)))
+        (is (< size 1024) (str size " bytes: " (wire/write-json data)))))
+    (inv/invoke! eng :seat (str mayor) :fire {:text "Look at the seats now."}
+                 {:principal colton
+                  :idempotency-key (str "held-fire:" (random-uuid))})
+    (is (= :fire (:action (last (log-of eng :seat mayor))))
+        "the fire moved the row between the hold and the tap")
+    (is (= 200 (:status (allow! h held-id))))
+    (let [call (get-row h "held_calls" held-id person)
+          scope (get-in (get-row h "seats" mayor person) [:data :scope])
+          shape (fn [xs] (mapv #(select-keys % [:kind :actions]) xs))]
+      (is (= "done" (:state call)) (pr-str (get-in call [:data :reason])))
+      (is (= (shape (conj mayor-scope {:kind "notifier" :actions ["create"]}))
+             (shape scope))
+          "the replay landed, and only the notifier entry changed"))))
+
 (deftest an-author-does-not-restate-a-seat-it-did-not-author
   (let [{:keys [h eng]} (world)
         {:keys [as]} (open-mayor! h)
