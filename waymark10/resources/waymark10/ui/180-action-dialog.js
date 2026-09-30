@@ -172,7 +172,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     } else node.value = val;
   };
   const showPeers = participants => {
-    const me = principalId() || "anonymous";
+    const me = viewerId() || "anonymous";
     const others = (participants || []).filter(p => p.id !== me);
     peers.textContent = others.length
       ? ` · editing with ${others.map(p => p.display || p.id).join(", ")}` : "";

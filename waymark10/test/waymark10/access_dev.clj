@@ -5,7 +5,10 @@
   drops at boot, and the boot seeds what the drive reads: a member, a
   seat whose sitter acts for that member, and one held seat-restate
   held_call whose owner is the member and whose caller and door author
-  are the seat (held_call_test's seat and hold-door! seeds).
+  are the seat (held_call_test's seat and hold-door! seeds). The RP's
+  session doors are composed (no identity provider, require-auth off,
+  so the dev headers still speak): the drive signs a guest in through
+  /auth/guest and reads the UI with a session cookie alone.
 
     WAYMARK10_TEST_DSN=jdbc:postgresql://localhost:5433/waymark10_ui_test?user=ckopsa \\
     clojure -Sdeps '{:aliases {:fx {:extra-paths [\"test\"]}}}' -M:fx \\
@@ -17,6 +20,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
+            [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -60,9 +64,16 @@
           (jdbc/execute! tx [(str "DROP TABLE IF EXISTS \"" t "\" CASCADE")]))))
     (let [eng (engine/engine {:storage st
                               :resources [caps/capability]
-                              :auto-migrate true})
+                              :auto-migrate true
+                              :oidc {:issuer "https://idp.test/realms/access-dev"
+                                     :audience "access-dev"
+                                     :jwks {:keys []}
+                                     :rp {:client-id "access-dev"
+                                          :client-secret "access-dev"
+                                          :app-url (str "http://localhost:" port)
+                                          :session-secret "a-32-byte-session-secret-access!"}}})
           ids (seed! eng)]
-      (engine/start! eng port)
+      (engine/start! eng port {:wrap-handler (rp/wrap-handler eng)})
       (println (str "access engine: http://localhost:" port "/api/-/ui"))
       (println (str "seeded: " (pr-str ids)))
       eng)))
