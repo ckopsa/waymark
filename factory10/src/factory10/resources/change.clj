@@ -817,6 +817,21 @@
   [row _inp _ctx]
   (if (has-a-pull-request? row) (t/deny) (t/allow)))
 
+(defguardfn the-mirror-or-its-tickets-ending-closes-it
+  {:reads [:principal :within]
+   :hide true
+   :explain "The mirror closes this row, or the ending of the ticket it was built for does. A person and a model read it."}
+  [_row _inp ctx]
+  ;; `mirror/the-mirror-writes-this-row`, and one hand more (ticket
+  ;; 458d65c5): a ticket's ending closes the unmerged changes born from
+  ;; it inside its own transaction, whoever's hand ended it.
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (or (= :system (:type (:principal ctx)))
+            (and (= :ticket kind)
+                 (contains? #{:complete :drop :land :mend :finish} action)))
+      (t/allow)
+      (t/deny))))
+
 (defguardfn only-a-person-closes-a-change
   {:reads [:principal :within]
    :hold true
@@ -1495,7 +1510,7 @@
     ;; one's ticket has just ended.
     :supersede
     {:from #{:open :submitted :failing :stuck} :to :closed
-     :guards [the-mirror-writes-this-row]
+     :guards [the-mirror-or-its-tickets-ending-closes-it]
      :handler write-what-superseded-it
      :input [:map
              [:superseded_by {:not-a-ref "The web address (a URL) of the pull request that merged in this one's place, not a row id."
@@ -1634,7 +1649,7 @@
     ;; Hidden, and the mirror's hand alone.
     :note_adoption
     {:from #{:submitted} :to :submitted
-     :guards [the-mirror-writes-this-row]
+     :guards [the-mirror-or-its-tickets-ending-closes-it]
      :handler note-the-adoption
      :input [:map
              [:unadopted_since {:optional true :x-display {:hidden true}}
