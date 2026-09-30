@@ -609,7 +609,9 @@
                                            "the presence and intent frames "
                                            "with the firehose half absent")}
                          :seasons {:href "/api/-/seasons"
-                                   :note "the last weeks as a shape — what moved, what ages"}}
+                                   :note "the last weeks as a shape — what moved, what ages"}
+                         :render_markdown {:href "/api/-/render/markdown" :method "POST"
+                                           :note "prose fields' markdown as safe HTML — {texts: [...]} in, {html: [...]} out, in order"}}
                   (get-in eng [:oidc :rp])
                   (assoc :agent_session
                          {:href "/auth/agent" :method "POST"
