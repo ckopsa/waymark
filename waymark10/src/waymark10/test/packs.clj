@@ -693,6 +693,8 @@
                         (or (:title b) "no problem document") "), which is"
                         " neither an allowance nor a refusal")})))
 
+(declare leash!)
+
 (defn- run-scenario
   "One conformance-tier scenario, staged and attempted through the
   real HTTP door.
@@ -703,7 +705,15 @@
   and in the `:input` is then replaced by that id
   (`scenario/fill-handles`) — which is how a scenario cites a row that
   will EXIST, and therefore how a door that resolves what a body cites
-  can be proved by a declared scenario at all (waymark-fp62.4.1)."
+  can be proved by a declared scenario at all (waymark-fp62.4.1).
+
+  An :agent principal is attempted ON A LEASH (waymark-zs9): after the
+  staging and before the attempt, the walker mints one grant scoped to
+  exactly the {kind, action} the scenario attempts, the agent accepts
+  it, and the attempt presents it — `leash!`, the same thing the suites
+  write by hand. Without it the router's default deny answers 404
+  before any wall speaks. `:as {:leashed false}` opts out, so the
+  unleashed agent's 404 is still a scenario of its own."
   [ctx rdef' s]
   (let [staged (reduce
                 (fn [ids gv]
@@ -717,10 +727,22 @@
                 {} (:given s))]
     (if (:error staged)
       (scenario/violation s {:unreadable (str "could not be staged: " (:error staged))})
-      (let [hs (scenario-headers s)
+      (let [p (:as s)
+            leashed? (and (= :agent (:type p)) (not (false? (:leashed p))))
+            leash (when leashed?
+                    (leash! ctx (str (:id p))
+                            [{:kind (name (:kind s))
+                              :actions [(name (:attempt s))]}]))
+            hs (cond-> (scenario-headers s)
+                 leash (assoc "x-waymark-grant" (get leash "x-waymark-grant")))
             input (scenario/fill-handles (:input s) staged)
-            resp (if (scenario/create-door? rdef' (:attempt s))
+            resp (cond
+                   (and leashed? (nil? leash))
+                   ::unleashed
+
+                   (scenario/create-door? rdef' (:attempt s))
                    (req ctx :post (str "/api/" (:plural rdef')) (or input {}) hs)
+                   :else
                    (let [subject (stage-declared-row
                                   ctx (:kind s)
                                   (get-in s [:row :state])
@@ -730,7 +752,13 @@
                        ::unstaged
                        (invoke-http ctx (:kind s) (:id subject) (:attempt s)
                                     input {:headers hs}))))]
-        (if (= ::unstaged resp)
+        (case resp
+          ::unleashed
+          (scenario/violation
+           s {:unreadable (str "the walker could not leash the agent to "
+                               (name (:kind s)) "/" (name (:attempt s))
+                               " — the grant's mint or its acceptance refused")})
+          ::unstaged
           (scenario/violation
            s {:unreadable "the row it describes could not be staged through its own door"})
           (scenario/violation s (wire-verdict ctx resp)))))))

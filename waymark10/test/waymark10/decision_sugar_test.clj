@@ -88,6 +88,10 @@
                           :x-display {:label "As a substitute"
                                       :help "Tick this to stand in rather than hold the seat: a substitute gets the seat's scope minus its drop list, reads the seat's memory without writing it, and is not limited to one per seat."}}
              [:maybe :boolean]]
+            [:waits_on {:optional true :kind :member
+                        :x-display {:label "Waits on"
+                                    :help "The member who must approve this ask: the person the requesting seat or delegate acts for, or the requester themselves. The engine stamps it at birth."}}
+             [:maybe :waymark/ref]]
             [:expires_at {:optional true
                           :x-display
                           {:label "Good until"
@@ -211,7 +215,9 @@
     (is (= (schema/entry-map (:schema split))
            (schema/entry-map (:schema sugared))))
     (is (= (schema/entry-map (:create-schema split))
-           (schema/entry-map (:create-schema sugared)))))
+           (schema/entry-map (:create-schema sugared))))
+    (is (not (contains? (schema/entry-map (:create-schema sugared)) :waits_on))
+        "an :engine-fields entry is stamped at birth, never offered at create"))
   (testing "the decider wall is one law in two objects"
     (doseq [[an a] (:actions sugared)]
       ;; both sides carry a canonical form, so callable-hash reads the
@@ -278,15 +284,21 @@
   ;; fingerprint (create.guards, absent when a kind declares none), so
   ;; the ask's create walls now show in its hash — and the edit above,
   ;; which never moved it, finally does. Re-pinned from CI (PR #298).
-  "7bc24c757b70be6a91bf17546f60151f9c158e6d6b7dfe0af6d3cecc077ffe38")
+  ;;
+  ;; THE LAW MOVED AGAIN (waymark-ti0): scope-omits-private-kinds, a
+  ;; create wall here and on :grant, reads :own-surface :grantable off
+  ;; the registry instead of a literal naming three app kinds — same
+  ;; refusals, new body, new hash. Re-pinned from CI (PR #531).
+  "3d25b716c8193b5347bd234f410bc4f170cd484604b112b597e90a87a8bb7007")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
          (fp/fingerprint-hash (r/fingerprint grants/approval-request)))
       "byte-identical fingerprint hashes: two spellings, one law")
-  (is (= the-canonical-hash
-         (fp/fingerprint-hash (r/fingerprint grants/approval-request)))
-      "…and the hash is the one the hand-written machine always had"))
+  (let [actual (fp/fingerprint-hash (r/fingerprint grants/approval-request))]
+    (is (= the-canonical-hash actual)
+        (str "…and the hash is the one the hand-written machine always had"
+             " (re-pin to " actual " only for a deliberate law change)"))))
 
 ;; ── the sugar's own refusals ────────────────────────────────────────
 ;; Each is a sentence the declaration surface owes an author, checked
@@ -337,7 +349,7 @@
                       (assoc-in row [:data :derived_from]
                                 (get-in row [:data :asked_by])))))
           born ((:on-create r) {:data {:ask "may I"}}
-                {:principal {:id "iris"} :now (java.time.Instant/EPOCH)})]
+                {:principal {:id "iris"} :now (java.time.Instant/ofEpochSecond 0)})]
       (is (= "iris" (get-in born [:data :asked_by]))
           "the decision's own stamp still lands")
       (is (= "iris" (get-in born [:data :derived_from]))

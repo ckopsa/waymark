@@ -662,6 +662,21 @@
   [answer]
   (some-> (:state answer) name not-empty))
 
+(defn head-answer
+  "The rig's merge answer as the line reads it (ticket baf76388). The
+  forge mirror stamps `green_head` when it reads every required check
+  green on a submitted change's head, so a rig's `red` for that very head
+  is the failing round's, carried over: it reads as `behind`, and the
+  change stands in the line and may ride a train. A head that moved since
+  the green read keeps the rig's red until its own checks are read."
+  [change answer]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (if (and (= "red" (answer-state answer))
+             head
+             (= head (some-> (get-in change [:data :green_head]) str)))
+      (assoc answer :state "behind")
+      answer)))
+
 (defn out-of-line
   "Why a change of a line does not stand in it this pass, or nil when it
   does. A conflicted branch is the failing path's, a draft is not
@@ -1077,7 +1092,7 @@
          (when change
            (vswap! asked inc)
            (let [answer (offer-merge! ctx seen change policy)]
-             (swap! answers assoc (str (:id change)) answer)
+             (swap! answers assoc (str (:id change)) (head-answer change answer))
              (when-not (and (deploy-check-of policy)
                             (= "merged" (answer-state answer)))
                (recur more)))))

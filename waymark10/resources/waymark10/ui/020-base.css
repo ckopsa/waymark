@@ -420,3 +420,23 @@
   .showcase-filter .combo { min-width: 200px; }
   .showcase-filter .combo input { width: 100%; }
 
+  /* server-rendered markdown (showMarkdown adds .md): tokens only, so
+     both themes read the same rules */
+  .md > :first-child { margin-top: 0; }
+  .md > :last-child { margin-bottom: 0; }
+  .md table { border-collapse: collapse; margin: 8px 0; }
+  .md th, .md td { border: 1px solid var(--line); padding: 4px 8px;
+                   text-align: left; vertical-align: top; }
+  .md th { background: var(--chipbg); font-weight: 600; }
+  .md code { font-family: var(--mono); font-size: .92em;
+             background: var(--chipbg); padding: 1px 4px;
+             border-radius: var(--radius); }
+  .md pre { background: var(--chipbg); padding: 8px 12px; overflow-x: auto;
+            border-radius: var(--radius); }
+  .md pre code { background: none; padding: 0; }
+  /* the prose box's Write/Preview toggle: the pressed tab is the one
+     showing */
+  .prose-tabs button[aria-pressed="true"] { font-weight: 600;
+    background: var(--verdigris-wash); border-color: var(--verdigris);
+    color: var(--verdigris-deep); }
+

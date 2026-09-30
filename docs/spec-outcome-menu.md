@@ -2240,9 +2240,20 @@ hide-flagged guard conceals rather than narrates, so no scenario may name
 one through the door. Every door this kind lets an agent **write**
 through checks the `through` ref, and checking it means reading the
 roster, so *an agent may write down somebody it found* and *an agent may
-correct what it observed* have **no expressible scenario**. They are
+correct what it observed* had **no expressible scenario**. They were
 proved over the real handler by an agent **holding a leash** instead,
 which is the stronger sentence anyway. Filed as `waymark-zs9`.
+
+**Since waymark-zs9 (2026-09-30) the walker holds the leash.**
+`packs/run-scenario` mints one grant over exactly the {kind, action} an
+`:agent` scenario attempts, the agent accepts it, and the attempt
+presents it — so the wall speaks instead of the router. The leash is
+unconditional by default; `:as {:leashed false}` opts out, and that
+scenario still sees 404 and is judged unreadable, which keeps *an
+unleashed agent sees nothing* a sentence of its own. `person` gains its
+seventh scenario, `an-agent-writes-down-somebody-through-somebody-real`:
+an agent's create with a dangling `through` is refused by
+`relates-through-somebody-here`, through the door.
 
 **`names-a-person` names no scenario either, and that is structural
 too.** A scenario's `:input` is a literal map and a `:given` row's id is

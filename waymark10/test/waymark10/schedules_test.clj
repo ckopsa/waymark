@@ -707,6 +707,11 @@
     (fn [tx] (store/query-rows (:storage *eng*) tx :runner_link
                                {:seeded_from from} {:limit 10}))))
 
+(defn- runners-of [kind id]
+  (store/with-tx (:storage *eng*)
+    (fn [tx] (sch/runners-of-row
+              (store/load-row (:storage *eng*) tx kind (str id) {})))))
+
 (deftest the-boot-seeds-one-runner-link-from-each-own-link
   (let [cn :sched-seed-links
         _ (drain! cn)
@@ -720,8 +725,17 @@
         bare-sched (:id (sched-of bare))
         from-model (str "model:" chair)
         from-linked (str "schedule:" linked-sched)
-        from-bare (str "schedule:" bare-sched)]
+        from-bare (str "schedule:" bare-sched)
+        set-chair (model! "claude-chair-seed-set")
+        _ (link-model! set-chair a-chair-url a-chair-token)
+        person-link (str (:id (:row (inv/create! *eng* :runner_link
+                                                 {:provider "claude_routine"
+                                                  :fire_url a-seat-url
+                                                  :fire_token a-seat-token}
+                                                 {:principal elena}))))]
     (link-schedule! linked-sched a-seat-url own-token)
+    (inv/invoke! *eng* :model (str set-chair) :set_runners
+                 {:runners [person-link]} {:principal elena})
     (rl/ensure-seeded-links! *eng*)
 
     (testing "the model and the linked schedule each get exactly one"
@@ -740,10 +754,29 @@
     (testing "a schedule without its own link gets none"
       (is (empty? (seeded from-bare))))
 
+    (testing "each source with no runners names exactly its seeded link"
+      (is (= [(str (:id (first (seeded from-model))))] (runners-of :model chair)))
+      (is (= [(str (:id (first (seeded from-linked))))]
+             (runners-of :schedule linked-sched)))
+      (is (nil? (runners-of :schedule bare-sched))))
+
     (testing "a second boot adds none"
       (rl/ensure-seeded-links! *eng*)
       (is (= 1 (count (seeded from-model))))
-      (is (= 1 (count (seeded from-linked)))))
+      (is (= 1 (count (seeded from-linked))))
+      (is (= [(str (:id (first (seeded from-model))))] (runners-of :model chair)))
+      (is (= [(str (:id (first (seeded from-linked))))]
+             (runners-of :schedule linked-sched))))
+
+    (testing "a list a person set is untouched"
+      (is (= 1 (count (seeded (str "model:" set-chair)))))
+      (is (= [person-link] (runners-of :model set-chair))))
+
+    (testing "a fire goes through the seeded link"
+      (fire-seat! linked "Walk the seeded link.")
+      (drain! cn)
+      (is (= (str (:id (first (seeded from-linked))))
+             (get-in (sched-of linked) [:data :last_runner]))))
 
     (testing "the sources keep their own links"
       (is (= {:fire_url a-seat-url :fire_token own-token}
@@ -810,6 +843,41 @@
 
     (seat-do! linked-id :retire)
     (seat-do! new-id :retire)))
+
+(deftest the-link-form-prefills-the-chairs-url
+  ;; waymark ticket 7152184d: the form offered whatever URL the row
+  ;; last held, and code-seat was relinked to inbox-clerk's Routine
+  (let [cn :sched-link-prefill
+        _ (drain! cn)
+        chair (model! "claude-chair-prefill")
+        _ (link-model! chair a-chair-url a-chair-token)
+        held-id (seat! "prefill-held" 3600 [chair])
+        bare-id (seat! "prefill-bare" 3600 [])
+        _ (drain! cn)
+        link (get-in (inv/resources *eng*) [:schedule :actions :link])
+        prefill #(render/prefill-values link (sched-of %)
+                                        (inv/render-hooks *eng*))]
+    (link-schedule! (:id (sched-of held-id)) a-seat-url a-seat-token)
+    (link-schedule! (:id (sched-of bare-id)) a-seat-url a-seat-token)
+
+    (testing "a schedule held for a model, naming another Routine, prefills the model's fire_url"
+      (is (= {:fire_url a-chair-url} (prefill held-id))))
+
+    (testing "a schedule with no chair prefills its own"
+      (is (= {:fire_url a-seat-url} (prefill bare-id))))
+
+    (testing "the token is never prefilled"
+      (is (not-any? #(contains? (prefill %) :fire_token) [held-id bare-id]))
+      (is (not-any? #(contains? (prefill %) :token) [held-id bare-id])))
+
+    (testing "a door with no :prefill-fn prefills the row's own values"
+      (is (= {:model (get-in (sched-of held-id) [:data :model])}
+             (render/prefill-values
+              (get-in (inv/resources *eng*) [:schedule :actions :restate])
+              (sched-of held-id) {}))))
+
+    (seat-do! held-id :retire)
+    (seat-do! bare-id :retire)))
 
 (deftest a-broken-schedule-goes-back-to-its-model
   ;; waymark ticket 1cdf9362: no token is pasted on the way back.
@@ -961,3 +1029,54 @@
       (is (= :linked-for-fire (guard-of bare-id))))
 
     (doseq [s [seat-id bare-id]] (seat-do! s :retire))))
+
+;; ── 11 · the adapter leaves a pool-only schedule alone (waymark ticket 962e0aeb)
+;; A schedule whose only way out is a runner pool, its own or its
+;; chair's, fires through Routines a person made: push!, pause!,
+;; resume! and delete! ask the provider nothing for it, and the row
+;; still ends when its seat retires.
+
+(deftest the-adapter-leaves-a-pool-only-schedule-alone
+  (let [cn :sched-pool-only
+        _ (drain! cn)
+        bare (model! "claude-chair-pool-bare")
+        pooled (model! "claude-chair-pool")
+        _ (set-runners! :model pooled {:runners [(runner-link!)]})
+        own (seat! "pool-own-clerk" 3600 [bare])
+        _ (drain! cn)
+        xid (get-in (sched-of own) [:data :external_id])
+        _ (set-runners! :schedule (:id (sched-of own)) {:runners [(runner-link!)]})
+        _ (drain! cn)
+        creates (:creates (sch/counts *fake*))
+        chaired (seat! "pool-chair-clerk" 3600 [pooled])
+        _ (drain! cn)
+        asked #(dissoc (sch/counts *fake*) :reads)]
+
+    (testing "a seat whose chair holds only a pool gets no copy"
+      (is (some? xid) "the own-pool seat was pushed before its pool was set")
+      (is (not (sch/linked? *eng* (sched-of chaired))))
+      (is (= creates (:creates (sch/counts *fake*))))
+      (is (nil? (get-in (sched-of chaired) [:data :external_id]))))
+
+    (let [before (asked)]
+      (testing "restate, park and unpark ask the provider nothing"
+        (doseq [s [own chaired]]
+          (restate-cadence! s 21600)
+          (drain! cn)
+          (seat-do! s :park)
+          (drain! cn)
+          (seat-do! s :unpark)
+          (drain! cn))
+        (is (= before (asked)))
+        (is (= "0 * * * *" (:cron (copy-of (sched-of own))))
+            "the old copy is not updated")
+        (is (true? (:enabled (copy-of (sched-of own)))) "nor paused")
+        (is (= :live (:state (sched-of own)))))
+
+      (testing "retire ends both rows and deletes nothing at the provider"
+        (doseq [s [own chaired]] (seat-do! s :retire))
+        (drain! cn)
+        (is (= before (asked)))
+        (is (some? (sch/copy *fake* xid)))
+        (doseq [s [own chaired]]
+          (is (= :ended (:state (sched-of s)))))))))

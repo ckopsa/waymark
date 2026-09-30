@@ -194,6 +194,15 @@
     compare of base...head is behind by at least one commit). Throws
     when the forge does not answer."))
 
+(defprotocol ForgePull
+  "One pull request read by its number, outside the window (ticket
+  949d18c5). A protocol of its own: a source that does not implement
+  it adopts only what the window shows, and the pass notes the rest."
+  (forge-pull [s repository number]
+    "→ the change document of pull request `number`, in the shape
+    `forge-poll` answers, or nil. Throws when the forge does not
+    answer or has no such pull request."))
+
 ;; ── what the two kinds take ─────────────────────────────────────────
 
 (def change-create-fields
@@ -1030,6 +1039,16 @@
                              :running (when (conflicted? row)
                                         (with-conflict nil row))
                              (with-conflict checked row))
+                   ;; the mirror's own read of a submitted head, stamped
+                   ;; for the merge line: a rig's red on a head read green
+                   ;; here is the failing round's (ticket baf76388)
+                   _ (when (= :submitted (state-of row))
+                       (case (:verdict verdict)
+                         :green (bench/mark-row! eng :change (str (:id row))
+                                                 {:green_head head} #{})
+                         :red (bench/mark-row! eng :change (str (:id row))
+                                               {:green_head nil} #{})
+                         nil))
                    ;; a head whose run died without a verdict is re-run
                    ;; once, and the re-run is its move for this pass
                    ;; (ticket 22f91244)
@@ -1168,22 +1187,41 @@
     (when (and (map? pr) (integer? (:number pr)))
       pr)))
 
+(defn- forge-doc-of
+  "The forge's own document for the pull request the bench names for
+  this row, or nil (ticket 949d18c5). The listing's window can pass a
+  pull request before any pass adopts it, and then no later pass sees
+  it until it moves; asking for it by number closes that gap. Only a
+  pull request on the row's own head branch counts, and a forge that
+  will not answer costs the row this pass's adoption and nothing else."
+  [source row repo pr log-fn]
+  (when (satisfies? ForgePull source)
+    (let [doc (try (forge-pull source repo (:number pr))
+                   (catch Exception e
+                     (log-fn "the pull request #" (:number pr) " of " repo
+                             " could not be read (" (ex-message e) ")")
+                     nil))]
+      (when (and (map? doc)
+                 (= (str (get-in row [:data :head_branch]))
+                    (str (:head_branch doc))))
+        doc))))
+
 (defn- adoption-move
   "The `note_adoption` input this pass writes on the row, or nil: the
   first sight stamped, or the note once the window has passed and the
   stored note says something else."
   [row repo branch pr ^Instant now]
-  (let [stamp (text-of (get-in row [:data :landed_at]))
+  (let [stamp (text-of (get-in row [:data :unadopted_since]))
         seen (when stamp
                (try (Instant/parse stamp) (catch Exception _ nil)))
         note (adoption-note repo branch pr)]
     (cond
-      (nil? seen) {:landed_at (str now)}
+      (nil? seen) {:unadopted_since (str now)}
 
       (and (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
               (long adoption-note-window-ms))
            (not= note (str (get-in row [:data :adoption_note]))))
-      {:landed_at stamp :adoption_note note})))
+      {:unadopted_since stamp :adoption_note note})))
 
 ;; ── a submitted change that never opened a pull request (ticket 226d2b85)
 ;;
@@ -1227,7 +1265,7 @@
   [eng row repo branch ^Instant now]
   (when-some [tid (ticket-of row)]
     (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
-      (let [stamp (text-of (get-in row [:data :landed_at]))
+      (let [stamp (text-of (get-in row [:data :unadopted_since]))
             seen (when stamp
                    (try (Instant/parse stamp) (catch Exception _ nil)))
             note (unopened-note repo branch)]
@@ -1238,20 +1276,77 @@
                        (str "closed: ticket " tid " ended; this change "
                             "never opened a pull request")}]
 
-          (nil? seen) [:note_adoption {:landed_at (str now)}]
+          (nil? seen) [:note_adoption {:unadopted_since (str now)}]
 
           (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
              (long adoption-note-window-ms))
           [:stick {:why (subs note 0 (min (count note) why-chars))
                    :failing_checks ["no pull request"]}])))))
 
+;; ── the old name's last rows (ticket 2d216859) ──────────────────────
+;;
+;; Ticket 8f2fac64 renamed `landed_at` to `unadopted_since`, and the
+;; rows the forge pass no longer looks at kept the old name. The boot
+;; clears them once, beneath the doors because the field is no longer
+;; law, and a boot after that finds nothing to write.
+
+(def ^:private legacy-limit
+  "The most change rows one boot reads for the old name."
+  100000)
+
+(defn- without-landed-at
+  "The row with `landed_at` gone. A submitted change with no number
+  keeps its stamp as `unadopted_since` when it has none of its own."
+  [row]
+  (let [legacy (text-of (get-in row [:data :landed_at]))]
+    (cond-> (update row :data dissoc :landed_at)
+      (and legacy
+           (= :submitted (state-of row))
+           (nil? (get-in row [:data :number]))
+           (nil? (text-of (get-in row [:data :unadopted_since]))))
+      (assoc-in [:data :unadopted_since] legacy))))
+
+(defn clear-landed-at!
+  "Every change row still carrying `landed_at` rewritten without it
+  (ticket 2d216859); the count of rows written. Idempotent: a row
+  without the field is not touched, and a row another process moved
+  first is left to the next boot."
+  [eng]
+  (let [st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx] (store/query-rows st tx :change {}
+                                          {:limit legacy-limit})))]
+    (reduce
+     (fn [n row]
+       (if-not (contains? (:data row) :landed_at)
+         n
+         (try
+           (if (store/with-tx st
+                 (fn [tx]
+                   (let [now (store/load-row st tx :change (str (:id row)) {})]
+                     (when (contains? (:data now) :landed_at)
+                       (store/save-row! st tx :change
+                                        (assoc (without-landed-at now)
+                                               :version (inc (long (:version now))))
+                                        (:version now))
+                       true))))
+             (inc n)
+             n)
+           (catch Exception e
+             (warn! "the old landed_at of change " (:id row)
+                    " was not cleared (" (ex-message e) ")")
+             n))))
+     0 rows)))
+
 (defn- adoption-note-pass!
   "Every submitted change of a repository with an active policy that
-  has no number → the pull request its landing opened, and at most one
-  `note_adoption`; when its landing opened none, the `unopened-move`.
+  has no number → the pull request its landing opened, adopted when
+  the forge answers it by number, else at most one `note_adoption`;
+  when its landing opened none, the `unopened-move`. The first-sight
+  stamp never stands in the adoption's way: the adopt door clears it.
   A rig that does not answer, or a door the engine refuses, costs that
   change one pass and nothing else."
-  [eng census log-fn]
+  [eng source census log-fn]
   (let [by-repo (into {}
                       (keep (fn [p]
                               (when-some [r (some-> (get-in p [:data :repository])
@@ -1269,19 +1364,22 @@
            census
            (try
              (let [pr (landed-pull-request eng row policy)
-                   branch (bench/branch-of row policy)
-                   [door input] (if pr
-                                  (some->> (adoption-move row repo branch pr now)
-                                           (vector :note_adoption))
-                                  (unopened-move eng row repo branch now))]
-               (if (nil? input)
-                 census
-                 (do (inv/invoke! eng :change (str (:id row)) door input
-                                  (as-opts))
-                     (cond-> census
-                       (:adoption_note input) (update :adoption-noted inc)
-                       (= :stick door) (update :stuck inc)
-                       (= :supersede door) (update :unopened-closed inc)))))
+                   branch (bench/branch-of row policy)]
+               (if-some [doc (when pr (forge-doc-of source row repo pr log-fn))]
+                 (change-pass! eng [doc] census log-fn)
+                 (let [[door input] (if pr
+                                      (some->> (adoption-move row repo branch
+                                                              pr now)
+                                               (vector :note_adoption))
+                                      (unopened-move eng row repo branch now))]
+                   (if (nil? input)
+                     census
+                     (do (inv/invoke! eng :change (str (:id row)) door input
+                                      (as-opts))
+                         (cond-> census
+                           (:adoption_note input) (update :adoption-noted inc)
+                           (= :stick door) (update :stuck inc)
+                           (= :supersede door) (update :unopened-closed inc)))))))
              (catch Exception e
                (log-fn "the change " (get-in row [:data :change_id])
                        " was refused its adoption note (" (ex-message e) ")")
@@ -1804,7 +1902,7 @@
                   census (failing-pass! eng source read-checks census log-fn)
                   census (staleness-pass! eng source read-checks census
                                           log-fn)
-                  census (adoption-note-pass! eng census log-fn)]
+                  census (adoption-note-pass! eng source census log-fn)]
               [census nil])
             (catch Exception e [census e]))
           census (base-pass! eng source census log-fn)

@@ -721,7 +721,7 @@
 
 ;; ── the cursor ──────────────────────────────────────────────────────
 
-(deftest the-window-re-asks-from-sixty-seconds-behind
+(deftest the-window-re-asks-from-five-minutes-behind
   (let [state (gh/fake-state)
         source (gh/fake-source state {:cursor "2026-09-18T12:00:00Z"})
         pull (fn [n at]
@@ -729,12 +729,13 @@
                 :user {:login "ckopsa"} :base {:ref "main"}
                 :head {:ref (str "b" n) :sha (str "sha" n)}
                 :updated_at at :labels []})]
-    ;; inside the sixty seconds, and outside them
-    (gh/seed-pull! state repo (pull 7 "2026-09-18T11:59:30Z"))
-    (gh/seed-pull! state repo (pull 8 "2026-09-18T11:58:00Z"))
+    ;; inside the five minutes (though outside sixty seconds), and
+    ;; outside them
+    (gh/seed-pull! state repo (pull 7 "2026-09-18T11:56:00Z"))
+    (gh/seed-pull! state repo (pull 8 "2026-09-18T11:54:30Z"))
     (let [answer (forge/forge-poll source)]
       (is (= ["github:ckopsa/waymark#7"] (mapv :change_id (:changes answer)))
-          "the window re-asks from sixty seconds behind the cursor, and
+          "the window re-asks from five minutes behind the cursor, and
            stops at the first pull request older than that")
       (is (true? (:complete? answer)))
       (is (= "2026-09-18T12:00:00Z" (gh/cursor source))
@@ -1501,17 +1502,17 @@
                               (java.time.Duration/ofMinutes 20)))]
     (let [census (pass! r)
           row (the-unadopted engine)]
-      (is (some? (get-in row [:data :landed_at]))
+      (is (some? (get-in row [:data :unadopted_since]))
           "the pass stamps the first time it saw the pull request")
       (is (nil? (get-in row [:data :adoption_note]))
           "and says nothing inside the window")
       (is (= 0 (:adoption-noted census))))
-    (rewrite-unadopted! engine #(assoc-in % [:data :landed_at] long-ago))
+    (rewrite-unadopted! engine #(assoc-in % [:data :unadopted_since] long-ago))
     (let [census (pass! r)
           row (the-unadopted engine)]
       (is (= note (get-in row [:data :adoption_note]))
           "after the window the row says what landed and where")
-      (is (= long-ago (get-in row [:data :landed_at]))
+      (is (= long-ago (get-in row [:data :unadopted_since]))
           "the first sight stands")
       (is (= 1 (:adoption-noted census))))
     (testing "a second pass does not write the same note again"
@@ -1526,13 +1527,73 @@
       (let [row (one-row engine :change {:change_id "github:ckopsa/waymark#7"})]
         (is (= 7 (get-in row [:data :number])))
         (is (nil? (get-in row [:data :adoption_note])))
-        (is (nil? (get-in row [:data :landed_at])))))))
+        (is (nil? (get-in row [:data :unadopted_since])))))))
 
 (deftest a-change-with-no-landed-pull-request-is-not-noted
   (let [{:keys [engine] :as r} (unadopted-world nil)]
     (pass! r)
-    (is (nil? (get-in (the-unadopted engine) [:data :landed_at])))
+    (is (nil? (get-in (the-unadopted engine) [:data :unadopted_since])))
     (is (nil? (get-in (the-unadopted engine) [:data :adoption_note])))))
+
+(deftest the-boot-clears-the-old-name-once
+  ;; ticket 2d216859: `landed_at` (renamed by ticket 8f2fac64) is
+  ;; cleared at boot, and a stamp that still means something moves
+  (let [{:keys [engine]} (unadopted-world nil)
+        st (:storage engine)
+        stamp "2026-09-20T10:00:00Z"
+        _ (inv/create! engine :change {:change_id "ticket:5e7ded00"
+                                       :repository repo
+                                       :title "A superseded change"
+                                       :base_branch "main"
+                                       :head_branch "bench/5e7ded00"}
+                       {:principal mirror/source-principal})
+        old (one-row engine :change {:change_id "ticket:5e7ded00"})]
+    (rewrite-unadopted! engine #(assoc-in % [:data :landed_at] stamp))
+    (store/with-tx st
+      (fn [tx]
+        (store/save-row! st tx :change
+                         (-> old
+                             (assoc :state :superseded)
+                             (assoc-in [:data :landed_at] stamp)
+                             (assoc :version (inc (long (:version old)))))
+                         (:version old))))
+    (is (= 2 (forge/clear-landed-at! engine)))
+    (is (= 0 (forge/clear-landed-at! engine)) "a second boot writes nothing")
+    (let [row (the-unadopted engine)
+          gone (one-row engine :change {:change_id "ticket:5e7ded00"})]
+      (is (= stamp (get-in row [:data :unadopted_since]))
+          "the submitted change keeps its stamp under the new name")
+      (is (not (contains? (:data row) :landed_at)))
+      (is (not (contains? (:data gone) :landed_at)))
+      (is (nil? (get-in gone [:data :unadopted_since]))
+          "the superseded change loses the value"))))
+
+(deftest a-landed-pull-request-the-window-missed-is-adopted-by-number
+  ;; ticket 949d18c5: the landing reported, the pass stamped the row,
+  ;; and the listing's window had already passed the pull request
+  (let [{:keys [state engine]}
+        (unadopted-world {:number 7 :state "open"
+                          :url "https://github.com/ckopsa/waymark/pull/7"})
+        r {:source (gh/fake-source state {:cursor "2026-09-18T13:00:00Z"})
+           :engine engine}
+        id (str (:id (the-unadopted engine)))]
+    (gh/seed-pull! state repo
+                   {:number 7 :state "open" :title "A landed change"
+                    :user {:login "ckopsa"} :base {:ref "main"}
+                    :head {:ref a-landed-branch :sha "sha7"}
+                    :html_url "https://github.com/ckopsa/waymark/pull/7"
+                    :updated_at "2026-09-18T12:00:00Z" :labels []})
+    (rewrite-unadopted! engine
+                        #(assoc-in % [:data :unadopted_since] "2026-09-18T12:05:00Z"))
+    (let [census (pass! r)
+          row (one-row engine :change {:change_id "github:ckopsa/waymark#7"})]
+      (is (= 1 (:adopted census)) "the pull request is adopted by number")
+      (is (= id (str (:id row))) "onto the row that asked for it")
+      (is (= 7 (get-in row [:data :number])))
+      (is (= :submitted (:state row)))
+      (is (nil? (get-in row [:data :unadopted_since]))
+          "the first-sight stamp goes with the adoption")
+      (is (nil? (get-in row [:data :adoption_note]))))))
 
 ;; ── a submitted change that never opened a pull request (ticket 226d2b85)
 
@@ -1577,8 +1638,8 @@
     (pass! r)
     (let [row (the-unadopted engine)]
       (is (= "submitted" (name (:state row))) "inside the window it waits")
-      (is (some? (get-in row [:data :landed_at])) "the first sight is stamped"))
-    (rewrite-unadopted! engine #(assoc-in % [:data :landed_at] long-ago))
+      (is (some? (get-in row [:data :unadopted_since])) "the first sight is stamped"))
+    (rewrite-unadopted! engine #(assoc-in % [:data :unadopted_since] long-ago))
     (let [census (pass! r)
           row (the-unadopted engine)]
       (is (= "stuck" (name (:state row))) "after the window a person sees it")

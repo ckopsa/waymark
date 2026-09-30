@@ -18,7 +18,8 @@
   `ensure-seeded-links!` (piece 1c) is the boot seed: one link for
   each model and each schedule that holds its own fire URL and token,
   recorded by `seeded_from` so a second boot makes none. The source
-  rows keep their own links; nothing fires through a seeded link yet.
+  rows keep their own links, and a source row that names no runners
+  is given its seeded link as its list (4e42b3d4), so fires go through it.
 
   `fire-pool!` (d16b71bf) chooses among a pool's links: it skips a
   link that is waiting and takes the least-used of the rest, or, in
@@ -436,7 +437,9 @@
   fire URL and token, one runner link with provider claude_routine,
   that URL and a copy of the token, recorded by `seeded_from`
   (`model:<id>` or `schedule:<id>`) so running it again makes none.
-  The source rows keep their own links untouched."
+  The source rows keep their own links untouched. A source row whose
+  `runners` is empty — an active model, a live schedule — is given
+  that link as its list; a list a person set is never overwritten."
   [eng]
   (when (contains? (inv/resources eng) :runner_link)
     (doseq [kind [:model :schedule]
@@ -444,15 +447,22 @@
             :let [url (some-> (get-in r [:data :fire_url]) str not-empty)
                   token (some-> (get-in r [:data :fire_token]) str not-empty)
                   from (str (name kind) ":" (:id r))]
-            :when (and url token
-                       (empty? (rows-of eng :runner_link {:seeded_from from})))]
+            :when (and url token)]
       (try
-        (inv/create! eng :runner_link
-                     {:provider "claude_routine"
-                      :fire_url url
-                      :fire_token token
-                      :seeded_from from}
-                     {:principal seed-actor})
+        (when (empty? (rows-of eng :runner_link {:seeded_from from}))
+          (inv/create! eng :runner_link
+                       {:provider "claude_routine"
+                        :fire_url url
+                        :fire_token token
+                        :seeded_from from}
+                       {:principal seed-actor}))
+        (when-let [link (first (rows-of eng :runner_link {:seeded_from from}))]
+          (when (and (nil? (sch/runners-of-row r))
+                     (= (if (= kind :model) "active" "live")
+                        (name (:state r))))
+            (inv/invoke! eng kind (str (:id r)) :seed_runners
+                         {:runners [(str (:id link))]}
+                         {:principal seed-actor})))
         (catch Exception e
           (binding [*out* *err*]
             (println (str "waymark10 runner links: seed from " from
@@ -613,6 +623,32 @@
   [eng link-row ^Instant at]
   (some-> (provider-row eng (get-in link-row [:data :provider]))
           (waiting-until at)))
+
+(defn account-hold
+  "The instant before which no fire of `provider` (a provider name) goes
+  out — its row's `retry_after`, or the close of its spent window — or
+  nil when the account lets it fire. For a schedule's fire through its
+  own single link, which is no runner link (5c499772)."
+  [eng provider]
+  (some-> (provider-row eng provider)
+          (waiting-until (or (instant-of ((:now-fn eng))) (Instant/now)))))
+
+(defn count-account!
+  "Write on `provider`'s row what one fire through a schedule's own
+  single link answered (5c499772): a started run counts in its window,
+  and a throttle that names the account holds it — as `fire-link!` does
+  for a runner link."
+  [eng provider answer]
+  (when-some [p (provider-row eng provider)]
+    (let [at (or (instant-of ((:now-fn eng))) (Instant/now))]
+      (cond
+        (contains? answer :started)
+        (act! eng :runner_provider p :fired (window-after (:data p) at))
+
+        (and (contains? answer :throttled) (account-throttle? answer))
+        (act! eng :runner_provider p :throttle
+              {:retry_after (str (sch/retry-instant at (:throttled answer)
+                                                    (:body answer)))})))))
 
 (defn- links-by-id [eng]
   (into {} (map (juxt (comp str :id) identity)) (rows-of eng :runner_link {})))

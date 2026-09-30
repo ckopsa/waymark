@@ -137,7 +137,7 @@
   ;; with the wait it described (ticket 58e706d6).
   (-> row
       (update :data merge (into {} (remove (comp nil? val)) inp))
-      (update :data assoc :landed_at nil :adoption_note nil)))
+      (update :data assoc :unadopted_since nil :adoption_note nil)))
 
 (defhandler note-the-adoption [row inp _ctx]
   ;; THE FORGE PASS'S OWN RECORD (ticket 58e706d6): when it first saw
@@ -145,7 +145,7 @@
   ;; has passed with no adoption, the note that says so. An input with
   ;; neither clears both.
   (update row :data assoc
-          :landed_at (some-> (:landed_at inp) str not-empty)
+          :unadopted_since (some-> (:unadopted_since inp) str not-empty)
           :adoption_note (some-> (:adoption_note inp) str not-empty)))
 
 ;; ── the merge finishes the task the change was born from ────────────
@@ -1150,6 +1150,10 @@
     ;; merge line trusts them only while it is still the row's head_sha
     [:missing_checks_head {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
+    ;; the head the forge pass last read green on every required check
+    ;; (ticket baf76388): the merge line does not take a rig's red for it
+    [:green_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
     ;; ── the bench's three (waymark-fp62.6.3.2, R-4) ──────────────
     [:branch {:optional true
               :x-display
@@ -1216,8 +1220,9 @@
     ;; a submit whose landing opened a pull request the forge never
     ;; adopted (ticket 58e706d6): the first time the forge pass saw it,
     ;; and the note it writes once the window has passed. The adoption
-    ;; clears both.
-    [:landed_at {:optional true :x-display {:hidden true}}
+    ;; clears both. `unadopted_since` is the mirror's first-sight stamp,
+    ;; NOT a landing: no bench landing or merge writes it.
+    [:unadopted_since {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
     [:adoption_note {:optional true
                      :examples ["landed as #7 on ckopsa/waymark but no pull request row adopted it; head bench/58e706d6"]
@@ -1603,7 +1608,7 @@
      :guards [the-mirror-writes-this-row]
      :handler note-the-adoption
      :input [:map
-             [:landed_at {:optional true :x-display {:hidden true}}
+             [:unadopted_since {:optional true :x-display {:hidden true}}
               [:maybe [:string {:max 64}]]]
              [:adoption_note {:optional true :x-display {:hidden true}}
               [:maybe [:string {:max 500}]]]]

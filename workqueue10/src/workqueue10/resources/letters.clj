@@ -19,7 +19,7 @@
   pushdown), so author and recipient each see the row with no grant,
   and a THIRD agent 404s it by construction — default-deny conceals,
   never refuses. Letters are also NEVER GRANTABLE: like self and
-  journal they sit in private-own-surface-kinds, so no ask or grant
+  journal they declare :own-surface {:grantable false}, so no ask or grant
   scope may name them — personal mail is not delegable sight.
 
   Humans and system remain UNSCOPED and see all letters — identical
@@ -417,7 +417,8 @@
    ;; to the addressee alone, because a shelf with no floor is a flood
    ;; and the recipient keeps a broom of its own.
    :own-surface {:by [:owner :to]
-                 :actions #{"create" "open" "discard"}}
+                 :actions #{"create" "open" "discard"}
+                 :grantable false}
    :schema [:map
             ;; the AUTHOR — stamped by the engine (on-create); a
             ;; persisted row always carries it. Filterable so own-ids

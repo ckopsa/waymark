@@ -597,7 +597,22 @@
 
             (testing "judging one of the five drops the count to four"
               (judge-sitting! eng judgment (or (first unjudged) fifth))
-              (is (= 4 (n))))))))))
+              (is (= 4 (n))))))))
+
+    (testing "a comma state in the entry's filter is any-of (ticket 708c0f8f)"
+      (let [open-sid (str (:id (:row (inv/create! eng :sitting
+                                                  {:seat (str worker)
+                                                   :model (str model)
+                                                   :grant (str grant)}
+                                                  {:principal worker-sitter}))))
+            _ (transcripts/issue-key! eng (raw-of eng :seat worker)
+                                      (raw-of eng :sitting open-sid))
+            either (assoc seal-count :filter {:state "open,sealed"})]
+        (is (= :open (:state (transcripts/transcript-for-sitting eng open-sid)))
+            "the unsealed sitting's transcript is open")
+        (is (= 4 (n)) "the default `sealed` leaves the open one out")
+        (is (= 5 (#'wakes/entry-count eng (raw-of eng :seat (:id judge)) either))
+            "open,sealed counts the four unjudged sealed and the open one")))))
 
 ;; ── 5 · a listed verdict files one draft ticket ───────────────────────
 
@@ -816,6 +831,11 @@
     (is (some? refused) "the restate is refused")
     (is (str/includes? (pr-str (ex-data refused)) (str (:id successor)))
         "and the refusal names the successor")
+    (is (= :walk-judgment-not-superseded (:guard (ex-data refused)))
+        "the guard that judged it is the superseded one, not the walk's")
+    (is (not-any? #(str/includes? (str %) "promote")
+                  (:remedies (ex-data refused)))
+        "and it offers no promote: a superseded judgment cannot be promoted")
     (is (= (str (:id successor))
            (str (get-in (raw-row eng :seat (:id seat)) [:data :judgment]))))))
 

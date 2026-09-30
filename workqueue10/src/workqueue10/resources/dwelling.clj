@@ -321,7 +321,8 @@
    ;; Declared here since waymark-442.6: core used to carry a literal
    ;; set of kind names that reached into this app to name :self.
    :own-surface {:by :owner
-                 :actions #{"create" "update" "retire" "restore"}}
+                 :actions #{"create" "update" "retire" "restore"}
+                 :grantable false}
    :schema [:map
             ;; WHOSE self this is — the agent principal id. Optional in
             ;; the schema because the engine stamps it (on-create); a
@@ -491,7 +492,7 @@
    :label-template "{data.title}"
    ;; the same courtesy the self gets, and for the same reason: a
    ;; shared history an agent cannot write is not a history it lives in
-   :own-surface {:by :owner :actions #{"create" "amend"}}
+   :own-surface {:by :owner :actions #{"create" "amend"} :grantable false}
    :schema [:map
             ;; whose journal — the inhabitant agent id. Stamped by the
             ;; engine, filterable so own-ids finds an agent's entries.

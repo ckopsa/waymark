@@ -449,6 +449,22 @@
     (if (chair-link-read read' row) (t/allow) (t/deny))
     (t/allow)))                         ; probe ctx — decline to guess
 
+(defn- chair-url-prefill
+  "The `link` form's computed prefill (waymark ticket 7152184d): the
+  fire URL of the model this schedule's seat is held for. The form
+  used to offer whatever URL the row last held, and on 2026-09-28
+  that relinked code-seat to inbox-clerk's Routine. Nil when the seat
+  has no chair, the chair has no URL, or there is no reader — the
+  row's own fire_url stands then. The token is never prefilled."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [url (some->> (get-in row [:data :seat]) str not-empty
+                             (read' :seat)
+                             seats/chair-of
+                             (read' :model)
+                             :data :fire_url str not-empty)]
+      {:fire_url url})))
+
 (def no-link-note
   "The note an unlinked row carries (R-12.18), spelled once so the
   door and the test read the same words."
@@ -559,6 +575,14 @@
                        (assoc % :runner_order o)
                        (dissoc % :runner_order)))
       (update :data dissoc :note)))
+
+;; the boot seed's list (waymark ticket 4e42b3d4): seats.clj's
+;; `seed-runners`, spelled again as `write-runners` spells `set-runners`.
+(defhandler seed-runners
+  [row inp _ctx]
+  (if (runners-of-row row)
+    row
+    (assoc-in row [:data :runners] (vec (:runners inp)))))
 
 (defresource schedule
   {:kind :schedule
@@ -856,7 +880,7 @@
      ;; input digest, summary — is still the audit that a link was
      ;; made, by whom, when.
      :guards [a-person-or-a-delegate]
-     :edit {:prefill [:fire_url] :fence false
+     :edit {:prefill [:fire_url] :prefill-fn chair-url-prefill :fence false
             :unfenced-reason
             "The token comes from the Routine's own page, not from this row; a link replaces what stands rather than editing it."}
      :safety {:idempotent true :reversible false :confirm false
@@ -981,7 +1005,25 @@
             "Written by the fire consumer the moment the provider throttled the fire; no read preceded it to fence against."}
      :safety engine-writes
      :handler hold-throttle
-     :display {:label "Routine throttled"}}}
+     :display {:label "Routine throttled"}}
+
+    ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
+    ;; and a no-op on a row that already names a list. Only a live row:
+    ;; the seed must not wake a paused one.
+    :seed_runners
+    {:from #{:live} :to :live
+     :input [:map
+             [:runners {:x-display {:hidden true}}
+              [:vector {:min 1 :max 20} [:string {:min 1 :max 200}]]]]
+     :record true
+     :guards [engine-writes-schedules]
+     :edit {:prefill [:runners] :fence false
+            :unfenced-reason
+            "Written by the boot seed, which read the row in this pass; it writes only a list that is empty."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The engine names the link it seeded from this row; Runner links restates the list."}
+     :handler seed-runners
+     :display {:label "Runner list seeded"}}}
    :deviations
    ["The schedule is NOT declared through server/mirror, though R-12.0 names the calendar as the precedent. Three reasons: mirror's authority points inward (a pull wins; R-12.3 wants a read-back that reports and never repairs), mirror refuses a kind that declares its own :states (R-12.1 names four), and MirrorAdapter has no pause, resume or delete (calendar10 had to hang delete-event! off the side of the protocol). The seam is ScheduleAdapter instead, and the bookkeeping posture — hidden system doors over ordinary data fields — is borrowed from mirror whole."
     "R-12.1 lists four states; this kind has five. `ended` is where a retired or merged seat's schedule lands once the copy is deleted. The alternative was returning the row to `pending`, which means \"no copy yet\" and invites the next push to make one."
@@ -1629,7 +1671,9 @@
   hand and this engine has no endpoint that could write it. A
   CHAIR-LINKED row is skipped for the same reason
   (waymark-fp62.7.23): the Routine it fires through is the model's,
-  made by hand one row over."
+  made by hand one row over. A POOL-ONLY row is skipped as well
+  (waymark ticket 962e0aeb): its fires go out through runners a
+  person made, so a copy of ours would be a second Routine."
   [eng adapters schedule-row]
   (let [seat-id (get-in schedule-row [:data :seat])
         seat-row (raw-row eng :seat seat-id)]
@@ -1644,6 +1688,8 @@
           nil)
 
       (some? (chair-link-of eng seat-row)) nil
+
+      (some? (pool-of eng schedule-row seat-row)) nil
 
       :else
       (let [adapter (adapter-for adapters schedule-row)
@@ -1672,11 +1718,12 @@
   transition would 409 and park the drain. A LINKED row is left alone
   too, the chair's link included: a person manages that Routine, and
   parking the seat is already the wall the fire door refuses at
-  (R-12.18, R-12.20, and waymark-fp62.7.23's chair)."
+  (R-12.18, R-12.20, and waymark-fp62.7.23's chair) — and a runner
+  pool's, which `fires-out?` counts (waymark ticket 962e0aeb)."
   [eng adapters schedule-row]
   (when-some [xid (some-> (get-in schedule-row [:data :external_id]) str not-empty)]
     (when (and (= :live (:state schedule-row))
-               (not (linked? eng schedule-row)))
+               (not (fires-out? eng schedule-row)))
       (try
         (pause-copy (adapter-for adapters schedule-row) xid)
         (act! eng (:id schedule-row) :pause nil)
@@ -1689,9 +1736,10 @@
 
   A LINKED row is left alone (R-12.18), the paused case included: the
   row's own state there is the provider's answer to a fire, not a
-  park, and only a fire that goes out moves it."
+  park, and only a fire that goes out moves it. A pool-only row is
+  left alone the same way (`fires-out?`, waymark ticket 962e0aeb)."
   [eng adapters schedule-row]
-  (when-not (linked? eng schedule-row)
+  (when-not (fires-out? eng schedule-row)
     (case (:state schedule-row)
       :paused (if-some [xid (some-> (get-in schedule-row [:data :external_id])
                                     str not-empty)]
@@ -1710,12 +1758,13 @@
 
   A LINKED row ends too, and no adapter is called (R-12.18): the
   Routine a person made by hand stays where it is, and this row stops
-  pointing at it."
+  pointing at it. A pool-only row is the same (`fires-out?`, waymark
+  ticket 962e0aeb)."
   [eng adapters schedule-row]
   (when-not (= :ended (:state schedule-row))
     (let [xid (some-> (get-in schedule-row [:data :external_id]) str not-empty)]
       (try
-        (when (and xid (not (linked? eng schedule-row)))
+        (when (and xid (not (fires-out? eng schedule-row)))
           (delete-copy (adapter-for adapters schedule-row) xid))
         (act! eng (:id schedule-row) :end nil)
         (catch Exception e (break! eng schedule-row e))))))
@@ -1890,9 +1939,12 @@
   ([eng adapter schedule-row text at]
    (fire! eng adapter schedule-row text at (link-of eng schedule-row)))
   ([eng adapter schedule-row text at link]
+   (fire! eng adapter schedule-row text at link nil))
+  ([eng adapter schedule-row text at link on-answer]
    (when (some-> (:fire_url link) str not-empty)
      (let [answer (fire (claude-routine adapter) link text)
            status (some-> (:status answer) long)]
+       (when on-answer (on-answer answer))
        (cond
          (contains? answer :started)
          (try-act! eng schedule-row :fired
@@ -1984,7 +2036,20 @@
     (fire-through-pool! eng (constantly (claude-routine adapter))
                         schedule-row text at ids
                         (pool-order-of eng schedule-row seat-row))
-    (fire! eng adapter schedule-row text at (link-of eng schedule-row seat-row))))
+    ;; the one link is no runner link, but its fire still goes out on
+    ;; the claude_routine account: it waits on that row's hold and
+    ;; counts toward its cap (5c499772)
+    (let [provider "claude_routine"
+          hold ((requiring-resolve 'waymark10.server.runner-links/account-hold)
+                eng provider)]
+      (if hold
+        (try-act! eng schedule-row :throttle
+                  {:note (clip (str "The " provider " account is waiting; the wake goes out at "
+                                    hold "."))
+                   :retry_after (str hold)})
+        (fire! eng adapter schedule-row text at (link-of eng schedule-row seat-row)
+               (partial (requiring-resolve 'waymark10.server.runner-links/count-account!)
+                        eng provider))))))
 
 (defn held?
   "Does this row hold its wakes rather than fire them (waymark ticket
