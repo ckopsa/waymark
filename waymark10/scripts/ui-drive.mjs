@@ -68,6 +68,13 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs invitation
 
+   GUIDED (guided follow, two people in two browser contexts, against
+   the batch-a engine — the recipe door's shared draft needs a real
+   store; CI runs it in the ui-guided job of .github/workflows/tests.yml):
+   1. the batch-a boot, on 8123
+   2. the same chromium
+   3. node waymark10/scripts/ui-drive.mjs guided
+
    (The FEED and RECIPE drives — the day's scroll-first face and the
    recipe editor — retired with the feed, 2026-09, and so did
    feed-smoke.sh.)
@@ -76,11 +83,11 @@
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = ["batch-a", "access", "invitation"].includes(process.argv[2])
+const MODE = ["batch-a", "access", "invitation", "guided"].includes(process.argv[2])
   ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
-  (MODE === "batch-a" ? "http://localhost:8123"
+  (["batch-a", "guided"].includes(MODE) ? "http://localhost:8123"
    : ["access", "invitation"].includes(MODE) ? "http://localhost:8124"
    : "http://localhost:8010");
 
@@ -1000,9 +1007,292 @@ async function invitationStory() {
   ok("Decline moves the invitation to declined", await stateOf(declined) === "declined");
 }
 
+/* ════ guided follow: two people, two browser contexts ═══════════════
+   Against waymark10.batch-a-dev/start! (the meal fixture on
+   Postgres: the recipe door keeps a shared live draft, which a memory
+   engine cannot store; the drive seeds through the API). ui-test
+   pins the page's strings (ui-follow-offers-guided-mode,
+   ui-sharing-is-off-by-default); this executes them, per
+   docs/spec-guided-follow.md §2 and §3. Tab A (ada) turns on share my
+   screen, filters the meals, focuses a row, pages, opens a dialog and
+   types; tab B (bo) follows ada in guided mode and sees each land.
+   Then the guards: the Access panel parks, a dialog bo opened is never
+   replaced, and an invitation to bo opens in bo's own hand. Each tab
+   is its own browser context, so each holds its own localStorage —
+   two principals in one chromium. */
+async function guidedStory() {
+  const tag = Date.now().toString(36);
+  const call = async (method, path, body, pid) => {
+    const res = await fetch(BASE + path,
+      {method, headers: {"Content-Type": "application/json",
+                         "x-waymark-principal": pid},
+       body: body ? JSON.stringify(body) : null});
+    return {status: res.status, body: await res.json().catch(() => null)};
+  };
+  const must = (r, status, what) => {
+    if (r.status !== status)
+      throw new Error(what + ": " + r.status + " " + JSON.stringify(r.body));
+    return r;
+  };
+
+  console.log("· seeding three meals as ada, two of them on the list");
+  const meals = [];
+  for (const name of ["soup", "stew", "pie"])
+    meals.push(must(await call("POST", "/api/meals",
+      {name: `Guided ${name} ${tag}`, themes: ["guided"]}, "ada"),
+      201, "ada creates a meal").body.self);
+  for (const self of meals.slice(0, 2))
+    must(await call("POST", self + "/-/accept", null, "ada"), 200, "ada accepts " + self);
+  must(await call("GET", "/api/invitations", null, "bo"), 200,
+       "this engine serves invitations");
+
+  /* one CDP socket per target: the browser's, and each tab's */
+  const cdp = async url => {
+    const sock = new WebSocket(url);
+    await new Promise(res => sock.onopen = res);
+    let n = 0;
+    const waiting = new Map();
+    sock.onmessage = ev => {
+      const m = JSON.parse(ev.data);
+      if (m.id && waiting.has(m.id)) { waiting.get(m.id)(m); waiting.delete(m.id); }
+      if (m.method === "Runtime.exceptionThrown")
+        consoleErrors.push(JSON.stringify(m.params.exceptionDetails.exception?.description
+                                          || m.params.exceptionDetails.text));
+      if (m.method === "Runtime.consoleAPICalled" && m.params.type === "error")
+        consoleErrors.push(m.params.args.map(a => a.value || a.description).join(" "));
+    };
+    const call = (method, params) => new Promise((res, rej) => {
+      const id = ++n;
+      waiting.set(id, m => m.error
+        ? rej(new Error(method + ": " + JSON.stringify(m.error))) : res(m));
+      sock.send(JSON.stringify({id, method, params: params || {}}));
+    });
+    return {call, close: () => sock.close()};
+  };
+  const version = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json();
+  const browser = await cdp(version.webSocketDebuggerUrl);
+  const contexts = [];
+  const openTab = async label => {
+    const ctx = (await browser.call("Target.createBrowserContext")).result.browserContextId;
+    contexts.push(ctx);
+    const target = (await browser.call("Target.createTarget",
+      {url: "about:blank", browserContextId: ctx, newWindow: true})).result.targetId;
+    const c = await cdp(`ws://127.0.0.1:${DEBUG_PORT}/devtools/page/${target}`);
+    await c.call("Runtime.enable");
+    await c.call("Page.enable");
+    /* a hidden tab parks its live stream (200-events-follow.js) */
+    await c.call("Emulation.setFocusEmulationEnabled", {enabled: true});
+    const js = async expr => {
+      const r = await c.call("Runtime.evaluate",
+        {expression: expr, awaitPromise: true, returnByValue: true});
+      if (r.result.exceptionDetails)
+        throw new Error(`${label}: eval failed: ` + JSON.stringify(r.result.exceptionDetails));
+      return r.result.result.value;
+    };
+    const until = async (pred, what, ms = 8000) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        if (await js(pred)) return true;
+        await sleep(150);
+      }
+      throw new Error(`${label}: timed out waiting for ${what}`);
+    };
+    return {call: c.call, js, until, close: c.close};
+  };
+  const boot = async (tab, pid, query) => {
+    await tab.call("Page.navigate", {url: BASE + "/api/-/ui"});
+    await sleep(1200);
+    await tab.js(`localStorage.setItem("wm10.principal", ${JSON.stringify(pid)}); true`);
+    await tab.call("Page.navigate", {url: BASE + "/api/-/ui" + (query || "")});
+    await sleep(1200);
+    await tab.until(`!!document.querySelector("#sharebtn") &&
+                     document.querySelectorAll("nav a").length > 0`, "the shell");
+  };
+  const button = (scope, label) =>
+    `[...document.querySelectorAll(${JSON.stringify(scope + " button")})]
+       .find(b => b.textContent.startsWith(${JSON.stringify(label)}))`;
+  const press = (tab, scope, label) => tab.js(`${button(scope, label)}.click(); true`);
+  /* typing into ada's own dialog: the form shares on its input event */
+  const type = (tab, value) => tab.js(`{
+    const n = document.querySelector("dialog[open]:not([data-guided]) [name=recipe]");
+    n.value = ${JSON.stringify(value)};
+    n.dispatchEvent(new Event("input", {bubbles: true})); true }`);
+  /* bo has read ada's frame carrying this recipe: the next check is
+     about what bo's screen did with it, not whether it arrived. The
+     recipe door keeps a shared live draft, and the registry reads the
+     fields from that draft, so a beat can carry the draft's older
+     values: the 10 s heartbeat is the latest one to carry the new */
+  const arrived = (tab, recipe) => tab.until(
+    `PRESENCE.get("ada")?.ui?.fields?.recipe === ${JSON.stringify(recipe)}`,
+    `ada's frame (${recipe})`, 15000);
+  /* ada's dialog: update_recipe on the first on-list meal, from its
+     row in the collection. A create dialog stands on the collection,
+     and the registry keeps only a dialog on a row, so it never crosses */
+  const recipeButton = `[...document.querySelectorAll(${JSON.stringify(
+      `tr[data-self="${meals[0]}"] button`)})]
+    .find(b => /^update recipe/i.test(b.textContent))`;
+  const recipeKey = `${meals[0]} update_recipe`;
+  const openRecipe = async () => {
+    await A.until(`!!${recipeButton}`, "ada's recipe door on the row");
+    await A.js(`${recipeButton}.click(); true`);
+    await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
+    await B.until(`!!document.querySelector(${JSON.stringify(
+      `dialog[open][data-guided="${recipeKey}"]`)})`, "the guided dialog", 15000);
+  };
+
+  console.log("· two tabs: ada shares, bo follows");
+  const A = await openTab("ada"), B = await openTab("bo");
+  await boot(A, "ada");
+  await boot(B, "bo", "?follow=ada&follow_name=Ada");
+  ok("both tabs are visible, so neither parks its live stream",
+     await A.js(`document.visibilityState`) === "visible" &&
+     await B.js(`document.visibilityState`) === "visible");
+  ok("share my screen is off by default",
+     await A.js(`document.querySelector("#sharebtn").getAttribute("aria-pressed")`) === "false");
+  await A.js(`document.querySelector("#sharebtn").click(); true`);
+  await A.until(`document.querySelector("#sharebtn").getAttribute("aria-pressed") === "true"`,
+                "the share toggle on");
+  ok("the toggle turns sharing on, for this tab only",
+     await A.js(`sessionStorage.getItem("wm10.share.ui")`) === "1");
+  await B.until(`!!${button("#followchip", "guide me")}`, "the guide-me offer");
+  await press(B, "#followchip", "guide me");
+  await B.until(`!!document.querySelector("#followchip [data-guided-mark]")`, "the guided mark");
+  ok("guide me turns guided follow on and marks the chip",
+     await B.js(`localStorage.getItem("wm10.follow.ui")`) === "1");
+
+  console.log("· the collection, its query, the focused row");
+  await A.js(`location.hash = "/api/meals"; true`);
+  await B.until(`hereHref() === "/api/meals"`, "bo following ada to the meals");
+  ok("the follower goes where the sharer goes", true);
+  await A.js(`location.hash = "/api/meals?state=on_list"; true`);
+  await B.until(`decodeURIComponent(location.hash) === "#/api/meals?state=on_list"`,
+                "the shared filter");
+  await B.until(`{ const rows = [...document.querySelectorAll("tbody tr[data-self]")]
+                     .map(r => r.dataset.self);
+                   rows.includes(${JSON.stringify(meals[0])}) &&
+                   rows.includes(${JSON.stringify(meals[1])}) &&
+                   !rows.includes(${JSON.stringify(meals[2])}) }`, "the on-list rows");
+  ok("the collection query crosses: bo's screen filters as ada's does", true);
+  const lit = `tr[data-self="${meals[0]}"] td.c-state`;
+  await A.until(`!!document.querySelector(${JSON.stringify(lit)})`, "ada's row");
+  await A.js(`document.querySelector(${JSON.stringify(lit)}).click(); true`);
+  await B.until(`document.querySelector("tr[data-guided-focus]")?.dataset.self === ${JSON.stringify(meals[0])}`,
+                "the lit row");
+  ok("ada's focused row is lit on bo's screen, and only that row",
+     await B.js(`document.querySelectorAll("tr[data-guided-focus]").length`) === 1);
+
+  console.log("· a page of the collection");
+  await A.js(`location.hash = "/api/meals?state=on_list&page%5Bsize%5D=1"; true`);
+  await A.until(`[...document.querySelectorAll(".pager a")]
+                   .some(a => a.textContent === "next →")`, "ada's next-page link");
+  await A.js(`[...document.querySelectorAll(".pager a")]
+    .find(a => a.textContent === "next →").click(); true`);
+  await A.until(`/page\\[number\\]=2/.test(decodeURIComponent(location.hash))`, "ada on page 2");
+  await B.until(`/page\\[number\\]=2/.test(decodeURIComponent(location.hash))`, "bo on page 2");
+  await B.until(`(document.querySelector(".pager")?.textContent || "").includes("page 2")`,
+                "bo's page 2, rendered");
+  ok("the page crosses as page[number], the parameter the collection route reads",
+     !(await B.js(`/[?&]page=/.test(decodeURIComponent(location.hash))`)));
+
+  console.log("· the Access panel parks");
+  await B.js(`location.hash = "access"; true`);
+  await B.until(`hereHref() === "access"`, "bo on the Access panel");
+  await A.js(`location.hash = "/api/meals"; true`);
+  await B.until(`JSON.stringify(PRESENCE.get("ada")?.ui?.collection?.filter) === "{}"`,
+                "ada's frame for the unfiltered meals");
+  await sleep(500);
+  ok("a follower on the Access panel is not moved", await B.js(`hereHref()`) === "access");
+  await B.js(`location.hash = "/api/meals"; true`);
+  await B.until(`hereHref() === "/api/meals" && !!${button("", "New meal")}`, "bo back on the meals");
+
+  console.log("· ada's dialog, read-only on bo's screen");
+  await openRecipe();
+  const display = await B.js(`PRESENCE.get("ada")?.principal?.display || "ada"`);
+  ok(`the guided dialog is marked "${display} is filling this in"`,
+     await B.js(`document.querySelector("dialog[open][data-guided] [data-guided-note]")?.textContent`)
+       === `${display} is filling this in`);
+  ok("its inputs are disabled and Cancel is its only button",
+     await B.js(`{ const g = document.querySelector("dialog[open][data-guided]");
+       const inputs = [...g.querySelectorAll("input, select, textarea")];
+       inputs.length > 0 && inputs.every(n => n.disabled) &&
+       [...g.querySelectorAll(".dlgfoot button")].map(b => b.textContent).join() === "Cancel" }`));
+  await type(A, "Guided gumbo");
+  await B.until(`document.querySelector("dialog[open][data-guided] [name=recipe]")?.value
+                 === "Guided gumbo"`, "the typed recipe", 15000);
+  ok("the fields cross as ada types them", true);
+
+  console.log("· a dialog bo opened is not replaced");
+  await press(B, "dialog[open][data-guided] .dlgfoot", "Cancel");
+  await B.until(`!document.querySelector("dialog[open]")`, "the guided dialog dismissed");
+  await press(B, "", "New meal");
+  await B.until(`!!document.querySelector("dialog[open]:not([data-guided]) input[name=name]")`,
+                "bo's own create form");
+  await type(A, "Guided gumbo, again");
+  await arrived(B, "Guided gumbo, again");
+  await sleep(500);
+  ok("bo's own dialog stays open, live and empty, with no guided dialog beside it",
+     await B.js(`{ const own = document.querySelector("dialog[open]:not([data-guided])");
+       const n = own && own.querySelector("input[name=name]");
+       !!n && !n.disabled && n.value === "" && !document.querySelector("dialog[data-guided]") }`));
+  await press(B, "dialog[open] .dlgfoot", "Cancel");
+  await type(A, "Guided gumbo, once more");
+  await arrived(B, "Guided gumbo, once more");
+  await sleep(500);
+  ok("a guided dialog bo closed by hand is not reopened for the same step",
+     await B.js(`!document.querySelector("dialog[open]")`));
+
+  console.log("· an invitation to bo opens in bo's hand");
+  await press(A, "dialog[open] .dlgfoot", "Cancel");
+  await B.until(`!!PRESENCE.get("ada")?.ui && !PRESENCE.get("ada").ui.dialog`, "ada's dialog closed");
+  await openRecipe();
+  const note = `Write the recipe here, ${tag}.`;
+  const inv = must(await call("POST", "/api/invitations",
+    {subject: "bo", self: meals[1], action: "update_recipe", field: "recipe",
+     note, suggest: {recipe: "Brown the roux."}}, "ada"),
+    201, "ada invites bo to write the recipe").body;
+  /* the invitations row's "Take this step" calls openInvitationRow;
+     it is called here directly, because bo's screen in guided mode
+     stands on ada's meals, not on bo's invitations */
+  await B.js(`openInvitationRow({self: ${JSON.stringify(inv.self)}}); true`);
+  await B.until(`!!document.querySelector("dialog[open] [data-invite-note]")`, "the invitation dialog");
+  ok("the invitation opens in bo's hand, over ada's guided dialog",
+     await B.js(`{ const open = document.querySelectorAll("dialog[open]");
+       const t = open.length === 1 && open[0].querySelector("textarea[name=recipe]");
+       !!t && !t.disabled && !open[0].hasAttribute("data-guided") }`));
+  ok("the note stands by the invited field, and the suggestion is marked as one",
+     await B.js(`{ const d = document.querySelector("dialog[open]");
+       const t = d.querySelector("textarea[name=recipe]");
+       d.querySelector("[data-invite-note]").textContent === ${JSON.stringify(note)} &&
+       t.value === "Brown the roux." && t.classList.contains("suggested-value") }`));
+  ok("bo's screen is on the invited row", await B.js(`hereHref()`) === meals[1]);
+  await type(A, "Guided gumbo, while bo writes");
+  await arrived(B, "Guided gumbo, while bo writes");
+  await sleep(500);
+  ok("ada's next frame neither replaces bo's dialog nor moves bo's screen",
+     await B.js(`!!document.querySelector("dialog[open] [data-invite-note]") &&
+       !document.querySelector("dialog[data-guided]") &&
+       hereHref() === ${JSON.stringify(meals[1])}`));
+
+  console.log("· stopping");
+  await press(B, "dialog[open] .dlgfoot", "Cancel");
+  await press(A, "dialog[open] .dlgfoot", "Cancel");
+  await A.js(`document.querySelector("#sharebtn").click(); true`);
+  ok("the toggle turns sharing off", await A.js(`sessionStorage.getItem("wm10.share.ui")`) === null);
+  await B.js(`document.querySelector("#followchip [data-guided-mark]").click(); true`);
+  await B.until(`localStorage.getItem("wm10.follow.ui") === null &&
+                 !document.querySelector("#followchip [data-guided-mark]")`, "guided mode off");
+  ok("the guided mark turns guided mode off, and the follow stands",
+     await B.js(`followId`) === "ada");
+  A.close(); B.close();
+  for (const ctx of contexts)
+    await browser.call("Target.disposeBrowserContext", {browserContextId: ctx});
+  browser.close();
+}
+
 if (MODE === "batch-a") await batchAStory();
 else if (MODE === "access") await accessStory();
 else if (MODE === "invitation") await invitationStory();
+else if (MODE === "guided") await guidedStory();
 else await mealplanStory();
 
 console.log(`\nUI drive (${MODE}): ${passed} checks passed` +
