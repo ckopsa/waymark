@@ -39,6 +39,7 @@
   waymark10.mcp-power-shape-test's."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
@@ -137,6 +138,29 @@
                              :inputSchema {:type "object" :properties {}}}]}
       {})))
 
+(def ^:private ticket-kind
+  "A walk row that carries its own descriptive branch (ticket 81931c1c)."
+  (r/resource
+   {:kind :ticket
+    :plural "tickets"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "What it asks"}}
+      [:string {:min 1 :max 120}]]
+     [:branch {:x-display {:label "Its branch"}}
+      [:string {:min 1 :max 120}]]]
+    :filterable {:state #{:eq :in}}
+    :sortable {:fields [:title] :default "title"}
+    :actions
+    {:close {:from #{:open} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A test kind: nothing reopens it."}
+             :display {:label "Close" :style :primary :order 1}}}}))
+
 (defn- fresh-engine
   "An engine over the two fakes: the rig is the `bench` row's client
   through the `:client-fn` seam, and Gate is the bridge row's through
@@ -146,7 +170,7 @@
   (let [rig (fake-rig log)]
     (doto (engine/engine
            {:storage (memory/storage)
-            :resources [caps/capability]
+            :resources [caps/capability ticket-kind]
             :now-fn (fn [] clock)
             :services {:mcp-servers
                        {:client-fn (fn [row]
@@ -828,3 +852,60 @@
         (let [r (power! (:w a) {:tool "bench__read"
                                 :arguments {:path "src/a.clj"}})]
           (is (false? (:isError r)) (text-of r)))))))
+
+(deftest a-descriptive-branch-belongs-to-the-ticket-whose-branch-field-names-it
+  ;; Ticket 81931c1c: the default pattern waymark/* would read
+  ;; `groom-reopens` as the row id; the ticket's own `branch` field says
+  ;; which row the branch is.
+  (let [w (world [{:kind "bench.read" :actions [] :filter {:repo a-repo}}
+                  {:kind "bench.edit" :actions [] :filter {:repo a-repo}}])
+        eng (:eng w)
+        model (a-model! eng)
+        seat (:row (inv/create! eng :seat
+                                {:name "narrow-power-tickets"
+                                 :charter "Build what each open ticket asks for."
+                                 :scope [{:kind "capability" :actions []}
+                                         {:kind "ticket" :actions []}]
+                                 :walk "ticket"
+                                 :standing_ttl_seconds 604800
+                                 :cadence_seconds 3600
+                                 :budget_usd_per_week 5M
+                                 :sitting_budget_tokens 1000000}
+                                {:principal colton}))
+        branch "waymark/groom-reopens"
+        mine (:row (inv/create! eng :ticket {:title "Groom reopens" :branch branch}
+                                {:principal colton}))
+        theirs (:row (inv/create! eng :ticket {:title "Another" :branch "waymark/another"}
+                                  {:principal colton}))
+        claim! (requiring-resolve 'waymark10.server.seats/claim-rows!)
+        sit! (fn [ticket]
+               (let [s (:row (inv/create! eng :sitting
+                                          {:seat (:id seat) :model (:id model)
+                                           :grant (:grant w)}
+                                          {:principal clerk}))
+                     sid (mcp/open-session! eng)]
+                 (mcp/bind-session! eng sid {:seat (:id seat) :sitter clerk
+                                             :sitting (:id s)
+                                             :bench {:repo a-repo :branch branch}})
+                 (claim! eng (:id s) [(str (:id ticket))])
+                 {:id (str (:id s))
+                  :w (assoc w :session (assoc (:session w) :mcp-session-id sid))}))
+        edit! (fn [bound]
+                (power! bound {:tool "bench__edit"
+                               :arguments {:path "src/a.clj"}}))
+        a (sit! mine)
+        b (sit! theirs)]
+
+    (testing "the ticket's own sitting writes its descriptive branch"
+      (let [r (edit! (:w a))]
+        (is (false? (:isError r)) (text-of r))
+        (is (= branch (:branch (last-arguments w))))))
+
+    (testing "a sitting handed another ticket is refused, naming the ticket"
+      (let [n (count (calls w))
+            r (edit! (:w b))
+            said (text-of r)]
+        (is (true? (:isError r)) said)
+        (is (str/includes? said (str "no longer holds ticket " (:id mine))) said)
+        (is (not (str/includes? said "groom-reopens")) said)
+        (is (= n (count (calls w))) "nothing reached the rig")))))

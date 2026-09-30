@@ -751,13 +751,15 @@
 
 ;; ── the sitting that holds the row (ticket d7c854b3) ────────────────
 ;;
-;; A branch the repository's own branch_pattern minted names ONE walk
-;; row (`bench/<ticket id>`), and a write on it is the write of the
-;; sitting that holds that row. A sitting closed early while its run
+;; A branch names ONE walk row, and a write on it is the write of the
+;; sitting that holds that row. The row is the walked row whose own
+;; `branch` field is the call's branch (a ticket carries a descriptive
+;; one, ticket 81931c1c); only when no walked row claims the branch is
+;; it what the `*` of the repository's branch_pattern stands for. A sitting closed early while its run
 ;; still edits, or one another open sitting of its seat has taken the
 ;; row from, is refused before the forward: two sittings never write
-;; one branch. Reads stay open, a branch outside the pattern is not
-;; judged, and neither is a call that names no sitting (the REST door,
+;; one branch. Reads stay open, a branch no row claims and outside the
+;; pattern is not judged, and neither is a call that names no sitting (the REST door,
 ;; the engine's own hand). A sitting whose walk handed it no row at all
 ;; is judged only on being open and on no other sitting holding the row.
 
@@ -769,7 +771,8 @@
 (defn- branch-row-id
   "The walk row a branch was minted for: what the `*` of the
   repository's branch_pattern stands for in it, or nil for a branch
-  outside the pattern."
+  outside the pattern. The fallback, when no walked row's own `branch`
+  field claims the branch (`claiming-row-id`)."
   [policy branch]
   (let [pattern (or (some-> (get-in policy [:data :branch_pattern]) str not-empty)
                     default-branch-pattern)
@@ -786,6 +789,28 @@
 (defn- holds-row? [sitting row-id]
   (boolean (some #(= row-id (str %)) (get-in sitting [:data :walked_rows]))))
 
+(defn- walk-kind-of
+  "The kind this seat walks, when this engine declares it, or nil."
+  [eng st tx seat]
+  (when seat
+    (let [k (some-> (store/load-row st tx :seat seat {})
+                    (get-in [:data :walk]) str not-empty keyword)]
+      (when (and k (get (inv/resources eng) k)) k))))
+
+(defn- claiming-row-id
+  "The walk row whose own `branch` field is this branch, among the rows
+  these sittings were handed, or nil when none names it."
+  [st tx kind sittings branch]
+  (when kind
+    (->> sittings
+         (mapcat #(get-in % [:data :walked_rows]))
+         (keep #(some-> % str not-empty))
+         distinct
+         (some (fn [id]
+                 (when (= branch (some-> (store/load-row st tx kind id {})
+                                         (get-in [:data :branch]) str))
+                   id))))))
+
 (defn- bench-hold-block
   "Why a bench write should be refused because the calling sitting does
   not hold the row its branch was minted for, as {:row :sitting :state
@@ -795,29 +820,32 @@
     (let [sid (some-> (:sitting opts) str not-empty)
           branch (some-> (:branch args) str not-empty)]
       (when (and sid branch (get (inv/resources eng) :sitting))
-        (when-some [row-id (branch-row-id (repo-policy-of eng (:repo args)) branch)]
-          (let [st (:storage eng)
-                [sitting holder]
-                (store/with-tx st
-                  (fn [tx]
-                    (let [s (store/load-row st tx :sitting sid {})
-                          seat (some-> (get-in s [:data :seat]) str not-empty)]
-                      [s (when seat
-                           (->> (store/query-rows st tx :sitting
-                                                  {:seat seat :state :open}
-                                                  {:limit 50 :newest-first true})
-                                (remove #(= sid (str (:id %))))
-                                (filter #(holds-row? % row-id))
-                                first))])))
-                state (some-> (:state sitting) name)
-                walked (seq (get-in sitting [:data :walked_rows]))]
-            (when (and sitting
-                       (or holder
-                           (not= "open" state)
-                           (and walked (not (holds-row? sitting row-id)))))
-              {:row row-id :sitting sid :state state
-               :ended (get-in sitting [:data :ended_at])
-               :holder (some-> (:id holder) str)})))))))
+        (let [st (:storage eng)
+              policy (repo-policy-of eng (:repo args))
+              [sitting row-id holder]
+              (store/with-tx st
+                (fn [tx]
+                  (let [s (store/load-row st tx :sitting sid {})
+                        seat (some-> (get-in s [:data :seat]) str not-empty)
+                        others (when seat
+                                 (->> (store/query-rows st tx :sitting
+                                                        {:seat seat :state :open}
+                                                        {:limit 50 :newest-first true})
+                                      (remove #(= sid (str (:id %))))))
+                        row-id (or (claiming-row-id st tx (walk-kind-of eng st tx seat)
+                                                    (cons s others) branch)
+                                   (branch-row-id policy branch))]
+                    [s row-id (when row-id
+                                (first (filter #(holds-row? % row-id) others)))])))
+              state (some-> (:state sitting) name)
+              walked (seq (get-in sitting [:data :walked_rows]))]
+          (when (and sitting row-id
+                     (or holder
+                         (not= "open" state)
+                         (and walked (not (holds-row? sitting row-id)))))
+            {:row row-id :sitting sid :state state
+             :ended (get-in sitting [:data :ended_at])
+             :holder (some-> (:id holder) str)}))))))
 
 (defn- refuse-bench-hold
   "The 409 for a bench write from a sitting that no longer holds the
