@@ -184,6 +184,25 @@
                                 [:project {:optional true :not-a-ref " "}
                                  [:maybe [:string {:max 40}]]]))))
 
+(deftest unrefd-ids-a-prose-field-passes-beside-its-kind
+  ;; `project` is registered; a prose field of that name holds no id
+  (is (assemble :c (update calendar-day :schema conj
+                           [:project {:optional true
+                                      :x-display {:widget "prose"}}
+                            [:maybe [:string {:max 40}]]]))))
+
+(deftest unrefd-ids-a-string-longer-than-an-id-passes
+  (is (assemble :c (update calendar-day :schema conj
+                           [:project {:optional true}
+                            [:maybe [:string {:max 65}]]])))
+  (is (assemble :c (update calendar-day :schema conj
+                           [:project {:optional true} [:maybe :string]]))))
+
+(deftest unrefd-ids-a-string-an-id-fits-still-errors
+  (breaks :unref'd-ids
+          #(assemble :c (update calendar-day :schema conj
+                                [:project [:string {:max 64}]]))))
+
 (deftest owns-child-unregistered
   (breaks :owns #(reg-of (res project) (res calendar-day))))
 

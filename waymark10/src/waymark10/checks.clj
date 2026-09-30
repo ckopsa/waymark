@@ -767,6 +767,31 @@
       (keyword (subs n 0 (- (count n) 3)))
       k)))
 
+(defn- string-max
+  "The :max of the string inside a string-shaped form, or nil when it
+  declares none."
+  [form]
+  (case (if (vector? form) (first form) form)
+    :string (when (and (vector? form) (map? (second form)))
+              (:max (second form)))
+    (:maybe :vector) (string-max (last form))
+    nil))
+
+(def ^:private id-max
+  "The longest id this engine mints or takes, in characters."
+  64)
+
+(defn- plainly-no-id?
+  "Does this field plainly hold no id, whatever it is called? Its widget
+  is `prose`, or its string may run longer than any id (no max, or one
+  past `id-max`). Judged from the field alone, so a field's verdict does
+  not move when an app registers a kind of the same name (PR #542 had
+  to waive eight prose `note` fields when a test declared `note`)."
+  [properties schema]
+  (or (= "prose" (some-> (get-in properties [:x-display :widget]) name))
+      (let [m (string-max schema)]
+        (or (nil? m) (< id-max m)))))
+
 (defn check-unref'd-ids
   "A plain string field named after a kind the registry serves, or
   `<kind>_id`, holds that kind's row id — and without `:kind` nothing
@@ -774,7 +799,9 @@
   never resolves it. member's notify.notifier was one, and a saved
   `\"Telegram\"` silently skipped every notice rule. So such a field is
   a ref, or it says why not with `{:not-a-ref \"why\"}` (a field that
-  holds a name, not an id). Needs the registry's kinds, so it runs at
+  holds a name, not an id). A field that plainly holds no id — a prose
+  widget, or a string longer than any id — is not judged at all
+  (`plainly-no-id?`). Needs the registry's kinds, so it runs at
   assembly (waymark10.checks-assembly) over every surface
   `kind-surfaces` walks."
   [r kinds]
@@ -782,7 +809,8 @@
                    [k {:keys [properties schema]}] (schema/entry-map form)
                    :when (and (contains? kinds (named-kind k))
                               (string-shape? schema)
-                              (nil? (:kind properties)))
+                              (nil? (:kind properties))
+                              (not (plainly-no-id? properties schema)))
                    :let [why (:not-a-ref properties)]
                    :when (not (and (string? why) (not (str/blank? why))))]
                (str where " field " k " (kind " (named-kind k) ")"))]
