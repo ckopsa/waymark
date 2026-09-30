@@ -81,6 +81,7 @@
              [:string {:min 1 :max 240}]]
             ;; who enforces — a pointer for humans, never a call site
             [:enforced_by {:optional true
+                           :not-a-ref "bare today; swept by 5cb6a0c7"
                            :x-display
                            {:label "Who actually enforces it"
                             :help "The system standing in front of the data — this engine holds the rule and never the credential, so this names where to look when the rule is not honoured."}}

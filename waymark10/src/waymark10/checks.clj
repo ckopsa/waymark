@@ -664,6 +664,15 @@
                         (= :waymark/ref (if (vector? item) (first item) item)))
               false)))))
 
+(defn- declared-forms
+  "[where form] for the data schema, the create door and each action's
+  input — the top-level forms a kind declares."
+  [r]
+  (list* ["data" (:schema r)]
+         ["the create door" (or (:create-schema r) (:schema r))]
+         (for [a (machine/actions-seq r) :when (:input a)]
+           [(str "action " (name (:name a))) (:input a)])))
+
 (defn- kind-surfaces
   "Every declared form a `:kind` entry can sit in: the data schema, the
   create door and each action's input — and, one level down, a nested
@@ -678,10 +687,23 @@
                        (when-some [nested (nested-map-form form k)]
                          [[(str where ", " (name k)) nested]])))
                    (schema/entry-keys form))))
-   (list* ["data" (:schema r)]
-          ["the create door" (or (:create-schema r) (:schema r))]
-          (for [a (machine/actions-seq r) :when (:input a)]
-            [(str "action " (name (:name a))) (:input a)]))))
+   (declared-forms r)))
+
+(defn- deep-surfaces
+  "[where form nested?] for every declared form and, however deep, every
+  nested map or list item map below it — held_call's `door.author`
+  sits under a nested map, where `kind-surfaces` stops looking."
+  [r]
+  (letfn [(below [where form]
+            (mapcat (fn [k]
+                      (when-some [[w sub] (if-some [item (item-map-form form k)]
+                                            [(str where ", " (name k) "[]") item]
+                                            (when-some [nested (nested-map-form form k)]
+                                              [(str where ", " (name k)) nested]))]
+                        (cons [w sub true] (below w sub))))
+                    (schema/entry-keys form)))]
+    (mapcat (fn [[where form]] (cons [where form false] (below where form)))
+            (declared-forms r))))
 
 (defn- pair-fields
   "The KIND-AND-ID PAIRS of one input form: an `<x>_kind` entry beside an
@@ -781,6 +803,9 @@
   "The longest id this engine mints or takes, in characters."
   64)
 
+(defn- prose-widget? [properties]
+  (= "prose" (some-> (get-in properties [:x-display :widget]) name)))
+
 (defn- plainly-no-id?
   "Does this field plainly hold no id, whatever it is called? Its widget
   is `prose`, or its string may run longer than any id (no max, or one
@@ -788,40 +813,68 @@
   not move when an app registers a kind of the same name (PR #542 had
   to waive eight prose `note` fields when a test declared `note`)."
   [properties schema]
-  (or (= "prose" (some-> (get-in properties [:x-display :widget]) name))
+  (or (prose-widget? properties)
       (let [m (string-max schema)]
         (or (nil? m) (< id-max m)))))
+
+(def ^:private principal-names
+  "Field names that hold a principal's id, whatever kinds are served.
+  A name ending in `_by` is one too."
+  #{"owner" "author" "caller" "member" "sitter" "person"})
+
+(defn- reads-as-id
+  "Why field k reads as a row id, or nil: it is named after a kind the
+  registry serves, or after a principal, or it is a nested map's `id`
+  beside a `kind` that names the row's kind."
+  [k kinds sibling-keys nested?]
+  (let [n (name k)]
+    (cond
+      (contains? kinds (named-kind k)) (str "kind " (named-kind k))
+      (or (contains? principal-names n) (str/ends-with? n "_by")) "a principal"
+      (and nested? (= :id k) (contains? sibling-keys :kind)) "id beside kind")))
 
 (defn check-unref'd-ids
   "A plain string field named after a kind the registry serves, or
   `<kind>_id`, holds that kind's row id — and without `:kind` nothing
   says so: the form draws a free-text box and the dangling-ref wall
   never resolves it. member's notify.notifier was one, and a saved
-  `\"Telegram\"` silently skipped every notice rule. So such a field is
-  a ref, or it says why not with `{:not-a-ref \"why\"}` (a field that
-  holds a name, not an id). A field that plainly holds no id — a prose
-  widget, or a string longer than any id — is not judged at all
-  (`plainly-no-id?`). Needs the registry's kinds, so it runs at
-  assembly (waymark10.checks-assembly) over every surface
-  `kind-surfaces` walks."
+  `\"Telegram\"` silently skipped every notice rule. So does a field
+  named after a principal (`owner`, `author`, `caller`, `member`,
+  `sitter`, `person`, or `…_by`), and a nested map's `id` beside a
+  `kind`. So such a field is a ref, or it says why not with
+  `{:not-a-ref \"why\"}` (a field that holds a name, not an id) — a
+  waiver with no reason waives nothing. A field that plainly holds no
+  id — a prose widget, or a string longer than any id — is not judged
+  at all (`plainly-no-id?`); a principal-named field or an id beside a
+  kind is spared only for a prose widget, since a principal id or a
+  held call's `door.id` runs past `id-max`. Needs the registry's kinds, so it runs at
+  assembly (waymark10.checks-assembly) over every form
+  `deep-surfaces` walks, nested maps at any depth."
   [r kinds]
-  (let [hits (for [[where form] (kind-surfaces r)
-                   [k {:keys [properties schema]}] (schema/entry-map form)
-                   :when (and (contains? kinds (named-kind k))
+  (let [hits (for [[where form nested?] (deep-surfaces r)
+                   :let [entries (schema/entry-map form)
+                         siblings (set (keys entries))]
+                   [k {:keys [properties schema]}] entries
+                   :let [by-kind (contains? kinds (named-kind k))
+                         reading (reads-as-id k kinds siblings nested?)]
+                   :when (and reading
                               (string-shape? schema)
                               (nil? (:kind properties))
-                              (not (plainly-no-id? properties schema)))
+                              (not (if by-kind
+                                     (plainly-no-id? properties schema)
+                                     (prose-widget? properties))))
                    :let [why (:not-a-ref properties)]
                    :when (not (and (string? why) (not (str/blank? why))))]
-               (str where " field " k " (kind " (named-kind k) ")"))]
+               (str where " field " k " (" reading ")"))]
     (when (seq hits)
       (err r :unref'd-ids
            (str (str/join "; " hits)
-                ": each is named after a kind and holds a string, so it "
-                "reads as that kind's row id, but nothing declares it a "
-                "ref. Declare it :waymark/ref with that :kind, or, when "
-                "it holds no id (a name, say), waive it with "
-                "{:not-a-ref \"why\"} in its properties.")))))
+                ": each is named after a kind or a principal, or is an "
+                "id beside a kind, and holds a string, so it reads as a "
+                "row id, but nothing declares it a ref. Declare it "
+                ":waymark/ref with its :kind, or, when it holds no id (a "
+                "name, say), waive it with {:not-a-ref \"why\"} in its "
+                "properties.")))))
 
 ;; ── the query surface ───────────────────────────────────────────────
 

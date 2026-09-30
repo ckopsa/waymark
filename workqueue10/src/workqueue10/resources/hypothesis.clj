@@ -1103,11 +1103,13 @@
     (entry :last_moved {:optional true :sort true}
            [:maybe :waymark/instant])
     ;; WHOSE READING, and it is the four-eyes field
-    (entry :observed_by {:optional true :filter #{:eq}}
+    (entry :observed_by {:optional true :filter #{:eq}
+                         :not-a-ref "bare today; swept by 5cb6a0c7"}
            [:maybe [:string {:max 128}]])
     (entry :affirmed_at {:optional true :sort true}
            [:maybe :waymark/instant])
-    (entry :affirmed_by {:optional true :filter #{:eq}}
+    (entry :affirmed_by {:optional true :filter #{:eq}
+                         :not-a-ref "bare today; swept by 5cb6a0c7"}
            [:maybe [:string {:max 128}]])]
    ;; the client states the claim, its shape, what it is about and
    ;; where it started. EVERY OTHER FIELD IS THE ENGINE'S.

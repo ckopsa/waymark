@@ -79,7 +79,8 @@
               [:title {:optional true} [:maybe [:string {:max 120}]]]
               [:score {:optional true} [:maybe :decimal]]
               [:done_at {:optional true} [:maybe :waymark/instant]]
-              [:author {:optional true :x-display {:hidden true}}
+              [:author {:optional true :x-display {:hidden true}
+                        :not-a-ref "A fixture's bare principal id."}
                [:maybe [:string {:max 120}]]]
               [:parent_id {:optional true} [:maybe [:string {:max 64}]]]]
      :filterable {:state #{:eq} :score #{:eq}}

@@ -67,7 +67,8 @@
     :own-surface {:by [:owner :to] :actions #{"create" "open"}
                   :grantable false}
     :schema [:map
-             [:owner [:string {:min 1 :max 128}]]
+             [:owner {:not-a-ref "A fixture's bare principal id."}
+              [:string {:min 1 :max 128}]]
              [:to [:string {:min 1 :max 128}]]
              [:title {:optional true} [:maybe [:string {:max 120}]]]
              [:body {:x-display {:widget "prose"}} [:string {:min 1 :max 400}]]]
