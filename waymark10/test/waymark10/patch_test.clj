@@ -124,6 +124,20 @@
     (testing "the version as it stands writes"
       (is (= ["p" "q"] (:tags (revise! eng id {:tags {:add ["q"]}} {:if-match "2"})))))))
 
+(deftest a-stale-wholesale-write-names-the-moved-field
+  ;; ticket 760ae5f8: without `patch` the refusal stays version-conflict
+  ;; and its 412, and carries the same moved list stale does
+  (let [eng (world)
+        id (born! eng {:title "first" :tags ["p"]})
+        read-at (inv/etag :jot id 1)]
+    (revise! eng id {:title "moved"})
+    (let [e (refusal #(inv/invoke! eng :jot id :revise {:title "whole" :tags ["q"]}
+                                   {:principal colton :if-match read-at}))]
+      (is (= :version-conflict (:waymark10/problem e)))
+      (is (= 412 (:status e)))
+      (is (= ["title"] (:moved e)))
+      (is (str/includes? (:detail e) "title")))))
+
 (deftest the-door-says-omitted-fields-keep-their-values
   (let [eng (world)
         id (born! eng {:title "first" :tags ["p"]})
@@ -157,4 +171,50 @@
     (testing "the fence reads only the field the patch names"
       (is (= #{"tags"} (set (map name (keys (get-in data [:door :prefill_digests])))))))
     (testing "the call is the patch, and small"
+      (is (nil? (:input data)) "the body is kept once, in forward")
+      (is (true? (get-in data [:forward :patch])))
       (is (< (count (wire/write-json data)) 1024)))))
+
+(defn- hold-swap!
+  "A held patch that swaps tag a for c, fenced at the row's birth."
+  [eng id]
+  (:id (held/hold-door! eng {:kind :jot :action :revise :id id
+                             :body {:patch true :tags {:remove ["a"] :add ["c"]}}
+                             :caller "seat:jotter" :owner "colton"
+                             :why "Swap one tag."
+                             :if-match (inv/etag :jot id 1)})))
+
+(defn- allow!
+  "The person's tap, then the engine's replay behind it. → the held
+  call's row as it ends."
+  [eng hid]
+  (let [st (:storage eng)
+        out (inv/invoke! eng :held_call (str hid) :allow {} {:principal colton})]
+    (held/forward! eng (:row out))
+    (store/with-tx st #(store/load-row st % :held_call (str hid) {}))))
+
+(defn- jot-data [eng id]
+  (let [st (:storage eng)]
+    (:data (store/with-tx st #(store/load-row st % :jot id {})))))
+
+(deftest a-held-patch-applies-on-allow-against-the-row-as-it-stands
+  (let [eng (world)
+        id (born! eng {:title "held" :tags ["a" "b"]})
+        hid (hold-swap! eng id)]
+    (revise! eng id {:title "moved"})
+    (let [call (allow! eng hid)]
+      (is (= :done (:state call)) (pr-str (get-in call [:data :reason])))
+      (is (= {:title "moved" :tags ["b" "c"]}
+             (select-keys (jot-data eng id) [:title :tags]))
+          "the patch landed on the row as it stands, and the title kept its move"))))
+
+(deftest a-held-patch-fails-naming-the-field-that-moved
+  (let [eng (world)
+        id (born! eng {:title "held" :tags ["a" "b"]})
+        hid (hold-swap! eng id)]
+    (revise! eng id {:tags {:add ["d"]}})
+    (let [call (allow! eng hid)]
+      (is (= :failed (:state call)))
+      (is (str/includes? (str (get-in call [:data :reason])) "tags")
+          (pr-str (get-in call [:data :reason]))))
+    (is (= ["a" "b" "d"] (:tags (jot-data eng id))) "the stale patch did not land")))
