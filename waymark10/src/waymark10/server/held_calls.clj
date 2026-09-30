@@ -61,7 +61,7 @@
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
-           (java.time Instant)
+           (java.time Instant LocalTime ZoneId)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
@@ -1015,6 +1015,8 @@
     [:maybe :int]]
    [:failed {:optional true :x-display {:label "Failed" :raw true}}
     [:maybe :int]]
+   [:held {:optional true :x-display {:label "Held for quiet hours" :raw true}}
+    [:maybe :int]]
    [:last_error {:optional true :x-display {:label "Last error" :raw true}}
     [:maybe [:string {:max 500}]]]])
 
@@ -1174,20 +1176,97 @@
   [eng notifier-id outcome error]
   (tally-row! eng :notifier notifier-id outcome error))
 
+;; ── quiet hours (docs/spec-addressed-notice.md :quiet) ──────────────
+;;
+;; A member's `notify.quiet {from, to, zone}` is a daily window of local
+;; times. A notice addressed to that member inside it — a notifier's
+;; audience, or a notice rule's addressee — is not sent: its summary and
+;; link land on the member row's `quiet_held`, in place, and the notice
+;; is counted `held`. The clock sweep sends one digest through the
+;; member's own `notify` once the window has closed; the held lines are
+;; taken off the row under its lock first, so a digest goes out once.
+
+(def ^:private quiet-held-cap
+  "How many held lines one member keeps; the oldest are dropped first."
+  100)
+
+(defn- local-time [s]
+  (try (LocalTime/parse (str/trim (str s))) (catch Exception _ nil)))
+
+(defn quiet?
+  "Is `now` inside the window this `notify` map's `quiet` names? `from`
+  and `to` are local times (HH:mm) in `zone`, UTC when empty; a window
+  whose `from` comes after its `to` spans midnight. A window that does
+  not parse is never quiet."
+  [notify ^Instant now]
+  (let [{:keys [from to zone]} (:quiet notify)
+        ^LocalTime from (local-time from)
+        ^LocalTime to (local-time to)
+        ^ZoneId zone (try (ZoneId/of (or (some-> zone str str/trim not-empty) "UTC"))
+                          (catch Exception _ nil))]
+    (boolean
+     (when (and from to zone now (not= from to))
+       (let [t (.toLocalTime (.atZone now zone))
+             after-from? (not (.isBefore t from))
+             before-to? (.isBefore t to)]
+         (if (.isBefore from to)
+           (and after-from? before-to?)
+           (or after-from? before-to?)))))))
+
+(defn- now-of ^Instant [eng] ((:now-fn eng)))
+
+(defn- hold-quiet!
+  "Keep one notice's summary and link on the member row, in place, for
+  the digest."
+  [eng member-id {:keys [summary link]}]
+  (let [st (:storage eng)
+        id (str member-id)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :member id {:for-update true})]
+          (store/update-data!
+           st tx :member id
+           (update (:data raw) :quiet_held
+                   #(vec (take-last quiet-held-cap
+                                    (conj (vec %) {:summary (str summary)
+                                                   :link (str link)}))))
+           (:next-flip-at raw)))))))
+
+(defn- quiet-member
+  "The member a notifier's audience names — bound by `subject`, or by
+  row id — when that member's quiet hours hold now; nil otherwise."
+  [eng audience]
+  (let [a (some-> audience str not-empty)
+        rd (get (inv/resources eng) :member)
+        st (:storage eng)]
+    (when (and a rd)
+      (let [raw (or (first (store/with-tx st
+                             (fn [tx] (store/query-rows st tx :member
+                                                        {:subject a} {:limit 1}))))
+                    (try (stored-row eng :member a) (catch Exception _ nil)))
+            m (some->> raw (inv/decode-row rd))]
+        (when (quiet? (get-in m [:data :notify]) (now-of eng))
+          m)))))
+
 (defn- notify!
   "One notice: the rendered input, through the server's tool, as the
-  engine. → :sent or :failed; never throws."
+  engine; held instead while the audience's quiet hours hold.
+  → :sent, :held or :failed; never throws."
   [eng notifier-row t]
   (try
-    (let [args (render-notice (get-in notifier-row [:data :input_template])
-                              (notice-values eng notifier-row t))
-          answer (servers/call! eng (notifier-tool eng notifier-row) args)]
-      (if (:isError answer)
-        (let [msg (or (some-> answer :content first :text) "the tool answered an error")]
-          (tally! eng (:id notifier-row) :failed msg)
-          :failed)
-        (do (tally! eng (:id notifier-row) :sent nil)
-            :sent)))
+    (let [values (notice-values eng notifier-row t)]
+      (if-some [member (quiet-member eng (get-in notifier-row [:data :audience]))]
+        (do (hold-quiet! eng (:id member) values)
+            (tally! eng (:id notifier-row) :held nil)
+            :held)
+        (let [args (render-notice (get-in notifier-row [:data :input_template]) values)
+              answer (servers/call! eng (notifier-tool eng notifier-row) args)]
+          (if (:isError answer)
+            (let [msg (or (some-> answer :content first :text) "the tool answered an error")]
+              (tally! eng (:id notifier-row) :failed msg)
+              :failed)
+            (do (tally! eng (:id notifier-row) :sent nil)
+                :sent)))))
     (catch Exception e
       (warn! "notifier " (get-in notifier-row [:data :name]) " could not send for "
              "transition " (:id t) " — " (ex-message e))
@@ -1351,6 +1430,8 @@
     [:maybe :int]]
    [:unaddressed {:optional true :x-display {:label "Unaddressed" :raw true}}
     [:maybe :int]]
+   [:held {:optional true :x-display {:label "Held for quiet hours" :raw true}}
+    [:maybe :int]]
    [:last_error {:optional true :x-display {:label "Last error" :raw true}}
     [:maybe [:string {:max 500}]]]
    [:told {:optional true :x-display {:label "Told at their instants" :raw true}}
@@ -1447,8 +1528,8 @@
 (defn- address!
   "One addressed notice: the member the rule's field names, reached the
   way the member's `notify` says, with the rule's notifier's text.
-  → [outcome error], the outcome :sent, :failed, :skipped, :unaddressed
-  or :self. Counts nothing; never throws."
+  → [outcome error], the outcome :sent, :held, :failed, :skipped,
+  :unaddressed or :self. Counts nothing; never throws."
   [eng rule t]
   (let [count! (fn [outcome error] [outcome error])]
     (try
@@ -1468,6 +1549,9 @@
               (= actor (some-> (get-in member [:data :subject]) str))) [:self nil]
           (or (nil? member) (empty? notify)) (count! :skipped nil)
           (nil? texter) (count! :failed "the rule's notifier is gone")
+          (quiet? notify (now-of eng))
+          (do (hold-quiet! eng (:id member) (notice-values eng texter t))
+              (count! :held nil))
           :else
           (let [args (merge (render-notice (get-in texter [:data :input_template])
                                            (notice-values eng texter t))
@@ -1484,7 +1568,7 @@
 
 (defn- tell!
   "One addressed notice, counted on the rule in place.
-  → :sent, :failed, :skipped, :unaddressed or :self; never throws."
+  → :sent, :held, :failed, :skipped, :unaddressed or :self; never throws."
   [eng rule t]
   (let [[outcome error] (address! eng rule t)]
     (if (= :self outcome)
@@ -1566,6 +1650,38 @@
              vec))
       [])))
 
+(defn- at-fault
+  "Why the rule's `at` can never tell, judged as at-names-a-datetime
+  judges it — or nil. A rule stored before that wall stood is judged
+  here, on every sweep."
+  [eng rule]
+  (let [kind (str (get-in rule [:data :kind]))
+        field (at-field rule)]
+    (when-some [rd (get (inv/resources eng) (keyword kind))]
+      (let [s (schema/field-schema (:schema rd) field)
+            head (if (vector? s) (first s) s)
+            why (cond (nil? s) "is not a field of that kind"
+                      (not= :waymark/instant head) "is not a datetime, so it never tells")]
+        (when why
+          (str "at: " kind "." (name field) " " why))))))
+
+(defn- note-at-fault!
+  "Counts the fault once as failed and names it in last_error, under
+  the rule's lock; the same fault on the next sweep changes nothing."
+  [eng rule why]
+  (let [st (:storage eng)
+        id (str (:id rule))]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
+          (when (not= why (get-in raw [:data :last_error]))
+            (store/update-data!
+             st tx :notice_rule id
+             (-> (:data raw)
+                 (assoc :last_error why)
+                 (update :failed (fnil inc 0)))
+             (:next-flip-at raw))))))))
+
 (defn- kept-marks
   "The marks a rule keeps: every one that names a row still due, and
   the last told-cap of the rest."
@@ -1574,7 +1690,7 @@
         gone (remove live marks)]
     (into (vec (take-last told-cap gone)) (filter live marks))))
 
-(defn- tell-at!
+(defn- tell-due!
   "One rule's pass: each due row not yet told for its instant is claimed
   — its mark lands under the rule's lock, and the lock lets go — then
   told outside it; the counts land after in a second short lock.
@@ -1621,6 +1737,14 @@
                                     (:next-flip-at raw))))))
         (count claimed)))))
 
+(defn- tell-at!
+  "The pass, unless the rule's `at` can never tell: then the fault is
+  reported on the rule instead. → how many were told."
+  [eng rule now]
+  (if-some [why (at-fault eng rule)]
+    (do (note-at-fault! eng rule why) 0)
+    (tell-due! eng rule now)))
+
 (defn sweep-notice-instants!
   "One pass of the timed notice: every active rule with `at`, told for
   the rows whose instant has come. The maintainer's clock sweep runs
@@ -1638,6 +1762,73 @@
               (filter at-field (active-rows eng :notice_rule))))
     (catch Exception e
       (warn! "the timed notice sweep failed — " (ex-message e))
+      0)))
+
+(defn digest-text
+  "The one message a closed window sends: a count, then each held
+  notice on its own line with its link."
+  [lines]
+  (let [n (count lines)]
+    (str/join "\n" (cons (str n (if (= 1 n) " notice" " notices") " while you were quiet:")
+                         (map (fn [{:keys [summary link]}]
+                                (str/trim (str "- " summary " " link)))
+                              lines)))))
+
+(defn- digest!
+  "One member's digest, once their window has closed: the held lines
+  are taken off the row under its lock, then sent outside it through
+  the member's own `notify`, over the carrier's template. → 1 when a
+  digest went out, else 0; never throws."
+  [eng member now]
+  (let [st (:storage eng)
+        id (str (:id member))
+        notify (get-in member [:data :notify])]
+    (if (quiet? notify now)
+      0
+      (let [held (store/with-tx st
+                   (fn [tx]
+                     (when-some [raw (store/load-row st tx :member id {:for-update true})]
+                       (let [held (vec (get-in raw [:data :quiet_held]))]
+                         (when (seq held)
+                           (store/update-data! st tx :member id
+                                               (dissoc (:data raw) :quiet_held)
+                                               (:next-flip-at raw))
+                           held)))))
+            carrier (some->> (:notifier notify) str not-empty (decoded-row eng :notifier))]
+        (cond
+          (empty? held) 0
+          (nil? carrier)
+          (do (warn! "member " id " held " (count held)
+                     " notices and names no notifier to send the digest")
+              0)
+          :else
+          (try
+            (let [args (merge (render-notice (get-in carrier [:data :input_template]) {})
+                              {:text (digest-text held)}
+                              (:input notify))
+                  answer (servers/call! eng (notifier-tool eng carrier) args)]
+              (if (:isError answer)
+                (do (warn! "member " id "'s digest failed — "
+                           (some-> answer :content first :text))
+                    0)
+                1))
+            (catch Exception e
+              (warn! "member " id "'s digest could not send — " (ex-message e))
+              0)))))))
+
+(defn sweep-quiet-digests!
+  "One pass of quiet hours: each member holding notices whose window
+  has closed is sent one digest. The maintainer's clock sweep runs it;
+  tests call it directly. → how many digests went out; never throws."
+  [eng]
+  (try
+    (let [now (now-of eng)]
+      (reduce (fn [n m] (+ n (digest! eng m now)))
+              0
+              (filter #(seq (get-in % [:data :quiet_held]))
+                      (active-rows eng :member))))
+    (catch Exception e
+      (warn! "the quiet hours digest sweep failed — " (ex-message e))
       0)))
 
 (defn notifier-consumer-fn

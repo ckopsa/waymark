@@ -1199,19 +1199,25 @@
 (defn- adoption-move
   "The `note_adoption` input this pass writes on the row, or nil: the
   first sight stamped, or the note once the window has passed and the
-  stored note says something else."
+  stored note says something else, or a stamp under the old name
+  `landed_at` carried over to `unadopted_since` (ticket 8f2fac64)."
   [row repo branch pr ^Instant now]
-  (let [stamp (text-of (get-in row [:data :landed_at]))
+  (let [legacy (text-of (get-in row [:data :landed_at]))
+        stamp (or (text-of (get-in row [:data :unadopted_since])) legacy)
         seen (when stamp
                (try (Instant/parse stamp) (catch Exception _ nil)))
-        note (adoption-note repo branch pr)]
+        note (adoption-note repo branch pr)
+        stored (text-of (get-in row [:data :adoption_note]))]
     (cond
-      (nil? seen) {:landed_at (str now)}
+      (nil? seen) {:unadopted_since (str now)}
 
       (and (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
               (long adoption-note-window-ms))
            (not= note (str (get-in row [:data :adoption_note]))))
-      {:landed_at stamp :adoption_note note})))
+      {:unadopted_since stamp :adoption_note note}
+
+      legacy (cond-> {:unadopted_since stamp}
+               stored (assoc :adoption_note stored)))))
 
 ;; ── a submitted change that never opened a pull request (ticket 226d2b85)
 ;;
@@ -1255,7 +1261,8 @@
   [eng row repo branch ^Instant now]
   (when-some [tid (ticket-of row)]
     (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
-      (let [stamp (text-of (get-in row [:data :landed_at]))
+      (let [legacy (text-of (get-in row [:data :landed_at]))
+            stamp (or (text-of (get-in row [:data :unadopted_since])) legacy)
             seen (when stamp
                    (try (Instant/parse stamp) (catch Exception _ nil)))
             note (unopened-note repo branch)]
@@ -1266,7 +1273,10 @@
                        (str "closed: ticket " tid " ended; this change "
                             "never opened a pull request")}]
 
-          (nil? seen) [:note_adoption {:landed_at (str now)}]
+          (nil? seen) [:note_adoption {:unadopted_since (str now)}]
+
+          ;; a stamp under the old name (ticket 8f2fac64) moves first
+          legacy [:note_adoption {:unadopted_since stamp}]
 
           (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
              (long adoption-note-window-ms))
