@@ -280,9 +280,12 @@
     (is (= "integer" (get-in props [:max_chars :type])))
     (is (re-find #"text_only" (str (:description tool)))
         "a shape nobody is told about is a shape nobody asks for")
-    (is (= #{:tool :arguments :text_only :max_chars} (set (keys props)))
+    (is (= #{:tool :arguments :text_only :max_chars
+             :at :zone :validity :grace_seconds}
+           (set (keys props)))
         "and nothing else: the two arguments are the whole of the
-         shape")
+         shape, beside the four that say when the call is made
+         (spec-scheduled-actions R-7.2)")
     (is (false? (get-in tool [:input-schema :additionalProperties]))
         "the door still refuses an argument it does not know")
     (is (string? (wire/write-json tool))
