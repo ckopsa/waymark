@@ -140,7 +140,7 @@
   [:followed {:x-ref {:principal true}
               :x-display {:raw true
                           :label "Who was followed"
-                          :help "The principal the recorder followed: their principal id."}}
+                          :help "The principal whose screen and writes this walk holds: their principal id. It is the recorder's own id when a person or an agent records itself."}}
    [:string {:min 1 :max 128}]])
 
 (def ^:private title-field
@@ -163,7 +163,7 @@
     [:recorder {:x-ref {:principal true}
                 :x-display {:raw true
                             :label "Who recorded"
-                            :help "The follower whose stream this walk records, stamped by the engine at birth. A frame holds only what this principal could see."}}
+                            :help "The principal who records this walk, stamped by the engine at birth: a follower recording someone else's stream, or a person or an agent recording its own. A frame holds only what this principal could see."}}
      [:string {:min 1 :max 128}]]
     followed-field
     title-field
@@ -463,7 +463,9 @@
                           (ex-message e)))))))))
 
 (defn record-own!
-  "A write door's post-commit pass (router/count-committed!): the
+  "A write door's post-commit pass (router/count-committed! at the
+  create and action routes, router/bulk-action once per row it moved;
+  the connector's invoke rides those same routes): the
   transition `principal` just committed goes to every self walk they
   are recording, under `sight`, the request's own visibility. A replay,
   a rehearsal and an anonymous write record nothing, and neither does a

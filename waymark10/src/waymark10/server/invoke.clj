@@ -1601,10 +1601,16 @@
   recorded: items run with :record-key? false, so the key lands in
   the log (one action per item for `feed/actions-from-feed` and
   `mcp/actions-from-mcp`, which fold by the key's prefix) while the
-  idempotency store holds exactly the one whole-call record."
+  idempotency store holds exactly the one whole-call record.
+
+  `:on-item`, when given, is called with each item's result once the
+  item has committed and its after-write ran: the router's seam for
+  what a single invoke does after its own commit (a self walk's
+  recording, walks/record-own!). A rehearsal, a deferral and a replay
+  of the whole call run none."
   [engine kind action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
-           dry-run grant]
+           dry-run grant on-item]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -1725,7 +1731,8 @@
                                                                 :reason (problem-reason e)}]}}))
                                   (throw e))))]
                         (doseq [res results]
-                          (after-write! engine kind action-name res))
+                          (after-write! engine kind action-name res)
+                          (when on-item (on-item res)))
                         {:succeeded (count items) :refused 0 :failed 0 :refusals []})
                       ;; partial success: one transaction PER item — a
                       ;; refusal never poisons its neighbors. Stop mode
@@ -1740,6 +1747,7 @@
                                        (let [res (store/with-tx (:storage engine)
                                                    #(run-item % it))]
                                          (after-write! engine kind action-name res)
+                                         (when on-item (on-item res))
                                          (update rep :succeeded inc))
                                        (catch Exception e
                                          (if (refusal? e)
