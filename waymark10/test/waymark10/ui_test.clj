@@ -168,6 +168,25 @@
     (is (str/includes? body
                        "invokeBare(invitation.doc.actions.decline, invitation.doc)"))))
 
+(deftest ui-offers-do-this-later
+  ;; docs/spec-scheduled-actions.md R-7.3: a row's dialog schedules the
+  ;; same call, with the zone named and the rule in plain words; a confirm
+  ;; door's sentence rides the scheduling tap; and the row's page lists
+  ;; what waits on it, with reschedule and cancel
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "\"Do this later\""))
+    (is (str/includes? body "Intl.DateTimeFormat().resolvedOptions().timeZone"))
+    (is (str/includes? body "rule(\"strict\", \"Only if nothing about it changes\")"))
+    (is (str/includes? body "rule(\"state\", \"As long as it is still \""))
+    (is (str/includes? body "rule(\"conditions\","))
+    (is (str/includes? body "filterPopover(query, new URLSearchParams()")
+        "a condition is written with the collection's filter control")
+    (is (str/includes? body "api(\"/api/scheduled_actions\","))
+    (is (str/includes? body "call.acknowledge = consequence"))
+    (is (str/includes? body "function scheduledSection(doc)"))
+    (is (str/includes? body "name: \"reschedule\", entry: acts.reschedule"))
+    (is (str/includes? body "invokeBare(acts.cancel, item)"))))
+
 (deftest ui-follow-offers-guided-mode
   ;; docs/spec-guided-follow.md §2: the follow chip offers guided mode,
   ;; which reopens the one live stream with ?ui=<pid> and applies the

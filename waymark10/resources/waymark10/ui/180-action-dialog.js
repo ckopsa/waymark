@@ -75,6 +75,13 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   const form = input ? buildForm(input, initialValues, kind) : el("div", {});
 
   const errBox = el("div", {});
+  /* "Do this later" (docs/spec-scheduled-actions.md R-7.3): a row's own
+     door, in the person's own hand. A bulk write and a create have no
+     one row to hold a rule against, and a scheduled action's own doors
+     move the row that already is the later. */
+  const laterable = !bulkIds && !guided && kind !== "scheduled_action" &&
+    /^\/api\/[^/]+\/(?!-\/)[^/]+\/-\/[^/?]+$/.test(entry.href || "");
+  const laterBox = el("div", {"data-later-panel": "", style: "display:none"});
   /* the blur judge's verdict line (§23): "✓ so far" is the partial
      rehearsal speaking — every field it can already judge, judged */
   const dryNote = el("span", {class: "drynote"});
@@ -111,7 +118,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
             el("b", {}, "Confirm: "),
             entry.display?.description || "This action requires confirmation.")
         : null,
-      form, errBox, draftBar),
+      form, laterBox, errBox, draftBar),
     el("div", {class: "dlgfoot"},
       el("span", {class: "hint"},
         entry.draft ? (entry.draft.shared ? "shared draft — saved on blur"
@@ -130,6 +137,10 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
                         onclick: () => declineInvitation()}, "Decline")
         : null,
       el("button", {onclick: () => closeDlg()}, "Cancel"),
+      laterable
+        ? el("button", {"data-later": "", onclick: () => openLater()},
+            "Do this later")
+        : null,
       el("button", {class: safety.confirm ? "danger" : "primary",
                     onclick: () => submit()},
         safety.confirm
@@ -440,6 +451,106 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       return;
     }
     showErrors(problem);
+  }
+
+  /* ── do this later (docs/spec-scheduled-actions.md R-7.3): the same
+     call, written as a scheduled_action and made at its time. The
+     picker speaks the browser's zone and the panel names it; the rule
+     the run is held to is chosen in plain words; and on a confirm door
+     the panel shows the sentence, because the tap that schedules is
+     the acknowledgment. ─────────────────────────────────────────────── */
+  const laterZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const laterConds = {};
+  /* the sentence as waymark10.confirm/consequence-of reads it */
+  const consequence = entry.display?.description || entry.display?.label ||
+    "This action requires confirmation.";
+  function paintLaterConds(box) {
+    box.replaceChildren(...Object.entries(laterConds).map(([k, v]) =>
+      el("span", {class: "chip on", "data-later-cond": k}, `${k}=${v} `,
+        el("span", {title: "remove", onclick: () => {
+          delete laterConds[k]; paintLaterConds(box);
+        }}, "×"))));
+  }
+  async function openLater() {
+    if (laterBox.firstChild) {
+      laterBox.style.display =
+        laterBox.style.display === "none" ? "block" : "none";
+      return;
+    }
+    const p = n => String(n).padStart(2, "0");
+    const t = new Date(Date.now() + 86400000);
+    const at = el("input", {type: "datetime-local", "data-later-at": "",
+      value: `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}T08:30`});
+    const condChips = el("div", {});
+    const condBox = el("div", {"data-later-conds": "", style: "display:none"},
+      condChips);
+    let condsBuilt = false;
+    /* *Only if…*: the collection's own filter control over the kind's
+       query input, so a condition is spelled the way a filter is */
+    const showConds = async on => {
+      condBox.style.display = on ? "block" : "none";
+      if (!on || condsBuilt) return;
+      condsBuilt = true;
+      const col = await api(doc.self.split("?")[0].split("/").slice(0, 3).join("/") +
+                            "?page%5Bsize%5D=1");
+      const query = (((col.body || {}).actions || {}).query || {}).input;
+      const fp = query && filterPopover(query, new URLSearchParams(), updates => {
+        for (const [k, v] of Object.entries(updates))
+          if (v !== "") laterConds[k] = v;
+        paintLaterConds(condChips);
+      });
+      condBox.append(fp || el("span", {class: "muted"},
+        `${pretty(kind)} declares no field a condition can read`));
+    };
+    const rule = (value, text) => {
+      const radio = el("input", {type: "radio", name: "later_validity", value});
+      radio.checked = value === "state";
+      radio.addEventListener("change", () => showConds(value === "conditions"));
+      return el("label", {style: "display:block"}, radio, " ", text);
+    };
+    laterBox.append(
+      el("p", {}, el("b", {}, "Do this later: "), at, " ",
+        el("span", {class: "muted", "data-later-zone": ""}, laterZone)),
+      rule("strict", "Only if nothing about it changes"),
+      rule("state", "As long as it is still " + pretty(doc.state || "as it is")),
+      rule("conditions", "Only if…"),
+      condBox,
+      safety.confirm
+        ? el("div", {class: "consequence"},
+            el("b", {}, "Scheduling confirms: "), consequence)
+        : null,
+      el("div", {class: "actions"},
+        el("button", {class: "primary", "data-later-go": "",
+                      onclick: () => schedule()}, "Schedule")));
+    laterBox.style.display = "block";
+  }
+  async function schedule() {
+    clearTimeout(dryTimer);          /* as on submit: the blur judge
+                                        stands down */
+    const at = laterBox.querySelector("[data-later-at]").value;
+    if (!at) {
+      showErrors({title: "No time", detail: "Choose the time this runs at."});
+      return;
+    }
+    const validity =
+      laterBox.querySelector("input[name=later_validity]:checked")?.value || "state";
+    /* the same target and input the submit would send */
+    const call = {
+      target: {kind, action: name, id: doc.self.split("?")[0].split("/").pop()},
+      input: input ? collectValues(form, input) : {},
+      run_at: at, zone: laterZone, validity};
+    if (validity === "conditions") call.conditions = {...laterConds};
+    if (safety.confirm) call.acknowledge = consequence;
+    const btn = laterBox.querySelector("[data-later-go]");
+    btn.disabled = true;             /* one tap, one scheduled action */
+    const res = await api("/api/scheduled_actions",
+      {method: "POST", body: JSON.stringify(call),
+       headers: {"Idempotency-Key": uuid()}});
+    btn.disabled = false;
+    if (!res.ok) { showErrors(res.body); return; }
+    closeDlg();
+    toast(`${pretty(name)} scheduled for ${at.replace("T", " ")} (${laterZone})`);
+    render();
   }
 
   /* an invitation (docs/spec-guided-follow.md §3): the suggested
