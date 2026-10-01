@@ -1294,7 +1294,13 @@
               (grants/check-args! (visibility-of req) rdef (keyword action)
                                   (dissoc body :ids :on_error)))
           opts (invoke-opts req)
-          result (inv/bulk! eng (:kind rdef) (keyword action) body opts)]
+          ;; a principal recording their own walk has each row this call
+          ;; moved put in it, under this request's sight, as the single
+          ;; door does (count-committed!, walks/record-own!)
+          result (inv/bulk! eng (:kind rdef) (keyword action) body
+                            (assoc opts :on-item
+                                   #(walks/record-own! eng (principal-of req)
+                                                       (visibility-of req) %)))]
       (cond
         (:deferred result)
         ;; the phase-7 punt closes (phase 9b): an over-threshold call
