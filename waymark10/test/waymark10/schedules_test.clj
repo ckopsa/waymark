@@ -801,6 +801,56 @@
     (seat-do! linked :retire)
     (seat-do! bare :retire)))
 
+(deftest the-boot-seeds-a-paused-or-broken-schedule-where-it-stands
+  (let [cn :sched-seed-states
+        _ (drain! cn)
+        chair (model! "claude-chair-seed-states")
+        _ (link-model! chair a-chair-url a-chair-token)
+        paused (seat! "seed-paused-clerk" 3600 [chair])
+        broken (seat! "seed-broken-clerk" 3600 [chair])
+        _ (drain! cn)
+        own-token "rk-test-seed-states-0123456789abcdef"
+        paused-sched (:id (sched-of paused))
+        broken-sched (:id (sched-of broken))
+        state-of #(name (:state (sched-of %)))
+        engine! (fn [id action body]
+                  (inv/invoke! *eng* :schedule (str id) action body
+                               {:principal sch/system-actor}))]
+    (link-schedule! paused-sched a-seat-url own-token)
+    (link-schedule! broken-sched a-seat-url own-token)
+    (drain! cn)
+    (engine! paused-sched :pause nil)
+    (engine! broken-sched :fail {:note "The provider refused the link."})
+    (is (= "paused" (state-of paused)))
+    (is (= "broken" (state-of broken)))
+    (is (nil? (runners-of :schedule paused-sched)))
+    (is (nil? (runners-of :schedule broken-sched)))
+    (rl/ensure-seeded-links! *eng*)
+
+    (testing "a paused schedule stays paused and names exactly its seeded link"
+      (let [[s & more] (seeded (str "schedule:" paused-sched))]
+        (is (some? s))
+        (is (empty? more))
+        (is (= "paused" (state-of paused)))
+        (is (= [(str (:id s))] (runners-of :schedule paused-sched)))))
+
+    (testing "a broken schedule stays broken and names exactly its seeded link"
+      (let [[s & more] (seeded (str "schedule:" broken-sched))]
+        (is (some? s))
+        (is (empty? more))
+        (is (= "broken" (state-of broken)))
+        (is (= [(str (:id s))] (runners-of :schedule broken-sched)))))
+
+    (testing "a second boot adds none and moves neither"
+      (rl/ensure-seeded-links! *eng*)
+      (is (= 1 (count (seeded (str "schedule:" paused-sched)))))
+      (is (= 1 (count (seeded (str "schedule:" broken-sched)))))
+      (is (= "paused" (state-of paused)))
+      (is (= "broken" (state-of broken))))
+
+    (seat-do! paused :retire)
+    (seat-do! broken :retire)))
+
 (def ^:private mayor (t/principal {:id "mayor" :type :agent :display "Mayor"}))
 
 (deftest link-like-copies-a-link-without-a-credential-crossing
