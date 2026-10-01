@@ -955,7 +955,8 @@
   door has just prepared, and answers {held true, held_call <id>} at
   once. It is an ANSWER and never a refusal, so it stands AFTER every
   refusal above and BEFORE the wire. `opts` is what only the caller's
-  side knows, {:caller <principal id> :sitting <id>}. A call
+  side knows, {:caller <principal id> :principal <principal> :sitting
+  <id>}; a forward carries it to the server as headers. A call
   that names no caller cannot be held, because a row with nobody's
   name on it is a row nobody is barred from allowing."
   ([eng-or-rpc vis tool args] (invoke-for eng-or-rpc vis tool args nil))
@@ -1021,8 +1022,11 @@
          (refuse-anonymous tname)
 
          :else
-         (servers/call! eng tname
-                        (forward-args row (with-allow args (:allow verdict)))))))))
+         ;; the caller rides as headers the engine writes (`caller-headers`)
+         (binding [servers/*caller* (when (or (:principal opts) (:caller opts))
+                                      (select-keys opts [:principal :caller :sitting]))]
+           (servers/call! eng tname
+                          (forward-args row (with-allow args (:allow verdict))))))))))
 
 ;; ── the engine's own hand (the write path) ──────────────────────────
 

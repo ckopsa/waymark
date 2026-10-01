@@ -80,6 +80,14 @@
   like a secret (a space, a colon, more than 64 characters) refuses
   at create and at restate.
 
+  THE CALL NAMES ITS CALLER. The power door binds `*caller*` around
+  its forward, and the http client's headers read it on every request:
+  X-Waymark-Seat, X-Waymark-Principal, X-Waymark-Acts-For and
+  X-Waymark-Sitting (`caller-headers`). The engine writes all four from
+  the session, never from the call's arguments, so a caller cannot
+  spell them. A row with `send_caller` false sends none of them. The
+  engine's own hand binds nothing and sends nothing.
+
   THE CADENCE. `start-discover-sweeper!` re-reads every live row's
   tools/list on an interval and walks the `discover` door only when
   the hash moved, so an unchanged list costs no transition. The hash
@@ -150,17 +158,50 @@
 (defn- config-key [row]
   (let [d (:data row)]
     [(str (:transport d)) (:url d) (:command d) (vec (:args d))
-     (:auth_env d) (boolean (:passthrough d))]))
+     (:auth_env d) (boolean (:passthrough d)) (false? (:send_caller d))]))
+
+(def ^:dynamic *caller*
+  "Who makes the power call on this thread: {:principal :caller
+  :sitting}, bound by the power door around its forward and read by
+  the http client on every request. nil is the engine's own hand."
+  nil)
+
+(defn- header-safe
+  "A header value holds printable ASCII only: anything else is dropped."
+  [s]
+  (str/replace (str s) #"[^\x20-\x7e]" ""))
+
+(defn caller-headers
+  "The four headers that name who made a power call, from what the
+  session knows and never from the call's arguments. A seat's sitter is
+  `seat:<id>` with the display `<name> (seat)`; any other principal
+  answers an empty X-Waymark-Seat."
+  [{:keys [principal caller sitting]}]
+  (let [pid (str (or (:id principal) caller))
+        seat (when (str/starts-with? pid "seat:") (subs pid 5))
+        seat-name (str/replace (str (:display principal)) #" \(seat\)$" "")]
+    (update-vals
+     {"X-Waymark-Seat" (if seat (str "name=" seat-name "; id=" seat) "")
+      "X-Waymark-Principal" (str "type=" (some-> (:type principal) name)
+                                 "; id=" pid)
+      "X-Waymark-Acts-For" (str (:acts-for principal))
+      "X-Waymark-Sitting" (str sitting)}
+     header-safe)))
 
 (defn- headers-fn
-  "The http client's extra headers, read from the environment on
-  every call (R-9). nil when the row names no variable."
-  [env-name]
-  (when-not (str/blank? (str env-name))
+  "The http client's extra headers, read on every call: the
+  Authorization the environment holds (R-9), and the caller's four
+  when the power door bound one and the row did not opt out."
+  [d]
+  (let [env-name (:auth_env d)
+        send-caller? (not (false? (:send_caller d)))]
     (fn []
-      (let [v (System/getenv (str env-name))]
-        (when-not (str/blank? (str v))
-          {"Authorization" (str v)})))))
+      (merge (when-not (str/blank? (str env-name))
+               (let [v (System/getenv (str env-name))]
+                 (when-not (str/blank? (str v))
+                   {"Authorization" (str v)})))
+             (when (and send-caller? *caller*)
+               (caller-headers *caller*))))))
 
 (defn- build-client [seam row]
   (let [d (:data row)
@@ -179,7 +220,7 @@
 
               :else
               (client/http-client (str (:url d))
-                                  {:headers-fn (headers-fn (:auth_env d))
+                                  {:headers-fn (headers-fn d)
                                    :timeout-ms timeout}))]
     (client/with-timeout raw timeout)))
 
@@ -846,7 +887,7 @@
 
 (def restatable
   "The fields a restate states again (R-8)."
-  [:url :command :args :auth_env :powers :note])
+  [:url :command :args :auth_env :send_caller :powers :note])
 
 (defhandler restate-server [row inp ctx]
   (let [row (reduce (fn [r f]
@@ -1088,6 +1129,10 @@
                            :label "Auth variable"
                            :help "The NAME of an environment variable on the engine's host that holds the Authorization header value. Never the value."}}
     [:maybe [:string {:max 64}]]]
+   [:send_caller {:optional true
+                  :x-display {:label "Send the caller"
+                              :help "False for an upstream that must not see who calls: the engine then sends no X-Waymark-Seat, X-Waymark-Principal, X-Waymark-Acts-For or X-Waymark-Sitting header. Empty means true."}}
+    [:maybe :boolean]]
    [:passthrough {:optional true
                   :x-display {:label "Passthrough"
                               :help "True only on the row named gate: its tools already wear their prefixes, and the engine adds nothing in front."}}
@@ -1163,6 +1208,10 @@
                :x-display {:raw true :label "Auth variable"
                            :help "The NAME of the environment variable, never the value."}}
     [:maybe [:string {:max 64}]]]
+   [:send_caller {:optional true
+                  :x-display {:label "Send the caller"
+                              :help "False to send the server no caller headers."}}
+    [:maybe :boolean]]
    [:powers {:optional true
              :x-display {:label "Powers"
                          :help "The whole policy, stated again: which tools each power token admits, and what a call must pass before it goes out."}}
