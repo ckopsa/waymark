@@ -287,7 +287,7 @@ walk        one row per recording
 walk_frame  one row per frame, written quietly with the engine's
             own hand (inv/insert-quiet!, as transcript_entry is):
   fields: walk, t (ms since started_at), type (move | ui | transition
-          | invitation), body
+          | invitation | doc), body
 ```
 
 **A walk is recorded under the recorder's sight.** Each frame is

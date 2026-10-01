@@ -76,7 +76,8 @@ function historySection(streamHref) {
     el("summary", {class:"muted"}, "History ", count), body);
   let loaded = false;
   const load = () => {
-    if (loaded) return;
+    /* a replay's screen reads nothing (100-core.js, apiHeld) */
+    if (loaded || apiHeld) return;
     loaded = true;
     body.append(el("span", {class:"muted"}, "…"));
     fetchReplay(streamHref).then(frames => {
