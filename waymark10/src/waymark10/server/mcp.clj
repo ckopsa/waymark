@@ -1724,6 +1724,28 @@
   [st self]
   (beat! st self {:dialog nil}))
 
+(defn- lift-caption
+  "An invoke's `caption` and `caption_field` may also ride inside `input`
+  (docs/spec-agent-demo-walks.md § 3): a client holding a tool list from
+  before the two arguments shipped cannot send them beside it. → `args`
+  with each one moved out of `input`; the one beside `input` wins when
+  the call carries both. A key the door's own input declares is the
+  door's argument and stays where it is."
+  [rdef aname {:keys [input] :as args}]
+  (let [form (or (get-in rdef [:actions aname :input]) (:schema rdef))
+        declared (when (vector? form)
+                   (into #{} (comp (filter vector?) (map first) (filter keyword?))
+                         (rest form)))
+        lifted (when (map? input)
+                 (into [] (comp (filter #(#{"caption" "caption_field"} (name %)))
+                                (remove #(contains? declared (keyword (name %)))))
+                       (keys input)))]
+    (reduce (fn [a k]
+              (let [top (keyword (name k))]
+                (cond-> (update a :input dissoc k)
+                  (not (contains? a top)) (assoc top (get input k)))))
+            args lifted)))
+
 (defn- stage-caption!
   "A call's `caption` (docs/spec-agent-demo-walks.md § 3): one `caption`
   frame in the caller's recording self walk, written before the call's
@@ -2303,11 +2325,15 @@
   refusal (404 for a concealed door, 409 with the guard's own sentence
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
-  [eng call session {:keys [kind id ids items action input dry_run acknowledge
+  [eng call session {:keys [kind id ids items action dry_run acknowledge
                             acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))
+        ;; a caption inside `input` is the call's own (§ 3): it leaves
+        ;; `input` here, before the form is typed and the door judges it
+        args (lift-caption rdef aname args)
+        input (:input args)
         ;; captioned (§ 3): the line is written before the call's beats,
         ;; on the row's form, or on the collection for a create and a
         ;; bulk call. The two arguments go no further than here

@@ -38,8 +38,8 @@
   row)
 
 (def ^:private errand
-  "A row with three doors: two plain arguments, one secret argument,
-  and a guard that refuses."
+  "A row with four doors: two plain arguments, one secret argument, an
+  argument of its own named `caption`, and a guard that refuses."
   (r/resource
    {:kind :errand
     :plural "errands"
@@ -66,6 +66,10 @@
                        [:maybe [:string {:max 12}]]]]
               :handler assign-handler
               :safety {:idempotent true :reversible true :confirm false}}
+     :label {:from #{:open} :to :open
+             :input [:map [:caption [:string {:max 80}]]]
+             :handler assign-handler
+             :safety {:idempotent true :reversible true :confirm false}}
      :complete {:from #{:open} :to :done
                 :guards [ready-gate]
                 :safety {:idempotent true :reversible false :confirm false
@@ -313,3 +317,39 @@
                         (filter #(= "caption" (:type %)))
                         (mapv (juxt #(get-in % [:body :text])
                                     #(get-in % [:body :self]))))))))))))
+
+(deftest a-caption-inside-input-is-the-calls-own
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            line "The agent renames the errand."
+            w (self-walk! h)
+            captions (fn [] (->> (frames eng w)
+                                 (filter #(= "caption" (:type %)))
+                                 (mapv #(get-in % [:body :text]))))]
+        (testing "it writes the caption frame and does not reach the door"
+          (is (tool h "waymark_invoke" {:kind "errand" :id a :action "rename"
+                                        :input {:title "Towels" :caption line
+                                                :caption_field "title"}}))
+          (is (= [["caption"]
+                  [:move (path a)]
+                  [:ui "rename" {}]
+                  [:ui "rename" {:title "Towels"}]
+                  [:transition "rename"]
+                  [:ui nil {}]]
+                 (beats eng w)))
+          (is (= {:self (path a) :action "rename" :field "title" :text line}
+                 (select-keys (:body (first (frames eng w)))
+                              [:self :action :field :text]))))
+        (testing "the argument beside input wins"
+          (is (tool h "waymark_invoke" {:kind "errand" :id a :action "rename"
+                                        :input {:title "Sheets" :caption "Inside."}
+                                        :caption "Beside."}))
+          (is (= [line "Beside."] (captions))))
+        (testing "a door's own `caption` argument stays the door's"
+          (is (tool h "waymark_invoke" {:kind "errand" :id a :action "label"
+                                        :input {:caption "Linen"}}))
+          (is (= [line "Beside."] (captions)))
+          (is (= [:ui "label" {:caption "Linen"}]
+                 (last (filter #(= [:ui "label"] (vec (take 2 %)))
+                               (beats eng w))))))))))
