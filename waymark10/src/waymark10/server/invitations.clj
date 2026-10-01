@@ -134,17 +134,30 @@
       (secret? (get-in entries [k :properties]))
       (str "`" arg "`" where " is a secret argument, and nobody is invited to type a secret."))))
 
+(defn- judges-the-input?
+  "Does this denier's verdict turn on what the door is handed: does its
+  `:judges` name an argument of the action's input?"
+  [rdef action denier]
+  (let [args (some-> (get-in rdef [:actions (keyword (name action)) :input])
+                     schema/entry-map)]
+    (boolean (some #(contains? args (if (sequential? %) (first %) %))
+                   (:judges denier)))))
+
 (defn- shut-now
   "Why the row cannot take the door now, in the words its envelope's
   `unavailable` uses; nil when it can. A denier reading the principal
   or the grant refused the AUTHOR's hand, not the row, and the
   subject's hand is judged at the subject's own invoke, so it is no
-  reason here."
+  reason here. A denier judging an argument of the door's input
+  refused an input nobody has typed yet: what the person submits is
+  judged at the person's own invoke too, so it is no reason either. A
+  denier that judges the row's state alone still refuses."
   [rdef action row ctx]
   (let [{:keys [status reason denier]}
         (render/action-availability rdef action row ctx)]
     (when (and (= :unavailable status)
-               (not (some #{:principal :grant} (:reads denier))))
+               (not (some #{:principal :grant} (:reads denier)))
+               (not (judges-the-input? rdef action denier)))
       (or reason (str "`" (name action) "` is not open on that row now.")))))
 
 (defn subject-name
