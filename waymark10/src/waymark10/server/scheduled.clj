@@ -1,6 +1,7 @@
 (ns waymark10.server.scheduled
   "The scheduled action (docs/spec-scheduled-actions.md, children 1a,
-  1b, 1c, 2, 4a, 5 and 6): a call stored for a time, as a kind of its own.
+  1b, 1c, 2, 4a, 4b, 5 and 6): a call stored for a time, as a kind of
+  its own.
 
   THIS NAMESPACE IS THE KIND, ITS SCHEDULING CHECK, ITS RUN AND ITS
   CLOCK. The create validates, checks and stores. `start!` claims a row
@@ -45,6 +46,14 @@
   row, which the hold guards read as that yes (waymark10.holds), so
   nobody is asked twice. The yes carries no grant forward.
 
+  A POWER TOOL HAS NO ROW AND NO REHEARSAL (R-4.4). `target: {tool}`,
+  with the tool's arguments as `input`. The create reads only that the
+  tool is among the scheduler's powers, and a power whose `approval` is
+  `person` is born `proposed` as any held call is. The run goes through
+  the power door (`gate-proxy/invoke-for`) as the server row stands
+  then. A call that ends unknown, and a row left `running`, is `failed`
+  and is never made again: an external call does not land once by key.
+
   THE ENGINE NEVER GUESSES UTC (R-7.2). `run_at` is RFC 3339 with an
   offset, or a local time read in the `zone` the body names, else in
   the zone on the scheduler's member row or its person's. From then
@@ -64,8 +73,10 @@
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.delegation :as delegation]
+            [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp-servers :as servers]
             [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
@@ -196,8 +207,12 @@
     (cond
       (nil? (:target inp)) (t/allow)
 
+      ;; R-4.4: a power tool. Whether it is among the scheduler's
+      ;; powers is the scheduling check's
       (not (blank? tool))
-      (t/deny {:vars {:problem "a power tool target is child 4 of docs/spec-scheduled-actions.md (approval at scheduling, and power targets), which is not built yet. Name a `kind` and an `action`."}})
+      (if (and (blank? kind) (blank? action) (blank? (:id (:target inp))))
+        (t/allow)
+        (t/deny {:vars {:problem "`target` names a power `tool`, or a `kind` and an `action`, and never both."}}))
 
       (or (blank? kind) (blank? action))
       (t/deny {:vars {:problem "`target` names a `kind` and an `action`, and the row's `id` unless the action creates one."}})
@@ -390,6 +405,58 @@
     (when (rdef-of "held_call")
       (delegation/hold-owner ctx))))
 
+(defn- tool-of
+  "The power tool a target names (R-4.4), or nil for an engine door."
+  [target]
+  (some-> (:tool target) str str/trim not-empty))
+
+(defn- power-at-scheduling
+  "R-4.4: a power tool as the scheduler holds it now, read inside the
+  create's own transaction: `{:row :entry :token :why :approval}`, or
+  `{:problem}`. There is no rehearsal, because an external server has no
+  dry run. A power is worn and never inherited, so a scheduler that
+  wears no grant holds none."
+  [tool ctx]
+  (let [rows (when-some [find' (:find ctx)]
+               (find' :mcp_server {} {:limit 1000}))
+        {:keys [entry token] :as hit} (servers/resolve-among rows tool)
+        power? (get-in ctx [:grant :power?])]
+    (if (and entry token power? (power? token))
+      hit
+      {:problem (str "there is no power tool `" tool "` among your powers that you may schedule.")})))
+
+(defn- power-problem
+  "What the scheduling check refuses in a power call (R-4.4), as one
+  sentence, or nil: a tool that is not among the scheduler's powers, and
+  a call with no `why` where the tool's entry demands one."
+  [tool inp ctx]
+  (let [{:keys [problem why]} (power-at-scheduling tool ctx)
+        said? #(not (str/blank? (str (get-in inp [:input %]))))]
+    (cond
+      problem problem
+
+      (and why (not (said? :why)) (not (said? :__why)))
+      (str "`" tool "` takes one sentence of reason. Send `why` in `input`: the person who approves the call reads it."))))
+
+(defn- power-snapshot
+  "What a power tool's server row was when this was scheduled (R-4.4):
+  its version, which `strict` pins, and its state."
+  [tool ctx]
+  (let [{:keys [row]} (power-at-scheduling tool ctx)]
+    (not-empty
+     (into {} (filter (comp some? val))
+           {:version (:version row)
+            :state (some-> (:state row) name)}))))
+
+(defn- power-why
+  "A power call's own sentence of reason, which the person who taps
+  reads (R-4.3), or nil for an engine door."
+  [data]
+  (when (tool-of (:target data))
+    (or (some-> (get-in data [:input :why]) str not-empty)
+        (some-> (get-in data [:input :__why]) str not-empty)
+        "Held for the person's tap.")))
+
 (defn- rehearse!
   "R-3.1: the call, rehearsed as the scheduler under the grant it wears.
   The door's own refusal is thrown as the door wrote it, unless it is a
@@ -418,10 +485,16 @@
   the door is rehearsed once more only to read which way it passed."
   [inp ctx]
   (when (and (:rehearse ctx) (map? (:target inp)))
-    (let [{:keys [problem] :as door} (door-of (:target inp) ctx)]
-      (when-not problem
-        (try (:held (rehearse! door inp ctx))
-             (catch clojure.lang.ExceptionInfo _ nil))))))
+    (if-some [tool (tool-of (:target inp))]
+      ;; a power whose `approval` is `person`, on an engine that serves
+      ;; a held call to ask with
+      (when (and (= :person (:approval (power-at-scheduling tool ctx)))
+                 (when-some [rdef-of (:rdef-of ctx)] (rdef-of "held_call")))
+        "Held for the person's tap.")
+      (let [{:keys [problem] :as door} (door-of (:target inp) ctx)]
+        (when-not problem
+          (try (:held (rehearse! door inp ctx))
+               (catch clojure.lang.ExceptionInfo _ nil)))))))
 
 (defn- refused-now
   "The scheduling check. Answers the sentence of a refusal this kind
@@ -463,7 +536,9 @@
    :explain "A scheduled action is checked against its door when it is scheduled: {problem}"}
   [_row inp ctx]
   (if-some [problem (when (and (:rehearse ctx) (map? (:target inp)))
-                      (refused-now inp ctx))]
+                      (if-some [tool (tool-of (:target inp))]
+                        (power-problem tool inp ctx)
+                        (refused-now inp ctx)))]
     (t/deny {:vars {:problem problem}})
     (t/allow)))
 
@@ -490,6 +565,10 @@
                                     (door-of (:target inp) ctx))]
     (cond
       (and (not rule?) (empty? params)) nil
+
+      ;; R-4.4: a power tool has no row to read
+      (tool-of (:target inp))
+      (throw (unfit :conditions "A power tool has no row to read, so it takes no conditions. Schedule it under `state` or `strict`."))
 
       (not rule?)
       (throw (unfit :validity "`conditions` are read only under the `conditions` rule. Send `validity: conditions`, or leave `conditions` out."))
@@ -560,7 +639,9 @@
         {:keys [instant zone]} (time-of nil (:data row) ctx)
         acts-for (some-> (:acts-for p) str not-empty)
         grant (some-> (get-in ctx [:grant :id]) str not-empty)
-        snapshot (snapshot-of (:data row) ctx)
+        snapshot (if-some [tool (tool-of (get-in row [:data :target]))]
+                   (power-snapshot tool ctx)
+                   (snapshot-of (:data row) ctx))
         held (hold-met (:data row) ctx)]
     (cond-> (update row :data
                     #(cond-> (assoc %
@@ -636,7 +717,9 @@
     (if (< n (count s)) (str (subs s 0 (dec n)) "…") s)))
 
 (defn- call-of [door]
-  (str "`" (name (:action door)) "` on " (name (:kind door))))
+  (if-some [tool (:tool door)]
+    (str "`" tool "`")
+    (str "`" (name (:action door)) "` on " (name (:kind door)))))
 
 (def ^:private ^DateTimeFormatter hour-and-minute
   (DateTimeFormatter/ofPattern "HH:mm"))
@@ -949,8 +1032,8 @@
           written (assoc :id written)
           state (assoc :state state))))))
 
-(defn run!
-  "The run of a row `start!` claimed (R-3.3): who it runs as, the grant
+(defn- run-door!
+  "The run of an engine door `start!` claimed (R-3.3): who it runs as, the grant
   read again by its id, the validity rule, the confirm sentence read
   again, a dry run, then the call under the key `scheduled_action:<id>`.
   A call that already landed under that key ends the row from its
@@ -979,6 +1062,113 @@
         (end! eng id end
               (or why (ran-words door data))
               (or before (when (= :land end) (outcome-of eng door res))))))))
+
+(def ^:private maybe-sent "It may or may not have been sent.")
+
+(defn- power-leash
+  "R-4.2 and R-4.4 for a power call: the grant read again by its id, and
+  the tool resolved again from its server row as it stands now. `{:vis}`
+  is the visibility the power door judges the call under. `{:why}` skips
+  the row: the tool is no longer among the runner's powers, its server
+  is not serving, or under `strict` the server row moved."
+  [eng data principal tool]
+  (let [gid (some-> (:grant data) str not-empty)
+        vis (when (and gid (= :active (:standing (grants/grant-standing eng gid))))
+              (grants/visibility eng gid principal))
+        wall (get-in vis [:seat :reason])
+        {:keys [row entry token approval]} (servers/resolve-tool eng tool)
+        version (get-in data [:snapshot :version])
+        call (str "`" tool "`")]
+    (cond
+      (= "seat_not_active" wall)
+      {:why "The seat this was scheduled from is not open, and a seat that is not open does nothing."}
+
+      wall
+      {:why (str "The seat this was scheduled from serves nothing now (" wall ").")}
+
+      (or (nil? entry) (nil? (grants/capability-entry vis token)))
+      {:why (str call " is no longer among the powers this was scheduled under.")}
+
+      (not= :live (:state row))
+      {:why (str "The server of " call " is not serving.")}
+
+      (and (= "strict" (:validity data)) (not= version (:version row)))
+      {:why (str "The server of " call " changed since this was scheduled (version "
+                 version ", now " (:version row) ").")}
+
+      ;; R-4.3: the yes is given at scheduling, and a run asks nobody
+      (and (= :person approval) (str/blank? (str (:held_call data))))
+      {:why (str call " now waits on a person's yes, and this was scheduled without one.")}
+
+      :else {:vis vis})))
+
+(defn- send-power
+  "The power call itself, through the power door's own judgment as it
+  stands at the run, so the filter and the `why` are prepared from the
+  server row as it is now (R-4.4). A refusal the door gives before the
+  wire is a skip. An external call does not land once by key, so a call
+  that ends unknown is `failed` and is never made again."
+  [eng id tool data principal vis]
+  (let [call (str "`" tool "`")
+        unknown {:end :fail :why (str call " did not answer. " maybe-sent)}]
+    (try
+      (let [res (gate/invoke-for eng vis tool (or (:input data) {})
+                                 {:caller (str (:id principal))
+                                  ;; R-4.3: the person's yes, which the
+                                  ;; power door reads back from this row
+                                  :within {:kind kind :action :run :id (str id)}})]
+        (cond
+          (true? (get-in res [:structuredContent :held]))
+          {:end :skip :why (str call " waits on a person's tap, and nobody approved it for this time.")}
+
+          (true? (:isError res))
+          {:end :fail :why (str call " was sent, and its server answered an error.")}
+
+          :else {:end :land}))
+      (catch clojure.lang.ExceptionInfo e
+        (let [status (:status (ex-data e))]
+          (if (and (:waymark10/problem (ex-data e))
+                   (number? status) (< (long status) 500))
+            {:end :skip :why (str call " was refused: " (said e))}
+            unknown)))
+      (catch Exception _ unknown))))
+
+(defn- run-power!
+  "The run of a power call (R-4.4): who it runs as, the grant and the
+  server row read again, then the power door. There is no dry run, and
+  no key the call lands under."
+  [eng id row tool]
+  (let [data (:data row)
+        {:keys [principal why]} (runner-of eng row)
+        leash (when principal (power-leash eng data principal tool))
+        skip (or why (:why leash))
+        {:keys [end why]} (if skip
+                            {:end :skip :why skip}
+                            (send-power eng id tool data principal (:vis leash)))]
+    (end! eng id end (or why (ran-words {:tool tool} data)) nil)))
+
+(defn run!
+  "The run of a row `start!` claimed: an engine door through its checks
+  (R-3.3), a power tool through the power door (R-4.4). Answers the
+  ending, `:done`, `:skipped` or `:failed`. A row that is not `running`
+  is left as it is and answers nil."
+  [eng id]
+  (let [row (stored-row eng kind id)]
+    (when (= :running (:state row))
+      (if-some [tool (tool-of (get-in row [:data :target]))]
+        (run-power! eng id row tool)
+        (run-door! eng id)))))
+
+(defn- recover!
+  "R-5.4: a row a stopped engine left `running`. An engine door is run
+  again under its key and lands once. A power call has no key its
+  server honours, so it is failed and never made again."
+  [eng row]
+  (if-some [tool (tool-of (get-in row [:data :target]))]
+    (end! eng (:id row) :fail
+          (str "`" tool "` was under way when the engine stopped. " maybe-sent)
+          nil)
+    (run! eng (:id row))))
 
 ;; ── the clock (R-5) ─────────────────────────────────────────────────
 
@@ -1062,8 +1252,9 @@
   [data]
   (let [{:keys [action id] target :kind} (:target data)
         ^Instant at (:run_at data)]
-    (str action " " target
-         (when-some [id (some-> id str not-empty)] (str " " id))
+    (str (or (tool-of (:target data))
+             (str action " " target
+                  (when-some [id (some-> id str not-empty)] (str " " id))))
          " · "
          (.format day-and-minute
                   (.atZone at ^ZoneId (or (zone-id (:zone data)) ZoneOffset/UTC))))))
@@ -1125,7 +1316,7 @@
             author (some-> (delegation/author-seat ctx) :id str)]
         (inv/create! eng :held_call
                      (cond-> {:tool "scheduled_action.arm"
-                              :why (cut (asked-why eng row door) 1000)
+                              :why (cut (or (power-why data) (asked-why eng row door)) 1000)
                               :caller (str (:scheduler data))
                               :forward {}
                               :shown (cut (shown-of data) 140)
@@ -1229,7 +1420,8 @@
   (R-4.3). They are settled first and counted in no tally.
 
   RECOVERED: a row `running` for more than five minutes has no live
-  runner, and is run again under its key (R-5.4). LATE: a `scheduled`
+  runner: an engine door is run again under its key, and a power call
+  is failed and never made again (R-5.4). LATE: a `scheduled`
   row past its grace is skipped with a sentence (R-5.3). RAN: every
   other `scheduled` row whose minute has begun is claimed and run,
   oldest `run_at` first.
@@ -1244,7 +1436,7 @@
           stuck (rows-where eng :running :ran_at :<
                             (.minusSeconds now (long stuck-seconds)))
           recovered (count (filter (fn [row]
-                                     (quietly (:id row) #(run! eng (:id row))))
+                                     (quietly (:id row) #(recover! eng row)))
                                    stuck))
           _ (settle-proposed! eng now)
           due (sort-by #(get-in % [:data :run_at])
@@ -1312,7 +1504,7 @@
     [:id {:optional true :x-ref {:kind-from :kind}
           :x-display {:raw true :label "Row"}}
      [:maybe [:string {:min 1 :max 128}]]]
-    ;; child 4's, declared so the refusal names the child and not a key
+    ;; R-4.4: a power tool, named in place of a kind and an action
     [:tool {:optional true :x-display {:raw true :label "Power tool"}}
      [:maybe [:string {:min 1 :max 120}]]]]])
 
@@ -1540,7 +1732,7 @@
    ["R-4.3 says the engine writes the row `proposed` and mints one held call. A birth runs under the scheduler's hand and a held call is the engine's to write, so the row is born `proposed` naming the held call's id and the call is minted after the create commits. A row whose held call was never minted is asked about on the clock's next pass."
     "R-4.3 says `reschedule` sends an approved row back to `proposed`. A door lands in one state, so `reschedule` lands `scheduled` naming a held call nobody has minted, which is no yes, and the engine's own `ask` moves the row to `proposed` when it mints that call. R-1 does not draw `ask`."
     "R-4.3 writes `shown` as \"tomorrow 08:30\". A row is read on more days than one, so the time is a date and a clock time in the scheduler's zone."
-    "R-4.3 names two holds. A power whose `approval` is `person` is child 4b's; a target here is an engine door, and a `:hold true` guard is the hold the scheduling check meets. Under `expect_state` no guard is judged, so no hold is met at scheduling and the run meets it as a refusal."
+    "R-4.3 names two holds, and the scheduling check meets both: a `:hold true` guard of an engine door, and a power whose `approval` is `person`. Under `expect_state` no guard is judged, so no hold is met at scheduling and the run meets it as a refusal. A power held at scheduling is asked about with the call's own `why`, and the power door reads the yes back from the row when the run names it."
     "R-4.3 says the hold guards check this input. The run sends the row's own `input` and no door edits it, so the guards read the row and compare no input."
     "R-1 says `cancel` is the scheduler's. A refused held call cancels the row with the engine's own hand, and `outcome_why` keeps the decider's reason. A `proposed` row that is cancelled or skipped leaves its held call waiting, and an allow of it then fails at `arm`."
     "R-1 says `input` is capped as held_calls/capped caps. A cut input is a different call, so an input over the same 16 KB ceiling is refused at scheduling with a sentence and never stored cut."
@@ -1557,7 +1749,8 @@
     "R-4.2 says the run counts on no sitting. A sitting's transitions are the log rows whose actor names its grant, so the run's actor names no grant: it carries `scheduled`, and the grant's id stays on this row."
     "R-5.1 takes due rows oldest first. `run_at` has no promoted column to order by, so a pass takes up to its cap of the due rows in the order they were scheduled and runs that page oldest `run_at` first."
     "R-5.3's sentence says the engine was down. The sweep cannot tell a stopped engine from a slow pass, and says it either way."
-    "R-5.4 fails a power tool that was left `running`. Targets are engine doors until child 4, so every row left `running` is run again under its key."
+    "R-4.4 says a power tool has no rehearsal. The scheduling check still reads the tool's `powers` entry: a tool that is not among the scheduler's powers is refused, and so is a call with no `why` where the entry demands one. A power token that names one tool is not resolved at the create; `waymark_power` resolves it before it schedules."
+    "R-4.4's `state` rule says the server row is still serving. That is read as the row's `live` state, so a dark row skips the run and is not probed. A power run keeps no `outcome`, because the field names a row a call wrote. A server that answers an error ends the row `failed` with that sentence, and only a call that did not answer says it may or may not have been sent."
     "R-2.1 sends the snapshot's etag as If-Match. The fence judges it only on a fenced door, so the run also compares the row's version with the snapshot's before the call; on an unfenced door a write between that read and the call is not caught."
     "R-2.2 asks that the row's envelope still advertises the action. The run reads the door's declared from-states and leaves the rest to the dry run, which judges the guards the envelope would."
     "R-2.3 does not say whether a condition must hold when it is scheduled. It need not: the grammar and the grant are judged at scheduling, and the conditions are read at the run."
