@@ -42,6 +42,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.sources.forge :as forge]
             [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
@@ -3300,6 +3301,94 @@
           "the sit answers the withheld row rather than an empty list")
       (is (re-find #"stuck" (str (:reason (first withheld))))
           "and says why it was held back"))))
+
+;; ── a ticket's ending closes its unmerged changes (ticket 458d65c5) ──
+
+(defn- change-by-id [w id]
+  (store/with-tx (:storage (:eng w))
+    (fn [tx] (store/load-row (:storage (:eng w)) tx :change (str id) {}))))
+
+(deftest dropping-a-ticket-closes-its-stuck-change
+  (let [w (ticket-world)
+        change-id (get-in (:answer w) [:change :id])
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "stuck" (name (:state (change-by-id w change-id)))))
+    (end-ticket! w (str (:id (:ticket w))) :drop)
+    (is (= "dropped" (ticket-state w)))
+    (is (= "closed" (name (:state (change-by-id w change-id))))
+        "the drop closes the change it left stuck")
+    (is (= "ticket dropped: Ended for the test."
+           (get-in (change-by-id w change-id) [:data :superseded_by])))))
+
+(deftest completing-a-ticket-closes-its-other-unmerged-changes
+  (testing "a person's complete closes the change it left open"
+    (let [w (ticket-world)
+          change-id (get-in (:answer w) [:change :id])]
+      (end-ticket! w (str (:id (:ticket w))) :complete)
+      (is (= "closed" (name (:state (change-by-id w change-id)))))
+      (is (= "ticket done: Ended for the test."
+             (get-in (change-by-id w change-id) [:data :superseded_by])))))
+  (testing "a merge closes the other change born from its ticket, not itself"
+    (let [w (ticket-world)
+          url (submitted-and-adopted! w 85)
+          merged-id (get-in (:answer w) [:change :id])
+          other (:row (inv/create! (:eng w) :change
+                                   {:change_id "github:ckopsa/waymark#86"
+                                    :repository a-repository
+                                    :head_branch "bench/another-try"
+                                    :born_from (str "ticket:" (:id (:ticket w)))}
+                                   {:principal mirror/source-principal}))]
+      (mirror-moves-change! w :merge nil)
+      (is (landed-with? w url))
+      (is (= "merged" (name (:state (change-by-id w merged-id)))))
+      (is (= "closed" (name (:state (change-by-id w (:id other))))))
+      (is (= url (get-in (change-by-id w (:id other)) [:data :superseded_by]))
+          "and it names the pull request that merged"))))
+
+(deftest a-sit-never-hands-back-a-change-of-an-ended-ticket
+  (let [w (ticket-world)
+        change-id (str (get-in (:answer w) [:change :id]))
+        ticket-id (str (:id (:ticket w)))
+        _ (seat-invokes! w "stall" {:why a-stall-sentence})
+        ;; a leftover: the ticket ended before an ending closed its changes
+        _ (force-ticket-state! w :dropped)
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        k (seats/hold-fire-key! (:eng w) seat-row ((:now-fn (:eng w)))
+                                (str "Resolve change " change-id " and stop."))
+        answer (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                              {:key k :seat "bench-seat"}))]
+    (is (= "stuck" (name (:state (change-by-id w change-id)))))
+    (is (false? (seats/named-beside-a-live-change? (:eng w) "ticket" ticket-id)))
+    (is (empty? (get-in answer [:walk :rows]))
+        "the fire names the leftover, and the sit hands nothing")))
+
+(deftest the-sweep-closes-leftovers-and-leaves-live-ones
+  (let [w (ticket-world)
+        eng (:eng w)
+        leftover-id (get-in (:answer w) [:change :id])
+        _ (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (force-ticket-state! w :dropped)
+        live-ticket (:row (inv/create! eng :ticket
+                                       {:title "Keep the live one"
+                                        :type "feature"
+                                        :repo a-repository}
+                                       {:principal person}))
+        live (:row (inv/create! eng :change
+                                {:change_id (str "ticket:" (:id live-ticket))
+                                 :repository a-repository
+                                 :head_branch "bench/live-one"
+                                 :born_from (str "ticket:" (:id live-ticket))}
+                                {:principal mirror/source-principal}))]
+    (is (= 1 (forge/sweep-ended-tickets! eng (fn [& _]))))
+    (is (= "closed" (name (:state (change-by-id w leftover-id)))))
+    (is (str/starts-with? (str (get-in (change-by-id w leftover-id)
+                                       [:data :superseded_by]))
+                          "ticket dropped"))
+    (is (= "open" (name (:state (change-by-id w (:id live)))))
+        "a live ticket's change is left")
+    (is (= 0 (forge/sweep-ended-tickets! eng (fn [& _])))
+        "a second sweep finds nothing")))
 
 (deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
   (let [w (ticket-world)

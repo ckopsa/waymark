@@ -127,6 +127,25 @@
   ;; one says the change merges when it is green.
   (assoc-in row [:data :merge_after] (vec (:merge_after inp))))
 
+(defn- changes-born-from
+  "Every change born from this ticket that stands in one of `states`.
+  The adoption writes GitHub's id over `change_id`, so a change with a
+  pull request is found by its repository and read by its `born_from`."
+  [row states find']
+  (let [born (str "ticket:" (:id row))
+        repo (some-> (get-in row [:data :repo]) str not-empty)]
+    (vals (into {}
+                (comp (filter #(= born (str (get-in % [:data :born_from]))))
+                      (map (juxt :id identity)))
+                (mapcat (fn [state]
+                          (concat
+                           (find' :change {:state state :change_id born}
+                                  {:limit 50})
+                           (when repo
+                             (find' :change {:state state :repository repo}
+                                    {:limit 200}))))
+                        states)))))
+
 (defn- put-its-change-back-to-work!
   "A TICKET BACK IN THE QUEUE PUTS ITS STUCK CHANGE BACK TO WORK
   (ticket 9ace68fb). The sit hands no ticket whose change is stuck, so
@@ -145,19 +164,9 @@
   rehearsal carries no pen, and moves nothing."
   [row ctx]
   (let [find' (:find ctx)
-        invoke' (:invoke ctx)
-        born (str "ticket:" (:id row))
-        repo (some-> (get-in row [:data :repo]) str not-empty)]
+        invoke' (:invoke ctx)]
     (when (and find' invoke')
-      (doseq [change (vals (into {}
-                                 (map (juxt :id identity))
-                                 (concat
-                                  (find' :change {:state "stuck" :change_id born}
-                                         {:limit 50})
-                                  (when repo
-                                    (find' :change {:state "stuck" :repository repo}
-                                           {:limit 200})))))
-              :when (= born (str (get-in change [:data :born_from])))]
+      (doseq [change (changes-born-from row ["stuck"] find')]
         (try
           (invoke' :change (:id change)
                    (if (nil? (get-in change [:data :number]))
@@ -280,11 +289,96 @@
                   (println "factory10 ticket ending: the parent" parent
                            "was not finished -" (ex-message e)))))))))))
 
+(def ^:private unmerged
+  "The states of a change its ticket's ending closes. `submitted` is
+  not one: its pull request is GitHub's to end."
+  ["open" "stuck" "failing"])
+
+(defn- clip
+  "`s`, cut to the 500 characters the change's doors take."
+  [s]
+  (let [s (str s)] (subs s 0 (min 500 (count s)))))
+
+(defn- merged-address
+  "The pull request a merge's sentence names — `Merged: <address>.` or
+  `Merged: <address>; children done.` — else nil."
+  [close-reason]
+  (some-> (re-find #"^Merged: (\S+)" (str close-reason))
+          second
+          (str/replace #"[.;]+$" "")
+          not-empty))
+
+(defn ending-sentence
+  "What a change its ticket's ending closed names as `superseded_by`
+  (ticket 458d65c5): the pull request that merged, when a merge ended
+  the ticket, as the merge's own close of a duplicate names it; else
+  the ending and the sentence the ticket ended with."
+  [ending close-reason]
+  (or (merged-address close-reason)
+      (clip (str "ticket " (name ending) ": " close-reason))))
+
+(defn- address-of
+  "The pull request's url, else its id: what a merge's sentence names."
+  [change]
+  (or (not-empty (str (get-in change [:data :url])))
+      (not-empty (str (get-in change [:data :change_id])))))
+
+(defn- close-its-unmerged-changes!
+  "A TICKET THAT ENDS TAKES ITS UNMERGED CHANGES WITH IT (ticket
+  458d65c5). A change left open, stuck or failing beside an ended
+  ticket was a queue nobody would clear, and one of them was picked up
+  and merged after its ticket was dropped. So every such change born
+  from the ticket with no pull request walks, in the same transaction,
+  `supersede` to `closed`, naming the ending. A change with a pull
+  request is GitHub's to end (`no-pull-request-to-close`): it is left,
+  and a submitted one's `adoption_note` says its ticket ended. The
+  change whose merge IS this ending is the one the sentence names, and
+  is left for its merge.
+
+  BEST-EFFORT, as `release-the-waiters!` is: a change that refuses is
+  said in the log, and the ending stands."
+  [row ending inp ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)
+        reason (str (:close_reason inp))
+        merged (merged-address reason)
+        sentence (ending-sentence ending reason)]
+    (when (and find' invoke')
+      (doseq [change (changes-born-from row (conj unmerged "submitted") find')
+              :let [submitted? (= :submitted (state-of change))
+                    pull-request? (some? (get-in change [:data :number]))]
+              :when (and (not= merged (address-of change))
+                         (if submitted? pull-request? (not pull-request?)))]
+        (try
+          (if submitted?
+            (invoke' :change (str (:id change)) :note_adoption
+                     (cond-> {:adoption_note
+                              (clip (str "Its ticket ended (" sentence
+                                         "); close this pull request at GitHub."))}
+                       (get-in change [:data :unadopted_since])
+                       (assoc :unadopted_since
+                              (str (get-in change [:data :unadopted_since])))))
+            (invoke' :change (str (:id change)) :supersede
+                     {:superseded_by sentence}))
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factory10 ticket ending: the change" (:id change)
+                       "was not closed -" (ex-message e)))))))))
+
 (defhandler close-the-ticket [row inp ctx]
-  ;; One handler for both endings. The machine says which ending; the
-  ;; handler writes the sentence, and releases what waited on it.
+  ;; One handler for every ending but the drop (`drop-the-ticket`). The
+  ;; machine says which ending; the handler writes the sentence,
+  ;; releases what waited on it, and closes its unmerged changes.
   (release-the-waiters! row ctx)
   (finish-the-parent! row ctx)
+  (close-its-unmerged-changes! row :done inp ctx)
+  (assoc-in row [:data :close_reason] (:close_reason inp)))
+
+(defhandler drop-the-ticket [row inp ctx]
+  ;; `close-the-ticket`, with its changes naming the drop
+  (release-the-waiters! row ctx)
+  (finish-the-parent! row ctx)
+  (close-its-unmerged-changes! row :dropped inp ctx)
   (assoc-in row [:data :close_reason] (:close_reason inp)))
 
 (defhandler reopen-the-ticket [row _inp _ctx]
@@ -1094,7 +1188,7 @@
     {:from #{:draft :open} :to :dropped
      :input close-input
      :guards [children-are-finished]
-     :handler close-the-ticket
+     :handler drop-the-ticket
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}

@@ -4948,15 +4948,33 @@
             (when (str/starts-with? born groomed-walk-prefix)
               (not-empty (subs born (count groomed-walk-prefix))))))))))
 
+(defn- ticket-ended?
+  "Has the ticket `id` ended, `done` or `dropped`? False for a ticket
+  the store does not hold."
+  [eng id]
+  (boolean
+   (when-some [rdef (get (inv/resources eng) :ticket)]
+     (let [st (:storage eng)]
+       (try
+         (some->> (store/with-tx st
+                    (fn [tx] (store/load-row st tx :ticket (str id) {})))
+                  (inv/decode-row rdef)
+                  :state name keyword
+                  (contains? #{:done :dropped}))
+         (catch Exception _ false))))))
+
 (defn named-beside-a-live-change?
   "Does a live change — open, submitted, failing or stuck — stand beside
   the ticket a fire named? Such a ticket is walked whatever its own
   state (ticket 7af7d506): a seat fired on a ticket in review is handed
   it and its change, and a ticket whose change merged or closed is not.
-  False for any other walk."
+  A ticket that ended is not either (ticket 458d65c5): its ending
+  closed its changes, and a leftover is no work to hand. False for any
+  other walk."
   [eng walk id]
   (boolean
-   (when-some [rdef (when (= "ticket" (str walk))
+   (when-some [rdef (when (and (= "ticket" (str walk))
+                               (not (ticket-ended? eng id)))
                       (get (inv/resources eng) :change))]
      (let [st (:storage eng)]
        (some #(contains? #{:open :submitted :failing :stuck}

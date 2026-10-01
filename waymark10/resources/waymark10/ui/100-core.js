@@ -86,6 +86,16 @@ $who.addEventListener("change", () => {
 });
 function principalId() { return $who.value.trim(); }
 
+/* the viewer, for every "is this me" check: the dev box when it holds
+   a value, else the identity the engine resolved (a session cookie or
+   a bearer, echoed on well-known — reflectIdentity below), in the form
+   a principal field holds. principalHeaders stays on principalId: it
+   sets the dev header only. */
+function viewerId() {
+  const id = principalId() || window.signedinPrincipal?.id || "";
+  return String(id).replace(/^member:/, "");
+}
+
 /* a REAL signed-in identity (bearer or session cookie, resolved by the
    engine and echoed on well-known) retires the dev box: the header
    shows who the engine says you are, with the door out. When the dev
