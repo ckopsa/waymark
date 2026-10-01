@@ -590,6 +590,12 @@
                                                   {:by (some-> (res/decision r)
                                                                :by name)}))]))
                                  resources)}
+         ;; when the engine ends (engine's :expires-at, a demo clone's
+         ;; WAYMARK_ENGINE_EXPIRES_AT — docs/spec-demo-clones.md § 3).
+         ;; Absent on a working engine, and the UI shows its banner
+         ;; only when this is here
+         (:expires-at eng)
+         (assoc :expires_at (str (:expires-at eng)))
          ;; global navigation between the deployable's applications:
          ;; every distinct declared domain, sorted — present only when
          ;; some kind declares one, so single-domain wires are unchanged

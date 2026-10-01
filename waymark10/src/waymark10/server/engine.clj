@@ -220,6 +220,19 @@
                     :name (or (not-empty (some-> (:name opts) str))
                               (not-empty (System/getenv "WAYMARK_ENGINE_NAME"))
                               "waymark")
+                    ;; when this engine ends: the :expires-at option, else
+                    ;; WAYMARK_ENGINE_EXPIRES_AT, read once at boot. Only
+                    ;; a demo clone carries one (docs/spec-demo-clones.md
+                    ;; § 3); the well-known document answers it beside
+                    ;; the name and the UI warns on it. A value that is
+                    ;; not an instant refuses the boot: a clone that
+                    ;; ends unannounced takes a walk with it.
+                    :expires-at (when-some [at (or (not-empty (some-> (:expires-at opts) str))
+                                                   (not-empty (System/getenv "WAYMARK_ENGINE_EXPIRES_AT")))]
+                                  (try (java.time.Instant/parse at)
+                                       (catch java.time.format.DateTimeParseException _
+                                         (throw (ex-info (str "WAYMARK_ENGINE_EXPIRES_AT is not an instant: " at)
+                                                         {:expires-at at})))))
                     :registry (atom reg)
                     ;; the assembled selection, kept because the
                     ;; router seam asks for it again at handler time

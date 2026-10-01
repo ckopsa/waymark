@@ -441,4 +441,15 @@
   .prose-tabs button[aria-pressed="true"] { font-weight: 600;
     background: var(--verdigris-wash); border-color: var(--verdigris);
     color: var(--verdigris-deep); }
+  /* a demo engine's end (docs/spec-demo-clones.md §3): a note until 15
+     minutes are left, a warning from there, and the last one at 5 */
+  #demobanner { margin: 0 0 12px; padding: 8px 12px; font-size: 13px;
+                border: 1px solid var(--line); border-radius: var(--radius);
+                background: var(--chipbg); color: var(--ink); }
+  #demobanner[hidden] { display: none; }
+  #demobanner[data-demo-level="warn"] { background: var(--warn-wash);
+    border-color: var(--warn); color: var(--warn); }
+  #demobanner[data-demo-level="last"] { background: var(--refusal-wash);
+    border-color: var(--refusal); color: var(--refusal); font-weight: 600; }
+  #demobanner a { color: inherit; }
 
