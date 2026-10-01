@@ -21,6 +21,7 @@
             [waymark10.server.presence :as presence]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
@@ -160,6 +161,72 @@
         (testing "a row that is not there moves nothing"
           (is (not (tool h "waymark_get" {:kind "errand" :id "no-such-row"})))
           (is (= [[:move (path a)]] (beats eng w))))))))
+
+(deftest a-get-of-the-walk-itself-makes-no-frame
+  (with-stage
+    (fn [eng h _reg]
+      (let [w (self-walk! h)]
+        (is (tool h "waymark_get" {:kind "walk" :id w}))
+        (is (= [] (beats eng w)))))))
+
+;; A grant-scoped GET is its caller's gaze already (`presence/read!`),
+;; and that door has no tap: the get's own beat still writes the move.
+
+(def ^:private mayor
+  {"x-waymark-principal" "mayor" "x-waymark-actor-type" "agent"})
+
+(defn- under-a-grant
+  "`mayor`'s headers under a grant colton gave over every errand."
+  [eng]
+  (let [gid (get-in (inv/create! eng :grant
+                                 {:audience "mayor"
+                                  :scope [{:kind "errand" :actions []}]}
+                                 {:principal (t/principal {:id "colton"})})
+                    [:row :id])]
+    (inv/invoke! eng :grant gid :accept nil
+                 {:principal (t/principal {:id "mayor" :type :agent})})
+    (assoc mayor "x-waymark-grant" (str gid))))
+
+(defn- post-as [h headers uri body]
+  (h {:request-method :post :uri uri :headers headers
+      :body (wire/write-json body)}))
+
+(defn- tool-as
+  "`tool`, with the caller's own headers."
+  [h headers tool-name args]
+  (let [resp (post-as h headers "/api/-/mcp"
+                      {:jsonrpc "2.0" :id 1 :method "tools/call"
+                       :params {:name tool-name :arguments args}})]
+    (is (= 200 (:status resp)) (:body resp))
+    (not (:isError (:result (json resp))))))
+
+(deftest a-scoped-get-writes-its-move-and-its-doc
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            b (errand! h {:title "Laundry"})
+            scoped (under-a-grant eng)
+            ;; an agent with no grant is served no walks, so the walk
+            ;; is made at the engine's own door
+            w (str (get-in (inv/create! eng :walk
+                                        {:followed "mayor" :title "The mayor's walk"
+                                         :docs true}
+                                        {:principal (t/principal {:id "mayor" :type :agent})})
+                           [:row :id]))
+            shown (fn []
+                    (mapv (fn [{:keys [type body]}] [(keyword type) (:self body)])
+                          (frames eng w)))]
+        (is (tool-as h scoped "waymark_get" {:kind "errand" :id a}))
+        (is (= [[:move (path a)] [:doc (path a)]] (shown))
+            "the read marked the gaze first, and the move is still written")
+        (testing "a second row: a second move, and its screen"
+          (is (tool-as h scoped "waymark_get" {:kind "errand" :id b}))
+          (is (= [[:move (path a)] [:doc (path a)]
+                  [:move (path b)] [:doc (path b)]]
+                 (shown))))
+        (testing "the same row again: the gaze did not change"
+          (is (tool-as h scoped "waymark_get" {:kind "errand" :id b}))
+          (is (= 4 (count (frames eng w)))))))))
 
 (deftest a-query-reports-its-collection
   (with-stage
