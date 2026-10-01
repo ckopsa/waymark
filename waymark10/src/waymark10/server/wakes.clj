@@ -751,18 +751,33 @@
                (ex-message e))
         nil))))
 
+(defn- withheld-rows
+  "The walk row ids a sit of this seat would leave off its page:
+  `seats/unwalkable-rows`, and for a seat that walks a judgment the
+  subjects that judgment has already judged (`judgments/judged-subjects`,
+  which `mcp/walk-of` subtracts the same way). Without the second, a
+  judged subject still open in the queue read as a row to hand: a seat
+  of several slots fired again on every sitting's close, and each run
+  sat to an empty walk (ticket 871c8555). → a set of ids."
+  [eng seat-row]
+  (let [skip (set (seats/unwalkable-rows eng seat-row nil))]
+    (if-some [jid (some-> (get-in seat-row [:data :judgment]) str not-empty)]
+      (into skip (judgments/judged-subjects eng jid))
+      skip)))
+
 (defn- slots
   "What a seat with several slots has in hand at `at`. `:busy` is its
   open sittings and the runs on their way to a sit; `:free` is the rows
-  of its walk the sit would hand (no open sitting holds them and no
-  stuck change stands beside them, `seats/unwalkable-rows`), less the
+  of its walk the sit would hand (no open sitting holds them, no stuck
+  change stands beside them and no verdict of its judgment stands on
+  them, `withheld-rows`), less the
   rows those runs will take. A seat that walks nothing has no free row."
   [eng seat-row ^Instant at]
   (let [seat-id (str (:id seat-row))
         flying (long (in-flight eng seat-id at))
         queue (when-some [[kind f] (walk-query eng seat-row)]
                 (ids-under eng kind f))
-        unclaimed (count (remove (seats/unwalkable-rows eng seat-row nil) queue))]
+        unclaimed (count (remove (withheld-rows eng seat-row) queue))]
     {:busy (+ (long (seats/open-sitting-count eng seat-id)) flying)
      :free (max 0 (- unclaimed flying))}))
 
@@ -910,15 +925,14 @@
   (`mcp/walk-of`): the judgment's `queue` for a seat that says one,
   and the walk's scope entry filter otherwise, both under the kind's
   defaults. Less, as the sit leaves them out, the rows another open
-  sitting holds and the tickets whose change is stuck
-  (`seats/unwalkable-rows`, ticket e031e479): with none of those the
-  count is `count-under`'s, and with some it is the queue's ids, at
-  most `queue-page` of them, less those. A judgment seat's count does
-  not subtract the subjects already judged, so it can only read high:
-  a zero here is a zero on the sit's page too."
+  sitting holds, the tickets whose change is stuck (ticket e031e479)
+  and the subjects the seat's judgment has judged (`withheld-rows`,
+  ticket 871c8555): with none of those the count is `count-under`'s,
+  and with some it is the queue's ids, at most `queue-page` of them,
+  less those. A zero here is a zero on the sit's page too."
   [eng seat-row]
   (when-some [[walk f] (walk-query eng seat-row)]
-    (let [skip (seats/unwalkable-rows eng seat-row nil)]
+    (let [skip (withheld-rows eng seat-row)]
       (if (empty? skip)
         (count-under eng walk f)
         (some->> (ids-under eng walk f) (remove skip) count)))))
@@ -984,7 +998,7 @@
       (walk-count eng seat-row)
 
       (and walk (= walk kind))
-      (let [skip (seats/unwalkable-rows eng seat-row nil)]
+      (let [skip (withheld-rows eng seat-row)]
         (if (empty? skip)
           (count-under eng kind (:filter e))
           (some->> (ids-under eng kind (:filter e)) (remove skip) count)))

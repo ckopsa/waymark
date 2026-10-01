@@ -911,3 +911,45 @@
       (is (some? (:sitting (doc-of r))) "the same key opens the sit")
       (is (not (seats/fire-key-held? eng (raw-row eng :seat (:id seat)) fire-key))
           "and that sit is the one that spent it"))))
+
+;; ── 9 · a judged subject is no row to wake for (ticket 871c8555) ─────
+
+(deftest a-judged-subject-is-no-row-to-wake-for
+  (let [eng (fresh-engine)
+        judgment (promoted-judgment! eng {})
+        seat (open-judge-seat! eng judgment {:max_open_sittings 3})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng (:id seat))))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_expense_judge/fire")
+                        :token "rk-test-expense-judge-0123456789abcdef"}
+                       {:principal person})
+        seat-row #(raw-of eng :seat (:id seat))
+        fires #(filterv (fn [t] (= :fire (:action t)))
+                        (store/with-tx (:storage eng)
+                          (fn [tx] (store/transitions
+                                    (:storage eng) tx
+                                    {:kind :seat :resource-id (str (:id seat))}
+                                    {}))))]
+
+    (testing "unjudged, the subject is a row the wake counts"
+      (is (= 1 (#'wakes/walk-count eng (seat-row)))))
+
+    (inv/create! eng :verdict (verdict-input judgment (:id knives) {})
+                 {:principal (t/principal {:id "expense-sitter" :type :agent})})
+
+    (testing "judged, the wake's walk is as empty as the sit's"
+      (is (= 0 (#'wakes/walk-count eng (seat-row)))
+          "the sit subtracts the judged subject, and so does the count")
+      (is (true? (#'wakes/empty-walk? eng (seat-row)))))
+
+    (testing "a closing sitting of a seat of several slots fires nothing"
+      (is (nil? (wakes/release! eng (seat-row)
+                                (schedules/schedule-for-seat eng (:id seat))
+                                "wake:test:release:judged"
+                                ((:now-fn eng))
+                                true))
+          "no slot is left a row to take, so the close is no wake")
+      (is (empty? (fires))))))
