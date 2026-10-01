@@ -9,6 +9,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.oidc :as oidc]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -59,11 +60,11 @@
 (def ^:private ui-capability
   {:extensions {"io.modelcontextprotocol/ui" {:mimeTypes [mcp/app-mime]}}})
 
-(defn- initialize! [h bearer capabilities]
+(defn- initialize! [h bearer capabilities & [client-name]]
   (let [resp (rpc h bearer "initialize"
                   {:protocolVersion mcp/protocol-version
                    :capabilities capabilities
-                   :clientInfo {:name "claude-ai" :version "1"}})]
+                   :clientInfo {:name (or client-name "claude-ai") :version "1"}})]
     (assoc bearer "mcp-session-id" (get-in resp [:headers "Mcp-Session-Id"]))))
 
 (def ^:private the-fixed (mapv :name (mcp/listing)))
@@ -162,6 +163,39 @@
       (is (= ["app"] (:visibility (ui-of n))) n))
     (is (= "text/html;profile=mcp-app" (:mimeType page)))
     (is (str/includes? (str (:text page)) "ui/initialize"))))
+
+(deftest a-client-named-on-the-undeclared-list-is-taken-as-declaring
+  (let [named {:app-undeclared-clients ["claude-code"]}
+        with-apps (into the-fixed ["waymark_show" "waymark_app_read" "waymark_app_act"])
+        ;; a session of `client-name` that declared no extension → its tool names
+        names (fn [{:keys [h]} bearer client-name]
+                (mapv :name (tools-of h (initialize! h bearer {} client-name))))]
+    (testing "the name is listed, on a listed delegate client: the three tools"
+      (let [{:keys [h]} (world named)
+            as (initialize! h colton {} "claude-code")]
+        (is (= with-apps (mapv :name (tools-of h as))))
+        (is (= "text/html;profile=mcp-app"
+               (get-in (json (rpc h as "resources/read" {:uri mcp/app-resource-uri}))
+                       [:result :contents 0 :mimeType])))))
+    (testing "the name is not listed: today's list"
+      (is (= the-fixed (names (world) colton "claude-code")))
+      (is (= the-fixed (names (world named) colton "claude-ai"))
+          "a client on neither list is listed as before"))
+    (testing "a listed name on an UNLISTED delegate client still gets the fallback"
+      (is (= the-fixed (names (world named) (delegate "other" "colton") "claude-code"))))
+    (testing "with the ticket secret unset the name list changes nothing"
+      (is (= the-fixed (names (world (assoc named :app-ticket-secret nil))
+                              colton "claude-code"))))))
+
+(deftest from-env-reads-the-undeclared-client-names
+  (let [env {"WAYMARK10_OIDC_ISSUER" "https://idp.test/realms/home"
+             "WAYMARK10_MCP_APP_TICKET_SECRET" "a-ticket-secret-for-the-test"}]
+    (is (= ["claude-code" "cursor"]
+           (:app-undeclared-clients
+            (oidc/from-env (assoc env "WAYMARK10_MCP_APP_UNDECLARED_CLIENTS"
+                                  "claude-code, cursor")))))
+    (is (not (contains? (oidc/from-env env) :app-undeclared-clients))
+        "empty by default")))
 
 (deftest the-persons-tap-moves-the-seats-held-call
   (let [{:keys [eng h] :as w} (world)

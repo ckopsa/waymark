@@ -1279,13 +1279,26 @@
 (defn- app-session?
   "Does this session get the app tools? Its client declared the
   extension, its BEARER is a delegate of a client the owner listed in
-  :app-clients, and the ticket's signing key is set."
+  :app-clients, and the ticket's signing key is set.
+
+  A session whose recorded clientInfo NAME is on :app-undeclared-clients
+  (WAYMARK10_MCP_APP_UNDECLARED_CLIENTS) is taken as having declared the
+  extension: Claude Code draws pages and declares nothing. The trade:
+  clientInfo is self-reported, so that list is the owner trusting a host
+  by its name, behind the connector login. It stands in for the
+  declaration and for nothing else; the delegate client and the signing
+  key are still asked for. It is an experiment (docs/spec-mcp-apps.md,
+  section 1): the owner empties the list when the model sees an app-only
+  tool or a ticket."
   [eng session]
   (let [oidc (:oidc eng)
         bearer (:bearer session)
-        person (some-> (:acts-for bearer) str not-empty)]
+        person (some-> (:acts-for bearer) str not-empty)
+        client-name (some-> (:client-name session) str not-empty)]
     (boolean
-     (and (:app-ui session)
+     (and (or (:app-ui session)
+              (and client-name
+                   (some #(= client-name (str %)) (:app-undeclared-clients oidc))))
           person
           (not (str/blank? (str (:app-ticket-secret oidc))))
           (some #(and (contains? (:delegate-clients oidc) %)

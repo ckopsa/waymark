@@ -126,6 +126,23 @@ owner:
   keeps the wall between its model and its frames. The ceremony section
   of the connector door gains one line when the first child lands.
 
+**A host that draws pages and does not declare.** Claude Code
+(`clientInfo.name` `claude-code`, observed 2026-10-01) renders MCP Apps
+and initializes without the extension, so the gate above never lists
+`waymark_show` to it. `:app-undeclared-clients`
+(`WAYMARK10_MCP_APP_UNDECLARED_CLIENTS`, a comma list of clientInfo
+names, empty by default) treats a session whose recorded `client_name`
+is on it as having declared. Every other condition stays: the bearer is
+a delegate of a client in `:app-clients`, and the ticket secret is set.
+The trade is that clientInfo is self-reported, so this list is the
+owner trusting that host **by name**, behind the connector login, with
+no declaration to check the name against. It is an experiment, and the
+owner's mayor session verifies it: with the list on, the model in
+Claude Code must **not** see `waymark_app_read` or `waymark_app_act` in
+its tool list, and `waymark_show`'s text content must carry no ticket.
+If either shows, the owner empties the list. A client on neither list
+is listed as before.
+
 **The per-render ticket, and what it is not.** `waymark_app_read`
 answers a ticket beside the row. `waymark_app_act` requires it. The
 ticket is a signed statement of `{session, person, kind, id, version,

@@ -204,7 +204,10 @@
                     ;; …and the principal the BEARER resolved: the app tools
                     ;; read the person from it (docs/spec-mcp-apps.md § 2)
                     true (assoc :bearer principal)
-                    (:app-ui entry) (assoc :app-ui true))
+                    (:app-ui entry) (assoc :app-ui true)
+                    ;; …and the name its client gave: `app-session?` reads it
+                    ;; against :app-undeclared-clients
+                    (:client-name entry) (assoc :client-name (:client-name entry)))
           with-session (fn [resp]
                          (cond-> resp
                            minted (assoc-in [:headers session-header] minted)))]
