@@ -19,7 +19,7 @@
 (def ^:private head-b "a667ef35bcb9")
 (def ^:private head-a-in-full "2fba27a35bcb0c1d2e3f405162738495a6b7c8d9")
 
-(def ^:private a-person (t/principal {:id "colton" :type :person}))
+(def ^:private a-person (t/principal {:id "colton" :type :human}))
 
 (defhandler observe-the-head [row inp ctx]
   (when-some [head (:head inp)]
@@ -33,6 +33,7 @@
     :states [:open :merged]
     :initial :open
     :terminal #{:merged}
+    :allow-dead #{:merged}
     :summary "{data.title} · {state}"
     :schema [:map
              [:title [:string {:min 1 :max 60}]]

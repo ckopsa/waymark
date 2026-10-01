@@ -19,7 +19,7 @@
 (def ^:private head-a "2fba27a0c1d2e3f405162738495a6b7c8d9e0f12")
 (def ^:private head-b "a667ef3b1c2d3e4f5061728394a5b6c7d8e9f012")
 
-(def ^:private a-person (t/principal {:id "colton" :type :person}))
+(def ^:private a-person (t/principal {:id "colton" :type :human}))
 
 (defn- a-change!
   "A change the mirror minted, at `head` (nil: a seat-born row that
