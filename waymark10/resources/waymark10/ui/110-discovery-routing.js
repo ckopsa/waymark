@@ -63,6 +63,8 @@ function kindAtHref(idx, href) {
 /* published data schemas: x-display hints per kind */
 const dataHintsCache = {};
 async function kindSchema(kind) {
+  /* a held read is not an answer: nothing is remembered from it */
+  if (apiHeld) return dataHintsCache[kind] || {};
   if (!(kind in dataHintsCache)) {
     try {
       const {ok, body} = await api(`/api/schemas/${kind}`);
