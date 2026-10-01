@@ -2289,6 +2289,18 @@
                 :always
                 (without-entries (get-in seat [:data :stale])))})))
 
+(defn seat-grant-of-another?
+  "Does `grant-id` name a SEAT grant whose audience is not this
+  principal? The identity boundary asks it of the header a delegate
+  presented: the seat's view is the connector's alone, so the HTTP door
+  refuses that header by name instead of resolving it to a dead
+  surface. A seat grant its own audience presents is not this
+  question's, and neither is a grant that carries its own scope."
+  [eng grant-id principal]
+  (when-some [row (when grant-id (load-decoded eng :grant grant-id))]
+    (boolean (and (seat-cited row)
+                  (not= (get-in row [:data :audience]) (:id principal))))))
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
