@@ -140,6 +140,13 @@
                                     protected-resource document advertises
     WAYMARK10_MCP_APP_CLIENTS       delegate client ids trusted with the
                                     MCP Apps tools (docs/spec-mcp-apps.md)
+    WAYMARK10_MCP_APP_UNDECLARED_CLIENTS
+                                    clientInfo NAMES (e.g. claude-code)
+                                    taken as declaring the MCP Apps
+                                    extension when they do not; empty by
+                                    default. The name is self-reported:
+                                    this is the owner trusting that host
+                                    by name, behind the connector login
     WAYMARK10_MCP_APP_TICKET_SECRET the app ticket's HMAC key; unset, the
                                     app tools are listed for nobody
 
@@ -158,6 +165,7 @@
            delegates (parse-delegates (env "WAYMARK10_OIDC_DELEGATE_CLIENTS"))
            scopes (parse-list (env "WAYMARK10_OIDC_RESOURCE_SCOPES"))
            app-clients (parse-list (env "WAYMARK10_MCP_APP_CLIENTS"))
+           undeclared (parse-list (env "WAYMARK10_MCP_APP_UNDECLARED_CLIENTS"))
            ticket-secret (some-> (env "WAYMARK10_MCP_APP_TICKET_SECRET")
                                  str str/trim not-empty)]
        (when-not ticket-secret
@@ -177,6 +185,8 @@
          (assoc :resource-scopes scopes)
          (seq app-clients)
          (assoc :app-clients app-clients)
+         (seq undeclared)
+         (assoc :app-undeclared-clients undeclared)
          ticket-secret
          (assoc :app-ticket-secret ticket-secret)
          client-id
