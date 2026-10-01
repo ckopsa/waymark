@@ -25,11 +25,13 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.server.store.memory :as memory]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.time Instant)
+  (:import (java.sql Timestamp)
+           (java.time Instant)
            (java.time.temporal ChronoUnit)))
 
 ;; ── the queue a seat walks ──────────────────────────────────────────
@@ -295,3 +297,77 @@
       (inv/invoke! *eng* :memo (:id untouched) :reopen nil
                    {:principal colton})
       (is (= 1 (:corrections (ledger seat)))))))
+
+;; ── the log under a grant, over a window ────────────────────────────
+
+(defn- pin-at-postgres! [st id ^Instant at]
+  (store/with-tx st
+    (fn [tx]
+      (jdbc/execute-one!
+       tx ["UPDATE waymark10_transitions SET at = ? WHERE id = ?"
+           (Timestamp/from at) id]))))
+
+(defn- pin-at-memory! [st id at]
+  (swap! (:state st) update :transitions
+         (fn [log] (mapv #(if (= id (:id %)) (assoc % :at at) %) log))))
+
+(defn- seed-log!
+  "The same log rows in either store. Each store stamps `at` from its
+  own clock on the append, so `pin!` moves the stamp afterwards: that
+  is what puts a row a millisecond outside a bound, or exactly on it.
+  A nil grant is an actor that carries none."
+  [st pin! rows]
+  (doseq [[rid grant at] rows]
+    (let [rec (store/with-tx st
+                (fn [tx]
+                  (store/append-transition!
+                   st tx {:kind :memo :resource-id rid :action :dismiss
+                          :from-state :queued :to-state :dismissed
+                          :actor (cond-> {:id (:id clerk) :type "agent"}
+                                   grant (assoc :grant grant))})))]
+      (pin! st (:id rec) at))))
+
+(defn- under-grant [st grant since until]
+  (store/with-tx st
+    (fn [tx] (store/transitions-under-grant st tx grant since until {}))))
+
+(deftest the-log-under-a-grant-is-the-same-window-on-postgres-as-in-memory
+  (let [since (Instant/parse "2026-03-02T10:00:00Z")
+        until (Instant/parse "2026-03-02T11:00:00Z")
+        inside (.plusSeconds since 1800)
+        mine "grant-window-mine"
+        other "grant-window-other"
+        rows [["before" mine (.minusMillis since 1)]
+              ["on-since" mine since]
+              ["inside" mine inside]
+              ["other-grant" other inside]
+              ["no-grant" nil inside]
+              ["on-until" mine until]
+              ["after" mine (.plusMillis until 1)]]
+        mem (memory/storage)
+        _ (seed-log! @storage pin-at-postgres! rows)
+        _ (seed-log! mem pin-at-memory! rows)
+        found (fn [st grant s u]
+                (mapv (juxt :resource-id :at #(get-in % [:actor :grant]))
+                      (under-grant st grant s u)))
+        rids (fn [grant s u] (mapv first (found @storage grant s u)))]
+    (testing "a transition under another grant, or under none, is left out"
+      (is (= ["on-since" "inside" "on-until"] (rids mine since until)))
+      (is (= ["other-grant"] (rids other since until)))
+      (is (= [] (rids "grant-window-nobody" since until))))
+
+    (testing "one on either boundary is kept, one just outside it is not"
+      (is (= [since inside until]
+             (mapv second (found @storage mine since until)))))
+
+    (testing "a nil bound is open at that end"
+      (is (= ["before" "on-since" "inside" "on-until"] (rids mine nil until)))
+      (is (= ["on-since" "inside" "on-until" "after"] (rids mine since nil)))
+      (is (= ["before" "on-since" "inside" "on-until" "after"]
+             (rids mine nil nil))))
+
+    (testing "and the memory store answers the same rows for each window"
+      (doseq [grant [mine other "grant-window-nobody"]
+              [s u] [[since until] [nil until] [since nil] [nil nil]]]
+        (is (= (found mem grant s u) (found @storage grant s u))
+            (str grant " over " s " to " u))))))
