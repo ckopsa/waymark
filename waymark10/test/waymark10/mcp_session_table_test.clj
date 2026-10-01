@@ -192,6 +192,32 @@
             (is (not= sid (sessions/id-hash sid)))
             (is (not (str/includes? (pr-str rows) sid)))))))))
 
+(deftest the-table-remembers-what-the-client-declared
+  ;; docs/spec-mcp-apps.md § 5: the three columns, read on the OTHER engine
+  (with-two-engines
+    (fn [eng-a eng-b]
+      (let [st (:storage eng-a)
+            ^Instant now ((:now-fn eng-a))
+            cutoff (.minusSeconds now mcp/session-ttl-seconds)
+            declared #(select-keys (sessions/touch! (:storage eng-b) % now cutoff)
+                                   [:app-ui :client-name :client-version])
+            nothing {:app-ui false :client-name nil :client-version nil}]
+        (let [said {:app-ui true :client-name "claude-ai" :client-version "1"}]
+          (sessions/open! st "declared" now cutoff said)
+          (is (= said (declared "declared")) "what open wrote, touch answers"))
+        (sessions/open! st "silent" now cutoff nil)
+        (is (= nothing (declared "silent")) "opened with nothing declared")
+        (testing "a row written with only the old columns"
+          (store/with-tx st
+            (fn [tx]
+              (jdbc/execute! tx ["INSERT INTO waymark10_mcp_sessions
+                                    (id_hash, created, touched)
+                                  VALUES (?, ?, ?)"
+                                 (sessions/id-hash "old")
+                                 (java.sql.Timestamp/from now)
+                                 (java.sql.Timestamp/from now)])))
+          (is (= nothing (declared "old"))))))))
+
 (deftest an-unknown-id-still-answers-404-and-an-expired-one-is-evicted
   (with-two-engines
     (fn [eng-a eng-b]

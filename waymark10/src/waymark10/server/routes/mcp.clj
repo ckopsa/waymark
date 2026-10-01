@@ -183,7 +183,8 @@
                       str str/trim not-empty)
           entry (when sid (mcp/touch-session! eng sid))
           _ (when (and sid (nil? entry) (not init?)) (unknown-session!))
-          minted (when init? (mcp/open-session! eng))
+          minted (when init?
+                   (mcp/open-session! eng (mcp/app-declaration (:params body))))
           session (cond-> (if-some [bound (:bound entry)]
                             (sitter-session eng bound)
                             {:principal principal
@@ -199,7 +200,11 @@
                     ;; transcript door as an absolute address, because
                     ;; the hook that posts to it has no other way to
                     ;; learn one (docs/spec-transcript.md R-4.2)
-                    true (assoc :origin (origin-of req)))
+                    true (assoc :origin (origin-of req))
+                    ;; …and the principal the BEARER resolved: the app tools
+                    ;; read the person from it (docs/spec-mcp-apps.md § 2)
+                    true (assoc :bearer principal)
+                    (:app-ui entry) (assoc :app-ui true))
           with-session (fn [resp]
                          (cond-> resp
                            minted (assoc-in [:headers session-header] minted)))]
@@ -352,7 +357,9 @@
         ;; engine's mcp_server rows (spec-mcp-servers), each row holding
         ;; its one client — so a server's session is opened lazily and
         ;; reused across requests rather than re-shaken per message.
-        gate-rpc (gate/rpc-of eng)]
+        gate-rpc (gate/rpc-of eng)
+        ;; the MCP Apps page: a missing fragment fails startup
+        _ @mcp/app-page]
     {:module :mcp
      :static [["/api/-/mcp" {:post (rpc-post eng call gate-rpc)
                              :get (rpc-get eng)}]
