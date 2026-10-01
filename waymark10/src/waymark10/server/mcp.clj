@@ -1691,6 +1691,49 @@
       :scanned (count log)
       :reached-cap (= (count log) n)})))
 
+(def app-origin-prefix
+  "The `Idempotency-Key` prefix of a person's tap. It is not `mcp/`, so
+  `actions-from-mcp` keeps counting the model's writes alone."
+  "mcp-app")
+
+(defn taps-from-app
+  "The MCP Apps experiment's number (docs/spec-mcp-apps.md, The count):
+  how many writes a person tapped in Claude, by principal, kind and
+  action.
+
+  `actions-from-mcp`'s sibling, over the same newest-first window of
+  `:limit` transitions (`log-scan-cap` by default, `:since` to walk
+  further back). It keeps the ones whose `idempotency_key` starts with
+  `app-origin-prefix` and a slash, the key `waymark_app_act` builds:
+  `mcp-app/<url-encoded bearer id>/<nonce>`. A replayed act lands no
+  second transition, so it is counted once. → `{:total :by-principal
+  :by-kind :by-action :scanned :reached-cap}`."
+  ([eng] (taps-from-app eng {}))
+  ([eng {:keys [limit since]}]
+   (let [st (:storage eng)
+         n (long (or limit log-scan-cap))
+         log (store/with-tx st
+               (fn [tx] (store/transitions st tx (cond-> {} since (assoc :since since))
+                                           {:limit n :newest-first true})))
+         lead (str app-origin-prefix "/")
+         hits (into []
+                    (keep (fn [tr]
+                            (let [k (:idempotency-key tr)]
+                              (when (and (string? k) (str/starts-with? k lead))
+                                {:principal (URLDecoder/decode
+                                             (str (second (str/split k #"/")))
+                                             "UTF-8")
+                                 :action (name (:action tr))
+                                 :kind (name (:kind tr))}))))
+                    log)]
+     {:total (count hits)
+      :by-principal (frequencies (map :principal hits))
+      :by-kind (frequencies (map :kind hits))
+      :by-action (frequencies (map (fn [h] (str (:kind h) "." (:action h)))
+                                   hits))
+      :scanned (count log)
+      :reached-cap (= (count log) n)})))
+
 (defn- invoke-headers
   "Rules 3 and 4 of the affordance-following client (waymark10.client),
   which this tool is one of — with one thing the generic client does
@@ -4476,11 +4519,6 @@
                :fields [:tool :why :shown :changes :call :door]}})
 
 (def ^:private app-ticket-seconds 600)
-
-(def app-origin-prefix
-  "The `Idempotency-Key` prefix of a person's tap. It is not `mcp/`, so
-  `actions-from-mcp` keeps counting the model's writes alone."
-  "mcp-app")
 
 (defn- hmac ^String [secret ^String s]
   (let [mac (doto (Mac/getInstance "HmacSHA256")
