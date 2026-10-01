@@ -177,12 +177,16 @@
       (is (= "cancelled" (state-of eng mine)))
       (is (some? (refusal #(move! eng mine :reschedule later person)))))
     (testing "the person a delegate acts for stops what the delegate scheduled"
-      (let [theirs (:id (schedule! eng c {} {:principal planner}))]
+      (let [theirs (:id (schedule! eng c {}
+                                   {:principal planner
+                                    :grant {:id "grant-planner"
+                                            :action? (fn [_ _] true)
+                                            :row? (fn [_ _] true)}}))]
         (is (some? (refusal #(move! eng theirs :cancel {} other))))
         (move! eng theirs :cancel {} person)
         (is (= "cancelled" (state-of eng theirs)))))
-    (testing "the own surface is the scheduler's, and confers the two doors"
-      (is (= {:by [[:scheduler]] :all false :actions #{"cancel" "reschedule"}}
+    (testing "the own surface is the scheduler's, and confers the create and the two doors"
+      (is (= {:by [[:scheduler]] :all false :actions #{"create" "cancel" "reschedule"}}
              (:own-surface scheduled/scheduled-action))))))
 
 (deftest only-the-engine-starts-and-ends-it
@@ -277,8 +281,12 @@
     (member! eng "colton" {:zone "America/Denver"})
     (member! eng "iris" {})
     (testing "the scheduler's own member row, and a delegate's person's"
-      (doseq [who [person planner]]
-        (let [row (schedule! eng c local {:principal who})]
+      (doseq [opts [{:principal person}
+                    {:principal planner
+                     :grant {:id "grant-planner"
+                             :action? (fn [_ _] true)
+                             :row? (fn [_ _] true)}}]]
+        (let [row (schedule! eng c local opts)]
           (is (= (Instant/parse "2026-10-02T14:30:00Z") (get-in row [:data :run_at])))
           (is (= "America/Denver" (get-in row [:data :zone]))))))
     (testing "the zone the body names wins over the member's"
