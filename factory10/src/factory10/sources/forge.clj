@@ -353,13 +353,30 @@
   [row]
   (some-> (:state row) name keyword))
 
+(defn- holds-conflict?
+  "Does the row's `conflicted` stand against what the forge reads now
+  (ticket bf8ba0a6)? The merge pass writes `conflicted` when the rig's
+  merge is refused as not mergeable, and parks that head: nothing writes
+  it a second time. GitHub's own read of the same head may still say
+  `unknown` or `blocked` — it has not computed the merge, or the policy
+  word outranks it — and that word used to replace the conflict before
+  the failing pass read it, so #706 sat submitted and parked. Neither
+  word says the conflict is gone: only `clean`, or a new head, does."
+  [row doc]
+  (and (= "conflicted" (str (get-in row [:data :mergeable])))
+       (contains? #{"unknown" "blocked"} (str (:mergeable doc)))
+       (or (nil? (:head_sha doc))
+           (= (str (:head_sha doc)) (str (get-in row [:data :head_sha]))))))
+
 (defn- changed-facts
   "The facts that moved under the row. A value equal to the stored one
-  is not written again, so a pass that saw nothing new logs nothing."
+  is not written again, so a pass that saw nothing new logs nothing. A
+  conflict the row holds (`holds-conflict?`) is not written over."
   [row doc]
   (into {}
         (keep (fn [[k v]] (when (not= v (get-in row [:data k])) [k v])))
-        (present doc change-observe-fields)))
+        (present (cond-> doc (holds-conflict? row doc) (dissoc :mergeable))
+                 change-observe-fields)))
 
 (defn- state-door
   "The one door from the row's state to the forge's. nil when the row
