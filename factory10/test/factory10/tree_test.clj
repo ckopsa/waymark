@@ -475,7 +475,7 @@
                :deploy_state :deploy_note
                :groom_floor :groom_floor_settle_seconds
                :groom_floor_max_priority
-               :floor_noted_at :floor_count}
+               :floor_noted_at :floor_count :floor_ticket}
              fields)
           "every number a submit obeys, where the bench clones it from,
            and the engine's own: when the bench took it, why it did not,
@@ -490,7 +490,7 @@
                :line_waiting :line_at :line_train
                :deploy_waits_on :deploy_waiting_since :deployed_head
                :deployed_at :deploy_state :deploy_note
-               :floor_noted_at :floor_count}
+               :floor_noted_at :floor_count :floor_ticket}
              (into #{} (remove form) fields))
           "…and the engine's are on no form: a person states the
            policy, and the engine says what the bench and the source did

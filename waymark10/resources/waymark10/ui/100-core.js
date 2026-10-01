@@ -137,7 +137,13 @@ function grantChip() {
 }
 grantChip();
 
+/* a replay that draws the product's own screens from recorded
+   documents (200-events-follow.js, renderReplayDoc) holds every
+   request: the screen code asks as it does live and is answered
+   nothing, with no fetch */
+let apiHeld = false;
 async function api(href, opts={}) {
+  if (apiHeld) return {res: null, status: 0, ok: false, body: null, etag: null};
   const res = await fetch(href, {method: opts.method || "GET",
     headers: {...principalHeaders(),
               ...(opts.body !== undefined ? {"Content-Type": "application/json"} : {}),
