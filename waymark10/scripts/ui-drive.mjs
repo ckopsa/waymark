@@ -1580,7 +1580,9 @@ async function openChrome() {
    screen, filters the meals, focuses a row, pages, opens a dialog and
    types; tab B (bo) follows ada in guided mode and sees each land.
    Then the guards: the Access panel parks, a dialog bo opened is never
-   replaced, and an invitation to bo opens in bo's own hand. Each tab
+   replaced, and an invitation to bo opens in bo's own hand. Then a
+   walkthrough by ada for bo (docs/spec-walkthrough.md §7 item 6): its
+   agent step's `ui` frame shows on bo's screen under the chip. Each tab
    is its own browser context, so each holds its own localStorage —
    two principals in one chromium. */
 async function guidedStory() {
@@ -1785,8 +1787,69 @@ async function guidedStory() {
        !document.querySelector("dialog[data-guided]") &&
        hereHref() === ${JSON.stringify(meals[1])}`));
 
-  console.log("· stopping");
+  /* a walkthrough's agent step (docs/spec-walkthrough.md §5, watching
+     an agent step): ada leads bo through two steps on the stew, hers
+     first. Start follows the author in guided mode, bo's screen goes to
+     the step's row, and what ada shares shows there under the chip. */
+  console.log("· a walkthrough's agent step: bo watches ada work");
   await press(B, "dialog[open] .dlgfoot", "Cancel");
+  await press(A, "dialog[open] .dlgfoot", "Cancel");
+  /* bo follows ada's gaze only, so Start is what turns guided mode on */
+  await B.js(`document.querySelector("#followchip [data-guided-mark]").click(); true`);
+  await B.until(`localStorage.getItem("wm10.follow.ui") === null`,
+                "guided mode off before the start");
+  const agentNote = "Watch me: writing the recipe.";
+  const led = must(await call("POST", "/api/walkthroughs",
+    {subject: "bo", title: `Writing the stew ${tag}`,
+     steps: [{who: "agent", self: meals[1], note: agentNote},
+             {who: "person", self: meals[1], action: "update_recipe",
+              fields: ["recipe"], note: "Now you write the rest."}]}, "ada"),
+    201, "ada offers bo a walkthrough").body;
+  const ledId = led.self.split("/").pop();
+  /* each door is taken through the page of the one who holds it */
+  const takeDoor = (tab, name) => tab.js(
+    `api(${JSON.stringify(led.self)})
+       .then(r => invokeBare(r.body.actions[${JSON.stringify(name)}], r.body))
+       .then(r => r.ok)`);
+  ok("bo starts the walkthrough", await takeDoor(B, "start"));
+  await B.until(`walkthroughId === ${JSON.stringify(ledId)} && followId === "ada" &&
+                 localStorage.getItem("wm10.follow.ui") === "1"`,
+                "the walkthrough in hand and its author followed in guided mode", 15000);
+  ok("Start follows the author in guided mode", true);
+  await A.js(`location.hash = ${JSON.stringify(meals[1])}; true`);
+  const stewButton = `[...document.querySelectorAll("button")]
+    .find(b => !b.closest("dialog") && /^update recipe/i.test(b.textContent))`;
+  await A.until(`hereHref() === ${JSON.stringify(meals[1])} && !!${stewButton}`,
+                "ada's recipe door on the stew's page");
+  await A.js(`${stewButton}.click(); true`);
+  await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
+  await B.until(`!!document.querySelector(${JSON.stringify(
+    `dialog[open][data-guided="${meals[1]} update_recipe"]`)})`,
+                "ada's dialog on bo's screen", 15000);
+  ok("an agent step's ui frame shows on the subject's screen under the chip",
+     await B.js(`{ const chip = document.querySelector("#walkchip");
+       chip.style.display !== "none" && chip.textContent.includes("Step 1 of 2") &&
+       chip.textContent.includes(${JSON.stringify(" is working: " + agentNote)}) &&
+       !chip.querySelector("[data-walk-skip]") && !!chip.querySelector("[data-walk-stop]") &&
+       hereHref() === ${JSON.stringify(meals[1])} }`));
+  /* ada ends her step with her dialog still open: bo's step opens over it */
+  ok("ada advances her own step", await takeDoor(A, "advance"));
+  await B.until(`document.querySelector("dialog[open] [data-walk-step]")
+                   ?.textContent.startsWith("Step 2 of 2")`,
+                "step 2's dialog on bo's screen", 15000);
+  ok("the next person step opens in bo's hand, over ada's guided dialog",
+     await B.js(`{ const open = document.querySelectorAll("dialog[open]");
+       const t = open.length === 1 && open[0].querySelector("textarea[name=recipe]");
+       !!t && !t.disabled && !open[0].hasAttribute("data-guided") }`));
+  await press(B, "dialog[open] .dlgfoot", "Cancel");
+  must(await call("POST", led.self + "/-/withdraw", null, "ada"), 200,
+       "ada withdraws the walkthrough");
+  await B.until(`!walkthroughId && document.querySelector("#walkchip").style.display === "none"`,
+                "the walkthrough out of bo's hand", 15000);
+  ok("the follow bo already held stands when the walkthrough leaves his hand",
+     await B.js(`followId === "ada" && localStorage.getItem("wm10.follow.ui") === "1"`));
+
+  console.log("· stopping");
   await press(A, "dialog[open] .dlgfoot", "Cancel");
   await A.js(`document.querySelector("#sharebtn").click(); true`);
   ok("the toggle turns sharing off", await A.js(`sessionStorage.getItem("wm10.share.ui")`) === null);
