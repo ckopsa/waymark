@@ -318,6 +318,21 @@
     (is (str/includes? body "(f.type === \"invitation\" || (f.type === \"caption\" && f.field))"))
     (is (str/includes? body "if (replay) replayCaption();"))))
 
+(deftest ui-replay-lights-the-field-a-staged-call-types
+  ;; docs/spec-agent-demo-walks.md §2: a typing beat names its argument
+  ;; in `focus`, and replay lights that field alone, in the invitation's
+  ;; lit style, in the dialog the beat draws
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const typing = !!d && typeof ui.focus === \"string\" && !ui.focus.startsWith(\"/\");"))
+    (is (str/includes? body "guidedTyping = typing ? ui.focus : null;"))
+    (is (str/includes? body "guidedFocus = typing ? null : ui.focus || null;"))
+    (is (str/includes? body "g.guidedLight(guidedTyping);"))
+    (is (str/includes? body "dlg.guidedLight = name => markTyped(form, name);"))
+    (is (str/includes? body "function markTyped(form, name) {"))
+    (is (str/includes? body "for (const s of form.querySelectorAll(\"[data-typed]\")) {"))
+    (is (str/includes? body "spot.classList.add(\"invited\");"))
+    (is (str/includes? body "spot.setAttribute(\"data-typed\", \"\");"))))
+
 (defn- well-known [h]
   (-> (h {:request-method :get :uri "/api/.well-known/waymark"
           :headers {"x-waymark-principal" "reader"}})
