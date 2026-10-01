@@ -456,6 +456,163 @@ function followChip() {
   chip.append(el("button", {title: "stop following", onclick: unfollow}, "✕"));
 }
 window.addEventListener("hashchange", followChip);
+
+/* ── a walkthrough in hand (docs/spec-walkthrough.md §5): once the
+   person starts one it is in hand in this tab, as a follow is, and a
+   chip beside the follow chip says how far along it is on every
+   screen. The row is the truth: the chip is redrawn from a fresh read
+   on every transition of that row the firehose carries. ───────────── */
+let walkthroughId = localStorage.getItem("wm10.walkthrough.id") || null;
+let walkthroughDoc = null;
+function stepLine(n, of, title) {
+  return `Step ${n} of ${of}` + (title ? ` · ${title}` : "");
+}
+/* what the dialog is told about an invitation a walkthrough opened; the
+   title is the one in hand, so no second read is made for it */
+function ledStep(d) {
+  const held = walkthroughDoc && walkthroughId === d.walkthrough;
+  return {id: d.walkthrough, step: d.step, of: d.of,
+          title: held ? (walkthroughDoc.data || {}).title || "" : ""};
+}
+function takeWalkthrough(id) {
+  walkthroughId = id;
+  localStorage.setItem("wm10.walkthrough.id", id);
+  return refreshWalkthrough();
+}
+function dropWalkthrough() {
+  walkthroughId = walkthroughDoc = null;
+  localStorage.removeItem("wm10.walkthrough.id");
+  walkthroughChip();
+}
+async function refreshWalkthrough() {
+  const id = walkthroughId;
+  if (!id) return;
+  const res = await api("/api/walkthroughs/" + encodeURIComponent(id));
+  if (walkthroughId !== id) return;
+  /* no answer (a held replay, an engine restarting) changes nothing */
+  if (!res.ok && res.status !== 404) return;
+  /* past its end, or out of this viewer's sight: nothing is in hand */
+  if (!res.ok || !["running", "stopped"].includes(res.body.state)) {
+    if (res.ok && res.body.state === "finished")
+      toast(`Finished: ${(res.body.data || {}).title || "the walkthrough"}`);
+    dropWalkthrough();
+    return;
+  }
+  walkthroughDoc = res.body;
+  walkthroughChip();
+}
+/* the open invitation of the step in hand. The collection is the read,
+   so the chip holds no invitation id that could go stale */
+async function ledInvitation() {
+  const res = await api("/api/invitations?state=open&walkthrough=" +
+                        encodeURIComponent(walkthroughId));
+  const item = res.ok && ((res.body.data || {}).items || [])[0];
+  if (!item) toast("This step is not open yet");
+  return item || null;
+}
+async function takeLedStep() {
+  const item = await ledInvitation();
+  if (item) openInvitationRow(item);
+}
+/* Skip is the invitation's own decline door, in the person's own hand */
+async function skipLedStep() {
+  const item = await ledInvitation();
+  if (!item) return;
+  const res = await api(item.self);
+  const decline = res.ok && (res.body.actions || {}).decline;
+  if (!decline) { toast("Skip is not open to you on this step right now"); return; }
+  const out = await invokeBare(decline, res.body);
+  toast(out.ok ? "Skipped"
+               : `Skip was refused: ${(out.body || {}).detail || out.status}`);
+}
+/* stop and resume are the walkthrough's own doors */
+async function walkLedDoor(name, done) {
+  const entry = ((walkthroughDoc || {}).actions || {})[name];
+  if (!entry) return;
+  const res = await invokeBare(entry, walkthroughDoc);
+  toast(res.ok ? done
+               : `${pretty(name)} was refused: ${(res.body || {}).detail || res.status}`);
+  if (res.ok) { refreshWalkthrough(); render(); }
+}
+function walkthroughChip() {
+  const chip = $("#walkchip");
+  const doc = walkthroughDoc;
+  chip.style.display = doc ? "inline-block" : "none";
+  chip.textContent = "";
+  if (!doc) return;
+  const d = doc.data || {}, steps = d.steps || [], of = steps.length;
+  const n = Math.min(d.current || 1, of);
+  const acts = doc.actions || {};
+  const btn = (mark, label, onclick) => el("button", {[mark]: "", onclick}, label);
+  const stop = acts.stop
+    ? btn("data-walk-stop", "Stop", () => walkLedDoor("stop", "Stopped")) : null;
+  if (doc.state === "stopped") {
+    chip.append(`Stopped at step ${n} of ${of}`);
+    if (acts.resume)
+      chip.append(btn("data-walk-resume", "Resume",
+                      () => walkLedDoor("resume", "Resumed")));
+  } else if (d.waiting_on === "agent") {
+    /* the agent's step: the person watches, so there is no Skip */
+    chip.append(`Step ${n} of ${of} · `, principalRef(d.author || ""),
+                ` is working: ${(steps[n - 1] || {}).note || ""}`);
+    if (stop) chip.append(stop);
+  } else {
+    chip.append(el("a", {href: "#" + doc.self}, stepLine(n, of, d.title)),
+                btn("data-walk-take", "Take this step", takeLedStep),
+                btn("data-walk-skip", "Skip", skipLedStep));
+    if (stop) chip.append(stop);
+  }
+}
+/* the row page's step list: every step's note in order, whose step it
+   is, how an ended one ended, and which one is open */
+function walkthroughSteps(doc) {
+  const d = doc.data || {};
+  const ended = new Map((d.outcomes || []).map(o => [o.step, o.outcome]));
+  return el("ol", {class: "walk-steps", "data-walk-steps": ""},
+    (d.steps || []).map((s, i) => el("li",
+      {class: doc.state === "running" && d.current === i + 1 ? "current" : ""},
+      el("span", {class: "muted"}, `${s.who || "person"} · `),
+      s.note || "",
+      ended.has(i + 1)
+        ? el("span", {class: "muted"}, ` · ${ended.get(i + 1)}`) : null)));
+}
+/* the next step arrives by itself: the firehose's half (210-ledger.js
+   hands every transition here). A transition of the row in hand redraws
+   the chip; the person's own start or resume takes the row in hand; an
+   invitation born for the walkthrough in hand and addressed to the
+   viewer opens, unless a dialog the person opened is on screen. */
+async function ledFrame(ev) {
+  if (replay) return;
+  const me = viewerId();
+  if (ev.kind === "walkthrough") {
+    const id = String(ev.self || "").split("/").pop();
+    if (id === walkthroughId) return refreshWalkthrough();
+    if (!walkthroughId && me && ["start", "resume"].includes(ev.action) &&
+        String((ev.actor || {}).id || "").replace(/^member:/, "") === me)
+      return takeWalkthrough(id);
+    return;
+  }
+  if (ev.kind !== "invitation" || ev.action !== "create" || !walkthroughId) return;
+  const res = await api(ev.self);
+  const d = (res.body || {}).data || {};
+  if (!res.ok || res.body.state !== "open" ||
+      d.walkthrough !== walkthroughId || d.subject !== me) return;
+  if ($("dialog[open]:not([data-guided])")) return;
+  openInvitation(res.body);
+}
+function onLedFrame(ev) { ledFrame(ev).catch(() => {}); }
+/* a tab with nothing in hand asks once, at boot, for the person's
+   newest running walkthrough and takes it in hand */
+wellKnown().then(async w => {
+  if (walkthroughId) return refreshWalkthrough();
+  const me = viewerId();
+  if (!me || !(w.resources || {}).walkthrough) return;
+  const res = await api("/api/walkthroughs?state=running&subject=" +
+                        encodeURIComponent(me));
+  const item = res.ok && ((res.body.data || {}).items || [])[0];
+  if (item) takeWalkthrough(item.self.split("/").pop());
+}).catch(() => {});
+
 const bootParams = new URLSearchParams(location.search);
 if (bootParams.get("follow")) {
   follow({id: bootParams.get("follow"),

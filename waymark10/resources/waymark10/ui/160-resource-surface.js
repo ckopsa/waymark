@@ -121,6 +121,10 @@ async function renderResource(view, doc, hints) {
     bar.append(el("button", {"data-export-walk": "",
       title: "download this recording as a .ndjson file",
       onclick: () => exportWalk(doc.self)}, "⬇ Export"));
+  /* a walkthrough's row page lists every step's note in order: the
+     person sees the whole path before they agree to it
+     (docs/spec-walkthrough.md §5; 200-events-follow.js) */
+  if (kind === "walkthrough") panel.append(walkthroughSteps(doc));
   /* an open invitation addressed to this viewer: one tap lands on the
      invited row with its door open in their own hand */
   if (kind === "invitation" && doc.state === "open" &&

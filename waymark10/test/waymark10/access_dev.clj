@@ -6,8 +6,10 @@
   drops at boot, and the boot seeds what the drive reads: a member, a
   seat whose sitter acts for that member, and one held seat-restate
   held_call whose owner is the member and whose caller and door author
-  are the seat (held_call_test's seat and hold-door! seeds), and one
-  sealed walk the drive replays. The RP's
+  are the seat (held_call_test's seat and hold-door! seeds), one
+  sealed walk the drive replays, and one three-step walkthrough the
+  sitter offers the drive's viewer on a led_note fixture row
+  (docs/spec-walkthrough.md § 7 item 5). The RP's
   session doors are composed (no identity provider, require-auth off,
   so the dev headers still speak): the drive signs a guest in through
   /auth/guest and reads the UI with a session cookie alone.
@@ -68,11 +70,67 @@
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A finished card is history."}}}}))
 
+;; the walkthrough fixture (docs/spec-walkthrough.md § 7 item 5): the row
+;; the seeded steps act on. One door with two plain arguments, so a
+;; person step can name two fields.
+(def led-note
+  (r/resource
+   {:kind :led_note
+    :plural "led_notes"
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 80}]]
+             [:room {:optional true} [:maybe [:string {:max 40}]]]]
+    :actions
+    {:rename {:from #{:open} :to :open
+              :input [:map
+                      [:title [:string {:min 1 :max 80}]]
+                      [:room {:optional true} [:maybe [:string {:max 40}]]]]
+              :handler (fn [row inp _ctx]
+                         (update row :data merge (select-keys inp [:title :room])))
+              :safety {:idempotent true :reversible true :confirm false}}
+     :finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A finished note is history."}}}}))
+
+(def ^:private viewer
+  "The principal the drive's first tab signs in as (ui-drive.mjs,
+  accessStory)."
+  "priya")
+
+(defn- lead!
+  "One open three-step walkthrough by the seat's sitter for the drive's
+  viewer, on one led_note: a person step naming two fields, an agent
+  step with no action, a person step. → its id string. The author is
+  the sitter's principal id with no agent type: an agent's create is
+  judged under its grant, and this boot holds none."
+  [eng sitter]
+  (let [note (:row (inv/create! eng :led_note {:title "Unsorted mail"}
+                                {:principal colton}))
+        self (str "/api/led_notes/" (:id note))
+        led (:row (inv/create!
+                   eng :walkthrough
+                   {:subject viewer
+                    :title "Sorting the desk's mail"
+                    :steps [{:who "person" :self self :action "rename"
+                             :fields ["title" "room"]
+                             :note "Name the pile, then say which room it is in."}
+                            {:who "agent" :note "Filing what you named."}
+                            {:who "person" :self self :action "rename"
+                             :fields ["title"]
+                             :note "Give the pile its last name."}]}
+                   {:principal (t/principal {:id sitter :display "mail-desk"})}))]
+    (str (:id led))))
+
 (defn seed!
-  "The member, the seat, its one held restate, and one sealed walk of
+  "The member, the seat, its one held restate, one sealed walk of
   three frames by the seat's sitter (a move to the seat, a ui frame
-  with the restate dialog open, a transition) for the drive's replay.
-  → {:member :seat :held :walk}, each an id string."
+  with the restate dialog open, a transition) for the drive's replay,
+  and the sitter's open walkthrough for the drive's viewer (lead!).
+  → {:member :seat :held :walk :walkthrough}, each an id string."
   [eng]
   (let [member (:row (inv/create! eng :member
                                   {:display "Jack Tester" :actor_type "human"}
@@ -118,7 +176,8 @@
                           :summary "mail-desk, restated"
                           :actor by})
     (inv/invoke! eng :walk wid :seal {} {:principal colton})
-    {:member mid :seat sid :held (str (:id h)) :walk wid}))
+    {:member mid :seat sid :held (str (:id h)) :walk wid
+     :walkthrough (lead! eng sitter)}))
 
 (defn start! [port]
   (let [st (pg/storage db/dsn)]
@@ -129,7 +188,8 @@
                                 {:builder-fn rs/as-unqualified-lower-maps})]
           (jdbc/execute! tx [(str "DROP TABLE IF EXISTS \"" t "\" CASCADE")]))))
     (let [eng (engine/engine {:storage st
-                              :resources [caps/capability ref-target ref-card]
+                              :resources [caps/capability ref-target ref-card
+                                          led-note]
                               :auto-migrate true
                               :oidc {:issuer "https://idp.test/realms/access-dev"
                                      :audience "access-dev"
@@ -139,6 +199,8 @@
                                           :app-url (str "http://localhost:" port)
                                           :session-secret "a-32-byte-session-secret-access!"}}})
           ids (seed! eng)]
+      ;; start! runs the engine's hooks, so both log consumers drain here:
+      ;; the invitations' answers a step and the walkthroughs' opens the next
       (engine/start! eng port {:wrap-handler (rp/wrap-handler eng)})
       (println (str "access engine: http://localhost:" port "/api/-/ui"))
       (println (str "seeded: " (pr-str ids)))
