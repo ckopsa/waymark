@@ -308,20 +308,14 @@
   running dispatcher; stop! ends it."
   [eng {:keys [poll-ms] :or {poll-ms 2000}}]
   (let [storage (:storage eng)
-        conn (try (pg/listen-connection storage)
-                  (catch Exception e
-                    (warn! "no LISTEN connection (" (ex-message e)
-                           "); running on the poll backstop alone")
-                    nil))
-        ;; the second channel rides the same parked connection
-        _ (when conn
-            (try
-              (with-open [stmt (.createStatement ^java.sql.Connection conn)]
-                (.execute stmt (str "LISTEN " observations-channel)))
-              (catch Exception e
-                (warn! "observations LISTEN failed (" (ex-message e)
-                       "); derivations ride the poll backstop"))))
-        pg-conn (some-> ^java.sql.Connection conn (.unwrap PGConnection))
+        ;; one parked connection LISTENs both channels; the listener
+        ;; reopens it when it dies, and the poll carries the beat until
+        ;; it is back
+        listener (or (pg/listener storage
+                                  [pg/notify-channel observations-channel]
+                                  warn!)
+                     (warn! "no LISTEN connection (not a Postgres storage);"
+                            " running on the poll backstop alone"))
         d {:eng eng
            :storage storage
            :last-seen (atom (or (:id (first (store/with-tx storage
@@ -333,7 +327,7 @@
            :last-obs (atom (last-observation-id storage))
            :subs (atom #{})
            :running (atom true)
-           :conn conn}
+           :listener listener}
         t (Thread.
            ^Runnable
            (fn []
@@ -341,8 +335,8 @@
                (try
                  ;; the wait IS the backstop: a notification wakes it
                  ;; early, the timeout polls regardless
-                 (if pg-conn
-                   (.getNotifications ^PGConnection pg-conn (int poll-ms))
+                 (if listener
+                   (pg/await-notifications! listener poll-ms)
                    (Thread/sleep (long poll-ms)))
                  (drain! d)
                  (catch InterruptedException _ nil)
@@ -357,7 +351,7 @@
 
 (defn stop! [d]
   (reset! (:running d) false)
-  (some-> ^java.sql.Connection (:conn d) .close)
+  (pg/close-listener! (:listener d))
   (some-> ^Thread (:thread d) .interrupt)
   nil)
 

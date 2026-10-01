@@ -13,6 +13,7 @@
            (java.nio.charset StandardCharsets)
            (java.sql Connection DriverManager Timestamp)
            (java.util.zip CRC32)
+           (org.postgresql PGConnection)
            (org.postgresql.util PGobject)))
 
 (set! *warn-on-reflection* true)
@@ -965,6 +966,111 @@
     (with-open [stmt (.createStatement conn)]
       (.execute stmt (str "LISTEN " notify-channel)))
     conn))
+
+;; ── a LISTEN connection that comes back ─────────────────────────────
+;; A parked LISTEN connection dies with a database restart, a network
+;; blip or an idle cut, and getNotifications then throws on every call.
+;; A listener holds that connection for one loop: it answers the beat
+;; instead of throwing, reopens the connection with every LISTEN the
+;; loop needs, and says the loss and the recovery once each.
+
+(defn listen-on
+  "A dedicated raw JDBC connection LISTENing every channel named —
+  listen-connection's discipline (never from the pool) for a loop that
+  names its own channels. The caller owns closing it."
+  ^Connection [^PostgresStorage st channels]
+  (let [url (.getJdbcUrl ^HikariDataSource (:ds st))
+        conn (DriverManager/getConnection url)]
+    (try
+      (with-open [stmt (.createStatement conn)]
+        (doseq [ch channels]
+          (.execute stmt (str "LISTEN " ch))))
+      conn
+      (catch Exception e
+        (try (.close conn) (catch Exception _ nil))
+        (throw e)))))
+
+(defn- listener-open!
+  "One attempt to open the listener's connection; true when it holds
+  one after it. A failure doubles the wait before the next attempt,
+  1s up to 30s; only the first failure and the recovery are said."
+  [{:keys [storage channels warn state closed]}]
+  (try
+    (let [conn (listen-on storage channels)
+          was-lost? (:lost? @state)]
+      (swap! state assoc :conn conn :lost? false :backoff-ms 0)
+      (if @closed
+        ;; a stop raced the open: nobody would close this one later
+        (.close conn)
+        (when was-lost? (warn "LISTEN connection is back")))
+      true)
+    (catch Exception e
+      (let [{:keys [lost? backoff-ms]} @state
+            wait-ms (min 30000 (max 1000 (* 2 (long backoff-ms))))]
+        (when-not lost?
+          (warn "no LISTEN connection (" (ex-message e)
+                "); riding the poll until it is back"))
+        (swap! state assoc :conn nil :lost? true :backoff-ms wait-ms
+               :retry-at (+ (System/currentTimeMillis) wait-ms)))
+      false)))
+
+(defn listener
+  "A LISTEN connection on `channels` that reopens itself, for one
+  loop's thread. warn is the loop's own (fn [& parts]). nil on a
+  storage that is not Postgres. A first open that fails is retried
+  like a lost one. close-listener! ends it."
+  [st channels warn]
+  (when (instance? PostgresStorage st)
+    (let [l {:storage st
+             :channels (vec channels)
+             :warn warn
+             :state (atom {:conn nil :lost? false :backoff-ms 0 :retry-at 0})
+             :closed (atom false)}]
+      (listener-open! l)
+      l)))
+
+(defn listener-connection
+  "The connection the listener holds right now, or nil while it is
+  lost."
+  ^Connection [l]
+  (:conn @(:state l)))
+
+(defn await-notifications!
+  "The loop's wait: the notifications that arrived within timeout-ms,
+  or nil. It never throws for a dead connection — it closes it, says
+  so once and answers at once, so the caller's beat still runs; later
+  calls sleep the poll and reopen the connection when its backoff is
+  due. A reopen answers at once too, so the beat catches up on what
+  the gap missed."
+  [{:keys [state warn closed] :as l} timeout-ms]
+  (let [timeout-ms (long timeout-ms)]
+    (if-some [^Connection conn (:conn @state)]
+      (try
+        (vec (.getNotifications ^PGConnection (.unwrap conn PGConnection)
+                                (int timeout-ms)))
+        (catch Exception e
+          (try (.close conn) (catch Exception _ nil))
+          (swap! state assoc :conn nil :lost? true :backoff-ms 1000
+                 :retry-at (+ (System/currentTimeMillis) 1000))
+          (when-not @closed
+            (warn "LISTEN connection lost (" (ex-message e)
+                  "); riding the poll until it is back"))
+          nil))
+      (let [wait-ms (- (long (:retry-at @state)) (System/currentTimeMillis))]
+        (cond
+          @closed (Thread/sleep timeout-ms)
+          (pos? wait-ms) (Thread/sleep (long (min timeout-ms wait-ms)))
+          (not (listener-open! l)) (Thread/sleep timeout-ms))
+        nil))))
+
+(defn close-listener!
+  "End a listener: it reopens nothing after this. nil-safe."
+  [l]
+  (when l
+    (reset! (:closed l) true)
+    (when-some [^Connection conn (:conn @(:state l))]
+      (try (.close conn) (catch Exception _ nil))))
+  nil)
 
 (defn storage
   "A pooled Postgres storage. jdbc-url e.g.
