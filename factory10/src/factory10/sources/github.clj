@@ -211,6 +211,63 @@
   (let [^java.util.Optional v (.firstValue (.headers resp) nm)]
     (.orElse v nil)))
 
+(def not-modified
+  "What a transport answers for a 304: the ETag the caller sent still
+  names the answer, so there is no body, and `call!` hands back the one
+  it kept."
+  ::not-modified)
+
+(def etag-ceiling
+  "How many answers the source keeps beside their ETags. Past it the
+  store starts over, and the next read of each route is a whole one."
+  2000)
+
+(defn answer-facts
+  "What one answer says about the rate limit (ticket cdba1f6a), read
+  from its status, its headers and its body. `header` is a function of
+  a lower-case header name. Answers {:etag :remaining :limit :reset
+  :throttle}, each absent when the answer did not say it.
+
+  `:throttle` is the instant the limit lifts, and only a 403 or a 429
+  carries one: when the headers say no call remains, when the answer
+  names a `retry-after`, or when the body says the rate limit was
+  exceeded. The instant follows GitHub's own order: `retry-after`
+  first, then the reset when nothing remains, and a minute when neither
+  is said. A 403 with none of these is a refusal of the token."
+  [status header body ^Instant now]
+  (let [remaining (whole (header "x-ratelimit-remaining"))
+        limit (whole (header "x-ratelimit-limit"))
+        reset (when-some [n (whole (header "x-ratelimit-reset"))]
+                (Instant/ofEpochSecond (long n)))
+        retry (whole (header "retry-after"))
+        etag (word (header "etag"))
+        spent? (and (contains? #{403 429} status)
+                    (or (= 0 remaining) retry
+                        (re-find #"(?i)rate limit" (str body))))]
+    (cond-> {}
+      etag (assoc :etag etag)
+      remaining (assoc :remaining remaining)
+      limit (assoc :limit limit)
+      reset (assoc :reset reset)
+      spent? (assoc :throttle (cond
+                                retry (.plusSeconds now (long retry))
+                                (and reset (= 0 remaining)) reset
+                                :else (.plusSeconds now 60))))))
+
+(defn- throttled
+  "The throw for a spent rate limit. It carries no `:status`, so a
+  caller that reads a 403 as a refusal of the token does not read this
+  one so: `:throttled` and the `:reset` instant say what it is."
+  [method route status reset]
+  (ex-info (str "github's rate limit is spent until " reset
+                (if status
+                  (str " (" status " for " method " " route ")")
+                  (str " (" method " " route " was not asked)")))
+           {:throttled true :reset (str reset) :answered status}))
+
+(defn- throttled? [e]
+  (boolean (:throttled (ex-data e))))
+
 (defn http-call
   "The real transport: (fn [method path {:keys [params body url raw
   anonymous]}]) → the parsed body, or, with :raw, the whole answer as
@@ -220,14 +277,20 @@
   never goes stale in a header map. Redirects are NOT followed by the
   client: the job log's redirect points at another host, and the
   caller follows it with :anonymous so the token stays here. Non-2xx
-  throws ex-info carrying :status on every route but a raw one."
+  throws ex-info carrying :status on every route but a raw one.
+
+  Two more opts carry the rate limit (ticket cdba1f6a). `:etag` is sent
+  as If-None-Match, and a 304 answers `not-modified`. `:heard` is
+  called with the `answer-facts` of every answer, the raw ones
+  included. A 403 or a 429 that says the limit is spent throws a
+  throttle, which is not a refusal."
   [{:keys [token-fn base]}]
   (let [client (-> (HttpClient/newBuilder)
                    (.connectTimeout (Duration/ofSeconds 10))
                    (.followRedirects HttpClient$Redirect/NEVER)
                    (.build))
         base (str/replace (str (or base api-base)) #"/+$" "")]
-    (fn [^String method path {:keys [params body url raw anonymous]}]
+    (fn [^String method path {:keys [params body url raw anonymous etag heard]}]
       (let [target (or url
                        (str base path
                             (when (seq params) (str "?" (query-string params)))))
@@ -246,6 +309,10 @@
                                            (.header builder "content-type"
                                                     "application/json")
                                            builder)
+            ^HttpRequest$Builder builder (if etag
+                                           (.header builder "if-none-match"
+                                                    (str etag))
+                                           builder)
             publisher (if body
                         (HttpRequest$BodyPublishers/ofString
                          (wire/write-json body) StandardCharsets/UTF_8)
@@ -254,12 +321,24 @@
             ^HttpResponse resp (.send client req
                                       (HttpResponse$BodyHandlers/ofString))
             status (.statusCode resp)
-            text (str (.body resp))]
-        (if raw
+            text (str (.body resp))
+            facts (answer-facts status #(header-of resp %) text (Instant/now))]
+        (when heard (heard facts))
+        (cond
+          raw
           {:status status :body text
            :location (header-of resp "location")
            :content-type (header-of resp "content-type")}
+
+          ;; the caller's ETag still names the answer: there is no body
+          ;; to parse, and GitHub does not count the call
+          (= 304 status)
+          not-modified
+
+          :else
           (do
+            (when-some [reset (:throttle facts)]
+              (throw (throttled method (or path url) status reset)))
             (when (>= status 400)
               (throw (ex-info (str "github answered " status " for "
                                    method " " (or path url))
@@ -273,11 +352,58 @@
                                         " with a body that is not JSON")
                                    {:status status}))))))))))
 
+(defn- hold-of
+  "The instant the source holds every call until, or nil when no hold
+  stands. A hold whose instant has passed is no hold."
+  [{:keys [budget now-fn]}]
+  (when-some [until (some-> budget deref :until)]
+    (let [^Instant now (if now-fn (now-fn) (Instant/now))]
+      (when (.isBefore now ^Instant until) until))))
+
+(defn- hear!
+  "Keep what one answer said of the rate limit. An answer that was the
+  throttle, or one that leaves no call, holds the source until the
+  instant it names."
+  [budget {:keys [remaining limit reset throttle]}]
+  (when budget
+    (let [until (or throttle (when (= 0 remaining) reset))]
+      (swap! budget
+             (fn [b]
+               (cond-> b
+                 remaining (assoc :remaining remaining)
+                 limit (assoc :limit limit)
+                 reset (assoc :reset reset)
+                 until (assoc :until until)))))))
+
 (defn- call!
-  "One request, counted. The census line's first number is this count."
-  [{:keys [call calls]} method path opts]
+  "One request, counted. The census line's first number is this count.
+
+  The rate limit is kept here (ticket cdba1f6a). While a spent limit
+  holds the source the request is not made: it throws the throttle the
+  answer that spent the limit threw, and it is not counted. A GET sends
+  the ETag of its last answer, and a 304 answers the body kept beside
+  it, which GitHub does not count against the limit. Every answer's
+  headers leave the remaining calls and the reset on the budget."
+  [{:keys [call calls budget etags] :as this} method path opts]
+  (when-some [until (hold-of this)]
+    (throw (throttled method (or path (:url opts)) nil until)))
   (swap! calls inc)
-  (call method path opts))
+  (let [k (when (and etags (= "GET" method) (not (:raw opts))
+                     (not (:url opts)))
+            [path (:params opts)])
+        known (when k (get @etags k))
+        heard (volatile! nil)
+        answer (try (call method path
+                          (cond-> (assoc opts :heard #(vreset! heard %))
+                            known (assoc :etag (:etag known))))
+                    (finally (hear! budget @heard)))]
+    (if (= not-modified answer)
+      (do (some-> budget (swap! update :unchanged (fnil inc 0)))
+          (:body known))
+      (do (when-some [tag (and k (:etag @heard))]
+            (swap! etags #(assoc (if (< (count %) etag-ceiling) % {})
+                                 k {:etag tag :body answer})))
+          answer))))
 
 ;; ── the cursor ──────────────────────────────────────────────────────
 
@@ -457,6 +583,7 @@
   [this repo number]
   (try (call! this "GET" (str "/repos/" repo "/pulls/" number) {})
        (catch Exception e
+         (when (throttled? e) (throw e))
          (warn! "the pull request " repo "#" number
                 " could not be read again (" (ex-message e) ")")
          nil)))
@@ -481,6 +608,7 @@
   (try (vec (call! this "GET" (str "/repos/" repo "/pulls/" number "/files")
                    {:params {:per_page page-size}}))
        (catch Exception e
+         (when (throttled? e) (throw e))
          (warn! "the paths of " repo "#" number " did not answer ("
                 (ex-message e) ")")
          nil)))
@@ -490,6 +618,7 @@
   (try (vec (call! this "GET" (str "/repos/" repo "/pulls/" number "/reviews")
                    {:params {:per_page page-size}}))
        (catch Exception e
+         (when (throttled? e) (throw e))
          (warn! "the reviews of " repo "#" number " did not answer ("
                 (ex-message e) ")")
          nil)))
@@ -629,6 +758,7 @@
   [this repo number sha]
   (try (check-runs! this repo sha)
        (catch Exception e
+         (when (throttled? e) (throw e))
          (warn! "the checks of " repo "#" number " did not answer ("
                 (ex-message e) ")")
          [])))
@@ -793,6 +923,7 @@
   (forge-poll [this]
     (reset! calls 0)
     (reset! actions-only #{})
+    (some-> (:budget this) (swap! assoc :unchanged 0))
     (let [floor (window-start @cursor)
           pending (first (reset-vals! retry {}))
           repos (repos-now this)
@@ -951,7 +1082,19 @@
                          (update m repository (fnil conj #{}) number)
                          m))
                      m docs)))
-    nil))
+    nil)
+
+  forge/ForgeBudget
+  (forge-budget [this]
+    (let [{:keys [remaining limit reset unchanged]} (some-> (:budget this)
+                                                            deref)
+          until (hold-of this)]
+      (cond-> {}
+        remaining (assoc :remaining remaining)
+        limit (assoc :limit limit)
+        reset (assoc :reset (str reset))
+        (and unchanged (pos? (long unchanged))) (assoc :unchanged unchanged)
+        until (assoc :held-until (str until))))))
 
 (defn parse-repos
   "\"ckopsa/waymark, ckopsa/waymark-bench\" → the repositories to read,
@@ -970,6 +1113,14 @@
   [{:keys [repos repos-fn]}]
   (or repos-fn (constantly (parse-repos repos))))
 
+(defn- with-budget
+  "The source with what the rate limit needs (ticket cdba1f6a): the
+  budget the last answer's headers said, the ETag and the body of each
+  GET it answered, and the clock the hold is read against (nil is the
+  wall clock)."
+  [source now-fn]
+  (assoc source :budget (atom {}) :etags (atom {}) :now-fn now-fn))
+
 (defn http-source
   "The real boundary over GitHub.
 
@@ -978,14 +1129,16 @@
   asked at every pass) or :repos (a static comma-separated string or
   seq), :base (the API base, for a test that wants a local server)."
   [{:keys [token token-fn base] :as config}]
-  (->GitHubSource (http-call {:token-fn (or token-fn (constantly token))
-                              :base base})
-                  (repos-fn-of config)
-                  (atom nil)
-                  (atom 0)
-                  (atom false)
-                  (atom #{})
-                  (atom {})))
+  (with-budget
+    (->GitHubSource (http-call {:token-fn (or token-fn (constantly token))
+                                :base base})
+                    (repos-fn-of config)
+                    (atom nil)
+                    (atom 0)
+                    (atom false)
+                    (atom #{})
+                    (atom {}))
+    nil))
 
 (defn from-env
   "The deployed boundary off FACTORY10_GITHUB_TOKEN. nil when the token
@@ -1105,6 +1258,24 @@
          (fn [m] (if status (assoc m repo status) (dissoc m repo)))))
 
 (def ^:private repo-path #"/repos/([^/]+/[^/]+)(?:/.*)?")
+
+(defn throttle!
+  "Make every route answer 403 with no call remaining until `reset` (an
+  Instant), as GitHub does when the hour's calls are spent; nil lifts
+  it."
+  [state reset]
+  (swap! state assoc :throttled reset))
+
+(defn budget!
+  "What the fake's rate-limit headers say on every answer: {:remaining
+  n :limit n :reset Instant}. nil sends none."
+  [state budget]
+  (swap! state assoc :budget budget))
+
+(defn unchanged
+  "The path of every GET the fake answered 304, oldest first."
+  [state]
+  (vec (:unchanged @state)))
 
 (defn requests
   "Every request the source made, oldest first."
@@ -1253,19 +1424,65 @@
           (throw (ex-info (str "the fake github answers no " method " " path)
                           {:status 404})))))))
 
+(defn- fake-wire
+  "The fake's headers, around `fake-call` (ticket cdba1f6a): the budget
+  `budget!` scripted on every answer, an ETag on every GET and a 304
+  for the caller that already holds it, and, while `throttle!` stands,
+  a 403 that says no call remains. The facts go through
+  `answer-facts`, as the real transport's do."
+  [state call now-fn]
+  (fn [method path {:keys [etag heard raw url params body anonymous] :as opts}]
+    (let [st @state
+          ^Instant now (if now-fn (now-fn) (Instant/now))
+          epoch (fn [^Instant t] (str (.getEpochSecond t)))
+          {:keys [remaining limit reset]} (:budget st)
+          hear (fn [status headers text]
+                 (let [facts (answer-facts status headers text now)]
+                   (when heard (heard facts))
+                   facts))]
+      (if-some [until (:throttled st)]
+        (let [text "API rate limit exceeded"
+              facts (hear 403 {"x-ratelimit-remaining" "0"
+                               "x-ratelimit-reset" (epoch until)}
+                          text)]
+          (swap! state update :requests conj
+                 {:method method :path (or path url) :params params :body body
+                  :anonymous (boolean anonymous)})
+          (if raw
+            {:status 403 :body text}
+            (throw (throttled method (or path url) 403 (:throttle facts)))))
+        (let [answer (call method path opts)
+              tag (when (and (= "GET" method) (not raw) (not url)
+                             (some? answer))
+                    (str "\"" (hash answer) "\""))]
+          (hear 200
+                (cond-> {}
+                  remaining (assoc "x-ratelimit-remaining" (str remaining))
+                  limit (assoc "x-ratelimit-limit" (str limit))
+                  reset (assoc "x-ratelimit-reset" (epoch reset))
+                  tag (assoc "etag" tag))
+                nil)
+          (if (and tag (= tag etag))
+            (do (swap! state update :unchanged (fnil conj []) path)
+                not-modified)
+            answer))))))
+
 (defn fake-source
   "The REAL source over an in-memory GitHub: the translation, the
   window, the cursor arithmetic and the log reading all run.
 
   opts: :repos (a static list, default ckopsa/waymark), :repos-fn (the
   deployed spelling — a function asked at every pass), :cursor (a
-  starting cursor, for the window's own test)."
+  starting cursor, for the window's own test), :now-fn (the clock a
+  rate-limit hold is read against, default the wall clock)."
   ([state] (fake-source state {}))
-  ([state {:keys [cursor] :as opts}]
-   (->GitHubSource (fake-call state)
-                   (repos-fn-of opts)
-                   (atom cursor)
-                   (atom 0)
-                   (atom false)
-                   (atom #{})
-                   (atom {}))))
+  ([state {:keys [cursor now-fn] :as opts}]
+   (with-budget
+     (->GitHubSource (fake-wire state (fake-call state) now-fn)
+                     (repos-fn-of opts)
+                     (atom cursor)
+                     (atom 0)
+                     (atom false)
+                     (atom #{})
+                     (atom {}))
+     now-fn)))
