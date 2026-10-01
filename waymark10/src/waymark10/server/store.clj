@@ -171,11 +171,12 @@
   (search-rows [st tx kind conds opts]
     "The collection page: rows matching every cond (the maintainer's
     grammar, widened with :op :in-any — vocab-array membership via
-    JSONB containment). opts {:order-by field-kw :desc bool :limit n
-    :offset n}; ordering runs over the promoted generated column
-    (f_<field>), :state over its column, a sortable-timestamp over the
-    engine column of that name, nil over created_at — id tiebreak
-    always, so pages never overlap.")
+    JSONB containment). opts {:order-by field-kw :desc bool :then-by
+    [{:field kw :desc bool} …] :limit n :offset n}; ordering runs over
+    the promoted generated column (f_<field>), :state over its column,
+    a sortable-timestamp over the engine column of that name, nil over
+    created_at — then each :then-by key in order among the ties, and id
+    tiebreak always, so pages never overlap.")
   (facet-counts [st tx kind field conds array?]
     "Observed value → count for one faceted field under the same conds
     the rows match — a real GROUP BY. array? true unrolls a JSON array
