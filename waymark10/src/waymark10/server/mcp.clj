@@ -1294,7 +1294,29 @@
                  (str "Cut each text part at this many characters. Say 4000 "
                       "for a mail message: it is enough to decide with, and "
                       "you can ask again for the whole of the one message "
-                      "that needs it.")}}
+                      "that needs it.")}
+     :at {:type "string"
+          :description
+          (str "When to make this call instead of now: RFC 3339 with an "
+               "offset (2026-10-02T08:30:00-06:00), or a local date and "
+               "time (2026-10-02T08:30) read in `zone`. The call is not "
+               "made: it is stored as a scheduled_action, and the answer "
+               "is {scheduled, scheduled_action, run_at}. A tool that "
+               "waits on a person is approved now, for that time.")}
+     :zone {:type "string"
+            :description
+            (str "With at: the IANA zone a local time is written in and "
+                 "shown in, e.g. America/Denver.")}
+     :validity {:type "string" :enum ["strict" "state"]
+                :description
+                (str "With at: what must still hold at the time. state "
+                     "(default): the tool is still among your powers and "
+                     "its server is serving. strict: and the server's row "
+                     "has not changed since.")}
+     :grace_seconds {:type "integer" :minimum 0 :maximum 86400
+                     :description
+                     (str "With at: how late the run may be when the engine "
+                          "was down at its time. An hour unless said.")}}
     :required ["tool"]
     :additionalProperties false}})
 
@@ -1965,7 +1987,8 @@
     (catch Exception _ run-at)))
 
 (defn- schedule-call
-  "`at` on waymark_invoke (docs/spec-scheduled-actions.md R-7.2): the
+  "`at` on waymark_invoke, and on waymark_power with `{tool}` for its
+  target (docs/spec-scheduled-actions.md R-7.2, R-4.4): the
   call is not made. It is written as a scheduled_action create — the
   kind, the action and the id become its `target`, `at` its `run_at` —
   and POSTed to that kind's own collection, so the scheduling check,
@@ -1982,7 +2005,7 @@
   invoke does, so the stored call is that sitting's act and its answer
   is one served answer on it. The run at `run_at` counts on no sitting
   (R-4.2)."
-  [eng call session rdef aname {:keys [id ids items at input dry_run] :as args}]
+  [eng call session target {:keys [ids items at input dry_run] :as args}]
   (if (or ids items)
     (refusal (p/problem :invalid-arguments 422 "One call at a time"
                         {:detail (str "`at` schedules one call: one row's action, or one create. "
@@ -1991,9 +2014,7 @@
                                       "each row.")}))
     (let [sdef (rdef-of eng "scheduled_action")
           resp (call (assoc (request session :post (str "/api/" (:plural sdef))
-                                     {:body (cond-> (into {:target (cond-> {:kind (name (:kind rdef))
-                                                                            :action (name aname)}
-                                                                     id (assoc :id (str id)))
+                                     {:body (cond-> (into {:target target
                                                            :run_at at}
                                                           (filter (comp some? val))
                                                           (select-keys args schedule-keys))
@@ -2042,7 +2063,10 @@
     (cond
       ;; `at`: the call is stored for its time, not made (R-7.2)
       (some? at)
-      (schedule-call eng call session rdef aname args)
+      (schedule-call eng call session
+                     (cond-> {:kind (name (:kind rdef)) :action (name aname)}
+                       id (assoc :id (str id)))
+                     args)
 
       (and (or ids items) id)
       (refusal (p/problem :invalid-arguments 422 "One target, please"
@@ -4948,10 +4972,16 @@
                      who {:caller (:id (:principal session))
                           :sitting (bound-sitting
                                     eng (:mcp-session-id session))}]
-                 (-> (gate/invoke-for gate-rpc (:visibility session) tname
-                                      sent who)
-                     (shaped args)
-                     (rig-dropped))))
+                 (if (some? (:at args))
+                   ;; `at`: the call is stored for its time, not made
+                   ;; (R-7.2, R-4.4)
+                   (schedule-call eng call session {:tool tname}
+                                  (assoc (select-keys args (conj schedule-keys :at))
+                                         :input sent))
+                   (-> (gate/invoke-for gate-rpc (:visibility session) tname
+                                        sent who)
+                       (shaped args)
+                       (rig-dropped)))))
 
      ;; the sit needs the Gate caller too, for the bench it prepares
      ;; (R-12.29) — the one body that is not in `bodies`

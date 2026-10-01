@@ -303,11 +303,11 @@
 (deftest what-a-later-child-builds-is-refused-by-name
   (let [eng (fresh-engine)
         c (chore! eng)]
-    (testing "a power target is child 4's"
+    (testing "a power target is checked against the scheduler's powers (child 4b)"
       (is (str/includes?
            (refusal #(schedule! eng c {:target {:tool "telegram__send_message"}
                                        :input {:text "Good morning."}}))
-           "child 4")))
+           "among your powers")))
     (testing "conditions and their rule are named together (child 5)"
       (is (some? (refusal #(schedule! eng c {:validity "conditions"}))))
       (is (some? (refusal #(schedule! eng c {:conditions {:state "open"}}))))

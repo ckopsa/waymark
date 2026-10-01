@@ -324,14 +324,15 @@
 (defn- passthrough? [row]
   (true? (get-in row [:data :passthrough])))
 
-(defn resolve-tool
-  "A prefixed tool name → {:row :bare :entry :token :why}, or nil
+(defn resolve-among
+  "Over rows already read, as a guard holds them inside its own
+  transaction (docs/spec-scheduled-actions.md R-4.4): a prefixed tool name → {:row :bare :entry :token :why}, or nil
   when no row answers to it. The row wearing the prefix wins. When
   none does, a passthrough row answers the full name: the one whose
   powers name it, else the first."
-  [eng tool]
+  [rs tool]
   (let [tool (str tool)
-        rs (rows eng)
+        rs (remove #(= :retired (:state %)) rs)
         by-prefix (when-some [[prefix bare] (split-name tool)]
                     (some (fn [row]
                             (when (and (= prefix (str (get-in row [:data :name])))
@@ -354,6 +355,11 @@
                ;; `approval person` demands one too
                :why (boolean (and entry (why-demanded? entry)))
                :approval (if entry (approval-of entry) :none))))))
+
+(defn resolve-tool
+  "`resolve-among`, over every row of this engine that is not retired."
+  [eng tool]
+  (resolve-among (rows eng) tool))
 
 (defn capability-of
   "The power token a prefixed tool name is bound to, or nil."
