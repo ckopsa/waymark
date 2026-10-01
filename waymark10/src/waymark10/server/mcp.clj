@@ -964,7 +964,16 @@
         "whose doors you know; use envelope when the next step "
         "depends on what the row affords after the move. A refusal, "
         "a dry_run verdict and a bulk report come back the same under "
-        "both.")
+        "both.\n\n"
+        "at: do this LATER. With `at` the call is not made: the engine "
+        "checks it now as it would judge it now, stores it as a "
+        "scheduled_action, and answers {scheduled, scheduled_action, "
+        "run_at, zone, validity, summary} — an answer, not a refusal. "
+        "What the door would refuse now is refused now, with the door's "
+        "own sentence. dry_run with `at` rehearses that check and "
+        "writes nothing. One row or one create at a time: `at` with "
+        "ids or items is refused. Cancel or reschedule it on the "
+        "scheduled_action row.")
    :input-schema {:type "object"
                   :properties
                   {:kind {:type "string"}
@@ -1016,6 +1025,37 @@
                    :dry_run {:type "boolean"
                              :description (str "Rehearse: validate schema and guards, "
                                                "write nothing, answer a verdict.")}
+                   :at {:type "string"
+                        :description (str "When to make this call instead of now: RFC 3339 "
+                                          "with an offset (2026-10-02T08:30:00-06:00), or a "
+                                          "local date and time (2026-10-02T08:30) read in "
+                                          "`zone`. At least one minute and at most 366 days "
+                                          "ahead. The engine never guesses UTC.")}
+                   :zone {:type "string"
+                          :description (str "With at: the IANA zone a local time is written "
+                                            "in and shown in, e.g. America/Denver. Left out, "
+                                            "a local time is read in the zone on your member row.")}
+                   :validity {:type "string" :enum ["strict" "state"]
+                              :description (str "With at: what must still hold at the time. "
+                                                "state (default): the row is still in the state "
+                                                "it is in now. strict: nothing about the row "
+                                                "changed since.")}
+                   :conditions {:type "object"
+                                :description (str "With at: your own conditions over the row's "
+                                                  "fields. Not built yet (child 5 of "
+                                                  "docs/spec-scheduled-actions.md): a call that "
+                                                  "names any is refused.")}
+                   :expect_state {:type "string"
+                                  :description (str "With at: the state the row is expected to be "
+                                                    "in at the time, when it is not in it now.")}
+                   :expect_refusals {:type "array" :items {:type "string"}
+                                     :description (str "With at: guard names, as a refusal spells "
+                                                       "them, that would refuse the call now and "
+                                                       "are expected to lift by its time.")}
+                   :grace_seconds {:type "integer" :minimum 0 :maximum 86400
+                                   :description (str "With at: how late the run may be when the "
+                                                     "engine was down at its time. An hour unless "
+                                                     "said, a day at most.")}
                    :acknowledge {:type "string"
                                  :description (str "The consequence sentence, echoed "
                                                    "exactly — required when "
@@ -1905,6 +1945,71 @@
                            :headers (invoke-headers session nil nil
                                                     acknowledge_warnings)}))))))))
 
+(def ^:private schedule-keys
+  "The scheduler's fields `waymark_invoke` carries beside `at` (R-7.2),
+  spelled as the scheduled_action create spells them."
+  [:zone :validity :conditions :expect_state :expect_refusals :grace_seconds
+   :acknowledge :acknowledge_warnings])
+
+(defn- in-zone
+  "An instant as the wire spells it, written on the clock of `zone`: a
+  scheduler reads its own time and not UTC (R-7.2). What this cannot
+  read is answered as it came."
+  [run-at zone]
+  (try
+    (.format java.time.format.DateTimeFormatter/ISO_OFFSET_DATE_TIME
+             (.atZone (java.time.Instant/parse (str run-at))
+                      (java.time.ZoneId/of (str zone))))
+    (catch Exception _ run-at)))
+
+(defn- schedule-call
+  "`at` on waymark_invoke (docs/spec-scheduled-actions.md R-7.2): the
+  call is not made. It is written as a scheduled_action create — the
+  kind, the action and the id become its `target`, `at` its `run_at` —
+  and POSTed to that kind's own collection, so the scheduling check,
+  the zone rules, the limits and the grant are judged by the one door
+  that judges them, and its refusal comes back as it wrote it.
+
+  The answer to a stored call is an ANSWER, not a refusal: the row's
+  id, `run_at` on the scheduler's clock, the rule and the summary line.
+  `dry_run` rehearses the same create and passes its verdict through.
+  Many rows at once are refused here: a scheduled bulk call is a
+  scheduled job, and that is its own design."
+  [eng call session rdef aname {:keys [id ids items at input dry_run] :as args}]
+  (if (or ids items)
+    (refusal (p/problem :invalid-arguments 422 "One call at a time"
+                        {:detail (str "`at` schedules one call: one row's action, or one create. "
+                                      "A scheduled bulk call is a scheduled job, which is not "
+                                      "built. Give `id` in place of ids or items, one call for "
+                                      "each row.")}))
+    (let [sdef (rdef-of eng "scheduled_action")
+          resp (call (request session :post (str "/api/" (:plural sdef))
+                              {:body (cond-> (into {:target (cond-> {:kind (name (:kind rdef))
+                                                                     :action (name aname)}
+                                                              id (assoc :id (str id)))
+                                                    :run_at at}
+                                                   (filter (comp some? val))
+                                                   (select-keys args schedule-keys))
+                                       input (assoc :input input))
+                               :query (when dry_run "dry_run=1")
+                               :headers {"idempotency-key"
+                                         (origin-key (get-in session [:principal :id])
+                                                     (random-uuid))}}))
+          row (when (and (not dry_run) (<= 200 (:status resp 500) 299))
+                (body-json resp))
+          ;; the envelope carries the address, not the id
+          sid (id-of-self (:self row))]
+      (if sid
+        (value-result {:scheduled true
+                       :scheduled_action sid
+                       :run_at (in-zone (get-in row [:data :run_at])
+                                        (get-in row [:data :zone]))
+                       :zone (get-in row [:data :zone])
+                       :validity (get-in row [:data :validity])
+                       :summary (:summary row)})
+        ;; a refusal, or a rehearsal's verdict: the door's own words
+        (pass-through resp)))))
+
 (defn- invoke
   "Read the row, then move it.
 
@@ -1921,11 +2026,15 @@
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
   [eng call session {:keys [kind id ids items action input dry_run acknowledge
-                            acknowledge_warnings if_version] :as args}]
+                            acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))]
     (cond
+      ;; `at`: the call is stored for its time, not made (R-7.2)
+      (some? at)
+      (schedule-call eng call session rdef aname args)
+
       (and (or ids items) id)
       (refusal (p/problem :invalid-arguments 422 "One target, please"
                           {:detail (str "id names one row; ids and items name many. "
