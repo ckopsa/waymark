@@ -1963,6 +1963,19 @@
   (str/starts-with? (str (get-in row [:data :title]))
                     (str floor-title-prefix repo ":")))
 
+(defn- floor-waits?
+  "Is this policy's floor ticket still draft or open? Found by the id
+  the policy keeps, whatever its title says now. A policy that filed
+  before it kept one is read by the title among `rows`, one time: the
+  id it finds is kept."
+  [eng policy repo rows]
+  (if-some [id (blank->nil (get-in policy [:data :floor_ticket]))]
+    (contains? #{:draft :open} (state-of (row-by-id eng :ticket id)))
+    (when-some [row (first (filter #(floor-ticket? repo %) rows))]
+      (bench/mark-row! eng :repo_policy (str (:id policy))
+                       {:floor_ticket (str (:id row))} #{})
+      true)))
+
 (defn- as-instant [v]
   (cond (instance? Instant v) v
         (str/blank? (str v)) nil
@@ -2006,18 +2019,20 @@
             ;; under a line, the floor asks only when a draft at or
             ;; above it waits; the default 4 asks as it always did
             (when-not (or (and (< line 4) (zero? waiting))
-                          (some #(floor-ticket? repo %) (concat drafts opened)))
-              (inv/create! eng :ticket
-                           {:title (cut (str floor-title-prefix repo ": " n
-                                             " open, floor " floor)
-                                        200)
-                            :detail (floor-detail repo n floor waiting)
-                            :type "chore"
-                            :priority 1
-                            :repo repo}
-                           (as-opts))
-              (bench/mark-row! eng :repo_policy (str (:id policy))
-                               {:floor_noted_at now :floor_count n} #{})
+                          (floor-waits? eng policy repo (concat drafts opened)))
+              (let [filed (inv/create! eng :ticket
+                                       {:title (cut (str floor-title-prefix repo ": " n
+                                                         " open, floor " floor)
+                                                    200)
+                                        :detail (floor-detail repo n floor waiting)
+                                        :type "chore"
+                                        :priority 1
+                                        :repo repo}
+                                       (as-opts))]
+                (bench/mark-row! eng :repo_policy (str (:id policy))
+                                 {:floor_noted_at now :floor_count n
+                                  :floor_ticket (some-> (get-in filed [:row :id]) str)}
+                                 #{}))
               true)))))))
 
 (defn floor-pass!

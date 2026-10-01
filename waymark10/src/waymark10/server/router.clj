@@ -2074,6 +2074,21 @@
   (p/->response (p/problem :not-found 404 "Not found"
                            {:detail "No such route."})))
 
+(defn- seat-door-is-the-connector
+  "The 403 a delegate's plain-HTTP call answers with when its
+  X-Waymark-Grant names a seat's grant (owner, 2026-10-01, ticket
+  b5d51b4d). The connector is the one door where a sitting's tally,
+  refusals and walls are kept, so the seat's view is the connector's
+  alone and a call over plain HTTP is its bearer's."
+  []
+  (p/problem :seat-door-is-the-connector 403 "The connector is the seat's door"
+             {:detail (str "This grant is a seat's, and a seat is sat "
+                           "through the connector alone: call waymark_sit "
+                           "there with the seat's key and make the seat's "
+                           "calls through its tools. A call over plain "
+                           "HTTP is its bearer's; leave X-Waymark-Grant "
+                           "out to make it as yourself.")}))
+
 (defn- wrap-identity
   "The identity boundary (phase 9a), judgment-style: the principal
   (bearer token via the engine's :oidc config, else the RP session
@@ -2091,6 +2106,13 @@
           ;; gate — first authenticated sight binds an invited member
           principal (members/gate! eng principal
                                    (get-in req [:headers "x-waymark-invite"]))
+          ;; the seat's view is the connector's alone: a delegate that
+          ;; presents a seat's grant here is refused by name, before
+          ;; anything is resolved or stamped for the seat
+          _ (when (and (:acts-for principal)
+                       (grants/seat-grant-of-another?
+                        eng (get-in req [:headers "x-waymark-grant"]) principal))
+              (throw (seat-door-is-the-connector)))
           vis (if-some [gid (or (get-in req [:headers "x-waymark-grant"])
                                 ;; the guest door's worn scope rides
                                 ;; the session (oidc-rp); the header,
@@ -2168,9 +2190,10 @@
 
 (defn wrap-reads-stamped
   "A sitting's READS are activity (ticket 900764ce): a GET under a
-  live grant stamps the calling sitting's `last_call_at`, so a sitter
-  that only reads over HTTP is not abandoned by the idle sweep while
-  it works. It counts no transition and no refusal. Mounted by
+  live grant stamps the calling sitting's `last_call_at`. It reaches
+  only a request whose own principal is the seat grant's audience: a
+  delegate's plain-HTTP read is its bearer's and stamps nothing
+  (ticket b5d51b4d). It counts no transition and no refusal. Mounted by
   `handler` only: the MCP door already stamps every tools/call through
   `seats/add-served!`. Best-effort, the mind-the-wall! posture — a
   stamp that could fail a read would be worse than none."

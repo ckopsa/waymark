@@ -119,16 +119,23 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.verdict :as verdict]))
 
 (set! *warn-on-reflection* true)
 
 ;; ── what a pull request writes back onto the row ────────────────────
 
-(defhandler observe-the-pull-request [row inp _ctx]
+(defhandler observe-the-pull-request [row inp ctx]
   ;; The source hands the facts it read. A fact it did not read is
   ;; absent, and absent means silent: the stored value stands. The
   ;; machine advances the state, never this handler.
+  ;;
+  ;; A HEAD THAT MOVES takes back what judged the old one (ticket
+  ;; 35600491): see `waymark10.verdict/reopen-stale-verdicts!`.
+  (let [head (some-> (:head_sha inp) str not-empty)]
+    (when (and head (not= head (some-> (get-in row [:data :head_sha]) str not-empty)))
+      (verdict/reopen-stale-verdicts! ctx :change (:id row) head)))
   (update row :data merge (into {} (remove (comp nil? val)) inp)))
 
 (defhandler adopt-the-pull-request [row inp _ctx]

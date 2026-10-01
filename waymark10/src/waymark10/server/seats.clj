@@ -223,7 +223,30 @@
    :refusals 5
    ;; how far back `backfill-health!` judges the sittings closed
    ;; before the close judged them
-   :backfill-days 7})
+   :backfill-days 7
+   ;; the closed sittings a seat's `health` is rolled over, for a seat
+   ;; that names no `health_window`
+   :window 10})
+
+(def health-alert-defaults
+  "The `health_alerts` of a seat that states none, and of each rule a
+  seat leaves out (seat health 3, ticket 698f6818). `health-breach` is
+  the judge."
+  {;; a share of submits under this is a breach…
+   :submit_rate_below 0.4M
+   ;; one sitting in the window that never sat is a breach
+   :never_sat_any true
+   ;; this many refused_out sittings in a row, newest first
+   :refused_out_run 2
+   ;; this many cut_short sittings in a row
+   :cut_short_run 3
+   ;; this many sittings in a row that carry the flag
+   :flag_run {:test_thrash 3 :rewalk 2}})
+
+(def ^:private alert-rate-sittings
+  "…judged only once the window holds this many sittings: a rate over
+  fewer says nothing yet."
+  6)
 
 (def ^:private outcome-help
   (str "Written by the engine at the close; the first that holds. submitted: a change was submitted under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal. cut_short: closed by the hook in under "
@@ -1333,7 +1356,7 @@
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
-   :release_grace_seconds
+   :release_grace_seconds :health_window :health_alerts :health_breaker
    :delegates])
 
 (def ^:private wall-inputs
@@ -1370,6 +1393,12 @@
                         row restatable)
                 (update :data dissoc :stale))
       lift? (update :data dissoc :halt))))
+
+(defhandler close-breaker [row _inp _ctx]
+  ;; seat health 3: the stated `max_open_sittings` was never lowered, so
+  ;; dropping the mark is the whole of it. The breach stays recorded,
+  ;; and only a NEW breach opens the breaker again.
+  (update row :data dissoc :breaker_open))
 
 (defhandler unpark-seat [row _inp ctx]
   ;; R-2: the seat's state IS the input of the `seat_not_active` wall,
@@ -2166,6 +2195,59 @@
   create door and the restate, with the budget said beside it."
   "How many sittings of this seat may run at once, each on a row of its own. One keeps the seat as it always was: an open sitting holds every wake. Above one, a wake starts another run while a row of the walk is left that no open sitting holds. The week's fuel is unchanged and counts every sitting, so three sittings at once spend it three times as fast.")
 
+(def ^:private health-alerts-help
+  (str "The rules each close judges this seat's health by. A rule that newly breaks files one draft ticket, and a rule left out keeps its default. The defaults: a submit rate under "
+       (:submit_rate_below health-alert-defaults)
+       " once the window holds " alert-rate-sittings
+       " sittings, any sitting that never sat, "
+       (:refused_out_run health-alert-defaults) " refused out in a row, "
+       (:cut_short_run health-alert-defaults) " cut short in a row, test_thrash on "
+       (get-in health-alert-defaults [:flag_run :test_thrash])
+       " in a row and rewalk on "
+       (get-in health-alert-defaults [:flag_run :rewalk]) " in a row."))
+
+(def ^:private health-breaker-help
+  "Tick it and a new breach caps this seat to one sitting at a time until somebody closes the breaker. It does nothing for a seat that runs one sitting at once, and the number the seat states is never lowered.")
+
+(def health-alerts-schema
+  "A seat's alert rules (seat health 3). Every rule is optional: a seat
+  states the ones it wants moved, and `health-alert-defaults` answers
+  for the rest."
+  [:map
+   [:submit_rate_below {:optional true
+                        :x-display {:label "Share that submitted, under which it is a breach"}}
+    [:maybe [:decimal {:min 0}]]]
+   [:never_sat_any {:optional true
+                    :x-display {:label "A sitting that never sat is a breach"}}
+    [:maybe :boolean]]
+   [:refused_out_run {:optional true
+                      :x-display {:label "Refused out in a row"}}
+    [:maybe [:int {:min 1 :max 100}]]]
+   [:cut_short_run {:optional true
+                    :x-display {:label "Cut short in a row"}}
+    [:maybe [:int {:min 1 :max 100}]]]
+   ;; the flags are declared one by one, so a form offers a number for
+   ;; each and no box that wants JSON (usability's spelled-by-hand)
+   [:flag_run {:optional true
+               :x-display {:label "In a row, by flag"}}
+    [:maybe
+     [:map
+      [:test_thrash {:optional true
+                     :x-display {:label "test_thrash in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]
+      [:read_heavy {:optional true
+                    :x-display {:label "read_heavy in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]
+      [:rewalk {:optional true
+                :x-display {:label "rewalk in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]
+      [:over_budget {:optional true
+                     :x-display {:label "over_budget in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]
+      [:refusals_high {:optional true
+                       :x-display {:label "refusals_high in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]]]]])
+
 (def fire-keys-schema
   "What the seat keeps of the keys its firings carried (R-12.37): one
   entry for each key the engine minted and no sit has spent yet.
@@ -2428,6 +2510,75 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them, so a run whose close came early is not overtaken mid-call. Zero hands them on at once."}}
      [:int {:min 0 :max 3600}]]
+    ;; SEAT HEALTH 2 (ticket 64a835b4). `health` is the rollup of the
+    ;; seat's last `health_window` closed sittings, written again each
+    ;; time one of them closes (`roll-health!`). WRITTEN BY NO DOOR,
+    ;; `fire_keys`' own way: neither the create door nor the restate
+    ;; declares `health`, so a body that carries it is refused as an
+    ;; unknown key. The window is the person's, and both doors take it.
+    [:health_window {:default (:window health-thresholds)
+                     :examples [(:window health-thresholds)]
+                     :x-display
+                     {:label "Sittings its health is read over"
+                      :help "The seat's health is counted over this many of its last closed sittings. A smaller window answers sooner to a change; a larger one is steadier."}}
+     [:int {:min 1 :max 100}]]
+    [:health {:optional true
+              :x-display
+              {:label "Health of its last sittings"
+               :spelled-by-hand "Written by the engine each time a sitting of this seat closes: what its last sittings came to, what they cost and which flags they carried. Never typed."}}
+     [:maybe [:map
+              [:sittings {:x-display {:label "Sittings in the window"}} :int]
+              [:outcomes {:x-display {:label "Sittings by outcome"}}
+               [:map-of :keyword :int]]
+              [:submit_rate {:optional true
+                             :x-display {:label "Share that submitted"}}
+               [:maybe [:decimal {:min 0}]]]
+              [:cost_usd {:x-display {:label "What they cost, in dollars"}}
+               [:decimal {:min 0}]]
+              [:cost_per_submit {:optional true
+                                 :x-display {:label "Dollars for each submit"}}
+               [:maybe [:decimal {:min 0}]]]
+              [:flags {:x-display {:label "Sittings by flag"}}
+               [:map-of :keyword :int]]
+              [:merged_prs {:x-display {:label "Changes merged since the window opened"}}
+               :int]
+              [:cost_per_merge {:optional true
+                                :x-display {:label "Dollars for each merge"}}
+               [:maybe [:decimal {:min 0}]]]
+              [:last_submit_at {:optional true
+                                :x-display {:label "Last submit"}}
+               [:maybe :waymark/instant]]
+              [:last_outcome {:optional true
+                              :x-display {:label "What the newest came to"}}
+               [:maybe [:string {:max 40}]]]
+              [:computed_at {:x-display {:label "Counted at"}}
+               :waymark/instant]
+              ;; SEAT HEALTH 3: the alert rule the window breaks now,
+              ;; written with the rollup and gone when the rule passes
+              [:breach {:optional true
+                        :x-display {:label "The alert it is breaking"}}
+               [:maybe [:map
+                        [:rule {:x-display {:label "Which rule"}}
+                         [:string {:max 80}]]
+                        [:at {:x-display {:label "Since"}} :waymark/instant]
+                        [:ticket {:optional true
+                                  :not-a-ref "It holds the id of the ticket the breach filed, in a kind this engine may not serve."
+                                  :x-display {:label "The ticket filed for it"}}
+                         [:maybe [:string {:max 128}]]]]]]]]]
+    ;; SEAT HEALTH 3 (ticket 698f6818). The rules a close judges the
+    ;; rollup by (`health-breach`), and whether a new breach caps the
+    ;; seat to one sitting at a time (`breaker_open`, below). Both are
+    ;; the person's, and both doors take them.
+    [:health_alerts {:optional true
+                     :x-display
+                     {:label "When its health is a breach"
+                      :help health-alerts-help}}
+     [:maybe health-alerts-schema]]
+    [:health_breaker {:optional true
+                      :x-display
+                      {:label "Trip a breaker on a breach"
+                       :help health-breaker-help}}
+     [:maybe :boolean]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2464,6 +2615,14 @@
     [:approved_at {:optional true
                    :x-display {:label "Approved at"}}
      [:maybe :waymark/instant]]
+    ;; SEAT HEALTH 3: the breaker a breach opened (`roll-health!`). The
+    ;; wake path reads it (`wakes/max-open-of`) and `close_breaker`
+    ;; drops it; `max_open_sittings` is never lowered.
+    [:breaker_open {:optional true
+                    :x-display
+                    {:label "Breaker open"
+                     :spelled-by-hand "Written by the engine when a health breach trips the breaker: the seat wakes one sitting at a time while it is set. close_breaker drops it; never typed."}}
+     [:maybe :boolean]]
     [:stale {:optional true
              :x-display
              {:label "Entries the boot sweep refused"
@@ -2671,6 +2830,22 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Two minutes is the default."}}
      [:int {:min 0 :max 3600}]]
+    [:health_window {:default (:window health-thresholds)
+                     :examples [(:window health-thresholds)]
+                     :x-display
+                     {:label "Sittings its health is read over"
+                      :help "The seat's health is counted over this many of its last closed sittings. Ten is the default."}}
+     [:int {:min 1 :max 100}]]
+    [:health_alerts {:optional true
+                     :x-display
+                     {:label "When its health is a breach"
+                      :help health-alerts-help}}
+     [:maybe health-alerts-schema]]
+    [:health_breaker {:optional true
+                      :x-display
+                      {:label "Trip a breaker on a breach"
+                       :help health-breaker-help}}
+     [:maybe :boolean]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2851,6 +3026,22 @@
                                       {:label "Grace before a closed sitting's rows are handed on, in seconds"
                                        :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Raise it when a run's close can come before its last call does."}}
               [:int {:min 0 :max 3600}]]
+             [:health_window {:default (:window health-thresholds)
+                              :examples [(:window health-thresholds)]
+                              :x-display
+                              {:label "Sittings its health is read over"
+                               :help "The seat's health is counted over this many of its last closed sittings. The next close counts it over the new window."}}
+              [:int {:min 1 :max 100}]]
+             [:health_alerts {:optional true
+                              :x-display
+                              {:label "When its health is a breach"
+                               :help health-alerts-help}}
+              [:maybe health-alerts-schema]]
+             [:health_breaker {:optional true
+                               :x-display
+                               {:label "Trip a breaker on a breach"
+                                :help health-breaker-help}}
+              [:maybe :boolean]]
              [:delegates {:optional true
                           :x-display
                           {:label "What it may author"
@@ -2890,7 +3081,8 @@
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
                       :fire_interval_seconds :max_open_sittings
-                      :release_grace_seconds :delegates]
+                      :release_grace_seconds :health_window
+                      :health_alerts :health_breaker :delegates]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
@@ -2940,6 +3132,18 @@
      :handler unpark-seat
      :display {:label "Unpark" :style :primary :order 3
                :description "The seat serves again, on the scope it had"}}
+
+    ;; SEAT HEALTH 3 (ticket 698f6818): the breaker a breach opened is
+    ;; closed by hand. No delegation guard, park's own reason: the door
+    ;; gives back only what the seat's `max_open_sittings` already
+    ;; states, so a person's tool or the authoring seat may pull it.
+    :close_breaker
+    {:from #{:active} :to :active
+     :guards [a-person]
+     :safety {:idempotent true :reversible true :confirm false}
+     :handler close-breaker
+     :display {:label "Close the breaker"
+               :description "The seat wakes as many sittings at once as it states again; only a new breach opens the breaker"}}
 
     ;; ── the keyed sitter session (R-12.12 to R-12.16) ───────────────
     ;; The person mints the secret, pastes it into the Routine's
@@ -4462,6 +4666,288 @@
                       true)))))))
         due)))
     0))
+
+;; ── seat health 2: the seat's own rollup (ticket 64a835b4) ──────────
+;;
+;; A sitting says what ONE wake came to. The seat row says what the
+;; last few came to, so a page or a mayor reads every seat's health off
+;; the seat collection in one call and opens no sitting to do it.
+
+(defn- divided
+  "`num` ÷ `den` to `scale` decimal places, or nil when there is nothing
+  to divide by. Exact decimals, `cost-of`'s own rule."
+  [num den scale]
+  (when (pos? (long den))
+    (.divide ^java.math.BigDecimal (bigdec num)
+             ^java.math.BigDecimal (bigdec den)
+             (int scale) RoundingMode/HALF_UP)))
+
+(defn- flag-key
+  "The key one flag is counted under. `refused:<type>` counts as
+  `refused`: a problem type is an address, and an address is no key.
+  `refused_by:<guard>` keeps its guard, because which law refuses a
+  seat out is the thing a reader wants."
+  [flag]
+  (let [s (if (keyword? flag) (subs (str flag) 1) (str flag))]
+    (keyword (if (str/starts-with? s "refused:") "refused" s))))
+
+(defn seat-health
+  "A seat's `health` over `sittings`: the documents of its last closed
+  and judged sittings, newest first. `merged` is how many of the seat's
+  changes merged since the oldest of them started, and `at` the moment
+  of the count. Pure. → the map the seat row carries."
+  [sittings merged at]
+  (let [n (count sittings)
+        outcome-of #(some-> (:outcome %) name)
+        counts (frequencies (keep outcome-of sittings))
+        submits (long (get counts "submitted" 0))
+        merged (long (or merged 0))
+        cost (transduce (keep #(some-> (:cost_usd %) bigdec)) + 0M sittings)]
+    {:sittings n
+     :outcomes (into {}
+                     (map (fn [o] [(keyword o) (long (get counts o 0))]))
+                     outcomes)
+     :submit_rate (divided submits n 4)
+     :cost_usd cost
+     :cost_per_submit (divided cost submits cost-scale)
+     :flags (frequencies (map flag-key (mapcat :flags sittings)))
+     :merged_prs merged
+     :cost_per_merge (divided cost merged cost-scale)
+     :last_submit_at (some->> sittings
+                              (filter #(= "submitted" (outcome-of %)))
+                              first
+                              :ended_at
+                              ->instant
+                              str)
+     :last_outcome (some-> (first sittings) outcome-of)
+     :computed_at (str at)}))
+
+;; ── seat health 3: a breach is told (ticket 698f6818) ───────────────
+;;
+;; The rollup says how a seat is doing. An alert says when that is bad
+;; enough to tell somebody: each close judges the seat's `health_alerts`
+;; over the window it just rolled. A rule that newly breaks files one
+;; draft ticket and is recorded as `health.breach`; a rule still broken
+;; at the next close files nothing, and one that passes clears the
+;; record.
+
+(defn- flag-name
+  "A flag as `flag_run` names it: `flag-key`'s spelling, as a string."
+  [flag]
+  (subs (str (flag-key flag)) 1))
+
+(defn health-breach
+  "The alert rule a seat's window breaks, or nil when it breaks none.
+  `alerts` is the seat's `health_alerts`, laid over
+  `health-alert-defaults`; `sittings` are the window's documents, newest
+  first, and `health` their rollup (`seat-health`). A run is counted
+  from the newest sitting back, so one sitting that is not of the run
+  ends it. The rules are judged in one order and the first that breaks
+  is the answer. Pure. → the rule's name."
+  [alerts health sittings]
+  (let [{:keys [submit_rate_below never_sat_any refused_out_run
+                cut_short_run flag_run]}
+        (merge health-alert-defaults
+               (into {} (remove (comp nil? val)) alerts))
+        outcome? (fn [o] #(= o (some-> (:outcome %) name)))
+        run (fn [pred] (count (take-while pred sittings)))
+        reached? (fn [limit n] (and (some? limit) (>= (long n) (long limit))))
+        rate (:submit_rate health)]
+    (cond
+      (and (true? never_sat_any) (some (outcome? "never_sat") sittings))
+      "never_sat_any"
+
+      (reached? refused_out_run (run (outcome? "refused_out")))
+      "refused_out_run"
+
+      (reached? cut_short_run (run (outcome? "cut_short")))
+      "cut_short_run"
+
+      :else
+      (or (some (fn [[flag limit]]
+                  (let [flag (flag-name flag)]
+                    (when (reached? limit
+                                    (run (fn [s] (some #(= flag (flag-name %))
+                                                       (:flags s)))))
+                      (str "flag_run:" flag))))
+                (sort-by #(flag-name (key %)) flag_run))
+          (when (and (some? rate) (some? submit_rate_below)
+                     (>= (long (:sittings health)) (long alert-rate-sittings))
+                     (neg? (compare (bigdec rate) (bigdec submit_rate_below))))
+            "submit_rate_below")))))
+
+(defn- breach-detail
+  "What the ticket says: the seat, the rule, and each sitting of the
+  window with what it came to, its flags and its link."
+  [seat rule sittings]
+  (let [data (:data seat)]
+    (str "Seat " (:name data) " (/api/seats/" (:id seat)
+         ") broke its health alert `" rule "` at "
+         (get-in data [:health :breach :at]) ".\n\n"
+         "Its last " (count sittings) " sittings, newest first:\n"
+         (str/join
+          "\n"
+          (map (fn [s]
+                 (str "- /api/sittings/" (:id s) " · "
+                      (or (some-> (:outcome s) name) "not judged")
+                      (when-some [flags (seq (:flags s))]
+                        (str " · "
+                             (str/join ", " (map #(if (keyword? %)
+                                                    (subs (str %) 1)
+                                                    (str %))
+                                                 flags))))))
+               sittings))
+         (when (true? (:breaker_open data))
+           (str "\n\nThe breaker is open (`breaker_open`): the seat wakes one sitting at a time, and its max_open_sittings stays "
+                (:max_open_sittings data)
+                ". `close_breaker` on the seat lets it wake them all again.")))))
+
+(defn- file-breach-ticket!
+  "The draft ticket a new breach earns, filed as the engine
+  (`judgments/file-ticket!`'s posture). Best effort: an engine that
+  serves no `ticket` kind files none, and a refusal leaves the breach
+  recorded without one. → the ticket's id, or nil."
+  [eng seat sittings]
+  (when (get (inv/resources eng) :ticket)
+    (let [{:keys [rule at]} (get-in seat [:data :health :breach])]
+      (try
+        (some-> (inv/create! eng :ticket
+                             {:title (str "seat " (get-in seat [:data :name])
+                                          " health breach: " rule)
+                              :detail (breach-detail seat rule sittings)
+                              :repo "ckopsa/waymark"
+                              :type "bug"
+                              :priority 1}
+                             {:principal seats-actor
+                              :idempotency-key (str "seat-health:" (:id seat)
+                                                    ":" rule ":" at)})
+                :row :id str)
+        (catch Exception _ nil)))))
+
+(defn- stamp-breach-ticket!
+  "Write the filed ticket's id beside the breach it was filed for, when
+  that breach still stands. The rollup's own MAINTENANCE write.
+  → the seat's `health` as written, or nil."
+  [eng seat-id rule ticket]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [seat (store/load-row st tx :seat seat-id
+                                         {:for-update true})]
+          (when (= rule (get-in seat [:data :health :breach :rule]))
+            (let [health (assoc-in (get-in seat [:data :health])
+                                   [:breach :ticket] ticket)]
+              (store/update-data! st tx :seat seat-id
+                                  (assoc (:data seat) :health health)
+                                  (:next-flip-at seat))
+              health)))))))
+
+(defn- merged-since
+  "How many of this seat's changes merged at or after `since`: the rows
+  of the `change` kind in `merged` whose author is the seat's name,
+  read by the moment each row last moved — a merged change is over, so
+  that moment is the merge unless a later maintenance write touched the
+  row. An engine that serves no such kind has merged none."
+  [eng tx seat-row ^java.time.Instant since]
+  (let [author (some-> (get-in seat-row [:data :name]) str not-empty)]
+    (if (and since author (get (inv/resources eng) :change))
+      (count
+       (filter (fn [row]
+                 (when-some [^java.time.Instant at (->instant (:updated-at row))]
+                   (not (.isBefore at since))))
+               (store/query-rows (:storage eng) tx :change
+                                 {:state :merged :author author}
+                                 {:limit seat-health-page :newest-first true})))
+      0)))
+
+(defn roll-health!
+  "Write the seat's `health` again, over its last `health_window` closed
+  sittings that carry an outcome (`seat-health`). A sitting closed
+  before the close judged it is not in the window. A MAINTENANCE write,
+  `bump-counter!`'s spelling: document only, version untouched, no
+  transition. Best-effort — a rollup that cannot be counted leaves the
+  last one standing and never fails the close that asked for it.
+
+  SEAT HEALTH 3: the same write judges the seat's alerts over the
+  window (`health-breach`). A rule that newly breaks is recorded as
+  `health.breach`, opens the breaker when the seat asks for one and
+  runs several sittings at once, and files one ticket after the write
+  commits. The same rule at the next close keeps its record and files
+  nothing; no rule clears it.
+  → the map written, or nil when there was nothing to write."
+  [eng seat-id]
+  (when (and seat-id
+             (get (inv/resources eng) :seat)
+             (get (inv/resources eng) :sitting))
+    (try
+      (let [st (:storage eng)
+            seat-id (str seat-id)
+            started #(->instant (:started_at %))]
+        (when-some [{:keys [seat sittings health new?]}
+                    (store/with-tx st
+                      (fn [tx]
+                        (when-some [seat (store/load-row st tx :seat seat-id
+                                                         {:for-update true})]
+                          (let [window (max 1 (long (or (get-in seat [:data :health_window])
+                                                        (:window health-thresholds))))
+                                sittings (->> (store/query-rows
+                                               st tx :sitting
+                                               {:seat seat-id :state :closed}
+                                               {:limit seat-health-page :newest-first true})
+                                              ;; the id rides along for the
+                                              ;; ticket's links
+                                              (map #(assoc (:data %) :id (:id %)))
+                                              (filter #(and (some? (:outcome %)) (started %)))
+                                              (sort-by started #(compare %2 %1))
+                                              (take window)
+                                              vec)
+                                at (call-stamp eng)
+                                health (seat-health
+                                        sittings
+                                        (merged-since eng tx seat
+                                                      (some-> (peek sittings) started))
+                                        at)
+                                was (get-in seat [:data :health :breach])
+                                rule (health-breach (get-in seat [:data :health_alerts])
+                                                    health sittings)
+                                new? (and (some? rule)
+                                          (not= rule (some-> (:rule was) str)))
+                                trip? (and new?
+                                           (true? (get-in seat [:data :health_breaker]))
+                                           (< 1 (long (or (get-in seat [:data :max_open_sittings])
+                                                          1))))
+                                health (cond-> health
+                                         rule (assoc :breach
+                                                     (if new?
+                                                       {:rule rule :at (str at)}
+                                                       was)))
+                                data (cond-> (assoc (:data seat) :health health)
+                                       trip? (assoc :breaker_open true))]
+                            (store/update-data! st tx :seat seat-id data
+                                                (:next-flip-at seat))
+                            {:seat (assoc seat :data data)
+                             :sittings sittings
+                             :health health
+                             :new? new?}))))]
+          ;; the ticket is its own write, after the rollup's commit
+          (or (when new?
+                (when-some [ticket (file-breach-ticket! eng seat sittings)]
+                  (stamp-breach-ticket! eng seat-id
+                                        (get-in health [:breach :rule])
+                                        ticket)))
+              health)))
+      (catch Exception _ nil))))
+
+(defn after-write
+  "The engine's `:maintain` hook, this module's arm (seat health 2): a
+  committed write that leaves a sitting closed rolls its seat's
+  `health`. It answers nil for every write, so the composition keeps
+  the row the passes before it decided on."
+  [eng kind _action-name res]
+  (when (and (= :sitting kind)
+             (= "closed" (some-> (get-in res [:row :state]) name)))
+    (roll-health! eng (get-in res [:row :data :seat])))
+  nil)
 
 (defn- a-persons-write?
   "A logged actor a person answers for: a human, or a held call a person

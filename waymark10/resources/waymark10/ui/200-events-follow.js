@@ -316,6 +316,8 @@ async function openGuidedDialog(d, name, key) {
     guided: {name, key, onDismiss: () => { guidedDismissed = key; }}});
   const g = $("dialog[open][data-guided]");
   if (g && g.guidedSet) g.guidedSet(guidedLastFields);
+  /* a replayed caption about this form is drawn in it */
+  if (replay) replayCaption();
 }
 function applyGuidedUi(f) {
   if (replay || !followUi || !followId || !f || !f.ui ||
@@ -678,6 +680,16 @@ demoBoot().catch(() => { /* engine not started, or restarting */ });
 const REPLAY_SPEEDS = [1, 2, 4];
 /* a long silence in the recording is cut to this many ms, before speed */
 const REPLAY_MAX_GAP = 3000;
+/* the beats of one connector call are recorded milliseconds apart
+   (docs/spec-agent-demo-walks.md §2): two frames closer than
+   REPLAY_BURST_MS are played REPLAY_BURST_GAP apart, before speed. No
+   browser makes such a burst, since a form's reports are debounced. */
+const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
+/* the frame after a caption waits for the caption to be read
+   (docs/spec-agent-demo-walks.md §3): REPLAY_READ_MS for each
+   character, at least REPLAY_READ_MIN and at most REPLAY_READ_MAX,
+   before speed, and on top of the gap the long-silence cut allows. */
+const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;
 function parseWalk(text) {
   let docs;
   try {
@@ -700,14 +712,18 @@ function startReplay(text) {
   const r = {title: walk.header.title || "a walk", engine: walk.header.engine,
              cast: walk.header.cast || {}, frames: walk.frames,
              at: 0, speed: 1, playing: false, timer: null, who: null, back,
+             caption: null,       // the caption frame on screen
              rows: new Map(),     // self → {kind, state, summary, log}
+             docs: new Map(),     // self, the document recorded for it so far
              known: new Set(),    // every row self the recording names
              fields: new Map()};  // dialog key → its field names
   for (const f of walk.frames) {
     const ui = (f.type === "ui" && f.ui) || {};
     /* an invitation names a dialog as well: its row's door, with the
-       invited field and the suggested ones */
-    const inv = f.type === "invitation" && f.self && f.action;
+       invited field and the suggested ones; and so does a caption
+       anchored to a field */
+    const inv = (f.type === "invitation" || (f.type === "caption" && f.field))
+      && f.self && f.action;
     const d = inv ? {self: String(f.self).split("?")[0], action: f.action}
                   : ui.dialog;
     for (const s of [f.self, ui.focus, d && d.self])
@@ -722,6 +738,9 @@ function startReplay(text) {
     }
   }
   replay = r;
+  /* a walk that carries its screens has them drawn by the live screen
+     code, whose reads are held for as long as the replay lasts */
+  apiHeld = walk.frames.some(f => f.type === "doc");
   guidedFocus = null;
   guidedLastFields = {};
   guidedDismissed = null;
@@ -738,6 +757,11 @@ function replayActor(f) {
    actionDialog can draw: every field the recording typed into, as
    text. The export carries no schema, so none is invented. */
 function replayDialogDoc(d) {
+  /* a walk that carries this row's document
+     (docs/spec-agent-demo-walks.md §8a) has the dialog drawn from that
+     document's own input schema */
+  const held = replay.docs.get(d.self);
+  if (held && (held.actions || {})[d.action]) return {ok: true, body: held};
   const names = replay.fields.get(d.self + " " + d.action) || new Set();
   const row = replay.rows.get(d.self) || {};
   return {ok: true, body: {
@@ -773,6 +797,18 @@ async function openReplayInvitation(f, actor) {
   g.guidedSet(f.suggest || {});
 }
 function applyReplayFrame(f) {
+  /* a `doc` frame is a screen and nobody's act: it is kept for
+     renderReplay, and its screen is drawn again when it is the one
+     showing */
+  if (f.type === "doc") {
+    const self = String(f.self || "").split("?")[0];
+    if (self && f.doc) {
+      replay.docs.set(self, f.doc);
+      if (self === String(hereHref() || "").split("?")[0]) render();
+    }
+    replayChip();
+    return;
+  }
   const actor = replayActor(f);
   replay.who = actor;
   if (f.type === "move") {
@@ -796,7 +832,11 @@ function applyReplayFrame(f) {
     else if (!$("dialog[open]")) location.hash = "#" + f.self;
   } else if (f.type === "invitation" && f.self && f.action) {
     openReplayInvitation(f, actor);
+  } else if (f.type === "caption") {
+    /* one line about the step that follows; an empty one clears it */
+    replay.caption = f.text ? f : null;
   }
+  replayCaption();
   replayChip();
 }
 function replaySchedule() {
@@ -804,9 +844,46 @@ function replaySchedule() {
   clearTimeout(r.timer);
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
   const prev = r.at ? (r.frames[r.at - 1].t || 0) : 0;
-  const gap = Math.min(REPLAY_MAX_GAP,
-                       Math.max(0, (r.frames[r.at].t || 0) - prev));
+  const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);
+  const read = replayReadingTime(r.at ? r.frames[r.at - 1] : null);
+  const gap = read + Math.min(REPLAY_MAX_GAP,
+                       r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);
   r.timer = setTimeout(replayStep, gap / r.speed);
+}
+/* how long the frame after `f` waits for `f` to be read: nothing,
+   unless `f` is a caption with a line in it */
+function replayReadingTime(f) {
+  if (!f || f.type !== "caption" || !f.text) return 0;
+  return Math.min(REPLAY_READ_MAX,
+                  Math.max(REPLAY_READ_MIN, REPLAY_READ_MS * f.text.length));
+}
+/* the caption on screen (docs/spec-agent-demo-walks.md §3): a band
+   holds the line until the next caption replaces it or an empty one
+   clears it. While the form the caption is about is open, the line is
+   drawn in it as well, by the code that draws an invitation's note:
+   beside its field, with the field lit, when the caption names one. */
+function replayCaption() {
+  const c = replay && replay.caption;
+  let band = $("#replaycaption");
+  if (!band && c)
+    document.body.append(band = el("div", {id: "replaycaption", role: "status"}));
+  if (band) {
+    band.textContent = c ? c.text : "";
+    band.style.display = c ? "block" : "none";
+  }
+  const g = $("dialog[open][data-guided]:not([data-replay-invite])");
+  if (!g || !g.guidedMark) return;
+  const here = !!c && !!c.action &&
+    String(c.self).split("?")[0] + " " + c.action === g.getAttribute("data-guided");
+  const old = g.querySelector("[data-caption-note]");
+  if (old && here && old.textContent === c.text) return;
+  if (old) {
+    old.remove();
+    for (const s of g.querySelectorAll(".invited")) s.classList.remove("invited");
+  }
+  if (here)
+    g.guidedMark(c.field ? [c.field] : [], c.text)
+      .setAttribute("data-caption-note", "");
 }
 function replayStep() {
   const r = replay;
@@ -820,12 +897,15 @@ function playReplay() {
   if (r.at >= r.frames.length) {       // again, from the start
     r.at = 0;
     r.who = null;
+    r.caption = null;
     r.rows.clear();
+    r.docs.clear();
     closeGuided();
     guidedFocus = null;
     guidedDismissed = null;
   }
   r.playing = true;
+  replayCaption();
   replayChip();
   replaySchedule();
 }
@@ -849,10 +929,12 @@ function stopReplay(quiet) {
   clearTimeout(r.timer);
   closeGuided();
   replay = null;
+  apiHeld = false;
   guidedFocus = null;
   guidedLastFields = {};
   guidedDismissed = null;
   guidedSeq = -1;
+  replayCaption();
   replayChip();
   if (quiet) return;
   /* a hashchange renders and beats on its own */
@@ -900,6 +982,10 @@ function renderReplay(view, href) {
   const [path, query] = href.split("?");
   const self = decodeURIComponent(path);
   const row = r.rows.get(self);
+  /* the latest document at or before the playhead draws the product's
+     own screen; with none, the panel below stands */
+  const doc = r.docs.get(self);
+  if (doc && doc.kind) return renderReplayDoc(view, doc);
   const panel = el("div", {class: "panel", "data-replay-screen": self});
   panel.append(el("div", {class: "crumbs"}, "Replay / ",
     el("span", {class: "id", title: self}, self)));
@@ -927,6 +1013,20 @@ function renderReplay(view, href) {
         el("td", {}, known.state || ""));
     }))));
   view.append(panel);
+  paintGuidedFocus();
+}
+/* a screen the walk carries (docs/spec-agent-demo-walks.md §8a): the
+   document recorded for this address, handed to the code that draws a
+   live row or collection. The screen is inert, so no action on it can
+   be taken, and apiHeld answers every read that code makes with
+   nothing. The hints are the ones this page already holds. */
+function renderReplayDoc(view, doc) {
+  const screen = el("div", {"data-replay-screen": doc.self || "",
+                            "data-replay-doc": "", inert: ""});
+  view.append(screen);
+  const hints = dataHintsCache[String(doc.kind).replace(/_collection$/, "")] || {};
+  if (String(doc.kind).endsWith("_collection")) renderCollection(screen, doc, hints);
+  else renderResource(screen, doc, hints).catch(() => {});
   paintGuidedFocus();
 }
 /* the two ways in: a sealed walk's row page (160-resource-surface.js),

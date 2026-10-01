@@ -135,6 +135,8 @@ work.
 | `wake_on` | list of entries `{kind, actions, filter, settle_seconds}`, optional | the transitions that fire the seat, each entry in the shape of a scope entry. A walk seat with no `wake_on` behaves as one computed entry: the walk's kind, with the action `create`. `settle_seconds`, a whole number from 1 to 604800, optional, makes an entry fire on the trailing edge. R-12.22. |
 | `fire_interval_seconds` | int, default 300 | the gap: the engine fires the seat at most once in this many seconds. R-12.22. |
 | `max_open_sittings` | int, 1 to 10, default 1 | the damper's count: the engine does not fire while the seat's open sittings plus its fires on their way have reached it. R-12.22. |
+| `health_window` | int, 1 to 100, default 10 | how many of the seat's last closed sittings its `health` is counted over. |
+| `health` | map, written by the engine | the rollup of those sittings, written again at each close: `sittings`, `outcomes` (a count for each outcome), `submit_rate`, `cost_usd`, `cost_per_submit`, `flags` (a count for each flag), `merged_prs` (the seat's changes merged since the window's first sitting started), `cost_per_merge`, `last_submit_at`, `last_outcome` and `computed_at`. No door writes it. The seat collection carries it, so one read of `/api/seats` answers every seat's health. |
 
 There is no `must` list and no `never` list. The first draft had
 both. Each sentence the model must pre-load is fuel, and each rule
@@ -320,6 +322,16 @@ must abandon an open fired sitting whose `last_call_at` is older than
 the seat's `sitting_idle_seconds`, with `closed_by` `sweep` and the
 note `silent since {last_call_at}`. The two cadences above stay as
 the outer bound.
+
+A sitting's calls are the connector's (the owner's ruling,
+2026-10-01). The connector is the one door that names the calling
+sitting and keeps its tally, its refusals and its walls, so the stamp
+above is written there. A sitter's call over plain HTTP is its
+bearer's, the delegate's or the person's, and not the seat's: it
+stamps no sitting, and there is no `x-waymark-sitting` header. A
+delegate that presents a seat's grant as `X-Waymark-Grant` at the
+HTTP door must be refused `403` with a sentence that names the
+connector as the seat's door.
 
 **R-7.7** A hard stop must raise an alert. The owner's ruling,
 2026-09-17: the three walls of R-5.2 (the seat not active, the model

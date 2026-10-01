@@ -36,6 +36,15 @@
                  border-left: 3px solid var(--warn); background: var(--panel); }
   .suggested-value { font-style: italic; border-style: dashed; }
 
+  /* ── a replayed caption: one line about the step, in a band ──────── */
+  #replaycaption { position: fixed; left: 50%; bottom: 28px; z-index: 30;
+                   transform: translateX(-50%); max-width: min(720px, 92vw);
+                   display: none; padding: 10px 18px; text-align: center;
+                   border-radius: var(--radius); box-shadow: var(--shadow);
+                   background: var(--ink); color: var(--paper);
+                   font-family: var(--serif); font-size: 16px;
+                   pointer-events: none; }
+
   /* ── the ledger: the activity drawer ─────────────────────────────── */
   #ledger { position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
             max-width: 92vw; z-index: 15; background: var(--paper);

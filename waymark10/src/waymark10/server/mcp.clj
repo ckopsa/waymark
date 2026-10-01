@@ -148,6 +148,7 @@
             [waymark10.server.mcp-sessions :as sessions]
             [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
+            [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
@@ -155,6 +156,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.walks :as walks]
             [waymark10.text :as text]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -857,6 +859,16 @@
                   :required ["kind"]
                   :additionalProperties false}})
 
+(def ^:private caption-arg
+  "The `caption` argument of the staged tools
+  (docs/spec-agent-demo-walks.md § 3)."
+  {:type "string"
+   :description (str "One line, at most 140 characters, about this step, "
+                     "for a self walk you are recording: it is written "
+                     "before the call's beats and stays until the next "
+                     "caption. An empty one clears it. With no recording "
+                     "walk it does nothing.")})
+
 (def ^:private query-tool
   {:name "waymark_query"
    :title "Query a collection"
@@ -894,6 +906,7 @@
                           :description "A declared sortable field; prefix with - for descending."}
                    :page_size {:type "integer" :minimum 1}
                    :page_number {:type "integer" :minimum 1}
+                   :caption caption-arg
                    :rows {:type "string" :enum ["none"]
                           :description "\"none\" returns totals and facets without the rows."}
                    :fields {:type "array" :items {:type "string"} :minItems 1
@@ -921,17 +934,23 @@
         "meta blocks. Use summary to read a row's values when you "
         "already know the kind's doors from waymark_schema; use "
         "envelope before acting, since the consequence sentence and "
-        "each action's availability on THIS row live only there.")
+        "each action's availability on THIS row live only there. "
+        "\"export\" is for a sealed walk: what its export file is — "
+        "format, header, frames, bytes, sha256, href — with its first "
+        "lines up to 64 KB and `truncated` when that was not all of "
+        "it. The whole file is read at href over HTTP.")
    :input-schema {:type "object"
                   :properties {:kind {:type "string"}
                                :id {:type "string"}
+                               :caption caption-arg
                                :depth {:type "string" :enum ["full" "summary"]
                                        :description "summary drops data and parts."}
-                               :return {:type "string" :enum ["envelope" "summary"]
+                               :return {:type "string" :enum ["envelope" "summary" "export"]
                                         :description (str "envelope (default): the row's "
                                                           "document, byte for byte. summary: "
                                                           "id/kind/state/summary/data only, "
-                                                          "without the actions block.")}}
+                                                          "without the actions block. export: "
+                                                          "a sealed walk's file, described.")}}
                   :required ["kind" "id"]
                   :additionalProperties false}})
 
@@ -1014,6 +1033,11 @@
                                                 "all back. May only tighten the declaration.")}
                    :action {:type "string"
                             :description "An action name this row advertises."}
+                   :caption caption-arg
+                   :caption_field {:type "string"
+                                   :description (str "With caption: one argument of the "
+                                                     "action, not a secret one. The caption "
+                                                     "is shown beside that field.")}
                    :if_version {:type "string"
                                 :description (str "The version you read: the row's etag or "
                                                   "meta.version. An edit door then refuses "
@@ -1606,6 +1630,118 @@
         :note (str "Availability is per row and per state — waymark_get "
                    "tells you what THIS row affords now.")}))))
 
+;; ── staging (docs/spec-agent-demo-walks.md § 2) ─────────────────────
+;;
+;; While, and only while, the session's principal has a self walk in
+;; `recording`, the calls it already makes are shown: each reports to
+;; its own presence in process, the call `presence-report` makes for a
+;; browser, with `walks/self-recorder`'s tap built from the session's
+;; visibility. Nothing is posted over HTTP, no stream is opened, and
+;; nothing sleeps: the recording keeps the beats' true times and replay
+;; paces them (`REPLAY_BURST_GAP`). There is no tool for it and no
+;; argument that turns it on. Creating the self walk is the opt-in.
+
+(def ^:private typed-beats
+  "The most beats one staged dialog types. A call with more arguments
+  types all but the last beat one by one, and the rest in the last."
+  12)
+
+(defn- stage
+  "What a staged beat needs, {:reg :principal :tap :visible?}, or nil
+  when this call makes no beat: the engine's presence registry is not
+  running, the session is anonymous, the kind is the recording's own
+  (`walks/record-own!`'s rule), or the principal is recording no self
+  walk. It never throws."
+  [eng session rdef]
+  (try
+    (let [principal (:principal session)
+          reg (some-> (:runtime eng) deref :presence)]
+      (when (and reg principal
+                 (not= (:id t/anonymous) (:id principal))
+                 (not (contains? #{"walk" "walk_frame"}
+                                 (some-> (:kind rdef) name)))
+                 (walks/recording-own? eng principal))
+        (when-some [rec (walks/self-recorder eng principal (:visibility session))]
+          {:reg reg
+           :principal principal
+           :tap (:presence rec)
+           :visible? (presence/self-visible? eng (:visibility session))})))
+    (catch Exception _ nil)))
+
+(defn- beat!
+  "One staged beat: `self`, and a `ui` part when the call shows one. A
+  self the session could not GET makes none: the gate `presence-report`
+  keeps for a browser on a private kind, kept for every kind here. It
+  never throws: a walk that could not take a frame does not fail the
+  call it shows."
+  [{:keys [reg principal tap visible?]} self ui]
+  (try
+    (when (visible? self)
+      (presence/report! reg principal self ui tap))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 mcp staging: a beat was not reported -"
+                 (ex-message e)))))
+  nil)
+
+(defn- typed-steps
+  "The `fields` of each typing beat, in order: each adds one value, and
+  past `typed-beats` arguments the last adds all that are left."
+  [given ks]
+  (let [n (count ks)]
+    (map #(select-keys given (take % ks))
+         (if (> n (long typed-beats))
+           (concat (range 1 typed-beats) [n])
+           (range 1 (inc n))))))
+
+(defn- stage-dialog!
+  "An invoke's beats before its write: the gaze moves to `self`, the
+  form opens with no value, and each argument is typed in the order of
+  the action's input schema (`presence/typed-keys`, which leaves a
+  secret one out). When the last beat already shows this form with
+  these values (a rehearsal typed them, or a refused call left them),
+  nothing is typed again. An action the kind does not declare opens no
+  form, and only the gaze moves."
+  [eng st self aname input]
+  (let [dialog {:self self :action (name aname)}
+        ks (presence/typed-keys eng self (name aname) input)
+        given (into {} (map (fn [[k v]] [(keyword (name k)) v])) input)
+        shown? (and ks
+                    (try (presence/shows? (:reg st) (:id (:principal st))
+                                          {:dialog dialog
+                                           :fields (select-keys given ks)})
+                         (catch Exception _ false)))]
+    (if (or (nil? ks) shown?)
+      (beat! st self nil)
+      (do (beat! st self {:dialog dialog :fields {}})
+          (doseq [fields (typed-steps given ks)]
+            (beat! st self {:dialog dialog :fields fields}))))))
+
+(defn- stage-close!
+  "The beat after a write that landed: the form closes. A refused call
+  and a rehearsal make none, so the form stays open with what was
+  typed, as it would on a person's screen."
+  [st self]
+  (beat! st self {:dialog nil}))
+
+(defn- stage-caption!
+  "A call's `caption` (docs/spec-agent-demo-walks.md § 3): one `caption`
+  frame in the caller's recording self walk, written before the call's
+  beats and anchored to the step's own `self`: the screen for a query,
+  the row for a get, the form for an invoke, and beside `caption_field`
+  when the call names one. → nil, or the refusal when the caption
+  cannot be shown (`walks/caption-problem`). With no recording self
+  walk the arguments are accepted and do nothing."
+  [eng session rdef self aname {:keys [caption caption_field]}]
+  (when (and (some? caption) (stage eng session rdef))
+    (let [c {:self self :action (some-> aname name) :field caption_field
+             :text caption}]
+      (if-some [why (walks/caption-problem eng c)]
+        (refusal (p/problem :invalid-arguments 422 "That caption cannot be shown"
+                            {:detail why}))
+        (do (walks/caption! eng (:principal session) (:visibility session) c)
+            nil)))))
+
 (defn- query [eng call session args]
   (let [{:keys [kind page_size page_number rows]} args
         return (return-of args)
@@ -1624,21 +1760,133 @@
                  (assoc "fields" (let [f (:fields args)]
                                    (if (string? f)
                                      f
-                                     (str/join "," (map str f))))))]
-    (answer
-     (call (request session :get (str "/api/" (:plural rdef))
-                    {:query (query-string params)}))
-     return
-     #(when (collection-doc? %) (collection-summary %)))))
+                                     (str/join "," (map str f))))))
+        self (str "/api/" (:plural rdef))
+        ;; captioned (§ 3): the line is written before the call's beats
+        refused (stage-caption! eng session rdef self nil args)
+        resp (when-not refused
+               (call (request session :get self {:query (query-string params)})))]
+    ;; staged (§ 2): the gaze goes to the collection, and its screen
+    ;; says what was asked. A query for totals alone shows nothing
+    (when (and (<= 200 (:status resp 500) 299)
+               (not= "none" (some-> rows str)))
+      (when-some [st (stage eng session rdef)]
+        (beat! st self
+               {:collection (cond-> {:self self}
+                              (map? (:filter args)) (assoc :filter (:filter args))
+                              (:sort args) (assoc :sort (str (:sort args)))
+                              (integer? page_number) (assoc :page page_number))})))
+    (or refused
+        (answer resp return #(when (collection-doc? %) (collection-summary %))))))
+
+;; return: export — a sealed walk's file, described and not carried
+;; (docs/spec-agent-demo-walks.md § 4). The export is a route and not an
+;; action, so no tool reached it. A megabyte of frames in a model's
+;; context is cost and no use, so the answer is the file's size, its
+;; digest and its first lines; `href` is where the whole of it is read.
+
+(def export-lines-cap
+  "How many bytes of a walk's export ride the answer as `lines`."
+  (* 64 1024))
+
+(defn- export-sha256 [^bytes bs]
+  (apply str (map #(format "%02x" %)
+                  (.digest (MessageDigest/getInstance "SHA-256") bs))))
+
+(defn- first-lines
+  "The first of `lines` that fit in `cap` bytes, each counted with its
+  newline."
+  [lines cap]
+  (let [cap (long cap)]
+    (loop [kept [] used 0 more (seq lines)]
+      (if-some [l (first more)]
+        (let [used (+ used 1 (alength (.getBytes ^String l StandardCharsets/UTF_8)))]
+          (if (> used cap)
+            kept
+            (recur (conj kept l) used (next more))))
+        kept))))
+
+(defn- export-digest
+  "What an agent needs to know about a walk's export, read off the
+  route's own bytes: `bytes` and `sha256` are of the whole file, and
+  `lines` is its first lines, the header line among them."
+  [href ^String text]
+  (let [bs (.getBytes text StandardCharsets/UTF_8)
+        all (str/split-lines text)
+        lines (first-lines all export-lines-cap)
+        header (try (j/read-value (first all) verbatim-mapper)
+                    (catch Exception _ nil))]
+    (array-map "format" (get header "format")
+               "header" header
+               "frames" (max 0 (dec (count all)))
+               "bytes" (alength bs)
+               "sha256" (export-sha256 bs)
+               "href" href
+               "lines" lines
+               "truncated" (< (count lines) (count all)))))
+
+(defn- not-sealed
+  "The refusal for an export of a walk that is not sealed. A recording
+  walk names `seal` as the remedy; a purged one has no frames left."
+  [state]
+  (p/problem
+   :wrong-state 409 "Wrong state"
+   (if (= "recording" state)
+     {:detail (str "Only a sealed walk exports; this walk is recording. "
+                   "Seal it first: waymark_invoke with kind \"walk\" and "
+                   "action \"seal\".")
+      :state state
+      :becomes-available {:in-states ["sealed"]}
+      :remedies ["walk.seal"]}
+     {:detail (str "Only a sealed walk exports; this walk is " state
+                   ", and its frames are gone.")
+      :state state})))
+
+(defn- walk-export
+  "`waymark_get` with `return: \"export\"`. The row is read first, so a
+  walk the session cannot see answers the row's own not-found; the
+  export is then the route's answer under the session's visibility,
+  the same bytes GET /api/walks/{id}/export gives."
+  [eng call session {:keys [kind id]}]
+  (let [rdef (rdef-of eng kind)]
+    (when-not (= walks/kind (:kind rdef))
+      (throw (p/problem :invalid-argument 422 "Invalid argument"
+                        {:detail (str "return: \"export\" reads a sealed walk; "
+                                      (name (:kind rdef)) " has no export.")
+                         :argument "return"
+                         :given "export"})))
+    (let [self (str "/api/" (:plural rdef) "/" id)
+          row (call (request session :get self {}))]
+      (if-not (<= 200 (:status row 500) 299)
+        (pass-through row)
+        (let [state (str (get (verbatim-json row) "state"))]
+          (if (not= "sealed" state)
+            (refusal (not-sealed state))
+            (let [href (str self "/export")
+                  resp (call (request session :get href {}))]
+              (if (<= 200 (:status resp 500) 299)
+                (result (j/write-value-as-string
+                         (export-digest href (body-text resp))
+                         verbatim-mapper))
+                (pass-through resp)))))))))
 
 (defn- get-row [eng call session {:keys [kind id depth] :as args}]
-  (let [return (return-of args)
-        rdef (rdef-of eng kind)]
-    (answer
-     (call (request session :get (str "/api/" (:plural rdef) "/" id)
-                    {:query (when depth (query-string {"depth" (str depth)}))}))
-     return
-     #(when (row-doc? %) (row-summary %)))))
+  (if (= "export" (some-> (:return args) str))
+    (walk-export eng call session args)
+    (let [return (return-of args)
+          rdef (rdef-of eng kind)
+          self (str "/api/" (:plural rdef) "/" id)
+          ;; captioned (§ 3): the line is written before the call's beat
+          refused (stage-caption! eng session rdef self nil args)
+          resp (when-not refused
+                 (call (request session :get self
+                                {:query (when depth (query-string {"depth" (str depth)}))})))]
+      ;; staged (§ 2): the gaze goes to the row that was read
+      (when (<= 200 (:status resp 500) 299)
+        (when-some [st (stage eng session rdef)]
+          (beat! st self nil)))
+      (or refused
+          (answer resp return #(when (row-doc? %) (row-summary %)))))))
 
 ;; the confirm gate — the one refusal this namespace issues in its own
 ;; voice, and the reason the spec calls MCP a safety surface rather
@@ -2059,14 +2307,33 @@
                             acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
-        aname (or (declared-action rdef action) (keyword action))]
+        aname (or (declared-action rdef action) (keyword action))
+        ;; captioned (§ 3): the line is written before the call's beats,
+        ;; on the row's form, or on the collection for a create and a
+        ;; bulk call. The two arguments go no further than here
+        refused (stage-caption! eng session rdef
+                                (str "/api/" (:plural rdef)
+                                     (when (and id (not (or ids items)))
+                                       (str "/" id)))
+                                aname args)
+        args (dissoc args :caption :caption_field)]
     (cond
+      refused refused
+
       ;; `at`: the call is stored for its time, not made (R-7.2)
       (some? at)
-      (schedule-call eng call session
-                     (cond-> {:kind (name (:kind rdef)) :action (name aname)}
-                       id (assoc :id (str id)))
-                     args)
+      (let [self (when (and id (not (or ids items)))
+                   (str "/api/" (:plural rdef) "/" id))
+            st (when self (stage eng session rdef))
+            _ (when st (stage-dialog! eng st self aname input))
+            res (schedule-call eng call session
+                               (cond-> {:kind (name (:kind rdef)) :action (name aname)}
+                                 id (assoc :id (str id)))
+                               args)]
+        ;; staged (§ 2): the scheduled_action it made is the write
+        (when (and st (not dry_run) (not (:isError res)))
+          (stage-close! st self))
+        res)
 
       (and (or ids items) id)
       (refusal (p/problem :invalid-arguments 422 "One target, please"
@@ -2081,10 +2348,19 @@
       ;; nothing to project there and the report passes through as
       ;; it is under both spellings
       (or ids items)
-      (bulk-rows call session rdef aname args)
+      (do
+        ;; staged (§ 2): the gaze goes to the collection, then the writes
+        (when-some [st (stage eng session rdef)]
+          (beat! st (str "/api/" (:plural rdef)) nil))
+        (bulk-rows call session rdef aname args))
 
       (nil? id)
-      (create-row call session rdef aname input dry_run acknowledge_warnings return)
+      (do
+        ;; staged (§ 2): the gaze goes to the collection. The form is not
+        ;; shown yet: presence's clean-ui keeps a dialog on a row self only
+        (when-some [st (stage eng session rdef)]
+          (beat! st (str "/api/" (:plural rdef)) nil))
+        (create-row call session rdef aname input dry_run acknowledge_warnings return))
 
       :else
       (let [self (str "/api/" (:plural rdef) "/" id)
@@ -2106,34 +2382,42 @@
                 fenced? (boolean
                          (or (get-in entry [:safety :fence])
                              (get-in rdef [:actions aname :safety :fence])))
-                sentence (consequence-of entry)]
+                sentence (consequence-of entry)
+                st (stage eng session rdef)]
+            ;; staged (§ 2): the form opens and is typed before the
+            ;; confirm gate and the write, so a refusal leaves it open
+            (when st (stage-dialog! eng st self aname input))
             (if (and (get-in entry [:safety :confirm])
                      (not= acknowledge sentence))
               (refusal (confirm-refusal aname sentence acknowledge))
-              (answer
-               ;; the sitting this session is bound to rides the request,
-               ;; so a wall judges THIS sitting and not the newest under
-               ;; the seat's shared grant (ticket 51dfd10b)
-               (call (assoc (request session :post
-                                     (or (:href entry) (str self "/-/" (name aname)))
-                                     {:body (or input {})
-                                      :query (when dry_run "dry_run=1")
-                                      :headers (cond-> (invoke-headers
-                                                        session fenced?
-                                                        (get-in env-resp [:headers "ETag"])
-                                                        acknowledge_warnings)
-                                                 ;; the version the CALLER read, not
-                                                 ;; this read's: an edit door holds
-                                                 ;; the write to it (ticket 5120da15)
-                                                 (some? if_version)
-                                                 (assoc "if-match" (str if_version)))})
-                            :waymark10/sitting
-                            (bound-sitting eng (:mcp-session-id session))))
-               return
-               ;; `from` and the changed set come off the row as READ —
-               ;; the same read the gate and the ETag came from
-               #(when (row-doc? %)
-                  (invoke-summary aname (verbatim-json env-resp) %))))))))))
+              ;; the sitting this session is bound to rides the request,
+              ;; so a wall judges THIS sitting and not the newest under
+              ;; the seat's shared grant (ticket 51dfd10b)
+              (let [resp (call (assoc (request session :post
+                                               (or (:href entry) (str self "/-/" (name aname)))
+                                               {:body (or input {})
+                                                :query (when dry_run "dry_run=1")
+                                                :headers (cond-> (invoke-headers
+                                                                  session fenced?
+                                                                  (get-in env-resp [:headers "ETag"])
+                                                                  acknowledge_warnings)
+                                                           ;; the version the CALLER read, not
+                                                           ;; this read's: an edit door holds
+                                                           ;; the write to it (ticket 5120da15)
+                                                           (some? if_version)
+                                                           (assoc "if-match" (str if_version)))})
+                                      :waymark10/sitting
+                                      (bound-sitting eng (:mcp-session-id session))))]
+                ;; staged (§ 2): the write landed, so the form closes
+                (when (and st (not dry_run) (<= 200 (:status resp 500) 299))
+                  (stage-close! st self))
+                (answer
+                 resp
+                 return
+                 ;; `from` and the changed set come off the row as READ —
+                 ;; the same read the gate and the ETag came from
+                 #(when (row-doc? %)
+                    (invoke-summary aname (verbatim-json env-resp) %)))))))))))
 
 ;; ── waymark_pursue (GRAIL 3/3): a goal in one call ──────────────────
 

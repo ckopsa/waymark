@@ -222,6 +222,42 @@
     (is (str/includes? body "if (uiSharing()) body.ui = uiShareState();"))
     (is (str/includes? body "shareableValues(collectValues(form, input), input)"))))
 
+(deftest ui-replay-paces-a-burst
+  ;; docs/spec-agent-demo-walks.md §2: the beats of one connector call
+  ;; are recorded milliseconds apart, and replay plays two frames less
+  ;; than 50 ms apart 450 ms apart, under the long-silence cut
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;"))
+    (is (str/includes? body "const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);"))
+    (is (str/includes? body "r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);"))
+    (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
+
+(deftest ui-replay-shows-a-caption-and-holds-for-it
+  ;; docs/spec-agent-demo-walks.md §3: a caption frame's line is shown in
+  ;; a band until the next caption or an empty one, and the frame after
+  ;; it waits 55 ms a character, between 1500 and 6000 ms
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;"))
+    (is (str/includes? body "replay.caption = f.text ? f : null;"))
+    (is (str/includes? body "el(\"div\", {id: \"replaycaption\", role: \"status\"})"))
+    (is (str/includes? body "band.textContent = c ? c.text : \"\";"))
+    (is (str/includes? body "#replaycaption {"))
+    (is (str/includes? body "Math.max(REPLAY_READ_MIN, REPLAY_READ_MS * f.text.length));"))
+    (is (str/includes? body "const read = replayReadingTime(r.at ? r.frames[r.at - 1] : null);"))
+    (is (str/includes? body "const gap = read + Math.min(REPLAY_MAX_GAP,"))))
+
+(deftest ui-replay-anchors-a-caption-to-its-field
+  ;; docs/spec-agent-demo-walks.md §3: a caption that names a field is
+  ;; drawn beside it, with the field lit, by the code that draws an
+  ;; invitation's note; the recorded dialog has that field to light
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function markInvited(form, names, text) {"))
+    (is (str/includes? body "dlg.guidedMark = (names, text) => markInvited(form, names, text);"))
+    (is (str/includes? body "g.guidedMark(c.field ? [c.field] : [], c.text)"))
+    (is (str/includes? body ".setAttribute(\"data-caption-note\", \"\");"))
+    (is (str/includes? body "(f.type === \"invitation\" || (f.type === \"caption\" && f.field))"))
+    (is (str/includes? body "if (replay) replayCaption();"))))
+
 (defn- well-known [h]
   (-> (h {:request-method :get :uri "/api/.well-known/waymark"
           :headers {"x-waymark-principal" "reader"}})
@@ -272,6 +308,39 @@
     (is (str/includes? body "markWalkExported(self);"))
     (is (str/includes? body "\"data-export-walk\""))
     (is (str/includes? body "onclick: () => exportWalk(doc.self)"))))
+
+(deftest ui-replay-draws-a-row-from-its-doc
+  ;; docs/spec-agent-demo-walks.md §8a: a `doc` frame is kept as the
+  ;; replay passes it, and the screen it names is drawn by the code that
+  ;; draws a live row or collection, inert, with every request held
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "replay.docs.set(self, f.doc);"))
+    (is (str/includes? body "if (doc && doc.kind) return renderReplayDoc(view, doc);"))
+    (is (str/includes? body "\"data-replay-doc\": \"\", inert: \"\"});"))
+    (is (str/includes? body "if (String(doc.kind).endsWith(\"_collection\")) renderCollection(screen, doc, hints);"))
+    (is (str/includes? body "else renderResource(screen, doc, hints).catch(() => {});"))
+    (testing "a dialog is drawn from the document's input schema"
+      (is (str/includes? body "if (held && (held.actions || {})[d.action]) return {ok: true, body: held};")))
+    (testing "it makes no read and no write"
+      (is (str/includes? body "apiHeld = walk.frames.some(f => f.type === \"doc\");"))
+      (is (str/includes? body "if (apiHeld) return {res: null, status: 0, ok: false, body: null, etag: null};"))
+      (is (str/includes? body "if (apiHeld) return dataHintsCache[kind] || {};"))
+      (is (str/includes? body "if (loaded || apiHeld) return;")))))
+
+(deftest ui-replay-falls-back-without-a-doc
+  ;; a screen the walk holds no document for is today's panel, and a
+  ;; walk with no document at all holds no request
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        from-doc "if (doc && doc.kind) return renderReplayDoc(view, doc);"
+        panel "const panel = el(\"div\", {class: \"panel\", \"data-replay-screen\": self});"]
+    (is (str/includes? body "const doc = r.docs.get(self);"))
+    (is (str/includes? body panel))
+    (is (< (str/index-of body from-doc) (str/index-of body panel))
+        "the panel is what is left when no document is held")
+    (is (str/includes? body "let apiHeld = false;"))
+    (testing "playing again forgets the documents, and stopping lets requests go"
+      (is (str/includes? body "r.rows.clear();\n    r.docs.clear();"))
+      (is (str/includes? body "replay = null;\n  apiHeld = false;")))))
 
 (defn- render! [headers body]
   (let [resp (*h* {:request-method :post :uri "/api/-/render/markdown"
