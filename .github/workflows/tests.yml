@@ -1123,14 +1123,39 @@ jobs:
           exit 1
       - name: Start headless chromium
         run: |
-          nohup google-chrome --headless=new --remote-debugging-port=9223 \
-            --no-sandbox --user-data-dir="$RUNNER_TEMP/chrome" about:blank \
-            > "$RUNNER_TEMP/chrome.log" 2>&1 &
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:9223/json/version > /dev/null 2>&1; then exit 0; fi
-            sleep 1
+          # Three attempts, each with its own profile directory and 30 s
+          # to open the debug port. This step failed once before any test
+          # ran (run 36918162044) on a change that touched no UI, and its
+          # log was not read, so the cause is not known: a failed attempt
+          # now says whether the browser exited or hung, and prints its
+          # log, and one failed start does not red the gate.
+          for attempt in 1 2 3; do
+            log="$RUNNER_TEMP/chrome-$attempt.log"
+            nohup google-chrome --headless=new --remote-debugging-port=9223 \
+              --no-sandbox --user-data-dir="$RUNNER_TEMP/chrome-$attempt" about:blank \
+              > "$log" 2>&1 &
+            pid=$!
+            for _ in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:9223/json/version > /dev/null 2>&1; then
+                echo "chromium answered on 9223 at attempt $attempt"
+                exit 0
+              fi
+              if ! kill -0 "$pid" 2> /dev/null; then break; fi
+              sleep 1
+            done
+            if kill -0 "$pid" 2> /dev/null; then
+              echo "attempt $attempt: chromium ran 30 s and never answered on 9223; it is killed"
+              kill "$pid" 2> /dev/null || true
+              wait "$pid" 2> /dev/null || true
+            else
+              status=0
+              wait "$pid" || status=$?
+              echo "attempt $attempt: chromium exited with status $status before it answered on 9223"
+            fi
+            cat "$log"
+            sleep 2
           done
-          cat "$RUNNER_TEMP/chrome.log"
+          echo "chromium never answered on 9223 in 3 attempts"
           exit 1
       - name: Drive the access UI
         run: node waymark10/scripts/ui-drive.mjs access
@@ -1193,14 +1218,34 @@ jobs:
           exit 1
       - name: Start headless chromium
         run: |
-          nohup google-chrome --headless=new --remote-debugging-port=9223 \
-            --no-sandbox --user-data-dir="$RUNNER_TEMP/chrome" about:blank \
-            > "$RUNNER_TEMP/chrome.log" 2>&1 &
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:9223/json/version > /dev/null 2>&1; then exit 0; fi
-            sleep 1
+          # Three attempts with a named failure, as in ui-access.
+          for attempt in 1 2 3; do
+            log="$RUNNER_TEMP/chrome-$attempt.log"
+            nohup google-chrome --headless=new --remote-debugging-port=9223 \
+              --no-sandbox --user-data-dir="$RUNNER_TEMP/chrome-$attempt" about:blank \
+              > "$log" 2>&1 &
+            pid=$!
+            for _ in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:9223/json/version > /dev/null 2>&1; then
+                echo "chromium answered on 9223 at attempt $attempt"
+                exit 0
+              fi
+              if ! kill -0 "$pid" 2> /dev/null; then break; fi
+              sleep 1
+            done
+            if kill -0 "$pid" 2> /dev/null; then
+              echo "attempt $attempt: chromium ran 30 s and never answered on 9223; it is killed"
+              kill "$pid" 2> /dev/null || true
+              wait "$pid" 2> /dev/null || true
+            else
+              status=0
+              wait "$pid" || status=$?
+              echo "attempt $attempt: chromium exited with status $status before it answered on 9223"
+            fi
+            cat "$log"
+            sleep 2
           done
-          cat "$RUNNER_TEMP/chrome.log"
+          echo "chromium never answered on 9223 in 3 attempts"
           exit 1
       - name: Drive guided follow
         run: node waymark10/scripts/ui-drive.mjs guided
