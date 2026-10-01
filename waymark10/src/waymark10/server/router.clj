@@ -132,6 +132,7 @@
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.runtime :as runtime]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.resource :as res]
             [waymark10.server.seams :as seams]
             [waymark10.server.seats :as seats]
@@ -802,10 +803,15 @@
           result (try
                    (count-committed!
                     eng req (:kind rdef)
-                    (inv/create! eng (:kind rdef) body
-                                 (select-keys opts [:principal :acknowledged
-                                                    :idempotency-key :dry-run
-                                                    :grant])))
+                    ;; a scheduled call that waits on a person has its
+                    ;; held call minted out here (scheduled/after-write!,
+                    ;; docs/spec-scheduled-actions.md R-4.3)
+                    (scheduled/after-write!
+                     eng rdef (first (:create-action-names rdef))
+                     (inv/create! eng (:kind rdef) body
+                                  (select-keys opts [:principal :acknowledged
+                                                     :idempotency-key :dry-run
+                                                     :grant]))))
                    (catch clojure.lang.ExceptionInfo e
                      (if-some [resp (held-instead eng opts (:kind rdef)
                                                   (first (:create-action-names rdef))
@@ -1168,7 +1174,13 @@
                        eng rdef (keyword action)
                        (grants/approval-effects!
                         eng rdef (keyword action)
-                        (inv/invoke! eng (:kind rdef) id (keyword action) body opts))))))
+                        ;; …and a scheduled call that waits on a person
+                        ;; is asked about again when its time moves, and
+                        ;; cancelled by a refusal, out here
+                        ;; (scheduled/after-write!, R-4.3)
+                        (scheduled/after-write!
+                         eng rdef (keyword action)
+                         (inv/invoke! eng (:kind rdef) id (keyword action) body opts)))))))
                    (catch Exception e
                      (let [d (ex-data e)
                            held (held-instead eng opts (:kind rdef)

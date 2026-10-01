@@ -75,6 +75,17 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs guided
 
+   LATER ("Do this later" from a row's dialog, and the row's pending
+   scheduled actions; docs/spec-scheduled-actions.md R-7.3. The
+   scheduled_action kind is core's, so a memory engine — no database —
+   serves it beside a ticket fixture):
+   1. clojure -Sdeps '{:aliases {:fx {:extra-paths ["test"]}}}' -M:fx -e \
+        "(do ((requiring-resolve 'waymark10.batch-a-dev/start-later!) 8125) nil) @(promise)"
+      (boot fresh per drive run — the drive writes its ticket through
+       the API)
+   2. the same chromium
+   3. node waymark10/scripts/ui-drive.mjs later
+
    (The FEED and RECIPE drives — the day's scroll-first face and the
    recipe editor — retired with the feed, 2026-09, and so did
    feed-smoke.sh.)
@@ -83,12 +94,13 @@
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = ["batch-a", "access", "invitation", "guided"].includes(process.argv[2])
+const MODE = ["batch-a", "access", "invitation", "guided", "later"].includes(process.argv[2])
   ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
   (["batch-a", "guided"].includes(MODE) ? "http://localhost:8123"
    : ["access", "invitation"].includes(MODE) ? "http://localhost:8124"
+   : MODE === "later" ? "http://localhost:8125"
    : "http://localhost:8010");
 
 const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json();
@@ -1155,6 +1167,147 @@ async function invitationStory() {
   ok("Decline moves the invitation to declined", await stateOf(declined) === "declined");
 }
 
+/* ════ later: "Do this later" from a row's dialog ═════════════════════
+   Against waymark10.batch-a-dev/start-later!. ui_test pins the page's
+   strings; this executes them (docs/spec-scheduled-actions.md R-7.3): a
+   ticket's Groom dialog schedules the groom for tomorrow 08:30 under
+   the state rule; the ticket's page lists it; Reschedule moves it and
+   Cancel removes it; and an *Only if…* row submits conditions the
+   engine accepts. Every write is read back off the API. */
+async function laterStory() {
+  const person = {"x-waymark-principal": "colton"};
+  const call = async (method, path, body, headers) => {
+    const res = await fetch(BASE + path,
+      {method, headers: {"Content-Type": "application/json", ...headers},
+       body: body ? JSON.stringify(body) : null});
+    return {status: res.status, body: await res.json().catch(() => null)};
+  };
+  const must = (r, status, what) => {
+    if (r.status !== status)
+      throw new Error(what + ": " + r.status + " " + JSON.stringify(r.body));
+    return r;
+  };
+  const p = n => String(n).padStart(2, "0");
+  /* tomorrow at h:m, as the picker writes it and as the instant it
+     names: node and chromium read the one machine's zone */
+  const tomorrow = (h, m) => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(h, m, 0, 0);
+    return {local: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(h)}:${p(m)}`,
+            instant: d.getTime()};
+  };
+
+  console.log("· seeding a draft ticket");
+  const ticket = must(await call("POST", "/api/tickets",
+    {title: "Later " + Date.now(), priority: 2}, person),
+    201, "the person writes a ticket").body.self.split("/").pop();
+  const pending = async () => must(await call("GET",
+    "/api/scheduled_actions?state=scheduled", null, person),
+    200, "read the scheduled actions").body.items
+    .filter(i => ((i.fields || {}).target || {}).id === ticket);
+  const settle = async (pred, what) => {
+    const t0 = Date.now();
+    for (;;) {
+      const rows = await pending();
+      if (pred(rows)) return rows;
+      if (Date.now() - t0 > 6000) throw new Error("timed out waiting for " + what);
+      await sleep(150);
+    }
+  };
+
+  console.log("· boot + principal");
+  await send("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await evaljs(`localStorage.setItem("wm10.principal", "colton"); location.reload(); true`);
+  await sleep(1200);
+
+  const dialog = `document.querySelector("dialog[open]")`;
+  const groom = `document.querySelector('button[data-action="groom"]')`;
+  const openLater = async () => {
+    await waitFor(`!!${groom}`, "the ticket's Groom");
+    await evaljs(`${groom}.click(); true`);
+    await waitFor(`!!${dialog}?.querySelector("[data-later]")`, "Do this later beside the submit");
+    await evaljs(`${dialog}.querySelector("[data-later]").click(); true`);
+    await waitFor(`!!${dialog}?.querySelector("[data-later-at]")`, "the time picker");
+  };
+  const schedule = async at => {
+    await evaljs(`${dialog}.querySelector("[data-later-at]").value = ${JSON.stringify(at)}; true`);
+    await evaljs(`${dialog}.querySelector("[data-later-go]").click(); true`);
+    await waitFor(`!${dialog}`, "the dialog closes once it is scheduled");
+  };
+
+  console.log("· schedule a groom for tomorrow 08:30, under state");
+  await evaljs(`location.hash = ${JSON.stringify("/api/tickets/" + ticket)}; true`);
+  await openLater();
+  ok("the dialog offers Do this later beside its submit", true);
+  ok("the picker's zone is named",
+     await evaljs(`${dialog}.querySelector("[data-later-zone]").textContent ===
+                   Intl.DateTimeFormat().resolvedOptions().timeZone`));
+  ok("the state rule is chosen, in plain words",
+     await evaljs(`(() => { const r = ${dialog}.querySelector('input[name="later_validity"]:checked');
+       return r.value === "state" &&
+              r.closest("label").textContent.includes("As long as it is still draft"); })()`));
+  const first = tomorrow(8, 30);
+  await schedule(first.local);
+  let rows = await settle(r => r.length === 1, "the scheduled groom");
+  ok("the groom is stored under the state rule", rows[0].fields.validity === "state");
+  ok("for tomorrow 08:30 in the person's zone",
+     Date.parse(rows[0].fields.run_at) === first.instant);
+  ok("and the ticket is not groomed yet",
+     must(await call("GET", "/api/tickets/" + ticket, null, person),
+          200, "read the ticket").body.state === "draft");
+
+  console.log("· the ticket's page lists it; reschedule moves it; cancel removes it");
+  const listed = `document.querySelector("[data-scheduled-row]")`;
+  await waitFor(`!!${listed}`, "the pending scheduled action on the ticket's page");
+  ok("the row's page lists its pending scheduled action",
+     await evaljs(`${listed}.textContent.includes("groom")`));
+  await evaljs(`${listed}.querySelector("[data-scheduled-reschedule]").click(); true`);
+  await waitFor(`!!${dialog}?.querySelector('[name="run_at"]')`, "the reschedule dialog");
+  const second = tomorrow(9, 15);
+  await evaljs(`${dialog}.querySelector('[name="run_at"]').value = ${JSON.stringify(second.local)}; true`);
+  await evaljs(`[...${dialog}.querySelectorAll(".dlgfoot button")].at(-1).click(); true`);
+  await waitFor(`!${dialog}`, "the reschedule lands");
+  rows = await settle(r => r.length === 1 &&
+    Date.parse(r[0].fields.run_at) === second.instant, "the moved time");
+  ok("reschedule moves it to tomorrow 09:15", true);
+  const moved = rows[0].self;
+  /* the page paints again after the move: cancel from the fresh row */
+  await waitFor(`!!${listed}?.textContent.includes("09:15")`, "the page shows the moved time");
+  await evaljs(`${listed}.querySelector("[data-scheduled-cancel]").click(); true`);
+  await settle(r => r.length === 0, "the cancel");
+  await waitFor(`!${listed}`, "the cancelled action leaves the page");
+  ok("cancel removes it from the row's page", true);
+  ok("and the scheduled action is cancelled",
+     must(await call("GET", moved, null, person),
+          200, "read the scheduled action").body.state === "cancelled");
+
+  console.log("· Only if…: a condition from the collection's filter control");
+  await openLater();
+  await evaljs(`${dialog}.querySelector('input[name="later_validity"][value="conditions"]').click(); true`);
+  const conds = `${dialog}.querySelector("[data-later-conds]")`;
+  await waitFor(`!!${conds}.querySelector(".filterpanel")`, "the filter control in the dialog");
+  await evaljs(`[...${conds}.querySelectorAll("button")]
+    .find(b => b.textContent.startsWith("Filters")).click(); true`);
+  await evaljs(`{ const sel = [...${conds}.querySelectorAll(".filterpanel select")]
+      .find(s => [...s.options].some(o => o.textContent === "Priority"));
+    sel.value = [...sel.options].find(o => o.textContent === "Priority").value;
+    sel.dispatchEvent(new Event("change")); true }`);
+  await waitFor(`!!${conds}.querySelector('[data-role=values] input[name="priority"]')`,
+                "the priority value");
+  await evaljs(`${conds}.querySelector('[data-role=values] input[name="priority"]').value = "2"; true`);
+  await evaljs(`[...${conds}.querySelectorAll(".filterpanel button")]
+    .find(b => b.textContent === "Apply").click(); true`);
+  await waitFor(`!!${dialog}.querySelector('[data-later-cond="priority"]')`, "the condition's chip");
+  ok("Only if… takes a row from the collection's filter control", true);
+  await schedule(first.local);
+  rows = await settle(r => r.length === 1, "the conditional groom");
+  ok("the conditions are submitted, and the engine accepts them",
+     rows[0].fields.validity === "conditions" &&
+     (rows[0].fields.conditions || {}).priority === "2");
+}
+
 /* ── more tabs: each its own browser context, so each holds its own
    localStorage and cookies — two people in one chromium. → {openTab,
    close}; close disposes every context openTab made. ─────────────── */
@@ -1505,6 +1658,7 @@ if (MODE === "batch-a") await batchAStory();
 else if (MODE === "access") await accessStory();
 else if (MODE === "invitation") await invitationStory();
 else if (MODE === "guided") await guidedStory();
+else if (MODE === "later") await laterStory();
 else await mealplanStory();
 
 console.log(`\nUI drive (${MODE}): ${passed} checks passed` +

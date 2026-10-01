@@ -1,12 +1,12 @@
 (ns waymark10.server.scheduled
   "The scheduled action (docs/spec-scheduled-actions.md, children 1a,
-  1b, 1c, 2, 5 and 6): a call stored for a time, as a kind of its own.
+  1b, 1c, 2, 4a, 5 and 6): a call stored for a time, as a kind of its own.
 
   THIS NAMESPACE IS THE KIND, ITS SCHEDULING CHECK, ITS RUN AND ITS
   CLOCK. The create validates, checks and stores. `start!` claims a row
   and `run!` carries it out; `sweep-due!` is the clock that calls them
-  (R-5), on a loop of its own. `start`, `land`, `skip` and `fail` are
-  the engine's own hand, and no hand at the wire walks them.
+  (R-5), on a loop of its own. `arm`, `ask`, `start`, `land`, `skip` and
+  `fail` are the engine's own hand, and no hand at the wire walks them.
 
   CHECKED AGAIN AT THE RUN (R-3.3). The claim, then the validity rule
   the row chose (R-2), then the confirm sentence read again, then a dry
@@ -36,6 +36,15 @@
   longer admits the call skips the row, and so does a seat that is not
   open. The run's transition counts on no sitting.
 
+  THE PERSON APPROVES AT SCHEDULING (R-4.3). A scheduling check that
+  meets a hold writes the row `proposed`, naming the held call it waits
+  on, and `ask!` mints that call after the commit: its door is `arm` on
+  the row and its `shown` is the call and the time. The allow replays
+  `arm`, a refusal cancels the row, and an expiry or the time passing
+  first skips it. The run invokes the door under `:within` naming this
+  row, which the hold guards read as that yes (waymark10.holds), so
+  nobody is asked twice. The yes carries no grant forward.
+
   THE ENGINE NEVER GUESSES UTC (R-7.2). `run_at` is RFC 3339 with an
   offset, or a local time read in the `zone` the body names, else in
   the zone on the scheduler's member row or its person's. From then
@@ -50,9 +59,11 @@
   (:require [clojure.string :as str]
             [waymark10.confirm :as confirm]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
@@ -86,7 +97,7 @@
   seat from spending tomorrow's budget today (R-4.2)."
   100)
 
-(def open-states "The states that count against it; child 4 adds `proposed`." [:scheduled])
+(def open-states "The states that count against it." [:proposed :scheduled])
 
 (def input-cap-bytes "The ceiling on a stored `input`: a held call's 16 KB." 16384)
 
@@ -256,7 +267,10 @@
   (let [who (str (:id (:principal ctx)))
         person (some-> (get-in row [:data :acts_as :acts_for]) str not-empty)]
     (if (or (= who (str (get-in row [:data :scheduler])))
-            (= who person))
+            (= who person)
+            ;; a refused held call cancels the row it asked about, and
+            ;; that hand is the engine's (R-4.3)
+            (= :system (:type (:principal ctx))))
       (t/allow)
       (t/deny))))
 
@@ -268,6 +282,17 @@
   (if (= :system (:type (:principal ctx)))
     (t/allow)
     (t/deny)))
+
+(g/defguard the-yes-arms-it
+  {:reads [:principal :held_call :within]
+   :hide true
+   :explain "A scheduled action that waits on a person is armed by that person's allow, which the engine replays; no hand at the wire arms one."}
+  [row _inp ctx]
+  ;; R-4.3: the replay of the held call this row names, and no other
+  (let [h (holds/allowed-hold ctx kind :arm (:id row))]
+    (if (and h (= (str (:id h)) (str (get-in row [:data :held_call]))))
+      (t/allow)
+      (t/deny))))
 
 ;; ── the scheduling check (R-3.1, R-3.2) ─────────────────────────────
 
@@ -356,21 +381,47 @@
       (str "the input does not fit `" (name (:name defn')) "`; look at "
            (str/join ", " (map #(str "`" (named (key %)) "`") errors)) "."))))
 
+(defn- waits-on
+  "The person a hold met at scheduling would wait on (R-4.3), or nil:
+  `delegation/hold-owner`'s reading, and nobody on an engine that serves
+  no held call. A hold with nobody to wait on is the door's refusal."
+  [ctx]
+  (when-some [rdef-of (:rdef-of ctx)]
+    (when (rdef-of "held_call")
+      (delegation/hold-owner ctx))))
+
 (defn- rehearse!
   "R-3.1: the call, rehearsed as the scheduler under the grant it wears.
   The door's own refusal is thrown as the door wrote it, unless it is a
-  guard the scheduler named in `expect_refusals` (R-3.2)."
+  guard the scheduler named in `expect_refusals` (R-3.2), or a hold with
+  a person to wait on (R-4.3), which answers `{:held <its sentence>}`."
   [{:keys [kind action id]} inp ctx]
   (let [expected (set (:expect_refusals inp))
         accepted (into #{} (map keyword) (:acknowledge_warnings inp))]
     (try
       ((:rehearse ctx) kind id action (or (:input inp) {}) {:acknowledged accepted})
+      nil
       (catch clojure.lang.ExceptionInfo e
-        (let [{:keys [guard] :as d} (ex-data e)]
-          (when-not (and (= :guard-refused (:waymark10/problem d))
-                         guard
-                         (contains? expected (name guard)))
-            (throw e)))))))
+        (let [{:keys [guard] :as d} (ex-data e)
+              refused? (and guard (= :guard-refused (:waymark10/problem d)))]
+          (cond
+            (and refused? (contains? expected (name guard))) nil
+
+            (and refused? (holds/hold? guard) (waits-on ctx))
+            {:held (str (or (:detail d) (ex-message e)))}
+
+            :else (throw e)))))))
+
+(defn- hold-met
+  "The hold the scheduling check met (R-4.3): the hold guard's own
+  sentence, or nil. The check has passed by the time this is asked, so
+  the door is rehearsed once more only to read which way it passed."
+  [inp ctx]
+  (when (and (:rehearse ctx) (map? (:target inp)))
+    (let [{:keys [problem] :as door} (door-of (:target inp) ctx)]
+      (when-not problem
+        (try (:held (rehearse! door inp ctx))
+             (catch clojure.lang.ExceptionInfo _ nil))))))
 
 (defn- refused-now
   "The scheduling check. Answers the sentence of a refusal this kind
@@ -498,8 +549,10 @@
   who scheduled it, who the run runs as, and the id of the grant it
   wore. `run_at` becomes the instant the body named, in whole minutes,
   and `zone` the zone it is shown in. `snapshot` is the target as the
-  scheduling check met it. `tell_done` and `tell_problem` name the
-  member each ending is told to, as `tell` allows (R-6.1)."
+  scheduling check met it. A call the check found held is born
+  `proposed`, naming the held call `ask!` mints for it (R-4.3).
+  `tell_done` and `tell_problem` name the member each ending is told
+  to, as `tell` allows (R-6.1)."
   [row ctx]
   (let [p (:principal ctx)
         tell (or (some-> (get-in row [:data :tell]) str not-empty) "all")
@@ -507,23 +560,39 @@
         {:keys [instant zone]} (time-of nil (:data row) ctx)
         acts-for (some-> (:acts-for p) str not-empty)
         grant (some-> (get-in ctx [:grant :id]) str not-empty)
-        snapshot (snapshot-of (:data row) ctx)]
-    (update row :data
-            #(cond-> (assoc %
-                            :scheduler (str (:id p))
-                            :acts_as (cond-> {:id (str (:id p))
-                                              :type (name (or (:type p) :human))}
-                                       acts-for (assoc :acts_for acts-for))
-                            :run_at instant
-                            :zone zone)
-               grant (assoc :grant grant)
-               snapshot (assoc :snapshot snapshot)
-               (and told (= "all" tell)) (assoc :tell_done told)
-               told (assoc :tell_problem told)))))
+        snapshot (snapshot-of (:data row) ctx)
+        held (hold-met (:data row) ctx)]
+    (cond-> (update row :data
+                    #(cond-> (assoc %
+                                    :scheduler (str (:id p))
+                                    :acts_as (cond-> {:id (str (:id p))
+                                                      :type (name (or (:type p) :human))}
+                                               acts-for (assoc :acts_for acts-for))
+                                    :run_at instant
+                                    :zone zone)
+                       grant (assoc :grant grant)
+                       snapshot (assoc :snapshot snapshot)
+                       held (assoc :held_call (str (random-uuid)))
+                       (and told (= "all" tell)) (assoc :tell_done told)
+                       told (assoc :tell_problem told)))
+      held (assoc :state :proposed))))
 
 (defhandler move-time [row inp ctx]
   (let [{:keys [instant zone]} (time-of row inp ctx)]
-    (update row :data assoc :run_at instant :zone zone)))
+    (update row :data
+            #(cond-> (assoc % :run_at instant :zone zone)
+               ;; R-4.3: the yes covered this call at the old time. The
+               ;; row names a held call nobody has minted, which is no
+               ;; yes, and `ask!` mints it and moves the row to `proposed`
+               (and (:held_call %) (not= instant (:run_at %)))
+               (assoc :held_call (str (random-uuid)))))))
+
+(defhandler record-stop [row inp ctx]
+  ;; a refused held call cancels the row in the decider's words (R-4.3);
+  ;; the scheduler's own cancel says nothing
+  (cond-> row
+    (and (= :system (:type (:principal ctx))) (:outcome_why inp))
+    (assoc-in [:data :outcome_why] (:outcome_why inp))))
 
 (defhandler record-start [row _inp ctx]
   (assoc-in row [:data :ran_at] (:now ctx)))
@@ -559,6 +628,12 @@
   "A refusal's own sentence."
   [^Throwable e]
   (str (or (:detail (ex-data e)) (ex-message e))))
+
+(defn- cut
+  "A sentence at most `n` characters long, ending in … when it was longer."
+  [s ^long n]
+  (let [s (str s)]
+    (if (< n (count s)) (str (subs s 0 (dec n)) "…") s)))
 
 (defn- call-of [door]
   (str "`" (name (:action door)) "` on " (name (:kind door))))
@@ -773,14 +848,26 @@
   :why}` for what it could not see."
   [eng id {target :id :as door} data principal grant]
   (let [version (get-in data [:snapshot :version])
+        yes (some-> (:held_call data) str not-empty)
         opts (cond-> {:principal principal
                       :acknowledged (into #{} (map keyword) (:acknowledge_warnings data))}
                grant (assoc :grant grant)
+               ;; R-4.3: a row a person approved runs under `:within`
+               ;; naming it, which the hold guards read as that yes
+               yes (assoc :within {:kind kind :action :run :id (str id)})
                ;; R-2.1: strict sends the snapshot's etag as If-Match
                (and target version (= "strict" (:validity data)))
                (assoc :if-match (inv/etag (:kind door) target version)))]
     (try
-      (let [warned (:warnings (attempt eng door data (assoc opts :dry-run true)))]
+      (let [warned (try
+                     (:warnings (attempt eng door data (assoc opts :dry-run true)))
+                     (catch clojure.lang.ExceptionInfo e
+                       ;; a create's rehearsal carries no `:within`, so
+                       ;; an approved create meets its hold there and
+                       ;; nowhere else: the invoke below is its judgment
+                       (when-not (and yes (nil? target)
+                                      (holds/hold? (:guard (ex-data e))))
+                         (throw e))))]
         (if (seq warned)
           {:end :skip
            :why (str (call-of door) " met a warning nobody accepted: "
@@ -961,10 +1048,185 @@
       (warn! "the row " id " failed: " (ex-message e))
       nil)))
 
+;; ── approval at scheduling (R-4.3) ──────────────────────────────────
+
+(def ^:private nobody-approved "Nobody approved this before its time.")
+
+(def ^:private ^DateTimeFormatter day-and-minute
+  (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))
+
+(defn- shown-of
+  "What the person reads on the held call: the call and the time, on the
+  scheduler's clock. The date is written out, because a row is read on
+  more days than the one it was written on."
+  [data]
+  (let [{:keys [action id] target :kind} (:target data)
+        ^Instant at (:run_at data)]
+    (str action " " target
+         (when-some [id (some-> id str not-empty)] (str " " id))
+         " · "
+         (.format day-and-minute
+                  (.atZone at ^ZoneId (or (zone-id (:zone data)) ZoneOffset/UTC))))))
+
+(defn- scheduler-ctx
+  "The scheduler as `delegation` reads a caller, outside any write: who
+  it is and whom it acts for, from the row's own stamps."
+  [eng row]
+  (let [{:keys [id type acts_for]} (get-in row [:data :acts_as])
+        hooks (inv/render-hooks eng)]
+    {:principal (cond-> (t/principal {:id (str id)
+                                      :type (keyword (or type "human"))})
+                  (some-> acts_for str not-empty) (assoc :acts-for (str acts_for)))
+     :now ((:now-fn eng))
+     :read (:read hooks)
+     :find (:find hooks)}))
+
+(defn- asked-why
+  "The hold guard's own sentence, for the person who answers: the call
+  rehearsed as its run would make it, under the grant as it stands."
+  [eng row door]
+  (let [data (:data row)
+        {:keys [principal]} (when-not (:problem door) (runner-of eng row))
+        leash (when principal (leash-of eng data principal))]
+    (or (when principal
+          (try
+            (attempt eng door data
+                     (cond-> {:principal principal
+                              :dry-run true
+                              :acknowledged (into #{} (map keyword)
+                                                  (:acknowledge_warnings data))}
+                       (:grant leash) (assoc :grant (:grant leash))))
+            nil
+            (catch clojure.lang.ExceptionInfo e
+              (when (holds/hold? (:guard (ex-data e)))
+                (not-empty (said e))))))
+        "Held for the person's tap.")))
+
+(defn ask!
+  "Mint the held call a row waits on (R-4.3), once. The row names its
+  held call's id from its birth or from its `reschedule`; this writes
+  that row with the engine's own hand, its door `arm` on this row, its
+  `caller` the scheduler and its `shown` the call and the time. A
+  `scheduled` row that names a held call nobody minted was moved by
+  `reschedule`, and goes back to `proposed` to be asked about again.
+  Answers the row as it stands after, or nil when there was nothing to
+  ask."
+  [eng id]
+  (let [row (stored-row eng kind id)
+        data (:data row)
+        hid (some-> (:held_call data) str not-empty)]
+    (when (and hid
+               (#{:proposed :scheduled} (:state row))
+               (contains? (inv/resources eng) :held_call)
+               (nil? (stored-row eng :held_call hid)))
+      (let [ctx (scheduler-ctx eng row)
+            door (door-of (:target data) (registry-ctx eng))
+            owner (delegation/hold-owner ctx)
+            author (some-> (delegation/author-seat ctx) :id str)]
+        (inv/create! eng :held_call
+                     (cond-> {:tool "scheduled_action.arm"
+                              :why (cut (asked-why eng row door) 1000)
+                              :caller (str (:scheduler data))
+                              :forward {}
+                              :shown (cut (shown-of data) 140)
+                              :door (cond-> {:kind "scheduled_action"
+                                             :action "arm"
+                                             :id (str id)}
+                                      author (assoc :author author))}
+                       owner (assoc :owner (str owner)))
+                     {:principal engine-actor :id hid})
+        (when (= :scheduled (:state row))
+          (inv/invoke! eng kind (str id) :ask {} {:principal engine-actor}))
+        (stored-row eng kind id)))))
+
+(defn- arm-of
+  "The id of the scheduled action a held call asks about, or nil."
+  [held]
+  (let [{k :kind a :action id :id} (get-in held [:data :door])]
+    (when (and (= "scheduled_action" (str k)) (= "arm" (str a)))
+      (some-> id str not-empty))))
+
+(defn- settle!
+  "A held call's ending that was not a yes, carried to the row that
+  waits on it: a refusal cancels the row with the decider's reason, and
+  an expiry skips it. A row that no longer waits on this call is left as
+  it is. Answers the row's new state, or nil."
+  [eng held]
+  (when-some [id (arm-of held)]
+    (let [row (stored-row eng kind id)]
+      (when (and (= :proposed (:state row))
+                 (= (str (:id held)) (str (get-in row [:data :held_call]))))
+        (case (:state held)
+          :refused (do (inv/invoke! eng kind id :cancel
+                                    {:outcome_why
+                                     (cut (or (some-> (get-in held [:data :reason])
+                                                      str not-empty)
+                                              "A person refused this call.")
+                                          240)}
+                                    {:principal engine-actor})
+                       :cancelled)
+          :expired (end! eng id :skip nobody-approved nil)
+          nil)))))
+
+(defn- settle-proposed!
+  "One pass over the rows that wait on a person (R-4.3). A row whose
+  time came first is skipped, and so is one whose held call expired; one
+  whose held call was refused is cancelled; and one whose held call was
+  never minted is asked about now."
+  [eng ^Instant now]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) kind)
+        rows (store/with-tx st
+               (fn [tx]
+                 (mapv #(inv/decode-row rdef %)
+                       (store/query-rows st tx kind {:state :proposed}
+                                         {:limit sweep-cap}))))]
+    (doseq [{:keys [id data]} rows]
+      (quietly id
+               (fn []
+                 (let [^Instant at (:run_at data)
+                       held (some->> (:held_call data) str not-empty
+                                     (stored-row eng :held_call))]
+                   (cond
+                     (and at (not (.isAfter at now)))
+                     (end! eng id :skip nobody-approved nil)
+
+                     (nil? held) (ask! eng id)
+                     :else (settle! eng held))))))))
+
+(defn after-write!
+  "THE WIRE-BOUNDARY EFFECTS of approval at scheduling (R-4.3), called by
+  the router after a committed create and a committed invoke, beside
+  `held-calls/after-allow!`. A scheduled action that names a held call
+  nobody minted has it minted out here (`ask!`), and the answer carries
+  the row as that left it. A refused held call that asked about a
+  scheduled action cancels it. Every other write passes through
+  untouched, and a replay does nothing twice. What a stopped engine
+  missed here, the clock's next pass does (`sweep-due!`)."
+  [eng rdef action out]
+  (let [row (:row out)]
+    (cond
+      (not (and (map? out) (:transition out) (nil? (:replayed? out)))) out
+
+      (and (= kind (:kind rdef)) (get-in row [:data :held_call]))
+      (if-some [now (quietly (:id row) #(ask! eng (:id row)))]
+        (assoc out :row now)
+        out)
+
+      (and (= :held_call (:kind rdef)) (= :refuse (keyword action)))
+      (do (quietly (:id row) #(settle! eng row))
+          out)
+
+      :else out)))
+
 (defn sweep-due!
   "One pass of the clock, and the one call a test makes instead of
   waiting for it (R-5.1). Answers how many rows each step ended:
   `{:ran :late :recovered}`.
+
+  UNAPPROVED: a `proposed` row whose time came, or whose held call
+  expired, is skipped, and one whose held call was refused is cancelled
+  (R-4.3). They are settled first and counted in no tally.
 
   RECOVERED: a row `running` for more than five minutes has no live
   runner, and is run again under its key (R-5.4). LATE: a `scheduled`
@@ -984,6 +1246,7 @@
           recovered (count (filter (fn [row]
                                      (quietly (:id row) #(run! eng (:id row))))
                                    stuck))
+          _ (settle-proposed! eng now)
           due (sort-by #(get-in % [:data :run_at])
                        (rows-where eng :scheduled :run_at :<= now))]
       (reduce (fn [tally row]
@@ -1191,7 +1454,7 @@
   {:kind :scheduled_action
    :plural "scheduled_actions"
    :nav :system
-   :states [:scheduled :running :done :skipped :failed :cancelled]
+   :states [:proposed :scheduled :running :done :skipped :failed :cancelled]
    :initial :scheduled
    :terminal #{:done :skipped :failed :cancelled}
    :summary "{data.target.action} {data.target.kind} · {data.run_at} · {state}"
@@ -1244,27 +1507,42 @@
      :display {:label "Reschedule" :order 1
                :description "Move this to another time; the call and the rule it runs under stay as they are"}}
     :cancel
-    {:from #{:scheduled} :to :cancelled
+    {:from #{:proposed :scheduled} :to :cancelled
      :guards [the-scheduler-moves-it]
+     :input why-input
+     :handler record-stop
+     :edit {:fence false
+            :unfenced-reason "Stopping the call writes over nobody's work: the row only ends, and the one sentence it may gain is the engine's record of a person's refusal."}
      :safety {:idempotent true :reversible false :confirm false
               :final "The call never runs. Its time may already have passed, so reopening would make the record lie; scheduling it again is a new row."}
      :display {:label "Cancel" :style :danger :order 2
                :description "Stop this before its time; the call never runs"}}
-    ;; the engine's own hand: the claim, and the three endings
+    ;; the engine's own hand: the person's yes replayed, the ask again,
+    ;; the claim, and the three endings
+    :arm (assoc (engine-door #{:proposed} :scheduled "Armed"
+                             "A person said yes to this call at this time. The yes is not taken back: cancel stops the call, and moving the time asks again.")
+                :guards [the-yes-arms-it])
+    :ask (engine-door #{:scheduled} :proposed "Asked again"
+                      "The time moved after a person said yes, so the row waits on a new yes for the new time.")
     :start (assoc (engine-door #{:scheduled} :running "Started"
                                "The claim: one runner holds this action, and its call is under way.")
                   :handler record-start)
     :land (engine-door #{:running} :done "Ran"
                        "The call ran and what it wrote is on the row. One row is one run."
                        ending-input)
-    :skip (engine-door #{:scheduled :running} :skipped "Skipped"
+    :skip (engine-door #{:proposed :scheduled :running} :skipped "Skipped"
                        "The validity rule did its work: the call did not run, and scheduling it again is a new row."
                        why-input)
     :fail (engine-door #{:running} :failed "Failed"
                        "The call was attempted and did not land. Scheduling it again is a new row."
                        why-input)}
    :deviations
-   ["R-1 draws `proposed` and `arm`. They are child 4's (approval at scheduling) and are not declared here, so a row is always born `scheduled` and `cancel` leaves from `scheduled` alone."
+   ["R-4.3 says the engine writes the row `proposed` and mints one held call. A birth runs under the scheduler's hand and a held call is the engine's to write, so the row is born `proposed` naming the held call's id and the call is minted after the create commits. A row whose held call was never minted is asked about on the clock's next pass."
+    "R-4.3 says `reschedule` sends an approved row back to `proposed`. A door lands in one state, so `reschedule` lands `scheduled` naming a held call nobody has minted, which is no yes, and the engine's own `ask` moves the row to `proposed` when it mints that call. R-1 does not draw `ask`."
+    "R-4.3 writes `shown` as \"tomorrow 08:30\". A row is read on more days than one, so the time is a date and a clock time in the scheduler's zone."
+    "R-4.3 names two holds. A power whose `approval` is `person` is child 4b's; a target here is an engine door, and a `:hold true` guard is the hold the scheduling check meets. Under `expect_state` no guard is judged, so no hold is met at scheduling and the run meets it as a refusal."
+    "R-4.3 says the hold guards check this input. The run sends the row's own `input` and no door edits it, so the guards read the row and compare no input."
+    "R-1 says `cancel` is the scheduler's. A refused held call cancels the row with the engine's own hand, and `outcome_why` keeps the decider's reason. A `proposed` row that is cancelled or skipped leaves its held call waiting, and an allow of it then fails at `arm`."
     "R-1 says `input` is capped as held_calls/capped caps. A cut input is a different call, so an input over the same 16 KB ceiling is refused at scheduling with a sentence and never stored cut."
     "R-1 lists `etag` in the snapshot. An etag is spelled from the kind, the id and the version, so the snapshot keeps `version` and a reader spells the etag from it."
     "R-1 says `reschedule` runs the scheduling check again. It does not yet: the check runs at the create, and a moved row meets its door at the run."

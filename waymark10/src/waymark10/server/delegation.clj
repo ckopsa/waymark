@@ -111,8 +111,12 @@
   one the person allowed, or nil. `:within` names the held row, and
   the row is read back through the write's own transaction: it must be
   `allowed`, name this kind and this row, and name this caller.
-  `target` is the row id, nil at a create door. The modules' own
-  holds share the check (holds/allowed-hold)."
+  `target` is the row id, nil at a create door. The run of a scheduled
+  action the person approved at scheduling is the second shape of the
+  same yes: `:within` names a `scheduled_action` that is `running`,
+  names this door and this caller, and whose held call is `done` by an
+  allow (docs/spec-scheduled-actions.md R-4.3). The modules' own holds
+  share the check (holds/allowed-hold)."
   [ctx kind target]
   (holds/allowed-hold ctx kind target))
 
