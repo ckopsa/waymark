@@ -137,6 +137,32 @@
       {:text (String. b 0 (int limit) StandardCharsets/UTF_8)
        :dropped (- n (long limit))})))
 
+(def why-limit
+  "The most characters of a caller's why a row keeps (ticket e9f65194)."
+  1000)
+
+(defn kept-why
+  "`why` as the row stores it → {:text :cut}. `cut` is true only when
+  characters went.
+
+  A why of at most `why-limit` characters is kept whole. A longer one
+  is cut at the last word boundary that leaves room for the mark, and
+  ends with \"…\", so a person reads whole words and sees that more was
+  said. A why with no space in it has no boundary, and is cut at the
+  limit."
+  [why]
+  (let [s (str why)
+        room (dec (long why-limit))]
+    (if (<= (count s) (long why-limit))
+      {:text s :cut false}
+      (let [head (subs s 0 room)
+            ;; a word that ends exactly where the room does is whole
+            whole (if (str/blank? (subs s room (inc room)))
+                    head
+                    (str/replace head #"\s+\S*$" ""))
+            kept (str/trimr (if (str/blank? whole) head whole))]
+        {:text (str kept "…") :cut true}))))
+
 (defn- short-value
   "One shown value, as a person reads it on the line."
   [v]
@@ -429,7 +455,15 @@
     [:why {:x-display
            {:label "Why"
             :help "The caller's one sentence of reason. An approval that held a call and had nothing to show would be a notice with no words on it."}}
-     [:string {:min 1 :max 240}]]
+     [:string {:min 1 :max 1000}]]
+    ;; the engine's stamp beside the why (ticket e9f65194), written
+    ;; ONLY when a cut happened: absent reads as not cut, so a whole
+    ;; why costs the row nothing, and a row written before it keeps
+    ;; its why as it was stored
+    [:why_cut {:optional true
+               :x-display {:label "Why was cut"
+                           :help "True when the caller's why was longer than the row keeps, and the stored one ends with … at a word boundary."}}
+     [:maybe :boolean]]
     [:caller {:x-ref {:principal true}
               :x-display {:raw true
                           :label "Who called"
@@ -549,7 +583,11 @@
      [:maybe [:map-of :keyword :any]]]
     [:why {:x-display {:label "Why"
                        :help "The caller's one sentence of reason, which the person who taps reads."}}
-     [:string {:min 1 :max 240}]]
+     [:string {:min 1 :max 1000}]]
+    [:why_cut {:optional true
+               :x-display {:label "Why was cut"
+                           :help "True when the caller's why was longer than the row keeps."}}
+     [:maybe :boolean]]
     [:caller {:x-ref {:principal true}
               :x-display {:raw true :label "Who called"
                           :help "The principal whose call this is."}}
@@ -701,7 +739,7 @@
   transition names the engine and the `caller` field names the
   caller. A hand at the wire cannot reach this door at all."
   [eng {:keys [server tool input forward why caller sitting entry]}]
-  (let [why (:text (capped why 240))
+  (let [{why :text cut :cut} (kept-why why)
         row (:row (inv/create!
                    eng :held_call
                    (cond-> {:tool (str tool)
@@ -711,6 +749,7 @@
                             :forward (or forward {})
                             :shown (:text (capped (shown-text entry input why)
                                                   140))}
+                     cut (assoc :why_cut true)
                      (some-> server str not-empty) (assoc :server (str server))
                      (some-> sitting str not-empty) (assoc :sitting (str sitting)))
                    {:principal engine-actor}))]
@@ -792,13 +831,13 @@
                                             named)))
         shown (str action " " kind (when what (str " " what))
                    (when changes
-                     (str " · " (str/join ", " (map name (keys changes))))))]
+                     (str " · " (str/join ", " (map name (keys changes))))))
+        kept (kept-why (or (some-> why str not-empty)
+                           "Held for the person's tap."))]
     (:row (inv/create!
            eng :held_call
            (cond-> {:tool (str kind "." action)
-                    :why (:text (capped (or (some-> why str not-empty)
-                                            "Held for the person's tap.")
-                                        240))
+                    :why (:text kept)
                     :caller (str caller)
                     :forward (or body {})
                     :shown (:text (capped shown 140))
@@ -807,6 +846,7 @@
                             (some-> author str not-empty) (assoc :author (str author))
                             (some-> if-match str not-empty) (assoc :if_match (str if-match))
                             digests (assoc :prefill_digests digests))}
+             (:cut kept) (assoc :why_cut true)
              changes (assoc :changes changes)
              (some-> owner str not-empty) (assoc :owner (str owner)))
            {:principal engine-actor}))))
