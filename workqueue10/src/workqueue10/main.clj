@@ -511,7 +511,8 @@
   [eng]
   (when (= "1" (System/getenv "FACTORY10"))
     (github/from-env #(System/getenv ^String %)
-                     #(bench/active-repositories eng))))
+                     #(bench/active-repositories eng)
+                     (forge/cursor-store eng))))
 
 (defn- factory-every-seconds []
   (or (some-> (System/getenv "FACTORY10_GITHUB_EVERY") parse-long)
