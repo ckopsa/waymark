@@ -2698,6 +2698,57 @@
       (finally
         (seat-do! seat :retire)))))
 
+(deftest a-pool-a-transient-refusal-left-unstarted-keeps-the-wake-pending
+  ;; waymark ticket 728317e3: a 503 from the pool's one link starts no run
+  (let [wn :wake-pool-transient
+        fn' :wake-pool-transient-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        live-token "rk-test-pooltransient-0123456789abcdef"
+        live (str (:id (:row (inv/create! *eng* :runner_link
+                                          {:provider "claude_routine"
+                                           :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                          "/routines/trig_pooltransient/fire")
+                                           :fire_token live-token}
+                                          {:principal elena}))))
+        model (model! "pool-transient-chair")
+        _ (inv/invoke! *eng* :model (str model) :set_runners
+                       {:runners [live]}
+                       {:principal elena})
+        seat (seat! "transientclerk"
+                    {:held_for [(str model)]
+                     :wake_on [{:kind "wake_task" :actions ["complete"]}]
+                     :fire_interval_seconds 1})
+        _ (drain-fires! fn')]
+    (try
+      (is (not (sch/linked? *eng* (sched-of seat))) "neither the row nor its chair holds a link")
+      (sch/answer! *fire* 503)
+      (task-do! (task! "the one the provider cannot start") :complete)
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (sch/answer! *fire* nil)
+      (is (= 1 (count (fires-of live-token))) "the refused POST went out once")
+      (let [row (sched-of seat)]
+        (is (= :live (:state row)) "a transient refusal is not a broken link")
+        (is (true? (get-in row [:data :wake_pending])))
+        (is (some? (get-in row [:data :retry_after])))
+        (is (= "the routines api answered 503 for the fire"
+               (get-in row [:data :note]))))
+
+      (testing "inside the minute nothing goes out, and a new match folds in"
+        (task-do! (task! "a second match, inside the minute") :complete)
+        (drain-wakes! wn)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (fires-of live-token))))
+        (let [row (sched-of seat)]
+          (is (= :live (:state row)))
+          (is (true? (get-in row [:data :wake_pending])))
+          (is (some? (get-in row [:data :retry_after])))))
+      (finally
+        (sch/answer! *fire* nil)
+        (seat-do! seat :retire)))))
+
 ;; ── several sittings at once (max_open_sittings) ───────────────────────
 ;;
 ;; A seat of three slots runs three sittings at once, each on its own
