@@ -129,7 +129,8 @@
 ;; pulled document never carries :born_here, and absence is silence,
 ;; so no sync can quietly clear it.
 (defguard ours-to-cancel
-  (refuse "This event came from the family's calendar, not from here — cancel it in Google Calendar.")
+  (refuse "This event came from the family's calendar, not from here — cancel it in Google Calendar."
+          {:open "No door here cancels an event the family's calendar made: Google Calendar is its authority, and it is cancelled there."})
   '(= (var :born_here) true))
 
 (defhandler strike

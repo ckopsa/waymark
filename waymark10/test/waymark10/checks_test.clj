@@ -848,6 +848,19 @@
         (is (= [:no-way-out] (mapv (comp :name :guard) (:dead-ends c))))
         (is (= 1 (count (:unmatched c))))))))
 
+(deftest an-unwaived-dead-end-is-a-remedy-error
+  ;; a dead end that was only printed passed the gate, so a new one
+  ;; landed unanswered; counted, it fails check-queue.
+  (with-redefs [checks/waivers (delay [])]
+    (let [c (checks/census [(guarded no-way-out)])]
+      (is (= 1 (checks/remedy-error-count c [])))))
+  (testing "a waived one is the old debt, and passes"
+    (with-redefs [checks/waivers
+                  (delay [{:guard :no-way-out :kind :thing
+                           :bead "waymark-fp62.2"}])]
+      (let [c (checks/census [(guarded no-way-out)])]
+        (is (= 0 (checks/remedy-error-count c [])))))))
+
 (deftest the-waiver-list-only-shrinks
   ;; acceptance 2: adding :remedies to a waived guard and keeping the
   ;; waiver fails check-queue.

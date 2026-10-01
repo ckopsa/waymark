@@ -290,7 +290,8 @@
 
 (g/defguard a-person-at-the-chair
   {:reads [:principal]
-   :explain "The chair's key and the chair's link are a person's to write: a person mints the key, a person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes both here. An agent does not write a chair's credential."}
+   :explain "The chair's key and the chair's link are a person's to write: a person mints the key, a person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes both here. An agent does not write a chair's credential."
+   :open "No door changes who the caller is: ask the person to write the chair's key and its link."}
   [_row _inp ctx]
   ;; `a-person`'s three-line check, spelled again rather than reused,
   ;; and schedules.clj's `a-person-or-a-delegate` makes the same trade
@@ -330,7 +331,8 @@
 ;; written by hand is a link the engine would fire at nothing.
 (g/defguard link-not-written-by-hand
   {:judges [:fire_url :fire_token]
-   :explain "The Routine's fire URL and its token are written by link alone, never by hand. Add the model first, then link the Routine to it."}
+   :explain "The Routine's fire URL and its token are written by link alone, never by hand. Add the model first, then link the Routine to it."
+   :remedies [:model/link]}
   [_row inp _ctx]
   (if (or (contains? inp :fire_url) (contains? inp :fire_token))
     (t/deny)
@@ -736,6 +738,7 @@
   ;; wall — `judgment-not-superseded`'s split, at the create and the
   ;; restate. Say where the house went next (ticket 86514746).
   {:judges [:judgment]
+   :open "No door revives a superseded judgment. The way out is in this same form: name the judgment the sentence names, or another promoted one."
    :reads [:judgment]
    :vars [:problem]
    :explain "A seat that says a judgment walks that judgment's own subjects and answers with its verdicts: {problem}."}
@@ -945,7 +948,8 @@
   {:judges [:author]
    :reads [:seat]
    :vars [:detail]
-   :explain "A seat is handed only to a seat that delegates, and only when it fits under that seat's ceiling: {detail}."}
+   :explain "A seat is handed only to a seat that delegates, and only when it fits under that seat's ceiling: {detail}."
+   :open "The way out is in this same form: name a seat that delegates and whose ceiling covers this one. A seat's ceiling is the delegates field of its own row, one GET away."}
   [row inp ctx]
   ;; hand_to (invariant 3 and 4 of server/delegation): the person's
   ;; tap writes the author AND the approval, so the seat must already
@@ -984,7 +988,8 @@
   {:reads [:principal :within]
    :hold true
    :vars [:seat :started_at]
-   :explain "Abandoning seat {seat}'s sitting, open since {started_at}, is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written."}
+   :explain "Abandoning seat {seat}'s sitting, open since {started_at}, is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written."
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and an agent that could abandon a sitting alone could end another seat's work."}
   [row _inp ctx]
   ;; NOT hidden (ticket be2c2c16): a door the grant admits must never
   ;; answer not-found. The sweep and a person pass; an agent's abandon,
@@ -1010,7 +1015,8 @@
 (g/defguard still-quiet-for-the-sweep
   {:reads [:within]
    :vars [:last_call_at]
-   :explain "The sweep ends only a quiet sitting, and this one made a call at {last_call_at}, inside its seat's idle limit."}
+   :explain "The sweep ends only a quiet sitting, and this one made a call at {last_call_at}, inside its seat's idle limit."
+   :open "Time clears it: the sweep ends this sitting once it has been quiet for its seat's idle limit, and no door hurries that."}
   [row _inp ctx]
   ;; ticket e3dfe60d: the sweep's pass reads `last_call_at` in one
   ;; transaction and ends the sitting in another, so a sit or a call
@@ -1097,7 +1103,8 @@
   ;; so this bites only rows written before it did.
   {:reads [:judgment]
    :vars [:judgment :problem]
-   :explain "This seat says the judgment {judgment}, which is superseded, and a seat walks only a judgment in force: {problem}, then unpark."}
+   :explain "This seat says the judgment {judgment}, which is superseded, and a seat walks only a judgment in force: {problem}, then unpark."
+   :open "No door revives a superseded judgment. The way out is this seat's own restate, naming the judgment the sentence names."}
   [row _inp ctx]
   (let [id (some-> (get-in row [:data :judgment]) str not-empty)
         read' (:read ctx)]

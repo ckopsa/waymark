@@ -718,8 +718,9 @@
 (defn remedies
   "Every dead end this ONE declaration still owes, waivers applied.
 
-  A warning, never an error: the debt is older than the check, and
-  the waiver list (`checks/waivers-resource`) carries the guards that
+  A warning HERE, and an error in `waymark10.check`, which counts
+  every one of these: the debt older than the check is on the waiver
+  list (`checks/waivers-resource`), which carries the guards that
   were dead ends on the day the check landed. Clear a waiver by
   giving its guard the remedy or the open sentence, not by editing
   the list — `waymark10.check` refuses a waiver that waives nothing."

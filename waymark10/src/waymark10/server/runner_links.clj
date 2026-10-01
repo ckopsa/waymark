@@ -69,7 +69,8 @@
 (g/defguard the-engine-writes-the-seed
   {:judges [:seeded_from]
    :reads [:principal]
-   :explain "Where a link was copied from is written by the engine's boot seed alone, never by hand. Make the link without seeded_from."}
+   :explain "Where a link was copied from is written by the engine's boot seed alone, never by hand. Make the link without seeded_from."
+   :remedies [:runner_link/create]}
   [_row inp ctx]
   (if (or (nil? (:seeded_from inp))
           (= :system (get-in ctx [:principal :type])))
@@ -340,7 +341,8 @@
 
 (g/defguard a-person-sets-the-cap
   {:reads [:principal]
-   :explain "An account's cap is a person's to set, from what the provider's own terms allow."}
+   :explain "An account's cap is a person's to set, from what the provider's own terms allow."
+   :open "No door changes who the caller is: ask the person to set the account's cap."}
   [_row _inp ctx]
   (if (a-persons-hand? ctx) (t/allow) (t/deny)))
 
