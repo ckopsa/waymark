@@ -22,7 +22,8 @@
             [waymark10.server.live :as live]
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
-            [waymark10.server.router :as router]))
+            [waymark10.server.router :as router]
+            [waymark10.server.walks :as walks]))
 
 (set! *warn-on-reflection* true)
 
@@ -100,7 +101,8 @@
   frames it may not see byte-level absent. ?ui=<pid> is guided
   follow's opt-in: that ONE pid's ui frames, redacted under this
   stream's own visibility; without it the stream is today's, byte for
-  byte."
+  byte. A follower recording a walk of that pid has the pid's frames
+  written to it as they are sent (walks/recorder)."
   [eng]
   (fn [req]
     (let [reg (presence-registry eng)
@@ -108,7 +110,10 @@
           ui (some-> (get (router/query-params req) "ui") str/trim not-empty)]
       (presence/sse-handler eng reg (presence/self-visible? eng vis) req
                             (when ui
-                              {:ui ui :redact (presence/ui-redactor eng vis)})))))
+                              {:ui ui :redact (presence/ui-redactor eng vis)
+                               :tap (:presence
+                                     (walks/recorder
+                                      eng (router/principal-of req) vis ui))})))))
 
 (defn- reportable-ui
   "A ui part's own row selves pass the beat's gate: a dialog on a
@@ -230,18 +235,25 @@
 
   ?ui=<pid> is guided follow's opt-in here as on /api/-/presence: the
   follower's page is already near the six-connection cap, so the ui
-  frames ride this stream rather than a second one."
+  frames ride this stream rather than a second one. It is also the
+  walk's recorder: one walks/recorder per stream taps the firehose and
+  the presence source, so a follower recording a walk of that pid has
+  its move, ui and transition frames written as they are sent."
   [eng]
   (fn [req]
     (let [vis (router/visibility-of req)
           visible? (presence/self-visible? eng vis)
-          ui (some-> (get (router/query-params req) "ui") str/trim not-empty)]
+          ui (some-> (get (router/query-params req) "ui") str/trim not-empty)
+          rec (when ui
+                (walks/recorder eng (router/principal-of req) vis ui))]
       (live/sse-handler eng
-                        [(live/firehose-source eng req)
-                         (live/presence-source
-                          (presence-registry eng) visible?
-                          (when ui
-                            {:ui ui :redact (presence/ui-redactor eng vis)}))
+                        [(live/tapped (live/firehose-source eng req) (:event rec))
+                         (live/tapped
+                          (live/presence-source
+                           (presence-registry eng) visible?
+                           (when ui
+                             {:ui ui :redact (presence/ui-redactor eng vis)}))
+                          (:presence rec))
                          (live/intents-source (intents-registry eng) visible?)]
                         req))))
 
