@@ -56,6 +56,11 @@
       bound_seat text,
       bound_sitting text,
       binding text)"
+   ;; what the client declared at initialize (docs/spec-mcp-apps.md § 5)
+   "ALTER TABLE waymark10_mcp_sessions
+      ADD COLUMN IF NOT EXISTS app_ui boolean NOT NULL DEFAULT false"
+   "ALTER TABLE waymark10_mcp_sessions ADD COLUMN IF NOT EXISTS client_name text"
+   "ALTER TABLE waymark10_mcp_sessions ADD COLUMN IF NOT EXISTS client_version text"
    "CREATE INDEX IF NOT EXISTS ix_wm10_mcp_sessions_touched
       ON waymark10_mcp_sessions (touched)"])
 
@@ -115,21 +120,27 @@
 
 (defn open!
   "Insert a fresh session under `id`, touched now, after sweeping every
-  row untouched since `cutoff`. Answers the id."
-  [storage id ^Instant now ^Instant cutoff]
+  row untouched since `cutoff`. Answers the id. `declared` is {:app-ui
+  :client-name :client-version}; nil or a missing key writes false / NULL."
+  [storage id ^Instant now ^Instant cutoff & [declared]]
   (store/with-tx storage
     (fn [tx]
       (ensure! storage tx)
       (jdbc/execute! tx ["DELETE FROM waymark10_mcp_sessions WHERE touched < ?"
                          (ts cutoff)])
       (jdbc/execute! tx ["INSERT INTO waymark10_mcp_sessions
-                            (id_hash, created, touched)
-                          VALUES (?, ?, ?)"
-                         (id-hash id) (ts now) (ts now)])))
+                            (id_hash, created, touched,
+                             app_ui, client_name, client_version)
+                          VALUES (?, ?, ?, ?, ?, ?)"
+                         (id-hash id) (ts now) (ts now)
+                         (boolean (:app-ui declared))
+                         (some-> (:client-name declared) str)
+                         (some-> (:client-version declared) str)])))
   id)
 
 (defn touch!
-  "The entry `id` names, {:created :touched :bound}, with `touched`
+  "The entry `id` names, {:created :touched :bound :app-ui :client-name
+  :client-version}, with `touched`
   moved to now when it is older than `touch-every-seconds` — or nil
   when no row answers the id, or the row was untouched since `cutoff`,
   in which case it is evicted here."
@@ -139,7 +150,8 @@
       (ensure! storage tx)
       (let [h (id-hash id)
             row (jdbc/execute-one!
-                 tx ["SELECT created, touched, binding
+                 tx ["SELECT created, touched, binding,
+                            app_ui, client_name, client_version
                         FROM waymark10_mcp_sessions WHERE id_hash = ?" h]
                  jdbc-opts)]
         (when row
@@ -156,7 +168,10 @@
                                      (ts now) h]))
                 {:created (instant (:created row))
                  :touched (if stale? now touched)
-                 :bound (read-binding (:binding row))}))))))))
+                 :bound (read-binding (:binding row))
+                 :app-ui (boolean (:app_ui row))
+                 :client-name (:client_name row)
+                 :client-version (:client_version row)}))))))))
 
 (defn bind!
   "Write `binding` onto the session `id` names, whole — a second bind

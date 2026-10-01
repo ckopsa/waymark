@@ -132,7 +132,8 @@
   — the HTTP door is right there), and tool descriptions generated
   from prose written for humans, which will read badly for some kinds
   and is a useful forcing function on those declarations."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [jsonista.core :as j]
             [reitit.ring :as ring]
             [waymark10.client :as client]
@@ -145,6 +146,7 @@
             [waymark10.server.judgments :as judgments]
             [waymark10.server.mcp-sessions :as sessions]
             [waymark10.server.members :as members]
+            [waymark10.server.oidc :as oidc]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
@@ -157,9 +159,11 @@
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
            (java.nio.charset StandardCharsets)
-           (java.security SecureRandom)
+           (java.security MessageDigest SecureRandom)
            (java.time Instant)
-           (java.util Base64)))
+           (java.util Base64)
+           (javax.crypto Mac)
+           (javax.crypto.spec SecretKeySpec)))
 
 (set! *warn-on-reflection* true)
 
@@ -354,16 +358,20 @@
 
 (defn open-session!
   "Register a fresh session and answer its id, or nil on an engine
-  that keeps none (a bare test handler built without the atom)."
-  [eng]
+  that keeps none (a bare test handler built without the atom).
+  `declared` is `app-declaration`'s map, kept on the entry."
+  [eng & [declared]]
   (when-some [a (:mcp-sessions eng)]
     (let [id (new-session-id)
           now ((:now-fn eng))]
       (if (session-table? eng)
-        (sessions/open! (:storage eng) id now (ttl-cutoff now))
+        (sessions/open! (:storage eng) id now (ttl-cutoff now) declared)
         (swap! a (fn [m]
                    (assoc (evict m now) id
-                          {:created now :touched now :bound nil}))))
+                          {:created now :touched now :bound nil
+                           :app-ui (boolean (:app-ui declared))
+                           :client-name (:client-name declared)
+                           :client-version (:client-version declared)}))))
       id)))
 
 (defn touch-session!
@@ -1246,6 +1254,106 @@
     :required ["tool"]
     :additionalProperties false}})
 
+;; ── MCP Apps (docs/spec-mcp-apps.md, child 1) ───────────────────────
+;; One page and three tools, for a session `app-session?` admits; every
+;; other caller gets the door as it always was. No csp is declared.
+
+(def app-mime
+  "The page profile a client declares and the resource answers."
+  "text/html;profile=mcp-app")
+
+(def app-resource-uri "ui://waymark/row")
+
+(defn app-declaration
+  "What an `initialize` said about its client, as the session entry
+  keeps it: whether the io.modelcontextprotocol/ui extension names
+  `app-mime`, and the clientInfo, so a person can read what a host says."
+  [params]
+  (let [mimes (get-in params [:capabilities :extensions
+                              (keyword "io.modelcontextprotocol/ui") :mimeTypes])]
+    {:app-ui (boolean (and (sequential? mimes)
+                           (some #(= app-mime (str %)) mimes)))
+     :client-name (some-> (get-in params [:clientInfo :name]) str)
+     :client-version (some-> (get-in params [:clientInfo :version]) str)}))
+
+(defn- app-session?
+  "Does this session get the app tools? Its client declared the
+  extension, its BEARER is a delegate of a client the owner listed in
+  :app-clients, and the ticket's signing key is set."
+  [eng session]
+  (let [oidc (:oidc eng)
+        bearer (:bearer session)
+        person (some-> (:acts-for bearer) str not-empty)]
+    (boolean
+     (and (:app-ui session)
+          person
+          (not (str/blank? (str (:app-ticket-secret oidc))))
+          (some #(and (contains? (:delegate-clients oidc) %)
+                      (= (str (:id bearer)) (oidc/delegate-id % person)))
+                (:app-clients oidc))))))
+
+(def ^:private row-ref-schema
+  {:kind {:type "string"} :id {:type "string"}})
+
+(def ^:private show-tool
+  {:name "waymark_show"
+   :title "Put a row in front of your person"
+   :description
+   (str "Show one row to the person you act for, inline, with the doors "
+        "that are theirs. Call it after a call answers `held: true` (kind "
+        "\"held_call\", id the `held_call` it named), after you file an "
+        "approval_request or an invitation, and when waymark_invoke meets "
+        "a confirm gate that is the person's. Then read the row again.")
+   :input-schema {:type "object"
+                  :properties (assoc row-ref-schema :action {:type "string"})
+                  :required ["kind" "id"]
+                  :additionalProperties false}
+   :_meta {:ui {:resourceUri app-resource-uri}}})
+
+(def ^:private app-tools
+  ;; the host hides `visibility ["app"]` from the model
+  [show-tool
+   {:name "waymark_app_read"
+    :description "The page's read: a row, the person's doors on it, and a ticket."
+    :input-schema {:type "object" :properties row-ref-schema
+                   :required ["kind" "id"]}
+    :_meta {:ui {:resourceUri app-resource-uri :visibility ["app"]}}}
+   {:name "waymark_app_act"
+    :description "The page's tap: one door of the row it read, with that read's ticket."
+    :input-schema {:type "object"
+                   :properties (assoc row-ref-schema
+                                      :action {:type "string"}
+                                      :input {:type "object"}
+                                      :ticket {:type "string"})
+                   :required ["kind" "id" "action" "ticket"]}
+    :_meta {:ui {:resourceUri app-resource-uri :visibility ["app"]}}}])
+
+(def ^:private app-fragments
+  "The page's ordered fragments, by ui_assembly.clj's pattern; the look
+  is the generic UI's own 020-base.css, by path."
+  ["waymark10/mcp_app/010-head.html"
+   "waymark10/ui/020-base.css"
+   "waymark10/mcp_app/050-shell.html"
+   "waymark10/mcp_app/100-bridge.js"
+   "waymark10/ui/900-tail.html"])
+
+(def app-page
+  "The page as one string. The transport derefs it at handler
+  construction, so a missing fragment fails startup, never a request."
+  (delay
+    (apply str
+           (map (fn [path]
+                  (or (some-> (io/resource path) slurp)
+                      (throw (ex-info (str "MCP App fragment missing from classpath: " path)
+                                      {:fragment path}))))
+                app-fragments))))
+
+(def ^:private app-resource
+  {:uri app-resource-uri
+   :name "Waymark row"
+   :mimeType app-mime
+   :_meta {:ui {:prefersBorder true}}})
+
 (def tools
   "The fixed tools, in the order an agent meets them: the spec's six,
   with waymark_pursue (GRAIL) beside invoke — one goal action walked
@@ -1271,12 +1379,14 @@
   "The `tools/list` payload — the MCP spelling of the fixed tools,
   camelCase and all. The definitions above stay kebab-cased because
   that is this codebase's spelling; the translation happens once,
-  here. It takes no caller: the list is static (waymark-912p) — what
-  a grant admits is read through waymark_powers, not off this list."
-  []
+  here. The list never moves with a grant (waymark-912p) — what a
+  grant admits is read through waymark_powers, not off this list. It
+  has two shapes, chosen once per session: `app-session?` adds the
+  three app tools after the fixed ones (docs/spec-mcp-apps.md § 5)."
+  [& [eng session]]
   (mapv (fn [t]
           (-> t (dissoc :input-schema) (assoc :inputSchema (:input-schema t))))
-        tools))
+        (cond-> tools (app-session? eng session) (into app-tools))))
 
 ;; ── tool bodies ─────────────────────────────────────────────────────
 
@@ -4358,6 +4468,167 @@
               (get (meta result) dropped-key))
             0)))
 
+;; ── the app tools' bodies (docs/spec-mcp-apps.md § 1–3) ─────────────
+
+(def ^:private app-law
+  "The doors a show admits on a kind, and the fields the page shows."
+  {:held_call {:doors ["allow" "refuse"]
+               :fields [:tool :why :shown :changes :call :door]}})
+
+(def ^:private app-ticket-seconds 600)
+
+(def app-origin-prefix
+  "The `Idempotency-Key` prefix of a person's tap. It is not `mcp/`, so
+  `actions-from-mcp` keeps counting the model's writes alone."
+  "mcp-app")
+
+(defn- hmac ^String [secret ^String s]
+  (let [mac (doto (Mac/getInstance "HmacSHA256")
+              (.init (SecretKeySpec. (.getBytes (str secret) StandardCharsets/UTF_8)
+                                     "HmacSHA256")))]
+    (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
+                     (.doFinal mac (.getBytes s StandardCharsets/UTF_8)))))
+
+(defn- sign-ticket
+  "The ticket: base64url JSON claims, a dot, HMAC-SHA256 over them."
+  [eng claims]
+  (let [body (.encodeToString
+              (.withoutPadding (Base64/getUrlEncoder))
+              (.getBytes ^String (wire/write-json claims) StandardCharsets/UTF_8))]
+    (str body "." (hmac (:app-ticket-secret (:oidc eng)) body))))
+
+(defn- read-ticket
+  "The claims of a ticket this engine signed, or nil."
+  [eng ticket]
+  (let [[body sig] (str/split (str ticket) #"\." 2)]
+    (when (and (seq body) (seq sig)
+               (MessageDigest/isEqual
+                (.getBytes (hmac (:app-ticket-secret (:oidc eng)) body)
+                           StandardCharsets/UTF_8)
+                (.getBytes ^String sig StandardCharsets/UTF_8)))
+      (try (wire/read-json (String. (.decode (Base64/getUrlDecoder) ^String body)
+                                    StandardCharsets/UTF_8))
+           (catch Exception _ nil)))))
+
+(defn- person-session
+  "The session the app tools run as: the PERSON the bearer acts for,
+  resolved by the identity boundary's own gate, under what a human
+  presenting no grant wears. No seat binding or sitting rides it."
+  [eng session]
+  (let [person (members/gate! eng (t/principal
+                                   {:id (str (:acts-for (:bearer session)))
+                                    :type :human :roles #{}}))]
+    {:principal person :visibility (grants/unscoped-visibility eng person)}))
+
+(defn- show
+  "waymark_show: the row through the real route as the session's OWN
+  principal, so it shows nothing the agent could not already read."
+  [eng call session {:keys [kind id]}]
+  (let [r (get-row eng call session {:kind kind :id id :return "summary"})]
+    (cond-> r
+      (not (:isError r))
+      (update :content conj
+              {:type "text"
+               :text (str "This row is in front of your person now. The tap is "
+                          "theirs; read the row again to see what they chose.")}))))
+
+(defn- app-read
+  "waymark_app_read: one row as the PERSON sees it, the law's doors on
+  its kind, and the ticket, which rides `structuredContent` alone."
+  [eng call session {:keys [kind id]}]
+  (let [rdef (rdef-of eng kind)
+        law (get app-law (:kind rdef))
+        resp (call (request (person-session eng session) :get
+                            (str "/api/" (:plural rdef) "/" id) nil))]
+    (if-not (= 200 (:status resp))
+      (pass-through resp)
+      (let [env (body-json resp)
+            ^Instant now ((:now-fn eng))
+            door (fn [aname]
+                   (let [entry (get-in env [:actions (keyword aname)])]
+                     {:action aname
+                      :label (or (get-in entry [:display :label]) aname)
+                      :style (get-in entry [:display :style])
+                      :available (some? entry)
+                      :inputs (mapv name (keys (get-in entry [:input :properties])))}))]
+        (assoc (result (str (:summary env)))
+               :structuredContent
+               {:kind (name (:kind rdef))
+                :id (str id)
+                :state (:state env)
+                :summary (:summary env)
+                :fields (vec (for [f (:fields law)
+                                   :let [v (get-in env [:data f])]
+                                   :when (some? v)]
+                               {:label (name f) :value v}))
+                :doors (mapv door (:doors law))
+                :ticket (sign-ticket
+                         eng {:session (sessions/id-hash (:mcp-session-id session))
+                              :person (str (:acts-for (:bearer session)))
+                              :kind (name (:kind rdef))
+                              :id (str id)
+                              :version (get-in resp [:headers "ETag"])
+                              :doors (vec (:doors law))
+                              :expires (+ (.getEpochSecond now) app-ticket-seconds)
+                              :nonce (new-session-id)})})))))
+
+(defn- app-act
+  "waymark_app_act: one door of the row a read showed, taken as the
+  person. The ticket is judged before any route is touched. Then the
+  row must still be the version the read rendered, unless this nonce
+  already landed and the idempotency store answers the first result.
+  The door's own walls judge the tap as they judge any tap."
+  [eng call session {:keys [kind id action input ticket]}]
+  (let [rdef (rdef-of eng kind)
+        claims (read-ticket eng ticket)
+        ^Instant now ((:now-fn eng))
+        _ (when-not (and claims
+                         (= (:session claims) (sessions/id-hash (:mcp-session-id session)))
+                         (= (:person claims) (str (:acts-for (:bearer session))))
+                         (= [(:kind claims) (:id claims)] [(name (:kind rdef)) (str id)])
+                         (>= (long (:expires claims)) (.getEpochSecond now))
+                         (some #{(str action)} (:doors claims)))
+            (throw (p/problem
+                    :app-ticket-refused 403 "Ticket refused"
+                    {:detail (str "This door takes an unexpired ticket that "
+                                  "waymark_app_read answered in this session, for "
+                                  "this person, row and door. Read the row again.")})))
+        psession (person-session eng session)
+        self (str "/api/" (:plural rdef) "/" id)
+        okey (str app-origin-prefix "/"
+                  (URLEncoder/encode (str (:id (:bearer session))) "UTF-8")
+                  "/" (:nonce claims))
+        st (:storage eng)
+        replay? (some? (store/with-tx st
+                         (fn [tx] (store/idempotency-lookup st tx okey (:kind rdef)))))
+        seen (call (request psession :get self nil))]
+    (cond
+      (not= 200 (:status seen))
+      (pass-through seen)
+      (and (not replay?) (not= (:version claims) (get-in seen [:headers "ETag"])))
+      (refusal (p/version-conflict (keyword (str action))
+                                   {:kind (:kind rdef) :id (str id)}))
+      :else
+      (let [resp (call (request psession :post (str self "/-/" action)
+                                {:body (or input {})
+                                 :headers {"idempotency-key" okey
+                                           "if-match" (str (:version claims))}}))]
+        (if (<= 200 (:status resp 500) 299)
+          ;; the one engine-made line the page hands the model
+          (let [state (:state (body-json resp))
+                line (str (name (:kind rdef)) " " id ": " action " → " state)]
+            (assoc (result line) :structuredContent {:line line :state state}))
+          (pass-through resp))))))
+
+(def ^:private app-bodies
+  {"waymark_app_read" app-read
+   "waymark_app_act" app-act})
+
+(defn- app-tool?
+  "Is this one of the page's own tools, on a session that has them?"
+  [eng session tool-name]
+  (and (app-session? eng session) (contains? app-bodies (str tool-name))))
+
 (defn call-tool
   "One `tools/call`. `call` is a `door` for this engine; `gate-rpc`
   is a gate-proxy caller for this engine (the four-arg arity builds
@@ -4435,6 +4706,11 @@
      (= "waymark_sit" tool-name)
      (attempt tool-name #(sit eng call gate-rpc session (or args {})))
 
+     ;; the one model-visible app tool. It runs as the session's own
+     ;; principal, so it is walled and counted like every tool above
+     (and (= "waymark_show" tool-name) (app-session? eng session))
+     (attempt tool-name #(show eng call session (or args {})))
+
      :else ::unknown-tool)))
 
 ;; ── the JSON-RPC message layer ──────────────────────────────────────
@@ -4460,7 +4736,7 @@
   revision would make every future MCP release a waymark outage, and
   the methods this server implements have been stable across all of
   them."
-  [params]
+  [eng session params]
   {:protocolVersion (let [asked (:protocolVersion params)]
                       (if (contains? supported-versions asked)
                         asked
@@ -4469,7 +4745,10 @@
    ;; grant that widens or narrows mid-session pushes
    ;; notifications/tools/list_changed, and a client that believed
    ;; the list frozen would never re-list after the person's tap
-   :capabilities {:tools {:listChanged true}}
+   :capabilities (cond-> {:tools {:listChanged true}}
+                   ;; the page is a resource, for a session with the app tools
+                   (app-session? eng (merge session (app-declaration params)))
+                   (assoc :resources {}))
    :serverInfo server-info
    :instructions instructions})
 
@@ -4682,12 +4961,28 @@
      (str/starts-with? (str method) "notifications/")
      nil
 
+     ;; the PERSON's tap, from the page: ahead of the closed-sitting
+     ;; refusal and outside the sitting's counters
+     (and (= "tools/call" (str method)) (app-tool? eng session (:name params)))
+     (rpc-result id (attempt (:name params)
+                             #((app-bodies (str (:name params)))
+                               eng call session (or (:arguments params) {}))))
      :else
      (case (str method)
-       "initialize" (rpc-result id (initialize params))
+       "initialize" (rpc-result id (initialize eng session params))
        "ping" (rpc-result id {})
        "tools/list"
-       (rpc-result id {:tools (listing)})
+       (rpc-result id {:tools (listing eng session)})
+       ;; the page; method-not-found, as ever, without the app tools
+       ("resources/list" "resources/read")
+       (cond
+         (not (app-session? eng session))
+         (rpc-error id method-not-found (str "Method not found: " method))
+         (= "resources/list" (str method))
+         (rpc-result id {:resources [app-resource]})
+         (= app-resource-uri (str (:uri params)))
+         (rpc-result id {:contents [(assoc app-resource :text @app-page)]})
+         :else (rpc-error id -32002 (str "Resource not found: " (:uri params))))
        "tools/call"
        (let [out (or (closed-sitting-refusal eng session (:name params)
                                              (:arguments params))
