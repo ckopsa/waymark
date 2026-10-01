@@ -1327,7 +1327,10 @@
                                             " missed fire not recorded — "
                                             (ex-message e))
                                      false))
-                            (inc n)
+                            ;; seat health 2: a sitting born closed
+                            ;; is a close too, and no door ran for it
+                            (do (seats/roll-health! eng (:id seat-row))
+                                (inc n))
                             n))
                         n
                         found)))))

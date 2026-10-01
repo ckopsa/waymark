@@ -64,6 +64,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.runtime :as runtime]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg]
@@ -265,6 +266,10 @@
                                                  engine kind action-name res)
                                                 res))]
                                   (server-belief/after-write
+                                   engine kind action-name res')
+                                  ;; seat health 2: a sitting that
+                                  ;; closed rolls its seat's `health`
+                                  (seats/after-write
                                    engine kind action-name res')
                                   res'))
                     ;; the declared surfaces, validated where every
