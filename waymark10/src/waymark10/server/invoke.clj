@@ -361,9 +361,15 @@
     and never reaches a wire, so `guard-ctx` drops it beside the
     pen. It follows the hand into an inner invoke, as `:grant` does,
     and a birth carries none: a create door reads no mail.
-    `inbox_item.research` is the first handler to read it."
+    `inbox_item.research` is the first handler to read it.
+  - `:idempotency-key` — the `Idempotency-Key` this invoke rides
+    under, or nil. It rides the ctx as `(:idempotency-key ctx)`, the
+    same string `land!` stamps on the transition, so a handler can say
+    which door a write came through. `held_call`'s two verdicts are
+    the first to read it."
   ([engine tx mode principal] (make-ctx engine tx mode principal nil))
-  ([engine tx mode principal {:keys [correlation-id self within grant power]}]
+  ([engine tx mode principal {:keys [correlation-id self within grant power
+                                     idempotency-key]}]
    (let [;; the cross-WRITE door (waymark9 Ctx.invoke): handlers and
          ;; on-create hooks write OTHER rows through the same
          ;; transaction and the full per-item algorithm. Only a real
@@ -389,6 +395,9 @@
              ;; the write this ctx was opened inside of, or nil at the
              ;; wire — see the docstring
              :within within
+             ;; the key this invoke rides under, as the transition
+             ;; will carry it — see the docstring
+             :idempotency-key idempotency-key
              :invoke
              (when sink
                (fn ctx-invoke [target-kind id action-name body & [opts]]
@@ -1173,6 +1182,7 @@
                            :within within
                            :grant grant
                            :power power
+                           :idempotency-key idempotency-key
                            :self {:kind kind :action action-name}})
             ;; guards judge; they never write — the pen stays with the
             ;; handler (and :on-create), so guard evaluation gets a

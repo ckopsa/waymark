@@ -249,10 +249,35 @@
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
+(def app-key-prefix
+  "The `Idempotency-Key` prefix of a person's tap in Claude. It is
+  mcp's `app-origin-prefix`, spelled again so this kind does not
+  require the MCP door; mcp_apps_count_test holds the two equal."
+  "mcp-app")
+
+(def mcp-key-prefix
+  "The `Idempotency-Key` prefix of an invoke from the MCP door: mcp's
+  `origin-prefix`, spelled again for the same reason."
+  "mcp")
+
+(defn answered-via
+  "Which door a verdict came through, read off the key the transition
+  carries: \"mcp-app\" for a person's tap in Claude, \"mcp\" for a key
+  of `mcp/origin-key`'s three segments, and \"other\" for every other
+  key and for none."
+  [k]
+  (let [segs (when (string? k) (str/split k #"/"))]
+    (cond
+      (and segs (str/starts-with? k (str app-key-prefix "/"))) "mcp-app"
+      (and (= 3 (count segs)) (= mcp-key-prefix (first segs))
+           (not-empty (nth segs 1)) (not-empty (nth segs 2))) "mcp"
+      :else "other")))
+
 (defn- stamp-decider [row ctx]
   (update row :data assoc
           :decided_by (get-in ctx [:principal :id])
-          :decided_at (:now ctx)))
+          :decided_at (:now ctx)
+          :answered_via (answered-via (:idempotency-key ctx))))
 
 (defhandler record-allow [row _inp ctx]
   (stamp-decider row ctx))
@@ -490,7 +515,17 @@
                   :x-display {:raw true :label "Who decided"}}
      [:maybe [:string {:max 128}]]]
     [:decided_at {:optional true :x-display {:label "When"}}
-     [:maybe :waymark/instant]]]
+     [:maybe :waymark/instant]]
+    ;; WHICH DOOR THE VERDICT CAME THROUGH (docs/spec-mcp-apps.md, The
+    ;; count): the engine stamps it on `allow` and `refuse` from the
+    ;; transition's key, and no input names it. It is not a `:maybe`,
+    ;; so it promotes a column the filter below can walk; a row
+    ;; answered before this field carries none and reads null.
+    [:answered_via {:optional true
+                    :x-display {:raw true
+                                :label "Answered through"
+                                :help "The door the verdict came through: mcp-app is a person's tap in Claude, mcp is the connector's own invoke, and other is every other door. The engine stamps it with the verdict."}}
+     [:enum "mcp-app" "mcp" "other"]]]
    ;; THE CREATE MODEL IS THE BIRTH AND NOTHING ELSE. What a verdict
    ;; and the engine's own endings write is not the power door's to
    ;; supply, so the model omits the five of them. It is the posture
@@ -573,9 +608,12 @@
    ;; absent: it is a `:maybe` ref, so it promotes no column for a
    ;; filter to walk, and a filter that cannot be answered is worse
    ;; than one nobody offered.
+   ;; `answered_via` is filterable so the MCP Apps experiment is one
+   ;; query: {answered_via mcp-app} is every verdict tapped in Claude.
    :filterable {:state #{:eq :in}
                 :caller #{:eq}
-                :tool #{:eq}}
+                :tool #{:eq}
+                :answered_via #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "held"}
    :create-guards [the-power-door-mints-it]
