@@ -30,8 +30,13 @@
 
   IT REFUSES A WORKING ENGINE. The engine's name must begin with
   `demo-` and no IdP may be configured. A step the law refuses throws,
-  and the boot ends. An engine that already holds a member of the cast
-  was seeded before, and the whole seed is skipped.
+  and the boot ends.
+
+  IT MARKS A WHOLE LOAD. After the last step the loader makes one more
+  row through the member door, `seed-<name>`: the completion marker. An
+  engine that holds the marker was seeded before, and the whole seed is
+  skipped. An engine that holds a member of the cast and no marker
+  stopped half-way through a seed, and the load refuses.
 
   A step's values may name what is only known at load: `[:ref :t1]` is
   the id of the row a step made, `[:self :t1]` is that row's path,
@@ -139,8 +144,27 @@
     (store/with-tx st
       (fn [tx] (store/load-row st tx kind (str id) {})))))
 
-(defn- seeded? [eng cast]
+(defn- enrolled? [eng cast]
   (boolean (some #(load-row eng :member (member-id cast %)) (keys cast))))
+
+;; ── the completion marker ───────────────────────────────────────────
+
+(defn- marker-id [seed]
+  (str "seed-" (:seed seed)))
+
+(defn- mark!
+  "The completion marker: one member row the loader owns, born through
+  the member door as the registrar after the last step succeeds."
+  [eng seed]
+  (let [id (marker-id seed)]
+    (inv/create! eng :member
+                 {:display (str "Seed `" (:seed seed) "`, loaded whole")
+                  :actor_type "agent"
+                  :subject id}
+                 {:principal members/registrar :id id})))
+
+(defn- seeded? [eng seed]
+  (some? (load-row eng :member (marker-id seed))))
 
 ;; ── the steps ───────────────────────────────────────────────────────
 
@@ -199,19 +223,28 @@
                          (value-of ctx (or (:input step) {})) opts)))))
 
 (defn load!
-  "Seed this engine: enrol the cast, then walk the steps in order.
+  "Seed this engine: enrol the cast, walk the steps in order, then
+  write the completion marker.
   → {:seed :seeded true :members n :steps n :refs {name {:kind :id}}},
-  or {:seed :seeded false :skipped sentence} for an engine seeded
-  before. Throws on an engine `admit!` refuses and on the first step
-  the law refuses. `:now` is the boot's moment, the engine's clock
-  when absent; relative dates count from it. `:wall-url` is the
-  clone's wall: when it is given, the seed's `:walled` servers are
-  made at it, and when it is not, none is made."
+  or {:seed :seeded false :skipped sentence} for an engine that holds
+  the marker. Throws on an engine `admit!` refuses, on the first step
+  the law refuses, and on an engine that holds a cast member and no
+  marker. `:now` is the boot's moment, the engine's clock when absent;
+  relative dates count from it. `:wall-url` is the clone's wall: when
+  it is given, the seed's `:walled` servers are made at it, and when
+  it is not, none is made."
   [eng {:keys [cast steps walled] :as seed} {:keys [now wall-url]}]
   (admit! eng)
-  (if (seeded? eng cast)
+  (cond
+    (seeded? eng seed)
     {:seed (:seed seed) :seeded false
-     :skipped "This engine already holds a member of the seed's cast, so the seed was applied before and is skipped whole."}
+     :skipped "This engine already holds the seed's completion marker, so the seed was applied before and is skipped whole."}
+
+    (enrolled? eng cast)
+    (throw (refusal "The seed is refused: a seed failed half-way on this database; bring the clone down."
+                    {:seed (:seed seed) :half-seeded true}))
+
+    :else
     (let [now (or now ((or (:now-fn eng) #(Instant/now))))]
       (register-roles! eng cast)
       ;; people first: an agent's row names the person it acts for
@@ -240,6 +273,8 @@
                                             :id (str (:id row))}))))
                   {}
                   (map-indexed vector steps))]
+        ;; last, and only after every step went through
+        (mark! eng seed)
         {:seed (:seed seed) :seeded true
          :members (count cast) :steps (count steps) :refs refs}))))
 
