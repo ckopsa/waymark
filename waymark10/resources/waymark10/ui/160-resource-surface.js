@@ -107,6 +107,12 @@ async function renderResource(view, doc, hints) {
                        toast(`following ${aud}`); }},
       `👁 Follow ${aud}`));
   }
+  /* a sealed walk plays on this screen, read-only: its export is the
+     one read the replay makes (200-events-follow.js) */
+  if (kind === "walk" && doc.state === "sealed")
+    bar.append(el("button", {"data-replay-walk": "",
+      title: "play this recording on this screen, read-only — nothing is written",
+      onclick: () => replayWalk(doc.self)}, "▶ Replay"));
   /* an open invitation addressed to this viewer: one tap lands on the
      invited row with its door open in their own hand */
   if (kind === "invitation" && doc.state === "open" &&

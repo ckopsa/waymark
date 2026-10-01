@@ -11,6 +11,7 @@
   <span id="lawstamp"></span>
   <span id="grantchip"></span>
   <span id="followchip"></span>
+  <span id="replaychip"></span>
   <div class="spacer"></div>
   <!-- the theme control: three states, and one of them is "don't
        decide" — System hands the question back to the operating
@@ -37,6 +38,13 @@
   <button id="sharebtn" style="font-size:12px;padding:4px 10px"
           type="button" aria-pressed="false"
           title="share my screen with followers — off">⧉</button>
+  <!-- replay a recorded walk from a file (docs/spec-guided-follow.md
+       §4): the .ndjson is read in this tab and played read-only;
+       200-events-follow.js wires it -->
+  <button id="replaybtn" style="font-size:12px;padding:4px 10px"
+          type="button"
+          title="replay a recorded walk from a .ndjson file — read-only">▶ file</button>
+  <input id="replayfile" type="file" accept=".ndjson,application/x-ndjson" hidden>
   <button id="ledgertoggle" style="font-size:12px;padding:4px 10px"
           aria-expanded="false" aria-controls="ledger"
           title="the live ledger — every transition as it lands">

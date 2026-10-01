@@ -217,7 +217,7 @@ function onRowFrame({event, id, data: ev}) {
   }
   /* following: go where they went — unless a dialog is open (never yank
      a human out of a form they're typing in) */
-  if (isFollowed && ev.self && ev.self !== here && !$("dialog[open]")) {
+  if (isFollowed && !replay && ev.self && ev.self !== here && !$("dialog[open]")) {
     location.hash = "#" + ev.self;
     return;
   }
