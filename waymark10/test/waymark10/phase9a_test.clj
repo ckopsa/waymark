@@ -365,7 +365,7 @@
         ;; made that wait on a person, own-surface by :caller
         (is (= ["approval_request"
                 "grant" "held_call" "job" "plan"
-                "sitting" "verdict"]
+                "scheduled_action" "sitting" "verdict"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]

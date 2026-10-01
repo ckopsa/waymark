@@ -18,7 +18,9 @@
 {:seed "demo"
  :version 1
  :cast
- {:ada  {:id "ada"  :display "Ada Example"    :type :human :household "Harbour House"}
+ {:ada  {:id "ada"  :display "Ada Example"    :type :human :household "Harbour House"
+         ;; a held tool call is answered by this role, and by no other
+         :roles ["approver"]}
   :ben  {:id "ben"  :display "Ben Sample"     :type :human :household "Harbour House"}
   :cleo {:id "cleo" :display "Cleo Specimen"  :type :human :household "Harbour House"}
   :plan {:id "plan" :display "Planner"        :type :agent :household "Harbour House"
@@ -28,6 +30,14 @@
   :fay  {:id "fay"  :display "Fay Figment"    :type :human :household "Orchard Flat"}
   :tidy {:id "tidy" :display "Tidy"           :type :agent :household "Orchard Flat"
          :acts-for :dov}}
+ ;; The servers behind the wall (docs/spec-demo-clones.md § 4). The
+ ;; loader makes each one only when the boot names a wall
+ ;; (WAYMARK_WALL_URL), as an mcp_server row at the wall's address. So
+ ;; the held call below is forwarded to the wall and to nothing else.
+ :walled
+ [{:server "mail"
+   :powers [{:power "mail.send" :tools ["send"] :approval "person"
+             :shown ["to" "subject"]}]}]
  :steps
  [;; ── Harbour House ──────────────────────────────────────────────
   ;; draft: the agent filed it, and nobody has groomed it
@@ -117,8 +127,11 @@
 
   ;; ── the held call ──────────────────────────────────────────────
   ;; NOT an ordinary invoke: the engine mints it, as the power door
-  ;; would for a call that waits on a person. Planner acts for Ada, so
-  ;; it waits on Ada's tap. No server stands behind the tool's name.
+  ;; would for a call that waits on a person. The approver role answers
+  ;; a held tool call, and Ada holds it; Planner, the caller, may not
+  ;; answer its own. The tool's server is the `mail` row under :walled:
+  ;; Ada's Allow ends `failed` with the wall's sentence, or with the
+  ;; engine's no-server sentence when the boot named no wall.
   {:hold {:tool "mail__send"
           :caller [:cast :plan]
           :why "Ben asked for the weekend menu by mail, and sending mail waits for Ada's tap."
