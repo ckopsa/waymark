@@ -222,6 +222,16 @@
     (is (str/includes? body "if (uiSharing()) body.ui = uiShareState();"))
     (is (str/includes? body "shareableValues(collectValues(form, input), input)"))))
 
+(deftest ui-replay-paces-a-burst
+  ;; docs/spec-agent-demo-walks.md §2: the beats of one connector call
+  ;; are recorded milliseconds apart, and replay plays two frames less
+  ;; than 50 ms apart 450 ms apart, under the long-silence cut
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;"))
+    (is (str/includes? body "const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);"))
+    (is (str/includes? body "r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);"))
+    (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
+
 (defn- well-known [h]
   (-> (h {:request-method :get :uri "/api/.well-known/waymark"
           :headers {"x-waymark-principal" "reader"}})
