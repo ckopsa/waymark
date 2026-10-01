@@ -1324,6 +1324,7 @@
                    :properties (assoc row-ref-schema
                                       :action {:type "string"}
                                       :input {:type "object"}
+                                      :acknowledge {:type "string"}
                                       :ticket {:type "string"})
                    :required ["kind" "id" "action" "ticket"]}
     :_meta {:ui {:resourceUri app-resource-uri :visibility ["app"]}}}])
@@ -4516,7 +4517,10 @@
 (def ^:private app-law
   "The doors a show admits on a kind, and the fields the page shows."
   {:held_call {:doors ["allow" "refuse"]
-               :fields [:tool :why :shown :changes :call :door]}})
+               :fields [:tool :why :shown :changes :call :door]}
+   :approval_request {:doors ["approve" "deny"]
+                      :fields [:task :scope :seat :substitute :expires_at
+                               :requested_by :waits_on :note]}})
 
 (def ^:private app-ticket-seconds 600)
 
@@ -4572,7 +4576,9 @@
 
 (defn- app-read
   "waymark_app_read: one row as the PERSON sees it, the law's doors on
-  its kind, and the ticket, which rides `structuredContent` alone."
+  its kind, and the ticket, which rides `structuredContent` alone. A
+  confirm door carries its consequence sentence, read off the row's own
+  entry, for the page to show and to send back as `acknowledge`."
   [eng call session {:keys [kind id]}]
   (let [rdef (rdef-of eng kind)
         law (get app-law (:kind rdef))
@@ -4583,12 +4589,19 @@
       (let [env (body-json resp)
             ^Instant now ((:now-fn eng))
             door (fn [aname]
-                   (let [entry (get-in env [:actions (keyword aname)])]
-                     {:action aname
-                      :label (or (get-in entry [:display :label]) aname)
-                      :style (get-in entry [:display :style])
-                      :available (some? entry)
-                      :inputs (mapv name (keys (get-in entry [:input :properties])))}))]
+                   (let [entry (get-in env [:actions (keyword aname)])
+                         props (get-in entry [:input :properties])]
+                     (cond-> {:action aname
+                              :label (or (get-in entry [:display :label]) aname)
+                              :style (get-in entry [:display :style])
+                              :available (some? entry)
+                              :inputs (mapv name (keys props))
+                              ;; what a text box may hold, where the door says
+                              :lengths (into {} (for [[k v] props
+                                                      :when (:maxLength v)]
+                                                  [(name k) (:maxLength v)]))}
+                       (get-in entry [:safety :confirm])
+                       (assoc :consequence (consequence-of entry)))))]
         (assoc (result (str (:summary env)))
                :structuredContent
                {:kind (name (:kind rdef))
@@ -4615,8 +4628,11 @@
   person. The ticket is judged before any route is touched. Then the
   row must still be the version the read rendered, unless this nonce
   already landed and the idempotency store answers the first result.
-  The door's own walls judge the tap as they judge any tap."
-  [eng call session {:keys [kind id action input ticket]}]
+  A confirm door then meets `waymark_invoke`'s own gate: `acknowledge`
+  is the consequence sentence exactly as the row states it, or the tap
+  is refused as the model's is. The door's own walls judge the tap as
+  they judge any tap."
+  [eng call session {:keys [kind id action input ticket acknowledge]}]
   (let [rdef (rdef-of eng kind)
         claims (read-ticket eng ticket)
         ^Instant now ((:now-fn eng))
@@ -4639,13 +4655,18 @@
         st (:storage eng)
         replay? (some? (store/with-tx st
                          (fn [tx] (store/idempotency-lookup st tx okey (:kind rdef)))))
-        seen (call (request psession :get self nil))]
+        seen (call (request psession :get self nil))
+        entry (when (= 200 (:status seen))
+                (get-in (body-json seen) [:actions (keyword (str action))]))]
     (cond
       (not= 200 (:status seen))
       (pass-through seen)
       (and (not replay?) (not= (:version claims) (get-in seen [:headers "ETag"])))
       (refusal (p/version-conflict (keyword (str action))
                                    {:kind (:kind rdef) :id (str id)}))
+      (and (get-in entry [:safety :confirm])
+           (not= acknowledge (consequence-of entry)))
+      (refusal (confirm-refusal (str action) (consequence-of entry) acknowledge))
       :else
       (let [resp (call (request psession :post (str self "/-/" action)
                                 {:body (or input {})
