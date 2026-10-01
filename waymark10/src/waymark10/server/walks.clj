@@ -18,6 +18,12 @@
   frame never carries request headers, grant ids, keys or credentials:
   those keys are dropped from the body at any depth before the insert.
 
+  THE RECORDER IS THE FOLLOWER'S OWN STREAM. `recorder` answers the taps
+  routes/realtime hangs on a stream opened with ?ui=<pid>: every `move`
+  and `ui` frame of the followed principal that stream sends, and every
+  firehose transition that principal made, goes to `record-frame!` for
+  each walk the follower is recording of that principal.
+
   THE ROW OUTLIVES ITS FRAMES. The purge deletes every frame and moves
   the walk to `purged`; the row keeps its title and its counts as the
   audit that a walk existed."
@@ -312,6 +318,113 @@
                                       (:next-flip-at row))
                   frame)))))))))
 
+;; ── the recorder (a follower's own stream) ──────────────────────────
+
+(def ^:private recorder-page
+  "How many walks of one principal one follower records at once."
+  20)
+
+(defn- recording-walks
+  "The ids of the walks `recorder` is recording of `followed` now."
+  [eng recorder followed]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (into []
+              (comp (filter #(and (= recorder (str (get-in % [:data :recorder])))
+                                  (= followed (str (get-in % [:data :followed])))))
+                    (map #(str (:id %))))
+              (store/query-rows st tx kind
+                                {:state :recording
+                                 :recorder recorder
+                                 :followed followed}
+                                {:limit recorder-page}))))))
+
+(defn- suggest-for
+  "An invitation's suggested values as `vis` may read them: the keys its
+  `:arg?` admits on the invited step, and none when the step names no
+  served kind. nil `vis` reads them whole. nil when there are none."
+  [eng vis {:keys [self action suggest]}]
+  (when (and (map? suggest) (seq suggest))
+    (if-some [arg? (:arg? vis)]
+      (let [[_ plural] (re-find #"/api/([^/?#]+)/[^/?#]+" (str self))
+            k (some->> plural (kind-of-plural eng))
+            action (some-> action name str/trim not-empty keyword)]
+        (if (and k action)
+          (into {} (filter (fn [[arg _]] (arg? k action (name arg)))) suggest)
+          {}))
+      suggest)))
+
+(defn- invitation-frame
+  "The `invitation` frame of one firehose event, when that event is the
+  birth of an invitation the follower can see; nil otherwise. The body
+  is pinned: {id, author, subject, self, action, field, note, suggest},
+  and `suggest` keeps only the keys the follower's `:arg?` admits."
+  [eng sight t]
+  (when (and (= "invitation" (some-> (:kind t) name))
+             (nil? (:from-state t))
+             (:resource-id t))
+    (let [st (:storage eng)
+          id (str (:resource-id t))
+          rdef (get (inv/resources eng) :invitation)]
+      (when (and rdef (or (nil? sight) ((:row? sight) :invitation id)))
+        (when-some [row (store/with-tx st
+                          (fn [tx] (store/load-row st tx :invitation id {})))]
+          (let [d (:data (inv/decode-row rdef row))]
+            {:type "invitation"
+             :body (assoc (select-keys d [:author :subject :self :action
+                                          :field :note])
+                          :id id
+                          :suggest (suggest-for eng sight d))}))))))
+
+(defn recorder
+  "One stream's recorder (docs/spec-guided-follow.md § 4): the taps a
+  stream serving `follower` hangs on its sources while it follows the
+  principal id `followed`. `sight` is the follower's visibility, the
+  one the stream redacts under. → {:presence f :event f}.
+
+  `:presence` takes a presence frame as the stream sends it, after the
+  follower's redaction, and records the followed principal's `move` and
+  `ui`. `:event` takes a firehose event and records a `transition` when
+  its actor is the followed principal, and an `invitation` beside it
+  when that transition created one (`invitation-frame`).
+
+  Each frame goes through `record-frame!` to every walk the follower
+  is recording of `followed` at that moment. The walks are read per
+  frame, so a walk started after the stream opened is recorded and a
+  sealed or purged one takes nothing. Closing the stream seals no walk.
+  A tap never throws: the stream outlives a write that failed."
+  [eng follower sight followed]
+  (let [fid (str (:id follower))
+        pid (str followed)
+        write! (fn [what frames]
+                 (try
+                   (when-some [ids (seq (recording-walks eng fid pid))]
+                     (let [frames (frames)]
+                       (doseq [id ids
+                               frame frames]
+                         (record-frame! eng id sight frame))))
+                   (catch Exception e
+                     (warn! "a " what " frame of " pid " was not recorded — "
+                            (ex-message e)))))]
+    {:presence
+     (fn [frame]
+       (let [event (:event frame)]
+         (when (and (contains? #{"move" "ui"} event)
+                    (= pid (str (get-in frame [:principal :id]))))
+           (write! event (fn [] [{:type event :body frame}])))))
+     :event
+     (fn [t]
+       (when (and (not= :derivation (::events/class t))
+                  (= pid (str (get-in t [:actor :id]))))
+         (write! "transition"
+                 (fn []
+                   (keep identity
+                         [{:type "transition"
+                           :body (walk/keywordize-keys
+                                  (events/transition-payload eng t))}
+                          (invitation-frame eng sight t)])))))}))
+
 ;; ── the export (waymark-walk/1) ─────────────────────────────────────
 
 (def export-format "waymark-walk/1")
@@ -363,7 +476,7 @@
   (let [p (case type
             ("move" "ui") (:principal body)
             "transition" (:actor body)
-            "invitation" (or (:author body) (get-in body [:data :author]))
+            "invitation" (:author body)
             nil)]
     (cond
       (map? p) [(some-> (:id p) str) (some-> (:type p) name)]
@@ -436,8 +549,9 @@
   `move` presence's self rule; `ui` that rule and presence/ui-redactor,
   and a ui frame with every part redacted crosses as a plain move;
   `transition` events/visible-transition; `invitation` :row? on the
-  invitation, named by the body's `id` or its `invitation` path."
-  [{:keys [vis visible? redact-ui]} type body]
+  invitation its pinned body names by `id` (`invitation-frame`), and
+  its `suggest` keeps the keys the exporter's :arg? admits."
+  [{:keys [vis visible? redact-ui suggest]} type body]
   (let [self (path-of (:self body))]
     (case type
       "move" (when (and self (visible? self))
@@ -452,18 +566,15 @@
                      (assoc (select-keys p [:kind :self :action :from :to
                                             :at :summary])
                             :type "transition"))
-      "invitation" (let [d (if (map? (:data body)) (:data body) body)
-                         step (path-of (:self d))
-                         id (or (:id body)
-                                (second (re-matches
-                                         #"/api/invitations/([^/?#]+)"
-                                         (str (path-of (:invitation body))))))]
+      "invitation" (let [id (:id body)]
                      (when (and id (or (nil? vis)
                                        ((:row? vis) :invitation (str id))))
-                       (cond-> (assoc (select-keys d [:action :field :note])
-                                      :type "invitation"
-                                      ::subject (some-> (:subject d) str))
-                         step (assoc :self step))))
+                       (let [suggested (suggest (assoc body :self self))]
+                         (cond-> (assoc (select-keys body [:action :field :note])
+                                        :type "invitation"
+                                        ::subject (some-> (:subject body) str))
+                           self (assoc :self self)
+                           (seq suggested) (assoc :suggest suggested)))))
       nil)))
 
 (defn- export-line [alias part]
@@ -494,7 +605,8 @@
             frdef (get (inv/resources eng) frame-kind)
             rules {:vis vis
                    :visible? (presence/self-visible? eng vis)
-                   :redact-ui (presence/ui-redactor eng vis)}
+                   :redact-ui (presence/ui-redactor eng vis)
+                   :suggest #(suggest-for eng vis %)}
             frames (->> (store/with-tx st
                           (fn [tx]
                             (vec (store/query-rows
