@@ -308,13 +308,13 @@
            (refusal #(schedule! eng c {:target {:tool "telegram__send_message"}
                                        :input {:text "Good morning."}}))
            "child 4")))
-    (testing "conditions are child 5's, under any rule"
-      (is (str/includes?
-           (refusal #(schedule! eng c {:validity "conditions"
-                                       :conditions {:state "open"}}))
-           "child 5"))
-      (is (str/includes? (refusal #(schedule! eng c {:conditions {:state "open"}}))
-                         "child 5")))
+    (testing "conditions and their rule are named together (child 5)"
+      (is (some? (refusal #(schedule! eng c {:validity "conditions"}))))
+      (is (some? (refusal #(schedule! eng c {:conditions {:state "open"}}))))
+      (is (= "conditions"
+             (get-in (schedule! eng c {:validity "conditions"
+                                       :conditions {:state "open"}})
+                     [:data :validity]))))
     (testing "a target names a kind and an action"
       (is (some? (refusal #(schedule! eng c {:target {:kind "chore"}})))))
     (testing "strict is stored, and a create names no row"

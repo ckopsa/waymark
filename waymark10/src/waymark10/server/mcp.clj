@@ -1035,16 +1035,18 @@
                           :description (str "With at: the IANA zone a local time is written "
                                             "in and shown in, e.g. America/Denver. Left out, "
                                             "a local time is read in the zone on your member row.")}
-                   :validity {:type "string" :enum ["strict" "state"]
+                   :validity {:type "string" :enum ["strict" "state" "conditions"]
                               :description (str "With at: what must still hold at the time. "
                                                 "state (default): the row is still in the state "
                                                 "it is in now. strict: nothing about the row "
-                                                "changed since.")}
+                                                "changed since. conditions: state, and every "
+                                                "entry of `conditions` holds.")}
                    :conditions {:type "object"
-                                :description (str "With at: your own conditions over the row's "
-                                                  "fields. Not built yet (child 5 of "
-                                                  "docs/spec-scheduled-actions.md): a call that "
-                                                  "names any is refused.")}
+                                :description (str "With at and validity conditions: your own "
+                                                  "conditions over the row's fields, as the map "
+                                                  "waymark_query takes as `filter` for that kind "
+                                                  "(priority_gte: \"2\"). All must hold at the "
+                                                  "time, or the call is skipped. Not for a create.")}
                    :expect_state {:type "string"
                                   :description (str "With at: the state the row is expected to be "
                                                     "in at the time, when it is not in it now.")}
