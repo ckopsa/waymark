@@ -458,4 +458,8 @@
                     font-family: var(--mono); font-size: 10.5px;
                     border: 1px solid var(--verdigris); border-radius: 999px;
                     color: var(--verdigris-deep); }
+  /* how far along a walkthrough's step is, above the form
+     (docs/spec-walkthrough.md §6) */
+  .invite-step { margin: 0 0 8px; font-family: var(--mono); font-size: 11.5px;
+                 color: var(--verdigris-deep); }
 
