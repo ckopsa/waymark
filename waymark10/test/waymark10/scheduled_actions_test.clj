@@ -1,10 +1,11 @@
 (ns waymark10.scheduled-actions-test
-  "The scheduled_action kind (docs/spec-scheduled-actions.md, child
-  1a): its stamps, its walls, its limits and its zone rules. Memory
-  storage, the real engine and a fixed clock. The scheduling check is
-  child 1b's and the run is child 1c's; neither is exercised here."
+  "The scheduled_action kind (docs/spec-scheduled-actions.md, children
+  1a and 1b): its stamps, its walls, its limits, its zone rules and its
+  scheduling check. Memory storage, the real engine and a fixed clock.
+  The run is child 1c's and is not exercised here."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
@@ -13,6 +14,15 @@
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t])
   (:import (java.time Instant)))
+
+(def ^:private not-before-monday
+  "A wall its scheduler expects to lift by the time."
+  (g/guard {:name :not-before-monday
+            :explain "Chores are scrubbed from Monday on."
+            :check (fn [_row _inp _ctx] (t/deny))}))
+
+(r/defhandler file-under [row inp _ctx]
+  (assoc-in row [:data :title] (:title inp)))
 
 (def ^:private chore
   "The row a scheduled call acts on."
@@ -33,7 +43,22 @@
               :display {:label "Finish" :order 1}}
      :reopen {:from #{:done} :to :open
               :safety {:idempotent true :reversible true :confirm false}
-              :display {:label "Reopen" :order 2}}}}))
+              :display {:label "Reopen" :order 2}}
+     ;; a door with an input, a door behind a guard and a confirm door
+     :file {:from #{:open} :to :done
+            :input [:map
+                    [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]]
+            :handler file-under
+            :safety {:idempotent true :reversible true :confirm false}
+            :display {:label "File" :order 3}}
+     :scrub {:from #{:open} :to :done
+             :guards [not-before-monday]
+             :safety {:idempotent true :reversible true :confirm false}
+             :display {:label "Scrub" :order 4}}
+     :scrap {:from #{:open} :to :done
+             :safety {:idempotent true :reversible true :confirm true
+                      :consequence "The chore is closed without being done."}
+             :display {:label "Scrap" :order 5}}}}))
 
 (def ^:private now (Instant/parse "2026-10-01T12:00:00Z"))
 
@@ -279,3 +304,143 @@
                                   :input {:title "Laundry"}})]
         (is (= "strict" (get-in row [:data :validity])))
         (is (= {:title "Laundry"} (get-in row [:data :input])))))))
+
+;; ── the scheduling check (child 1b) ─────────────────────────────────
+
+(defn- on
+  "A body that names `action` on chore `c`."
+  [c action & [extra]]
+  (merge {:target {:kind "chore" :action action :id (str c)}} extra))
+
+(defn- chore-move! [eng c action]
+  (inv/invoke! eng :chore (str c) action {} {:principal person}))
+
+(defn- chore-of [eng c]
+  (let [st (:storage eng)]
+    (store/with-tx st (fn [tx] (store/load-row st tx :chore (str c) {})))))
+
+(deftest the-scheduling-check-refuses-what-the-door-refuses
+  (let [eng (fresh-engine)
+        c (chore! eng)]
+    (testing "a door the row is not in the state for"
+      (is (str/includes? (refusal #(schedule! eng c (on c "reopen")))
+                         "Available in state")))
+    (testing "an input the door's schema refuses"
+      (is (str/includes? (refusal #(schedule! eng c (on c "file" {:input {:title ""}})))
+                         "failed validation"))
+      (is (nil? (refusal #(schedule! eng c (on c "file" {:input {:title "Dishes, done"}}))))))
+    (testing "a guard that refuses, in the guard's own sentence"
+      (is (str/includes? (refusal #(schedule! eng c (on c "scrub")))
+                         "from Monday on")))
+    (testing "a row that is not there, and a door that is not"
+      (is (str/includes?
+           (refusal #(schedule! eng c {:target {:kind "chore" :action "finish"
+                                                :id "no-such-chore"}}))
+           "No chore"))
+      (is (str/includes? (refusal #(schedule! eng c (on c "polish")))
+                         "has no action"))
+      (is (str/includes?
+           (refusal #(schedule! eng c {:target {:kind "errand" :action "finish"
+                                                :id (str c)}}))
+           "no door"))
+      (is (str/includes?
+           (refusal #(schedule! eng c {:target {:kind "chore" :action "finish"}}))
+           "names the row's `id`")))
+    (testing "a create is rehearsed in full"
+      (is (str/includes?
+           (refusal #(schedule! eng c {:target {:kind "chore" :action "create"}
+                                       :input {}}))
+           "failed validation")))
+    (testing "a door the scheduler's grant does not admit is not there"
+      (is (str/includes?
+           (refusal #(schedule! eng c {}
+                                {:principal planner
+                                 :grant {:id "grant-planner"
+                                         :action? (fn [_ a] (not= :finish a))
+                                         :row? (fn [_ _] true)}}))
+           "no door")))))
+
+(deftest an-expected-state-is-passed-over-and-no-guard-is-judged
+  (let [eng (fresh-engine)
+        c (chore! eng)]
+    (testing "`reopen` of a chore that is still open, expected done by then"
+      (let [row (schedule! eng c (on c "reopen" {:expect_state "done"}))]
+        (is (= "done" (get-in row [:data :snapshot :state])))
+        (is (nil? (get-in row [:data :snapshot :version]))
+            "a row that has not got there has no version to pin")))
+    (testing "`strict` is refused with it"
+      (is (str/includes?
+           (refusal #(schedule! eng c (on c "reopen" {:expect_state "done"
+                                                      :validity "strict"})))
+           "no version to pin")))
+    (testing "the action is declared from that state"
+      (is (str/includes?
+           (refusal #(schedule! eng c (on c "finish" {:expect_state "done"})))
+           "not declared from")))
+    (chore-move! eng c :finish)
+    (testing "the input's schema is still judged"
+      (is (str/includes?
+           (refusal #(schedule! eng c (on c "file" {:expect_state "open"
+                                                    :input {:title ""}})))
+           "does not fit")))
+    (testing "and no guard is"
+      (is (nil? (refusal #(schedule! eng c (on c "scrub" {:expect_state "open"}))))))
+    (testing "a create has no row to expect a state of"
+      (is (str/includes?
+           (refusal #(schedule! eng c {:target {:kind "chore" :action "create"}
+                                       :input {:title "Laundry"}
+                                       :expect_state "open"}))
+           "no row")))))
+
+(deftest an-expected-refusal-is-passed-over-by-name
+  (let [eng (fresh-engine)
+        c (chore! eng)]
+    (testing "the guard the scheduler names, and the names stay on the row"
+      (let [row (schedule! eng c (on c "scrub" {:expect_refusals ["not-before-monday"]}))]
+        (is (= ["not-before-monday"] (get-in row [:data :expect_refusals])))
+        (is (= "open" (get-in row [:data :snapshot :state])))))
+    (testing "a guard it did not name still refuses"
+      (is (str/includes?
+           (refusal #(schedule! eng c (on c "scrub" {:expect_refusals ["not-on-a-holiday"]})))
+           "from Monday on")))
+    (testing "a name passes over a guard and no other refusal"
+      (is (str/includes?
+           (refusal #(schedule! eng c (on c "reopen" {:expect_refusals ["not-before-monday"]})))
+           "Available in state")))))
+
+(deftest the-snapshot-is-written-at-scheduling
+  (let [eng (fresh-engine)
+        c (chore! eng)
+        snap #(get-in % [:data :snapshot])]
+    (testing "the row's version, state and law revision"
+      (let [s (snap (schedule! eng c {}))]
+        (is (= {:version 1 :state "open"} (select-keys s [:version :state])))
+        (is (string? (:law_revision s)))))
+    (testing "it is the row as it is now, not as it was born"
+      (chore-move! eng c :finish)
+      (chore-move! eng c :reopen)
+      (let [s (snap (schedule! eng c {}))]
+        (is (< 1 (:version s)))
+        (is (= (:version (chore-of eng c)) (:version s)))
+        (is (= "open" (:state s)))))
+    (testing "it is kept on the stored row"
+      (let [id (:id (schedule! eng c {}))]
+        (is (= "open" (get-in (row-of eng id) [:data :snapshot :state])))))
+    (testing "a create has no row, and keeps the law a birth is stamped by"
+      (let [s (snap (schedule! eng c {:target {:kind "chore" :action "create"}
+                                      :input {:title "Laundry"}}))]
+        (is (= #{:law_revision} (set (keys s))))))))
+
+(deftest a-confirm-door-takes-its-sentence-at-scheduling
+  (let [eng (fresh-engine)
+        c (chore! eng)
+        sentence "The chore is closed without being done."]
+    (testing "without the sentence it is refused, and the refusal states it"
+      (is (str/includes? (refusal #(schedule! eng c (on c "scrap"))) sentence)))
+    (testing "a sentence that is not the door's is refused"
+      (is (str/includes?
+           (refusal #(schedule! eng c (on c "scrap" {:acknowledge "Yes, do it."})))
+           sentence)))
+    (testing "the sentence, exactly as written, is stored with the call"
+      (let [row (schedule! eng c (on c "scrap" {:acknowledge sentence}))]
+        (is (= sentence (get-in row [:data :acknowledge])))))))
