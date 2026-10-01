@@ -96,13 +96,34 @@
                              :one-way "Sealing is for good."}
                     :display {:label "Seal"}}}})
 
+;; a kind with a way BACK: every kind above ends after one transition,
+;; and a second person's transition on one row needs a row that can
+;; take two (R-11.3: the second reads a person before it)
+(r/defresource shelf
+  {:kind :seat_shelf
+   :plural "seat_shelves"
+   :states [:open :done :gone]
+   :initial :open
+   :terminal #{:gone}
+   :summary "{data.name} · {state}"
+   :schema [:map [:name [:string {:min 1 :max 80}]]]
+   :flow [[:open :finish :done
+           {:undo :reopen
+            :display {:label "Done"}}]
+          [:done :reopen :open
+           {:undo :finish
+            :display {:label "Reopen"}}]
+          [:done :discard :gone
+           {:one-way "Discarding records reality; nothing external changes."
+            :display {:label "Discard"}}]]})
+
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private t0 (Instant/parse "2026-09-17T08:00:00Z"))
 
 (defn- world []
   (let [clock (atom t0)
-        eng (dev/scratch! [pantry ledger vault bulk-vault] {:now-fn (fn [] @clock)})]
+        eng (dev/scratch! [pantry ledger vault bulk-vault shelf] {:now-fn (fn [] @clock)})]
     {:clock clock :eng eng :h (dev/handler eng)}))
 
 (defn- req
@@ -645,3 +666,77 @@
       (is (= 200 (:status (req h :post (str "/api/seat_pantries/" mine "/-/finish")
                                {:headers human}))))
       (is (= [1 [mine]] (line))))))
+
+(deftest a-second-persons-transition-on-a-corrected-row-adds-nothing
+  (let [{:keys [h]} (world)
+        model (add-model! h "twice-model")
+        seat (open-seat! h "clerk-twice"
+                         {:scope [{:kind "seat_shelf"
+                                   :actions ["create" "finish" "reopen"]}]})
+        gid (sit! h (sitter "ari-twice") "clerk-twice" {})
+        as (sitter "ari-twice" {:grant gid})
+        sid (id-of (req h :post "/api/sittings"
+                        {:headers as :body {:seat seat :model model
+                                            :grant gid}}))
+        made (req h :post "/api/seat_shelves"
+                  {:headers as :body {:name "jars"}})
+        mine (id-of made)
+        line (fn []
+               (let [d (:data (json (req h :get (str "/api/sittings/" sid)
+                                         {:headers human})))]
+                 [(or (:corrections d) 0) (vec (:corrected_rows d))]))
+        move! (fn [action]
+                (:status (req h :post (str "/api/seat_shelves/" mine "/-/" action)
+                              {:headers human})))]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (is (= 200 (:status (req h :post (str "/api/sittings/" sid "/-/close")
+                             {:headers as
+                              :body {:input_tokens 10 :output_tokens 10
+                                     :cache_read_tokens 0
+                                     :cache_write_tokens 0
+                                     :turns 1 :note "Done."}}))))
+    (is (= [0 []] (line)))
+
+    (testing "a person's finish on the sitter's row adds one and the id"
+      (is (= 200 (move! "finish")))
+      (is (= [1 [mine]] (line))))
+
+    (testing "a person's reopen of the same row reads a person before it"
+      (is (= 200 (move! "reopen")))
+      (is (= [1 [mine]] (line)) "one row, one correction"))
+
+    (testing "and so does every person's transition after that"
+      (is (= 200 (move! "finish")))
+      (is (= [1 [mine]] (line))))))
+
+(deftest a-persons-write-on-a-row-whose-sitting-is-still-open-adds-nothing
+  (let [{:keys [h]} (world)
+        model (add-model! h "open-model")
+        seat (open-seat! h "clerk-open")
+        gid (sit! h (sitter "ari-open") "clerk-open" {})
+        as (sitter "ari-open" {:grant gid})
+        sid (id-of (req h :post "/api/sittings"
+                        {:headers as :body {:seat seat :model model
+                                            :grant gid}}))
+        made (req h :post "/api/seat_pantries"
+                  {:headers as :body {:name "oats"}})
+        mine (id-of made)
+        line (fn []
+               (let [d (:data (json (req h :get (str "/api/sittings/" sid)
+                                         {:headers human})))]
+                 [(or (:corrections d) 0) (vec (:corrected_rows d))]))]
+    (is (= 201 (:status made)) (pr-str (json made)))
+
+    (testing "the sitting is open, so the person's finish is not credited to it"
+      (is (= 200 (:status (req h :post (str "/api/seat_pantries/" mine "/-/finish")
+                               {:headers human}))))
+      (is (= [0 []] (line))))
+
+    (testing "and the close does not count it after the fact"
+      (is (= 200 (:status (req h :post (str "/api/sittings/" sid "/-/close")
+                               {:headers as
+                                :body {:input_tokens 10 :output_tokens 10
+                                       :cache_read_tokens 0
+                                       :cache_write_tokens 0
+                                       :turns 1 :note "Done."}}))))
+      (is (= [0 []] (line))))))
