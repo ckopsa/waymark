@@ -1650,6 +1650,59 @@ async function guidedStory() {
        const inputs = g ? [...g.querySelectorAll("input, select, textarea")] : [];
        inputs.length > 0 && inputs.every(n => n.disabled) }`));
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a walk file's invitation frame");
+  await A.until(`!replay && !document.querySelector("dialog[open]")`, "the replay to stop");
+  const replayNote = `Write the recipe here, ${tag}, in the replay.`;
+  const walkFile = [
+    {format: "waymark-walk/1", title: "Ada invites Bo",
+     cast: {a1: {display: "Ada", type: "human"}, p1: {display: "Bo", type: "human"}}},
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+    {t: 100, type: "invitation", who: "a1", subject: "p1", self: meals[1],
+     action: "update_recipe", field: "recipe", note: replayNote,
+     suggest: {recipe: "Brown the roux."}},
+    {t: 200, type: "ui", who: "a1", self: "/api/meals", ui: {}},
+    {t: 5000, type: "transition", who: "p1", kind: "meal", self: meals[1],
+     action: "update_recipe", from: "on_list", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided stew ${tag}`},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every request the page makes while the file plays that is not a read */
+  await A.js(`{ window.__replayWrites = [];
+    const f0 = window.fetch;
+    window.fetch = (u, o) => {
+      if (o && o.method && o.method !== "GET") window.__replayWrites.push(o.method + " " + u);
+      return f0(u, o);
+    }; true }`);
+  await A.js(`startReplay(${JSON.stringify(walkFile)})`);
+  const invite = `document.querySelector("dialog[open][data-replay-invite]")`;
+  /* the frame after the invitation is ada's screen elsewhere, 3 s
+     before the answer: the replay is paused there for the checks */
+  await A.until(`!!${invite} && replay.at === 3`, "the invitation's dialog, and the frame after it");
+  await A.js(`pauseReplay(); true`);
+  ok("the replay opens the invited door's dialog on the invited row, read-only, and a later frame leaves both",
+     await A.js(`{ const inputs = [...${invite}.querySelectorAll("input, select, textarea")];
+       hereHref() === ${JSON.stringify(meals[1])} &&
+       inputs.length > 0 && inputs.every(n => n.disabled) }`));
+  ok("the invited field is highlighted, the note stands beside it, and the suggestion is marked as one",
+     await A.js(`{ const g = ${invite};
+       const t = g.querySelector("[name=recipe]");
+       const spot = t.closest("label") || t.parentElement;
+       const n = g.querySelector("[data-invite-note]");
+       spot.classList.contains("invited") && spot.nextElementSibling === n &&
+       n.textContent === ${JSON.stringify(replayNote)} &&
+       t.value === "Brown the roux." && t.classList.contains("suggested-value") }`));
+  ok("the replayed invitation offers neither Decline nor submit",
+     await A.js(`{ const b = [...${invite}.querySelectorAll(".dlgfoot button")];
+       b.length === 1 && b[0].textContent === "Cancel" }`));
+  await A.js(`playReplay(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !!document.querySelector('[data-replay-transition="update_recipe"]')`,
+                "the answering transition on the row", 15000);
+  ok("the transition that answers the invitation closes its dialog",
+     await A.js(`!document.querySelector("dialog[open]")`));
+  ok("replaying the file made no write",
+     (await A.js(`window.__replayWrites.join(", ")`)) === "");
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
   A.close();
   await chrome.close();
 }

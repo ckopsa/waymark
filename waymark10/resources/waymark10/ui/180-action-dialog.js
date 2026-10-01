@@ -576,7 +576,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     for (const b of dlg.querySelectorAll(".dlgfoot button"))
       if (b.textContent !== "Cancel") b.remove();
     form.prepend(el("p", {class: "guided-note", "data-guided-note": ""},
-      `${guided.name} is filling this in`));
+      guided.note || `${guided.name} is filling this in`));
     dlg.guidedSet = fields => {
       for (const [k, v] of Object.entries(fields || {})) {
         const node = form.querySelector(`[name="${CSS.escape(k)}"]`);

@@ -336,9 +336,10 @@ function applyUiFrame(f) {
   guidedLastFields = ui.fields || {};
   guidedFocus = ui.focus || null;
   /* the existing guards: the Access panel parks, and a dialog this
-     person opened themselves is never replaced */
+     person opened themselves is never replaced; nor is a replayed
+     invitation's, which stands where the invited person's own stood */
   if ((replay || hereHref() !== "access") &&
-      !$("dialog[open]:not([data-guided])")) {
+      !$("dialog[open]:not([data-guided]), dialog[open][data-replay-invite]")) {
     const target = c && c.self ? collectionHrefOf(c) : f.self;
     const here = c && c.self
       ? collectionHrefOf(collectionShareOf(location.hash.slice(1)) || {self: ""})
@@ -671,7 +672,9 @@ demoBoot().catch(() => { /* engine not started, or restarting */ });
    export GET (none for a file), render() draws each screen from the
    recording (renderReplay), the dialog is built from the frame, a
    `transition` renders from its own body, and the presence beat is
-   held. The cast's display names say who is acting. ─────────────── */
+   held. An `invitation` opens its door's dialog through actionDialog's
+   own invitation code, read-only. The cast's display names say who is
+   acting. ───────────────────────────────────────────────────────── */
 const REPLAY_SPEEDS = [1, 2, 4];
 /* a long silence in the recording is cut to this many ms, before speed */
 const REPLAY_MAX_GAP = 3000;
@@ -701,13 +704,20 @@ function startReplay(text) {
              known: new Set(),    // every row self the recording names
              fields: new Map()};  // dialog key → its field names
   for (const f of walk.frames) {
-    const ui = (f.type === "ui" && f.ui) || {}, d = ui.dialog;
+    const ui = (f.type === "ui" && f.ui) || {};
+    /* an invitation names a dialog as well: its row's door, with the
+       invited field and the suggested ones */
+    const inv = f.type === "invitation" && f.self && f.action;
+    const d = inv ? {self: String(f.self).split("?")[0], action: f.action}
+                  : ui.dialog;
     for (const s of [f.self, ui.focus, d && d.self])
       if (s) r.known.add(String(s).split("?")[0]);
     if (d) {
       const key = d.self + " " + d.action;
       const names = r.fields.get(key) || new Set();
-      for (const k of Object.keys(ui.fields || {})) names.add(k);
+      const typed = inv ? [f.field, ...Object.keys(f.suggest || {})]
+                        : Object.keys(ui.fields || {});
+      for (const k of typed) if (k) names.add(k);
       r.fields.set(key, names);
     }
   }
@@ -738,6 +748,30 @@ function replayDialogDoc(d) {
         [...names].map(k =>
           [k, {type: "string", "x-display": {widget: "textarea"}}]))}}}}};
 }
+/* an `invitation` frame applied: the invited row, and its door's
+   dialog as actionDialog draws a live invitation — the suggestions
+   marked, the invited field lit, the note beside it — read-only, with
+   only Cancel in the footer. It holds the screen as an invited
+   person's own dialog does, until the transition that answers it. */
+async function openReplayInvitation(f, actor) {
+  const r = replay;
+  const d = {self: String(f.self).split("?")[0], action: f.action};
+  const subject = (r.cast[f.subject] || {}).display || f.subject || "someone";
+  closeGuided();
+  if ($("dialog[open]")) return;
+  if (d.self !== hereHref()) location.hash = "#" + d.self;
+  const doc = replayDialogDoc(d).body;
+  await actionDialog({name: d.action, entry: doc.actions[d.action], doc,
+    suggest: f.suggest || {},
+    invitation: {doc: {}, field: f.field, note: f.note},
+    guided: {name: actor.display, key: d.self + " " + d.action,
+             note: `${actor.display} invited ${subject} to this step`}});
+  const g = $("dialog[open][data-guided]");
+  if (!g) return;
+  if (replay !== r) { closeGuided(); return; }
+  g.setAttribute("data-replay-invite", "");
+  g.guidedSet(f.suggest || {});
+}
 function applyReplayFrame(f) {
   const actor = replayActor(f);
   replay.who = actor;
@@ -752,13 +786,17 @@ function applyReplayFrame(f) {
     row.summary = f.summary || row.summary;
     row.log.push({...f, actor});
     replay.rows.set(f.self, row);
+    /* the write an open invitation asked for: its dialog closes */
+    const inv = $("dialog[open][data-replay-invite]");
+    if (inv && inv.getAttribute("data-guided") === f.self + " " + f.action)
+      closeGuided();
     /* as the firehose steers: go where they wrote, unless a dialog is
        open; a row already on screen is drawn again from the frame */
     if (f.self === hereHref()) render();
     else if (!$("dialog[open]")) location.hash = "#" + f.self;
+  } else if (f.type === "invitation" && f.self && f.action) {
+    openReplayInvitation(f, actor);
   }
-  /* an `invitation` frame has no surface here yet: it is counted and
-     passed over */
   replayChip();
 }
 function replaySchedule() {
