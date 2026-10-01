@@ -842,6 +842,7 @@ function applyReplayFrame(f) {
 function replaySchedule() {
   const r = replay;
   clearTimeout(r.timer);
+  if (film && r.at >= r.frames.length) filmEnd();
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
   const prev = r.at ? (r.frames[r.at - 1].t || 0) : 0;
   const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);
@@ -869,7 +870,7 @@ function replayCaption() {
     document.body.append(band = el("div", {id: "replaycaption", role: "status"}));
   if (band) {
     band.textContent = c ? c.text : "";
-    band.style.display = c ? "block" : "none";
+    band.style.display = c && !filmBeside(c) ? "block" : "none";
   }
   const g = $("dialog[open][data-guided]:not([data-replay-invite])");
   if (!g || !g.guidedMark) return;
@@ -1029,6 +1030,61 @@ function renderReplayDoc(view, doc) {
   else renderResource(screen, doc, hints).catch(() => {});
   paintGuidedFocus();
 }
+/* ── film mode (docs/spec-agent-demo-walks.md §8b): a sealed walk played
+   for a camera, at /#/api/walks/<id>?film=1. The root element's
+   data-film hides the chrome a film must not show (030-screens.css)
+   and says where the page is: `ready` while the title card holds for
+   FILM_TITLE_MS, `playing` once play starts by itself at 1×, and
+   `ended` when the last screen has held for FILM_HOLD_MS. The camera
+   reads that and nothing else. The export GET is the one read, as it
+   is for ▶ Replay. ──────────────────────────────────────────────── */
+const FILM_TITLE_MS = 2000, FILM_HOLD_MS = 1500;
+/* the walk being filmed, by its self, or null */
+let film = null;
+function filmWalkOf(raw) {
+  const [path, query] = String(raw || "").split("?");
+  return /^\/api\/walks\/[^/]+$/.test(path) &&
+    new URLSearchParams(query || "").get("film") === "1" ? path : null;
+}
+function filmState(s) { document.documentElement.setAttribute("data-film", s); }
+/* the last frame is applied: the screen holds, then the page says so */
+function filmEnd() {
+  setTimeout(() => filmState("ended"), FILM_HOLD_MS);
+}
+/* a caption that names a field is drawn beside that field and not in
+   the band, as an invitation's note is, once its form is open */
+function filmBeside(c) {
+  const g = film && c.field && c.action &&
+    $("dialog[open][data-guided]:not([data-replay-invite])");
+  return !!g && !!g.guidedMark &&
+    String(c.self).split("?")[0] + " " + c.action === g.getAttribute("data-guided");
+}
+async function filmBoot() {
+  const self = filmWalkOf(location.hash.slice(1));
+  if (!self || film) return;
+  film = self;
+  /* the chrome is gone before the walk is read; a walk that cannot be
+     read never says `ready` */
+  filmState("");
+  let text = null;
+  try {
+    const res = await fetch(self + "/export", {headers: principalHeaders()});
+    if (res.ok) text = await res.text();
+  } catch (_e) { /* never ready */ }
+  const walk = parseWalk(text);
+  if (!walk) return;
+  const card = el("div", {id: "filmcard"},
+    el("h1", {}, walk.header.title || "a walk"));
+  document.body.append(card);
+  filmState("ready");
+  setTimeout(() => {
+    card.remove();
+    filmState("playing");
+    startReplay(text);
+  }, FILM_TITLE_MS);
+}
+window.addEventListener("hashchange", filmBoot);
+filmBoot();
 /* the two ways in: a sealed walk's row page (160-resource-surface.js),
    whose export is the one read a replay makes, and a .ndjson file the
    person picks, which makes none */
