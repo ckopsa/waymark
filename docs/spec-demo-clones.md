@@ -351,6 +351,13 @@ Children 1 and 2 are in ckopsa/waymark and depend on nothing. Children
 3 and 4 are in ckopsa/waymark-doors, and 3 needs 1 merged, because
 `up` can only seed a commit that carries the seed.
 
+**Amended by `docs/spec-agent-demo-walks.md` (2026-10-01).** The owner
+decided that nobody signs in to a demo clone: one agent works in it
+alone and the walk leaves as a video. Child 4 (the browser route) is
+dropped and section 2 is withdrawn with it. Child 3 is that spec's
+child 5, and child 5 here (the experiment) is replaced by the first run
+of its child 6b. Its section 9 lists each change to this document.
+
 1. *The seed and its loader* (ckopsa/waymark). Covers
    `waymark10/resources/waymark10/demo/seed.edn`, a loader
    (`waymark10.server.seed`) that walks the steps through the doors,

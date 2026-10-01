@@ -357,6 +357,13 @@ header carries `"engine"` (the engine's own name), so a reader can
 tell a demo walk from a real one. Walks recorded on a working engine
 are for onboarding inside it.
 
+**Amended by `docs/spec-agent-demo-walks.md` (2026-10-01).** A
+marketing walk is made by one agent alone in a demo clone and filmed
+there. That spec adds two frame types (`caption`, `doc`), the
+connector's staging of an agent's calls as `move` and `ui` beats, the
+export's summary through the connector, a frame ceiling, and replay's
+pacing. Its section 9 lists each change to this section.
+
 ## 5. The children
 
 Each child is one PR under the bench's ceiling. **Build stage 2
