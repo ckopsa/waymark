@@ -523,6 +523,7 @@
                 :self (errand-path c)
                 :action "rename"
                 :field "title"
+                :fields ["title"]
                 :note "Pick the new title here."}
         of (fn [w type] (filterv #(= type (:type %)) (frames-in eng (:id w))))
         scoped (walks/recorder eng person title-only "planner")

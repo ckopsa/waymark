@@ -2270,6 +2270,25 @@
                           (without-entries (get-in seat [:data :stale])))
                         (own-seat-entry seat-id))})))))
 
+(defn seat-of-grant
+  "The seat a grant row cites, as the welcome document names it:
+  {:id, :name, :scope}, or nil for a grant that carries its own scope.
+  `:scope` is the seat's scope as this grant wears it — minus the drop
+  list for a substitute, minus the sweep's stale entries — and no wall
+  is judged here: the walls are per request, and this is what the
+  grant carries when none stands."
+  [eng row]
+  (when-some [seat-id (seat-cited row)]
+    (let [seat (load-decoded eng :seat seat-id)]
+      {:id seat-id
+       :name (nonblank (get-in seat [:data :name]))
+       :scope (cond-> (vec (get-in seat [:data :scope]))
+                (true? (get-in row [:data :substitute]))
+                (without-entries (get-in seat [:data :substitute_drop]))
+
+                :always
+                (without-entries (get-in seat [:data :stale])))})))
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an

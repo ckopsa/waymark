@@ -452,4 +452,10 @@
   #demobanner[data-demo-level="last"] { background: var(--refusal-wash);
     border-color: var(--refusal); color: var(--refusal); font-weight: 600; }
   #demobanner a { color: inherit; }
+  /* a further invited field's place in the author's reading order
+     (docs/spec-walkthrough.md §4) */
+  .invite-ordinal { display: inline-block; margin-right: 6px; padding: 0 5px;
+                    font-family: var(--mono); font-size: 10.5px;
+                    border: 1px solid var(--verdigris); border-radius: 999px;
+                    color: var(--verdigris-deep); }
 

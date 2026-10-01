@@ -473,3 +473,159 @@
                       (get-in (json resp) [:data :items]))]
         (is (= 200 (:status resp)))
         (is (= [hook-id] ids))))))
+
+;; ── 9. the close judges the sitting: outcome and flags (fad586b7) ───
+
+(def ^:private a-sat
+  "The document of a closed sitting that sat, took its turns and moved
+  nothing: the base every fixture below is cut from."
+  {:closed_by "door" :turns 20 :refusals 0 :cancelled_runs 0
+   :served {:waymark_sit {:calls 1 :bytes 4000}}})
+
+(deftest each-outcome-has-one-fixture-and-the-first-match-wins
+  (let [t0 (java.time.Instant/parse "2026-10-01T10:00:00Z")
+        t1 (.plusSeconds t0 60)
+        t2 (.plusSeconds t0 120)
+        refused (assoc a-sat :last_refusal
+                       {:type "guard-refused" :guard "still-open" :at (str t1)})
+        health #(seats/sitting-health %1 %2 [])
+        outcome (comp :outcome health)]
+    (is (= "submitted" (outcome refused [{:kind :change :action :submit :at t0}]))
+        "a submit wins over a refusal that came after it")
+    (is (= "stalled" (outcome a-sat [{:kind :change :action :stall :at t0}])))
+    (is (= "never_sat" (outcome {:closed_by "missed" :missed true
+                                 :turns 0 :served {}}
+                                nil))
+        "a missed row")
+    (is (= "never_sat" (outcome (assoc a-sat :turns 0 :served {}) [])))
+    (is (= "refused_out" (outcome refused [{:kind :meal :action :accept :at t0}])))
+    (is (= "idle" (outcome refused [{:kind :meal :action :accept :at t2}]))
+        "a transition after the refusal means it was not refused out")
+    (is (= "cut_short" (outcome (assoc a-sat :closed_by "hook" :turns 9) [])))
+    (is (= "idle" (outcome (assoc a-sat :closed_by "hook" :turns 10) [])))
+    (is (= "idle" (outcome a-sat [])))
+    (is (= "idle" (outcome a-sat [{:kind :meal :action :submit :at t0}]))
+        "only a change's submit counts")
+
+    (testing "a refused_out sitting names the law that refused it"
+      (is (= ["refused:guard-refused" "refused_by:still-open"]
+             (:flags (health refused [])))))))
+
+(deftest the-flags-explain-the-outcome
+  (let [flags #(set (:flags (seats/sitting-health %1 [] %2)))
+        tests #(assoc-in a-sat [:served :bench__test] {:calls % :bytes 900})
+        walked (assoc a-sat :walked_rows ["t1"])
+        earlier (fn [& outcomes]
+                  (mapv #(hash-map :walked_rows ["t1"] :outcome %) outcomes))]
+    (is (= #{} (flags a-sat [])))
+
+    (testing "test_thrash: more than 6 bench.test calls, or a cancelled run"
+      (is (contains? (flags (tests 13) []) "test_thrash"))
+      (is (not (contains? (flags (tests 6) []) "test_thrash")))
+      (is (contains? (flags (assoc a-sat :cancelled_runs 1) []) "test_thrash")))
+
+    (testing "read_heavy: the read bytes, or what was dropped"
+      (is (contains? (flags (update a-sat :served assoc
+                                    :bench__read {:calls 9 :bytes 100000}
+                                    :bench__find {:calls 3 :bytes 50001})
+                            [])
+                     "read_heavy"))
+      (is (not (contains? (flags (assoc-in a-sat [:served :bench__read]
+                                           {:calls 9 :bytes 150000})
+                                 [])
+                          "read_heavy")))
+      (is (contains? (flags (assoc-in a-sat [:served :waymark_power]
+                                      {:calls 1 :bytes 1000 :dropped 2501})
+                            [])
+                     "read_heavy")
+          "2501 dropped is over half of the 5000 served"))
+
+    (testing "rewalk: two earlier sittings walked the row and did not submit"
+      (is (contains? (flags walked (earlier "idle" "stalled")) "rewalk"))
+      (is (not (contains? (flags walked (earlier "idle" "submitted")) "rewalk")))
+      (is (not (contains? (flags walked (earlier "idle")) "rewalk"))))
+
+    (testing "over_budget and refusals_high"
+      (is (contains? (flags (assoc a-sat :cost_usd 3.01M) []) "over_budget"))
+      (is (not (contains? (flags (assoc a-sat :cost_usd 3M) []) "over_budget")))
+      (is (contains? (flags (assoc a-sat :refusals 5) []) "refusals_high"))
+      (is (not (contains? (flags (assoc a-sat :refusals 4) []) "refusals_high"))))))
+
+(deftest a-close-stamps-the-outcome-and-the-query-filters-by-it
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        sid (initialize! h)
+        sitting-id (str (:sitting (sit! h sid)))
+        meal (:row (inv/create! eng :meal {:name "Soup" :themes []}
+                                {:principal person}))
+        ids-of (fn [query]
+                 (let [resp (h {:request-method :get :uri "/api/sittings"
+                                :query-string query
+                                :headers (bearer {:sub "colton"
+                                                  :name "Colton Kopsa"})})]
+                   (is (= 200 (:status resp)) query)
+                   (mapv #(str (or (:id %) (last (str/split (str (:self %)) #"/"))))
+                         (get-in (json resp) [:data :items]))))]
+    (is (false? (:isError (tool h (with-session sid) "waymark_invoke"
+                                {:kind "meal" :id (:id meal) :action "accept"}))))
+    (is (= 1 (seats/add-cancelled-run! eng sitting-id "r1")))
+    (is (= 200 (:status (report! h counts))))
+
+    (testing "a hook's close after seven turns, with no submit, is cut short"
+      (let [data (:data (row-of eng :sitting sitting-id))]
+        (is (= "cut_short" (some-> (:outcome data) name)))
+        (is (= ["test_thrash"] (vec (:flags data))))))
+
+    (testing "the collection filters by the outcome and by a flag"
+      (is (= [sitting-id] (ids-of "outcome=cut_short")))
+      (is (= [] (ids-of "outcome=idle")))
+      (is (= [sitting-id] (ids-of "flags=test_thrash"))))))
+
+(deftest the-backfill-judges-each-unjudged-sitting-once
+  (let [eng (fresh-engine)
+        {:keys [seat model]} (open-seat! eng)
+        now (java.time.Instant/now)
+        born! (fn [minutes-ago data]
+                (let [started (.minusSeconds now (* 60 (long minutes-ago)))]
+                  (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (str (:id (inv/insert-quiet!
+                                 eng tx :sitting
+                                 (merge {:seat (str (:id seat))
+                                         :model (str (:id model))
+                                         :member (seats/sitter-id seat)
+                                         :mode seats/default-mode
+                                         :started_at started
+                                         :ended_at (.plusSeconds started 60)
+                                         :input_tokens 0 :output_tokens 0
+                                         :cache_read_tokens 0
+                                         :cache_write_tokens 0
+                                         :turns 12 :transitions 0 :refusals 0
+                                         :served {:waymark_sit {:calls 1 :bytes 4000}}
+                                         :closed_by "door"}
+                                        data)
+                                 {:principal seats/seats-actor
+                                  :state :closed})))))))
+        first-walk (born! 180 {:walked_rows ["t1"]})
+        second-walk (born! 120 {:walked_rows ["t1"]})
+        third-walk (born! 60 {:walked_rows ["t1"]})
+        missed (born! 30 {:closed_by "missed" :missed true :turns 0 :served {}})
+        old (born! (* 8 24 60) {:walked_rows ["t1"]})
+        health #(let [data (:data (row-of eng :sitting %))]
+                  [(some-> (:outcome data) name) (some-> (:flags data) vec)])]
+    (is (= 4 (seats/backfill-health! eng)))
+
+    (testing "each sitting of the last week is judged, the oldest first"
+      (is (= ["idle" []] (health first-walk)))
+      (is (= ["idle" []] (health second-walk)))
+      (is (= ["idle" ["rewalk"]] (health third-walk))
+          "the third walk of one ticket without a submit")
+      (is (= ["never_sat" []] (health missed))))
+
+    (testing "a sitting older than the window is left alone"
+      (is (= [nil nil] (health old))))
+
+    (testing "a second pass writes nothing"
+      (is (= 0 (seats/backfill-health! eng)))
+      (is (= ["idle" ["rewalk"]] (health third-walk))))))
