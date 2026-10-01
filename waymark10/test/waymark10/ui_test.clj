@@ -309,6 +309,27 @@
     (is (str/includes? body "\"data-export-walk\""))
     (is (str/includes? body "onclick: () => exportWalk(doc.self)"))))
 
+(deftest ui-replay-draws-an-invitation-frame
+  ;; docs/spec-walkthrough.md §6: replay opens an `invitation` frame's
+  ;; dialog read-only, with every named field lit, the note and the
+  ;; "Step 2 of 4" line, and the next `transition` frame closes it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "async function openReplayInvitation(f, actor)"))
+    (is (str/includes? body "openReplayInvitation(f, actor);"))
+    (is (str/includes? body "g.setAttribute(\"data-replay-invite\", \"\");"))
+    (testing "every named field has an input and is lit"
+      (is (str/includes? body "const typed = inv ? [f.field, ...(f.fields || []),"))
+      (is (str/includes? body "fields: f.fields || (f.field ? [f.field] : [])},")))
+    (testing "the step line is drawn from the frame's own `step` and `of`"
+      (is (str/includes? body "invitation: {doc: {}, note: f.note, step: f.step, of: f.of,"))
+      (is (str/includes? body "if (invitation && invitation.step && invitation.of)"))
+      (is (str/includes? body "`Step ${invitation.step} of ${invitation.of}`"))
+      (is (str/includes? body "data-invite-step"))
+      (is (str/includes? body ".invite-step {")))
+    (testing "the transition that answers it closes it"
+      (is (str/includes? body "const inv = $(\"dialog[open][data-replay-invite]\");"))
+      (is (str/includes? body "if (inv && inv.getAttribute(\"data-guided\") === f.self + \" \" + f.action)")))))
+
 (deftest ui-replay-draws-a-row-from-its-doc
   ;; docs/spec-agent-demo-walks.md §8a: a `doc` frame is kept as the
   ;; replay passes it, and the screen it names is drawn by the code that
