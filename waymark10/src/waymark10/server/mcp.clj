@@ -137,6 +137,7 @@
             [jsonista.core :as j]
             [reitit.ring :as ring]
             [waymark10.client :as client]
+            [waymark10.confirm :as confirm]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as coll]
@@ -1580,16 +1581,15 @@
 ;; than a convenience: the engine already computes the sentence, and
 ;; echoing it is the price of a dangerous verb.
 
-(defn- consequence-of
+(def ^:private consequence-of
   "The confirm gate's text, read off the row's own rendered entry — the
   declaration's `:consequence` rides the wire as display.description,
   a per-origin map already resolved against this row's state. Same
   accessor waymark10.client uses, and it must stay the same one: two
-  readings of one sentence is a gate that can be walked around."
-  [entry]
-  (or (get-in entry [:display :description])
-      (get-in entry [:display :label])
-      "This action requires confirmation."))
+  readings of one sentence is a gate that can be walked around. It is
+  `confirm/consequence-of`, which a namespace this one requires may
+  call without requiring this one."
+  confirm/consequence-of)
 
 (defn- confirm-refusal [aname sentence given]
   (p/problem
