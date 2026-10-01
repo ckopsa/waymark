@@ -38,6 +38,12 @@
   <button id="sharebtn" style="font-size:12px;padding:4px 10px"
           type="button" aria-pressed="false"
           title="share my screen with followers — off">⧉</button>
+  <!-- record my own screen as a walk (docs/spec-guided-follow.md §4):
+       nobody has to follow; it turns sharing on for this tab while it
+       runs; 200-events-follow.js wires it -->
+  <button id="recordbtn" style="font-size:12px;padding:4px 10px"
+          type="button" aria-pressed="false"
+          title="record my own screen as a walk">● Record</button>
   <!-- replay a recorded walk from a file (docs/spec-guided-follow.md
        §4): the .ndjson is read in this tab and played read-only;
        200-events-follow.js wires it -->

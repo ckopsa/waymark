@@ -578,9 +578,14 @@
   or not (where it looks is its own to say). Three missed heartbeats
   evict. An optional `ui` part rides the same beat: cleaned by
   clean-ui and stored beside the entry with the next seq; a beat
-  without one keeps the last."
-  ([reg principal self] (report! reg principal self nil))
-  ([reg principal self ui]
+  without one keeps the last. An optional `tap` is shown the frames
+  this beat made, after it published: a `move` when the gaze changed
+  and the `ui` frame when the beat carried one. It is how a person's
+  own walk is recorded with nobody following (walks/self-recorder); a
+  curtained beat makes no frame, so its tap sees none."
+  ([reg principal self] (report! reg principal self nil nil))
+  ([reg principal self ui] (report! reg principal self ui nil))
+  ([reg principal self ui tap]
   (let [self (normalize-self self)]
     (check-self! self)
     (when (= (:id principal) (:id t/anonymous))
@@ -601,7 +606,8 @@
       (if (curtained? reg pid)
         (evict-local! reg pid)
         (let [e (entry-of reg principal self "heartbeat")
-              cv (curtain-view reg [pid])]
+              cv (curtain-view reg [pid])
+              before (get-in @(:local reg) [pid :entry])]
           (locking (:lock reg)
             (swap! (:local reg) update pid
                    (fn [st] (let [st (or st {:streams {}})]
@@ -612,7 +618,14 @@
                                      :hb-at (:at-ms e)))))
             (notify! reg {:event "report" :pid pid
                           :entry (get-in @(:local reg) [pid :entry])})
-            (publish! reg cv))))
+            (publish! reg cv))
+          ;; outside the lock: the tap writes rows
+          (when tap
+            (let [now (get-in @(:local reg) [pid :entry])]
+              (when (not= (:self before) (:self now))
+                (tap (frame-of "move" now)))
+              (when ui
+                (tap (ui-frame-of now)))))))
       nil))))
 
 (def read-beat-ms
