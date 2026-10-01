@@ -232,6 +232,32 @@
     (is (str/includes? body "r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);"))
     (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
 
+(deftest ui-replay-shows-a-caption-and-holds-for-it
+  ;; docs/spec-agent-demo-walks.md §3: a caption frame's line is shown in
+  ;; a band until the next caption or an empty one, and the frame after
+  ;; it waits 55 ms a character, between 1500 and 6000 ms
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;"))
+    (is (str/includes? body "replay.caption = f.text ? f : null;"))
+    (is (str/includes? body "el(\"div\", {id: \"replaycaption\", role: \"status\"})"))
+    (is (str/includes? body "band.textContent = c ? c.text : \"\";"))
+    (is (str/includes? body "#replaycaption {"))
+    (is (str/includes? body "Math.max(REPLAY_READ_MIN, REPLAY_READ_MS * f.text.length));"))
+    (is (str/includes? body "const read = replayReadingTime(r.at ? r.frames[r.at - 1] : null);"))
+    (is (str/includes? body "const gap = read + Math.min(REPLAY_MAX_GAP,"))))
+
+(deftest ui-replay-anchors-a-caption-to-its-field
+  ;; docs/spec-agent-demo-walks.md §3: a caption that names a field is
+  ;; drawn beside it, with the field lit, by the code that draws an
+  ;; invitation's note; the recorded dialog has that field to light
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function markInvited(form, names, text) {"))
+    (is (str/includes? body "dlg.guidedMark = (names, text) => markInvited(form, names, text);"))
+    (is (str/includes? body "g.guidedMark(c.field ? [c.field] : [], c.text)"))
+    (is (str/includes? body ".setAttribute(\"data-caption-note\", \"\");"))
+    (is (str/includes? body "(f.type === \"invitation\" || (f.type === \"caption\" && f.field))"))
+    (is (str/includes? body "if (replay) replayCaption();"))))
+
 (defn- well-known [h]
   (-> (h {:request-method :get :uri "/api/.well-known/waymark"
           :headers {"x-waymark-principal" "reader"}})
