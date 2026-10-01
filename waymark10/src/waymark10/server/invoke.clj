@@ -383,12 +383,41 @@
          ;; hand a guard a pen. Inner results collect on the sink;
          ;; finish! rides them out as :inner-writes so after-write!
          ;; runs their lifecycle/cascade/maintenance post-commit.
-         sink (when (= :invoke mode) (atom []))]
+         sink (when (= :invoke mode) (atom []))
+         ;; the FOLLOW-UP queue (ticket da882851): the calls the handler
+         ;; wants made AFTER this transaction commits. Only a real
+         ;; write mode carries it, as with the pen: a rehearsal queues
+         ;; nothing. land! rides the queue out as :follow-ups and
+         ;; after-write! makes each call.
+         follow-sink (when (= :invoke mode) (atom []))]
      (t/ctx {:principal principal
              :now ((:now-fn engine))
              :services (:services engine)
              :mode mode
              :inner-sink sink
+             :follow-sink follow-sink
+             ;; the FOLLOW-UP door (ticket da882851): a handler names one
+             ;; call, `{:kind :id :action :input}`, and the engine makes
+             ;; it after this write's transaction commits — an ordinary
+             ;; invoke! under THIS principal, leash and correlation id,
+             ;; judged by its own guards against the committed rows.
+             ;; Where ctx :invoke writes inside the transaction and its
+             ;; refusal rolls the outer write back, a follow-up's
+             ;; refusal is logged and the outer write stands (see
+             ;; follow-ups!). Guards never see it.
+             :follow-up
+             (when follow-sink
+               (fn ctx-follow-up [{:keys [kind id action input]}]
+                 (when-not (and (keyword? kind) (some? id) (keyword? action))
+                   (throw (t/definition-error
+                           "ctx follow-up: needs :kind, :id and :action")))
+                 (swap! follow-sink conj
+                        {:kind kind :id (str id) :action action :input input
+                         :opts {:principal principal
+                                :grant grant
+                                :power power
+                                :correlation-id correlation-id}})
+                 nil))
              ;; the presented leash, as the guards see it (waymark-sfe)
              :grant grant
              ;; …and the engine's own hand on the powers that leash
@@ -987,9 +1016,13 @@
        "application/waymark+json"))
     ;; writes the handler made through ctx :invoke ride out with the
     ;; result — after-write! owes each its post-commit pass
-    (let [inner (some-> (:inner-sink ctx) deref not-empty)]
+    ;; …and so do the follow-ups it queued through ctx :follow-up, which
+    ;; after-write! makes once this transaction has committed
+    (let [inner (some-> (:inner-sink ctx) deref not-empty)
+          follow (some-> (:follow-sink ctx) deref not-empty)]
       (cond-> {:row (decode-row rdef saved) :transition record}
-        inner (assoc :inner-writes inner)))))
+        inner (assoc :inner-writes inner)
+        follow (assoc :follow-ups follow)))))
 
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
@@ -1012,7 +1045,52 @@
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
-(declare cascade!)
+(declare cascade! invoke!)
+
+(def ^:private ^:dynamic *following*
+  "True while after-write! makes a write's follow-ups: the bound on
+  their nesting. Every write made under it — the follow-up itself, its
+  inner writes, its cascade — may queue, and nothing it queued runs."
+  false)
+
+(defn- follow-ups!
+  "Make the calls a committed write queued through ctx :follow-up
+  (ticket da882851), in the order it queued them. Each is an ordinary
+  invoke! — its own transaction, the full algorithm, its own transition
+  and after-write! pass — under the principal, leash and correlation id
+  of the write that queued it, and under the key
+  `follow-up:<outer transition id>:<index>`, so a second delivery of
+  the same outer transition replays instead of writing twice.
+
+  A follow-up that REFUSES is said on *err* and answered as :refused;
+  the outer write committed before it was tried and stands.
+
+  Follow-ups do not nest past ONE level: what a follow-up queues is
+  dropped with a *err* line, never run. → one outcome per call,
+  `{:kind :id :action}` plus `:res` or `:refused`; nil when dropped."
+  [engine res]
+  (let [tid (get-in res [:transition :id])
+        say (fn [{:keys [kind id action]} why]
+              (binding [*out* *err*]
+                (println (str "waymark10: follow-up " (name kind) "/" id " "
+                              (name action) " of transition " tid " " why))))]
+    (if *following*
+      (run! #(say % "dropped: a follow-up queues no follow-up")
+            (:follow-ups res))
+      (binding [*following* true]
+        (vec
+         (map-indexed
+          (fn [i {:keys [kind id action input opts] :as call}]
+            (try
+              {:kind kind :id id :action action
+               :res (invoke! engine kind id action input
+                             (assoc opts :idempotency-key
+                                    (str "follow-up:" tid ":" i)))}
+              (catch Exception e
+                (say call (str "refused: " (ex-message e)))
+                {:kind kind :id id :action action
+                 :refused (or (ex-message e) (str (class e)))})))
+          (:follow-ups res)))))))
 
 (defn- after-write!
   "A committed, non-replayed write may carry law-lifecycle effects: a
@@ -1043,7 +1121,15 @@
   own transaction, full algorithm, its own after-write! — under the
   system cascade actor and the parent transition's correlation id;
   redelivery is a natural no-op (children are selected by the child
-  action's :from states)."
+  action's :from states).
+
+  Ticket da882851 adds the FOLLOW-UPS, last: the calls the handler
+  queued through ctx :follow-up run after the cascade and the
+  maintenance pass, so each reads the rows as this write left them.
+  A refusing follow-up does not roll this write back — it committed
+  first — and a replayed or rehearsed write runs none. The outcomes
+  ride the result as :followed; the result's :row is the outer write's
+  own, and predates them."
   [engine kind action-name res]
   (if (and (:transition res) (nil? (:replayed? res)))
     (do
@@ -1056,9 +1142,14 @@
       (when-some [lc (:lifecycle engine)]
         (lc engine kind action-name res))
       (cascade! engine kind action-name res)
-      (if-some [m (:maintain engine)]
-        (or (m engine kind action-name res) res)
-        res))
+      (let [out (if-some [m (:maintain engine)]
+                  (or (m engine kind action-name res) res)
+                  res)]
+        (if (seq (:follow-ups res))
+          (let [done (follow-ups! engine res)]
+            (cond-> (dissoc out :follow-ups)
+              done (assoc :followed done)))
+          out)))
     res))
 
 ;; ── the engine-injected adopt (phase 5) ─────────────────────────────
@@ -1248,7 +1339,8 @@
             ;; ctx without the cross-write door, and without the hand
             ;; on a power (waymark-fp62.7.16): a wall that read mail
             ;; would refuse differently on a day Gate was dark
-            guard-ctx (dissoc ctx :invoke :create :inner-sink :power)]
+            guard-ctx (dissoc ctx :invoke :create :inner-sink :power
+                              :follow-up :follow-sink)]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
           (or (natural-replay engine tx rdef row defn digest within)
@@ -2222,7 +2314,7 @@
                                  []
                                  (create-walled-guards rdef))
                                inp (dissoc ctx :invoke :create :inner-sink
-                                           :power)
+                                           :power :follow-up :follow-sink)
                                acknowledged
                                ;; the birth's evidence scope: no row
                                ;; exists yet, so the create input IS
@@ -2348,9 +2440,11 @@
              "application/waymark+json"))
           ;; :on-create writes made through ctx :invoke/:create ride
           ;; out too
-          (let [inner (some-> (:inner-sink ctx) deref not-empty)]
+          (let [inner (some-> (:inner-sink ctx) deref not-empty)
+                follow (some-> (:follow-sink ctx) deref not-empty)]
             (cond-> {:row row :transition record}
-              inner (assoc :inner-writes inner))))))))
+              inner (assoc :inner-writes inner)
+              follow (assoc :follow-ups follow))))))))
 
 (defn engine
   "Phase-2 wiring: storage + resources, kinds ensured. Grows into

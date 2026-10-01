@@ -3254,6 +3254,44 @@ natural replay, dry-run writes nothing, 201-child self-loop cascade).
 | ctx `:invoke` (handlers + on-create only; guards and rehearsals never see it) | absorb's cascade writes another row's children with input — the owns cascade cannot say that | 2026-07-15 |
 | `:inner-writes` drain before the outer's own after-write! pass | the response's rollups tell the post-inner truth | 2026-07-15 |
 | cascade! seen-set + growing window | a self-loop cascade target must terminate past the 200-row page | 2026-07-15 |
+| ctx `:follow-up` runs post-commit, as a new invoke; one level deep | a call that must read the outer write's committed state (and may land the same row again) cannot run inside its transaction | 2026-10-01 |
+
+## ctx `:follow-up` — the handler's post-commit call
+
+Ticket da882851. ctx `:invoke` writes INSIDE the handler's transaction:
+the inner door reads the outer row as it stood before the write, and a
+second write of the outer row collides with the outer's own versioned
+save. A follow-up is the other half: the handler names one call,
+
+```clojure
+((:follow-up ctx) {:kind :ticket :id (:id row) :action :review :input {}})
+```
+
+and the engine makes it after the transaction commits.
+
+- `make-ctx` carries `:follow-up` ONLY in `:invoke` mode, and guard
+  evaluation receives a ctx without it. A dry run runs no handler and
+  holds no door, so a rehearsal queues nothing.
+- The queue rides the result as `:follow-ups`; `after-write!` runs it
+  LAST, after the inner writes' passes, the lifecycle, the cascade and
+  the maintenance pass. A write that rolls back takes its queue with it.
+- Each follow-up is an ordinary `invoke!`: its own transaction, the
+  full algorithm, its own guards, its own transition. It runs under the
+  principal, the grant and the correlation id of the write that queued
+  it. It is not opened inside that write, so its `:within` is nil.
+- Its idempotency key is `follow-up:<outer transition id>:<index>`. A
+  replayed outer write runs no follow-up (`after-write!` skips a
+  replay), and a second delivery of one outer transition replays the
+  stored answer.
+- **A follow-up that refuses does not roll the outer write back.** The
+  outer write committed first. The refusal is one line on `*err*` and
+  an entry with `:refused` in the result's `:followed`. The caller's
+  answer is the outer write's own row, which predates the follow-ups.
+- **Follow-ups do not nest past one level.** What a follow-up queues —
+  from its own handler, its inner writes or its cascade — is dropped
+  with a line on `*err*` and never run.
+
+Proof: `waymark10/test/waymark10/follow_up_test.clj`.
 
 ## `:touches` — blast radius as law
 

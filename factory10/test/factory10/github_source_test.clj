@@ -1570,6 +1570,26 @@
     (is (nil? (get-in (the-change engine) [:data :conflicts]))
         "a bench that cannot name the paths costs the paths, never the move")))
 
+(deftest the-rigs-conflict-outlives-the-forges-weaker-word
+  ;; ticket bf8ba0a6: #706's merge was refused as not mergeable and the
+  ;; merge pass wrote `conflicted`, with no landing record and every
+  ;; check green. The next poll read `blocked` over it at the same head,
+  ;; so the failing pass never saw the conflict and the change sat
+  ;; submitted and parked
+  (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
+        id (str (:id (the-change engine)))
+        _ (is (= "blocked" (get-in (the-change engine) [:data :mergeable])))
+        _ (bench/mark-row! engine :change id {:mergeable "conflicted"} #{})
+        census (pass! r)
+        row (the-change engine)]
+    (is (= "conflicted" (get-in row [:data :mergeable]))
+        "the forge's `blocked` at the same head does not replace the conflict")
+    (is (= :failing (:state row))
+        "and the change goes to its seat in that one pass")
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+    (is (= the-conflicts (get-in row [:data :conflicts])))
+    (is (= 1 (:failing census)))))
+
 (deftest a-behind-change-is-not-failing
   (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
         census (pass! r)]
@@ -2385,3 +2405,157 @@
   (let [{:keys [engine parent]} (stranded-world :open)]
     (is (= 0 (forge/finish-merged-parents! engine)))
     (is (= :in_review (:state (ticket-row engine parent))))))
+
+;; ── GitHub's rate limit (ticket cdba1f6a) ───────────────────────────
+;;
+;; A 403 that says the hour's calls are spent is a throttle and not a
+;; refusal: the pass that meets it stops, moves no row and notes no
+;; repository unreadable, and every call waits for the reset. An answer
+;; GitHub has not changed is a 304, which costs nothing, and the census
+;; line carries what is left.
+
+(def ^:private limit-hour (java.time.Instant/parse "2026-10-01T20:42:00Z"))
+(def ^:private limit-reset (java.time.Instant/parse "2026-10-01T21:00:00Z"))
+(def ^:private limit-head (get-in a-pull-request [:head :sha]))
+
+(defn- limit-rig
+  "A fresh in-memory GitHub with one open pull request and one green
+  check on its head, the real source over it on a clock the test holds,
+  and an engine whose one policy names the repository."
+  []
+  (let [state (gh/fake-state)
+        engine (boot)
+        clock (atom limit-hour)
+        source (gh/fake-source state {:repos-fn #(bench/active-repositories
+                                                  engine)
+                                      :now-fn #(deref clock)})]
+    (gh/seed-pull! state repo a-pull-request {:files the-files})
+    (gh/seed-check! state repo limit-head a-green-check)
+    (policy! engine repo)
+    {:state state :engine engine :source source :clock clock
+     :lines (atom [])}))
+
+(defn- limit-pass! [{:keys [source engine lines]}]
+  (forge/pass! {:source source :engine engine
+                :log-fn (fn [& parts] (swap! lines conj (apply str parts)))}))
+
+(defn- wire-count [state] (count (gh/requests state)))
+
+(deftest the-headers-tell-a-throttle-from-a-refusal
+  (let [epoch (str (.getEpochSecond ^java.time.Instant limit-reset))
+        facts (fn [status headers body]
+                (gh/answer-facts status headers body limit-hour))]
+    (testing "no call remains: the limit lifts at the reset"
+      (is (= limit-reset
+             (:throttle (facts 403 {"x-ratelimit-remaining" "0"
+                                    "x-ratelimit-reset" epoch}
+                               "")))))
+    (testing "a retry-after is the wait, whatever else is said"
+      (is (= (.plusSeconds ^java.time.Instant limit-hour 30)
+             (:throttle (facts 429 {"retry-after" "30"
+                                    "x-ratelimit-remaining" "12"
+                                    "x-ratelimit-reset" epoch}
+                               "")))))
+    (testing "a body that names the rate limit, and no header: a minute"
+      (is (= (.plusSeconds ^java.time.Instant limit-hour 60)
+             (:throttle (facts 403 {}
+                               "You have exceeded a secondary rate limit")))))
+    (testing "a 403 with calls left is a refusal of the token"
+      (is (= {:remaining 4999 :limit 5000 :reset limit-reset}
+             (facts 403 {"x-ratelimit-remaining" "4999"
+                         "x-ratelimit-limit" "5000"
+                         "x-ratelimit-reset" epoch}
+                    "Resource not accessible by integration"))
+          "no throttle, and the budget is read from it all the same"))
+    (testing "an answer that is not a 403 or a 429 is never a throttle"
+      (is (nil? (:throttle (facts 200 {"x-ratelimit-remaining" "0"
+                                       "x-ratelimit-reset" epoch}
+                                  "")))))))
+
+(deftest a-spent-rate-limit-holds-the-pass-and-refuses-nothing
+  (let [{:keys [state engine clock lines] :as w} (limit-rig)]
+    (gh/budget! state {:remaining 4321 :limit 5000 :reset limit-reset})
+    (limit-pass! w)
+    (is (str/includes? (str (last @lines))
+                       (str "4321 of 5000 calls left until " limit-reset))
+        "the census line carries the remaining calls and the reset")
+    (let [before (the-change engine)]
+      (is (some? before) "the first pass minted the change")
+      (gh/throttle! state limit-reset)
+
+      (testing "the pass that meets the spent limit stops"
+        (let [so-far (wire-count state)
+              census (limit-pass! w)]
+          (is (= (str limit-reset) (:held-until census)))
+          (is (= (inc so-far) (wire-count state))
+              "one answer said the limit is spent, and nothing was asked
+               after it")
+          (is (false? (:complete? census)) "the cursor stands")
+          (is (= 0 (:noted census)))
+          (is (nil? (source-note-of engine repo))
+              "a throttle is not a repository the token cannot read")
+          (is (= 0 (+ (long (:failing census)) (long (:stuck census))
+                      (long (:moved census)) (long (:refused census))))
+              "and no row moved or was refused on it")
+          (is (= before (the-change engine)))
+          (is (str/includes? (str (last @lines))
+                             (str "every call held until " limit-reset))
+              "the census line names the hold and the reset")))
+
+      (testing "the next pass waits for the reset, though GitHub would answer"
+        (gh/throttle! state nil)
+        (let [so-far (wire-count state)
+              census (limit-pass! w)]
+          (is (= so-far (wire-count state)) "nothing went on the wire")
+          (is (= 0 (:calls census)))
+          (is (= (str limit-reset) (:held-until census)))
+          (is (nil? (source-note-of engine repo)))
+          (is (= before (the-change engine)))))
+
+      (testing "past the reset the pass reads again"
+        (reset! clock (.plusSeconds ^java.time.Instant limit-reset 1))
+        (let [census (limit-pass! w)]
+          (is (nil? (:held-until census)))
+          (is (pos? (long (:calls census))))
+          (is (true? (:complete? census))))))))
+
+(deftest an-unchanged-answer-is-a-304-and-costs-nothing
+  (let [{:keys [state source]} (limit-rig)
+        _ (gh/budget! state {:remaining 4321 :limit 5000 :reset limit-reset})
+        ;; the first read of a new repository lists `state=open` only
+        ;; (ticket c07b581f), which is another request than every later
+        ;; listing: the two passes compared here come after it
+        _ (forge/forge-poll source)
+        first-poll (forge/forge-poll source)
+        first-checks (forge/forge-checks source repo limit-head)
+        so-far (wire-count state)
+        spared (count (gh/unchanged state))]
+    (is (= 1 (count (:changes first-poll))))
+
+    (testing "a second pass over a pull request that did not move"
+      (let [second-poll (forge/forge-poll source)
+            second-checks (forge/forge-checks source repo limit-head)]
+        (is (pos? (- (wire-count state) so-far)))
+        (is (= (- (wire-count state) so-far)
+               (- (count (gh/unchanged state)) spared))
+            "every request of it was answered 304")
+        (is (= (:changes first-poll) (:changes second-poll))
+            "and the documents are the ones the first pass read")
+        (is (= first-checks second-checks))
+        (is (= {:remaining 4321 :limit 5000 :reset (str limit-reset)}
+               (select-keys (forge/forge-budget source)
+                            [:remaining :limit :reset])))
+        (is (pos? (long (:unchanged (forge/forge-budget source)))))))
+
+    (testing "a check that finishes changes one route's answer, and only
+              that route is read whole"
+      (gh/seed-check! state repo limit-head a-red-check)
+      (let [so-far (wire-count state)
+            spared (count (gh/unchanged state))
+            checks (forge/forge-checks source repo limit-head)]
+        (is (= 2 (- (wire-count state) so-far))
+            "the check runs and the statuses")
+        (is (= 1 (- (count (gh/unchanged state)) spared))
+            "the statuses did not change")
+        (is (contains? (set (map :check_name checks)) "test10 (shard 3)")
+            "the new red check is read")))))
