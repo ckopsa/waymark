@@ -310,9 +310,13 @@ sharing on and ■ Stop turns it off again, seals the walk and opens its
 row page. The sight needs no extra rule: the recorder is the person
 whose screen it is, each frame is judged under the visibility of the
 request that made it, and a row that person cannot see is not written.
-The walk's own create and seal are not recorded in it. A write made
-through a door other than the HTTP create and action routes (the bulk
-door, the connector) is not recorded yet.
+The walk's own create and seal are not recorded in it. The create and
+action routes hand over their one transition and the bulk route one per
+row it moved; the connector's `waymark_invoke` rides those same routes,
+so an agent's own walk holds what the agent did. A held call's replay
+after the person's allow is not recorded yet (the forward keeps no
+sight of the author's session to judge the frame under), and neither
+is a batch on one row or a bulk call deferred to a job.
 
 **Retention.** `retention_days` defaults to 30. A sweep purges
 `walk_frame` rows after that time and moves the walk to `purged`. The
