@@ -1331,9 +1331,11 @@
 
 (def ^:private app-fragments
   "The page's ordered fragments, by ui_assembly.clj's pattern; the look
-  is the generic UI's own 020-base.css, by path."
+  is the generic UI's own 020-base.css, by path, and the page's own
+  030-app.css over it, which names that file's tokens and no colour."
   ["waymark10/mcp_app/010-head.html"
    "waymark10/ui/020-base.css"
+   "waymark10/mcp_app/030-app.css"
    "waymark10/mcp_app/050-shell.html"
    "waymark10/mcp_app/100-bridge.js"
    "waymark10/ui/900-tail.html"])
@@ -4517,7 +4519,7 @@
 (def ^:private app-law
   "The doors a show admits on a kind, and the fields the page shows."
   {:held_call {:doors ["allow" "refuse"]
-               :fields [:tool :why :shown :changes :call :door]}
+               :fields [:tool :why :changes :call :door]}
    :approval_request {:doors ["approve" "deny"]
                       :fields [:task :scope :seat :substitute :expires_at
                                :requested_by :waits_on :note]}})
@@ -4574,6 +4576,47 @@
                :text (str "This row is in front of your person now. The tap is "
                           "theirs; read the row again to see what they chose.")}))))
 
+(defn- boolean-input?
+  "Whether a door's input property is a boolean, bare or nullable. A
+  boolean is the engine's flag (`patch` on an edit door) and never a
+  person's words, so the page draws no box for one."
+  [prop]
+  (boolean (some #(let [t (:type %)]
+                    (if (coll? t) (some #{"boolean"} t) (= "boolean" t)))
+                 (cons prop (concat (:oneOf prop) (:anyOf prop))))))
+
+(defn- app-row
+  "One row's envelope as the PERSON reads it, or nil when the kind is
+  not served or the read is refused."
+  [eng call person kind id]
+  (when-some [plural (:plural (get (inv/resources eng) (keyword (name kind))))]
+    (try (let [resp (call (request person :get (str "/api/" plural "/" id) nil))]
+           (when (= 200 (:status resp)) (body-json resp)))
+         (catch Exception _ nil))))
+
+(defn- held-words
+  "A held call in words: `:title` for the page's heading (who asks, and
+  for what) and `:door` for its one-line door field. `caller`
+  (`seat:<id>`) resolves to the seat's name and the door's row to its
+  summary, both read as the PERSON; a refused read leaves the bare id."
+  [eng call person data]
+  (let [caller (str (:caller data))
+        {:keys [kind action id]} (:door data)
+        who (or (when (str/starts-with? caller "seat:")
+                  (get-in (app-row eng call person :seat (subs caller 5))
+                          [:data :name]))
+                caller)
+        row (when (and kind id) (:summary (app-row eng call person kind id)))
+        words #(str/replace (str %) "_" " ")]
+    {:title (if action
+              (str who " wants to " (words action) " "
+                   (cond row (str "‘" row "’")
+                         id (str (words kind) " " id)
+                         :else (words kind)))
+              (str who " wants to call " (:tool data)))
+     :door (when action
+             (str/join " · " (remove nil? [action kind (or row id)])))}))
+
 (defn- app-read
   "waymark_app_read: one row as the PERSON sees it, the law's doors on
   its kind, and the ticket, which rides `structuredContent` alone. A
@@ -4582,12 +4625,17 @@
   [eng call session {:keys [kind id]}]
   (let [rdef (rdef-of eng kind)
         law (get app-law (:kind rdef))
-        resp (call (request (person-session eng session) :get
+        person (person-session eng session)
+        resp (call (request person :get
                             (str "/api/" (:plural rdef) "/" id) nil))]
     (if-not (= 200 (:status resp))
       (pass-through resp)
       (let [env (body-json resp)
             ^Instant now ((:now-fn eng))
+            held (when (= :held_call (:kind rdef))
+                   (held-words eng call person (:data env)))
+            base (some-> (:app-url (:oidc eng)) str str/trim not-empty
+                         (str/replace #"/+$" ""))
             door (fn [aname]
                    (let [entry (get-in env [:actions (keyword aname)])
                          props (get-in entry [:input :properties])]
@@ -4595,7 +4643,13 @@
                               :label (or (get-in entry [:display :label]) aname)
                               :style (get-in entry [:display :style])
                               :available (some? entry)
-                              :inputs (mapv name (keys props))
+                              ;; a box for each input a person words:
+                              ;; never `patch`, never a boolean
+                              :inputs (vec (for [[k v] props
+                                                 :when (not (or (= "patch" (name k))
+                                                                (boolean-input? v)))]
+                                             (name k)))
+                              :required (mapv name (get-in entry [:input :required]))
                               ;; what a text box may hold, where the door says
                               :lengths (into {} (for [[k v] props
                                                       :when (:maxLength v)]
@@ -4608,9 +4662,16 @@
                 :id (str id)
                 :state (:state env)
                 :summary (:summary env)
+                :title (:title held)
+                ;; the row's own page, the hash route `held/ui-link` builds
+                :link (when base (str base "/#/api/" (:plural rdef) "/" id))
                 :fields (vec (for [f (:fields law)
-                                   :let [v (get-in env [:data f])]
-                                   :when (some? v)]
+                                   :let [v (if (and held (= :door f))
+                                             (:door held)
+                                             (get-in env [:data f]))]
+                                   ;; an empty `call` says nothing
+                                   :when (and (some? v)
+                                              (not (and (coll? v) (empty? v))))]
                                {:label (name f) :value v}))
                 :doors (mapv door (:doors law))
                 :ticket (sign-ticket
