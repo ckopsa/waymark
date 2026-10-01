@@ -549,6 +549,9 @@
       (json-response
        200
        (cond-> {:waymark "10"
+                ;; the engine's own name (engine's :name option), so a
+                ;; reader can tell a demo engine from a working one
+                :name (or (:name eng) "waymark")
                 :kinds (vec (sort (map (comp name key) resources)))
                 :resources (into (sorted-map)
                                  (map (fn [[k r]]
@@ -2117,6 +2120,21 @@
                      (ex-message e))))))
     (handler req)))
 
+(defn- walk-export
+  "GET /api/walks/{id}/export — a sealed walk as `waymark-walk/1`,
+  newline-delimited JSON (walks/export), redacted again under the
+  caller's visibility. A route and not an action, because the answer
+  is not an envelope. A walk the caller's grant cannot see and a walk
+  that is not sealed answer the same not-found."
+  [eng]
+  (fn [{{:keys [id]} :path-params :as req}]
+    (check-row! req {:kind walks/kind} id)
+    (if-some [body (walks/export eng id (visibility-of req))]
+      {:status 200
+       :headers {"Content-Type" "application/x-ndjson"}
+       :body body}
+      (throw (p/not-found walks/kind id)))))
+
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
   well-known document, the per-kind JSON schema, the SSE firehose, the
@@ -2130,6 +2148,8 @@
      {:get (well-known eng (into #{} (comp (mapcat :static) (map first))
                                  route-sets))}]
     ["/api/schemas/:kind" {:get (kind-schema eng)}]
+    ;; a core kind's one non-envelope answer (spec-guided-follow § 4)
+    ["/api/walks/:id/export" {:get (walk-export eng)}]
     ["/api/-/events" {:get (firehose-events eng)}]
     ["/api/-/welcome" {:get (welcome-doc eng)}]
     ["/api/-/grant-check" {:get (grant-check eng)}]

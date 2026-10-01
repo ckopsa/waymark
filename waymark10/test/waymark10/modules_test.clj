@@ -247,6 +247,10 @@
                ;; the dashboard slot's measure (dashboard measures
                ;; 1/3): one slot's number over its time window
                "/api/dashboard_slots/:id/-/measure"
+               ;; a sealed walk's export (spec-guided-follow § 4): core's
+               ;; one non-envelope answer, static and ahead of the
+               ;; plural grammar
+               "/api/walks/:id/export"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"

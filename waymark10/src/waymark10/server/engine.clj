@@ -212,6 +212,14 @@
                                       :fire-adapter :wake-tick-ms])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
+                    ;; the engine's own name: the :name option, else
+                    ;; WAYMARK_ENGINE_NAME, else "waymark". The
+                    ;; well-known document answers it and a walk's
+                    ;; export header carries it (spec-guided-follow
+                    ;; § 4), so a demo engine's walk says it is one.
+                    :name (or (not-empty (some-> (:name opts) str))
+                              (not-empty (System/getenv "WAYMARK_ENGINE_NAME"))
+                              "waymark")
                     :registry (atom reg)
                     ;; the assembled selection, kept because the
                     ;; router seam asks for it again at handler time

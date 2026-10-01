@@ -25,10 +25,14 @@
             [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.presence :as presence]
             [waymark10.server.store :as store]
-            [waymark10.types :as t])
-  (:import (java.time Duration Instant)
+            [waymark10.summary :as summary]
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
+  (:import (java.time Duration Instant ZoneOffset)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
@@ -199,7 +203,7 @@
      :display {:label "Delete the frames" :style :danger :order 2
                :description "Delete every frame of this walk now, before its days are up"}}}
    :deviations
-   ["§ 4 lists `export`; this child builds the kinds, the frames and the sweep, and the export door is its own child."
+   ["§ 4 lists `export` as a door; it is the route GET /api/walks/{id}/export (router/walk-export) and not an action, because it answers newline-delimited JSON and not an envelope."
     "`purge` also leaves `recording`, so a walk nobody sealed is still swept after its days, counted from its start."
     "The purge deletes the frames with `store/delete-rows!`, a maintenance delete with no transition per frame; the `purge` transition on this row is the record of it."]})
 
@@ -283,7 +287,11 @@
         body (scrub (or body {}))
         self (or (:self body) (get body "self"))]
     (when (and (some #{type} frame-types)
-               (or (nil? self) (sees-self? eng sight self)))
+               (or (nil? self) (sees-self? eng sight self))
+               ;; a transition is the firehose's event projected by the
+               ;; recorder's visibility, the export's own rule
+               (or (not= "transition" type)
+                   (some? (events/visible-transition sight body))))
       (let [st (:storage eng)
             ^Instant now ((:now-fn eng))
             id (str walk-id)]
@@ -303,6 +311,218 @@
                                       (update d :frame_count #(inc (long (or % 0))))
                                       (:next-flip-at row))
                   frame)))))))))
+
+;; ── the export (waymark-walk/1) ─────────────────────────────────────
+
+(def export-format "waymark-walk/1")
+
+(def unseen-display
+  "What the cast calls a principal whose row the exporter cannot see."
+  "someone")
+
+(def never-exported
+  "Body keys an export line drops at any depth, beside never-recorded:
+  a principal's own map and a sitting's id. A principal crosses only
+  as its cast alias."
+  #{"principal" "actor" "pid" "sitting" "sitting_id" "sittingid"
+    "allowed_by"})
+
+(def ^:private export-page 1000)
+
+(defn- path-of
+  "A `self` as a path: a recorded origin is cut. nil for a blank."
+  [self]
+  (let [s (str/trim (str self))]
+    (when-not (str/blank? s)
+      (str/replace s #"^[A-Za-z][A-Za-z0-9+.\-]*://[^/?#]*" ""))))
+
+(defn- clean
+  "A line's part as the export carries it: never-recorded and
+  never-exported keys dropped at any depth, a string that is a cast
+  member's principal id replaced by its alias, and the origin cut from
+  a string that addresses this API."
+  [alias part]
+  (walk/postwalk
+   (fn [x]
+     (cond
+       (map? x) (into {} (remove (fn [[k _]]
+                                   (and (or (keyword? k) (string? k))
+                                        (let [n (str/lower-case (name k))]
+                                          (or (contains? never-recorded n)
+                                              (contains? never-exported n))))))
+                      x)
+       (string? x) (or (get alias x)
+                       (str/replace x #"^[A-Za-z][A-Za-z0-9+.\-]*://[^/?#]*(?=/api/)" ""))
+       :else x))
+   part))
+
+(defn- who-of
+  "The principal a frame is by, read where its type carries it →
+  [principal id, the actor type the frame recorded]."
+  [type body]
+  (let [p (case type
+            ("move" "ui") (:principal body)
+            "transition" (:actor body)
+            "invitation" (or (:author body) (get-in body [:data :author]))
+            nil)]
+    (cond
+      (map? p) [(some-> (:id p) str) (some-> (:type p) name)]
+      (some? p) [(str p) nil])))
+
+(defn- principal-row
+  "The row a principal id names → [kind row], or nil: a `seat:` or
+  `model:` id names that kind's row, any other a member by row id or
+  by bound subject, the two spellings the members gate resolves."
+  [eng pid]
+  (let [st (:storage eng)
+        pid (str pid)
+        [_ prefix id] (re-matches #"(seat|model):(.+)" pid)
+        k (if prefix (keyword prefix) :member)
+        rdef (get (inv/resources eng) k)]
+    (when rdef
+      (when-some [row (or (store/with-tx st
+                            (fn [tx] (store/load-row st tx k (or id pid) {})))
+                          (when-not prefix
+                            (first (store/with-tx st
+                                     (fn [tx]
+                                       (store/query-rows st tx k {:subject pid}
+                                                         {:limit 1}))))))]
+        [k (inv/decode-row rdef row)]))))
+
+(defn- cast-member
+  "One cast entry, {:display :type}. The display is the principal's row
+  label read under the EXPORTER's visibility, and `unseen-display` when
+  the exporter cannot see that row or no row carries the id. The type
+  is agent for a seat, a model or an agent member, human for any other
+  member, and the frame's recorded actor type when no row says."
+  [eng vis pid recorded-type]
+  (let [[k row] (principal-row eng pid)
+        rdef (get (inv/resources eng) k)
+        seen? (and row (or (nil? vis)
+                           (boolean ((:row? vis) k (str (:id row))))))
+        label (when seen?
+                (summary/render (or (:label-template rdef) (:summary rdef))
+                                (assoc row :kind k)))
+        agent? (case k
+                 (:seat :model) true
+                 :member (= "agent" (some-> (get-in row [:data :actor_type]) name))
+                 (contains? #{"agent" "system"} recorded-type))]
+    {:display (if (str/blank? label) unseen-display label)
+     :type (if agent? "agent" "human")}))
+
+(defn- cast-of
+  "The cast of the lines that crossed, in order of first appearance →
+  {:alias {principal id → alias} :cast [[alias entry] …]}. Agents are
+  a1, a2 …, people p1, p2 …. A frame left out names nobody."
+  [eng vis parts]
+  (reduce (fn [acc [pid recorded-type]]
+            (if (or (str/blank? (str pid)) (contains? (:alias acc) pid))
+              acc
+              (let [entry (cast-member eng vis pid recorded-type)
+                    counter (if (= "agent" (:type entry)) :agents :people)
+                    n (inc (long (get acc counter)))
+                    alias (str (if (= :agents counter) "a" "p") n)]
+                (-> acc
+                    (assoc counter n)
+                    (assoc-in [:alias pid] alias)
+                    (update :cast conj [alias entry])))))
+          {:agents 0 :people 0 :alias {} :cast []}
+          (mapcat (fn [p] [[(::who p) (::who-type p)] [(::subject p) nil]])
+                  parts)))
+
+(defn- export-part
+  "One frame re-redacted under the exporter's visibility → the line's
+  own part, or nil when nothing of it is left. Each type has one rule:
+  `move` presence's self rule; `ui` that rule and presence/ui-redactor,
+  and a ui frame with every part redacted crosses as a plain move;
+  `transition` events/visible-transition; `invitation` :row? on the
+  invitation, named by the body's `id` or its `invitation` path."
+  [{:keys [vis visible? redact-ui]} type body]
+  (let [self (path-of (:self body))]
+    (case type
+      "move" (when (and self (visible? self))
+               {:type "move" :self self})
+      "ui" (when (and self (visible? self))
+             (let [f (redact-ui (assoc body :self self))]
+               (if (and (map? (:ui f)) (not= "move" (:event f)))
+                 {:type "ui" :self self :ui (:ui f)}
+                 {:type "move" :self self})))
+      "transition" (when-some [p (events/visible-transition
+                                  vis (cond-> body self (assoc :self self)))]
+                     (assoc (select-keys p [:kind :self :action :from :to
+                                            :at :summary])
+                            :type "transition"))
+      "invitation" (let [d (if (map? (:data body)) (:data body) body)
+                         step (path-of (:self d))
+                         id (or (:id body)
+                                (second (re-matches
+                                         #"/api/invitations/([^/?#]+)"
+                                         (str (path-of (:invitation body))))))]
+                     (when (and id (or (nil? vis)
+                                       ((:row? vis) :invitation (str id))))
+                       (cond-> (assoc (select-keys d [:action :field :note])
+                                      :type "invitation"
+                                      ::subject (some-> (:subject d) str))
+                         step (assoc :self step))))
+      nil)))
+
+(defn- export-line [alias part]
+  (let [who (get alias (::who part))
+        subject (get alias (::subject part))]
+    (cond-> (merge (array-map :t (:t part) :type (:type part))
+                   (when who {:who who})
+                   (clean alias (dissoc part :t :type ::who ::who-type ::subject)))
+      subject (assoc :subject subject))))
+
+(defn export
+  "A sealed walk as `waymark-walk/1` (docs/spec-guided-follow.md § 4):
+  newline-delimited JSON, the header line and then one line per frame.
+  `vis` is the EXPORTER's visibility (nil is an unscoped exporter), and
+  every frame is redacted again under it by its type's rule
+  (`export-part`), so the export holds what the recorder and the
+  exporter could both see. A frame with nothing left is left out and
+  the `t` of the others keeps the gap. A principal crosses only as a
+  cast alias: no principal id, grant id, sitting id, header, key or
+  origin is written. → the text, or nil when the walk is absent or
+  not sealed."
+  [eng walk-id vis]
+  (let [st (:storage eng)
+        id (str walk-id)
+        row (store/with-tx st (fn [tx] (store/load-row st tx kind id {})))]
+    (when (= "sealed" (some-> (:state row) name))
+      (let [d (:data row)
+            frdef (get (inv/resources eng) frame-kind)
+            rules {:vis vis
+                   :visible? (presence/self-visible? eng vis)
+                   :redact-ui (presence/ui-redactor eng vis)}
+            frames (->> (store/with-tx st
+                          (fn [tx]
+                            (vec (store/query-rows
+                                  st tx frame-kind {:walk id}
+                                  {:limit (max (long export-page)
+                                               (long (or (:frame_count d) 0)))}))))
+                        (map #(:data (inv/decode-row frdef %)))
+                        (sort-by #(long (or (:t %) 0))))
+            parts (vec (keep (fn [{:keys [t type body]}]
+                               (let [type (some-> type name)
+                                     body (walk/keywordize-keys (or body {}))
+                                     [pid recorded-type] (who-of type body)]
+                                 (when-some [part (export-part rules type body)]
+                                   (assoc part :t t
+                                          ::who pid
+                                          ::who-type recorded-type))))
+                             frames))
+            {:keys [alias cast]} (cast-of eng vis parts)
+            started (instant-of (:started_at d))
+            header (array-map
+                    :format export-format
+                    :title (:title d)
+                    :recorded (when started
+                                (str (.toLocalDate (.atZone started ZoneOffset/UTC))))
+                    :engine (or (:name eng) "waymark")
+                    :cast (apply array-map (mapcat identity cast)))]
+        (apply str (map #(str (wire/write-json %) "\n")
+                        (cons header (map #(export-line alias %) parts))))))))
 
 ;; ── the purge and the sweep ─────────────────────────────────────────
 
