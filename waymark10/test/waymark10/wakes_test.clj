@@ -2321,6 +2321,44 @@
 
     (seat-do! seat :retire)))
 
+;; The hold wrote `wake_pending` and `last_halted_wake` and left
+;; `halted` to a halted sit. A seat whose wakes are all held never
+;; sits, so its schedule read as not halted and a person could not see
+;; why nothing ran. The hold stamps `halted` itself, in the sit's
+;; spelling, and the first fire that goes out takes it off.
+
+(deftest a-wake-held-at-the-wall-stamps-the-schedule-halted
+  (let [wn :wake-wall-halted
+        fn' :wake-wall-halted-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "wallclerk"
+                      {:budget_usd_per_week 0.001M
+                       :wake_on [{:kind "wake_task" :actions ["complete"]}]}
+                      fn')
+        ;; one closed sitting spends more than the week holds
+        _ (close-sitting! (sitting! seat))
+        _ (drain-wakes! wn)
+        now (Instant/now)
+        halted #(get-in (sched-of seat) [:data :halted])]
+
+    (testing "a wake held at the wall stamps `halted` with the reason"
+      (task-do! (task! "a thing the wall holds") :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (= "budget" (:wall (halted))))
+      (is (re-find #"The week's fuel is spent" (str (:detail (halted))))))
+
+    (testing "the first fire after the wall lifts clears it"
+      (let [later (.plusSeconds now (* 8 86400))
+            rolled (assoc *eng* :now-fn (constantly later))]
+        (wakes/sweep-pending! rolled)
+        (is (= 1 (count (seat-fires seat))))
+        (is (nil? (halted)))))
+
+    (seat-do! seat :retire)))
+
 ;; ── a wake the fire door refuses waits ───────────────────────────────
 ;;
 ;; A halt line other than the budget's is judged by the `fire` door
