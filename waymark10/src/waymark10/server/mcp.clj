@@ -1698,7 +1698,8 @@
   "An invoke's beats before its write: the gaze moves to `self`, the
   form opens with no value, and each argument is typed in the order of
   the action's input schema (`presence/typed-keys`, which leaves a
-  secret one out). When the last beat already shows this form with
+  secret one out). A create's `self` is the collection, and its form is
+  the kind's create. When the last beat already shows this form with
   these values (a rehearsal typed them, or a refused call left them),
   nothing is typed again. An action the kind does not declare opens no
   form, and only the gaze moves."
@@ -2322,8 +2323,8 @@
 
       ;; `at`: the call is stored for its time, not made (R-7.2)
       (some? at)
-      (let [self (when (and id (not (or ids items)))
-                   (str "/api/" (:plural rdef) "/" id))
+      (let [self (when-not (or ids items)
+                   (str "/api/" (:plural rdef) (when id (str "/" id))))
             st (when self (stage eng session rdef))
             _ (when st (stage-dialog! eng st self aname input))
             res (schedule-call eng call session
@@ -2355,12 +2356,17 @@
         (bulk-rows call session rdef aname args))
 
       (nil? id)
-      (do
-        ;; staged (§ 2): the gaze goes to the collection. The form is not
-        ;; shown yet: presence's clean-ui keeps a dialog on a row self only
-        (when-some [st (stage eng session rdef)]
-          (beat! st (str "/api/" (:plural rdef)) nil))
-        (create-row call session rdef aname input dry_run acknowledge_warnings return))
+      (let [self (str "/api/" (:plural rdef))
+            st (stage eng session rdef)
+            ;; staged (§ 2): the form opens on the collection and is
+            ;; typed before the write, so a refusal leaves it open
+            _ (when st (stage-dialog! eng st self aname input))
+            res (create-row call session rdef aname input dry_run
+                            acknowledge_warnings return)]
+        ;; staged (§ 2): the create landed, so the form closes
+        (when (and st (not dry_run) (not (:isError res)))
+          (stage-close! st self))
+        res)
 
       :else
       (let [self (str "/api/" (:plural rdef) "/" id)

@@ -240,6 +240,32 @@
                   (pr-str (filter #(= "ui" (:type %)) (frames eng w)))
                   "4321")))))))
 
+(deftest a-create-types-its-form-on-the-collection
+  (with-stage
+    (fn [eng h _reg]
+      (let [w (self-walk! h)
+            call {:kind "errand" :action "create"
+                  ;; the arguments arrive room first; the schema says title first
+                  :input {:room "Kitchen" :title "Towels"}}
+            typed [[:move "/api/errands"]
+                   [:ui "create" {}]
+                   [:ui "create" {:title "Towels"}]
+                   [:ui "create" {:title "Towels" :room "Kitchen"}]]]
+        (is (tool h "waymark_invoke" (assoc call :dry_run true)))
+        (is (= typed (beats eng w))
+            "the rehearsal types the form and leaves it open")
+        (is (= #{"/api/errands"}
+               (into #{} (keep #(get-in % [:body :ui :dialog :self]))
+                     (frames eng w)))
+            "the form is on the collection")
+        (is (tool h "waymark_invoke" call))
+        (is (= (conj typed [:transition "create"] [:ui nil {}]) (beats eng w))
+            "the create writes and closes, and types nothing again")
+        (testing "an action the kind does not create with opens no form"
+          (is (not (tool h "waymark_invoke" {:kind "errand" :action "rename"
+                                             :input {:title "Mop"}})))
+          (is (= 6 (count (frames eng w)))))))))
+
 ;; ── 3. when nothing is staged ───────────────────────────────────────
 
 (defn- every-staged-call [h a]
