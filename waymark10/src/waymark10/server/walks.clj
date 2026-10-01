@@ -24,6 +24,12 @@
   firehose transition that principal made, goes to `record-frame!` for
   each walk the follower is recording of that principal.
 
+  A SELF WALK NEEDS NO FOLLOWER. A walk whose `followed` is its
+  `recorder` is a person recording their own screen. Nobody's stream
+  carries those frames, so the doors that made them hand them over:
+  the beat (`presence/report!`, tapped by `self-recorder`) and the
+  write doors (`record-own!`). The sight is the request's own.
+
   THE ROW OUTLIVES ITS FRAMES. The purge deletes every frame and moves
   the walk to `purged`; the row keeps its title and its counts as the
   audit that a walk existed."
@@ -424,6 +430,58 @@
                            :body (walk/keywordize-keys
                                   (events/transition-payload eng t))}
                           (invitation-frame eng sight t)])))))}))
+
+;; ── the self walk (a person's own screen, nobody following) ─────────
+
+(defn self-recorder
+  "A SELF walk's recorder: a walk whose `followed` is its `recorder` is
+  a person recording their own screen, and no follower's stream carries
+  its frames. This is `recorder` with the person as their own follower,
+  so `sight` is the person's own visibility, the one the request that
+  made the frame was judged under. → {:presence f :event f}, or nil on
+  an engine that serves no walks.
+
+  `:presence` is the tap `presence/report!` takes: it sees each `move`
+  and `ui` frame the person's own beat made. A `ui` frame passes
+  section 1's redaction under `sight` first, as a follower's stream
+  would have redacted it. `:event` takes a transition the person
+  committed (`record-own!`)."
+  [eng principal sight]
+  (when (contains? (inv/resources eng) kind)
+    (let [pid (str (:id principal))
+          rec (recorder eng principal sight pid)
+          redact (presence/ui-redactor eng sight)]
+      (assoc rec :presence
+             (fn [frame]
+               (try
+                 (when-some [frame (if (= "ui" (:event frame))
+                                     (redact frame)
+                                     frame)]
+                   ((:presence rec) frame))
+                 (catch Exception e
+                   (warn! "a frame of " pid "'s own walk was not recorded — "
+                          (ex-message e)))))))))
+
+(defn record-own!
+  "A write door's post-commit pass (router/count-committed!): the
+  transition `principal` just committed goes to every self walk they
+  are recording, under `sight`, the request's own visibility. A replay,
+  a rehearsal and an anonymous write record nothing, and neither does a
+  move of a walk or a frame: the recording's own doors are not the work
+  it shows. Returns `result`, and never throws."
+  [eng principal sight result]
+  (try
+    (let [t (:transition result)]
+      (when (and t
+                 (nil? (:replayed? result))
+                 (not= (:id t/anonymous) (:id principal))
+                 (not (contains? #{"walk" "walk_frame"}
+                                 (some-> (:kind t) name))))
+        (when-some [event (:event (self-recorder eng principal sight))]
+          (event t))))
+    (catch Exception e
+      (warn! "a write was not recorded in its own walk — " (ex-message e))))
+  result)
 
 ;; ── the export (waymark-walk/1) ─────────────────────────────────────
 
