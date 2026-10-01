@@ -165,22 +165,34 @@
 
   BEST-EFFORT, as `release-the-waiters!` is: a change that refuses is
   said in the log, and the ticket's move stands. A probe or a
-  rehearsal carries no pen, and moves nothing."
+  rehearsal carries no pen, and moves nothing.
+
+  THE TICKET FOLLOWS A PULL REQUEST BACK UNDER REVIEW (ticket
+  7e01dbe5). The ticket's own move lands it in `open`, which is beside
+  a submitted change once `rework_submitted` ran, so one
+  `rejoin_review` is queued through ctx :follow-up and the engine
+  walks it after this write commits. A follow-up that refuses is said
+  in the log and the ticket stays open, where the sit leaves it out
+  (ticket 6ca380da). A move that itself runs as a follow-up queues
+  one the engine drops, and its ticket stays open the same way."
   [row ctx]
   (let [find' (:find ctx)
-        invoke' (:invoke ctx)]
+        invoke' (:invoke ctx)
+        follow' (:follow-up ctx)
+        under-review? (volatile! false)]
     (when (and find' invoke')
       (doseq [change (changes-born-from row ["stuck"] find')]
         (try
-          (invoke' :change (:id change)
-                   (if (nil? (get-in change [:data :number]))
-                     :rework
-                     :rework_submitted)
-                   nil)
+          (if (nil? (get-in change [:data :number]))
+            (invoke' :change (:id change) :rework nil)
+            (do (invoke' :change (:id change) :rework_submitted nil)
+                (vreset! under-review? true)))
           (catch Exception e
             (binding [*out* *err*]
               (println "factory10 ticket: the change" (:id change)
-                       "was not put back to work -" (ex-message e)))))))))
+                       "was not put back to work -" (ex-message e))))))
+      (when (and follow' @under-review?)
+        (follow' {:kind :ticket :id (:id row) :action :rejoin_review})))))
 
 (defhandler groom-the-ticket [row _inp ctx]
   (put-its-change-back-to-work! row ctx)
@@ -673,6 +685,24 @@
   ;; answer nil, so it renders refused, which is true.
   (if (= :change (:kind (:within ctx)))
     (t/allow)
+    (t/deny)))
+
+(defguardfn its-change-is-under-review
+  {:reads [:change]
+   :open "No door clears this one. A ticket goes out for review behind a change of its own that is submitted: the change's submit sends it, and so does a groom, unblock or resume that puts its stuck pull request back under review."
+   :explain "A ticket follows its change out for review, and no change born from this ticket is submitted. It stays in the queue for the seat that builds it."}
+  [row _inp ctx]
+  ;; `only-its-change-moves-it` cannot judge this door: the engine walks
+  ;; it as a ctx :follow-up, after the write that queued it committed,
+  ;; and a follow-up carries no `:within` (ticket 7e01dbe5). The wall is
+  ;; the FACT instead, read from the committed rows, so a hand that
+  ;; takes the door moves the ticket only where its change already is.
+  ;; A ctx with no hook, the render probe, is refused: the door is
+  ;; advertised only where a submitted change was found.
+  (if-some [find' (:find ctx)]
+    (if (seq (changes-born-from row ["submitted"] find'))
+      (t/allow)
+      (t/deny))
     (t/deny)))
 
 (defguardfn only-a-childs-ending-finishes-it
@@ -1317,6 +1347,21 @@
               :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and puts its change back to work in the same move; a change with a pull request goes back under review at the next sit."}
      :display {:label "Stalled" :order 17
                :description "Its change stalled — back to draft, to be groomed again"}}
+
+    ;; THE GROOM'S FOLLOW-UP (ticket 7e01dbe5). A groom, unblock or
+    ;; resume that puts a stuck pull request back under review lands
+    ;; the ticket in `open`, its declared landing, beside a submitted
+    ;; change. Its handler queues this door through ctx :follow-up, and
+    ;; the engine walks it once that write commits. A follow-up carries
+    ;; no `:within`, so `review` would refuse it; this door is walled on
+    ;; the fact instead (`its-change-is-under-review`).
+    :rejoin_review
+    {:from #{:open} :to :in_review
+     :guards [its-change-is-under-review]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "A change built for this ticket is submitted, so the ticket leaves the queue while its pull request is reviewed. Its change sends it back if the checks go red, and its merge ends it."}
+     :display {:label "Out for review again" :order 26
+               :description "Its pull request is back under review — out of the queue with it"}}
 
     ;; the merge's ending, from every state that has not ended (ticket
     ;; 3ec37f66): `in_review` most days, `open` for a change a person

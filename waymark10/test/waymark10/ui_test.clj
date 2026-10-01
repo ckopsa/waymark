@@ -209,6 +209,36 @@
     (is (str/includes? body "function walkthroughSteps(doc)"))
     (is (str/includes? body "data-walk-steps"))))
 
+(deftest ui-start-follows-the-author-in-guided-mode
+  ;; docs/spec-walkthrough.md §5, watching an agent step: the person's own
+  ;; Start or Resume, heard on the firehose, follows the author in guided
+  ;; mode; an agent step takes the screen to its `self`; the next person
+  ;; step opens over a guided dialog; and a follow the walkthrough began
+  ;; ends when the walkthrough leaves the hand
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function followAuthor()"))
+    (is (str/includes? body "const tapped = !!me && [\"start\", \"resume\"].includes(ev.action) &&"))
+    (is (str/includes? body "if (tapped) followAuthor();"))
+    (is (str/includes? body "follow({id: author, display: held ? followName : author}, {ui: true});"))
+    (is (str/includes? body "function showAgentStep()"))
+    (is (str/includes? body "const self = ((d.steps || [])[(d.current || 1) - 1] || {}).self;"))
+    (is (str/includes? body "setTimeout(showAgentStep, 0);"))
+    (is (str/includes? body "if ($(\"dialog[open]:not([data-guided])\")) return;"))
+    (is (str/includes? body "if (walkthroughFollow && followId === walkthroughFollow) unfollow();"))))
+
+(deftest ui-an-agent-step-offers-stop-and-no-skip
+  ;; the chip on an agent step names who is working and the step's note,
+  ;; with Stop beside it; Skip is a person step's alone
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        from (str/index-of body "} else if (d.waiting_on === \"agent\") {")
+        to (some->> from (str/index-of body "} else {"))
+        branch (if (and from to) (subs body from to) "")]
+    (is (some? to) "the chip has a branch for an agent step")
+    (is (str/includes? branch "` is working: ${(steps[n - 1] || {}).note || \"\"}`"))
+    (is (str/includes? branch "if (stop) chip.append(stop);"))
+    (is (not (str/includes? branch "data-walk-skip")))
+    (is (not (str/includes? branch "data-walk-take")))))
+
 (deftest ui-offers-do-this-later
   ;; docs/spec-scheduled-actions.md R-7.3: a row's dialog schedules the
   ;; same call, with the zone named and the rule in plain words; a confirm

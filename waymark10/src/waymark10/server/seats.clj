@@ -240,6 +240,9 @@
    :refused_out_run 2
    ;; this many cut_short sittings in a row
    :cut_short_run 3
+   ;; this many sittings in a row that walked nothing, while rows of the
+   ;; kind the seat walks wait outside its grant
+   :walked_nothing_run 3
    ;; this many sittings in a row that carry the flag
    :flag_run {:test_thrash 3 :rewalk 2}})
 
@@ -2203,8 +2206,10 @@
        (:refused_out_run health-alert-defaults) " refused out in a row, "
        (:cut_short_run health-alert-defaults) " cut short in a row, test_thrash on "
        (get-in health-alert-defaults [:flag_run :test_thrash])
-       " in a row and rewalk on "
-       (get-in health-alert-defaults [:flag_run :rewalk]) " in a row."))
+       " in a row, rewalk on "
+       (get-in health-alert-defaults [:flag_run :rewalk]) " in a row, and "
+       (:walked_nothing_run health-alert-defaults)
+       " in a row that walked nothing while rows wait outside its grant."))
 
 (def ^:private health-breaker-help
   "Tick it and a new breach caps this seat to one sitting at a time until somebody closes the breaker. It does nothing for a seat that runs one sitting at once, and the number the seat states is never lowered.")
@@ -2225,6 +2230,9 @@
     [:maybe [:int {:min 1 :max 100}]]]
    [:cut_short_run {:optional true
                     :x-display {:label "Cut short in a row"}}
+    [:maybe [:int {:min 1 :max 100}]]]
+   [:walked_nothing_run {:optional true
+                         :x-display {:label "Walked nothing in a row, rows outside its grant"}}
     [:maybe [:int {:min 1 :max 100}]]]
    ;; the flags are declared one by one, so a form offers a number for
    ;; each and no box that wants JSON (usability's spelled-by-hand)
@@ -4736,6 +4744,14 @@
   [flag]
   (subs (str (flag-key flag)) 1))
 
+(defn- walked-nothing?
+  "Did this sitting end with nothing walked: its sit handed it no rows
+  (`stamp-walked-nothing!`) and it moved nothing after. A hook closes
+  such a wake within a few turns, so `cut_short` counts beside `idle`."
+  [sitting]
+  (and (true? (:walked_nothing sitting))
+       (contains? #{"idle" "cut_short"} (some-> (:outcome sitting) name))))
+
 (defn health-breach
   "The alert rule a seat's window breaks, or nil when it breaks none.
   `alerts` is the seat's `health_alerts`, laid over
@@ -4743,10 +4759,12 @@
   first, and `health` their rollup (`seat-health`). A run is counted
   from the newest sitting back, so one sitting that is not of the run
   ends it. The rules are judged in one order and the first that breaks
-  is the answer. Pure. → the rule's name."
-  [alerts health sittings]
+  is the answer. `hidden` is how many rows of the kind the seat walks
+  wait outside its grant (`hidden-waiting`), and `walked_nothing_run`
+  breaks only while there are some. Pure. → the rule's name."
+  [alerts health sittings & [hidden]]
   (let [{:keys [submit_rate_below never_sat_any refused_out_run
-                cut_short_run flag_run]}
+                cut_short_run flag_run walked_nothing_run]}
         (merge health-alert-defaults
                (into {} (remove (comp nil? val)) alerts))
         outcome? (fn [o] #(= o (some-> (:outcome %) name)))
@@ -4756,6 +4774,10 @@
     (cond
       (and (true? never_sat_any) (some (outcome? "never_sat") sittings))
       "never_sat_any"
+
+      (and (pos? (long (or hidden 0)))
+           (reached? walked_nothing_run (run walked-nothing?)))
+      "walked_nothing_run"
 
       (reached? refused_out_run (run (outcome? "refused_out")))
       "refused_out_run"
@@ -4776,12 +4798,86 @@
                      (neg? (compare (bigdec rate) (bigdec submit_rate_below))))
             "submit_rate_below")))))
 
+;; ── seat health 4: rows wait outside the grant (ticket fd930ff1) ────
+;;
+;; A sitting never learns of the rows its grant hides. The person who
+;; owns the seat should: a seat that keeps walking nothing while rows of
+;; the kind it walks wait outside its scope entry's filter is leashed
+;; too short. The engine counts those rows with its own hand, and the
+;; count goes to the ticket and to no answer a sitting reads.
+
+(def ^:private hidden-scan-limit
+  "The most rows of the walked kind one count reads. A count that
+  reaches it says that many or more."
+  200)
+
+(defn- hidden-str
+  "A state or a field's value as a filter spells it."
+  [v]
+  (if (keyword? v) (name v) (str v)))
+
+(defn- hidden-waiting
+  "The rows of the kind this seat walks that wait where its grant does
+  not reach: in the state its walk reads — the filter's own, or the
+  kind's default, or any state that is not terminal — and outside the
+  other fields of its scope entry's filter (`walk-filter`). Read
+  through the store and not through the seat's grant. A seat whose
+  entry filters by no field hides none, and a judgment seat walks the
+  judgment's queue and is not counted. Best effort.
+  → {:count :state :plural :fields}, or nil when none waits."
+  [eng tx seat-row]
+  (try
+    (let [kind (some-> (get-in seat-row [:data :walk]) str not-empty keyword)
+          rdef (get (inv/resources eng) kind)
+          flt (into {}
+                    (map (fn [[f v]] [(name f) (hidden-str v)]))
+                    (walk-filter seat-row))
+          fields (dissoc flt "state")]
+      (when (and rdef (seq fields)
+                 (nil? (some-> (get-in seat-row [:data :judgment]) str not-empty)))
+        (let [state (or (not-empty (get flt "state"))
+                        (some-> (get-in rdef [:default-filters :state])
+                                hidden-str not-empty))
+              terminal (into #{} (map hidden-str) (:terminal rdef))
+              waits? (fn [row]
+                       (or (some? state)
+                           (not (contains? terminal (hidden-str (:state row))))))
+              admitted? (fn [row]
+                          (every? (fn [[f v]]
+                                    (= v (some-> (get-in row [:data (keyword f)])
+                                                 hidden-str)))
+                                  fields))
+              n (count (filter #(and (waits? %) (not (admitted? %)))
+                               (store/query-rows (:storage eng) tx kind
+                                                 (if state {:state (keyword state)} {})
+                                                 {:limit hidden-scan-limit})))]
+          (when (pos? n)
+            {:count n
+             :state state
+             :plural (:plural rdef)
+             :fields (vec (sort (keys fields)))}))))
+    (catch Exception _ nil)))
+
+(defn- hidden-sentence
+  "What the person is told of a `walked_nothing_run` breach: how many
+  times the seat walked nothing and how many rows waited outside its
+  grant. The count and the kind, and no row's id."
+  [seat sittings {n :count :keys [state plural fields]}]
+  (str (get-in seat [:data :name]) " walked nothing "
+       (count (take-while walked-nothing? sittings)) " times while "
+       n " " (when state (str state " ")) plural
+       " sat outside its grant (" (str/join ", " fields)
+       " filter or scope)."))
+
 (defn- breach-detail
   "What the ticket says: the seat, the rule, and each sitting of the
-  window with what it came to, its flags and its link."
-  [seat rule sittings]
+  window with what it came to, its flags and its link. A
+  `walked_nothing_run` breach opens with `hidden-sentence`."
+  [seat rule sittings hidden]
   (let [data (:data seat)]
-    (str "Seat " (:name data) " (/api/seats/" (:id seat)
+    (str (when (and hidden (= "walked_nothing_run" rule))
+           (str (hidden-sentence seat sittings hidden) "\n\n"))
+         "Seat " (:name data) " (/api/seats/" (:id seat)
          ") broke its health alert `" rule "` at "
          (get-in data [:health :breach :at]) ".\n\n"
          "Its last " (count sittings) " sittings, newest first:\n"
@@ -4807,14 +4903,14 @@
   (`judgments/file-ticket!`'s posture). Best effort: an engine that
   serves no `ticket` kind files none, and a refusal leaves the breach
   recorded without one. → the ticket's id, or nil."
-  [eng seat sittings]
+  [eng seat sittings hidden]
   (when (get (inv/resources eng) :ticket)
     (let [{:keys [rule at]} (get-in seat [:data :health :breach])]
       (try
         (some-> (inv/create! eng :ticket
                              {:title (str "seat " (get-in seat [:data :name])
                                           " health breach: " rule)
-                              :detail (breach-detail seat rule sittings)
+                              :detail (breach-detail seat rule sittings hidden)
                               :repo "ckopsa/waymark"
                               :type "bug"
                               :priority 1}
@@ -4874,6 +4970,11 @@
   runs several sittings at once, and files one ticket after the write
   commits. The same rule at the next close keeps its record and files
   nothing; no rule clears it.
+
+  SEAT HEALTH 4: when the newest sitting walked nothing, the rows of
+  the walked kind that wait outside the seat's grant are counted in the
+  same transaction (`hidden-waiting`) for `walked_nothing_run`. The
+  count rides to the ticket and is not written on the seat row.
   → the map written, or nil when there was nothing to write."
   [eng seat-id]
   (when (and seat-id
@@ -4883,7 +4984,7 @@
       (let [st (:storage eng)
             seat-id (str seat-id)
             started #(->instant (:started_at %))]
-        (when-some [{:keys [seat sittings health new?]}
+        (when-some [{:keys [seat sittings health new? hidden]}
                     (store/with-tx st
                       (fn [tx]
                         (when-some [seat (store/load-row st tx :seat seat-id
@@ -4908,8 +5009,10 @@
                                                       (some-> (peek sittings) started))
                                         at)
                                 was (get-in seat [:data :health :breach])
+                                hidden (when (walked-nothing? (first sittings))
+                                         (hidden-waiting eng tx seat))
                                 rule (health-breach (get-in seat [:data :health_alerts])
-                                                    health sittings)
+                                                    health sittings (:count hidden))
                                 new? (and (some? rule)
                                           (not= rule (some-> (:rule was) str)))
                                 trip? (and new?
@@ -4928,10 +5031,11 @@
                             {:seat (assoc seat :data data)
                              :sittings sittings
                              :health health
-                             :new? new?}))))]
+                             :new? new?
+                             :hidden hidden}))))]
           ;; the ticket is its own write, after the rollup's commit
           (or (when new?
-                (when-some [ticket (file-breach-ticket! eng seat sittings)]
+                (when-some [ticket (file-breach-ticket! eng seat sittings hidden)]
                   (stamp-breach-ticket! eng seat-id
                                         (get-in health [:breach :rule])
                                         ticket)))
@@ -5290,6 +5394,42 @@
 (def ^:private uuid-in
   #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
+(def ^:private short-id-in
+  "An 8-hex word: the first group of a row id, as a person writes it."
+  #"(?<![0-9A-Za-z-])[0-9a-fA-F]{8}(?![0-9A-Za-z-])")
+
+(def ^:private short-id-words
+  "How many 8-hex words of one prose `named-row` looks up."
+  8)
+
+(defn- short-id-row
+  "The id of the ONE row whose id opens with the 8-hex `prefix`, or nil
+  (ticket 26c7967a). The rows are those of the kind the seat walks and,
+  for a seat that walks tickets, the changes, which `named-walk-row`
+  reads back to their ticket. No row, or several, names nothing."
+  [eng walk prefix]
+  (let [st (:storage eng)
+        prefix (str/lower-case prefix)
+        conds [{:target :id :op :>=
+                :value (str prefix "-0000-0000-0000-000000000000")}
+               {:target :id :op :<=
+                :value (str prefix "-ffff-ffff-ffff-ffffffffffff")}]
+        ids (try
+              (into []
+                    (comp (filter #(get (inv/resources eng) %))
+                          (mapcat (fn [kind]
+                                    (store/with-tx st
+                                      (fn [tx]
+                                        (store/ids-matching st tx kind
+                                                            conds 2)))))
+                          (map str)
+                          (filter #(str/starts-with? % prefix)))
+                    (distinct (cond-> [(keyword walk)]
+                                (= "ticket" walk) (conj :change))))
+              (catch Exception _ nil))]
+    (when (= 1 (count ids))
+      (first ids))))
+
 (defn- named-row
   "The id of the walk row a fire's text names, or nil. A wake's text is
   the transition as JSON (`wakes/wake-text`): the kind and the row id.
@@ -5297,18 +5437,25 @@
   walks tickets, a change, which the sit reads back to the ticket it was
   born from (`named-walk-row`). A person's prose names the first row id
   it holds (ticket 7af7d506), and the sit hands that row only when it is
-  such a row. Any other text — prose with no id, a count wake's count —
-  names nothing."
-  [seat-row text]
-  (when-some [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
-    (when-some [s (some-> text str str/trim not-empty)]
-      (if (str/starts-with? s "{")
-        (let [m (try (wire/read-json s) (catch Exception _ nil))
-              kind (when (map? m) (str (:kind m)))]
-          (when (or (= walk kind)
-                    (and (= "ticket" walk) (= "change" kind)))
-            (some-> (:id m) str not-empty)))
-        (re-find uuid-in s)))))
+  such a row. Prose with no whole id names the row of its first 8-hex
+  word that opens exactly one row's id (`short-id-row`, ticket
+  26c7967a), when `eng` is given to look it up. Any other text — prose
+  with no id, a count wake's count — names nothing."
+  ([seat-row text] (named-row nil seat-row text))
+  ([eng seat-row text]
+   (when-some [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
+     (when-some [s (some-> text str str/trim not-empty)]
+       (if (str/starts-with? s "{")
+         (let [m (try (wire/read-json s) (catch Exception _ nil))
+               kind (when (map? m) (str (:kind m)))]
+           (when (or (= walk kind)
+                     (and (= "ticket" walk) (= "change" kind)))
+             (some-> (:id m) str not-empty)))
+         (or (re-find uuid-in s)
+             (when eng
+               (some #(short-id-row eng walk %)
+                     (take short-id-words
+                           (distinct (re-seq short-id-in s)))))))))))
 
 (defn hold-fire-key!
   "Mint the key ONE fire carries, and keep its hash on the seat row.
@@ -5343,7 +5490,7 @@
           key (mint-key)
           ttl (long (or (get-in seat-row [:data :sitting_idle_seconds])
                         default-idle-seconds))
-          named (named-row seat-row text)
+          named (named-row eng seat-row text)
           entry (cond-> {:hash (key-hash key)
                          :expires_at (str (.plusSeconds at ttl))
                          :fired_at (str at)}
@@ -5771,7 +5918,7 @@
   the sit's to say, as it was, and a free row fires at once. → an
   Instant after `now`, or nil."
   [eng seat-row text now]
-  (when-some [named (some->> (named-row seat-row text)
+  (when-some [named (some->> (named-row eng seat-row text)
                              (named-walk-row eng (get-in seat-row [:data :walk])))]
     (let [st (:storage eng)
           open (store/with-tx st
@@ -5825,16 +5972,12 @@
                                                          id)}
                                         {:limit live-change-scan-limit})))))))))
 
-(defn named-open-beside-a-submitted-change?
-  "Is the ticket a fire named `open` while a change born from it is
-  `submitted` (ticket 6ca380da)? A groom, unblock or resume that puts a
-  stuck pull request back under review leaves its ticket open, and the
-  fire that follows names it; the round is in the house's hands, so the
-  named walk withholds it as the plain walk does (ticket 60c2ec22). A
-  ticket in review is still handed by name (ticket 7af7d506). Only a
-  change in the ticket's own repository counts, when the ticket names
-  one (ticket 80a8e60b). False for any other walk."
-  [eng walk id]
+(defn named-beside-a-submitted-change?
+  "Does the ticket a fire named stand in one of `states`, a set of state
+  names, while a change born from it is `submitted`? Only a change in
+  the ticket's own repository counts, when the ticket names one (ticket
+  80a8e60b). False for any other walk."
+  [eng walk id states]
   (boolean
    (when-some [rdef (when (= "ticket" (str walk))
                       (get (inv/resources eng) :change))]
@@ -5846,7 +5989,7 @@
                                    (store/load-row st tx :ticket (str id) {})))
                                (inv/decode-row tdef))
                       (catch Exception _ nil))]
-         (when (= "open" (some-> (:state ticket) name))
+         (when (contains? states (some-> (:state ticket) name))
            (some (let [repo (some-> (get-in ticket [:data :repo]) str not-empty)]
                    #(and (= "submitted" (some-> (:state %) name))
                          (or (nil? repo)
@@ -5858,6 +6001,18 @@
                                             {:born_from (str groomed-walk-prefix
                                                              id)}
                                             {:limit live-change-scan-limit})))))))))))
+
+(defn named-open-beside-a-submitted-change?
+  "Is the ticket a fire named `open` while a change born from it is
+  `submitted` (ticket 6ca380da)? The round is in the house's hands, so
+  the named walk withholds it as the plain walk does (ticket 60c2ec22).
+  A groom, unblock or resume that puts a stuck pull request back under
+  review sends its ticket out for review after it (ticket 7e01dbe5); a
+  ticket whose follow-up was refused, or whose change was submitted by
+  another path, is the one left open here. A ticket in review is still
+  handed by name (ticket 7af7d506)."
+  [eng walk id]
+  (named-beside-a-submitted-change? eng walk id #{"open"}))
 
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows

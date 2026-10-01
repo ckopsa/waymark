@@ -73,7 +73,8 @@
                             ;; caller`. `named!` above has already
                             ;; refused the anonymous request, so there
                             ;; is always a name here.
-                            {:caller (:id (router/principal-of req))})))))
+                            {:caller (:id (router/principal-of req))
+                             :principal (router/principal-of req)})))))
 
 (defn routes [eng]
   (let [rpc (gate/rpc-of eng)]

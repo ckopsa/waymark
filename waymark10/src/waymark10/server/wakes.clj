@@ -913,13 +913,22 @@
         ;; a groom that leaves a ticket open beside its submitted change
         ;; names a row the sit will not hand
         ;; (`seats/named-open-beside-a-submitted-change?`), so its fire
-        ;; would start a run that walks nothing
+        ;; would start a run that walks nothing. A groom, unblock or
+        ;; resume that put a stuck pull request back under review sends
+        ;; its ticket out for review after it (ticket 7e01dbe5), and the
+        ;; wake that move earned names a round already in the house's
+        ;; hands: it is withheld the same way. Any other wake naming a
+        ;; ticket in review fires (ticket 7af7d506).
         (let [walk (some-> (raw-row eng :seat (:id seat))
                            (get-in [:data :walk]) str not-empty)]
           (and (some? text)
                (= walk (name (:kind t)))
-               (seats/named-open-beside-a-submitted-change?
-                eng walk (:resource-id t))))
+               (seats/named-beside-a-submitted-change?
+                eng walk (:resource-id t)
+                (if (contains? #{"groom" "unblock" "resume"}
+                               (some-> (:action t) name))
+                  #{"open" "in_review"}
+                  #{"open"}))))
         (do (warn! "seat " (:id seat) " was woken on " (:resource-id t)
                    ", which is open beside a submitted change — its wake"
                    " fires nothing")

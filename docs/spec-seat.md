@@ -460,6 +460,9 @@ and `abandoned` are terminal.
 | `mode` | enum `fired`, `interactive` | the seat's mode, copied at birth. Engine-written. R-10.8. |
 | `person` | string, optional, up to 200 | the member the delegate acts for, when the sitter is a delegate. Engine-written. |
 | `tallied_at` | instant, optional | when the harness last tallied this open sitting. Engine-written. R-12.25. |
+| `walked_rows` | list of row ids, optional | the rows of the walk that the sit handed this sitting. They are this sitting's own until it closes: a second open sitting of the seat walks past them, and a re-sit is handed them back. Engine-written at the sit, on an open sitting only. |
+| `walked_nothing` | boolean, optional | `true` when the sit handed this sitting no rows and the sitting holds no `walked_rows`. It covers these causes: no queue was read, because the seat walks no kind or its grant does not admit the kind; the queue held no rows under the walk's filter and the seat's grant; every row the queue offered was left out, because another open sitting of the seat holds it or its change is stuck; the queue held rows and none was free to hand. It does not cover a seat at a wall: a halted sit is stamped with `halted` and not with this field. A re-sit that is handed a row takes the stamp off. Engine-written at the sit, on an open sitting only. |
+| `walked_nothing_why` | string, optional, up to 480 | one sentence beside `walked_nothing`: the cause, and each row left out with its reason. Engine-written at the sit, and taken off with `walked_nothing`. |
 | `cost_usd` | decimal | written at close, and again at each tally of an open sitting (R-12.27) |
 | `prices` | map | the four prices used at close, or at the last tally |
 | `note` | string | one sentence on what the sitting did |

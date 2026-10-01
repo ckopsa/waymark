@@ -790,29 +790,31 @@
 
 (defn- close-as!
   "One sitting of `seat`, born closed and already judged, that started
-  `minutes-ago`; then the rollup a close asks for. → the health written."
-  [eng seat model minutes-ago outcome]
+  `minutes-ago`; then the rollup a close asks for. `extra` is laid over
+  the sitting's document. → the health written."
+  [eng seat model minutes-ago outcome & [extra]]
   (let [started (.minusSeconds (java.time.Instant/now)
                                (* 60 (long minutes-ago)))]
     (store/with-tx (:storage eng)
       (fn [tx]
         (inv/insert-quiet!
          eng tx :sitting
-         {:seat (str (:id seat))
-          :model (str (:id model))
-          :member (seats/sitter-id seat)
-          :mode seats/default-mode
-          :started_at started
-          :ended_at (.plusSeconds started 60)
-          :input_tokens 0 :output_tokens 0
-          :cache_read_tokens 0
-          :cache_write_tokens 0
-          :turns 12 :transitions 0 :refusals 0
-          :served {:waymark_sit {:calls 1 :bytes 4000}}
-          :closed_by "door"
-          :cost_usd 0.5M
-          :outcome outcome
-          :flags []}
+         (merge {:seat (str (:id seat))
+                 :model (str (:id model))
+                 :member (seats/sitter-id seat)
+                 :mode seats/default-mode
+                 :started_at started
+                 :ended_at (.plusSeconds started 60)
+                 :input_tokens 0 :output_tokens 0
+                 :cache_read_tokens 0
+                 :cache_write_tokens 0
+                 :turns 12 :transitions 0 :refusals 0
+                 :served {:waymark_sit {:calls 1 :bytes 4000}}
+                 :closed_by "door"
+                 :cost_usd 0.5M
+                 :outcome outcome
+                 :flags []}
+                extra)
          {:principal seats/seats-actor
           :state :closed})))
     (seats/roll-health! eng (str (:id seat)))))
@@ -940,3 +942,157 @@
       (close-as! eng seat model 10 "cut_short")
       (is (nil? (get-in (stored) [:data :breaker_open])))
       (is (= 1 (count (tickets eng)))))))
+
+;; ── seat health 4: rows wait outside the grant (ticket fd930ff1) ────
+;;
+;; A seat whose walk comes up empty while rows of the kind it walks wait
+;; outside its scope entry's filter is told nothing of them, and its
+;; person is: the rule is on the seat row, the count in the ticket.
+
+(def ^:private post
+  "mcp_sit_test's queue, as much of it as a walk needs: it filters its
+  own queue by state, and `box` is filterable, so a scope entry narrows
+  a seat to one box and a post in another is outside its grant."
+  (r/resource
+   {:kind :post
+    :plural "posts"
+    :states [:queued :filed]
+    :initial :queued
+    :terminal #{:filed}
+    :summary "{data.subject} · {state}"
+    :schema
+    [:map
+     [:subject {:x-display {:label "What it is about"}}
+      [:string {:min 1 :max 120}]]
+     [:box {:x-display {:label "Which box"}} [:string {:min 1 :max 40}]]
+     [:received_at {:x-display {:label "When it arrived"}} :waymark/instant]]
+    :filterable {:state #{:eq :in} :box #{:eq}}
+    :default-filters {:state "queued"}
+    :sortable {:fields [:received_at] :default "received_at"}
+    :actions
+    {:file {:from #{:queued} :to :filed
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A filed post keeps its history."}}}}))
+
+(defn- post-engine []
+  (engine/engine {:storage (memory/storage)
+                  :resources [fx/meal groomers-ticket post]
+                  :oidc {:issuer issuer :audience audience :jwks jwks
+                         :app-url "https://app.test/"
+                         :delegate-clients {"connector" "Claude"}}}))
+
+(defn- open-post-seat!
+  "A seat that walks the post queue under its scope entry's filter: the
+  house's own box and no other. Its key is offered."
+  [eng]
+  (let [model (:row (inv/create! eng :model
+                                 {:name "close-test-model" :display "Close 1"
+                                  :vendor "anthropic" :tier "strong"
+                                  :price_input_per_mtok (:input prices)
+                                  :price_output_per_mtok (:output prices)
+                                  :price_cache_read_per_mtok (:cache_read prices)
+                                  :price_cache_write_per_mtok (:cache_write prices)}
+                                 {:principal person}))
+        seat (:row (inv/create!
+                    eng :seat
+                    {:name "post-clerk"
+                     :charter "Read each post and file it."
+                     :scope [{:kind "post" :actions ["file"]
+                              :filter {:box "house"}}]
+                     :walk "post"
+                     :held_for [(:id model)]
+                     :standing_ttl_seconds 604800
+                     :cadence_seconds 3600
+                     :budget_usd_per_week 5M
+                     :sitting_budget_tokens 60000}
+                    {:principal person}))]
+    (schedules/ensure-schedule! eng seat)
+    (inv/invoke! eng :seat (:id seat) :offer_key {:key a-key}
+                 {:principal person})
+    {:seat seat :model model}))
+
+(defn- post! [eng subject box]
+  (:row (inv/create! eng :post {:subject subject :box box
+                                :received_at "2026-09-18T07:00:00Z"}
+                     {:principal person})))
+
+(deftest the-walked-nothing-rule-wants-the-run-and-the-hidden-rows
+  (let [at (java.time.Instant/parse "2026-10-01T12:00:00Z")
+        nothing (fn [outcome] {:outcome outcome :flags [] :walked_nothing true})
+        breach (fn [sittings hidden]
+                 (seats/health-breach nil
+                                      (seats/seat-health sittings 0 at)
+                                      sittings
+                                      hidden))]
+    (is (= "walked_nothing_run" (breach (vec (repeat 3 (nothing "idle"))) 5)))
+    (is (nil? (breach (vec (repeat 3 (nothing "idle"))) 0))
+        "a queue that hides no row is only an empty queue")
+    (is (nil? (breach (vec (repeat 2 (nothing "idle"))) 5))
+        "two are no run yet")
+    (is (= "walked_nothing_run"
+           (breach [(nothing "cut_short") (nothing "idle") (nothing "cut_short")] 1))
+        "a hook closes such a wake within a few turns")
+    (is (nil? (breach [(nothing "idle") (nothing "idle") {:outcome "idle" :flags []}]
+                      5))
+        "an idle sitting that was handed rows is not of the run")))
+
+(deftest a-seat-that-walks-nothing-beside-hidden-rows-breaches-and-its-person-is-told
+  (let [eng (post-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-post-seat! eng)
+        seat-id (str (:id seat))
+        breach #(get-in (row-of eng :seat seat-id) [:data :health :breach])
+        hidden-ids (mapv #(str (:id (post! eng (str "Street post " %) "street")))
+                         (range 5))
+        nothing! #(close-as! eng seat model % "idle" {:walked_nothing true})]
+
+    (testing "the sitting's own answers carry no trace of the rows its grant hides"
+      (let [sat (sit! h (initialize! h))
+            sitting (row-of eng :sitting (:sitting sat))]
+        (is (empty? (get-in sat [:walk :rows])))
+        (is (true? (get-in sitting [:data :walked_nothing])))
+        (is (= "The queue held no rows under the walk's filter and the seat's grant."
+               (get-in sitting [:data :walked_nothing_why])))
+        (is (not-any? #(str/includes? (pr-str sat) %) hidden-ids))
+        (is (not (str/includes? (pr-str sat) "outside its grant")))))
+
+    (testing "two wakes that walked nothing are no run yet"
+      (nothing! 40)
+      (nothing! 30)
+      (is (nil? (breach)))
+      (is (empty? (tickets eng))))
+
+    (testing "the third is a breach, and the ticket tells the count and the kind"
+      (nothing! 20)
+      (let [[ticket :as filed] (tickets eng)
+            detail (str (get-in ticket [:data :detail]))]
+        (is (= "walked_nothing_run" (:rule (breach))))
+        (is (= 1 (count filed)))
+        (is (= "seat post-clerk health breach: walked_nothing_run"
+               (get-in ticket [:data :title])))
+        (is (str/starts-with?
+             detail
+             "post-clerk walked nothing 3 times while 5 queued posts sat outside its grant (box filter or scope)."))
+        (is (not-any? #(str/includes? detail %) hidden-ids)
+            "no row ids, only the count and the kind")
+        (is (= (str (:id ticket)) (:ticket (breach))))))
+
+    (testing "the seat row names the rule, and neither the count nor the rows"
+      (is (= #{:rule :at :ticket} (set (keys (breach))))))
+
+    (testing "a wake that submits ends the run and clears the breach"
+      (close-as! eng seat model 10 "submitted")
+      (is (nil? (breach)))
+      (is (= 1 (count (tickets eng)))))))
+
+(deftest a-seat-that-walks-nothing-with-no-hidden-rows-raises-no-breach
+  (let [eng (post-engine)
+        {:keys [seat model]} (open-post-seat! eng)
+        seat-id (str (:id seat))
+        filed (post! eng "Street post" "street")]
+    ;; a post that left the queue waits for nobody, in whichever box
+    (inv/invoke! eng :post (str (:id filed)) :file nil {:principal person})
+    (doseq [minutes-ago [40 30 20]]
+      (close-as! eng seat model minutes-ago "idle" {:walked_nothing true}))
+    (is (nil? (get-in (row-of eng :seat seat-id) [:data :health :breach])))
+    (is (empty? (tickets eng)))))
