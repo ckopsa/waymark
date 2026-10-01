@@ -620,6 +620,41 @@
         "the order is the security property: the why refuses before
          the hold mints anything")))
 
+;; ── the why is kept, and a cut says so (ticket e9f65194) ────────────
+
+(deftest a-long-why-is-kept-and-a-cut-ends-at-a-word-and-says-so
+  (let [w (world)
+        said (str/join " " (repeat 200 "refill"))
+        held! (fn [why]
+                (let [out (tool! w "waymark_power"
+                                 {:tool "emila__send"
+                                  :arguments {:to "otto@example.test"
+                                              :text "On my way."
+                                              :why why}})]
+                  (:data (held-row w (str (:held_call (doc-of out)))))))]
+
+    (testing "a 400-character why is stored whole"
+      (let [why (subs said 0 400)
+            data (held! why)]
+        (is (= 400 (count why)))
+        (is (= why (:why data)))
+        (is (false? (:why_cut data)))))
+
+    (testing "a 1200-character why is cut at a word, marked, and flagged"
+      (let [why (subs said 0 1200)
+            data (held! why)
+            stored (str (:why data))
+            body (subs stored 0 (max 0 (dec (count stored))))]
+        (is (= 1200 (count why)))
+        (is (<= (count stored) 1000))
+        (is (str/ends-with? stored "…"))
+        (is (str/starts-with? why body)
+            "what is kept is the caller's own words, from the start")
+        (is (str/ends-with? body "refill") "the last word is whole")
+        (is (= \space (nth why (count body)))
+            "and the cut fell on the space after it")
+        (is (true? (:why_cut data)))))))
+
 ;; ── the office the call was made in ─────────────────────────────────
 
 (deftest a-held-call-names-the-sitting-the-session-sat-in
