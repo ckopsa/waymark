@@ -644,6 +644,16 @@
                    :label "What the GitHub source could not read"
                    :help "The status and the route of the last pass that could not read this repository's pull requests, and when. Empty when the last pass read them."}}
     [:maybe [:string {:max 500}]]]
+   ;; the GitHub source's cursor for this repository (ticket c07b581f):
+   ;; stored, so a boot starts where the last pass stopped and does not
+   ;; read every pull request again
+   [:forge_cursor {:optional true
+                   :examples ["2026-10-01T20:32:00Z"]
+                   :x-display
+                   {:raw true
+                    :label "Pull requests read up to"
+                    :help "The newest change GitHub showed the source in this repository. The next pass asks for what moved after it."}}
+    [:maybe [:string {:max 64}]]]
    ;; the base branch's own state (ticket ade81ae9), so a person reads
    ;; whether main is red without opening GitHub
    [:base_state {:optional true

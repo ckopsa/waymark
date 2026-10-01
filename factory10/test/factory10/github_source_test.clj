@@ -257,6 +257,9 @@
         refused? (atom false)
         pull-reads #(filterv (fn [q] (= (str "/repos/" repo "/pulls/31") (:path q)))
                              (gh/requests state))]
+    ;; the repository is one the source has read: a first read lists the
+    ;; open pull requests only (ticket c07b581f), and this one merges after
+    (pass! r)
     (gh/seed-pull! state repo merged {:files the-files :reviews the-reviews})
     (let [census (with-redefs [forge/move-change!
                                (fn [& args]
@@ -271,7 +274,7 @@
 
     ;; the cursor moves past the pull request, and its head moves on
     ;; without a new stamp, so the listing no longer answers it
-    (reset! (:cursor source) "2026-09-18T16:00:00Z")
+    (swap! (:cursor source) assoc repo "2026-09-18T16:00:00Z")
     (gh/seed-pull! state repo (assoc-in merged [:head :sha] a-later-head)
                    {:files the-files :reviews the-reviews})
 
@@ -837,6 +840,96 @@
       (is (= "2026-09-18T10:00:00Z" (gh/cursor source))
           "the cursor advances only when every repository answered"))))
 
+;; ── one cursor for each repository, and stored (ticket c07b581f) ────
+
+(defn- pull-at [n at]
+  {:number n :state "open" :title (str "pull " n)
+   :user {:login "ckopsa"} :base {:ref "main"}
+   :head {:ref (str "b" n) :sha (str "sha" n)}
+   :updated_at at :labels []})
+
+(defn- a-cursor-store
+  "A cursor store as the wiring's, over a map a second source reads."
+  []
+  (let [kept (atom {})]
+    {:kept kept
+     :load (fn [repository] (get @kept repository))
+     :save! (fn [repository cursor] (swap! kept assoc repository cursor))}))
+
+(def ^:private the-bench-repo "ckopsa/bench")
+
+(deftest a-source-built-again-starts-at-the-stored-cursor
+  (let [state (gh/fake-state)
+        store (a-cursor-store)
+        opts {:repos [repo the-bench-repo] :store store}]
+    (gh/seed-pull! state repo (pull-at 1 "2026-09-18T10:00:00Z"))
+    (gh/seed-pull! state repo (pull-at 2 "2026-09-18T12:00:00Z"))
+    (gh/seed-pull! state the-bench-repo (pull-at 3 "2026-09-18T11:00:00Z"))
+    (forge/forge-poll (gh/fake-source state opts))
+    (is (= {repo "2026-09-18T12:00:00Z" the-bench-repo "2026-09-18T11:00:00Z"}
+           @(:kept store))
+        "each repository's cursor is written after its own read")
+    (let [before (count (gh/requests state))
+          answer (forge/forge-poll (gh/fake-source state opts))
+          asked (drop before (gh/requests state))
+          listing? #(re-matches #"/repos/[^/]+/[^/]+/pulls" (str (:path %)))
+          paths (mapv :path asked)]
+      (is (= [(str "/repos/" repo "/pulls")
+              (str "/repos/" the-bench-repo "/pulls")]
+             (mapv :path (filter listing? asked)))
+          "one listing call for each repository")
+      (is (every? #(= "all" (get-in % [:params :state])) (filter listing? asked))
+          "and it is the window's listing, not a first read")
+      (is (not-any? #{(str "/repos/" repo "/pulls/1")} paths)
+          "a pull request behind the window is not read again")
+      (is (= #{"github:ckopsa/waymark#2" "github:ckopsa/bench#3"}
+             (set (map :change_id (:changes answer))))
+          "only the ones inside the five minutes are seen again"))))
+
+(deftest a-repository-that-does-not-answer-holds-only-its-own-cursor
+  (let [state (gh/fake-state)
+        store (a-cursor-store)
+        source (gh/fake-source state {:repos [repo the-bench-repo]
+                                      :store store})]
+    (gh/seed-pull! state repo (pull-at 1 "2026-09-18T10:00:00Z"))
+    (gh/seed-pull! state the-bench-repo (pull-at 2 "2026-09-18T09:00:00Z"))
+    (gh/refuse! state the-bench-repo 403)
+    (let [answer (forge/forge-poll source)]
+      (is (false? (:complete? answer)))
+      (is (= [repo] (:answered answer)))
+      (is (= "2026-09-18T10:00:00Z" (gh/cursor source repo))
+          "the repository that answered moves its cursor")
+      (is (nil? (gh/cursor source the-bench-repo))
+          "the one that did not keeps its own")
+      (is (= {repo "2026-09-18T10:00:00Z"} @(:kept store))))
+    (gh/refuse! state the-bench-repo nil)
+    (let [before (count (gh/requests state))
+          answer (forge/forge-poll source)
+          asked (drop before (gh/requests state))]
+      (is (true? (:complete? answer)))
+      (is (= "2026-09-18T09:00:00Z" (gh/cursor source the-bench-repo)))
+      (is (= "all" (:state (:params (first asked))))
+          "and the first one is read from its window, not from nothing"))))
+
+(deftest a-new-repository-is-first-read-for-its-open-pull-requests
+  (let [state (gh/fake-state)
+        source (gh/fake-source state)
+        listings (fn [] (filterv #(= (str "/repos/" repo "/pulls") (:path %))
+                                 (gh/requests state)))]
+    (gh/seed-pull! state repo (pull-at 1 "2026-09-18T10:00:00Z"))
+    (gh/seed-pull! state repo (assoc (pull-at 2 "2026-09-18T11:00:00Z")
+                                     :state "closed"
+                                     :merged_at "2026-09-18T11:00:00Z"))
+    (let [answer (forge/forge-poll source)]
+      (is (= ["open"] (mapv #(get-in % [:params :state]) (listings))))
+      (is (= ["github:ckopsa/waymark#1"] (mapv :change_id (:changes answer)))
+          "what merged before the house read the repository is not mirrored")
+      (is (not-any? #{(str "/repos/" repo "/pulls/2")}
+                    (map :path (gh/requests state)))))
+    (testing "with a cursor the listing follows merges and closes again"
+      (forge/forge-poll source)
+      (is (= ["open" "all"] (mapv #(get-in % [:params :state]) (listings)))))))
+
 ;; ── check runs refused (a private repository) ───────────────────────
 ;;
 ;; A fine-grained token cannot hold `Checks`, so on a PRIVATE repository
@@ -988,6 +1081,32 @@
   [engine repository]
   (:row (inv/create! engine :repo_policy {:repository repository}
                      {:principal a-person})))
+
+(deftest the-cursor-is-kept-on-the-policy-row
+  ;; ticket c07b581f
+  (let [{:keys [state engine]} (rig)
+        policy (policy! engine repo)
+        on-the-row #(get-in (first (bench/policies engine :active))
+                            [:data :forge_cursor])]
+    (testing "no stored cursor and no change is no cursor"
+      (is (nil? ((:load (forge/cursor-store engine)) repo))))
+    (testing "a pass writes the repository's cursor on its policy"
+      (pass! {:source (gh/fake-source state {:store (forge/cursor-store engine)})
+              :engine engine})
+      (is (= "2026-09-18T12:00:00Z" (on-the-row))))
+    (testing "a source built again reads it back"
+      (let [again (gh/fake-source state {:store (forge/cursor-store engine)})
+            before (count (gh/requests state))]
+        (forge/forge-poll again)
+        (is (= "all" (get-in (first (drop before (gh/requests state)))
+                             [:params :state])))
+        (is (= "2026-09-18T12:00:00Z" (gh/cursor again repo)))))
+    (testing "a row with none is seeded from the newest stored change"
+      (bench/mark-row! engine :repo_policy (str (:id policy))
+                       {:forge_cursor nil} #{})
+      (let [seed ((:load (forge/cursor-store engine)) repo)]
+        (is (some? seed))
+        (is (= seed (on-the-row)) "and written, so the next boot reads it")))))
 
 (deftest the-source-polls-the-repositories-the-active-rows-name
   (let [state (gh/fake-state)

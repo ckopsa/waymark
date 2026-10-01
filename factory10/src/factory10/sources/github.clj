@@ -51,9 +51,18 @@
   and a listing that shows a new pull request late (PR #499 never
   appeared inside a sixty-second overlap); re-seeing a handful of pull
   requests costs nothing, because
-  the pass writes a fact only when the fact moved. The cursor advances
-  only when every configured repository answered, so a failure in the
-  middle of a pass makes the next pass re-read rather than skip.
+  the pass writes a fact only when the fact moved.
+
+  ONE CURSOR FOR EACH REPOSITORY, AND IT IS STORED (ticket c07b581f).
+  A repository's cursor advances when THAT repository answered, so one
+  that fails re-reads its own window at the next pass and costs no
+  other repository its window. The source is handed a `store` — `:load`
+  and `:save!`, which the wiring keeps on the `repo_policy` row — and
+  reads it once for each repository in a boot, so a restart starts
+  where the last pass stopped. A repository with no cursor at all is
+  one the house has never read: its first listing asks for `state=open`
+  only, because the pull requests merged and closed before then are
+  not the house's to mirror.
 
   IDENTITY is `github:owner/repo#number` for a change and
   `github:owner/repo/check-run/{id}` for a ci_run. Both are unique
@@ -296,8 +305,9 @@
 
 (defn window-start
   "The cursor as the window's floor: sixty seconds behind it, so a
-  write GitHub stamped a hair before the last read is not lost. nil
-  cursor reads everything — the first pass reads the world once."
+  write GitHub stamped a hair before the last read is not lost. A nil
+  cursor has no floor: the repository was never read, and its first
+  listing asks for the open pull requests only."
   [cursor]
   (some-> ^Instant (->instant cursor) (.minusSeconds overlap-seconds)))
 
@@ -431,11 +441,15 @@
 (defn- list-pulls!
   "The pull requests that moved, newest first, stopping at the window's
   floor. `state=all` because a merge and a close are moves this mirror
-  must follow, not rows it may drop."
+  must follow, not rows it may drop. No floor is a repository this
+  source has never read, and that one read asks for `state=open`: what
+  merged or closed before it is not the house's to mirror (ticket
+  c07b581f)."
   [this repo floor]
   (loop [page 1, out []]
     (let [items (vec (call! this "GET" (str "/repos/" repo "/pulls")
-                            {:params {:state "all" :sort "updated"
+                            {:params {:state (if floor "all" "open")
+                                      :sort "updated"
                                       :direction "desc"
                                       :per_page page-size :page page}}))
           fresh (if floor
@@ -788,18 +802,51 @@
             (warn! no-repositories-said))
           named))))
 
-(defrecord GitHubSource [call repos-fn cursor calls said actions-only retry]
+(defn- cursor-of!
+  "One repository's cursor: the one this source holds, else the stored
+  one, read once for each repository in a boot (ticket c07b581f). nil
+  is a repository nobody has read yet."
+  [{:keys [cursor store]} repo]
+  (let [held @cursor]
+    (if (contains? held repo)
+      (get held repo)
+      (let [stored (when-some [load (:load store)] (word (load repo)))]
+        (swap! cursor assoc repo stored)
+        stored))))
+
+(defn- move-cursor!
+  "The repository's cursor after its own read, held here and written to
+  the store when it moved. A store that will not take the write costs
+  the next boot a wider window, never this pass."
+  [{:keys [cursor store]} repo stood updates]
+  (let [moved (high-water stood updates)]
+    (when (not= moved stood)
+      (swap! cursor assoc repo moved)
+      (when-some [save! (:save! store)]
+        (try (save! repo moved)
+             (catch Exception e
+               (warn! "the cursor of " repo " was not stored ("
+                      (ex-message e) ")")))))))
+
+(defrecord GitHubSource [call repos-fn cursor calls said actions-only retry
+                         store]
   forge/ForgeSource
   (forge-poll [this]
     (reset! calls 0)
     (reset! actions-only #{})
-    (let [floor (window-start @cursor)
-          pending (first (reset-vals! retry {}))
+    (let [pending (first (reset-vals! retry {}))
           repos (repos-now this)
           answers (mapv (fn [repo]
-                          (try (assoc (repo-pass! this repo floor
-                                                  (get pending repo))
-                                      :repo repo :ok? true)
+                          ;; each repository reads from its OWN cursor
+                          ;; and moves it when it answered, so one that
+                          ;; throws holds no other repository's window
+                          (try (let [stood (cursor-of! this repo)
+                                     answer (repo-pass! this repo
+                                                        (window-start stood)
+                                                        (get pending repo))]
+                                 (move-cursor! this repo stood
+                                               (:updates answer))
+                                 (assoc answer :repo repo :ok? true))
                                (catch Exception e
                                  (warn! "the repository " repo
                                         " did not answer (" (ex-message e)
@@ -814,10 +861,6 @@
                         repos)
           answered (filterv :ok? answers)
           complete? (= (count answered) (count answers))]
-      ;; the cursor moves only when EVERY repository answered, so a
-      ;; failure in the middle of a pass re-reads rather than skips
-      (when complete?
-        (reset! cursor (high-water @cursor (mapcat :updates answered))))
       ;; a retry whose repository did not answer waits for the next pass
       (swap! retry #(merge-with into %
                                 (apply dissoc pending (map :repo answered))))
@@ -976,16 +1019,19 @@
   config: :token-fn (a zero-arg token source) or :token (the word
   itself), :repos-fn (a zero-arg function → the repositories to read,
   asked at every pass) or :repos (a static comma-separated string or
-  seq), :base (the API base, for a test that wants a local server)."
-  [{:keys [token token-fn base] :as config}]
+  seq), :base (the API base, for a test that wants a local server),
+  :store (where each repository's cursor is kept across boots: `:load`,
+  repository → cursor or nil, and `:save!`, repository and cursor)."
+  [{:keys [token token-fn base store] :as config}]
   (->GitHubSource (http-call {:token-fn (or token-fn (constantly token))
                               :base base})
                   (repos-fn-of config)
-                  (atom nil)
+                  (atom {})
                   (atom 0)
                   (atom false)
                   (atom #{})
-                  (atom {})))
+                  (atom {})
+                  store))
 
 (defn from-env
   "The deployed boundary off FACTORY10_GITHUB_TOKEN. nil when the token
@@ -995,12 +1041,15 @@
   `repos-fn` is the wiring's own reading of the active `repo_policy`
   rows (R-5). A source built without one falls back to the proving
   ground's repository, which is what a boot with no engine behind it
-  can honestly say."
+  can honestly say. `store` is the wiring's cursor store on those same
+  rows (ticket c07b581f); without one the cursors live in memory and a
+  boot starts each repository at its open pull requests."
   ([] (from-env #(System/getenv ^String %)))
   ([env] (from-env env nil))
-  ([env repos-fn]
+  ([env repos-fn] (from-env env repos-fn nil))
+  ([env repos-fn store]
    (when-some [token (word (env "FACTORY10_GITHUB_TOKEN"))]
-     (http-source {:token token :repos-fn repos-fn}))))
+     (http-source {:token token :repos-fn repos-fn :store store}))))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 ;;
@@ -1117,9 +1166,10 @@
   (:labels @state))
 
 (defn cursor
-  "The source's cursor — the highest `updated_at` it has seen."
-  [source]
-  @(:cursor source))
+  "The source's cursor — the highest `updated_at` it has seen in any
+  repository, or with a repository named, that repository's own."
+  ([source] (high-water nil (vals @(:cursor source))))
+  ([source repo] (get @(:cursor source) repo)))
 
 (def ^:private pulls-path #"/repos/([^/]+/[^/]+)/pulls")
 (def ^:private pull-path #"/repos/([^/]+/[^/]+)/pulls/(\d+)")
@@ -1187,7 +1237,11 @@
               (throw (ex-info "no such pull request" {:status 404}))))
 
         (re-matches pulls-path path)
-        (newest-first (vals (:pulls (repo-of (re-matches pulls-path path)))))
+        (newest-first
+         (cond->> (vals (:pulls (repo-of (re-matches pulls-path path))))
+           ;; `state=open` is GitHub's own filter; `all` drops nothing
+           (= "open" (str (:state params)))
+           (filter #(= "open" (str (:state % "open"))))))
 
         (re-matches checks-path path)
         (let [m (re-matches checks-path path)]
@@ -1259,13 +1313,16 @@
 
   opts: :repos (a static list, default ckopsa/waymark), :repos-fn (the
   deployed spelling — a function asked at every pass), :cursor (a
-  starting cursor, for the window's own test)."
+  starting cursor for every repository, for the window's own test),
+  :store (a cursor store as the wiring's, for the restart's test)."
   ([state] (fake-source state {}))
-  ([state {:keys [cursor] :as opts}]
+  ([state {:keys [cursor store] :as opts}]
    (->GitHubSource (fake-call state)
                    (repos-fn-of opts)
-                   (atom cursor)
+                   (atom {})
                    (atom 0)
                    (atom false)
                    (atom #{})
-                   (atom {}))))
+                   (atom {})
+                   (or store
+                       (when cursor {:load (constantly cursor)})))))

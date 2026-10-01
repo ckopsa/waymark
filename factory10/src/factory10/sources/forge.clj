@@ -132,7 +132,8 @@
     document carries the `ci_run` kind's own fields plus
     `:change_id` (the change it ran on) and whatever the forge needs
     to find the log later. `:complete?` is false when a repository
-    did not answer; the source holds its cursor where it was. A source
+    did not answer; the source holds that repository's cursor where it
+    was, and moves the cursor of each one that answered. A source
     may also answer `:answered` (the repositories that did answer) and
     `:refusals` ({repository {:status :route}} for each whose pulls
     listing refused the token), which the pass writes on the policy
@@ -1756,6 +1757,51 @@
     (inv/invoke! eng :ticket id :note_red
                  {:red_head (red-head-line head names)} (base-opts))
     id))
+
+;; THE SOURCE'S CURSOR, KEPT ON THE POLICY (ticket c07b581f). The GitHub
+;; source holds one cursor for each repository and loses them at a
+;; restart, and a source with no cursor reads a repository from its
+;; beginning. So the cursor is written on the repository's own
+;; `repo_policy` row with a maintenance write, as `base_checked_at` is,
+;; and a boot reads it back. A row that carries none yet is seeded from
+;; the newest stored change of that repository, so the first boot with
+;; this field does not read the world either; a repository with no
+;; change at all answers nil, and the source reads its open pull
+;; requests only.
+
+(defn- active-policy-of [eng repo]
+  (first (filter #(= (str repo) (some-> (get-in % [:data :repository]) str))
+                 (bench/policies eng :active))))
+
+(defn- newest-change-stamp
+  "When the newest stored change of this repository was last written,
+  or nil when the repository has none."
+  [eng repo]
+  (let [st (:storage eng)]
+    (some-> (store/with-tx st
+              (fn [tx] (first (store/query-rows st tx :change
+                                                {:repository (str repo)}
+                                                {:limit 1
+                                                 :order-by :updated_at
+                                                 :newest-first true}))))
+            :updated-at str not-empty)))
+
+(defn cursor-store
+  "Where the GitHub source keeps each repository's cursor across boots:
+  → {:load (fn [repo]) :save! (fn [repo cursor])}, over the active
+  `repo_policy` rows of this engine."
+  [eng]
+  (let [save! (fn [repo cursor]
+                (when-some [policy (active-policy-of eng repo)]
+                  (bench/mark-row! eng :repo_policy (str (:id policy))
+                                   {:forge_cursor (str cursor)} #{})))]
+    {:load (fn [repo]
+             (or (some-> (active-policy-of eng repo)
+                         (get-in [:data :forge_cursor]) str not-empty)
+                 (when-some [seed (newest-change-stamp eng repo)]
+                   (save! repo seed)
+                   seed)))
+     :save! save!}))
 
 (defn- blank->nil [v] (some-> v str not-empty))
 

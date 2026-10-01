@@ -466,6 +466,7 @@
                :merge_wait_seconds :rounds_per_change :merge_strategy
                :train_size :formatter :deny
                :test :check :orientation :enrolled_at :note :source_note
+               :forge_cursor
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
@@ -483,7 +484,7 @@
            state as the source last read it (ticket ade81ae9), and the
            house's merge line as the merge pass last wrote it (ticket
            b85aded5)")
-      (is (= #{:enrolled_at :note :source_note
+      (is (= #{:enrolled_at :note :source_note :forge_cursor
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
