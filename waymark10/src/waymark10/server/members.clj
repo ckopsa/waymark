@@ -768,6 +768,17 @@
                                     :label "Acts for"
                                     :help "The person this agent acts for — the identity a connector's token named when the gate first saw it. Written by the identity gate, never by hand; empty for people and for agents holding their own key."}}
              [:maybe [:string {:max 256}]]]
+            ;; the zone this member's own local times are read in
+            ;; (docs/spec-scheduled-actions.md R-7.2). The quiet hours
+            ;; keep a zone of their own inside :notify; this one is the
+            ;; person's, and a scheduled action written as a local time
+            ;; with no zone reads it. Absent = no zone: the engine
+            ;; never guesses UTC.
+            [:zone {:optional true
+                    :x-display {:raw true
+                                :label "Time zone"
+                                :help "The IANA zone this person's local times are read in, e.g. America/Denver. A scheduled action written as a local time with no zone of its own uses it."}}
+             [:maybe [:string {:max 64}]]]
             ;; how a notice_rule reaches this member (R-2). Absent =
             ;; never told: a rule skips and counts. Set by :set_notify.
             [:notify {:optional true

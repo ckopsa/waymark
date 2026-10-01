@@ -274,7 +274,7 @@
         ;; read the answer to is not an ask
         (is (= ["approval_request"
                 "grant" "held_call" "job"
-                "sitting" "verdict"]
+                "scheduled_action" "sitting" "verdict"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))
           "the domain stays concealed")

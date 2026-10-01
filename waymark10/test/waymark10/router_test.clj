@@ -124,7 +124,9 @@
     (is (= ["approval_request" "attachment" "definition"
             "grant" "held_call" "invitation" "job" "judgment" "mcp_server" "meal"
             "member" "model" "notice_rule" "notifier"
-            "plan" "role" "runner_link" "runner_provider" "schedule" "seat"
+            "plan" "role" "runner_link" "runner_provider" "schedule"
+            ;; docs/spec-scheduled-actions.md R-1: a call stored for a time
+            "scheduled_action" "seat"
             "sitting" "subscription" "task"
             ;; docs/spec-transcript.md: and what a sitting said, one
             ;; row per sitting and one per line, core's beside the
