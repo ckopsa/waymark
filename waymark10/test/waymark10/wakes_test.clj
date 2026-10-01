@@ -1028,6 +1028,136 @@
 
     (seat-do! seat :retire)))
 
+;; ── 8a · the close judges the count wakes again ─────────────────────
+;;
+;; Ticket 668a845d. A seat that takes one row per sitting writes a
+;; verdict, not the row it counted, so nothing of the counted kind
+;; follows its close. The close itself is the evaluation point.
+
+(defn- nth-sitting!
+  "`sitting!`, with a model of its own for each run of one seat."
+  [seat-id n]
+  (:id (:row (inv/create! *eng* :sitting
+                          {:seat (str seat-id)
+                           :model (str (model! (str "model-for-" seat-id "-" n)))
+                           :grant (str (grant!))}
+                          {:principal clerk}))))
+
+(defn- counting-seat!
+  "A linked seat counting one batch's open items as they are created,
+  its first run already released by the close of a sitting that was
+  open while two items arrived. → {:seat :token :ids}."
+  [nm batch interval wn fn' entry-extra]
+  (let [linked (linked-seat! nm
+                             {:scope count-scope
+                              :wake_on [(merge {:kind "wake_item"
+                                                :actions ["create"]
+                                                :filter {:batch batch}}
+                                               entry-extra)]
+                              :fire_interval_seconds interval}
+                             fn')
+        first-run (nth-sitting! (:seat linked) 1)
+        ids (vec (repeatedly 2 #(item! batch)))]
+    (drain-wakes! wn)
+    (close-sitting! first-run)
+    (drain-wakes! wn)
+    (assoc linked :ids ids)))
+
+(deftest a-count-wake-is-judged-again-when-a-sitting-closes
+  (let [wn :wake-count-close
+        fn' :wake-count-close-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token ids]}
+        (counting-seat! "countcloseclerk" "count-close" 1 wn fn'
+                        {:at_least 1})]
+
+    (testing "the two creates waited on the open sitting, and its close
+              released them as one fire"
+      (is (= 1 (count (seat-fires seat))))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (testing "a run that takes one row and closes is fired again, since
+              one row is still waiting"
+      (let [run (nth-sitting! seat 2)]
+        (item-do! (first ids) :complete)
+        (drain-wakes! wn)
+        (is (not (get-in (sched-of seat) [:data :wake_pending]))
+            "a completion is not an action the entry counts")
+        (Thread/sleep 1200)
+        (close-sitting! run)
+        (drain-wakes! wn)
+        (let [ts (seat-fires seat)]
+          (is (= 2 (count ts)))
+          (is (nil? (get-in (last ts) [:inputs :text]))
+              "the fire names no row"))
+        (drain-fires! fn')
+        (is (= 2 (count (fires-of token))))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+    (testing "a close with the queue empty fires nothing"
+      (let [run (nth-sitting! seat 3)]
+        (item-do! (second ids) :complete)
+        (drain-wakes! wn)
+        (Thread/sleep 1200)
+        (close-sitting! run)
+        (drain-wakes! wn)
+        (is (= 2 (count (seat-fires seat))))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+    (seat-do! seat :retire)))
+
+(deftest a-close-inside-the-gap-holds-the-count-wake-until-it-lifts
+  (let [wn :wake-count-close-gap
+        fn' :wake-count-close-gap-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat ids]}
+        (counting-seat! "countgapclerk" "count-close-gap" 2 wn fn'
+                        {:at_least 1})
+        run (nth-sitting! seat 2)]
+    (item-do! (first ids) :complete)
+    (drain-wakes! wn)
+    (close-sitting! run)
+    (drain-wakes! wn)
+
+    (testing "the close inside fire_interval_seconds fires nothing, and
+              the wake waits on the schedule row"
+      (is (= 1 (count (seat-fires seat))))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (testing "once the gap has passed, the sweep fires it"
+      (Thread/sleep 2200)
+      (wakes/sweep-pending! *eng*)
+      (let [ts (seat-fires seat)]
+        (is (= 2 (count ts)))
+        (is (nil? (get-in (last ts) [:inputs :text]))))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (seat-do! seat :retire)))
+
+(deftest a-close-replays-no-transition-wake
+  (let [wn :wake-transition-close
+        fn' :wake-transition-close-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (counting-seat! "transitioncloseclerk" "transition-close" 1 wn fn'
+                        {})
+        run (nth-sitting! seat 2)]
+    (is (= 1 (count (seat-fires seat)))
+        "the match the open sitting held is released, as it always was")
+
+    (testing "a seat with no count wake is not fired by a later close,
+              though rows of the kind it watches are still open"
+      (Thread/sleep 1200)
+      (close-sitting! run)
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (seat-do! seat :retire)))
+
 ;; ── 9 · the entry's filter decides what is counted ──────────────────
 
 (deftest a-count-wake-counts-only-the-rows-its-filter-names
