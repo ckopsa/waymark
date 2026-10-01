@@ -246,6 +246,44 @@
     (inv/invoke! eng :chore (str c) :reopen {} {:principal person})
     (is (nil? (refusal #(invite! eng c {}))) "reopened, it takes the door again")))
 
+(deftest an-invitation-to-restate-a-seat-held-for-a-model-is-created
+  (let [eng (fresh-engine)
+        model (:row (inv/create! eng :model
+                                 {:name "invited-frontier"
+                                  :display "invited-frontier"
+                                  :vendor "anthropic"
+                                  :tier "frontier"
+                                  :price_input_per_mtok 3M
+                                  :price_output_per_mtok 15M
+                                  :price_cache_read_per_mtok 0.3M
+                                  :price_cache_write_per_mtok 3.75M}
+                                 {:principal person}))
+        scope [{:kind "model" :actions ["retire"]}]
+        seat (:row (inv/create! eng :seat
+                                {:name "invited-seat"
+                                 :charter "Decide whether a message asks something of this house."
+                                 :scope scope
+                                 :standing_ttl_seconds 604800
+                                 :cadence_seconds 3600
+                                 :budget_usd_per_week 5M
+                                 :sitting_budget_tokens 60000
+                                 :held_for [(:id model)]}
+                                {:principal person}))
+        why (refusal #(inv/create! eng :invitation
+                                   {:subject "colton"
+                                    :self (str "/api/seats/" (:id seat))
+                                    :action "restate"
+                                    :fields ["scope"]
+                                    :suggest {:scope scope}
+                                    :note "Restate the scope here."}
+                                   {:principal planner
+                                    :grant (grant-seeing (:id seat))}))]
+    (is (= [(str (:id model))]
+           (mapv str (get-in (row-of eng :seat (:id seat)) [:data :held_for])))
+        "the seat is held for a model, so an empty restate would drop it")
+    (is (nil? why)
+        "a guard judging the restate's input is no reason: nobody has typed it yet")))
+
 (deftest the-summary-names-the-subject
   (let [eng (fresh-engine)
         m (:row (inv/create! eng :member {:display "Colton Kopsa" :actor_type "human"}

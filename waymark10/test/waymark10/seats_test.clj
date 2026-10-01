@@ -545,6 +545,11 @@
         (is (= [(:id frontier)]
                (get-in (row-of :seat (:id seat)) [:data :held_for]))
             "and the seat is still held for the model it was")))
+    (testing "a restate that clears held_for with no note is refused"
+      (let [p (refusal #(restate! (:id seat) (restate-body {})))]
+        (is (= :step-carries-a-note (:guard p)))
+        (is (= [(:id frontier)]
+               (get-in (row-of :seat (:id seat)) [:data :held_for])))))
     (testing "everything else about the seat moves without one"
       (restate! (:id seat) (restate-body {:held_for [(:id frontier)]
                                           :cadence_seconds 7200}))
