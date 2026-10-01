@@ -74,7 +74,10 @@ async function presenceBeat() {
      :curtain) is the law, and holds for clients that ignore this */
   if (localStorage.getItem("wm10.curtain")) return;
   const here = hereHref();
-  if (!principalId() || !here.startsWith("/api/")) return;
+  /* the viewer, not the dev box: a person signed in by session cookie
+     beats too — the server resolves the cookie, and principalHeaders
+     adds the dev header only when the box holds a value */
+  if (!viewerId() || !here.startsWith("/api/")) return;
   /* share my screen (200-events-follow.js): the ui part rides the beat
      only while this tab's toggle is on; turning it off sends one empty
      part, so followers stop seeing what was last shared */
