@@ -138,7 +138,7 @@
                (not (some #{:principal :grant} (:reads denier))))
       (or reason (str "`" (name action) "` is not open on that row now.")))))
 
-(defn- subject-name
+(defn subject-name
   "The subject's display name, as its member row labels it; the raw
   id when no member row carries that id."
   [subject ctx]
@@ -146,6 +146,58 @@
               (apply [:member (str subject)])
               (get-in [:data :display]))
       (str subject)))
+
+(defn sight-problem
+  "Why the author's own grant cannot point at the step `inp` names; nil
+  when it can. What the row can take NOW is not judged here: the
+  invitation's create adds that, and a walkthrough's step waits for it
+  until the step opens (docs/spec-walkthrough.md § 1)."
+  [inp ctx]
+  (let [{:keys [rdef id action door] :as step} (step-of inp ctx)
+        k (:kind rdef)
+        p (:principal ctx)
+        gr (:grant ctx)]
+    (cond
+      (nil? step)
+      "`self` must be a row's path, /api/<plural>/<id>, of a kind this engine serves."
+
+      (nil? door)
+      (str "`" (name action) "` is not a door of " (name k) ".")
+
+      ;; one sentence for all three, so a refusal never says
+      ;; whether a row the author cannot see exists
+      (or (and (some? gr)
+               (not (and ((:action? gr) k action) ((:row? gr) k id))))
+          (and (nil? gr) (= :agent (:type p)))
+          (nil? ((:read ctx) k id)))
+      "your grant does not see that row or does not admit that door.")))
+
+(defn fields-problem
+  "Why the arguments `inp` names cannot be shown to a person; nil when
+  they can, and nil when the step does not resolve, because
+  `sight-problem` says that."
+  [inp ctx]
+  (let [{:keys [action door]} (step-of inp ctx)
+        entries (some-> (:input door) schema/entry-map)
+        names (named-fields inp)
+        suggest (:suggest inp)]
+    (cond
+      (nil? door) nil
+
+      (and (some? (:field inp)) (some? (:fields inp)))
+      "name `fields`, or `field` alone for a list of one, and not both."
+
+      (empty? names)
+      "name at least one argument, in `fields` or in `field`."
+
+      :else
+      ;; one bad name refuses the whole create, and the refusal names it
+      (or (some #(argument-problem entries action "" %) names)
+          (when (map? suggest)
+            (some #(argument-problem entries action
+                                     ", a key of `suggest`,"
+                                     (arg-name %))
+                  (keys suggest)))))))
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
@@ -159,27 +211,10 @@
   (if (nil? (:rdef-of ctx))
     ;; no registry in scope (a render probe): the write path carries it
     (t/allow)
-    (let [{:keys [rdef id action door] :as step} (step-of inp ctx)
-          k (:kind rdef)
-          p (:principal ctx)
-          gr (:grant ctx)]
-      (cond
-        (nil? step)
-        (t/deny {:vars {:problem "`self` must be a row's path, /api/<plural>/<id>, of a kind this engine serves."}})
-
-        (nil? door)
-        (t/deny {:vars {:problem (str "`" (name action) "` is not a door of " (name k) ".")}})
-
-        ;; one sentence for all three, so a refusal never says
-        ;; whether a row the author cannot see exists
-        (or (and (some? gr)
-                 (not (and ((:action? gr) k action) ((:row? gr) k id))))
-            (and (nil? gr) (= :agent (:type p)))
-            (nil? ((:read ctx) k id)))
-        (t/deny {:vars {:problem "your grant does not see that row or does not admit that door."}})
-
-        :else
-        (if-some [why (some->> ((:read ctx) k id)
+    (if-some [problem (sight-problem inp ctx)]
+      (t/deny {:vars {:problem problem}})
+      (let [{:keys [rdef id action]} (step-of inp ctx)]
+        (if-some [why (some->> ((:read ctx) (:kind rdef) id)
                                (#(shut-now rdef action % ctx)))]
           (t/deny {:vars {:problem (str "the row cannot take `" (name action)
                                         "` now: " why)}})
@@ -192,30 +227,10 @@
    :open "The fields are the action's own input schema; name arguments of it that are not secret, in `fields` or in `field` alone, and suggest values only for such arguments."
    :explain "An invitation points at arguments of the action a person may be shown: {problem}"}
   [_row inp ctx]
-  (let [{:keys [action door]} (step-of inp ctx)
-        entries (some-> (:input door) schema/entry-map)
-        names (named-fields inp)
-        suggest (:suggest inp)]
-    (cond
-      ;; the step does not resolve: the-author-sees-the-step says so
-      (nil? door) (t/allow)
-
-      (and (some? (:field inp)) (some? (:fields inp)))
-      (t/deny {:vars {:problem "name `fields`, or `field` alone for a list of one, and not both."}})
-
-      (empty? names)
-      (t/deny {:vars {:problem "name at least one argument, in `fields` or in `field`."}})
-
-      :else
-      ;; one bad name refuses the whole create, and the refusal names it
-      (if-some [problem (or (some #(argument-problem entries action "" %) names)
-                            (when (map? suggest)
-                              (some #(argument-problem entries action
-                                                       ", a key of `suggest`,"
-                                                       (arg-name %))
-                                    (keys suggest))))]
-        (t/deny {:vars {:problem problem}})
-        (t/allow)))))
+  ;; a step that does not resolve: the-author-sees-the-step says so
+  (if-some [problem (fields-problem inp ctx)]
+    (t/deny {:vars {:problem problem}})
+    (t/allow)))
 
 (g/defguard the-subject-declines
   {:reads [:principal]

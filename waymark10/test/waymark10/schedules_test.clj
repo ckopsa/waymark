@@ -487,7 +487,10 @@
              ;; the order the pool is tried in (529deb73)
              :runner_order
              ;; the text a fire held by a release grace waits with (afb445d4)
-             :wake_text}
+             :wake_text
+             ;; every waiting fire's text, and the textless wake that
+             ;; waits beside them (58573175)
+             :wake_texts :wake_textless}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
       (doseq [a [:claim :observe :pause :resume :fail :end :fired]]
