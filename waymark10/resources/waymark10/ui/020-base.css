@@ -211,15 +211,15 @@
                border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
   #grantchip button { border: none; background: none; color: var(--warn);
                       padding: 0 0 0 6px; font-weight: 700; cursor: pointer; }
-  #followchip, #replaychip {
+  #followchip, #walkchip, #replaychip {
                 background: var(--verdigris-wash); color: var(--verdigris-deep);
                 border-radius: 999px; padding: 3px 12px; font-size: 12px;
                 font-weight: 600; display: none; white-space: nowrap; }
-  #followchip button, #replaychip button, #replaychip select {
+  #followchip button, #walkchip button, #replaychip button, #replaychip select {
                        border: none; background: none;
                        color: var(--verdigris-deep); padding: 0 0 0 6px;
                        font-weight: 700; cursor: pointer; }
-  #followchip a { color: var(--verdigris-deep); }
+  #followchip a, #walkchip a { color: var(--verdigris-deep); }
   #followchip .gaze-faded { opacity: .7; font-weight: 400; }
   /* presence: who else is looking at THIS screen — ephemeral dots off
      the /-/presence stream, never law */
@@ -454,8 +454,22 @@
   #demobanner a { color: inherit; }
   /* a further invited field's place in the author's reading order
      (docs/spec-walkthrough.md §4) */
+  /* a walkthrough (docs/spec-walkthrough.md §5): the step line above an
+     invited form, the mark in the invitation list, the row page's steps */
+  .walk-step { margin: 0 0 8px; font-size: 12px; font-weight: 600;
+               color: var(--verdigris-deep); }
+  .walk-mark { display: inline-block; margin-right: 6px; padding: 0 6px;
+               font-family: var(--mono); font-size: 10.5px;
+               border: 1px solid var(--verdigris); border-radius: 999px;
+               color: var(--verdigris-deep); }
+  .walk-steps { margin: 8px 0; padding-left: 22px; font-size: 13px; }
+  .walk-steps li.current { font-weight: 600; }
   .invite-ordinal { display: inline-block; margin-right: 6px; padding: 0 5px;
                     font-family: var(--mono); font-size: 10.5px;
                     border: 1px solid var(--verdigris); border-radius: 999px;
                     color: var(--verdigris-deep); }
+  /* how far along a walkthrough's step is, above the form
+     (docs/spec-walkthrough.md §6) */
+  .invite-step { margin: 0 0 8px; font-family: var(--mono); font-size: 11.5px;
+                 color: var(--verdigris-deep); }
 

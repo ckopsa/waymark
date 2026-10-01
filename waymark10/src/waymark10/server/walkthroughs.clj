@@ -145,6 +145,26 @@
   [row _inp ctx]
   (if (is? row :subject ctx) (t/allow) (t/deny)))
 
+(g/defguard the-walk-is-the-subjects-own-recording
+  ;; § 6: a walk is recorded under its recorder's sight, so the person
+  ;; led makes it; the engine and the author never do
+  {:judges [:walk]
+   :reads [:storage]
+   :open "Name a walk you made yourself that is still recording and follows this walkthrough's author, or leave `walk` out and nothing is recorded."
+   :explain "A walkthrough is recorded into a walk its subject made, that is still recording and follows the author."}
+  [row inp ctx]
+  (let [id (some-> (:walk inp) str not-empty)
+        walk (when id (some-> (:read ctx) (apply [:walk id])))]
+    (if (or (nil? id)
+            (and walk
+                 (= "recording" (some-> (:state walk) name))
+                 (= (str (get-in walk [:data :recorder]))
+                    (str (get-in row [:data :subject])))
+                 (= (str (get-in walk [:data :followed]))
+                    (str (get-in row [:data :author])))))
+      (t/allow)
+      (t/deny))))
+
 (g/defguard either-side-stops
   {:reads [:principal]
    :open "The wall is about who: the person led and the author stop it, and no field of this door makes anyone else one of them."
@@ -214,6 +234,11 @@
 
 (defhandler open-step [row _inp ctx]
   (opened row ctx))
+
+(defhandler start-step [row inp ctx]
+  ;; the recording, when the person asked for one: reconcile seals it
+  (cond-> (opened row ctx)
+    (some? (:walk inp)) (assoc-in [:data :walk] (str (:walk inp)))))
 
 (defhandler end-step [row inp ctx]
   ;; `advance` carries no input: the author's own word is `done`, and
@@ -344,7 +369,12 @@
          [:stop_reason {:optional true
                         :x-display {:label "Why it stopped"
                                     :help "One sentence from the hand that last stopped it."}}
-          [:maybe [:string {:max 240}]]]]))
+          [:maybe [:string {:max 240}]]]
+         [:walk {:optional true
+                 :kind :walk
+                 :x-display {:label "Recording"
+                             :help "The walk this walkthrough is recorded into, named by the person at the start. Empty when it is not recorded."}}
+          [:maybe :waymark/ref]]]))
    ;; everything but the offer is the engine's to write
    :create-schema (into [:map] offer-fields)
    :filterable {:state #{:eq :in}
@@ -358,8 +388,14 @@
    :actions
    {:start
     {:from #{:open} :to :running
-     :guards [the-subject-starts]
-     :handler open-step
+     :input [:map
+             [:walk {:optional true
+                     :kind :walk
+                     :x-display {:label "Record into"
+                                 :help "A walk you started that follows the author. The steps and your answers are recorded into it, and it is sealed when the walkthrough ends. Left empty, nothing is recorded."}}
+              [:maybe :waymark/ref]]]
+     :guards [the-subject-starts the-walk-is-the-subjects-own-recording]
+     :handler start-step
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The first step opens and the author is told. Stop pauses it at any step."}
      :display {:label "Start" :order 1
@@ -420,9 +456,7 @@
               :final "Every step has ended; reopening would make the record lie. Leading the person again is a new walkthrough."}
      :display {:label "Finished"}}}
    :deviations
-   ["§ 1 lists a `walk` field, the recording. It arrives with `start`'s `walk` input and its guard (§ 7 item 7), so it is not declared before anything can write it."
-    "An agent step that names `fields` or `suggest` is refused at create. § 2 gives an agent step neither, and a stored `suggest` would be values nobody judged."
-    "Reconcile does not seal a walk (§ 3). There is no `walk` field to read until § 7 item 7."]})
+   ["An agent step that names `fields` or `suggest` is refused at create. § 2 gives an agent step neither, and a stored `suggest` would be values nobody judged."]})
 
 ;; ── the engine's own hand ───────────────────────────────────────────
 
@@ -556,12 +590,26 @@
              (ex-message e) ")")
       nil)))
 
+(defn- seal-walk!
+  "Seal the walk this walkthrough was recorded into with the engine's
+  hand, best effort (§ 6). It reads first: a walk the person sealed
+  themselves, or one the sweep purged, is left as it is."
+  [eng row]
+  (when-some [id (some-> (get-in row [:data :walk]) str not-empty)]
+    (when (= :recording (:state (row-of eng :walk id)))
+      (try
+        (inv/invoke! eng :walk id :seal {} {:principal engine-actor})
+        (catch Exception e
+          (warn! "walk " id " could not be sealed (" (ex-message e) ")")
+          nil)))))
+
 (defn reconcile!
   "Make the world match the walkthrough row. `running` and past the
   last step: walk `finish`. `running` on a person step with no open
   invitation of this walkthrough for that step: create one. Not
-  `running`: withdraw every open invitation of this walkthrough. It
-  reads the row as it is now, not as the transition left it."
+  `running`: withdraw every open invitation of this walkthrough, and
+  when it is `finished` or `withdrawn`, seal the walk it was recorded
+  into. It reads the row as it is now, not as the transition left it."
   [eng id]
   (when-some [row (row-of eng kind id)]
     (let [n (get-in row [:data :current])
@@ -575,8 +623,12 @@
           (and (= "person" (who-of step))
                (not-any? #(= n (get-in % [:data :step])) open))
           (open-step! eng row n step))
-        (doseq [i open]
-          (withdraw! eng (:id i))))))
+        (do
+          (doseq [i open]
+            (withdraw! eng (:id i)))
+          ;; a stop does not seal: a resumed walkthrough keeps recording
+          (when (contains? #{:finished :withdrawn} (:state row))
+            (seal-walk! eng row))))))
   nil)
 
 ;; ── what the consumer hears ─────────────────────────────────────────

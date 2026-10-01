@@ -72,6 +72,8 @@ async function presenceBeat() {
   /* a replay (200-events-follow.js) writes nothing, not even where
      this tab looks: the screen shows a recording, not a gaze */
   if (replay) return;
+  /* nor does a film's page, before its replay starts */
+  if (film) return;
   const here = hereHref();
   /* the viewer, not the dev box: a person signed in by session cookie
      beats too — the server resolves the cookie, and principalHeaders

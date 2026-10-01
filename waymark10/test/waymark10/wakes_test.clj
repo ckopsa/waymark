@@ -72,6 +72,15 @@
     plain change opens nothing, an instant that moves backward opens
     nothing, and the entry's filter keeps another conversation's
     mention out of this seat.
+  - docs/spec-walkthrough.md § 3 · the AUTHOR of a walkthrough is
+    woken on its turn by one entry: the walkthrough's `start`, `step`,
+    `resume`, `stop` and `finish`, under a filter that names the seat
+    as `author` and `agent` as `waiting_on`. A start that opens an
+    agent step fires the seat and names the walkthrough. A start that
+    opens a person step wakes nobody, and the engine's `step` that
+    ends it does. A wake an open sitting damped releases one textless
+    fire, and the walkthrough is still the one row of the seat's
+    `waiting_on=agent` queue.
 
   Each seat here links its OWN fire token, and the assertions count
   the fires carrying that token: the suite shares one fake provider
@@ -86,6 +95,7 @@
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.schedules :as sch]
@@ -93,6 +103,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.wakes :as wakes]
+            [waymark10.server.walkthroughs :as walkthroughs]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -269,13 +280,49 @@
      ;; house named in seconds, not at the top of the hour
      :advance-every 20})))
 
+;; ── the row a walkthrough's person step points at ───────────────────
+
+(def ^:private wake-form
+  "The row a PERSON step of a walkthrough names
+  (docs/spec-walkthrough.md § 2). A person step points at arguments of
+  a door, and no other kind in this suite has a door that takes any."
+  (r/resource
+   {:kind :wake_form
+    :plural "wake_forms"
+    :states [:open :filed]
+    :initial :open
+    :terminal #{:filed}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title {:examples ["The gas bill"]
+                      :x-display {:label "What it is called"
+                                  :help "One line naming the form."}}
+              [:string {:min 1 :max 80}]]]
+    :filterable {:state #{:eq :in}}
+    :default-filters {:state "open"}
+    :actions
+    {:rename {:from #{:open} :to :open
+              :input [:map
+                      [:title {:examples ["The water bill"]
+                               :x-display {:label "What it is called"
+                                           :help "One line naming the form."}}
+                       [:string {:min 1 :max 80}]]]
+              :handler (fn [row inp _ctx]
+                         (update row :data merge (select-keys inp [:title])))
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Rename" :order 1}}
+     :file {:from #{:open} :to :filed
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "Filed is filed."}
+            :display {:label "File" :style :primary :order 2}}}}))
+
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["wake_tasks" "wake_items" "wake_memos" "wake_chats"
+  ["wake_tasks" "wake_items" "wake_memos" "wake_chats" "wake_forms"
    "schedules" "seats" "models" "sittings" "definitions"
    "members" "roles" "grants" "approval_requests" "attachments"
-   "subscriptions" "jobs"
+   "subscriptions" "jobs" "invitations" "walkthroughs"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"
    "waymark10_drafts"])
 
@@ -295,7 +342,8 @@
               fire (sch/fake-fire)
               eng (engine/engine
                    {:storage st
-                    :resources [wake-task wake-item wake-memo wake-chat]})]
+                    :resources [wake-task wake-item wake-memo wake-chat
+                                wake-form]})]
           (binding [*eng* (assoc eng
                                  :schedule-adapters {:claude_routine fake}
                                  :fire-adapter fire)
@@ -2878,3 +2926,205 @@
         (is (= 1 (count (seat-fires seat))))
         (close-sitting! s)
         (seat-do! seat :retire)))))
+
+;; ── a walkthrough's author is woken on its turn ─────────────────────
+;;
+;; docs/spec-walkthrough.md § 3, "How the author learns". A
+;; `walkthrough` is an ordinary kind, and `author` and `waiting_on` are
+;; filterable, so the wake has no code of its own for it. What these
+;; cases prove is that the ONE entry the spec writes does what the spec
+;; says, because the filter is read after the transition committed.
+
+(defn- leader-of
+  "The principal a sitting of this seat acts as. A walkthrough it
+  creates carries this id as its `author`."
+  [seat-id]
+  (t/principal {:id (str "seat:" seat-id) :type :agent :display "Leader"}))
+
+(def ^:private leader-grant
+  "The guard's-eye view of a grant that sees every row and admits
+  every door. The create guards judge the author's grant, and they are
+  not what these cases are about (`waymark10.walkthroughs-test`)."
+  {:id "grant-leader"
+   :action? (fn [_kind _action] true)
+   :row? (fn [_kind _id] true)})
+
+(defn- leading-seat!
+  "A linked seat that leads walkthroughs: its one `wake_on` entry is
+  the spec's own. The entry names the seat's id, and only the create
+  answers that id, so a `restate` writes the entry before the link.
+  → {:seat id :token token}."
+  [nm fire-cursor]
+  (let [seat-id (seat! nm {})
+        token (str "rk-test-" nm "-0123456789abcdef")]
+    (restate! seat-id
+              {:wake_on [{:kind "walkthrough"
+                          :actions ["start" "step" "resume" "stop" "finish"]
+                          :filter {:author (str "seat:" seat-id)
+                                   :waiting_on "agent"}}]})
+    (drain-fires! fire-cursor)
+    (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
+                 {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                 "/routines/trig_" nm "/fire")
+                  :token token}
+                 {:principal elena})
+    {:seat seat-id :token token}))
+
+(def ^:private an-agent-step
+  {:who "agent" :note "Watch me: reading the open forms."})
+
+(defn- a-person-step [form-id]
+  {:who "person"
+   :self (str "/api/wake_forms/" form-id)
+   :action "rename"
+   :fields ["title"]
+   :note "Give the form its new name."})
+
+(defn- form! [title]
+  (:id (:row (inv/create! *eng* :wake_form {:title title}
+                          {:principal elena}))))
+
+(defn- lead!
+  "The seat's sitter offers `steps` to Elena. → the walkthrough's id."
+  [seat-id steps]
+  (:id (:row (inv/create! *eng* :walkthrough
+                          {:subject "elena"
+                           :title "Filing the gas bill"
+                           :steps steps}
+                          {:principal (leader-of seat-id)
+                           :grant leader-grant}))))
+
+(defn- led-do! [id principal action]
+  (inv/invoke! *eng* :walkthrough (str id) action {}
+               {:principal principal
+                :idempotency-key (str (random-uuid))}))
+
+(defn- waiting-on [id]
+  (some-> (get-in (raw :walkthrough id) [:data :waiting_on]) name))
+
+(defn- settle-led!
+  "Drain the invitations consumer and the walkthroughs consumer, each
+  under this deftest's own cursor, until neither hears anything. The
+  chain from a person's transition to the engine's `step` is several
+  log entries, each heard from the log."
+  [invitations-cursor walkthroughs-cursor]
+  (loop [left 20]
+    (let [n (+ (consumers/drain-consumer! *eng* invitations-cursor
+                                          (invitations/consumer-fn *eng*))
+               (consumers/drain-consumer! *eng* walkthroughs-cursor
+                                          (walkthroughs/consumer-fn *eng*)))]
+      (when (and (pos? n) (pos? left))
+        (recur (dec left))))))
+
+(deftest a-seat-is-woken-when-its-walkthrough-waits-on-it
+  (let [wn :wake-led
+        fn' :wake-led-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]} (leading-seat! "leadclerk" fn')
+        id (lead! seat [an-agent-step])]
+    (drain-wakes! wn)
+
+    (testing "an offer wakes nobody: the person has not agreed to be led"
+      (is (empty? (seat-fires seat)))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (led-do! id elena :start)
+    (drain-wakes! wn)
+
+    (testing "the start opens the agent's step, and the seat fires once
+              with the walkthrough named"
+      (is (= "agent" (waiting-on id)))
+      (let [ts (seat-fires seat)]
+        (is (= 1 (count ts)))
+        (let [text (str (get-in (first ts) [:inputs :text]))]
+          (is (str/includes? text (str id)))
+          (is (str/includes? text "walkthrough"))
+          (is (str/includes? text "start"))
+          (is (str/includes? text "running")))))
+
+    (testing "and exactly one POST reached this seat's Routine"
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token))))
+      (is (str/includes? (str (:text (last (fires-of token)))) (str id))))
+
+    (seat-do! seat :retire)))
+
+(deftest a-person-step-opening-does-not-wake-the-author
+  (let [wn :wake-led-person
+        fn' :wake-led-person-fires
+        in :wake-led-person-invitations
+        wt :wake-led-person-walkthroughs
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        _ (settle-led! in wt)
+        {:keys [seat token]} (leading-seat! "leadpersonclerk" fn')
+        form (form! "The gas bill")
+        id (lead! seat [(a-person-step form) an-agent-step])]
+    (led-do! id elena :start)
+    (settle-led! in wt)
+    (drain-wakes! wn)
+
+    (testing "the person's step opened, and nobody was woken for it"
+      (is (= "person" (waiting-on id)))
+      (is (empty? (seat-fires seat)))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))
+          "nothing is remembered either: the row is not under the filter")
+      (drain-fires! fn')
+      (is (empty? (fires-of token))))
+
+    (inv/invoke! *eng* :wake_form (str form) :rename {:title "The water bill"}
+                 {:principal elena})
+    (settle-led! in wt)
+    (drain-wakes! wn)
+
+    (testing "the person's answer ends their step, the engine's `step`
+              opens the agent's, and that one wakes the seat"
+      (is (= 2 (get-in (raw :walkthrough id) [:data :current])))
+      (is (= "agent" (waiting-on id)))
+      (let [ts (seat-fires seat)]
+        (is (= 1 (count ts)))
+        (let [text (str (get-in (first ts) [:inputs :text]))]
+          (is (str/includes? text (str id)))
+          (is (str/includes? text "walkthrough"))
+          (is (str/includes? text "step"))))
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token)))))
+
+    (seat-do! seat :retire)))
+
+(deftest a-damped-wake-leaves-the-walkthrough-in-the-seats-queue
+  (let [wn :wake-led-damped
+        fn' :wake-led-damped-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]} (leading-seat! "leaddampedclerk" fn')
+        ;; the agent's queue, as docs/spec-walkthrough.md § 1 writes it
+        queue {:author (str "seat:" seat) :state "running" :waiting_on "agent"}
+        open-one (sitting! seat)
+        id (lead! seat [an-agent-step])]
+    (led-do! id elena :start)
+    (drain-wakes! wn)
+
+    (testing "the open sitting stops the fire, and the match waits"
+      (is (empty? (seat-fires seat)))
+      (drain-fires! fn')
+      (is (empty? (fires-of token)))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+    (testing "the close releases exactly one fire, and it names NO row"
+      (close-sitting! open-one)
+      (drain-wakes! wn)
+      (let [ts (seat-fires seat)]
+        (is (= 1 (count ts)))
+        (is (nil? (get-in (first ts) [:inputs :text]))))
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token))))
+      (is (nil? (:text (last (fires-of token))))))
+
+    (testing "the walkthrough the fire did not name is the one row of the
+              seat's queue, so the session that walks the queue finds it"
+      (is (= 1 (wakes/count-under *eng* :walkthrough queue)))
+      (is (true? (wakes/moved-under? *eng* :walkthrough id queue))))
+
+    (seat-do! seat :retire)))
