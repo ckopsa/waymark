@@ -3,6 +3,8 @@ function label(name, entry) { return entry.display?.label || title(name); }
 
 async function renderResource(view, doc, hints) {
   hints = hints || {};
+  /* the ref labels this envelope carries, before any cell asks */
+  noteRefs(doc);
   const panel = el("div", {class:"panel"});
   const kind = doc.kind;
   const colHref = doc.self.split("/").slice(0, 3).join("/");

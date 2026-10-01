@@ -381,15 +381,31 @@ function fieldColumns(items, query, hints) {
                      hints);
 }
 
-/* one referenced row's own summary, read live (wire 10 has no lookup
-   route class; the summary ride is a plain depth=summary read). null
-   when the kind has no collection, the read fails, or the row is
-   gone — every caller keeps the raw token in that case rather than
-   render an empty seat. */
+/* the summaries the row on screen already carries (6ef1473c): a full
+   envelope's `refs` block names each plain :kind ref's target as
+   {href, summary}, read under the reader's own grant, so those labels
+   cost no read. Replaced whole by every resource screen — a label
+   never outlives the envelope that carried it — and a ref the block
+   omits (hidden, gone, a list, a grid row) falls back to the live
+   read below. */
+let refsOnScreen = {};
+function noteRefs(doc) {
+  refsOnScreen = {};
+  for (const r of Object.values((doc || {}).refs || {}))
+    if (r && r.href && r.summary) refsOnScreen[r.href] = r.summary;
+}
+
+/* one referenced row's own summary: the one the envelope on screen
+   carried, else read live (wire 10 has no lookup route class; the
+   summary ride is a plain depth=summary read). null when the kind has
+   no collection, the read fails, or the row is gone — every caller
+   keeps the raw token in that case rather than render an empty seat. */
 async function rowSummary(kind, id) {
   try {
     const col = kind && collectionHref(await wellKnown(), kind);
     if (!col) return null;
+    const carried = refsOnScreen[`${col}/${id}`];
+    if (carried) return carried;
     const {ok, body} = await api(`${col}/${id}?depth=summary`);
     return (ok && body.summary) || null;
   } catch { return null; }
