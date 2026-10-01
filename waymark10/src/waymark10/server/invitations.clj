@@ -26,7 +26,16 @@
   action) match, the engine walks `answer` with its own hand and
   stores the transition's log id in `answered_by`. The person submits
   under their own grant; `suggest` is shown and never submitted by
-  the engine. An expiry sweep walks `expire` past `expires_at`.
+  the engine. An expiry sweep walks `expire` past `expires_at`. A
+  transition older than the invitation does not answer it: without
+  that, two neighbouring steps on the same (self, action) could both
+  be answered by one replayed transition.
+
+  A WALKTHROUGH'S STEP IS AN INVITATION THE ENGINE MAKES
+  (docs/spec-walkthrough.md § 3). `walkthrough`, `step` and `of` are
+  the engine's alone to write: a create that names one from any other
+  hand is refused. Such a row is stamped with the walkthrough's
+  author, and `withdraw` admits the engine on it.
 
   `self` is the row's path, `/api/<plural>/<id>` — the form intents
   and presence already speak. It names a row of ANY kind, and the ref
@@ -246,9 +255,24 @@
    :open "The wall is about who: the author withdraws its own invitation, and no field of this door makes anyone else the author."
    :explain "Only the author of this invitation withdraws it."}
   [row _inp ctx]
-  (if (= (str (get-in row [:data :author])) (str (:id (:principal ctx))))
+  ;; the engine too, on a walkthrough's invitation and on no other: it
+  ;; takes the step back when the walkthrough leaves `running`
+  (if (or (= (str (get-in row [:data :author])) (str (:id (:principal ctx))))
+          (and (some? (get-in row [:data :walkthrough]))
+               (= :system (:type (:principal ctx)))))
     (t/allow)
     (t/deny)))
+
+(g/defguard only-the-engine-names-a-walkthrough
+  {:judges [:walkthrough :step :of]
+   :reads [:principal]
+   :open "The wall is about who: the engine opens a walkthrough's steps, and no field of this door makes anyone else the engine. Leave `walkthrough`, `step` and `of` out, and the invitation stands alone."
+   :explain "Only the engine names a walkthrough, a step or a step count on an invitation; it opens each step when the one before it ends."}
+  [_row inp ctx]
+  (if (and (some some? ((juxt :walkthrough :step :of) inp))
+           (not= :system (:type (:principal ctx))))
+    (t/deny)
+    (t/allow)))
 
 (g/defguard the-engine-resolves-it
   {:reads [:principal]
@@ -265,12 +289,24 @@
   "The birth stamps: the author is the principal that created the row,
   never the body, `fields` is what the row stores, with `field` its
   first for a reader that knows only that one, and an invitation naming
-  no expiry gets the default."
+  no expiry gets the default. An invitation the engine makes for a
+  walkthrough is the one exception to the first: it is stamped with
+  the walkthrough's author, so the audit still reads that the agent
+  asked, and the author can still read it, withdraw it and find it by
+  `author`."
   [row ctx]
-  (let [names (named-fields (:data row))]
+  (let [names (named-fields (:data row))
+        led (some-> (get-in row [:data :walkthrough]) str not-empty)
+        leader (when led
+                 (some-> (:read ctx)
+                         (apply [:walkthrough led])
+                         (get-in [:data :author])
+                         str
+                         not-empty))]
     (-> (cond-> row
           (seq names) (update :data assoc :fields names :field (first names)))
-        (assoc-in [:data :author] (str (get-in ctx [:principal :id])))
+        (assoc-in [:data :author]
+                  (or leader (str (get-in ctx [:principal :id]))))
         (assoc-in [:data :subject_name] (subject-name (get-in row [:data :subject]) ctx))
         (update-in [:data :expires_at]
                    #(or % (.plusSeconds ^Instant (:now ctx)
@@ -321,6 +357,31 @@
                              :help "When the sweep expires this invitation. Left empty, the engine stamps a week out."}}
     [:maybe :waymark/instant]]])
 
+(def ^:private led-fields
+  "What the ENGINE writes when a walkthrough opens a step
+  (docs/spec-walkthrough.md § 3): which walkthrough, and how far along."
+  [[:walkthrough {:optional true
+                  :kind :walkthrough
+                  :x-display {:label "The walkthrough"
+                              :help "The walkthrough this step belongs to, written by the engine. Empty on an invitation that stands alone."}}
+    [:maybe :waymark/ref]]
+   [:step {:optional true
+           :x-display {:label "Step"
+                       :help "The number of this step in its walkthrough, counted from one. Written by the engine."}}
+    [:maybe [:int {:min 1 :max 20}]]]
+   [:of {:optional true
+         :x-display {:label "Of"
+                     :help "How many steps the walkthrough has. Written by the engine."}}
+    [:maybe [:int {:min 1 :max 20}]]]])
+
+(defn- off-the-form
+  "The same entries, kept off an author's form: the create model must
+  hold them for the engine's own create, and no person fills them in."
+  [entries]
+  (mapv (fn [[k props schema]]
+          [k (assoc-in props [:x-display :hidden] true) schema])
+        entries))
+
 (defresource invitation
   {:kind :invitation
    :plural "invitations"
@@ -338,6 +399,7 @@
                               :help "The principal that handed the step over, stamped by the engine at birth."}}
          [:string {:min 1 :max 128}]]]
        (into step-fields)
+       (into led-fields)
        (conj [:subject_name {:optional true
                              :x-display {:label "Invited by name"
                                          :help "The invited person's name as their member row said it at birth, stamped by the engine."}}
@@ -349,13 +411,18 @@
                                         :help "The log id of the person's own transition that answered this invitation."}}
               [:maybe [:string {:max 64}]]]))
    ;; the author and the answer are the engine's to write
-   :create-schema (into [:map] step-fields)
+   :create-schema (-> [:map]
+                      (into step-fields)
+                      (into (off-the-form led-fields)))
    :filterable {:state #{:eq :in}
                 :subject #{:eq}
-                :author #{:eq}}
+                :author #{:eq}
+                :walkthrough #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "open"}
-   :create-guards [the-author-sees-the-step the-field-is-an-open-argument]
+   :create-guards [only-the-engine-names-a-walkthrough
+                   the-author-sees-the-step
+                   the-field-is-an-open-argument]
    :on-create born
    :actions
    {:decline
@@ -420,11 +487,29 @@
   "The durable cursor's name in waymark10_cursors (consumer:invitations)."
   :invitations)
 
+(defn instant-of
+  "An instant, as a stored string or an Instant already; nil for
+  anything else."
+  ^Instant [v]
+  (cond
+    (instance? Instant v) v
+    (string? v) (try (Instant/parse ^String v) (catch Exception _ nil))
+    :else nil))
+
+(defn- older?
+  "Whether transition `t` was committed before invitation `row` was
+  born. Such a transition does not answer it."
+  [t row]
+  (let [at (instant-of (:at t))
+        birth (instant-of (:created-at row))]
+    (boolean (and at birth (.isBefore at birth)))))
+
 (defn handle-transition!
   "One committed transition: every open invitation whose subject is its
   actor and whose (self, action) it matches is answered, with the
-  transition's log id. Never throws: a parked cursor would stop every
-  later answer."
+  transition's log id. A transition committed before the invitation
+  was born answers nothing. Never throws: a parked cursor would stop
+  every later answer."
   [eng t]
   (try
     (let [rs (inv/resources eng)
@@ -437,7 +522,8 @@
           (doseq [row (open-rows eng)
                   :when (and (= self (get-in row [:data :self]))
                              (= action (str/trim (str (get-in row [:data :action]))))
-                             (= actor (str (get-in row [:data :subject]))))]
+                             (= actor (str (get-in row [:data :subject])))
+                             (not (older? t row)))]
             (walk! eng (:id row) :answer {:transition (str (:id t))})))))
     (catch Exception e
       (warn! "transition " (:id t) " could not be handled — " (ex-message e))
@@ -463,12 +549,6 @@
   (some-> consumer consumers/stop-consumer!))
 
 ;; ── expiry ──────────────────────────────────────────────────────────
-
-(defn- instant-of ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (string? v) (try (Instant/parse ^String v) (catch Exception _ nil))
-    :else nil))
 
 (defn sweep-expired!
   "One pass: every open invitation past its `expires_at`, expired

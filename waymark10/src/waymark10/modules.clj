@@ -409,6 +409,19 @@
                             (get-in eng [:services :invitations :sweep-ms]
                                     300000)}))
              :stop invitations/stop-expiry-sweeper!}
+            ;; the walkthroughs' consumer (spec-walkthrough § 3): it
+            ;; opens each step when the one before it ends. A second
+            ;; consumer on its own cursor, beside the invitations' and
+            ;; elected for its reason: two engines draining the same
+            ;; log would walk `step` twice.
+            {:hook :walkthroughs
+             :after [:dispatcher]
+             :elected :walkthroughs
+             :start (fn [eng running]
+                      (walkthroughs/start!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop walkthroughs/stop!}
             ;; the walks' retention (spec-guided-follow § 4), elected
             ;; for the expiry's reason
             {:hook :walk-retention

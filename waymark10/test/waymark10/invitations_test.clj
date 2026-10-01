@@ -256,3 +256,52 @@
     (is (= "Colton Kopsa" (get-in row [:data :subject_name])))
     (is (str/includes? line "Colton Kopsa"))
     (is (not (str/includes? line (str (:id m)))) "never the raw id")))
+
+;; docs/spec-walkthrough.md § 3: what the invitation gains.
+
+(deftest only-the-engine-names-a-walkthrough
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")
+        the-engine invitations/engine-actor
+        w (:id (:row (inv/create! eng :walkthrough
+                                  {:subject "colton"
+                                   :title "Tidying the chores"
+                                   :steps [{:who "agent" :note "Watch me."}]}
+                                  {:principal planner :grant (grant-seeing c)})))
+        led {:walkthrough (str w) :step 1 :of 1}]
+    (is (some? (refusal #(invite! eng c led)))
+        "the author's own hand names no walkthrough")
+    (is (some? (refusal #(invite! eng c {:step 1})))
+        "nor a step alone")
+    (let [row (:row (inv/create! eng :invitation
+                                 (merge {:subject "colton"
+                                         :self (str "/api/chores/" c)
+                                         :action "rename"
+                                         :field "title"
+                                         :note "Pick the new title here."}
+                                        led)
+                                 {:principal the-engine}))
+          alone (invite! eng c {})]
+      (is (= "planner" (get-in row [:data :author]))
+          "stamped with the walkthrough's author, not the engine's id")
+      (is (= (str w) (str (get-in row [:data :walkthrough]))))
+      (is (= [1 1] [(get-in row [:data :step]) (get-in row [:data :of])]))
+      (is (some? (refusal #(inv/invoke! eng :invitation (str (:id alone)) :withdraw {}
+                                        {:principal the-engine})))
+          "the engine withdraws no invitation that stands alone")
+      (inv/invoke! eng :invitation (str (:id row)) :withdraw {}
+                   {:principal the-engine})
+      (is (= "withdrawn" (state-of eng :invitation (:id row)))
+          "the engine takes a walkthrough's step back"))))
+
+(deftest a-transition-older-than-the-invitation-does-not-answer-it
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")]
+    (rename! eng c person "Before anybody asked")
+    (let [inv-row (invite! eng c {})]
+      (drain! eng)
+      (is (= "open" (state-of eng :invitation (:id inv-row)))
+          "the rename was committed before the invitation was born")
+      (rename! eng c person "After the invitation")
+      (drain! eng)
+      (is (= "answered" (state-of eng :invitation (:id inv-row)))))))
