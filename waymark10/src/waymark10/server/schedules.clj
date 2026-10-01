@@ -593,7 +593,8 @@
         (assoc-in [:data :last_run_url] (:last_run_url inp)))
       (cond-> (:last_runner inp)
         (assoc-in [:data :last_runner] (:last_runner inp)))
-      (update :data dissoc :note :retry_after :wake_pending :wake_due_at :wake_text)))
+      (update :data dissoc :note :retry_after :wake_pending :wake_due_at
+              :wake_text :wake_texts :wake_textless)))
 
 (defhandler hold-throttle
   [row inp _ctx]
@@ -689,7 +690,7 @@
             :x-display
             {:widget "prose"
              :label "What the provider last said"
-             :help "The adapter's own sentence about why it could not reach the provider — a missing credential reads exactly as one. On a broken row a person must act; on a live row with `retry_after` it is a throttle, and nothing is needed from anyone. Cleared by the next successful push or fire."}}
+             :help "The adapter's own sentence about why it could not reach the provider — a missing credential reads exactly as one. On a broken row a person must act; on a live row with `retry_after` it is a throttle, and nothing is needed from anyone. Cleared by the next successful push or fire. A fire that waits for a release grace says so here, and until when; that sentence is cleared when the fire goes out."}}
      [:maybe [:string {:max 280}]]]
     ;; ── the fire link (R-12.18) ─────────────────────────────────────
     ;; The URL is shown; the token never is. A linked row is a row a
@@ -761,6 +762,24 @@
                  {:label "The waiting fire's text"
                   :help "The text of a fire that named a row still in its release grace. The fire waits until the grace lifts, and then goes out with this text. Engine-written."}}
      [:maybe :string]]
+    ;; Every waiting fire's words (ticket 58573175). `wake_text` holds
+    ;; one string, so a second fire deferred in the same grace took the
+    ;; first's place. The list keeps each one time, in the order they
+    ;; came, and the release sends one run for each; `wake_text` stays
+    ;; as the first of them.
+    [:wake_texts {:optional true
+                  :x-display
+                  {:label "The waiting fires' texts"
+                   :help "The text of each fire that waits for a release grace, in the order they came. When the grace lifts, each goes out as its own run. Engine-written."}}
+     [:maybe [:vector :string]]]
+    ;; A wake with no text that waits beside those (ticket 58573175): a
+    ;; damped `wake_on` match walks the whole queue, so it goes out as
+    ;; its own fire and not as one of the texts' one-row runs.
+    [:wake_textless {:optional true
+                     :x-display
+                     {:label "A wake with no text waits too"
+                      :help "Set by the engine when a wake that names no row waits beside a waiting fire's text. It goes out as its own run, which walks the whole queue. Engine-written."}}
+     [:maybe :boolean]]
     ;; The replay's mark (waymark-fp62.21). The drain delivers at
     ;; least once, and a damped match carries no idempotency key, so
     ;; the wake remembers the last transitions it heard and a replay
@@ -1847,22 +1866,85 @@
                                   (catch Exception _ nil))
     :else nil))
 
+(defn waiting-texts
+  "The texts of the fires this row's data keeps waiting, in the order
+  they came (ticket 58573175): `wake_texts`, or the one `wake_text` of
+  a row written before the list. → a vector, empty when none waits."
+  [data]
+  (or (some->> (:wake_texts data) (keep #(some-> % str not-empty)) seq vec)
+      (some-> (:wake_text data) str not-empty vector)
+      []))
+
+(defn keep-waiting
+  "`data` with one more waiting text (ticket 58573175): added to
+  `wake_texts` unless it already waits there, with `wake_text` the
+  first of them. A wake already pending with NO text is marked
+  `wake_textless`, so the release still sends it as its own fire and
+  the text does not turn its queue walk into a one-row run."
+  [data text]
+  (let [held (waiting-texts data)
+        texts (if (some #{text} held) held (conj held text))]
+    (cond-> (assoc data
+                   :wake_pending true
+                   :wake_texts texts
+                   :wake_text (first texts))
+      (and (:wake_pending data) (empty? held))
+      (assoc :wake_textless true))))
+
+(defn keep-textless
+  "`data` with a wake of no text remembered beside its waiting texts,
+  when it has any (ticket 58573175). With none waiting, `wake_pending`
+  alone already says it, and `data` is answered as it is."
+  [data]
+  (cond-> data
+    (seq (waiting-texts data)) (assoc :wake_textless true)))
+
+(def ^:private waiting-note-opening
+  "How every note `defer-fire!` writes begins, so `clear-wake` can tell
+  it from a sentence of the provider's."
+  "Waiting for ")
+
+(defn- waiting-note? [note]
+  (.startsWith (str note) (str waiting-note-opening)))
+
+(defn- waiting-note
+  "The sentence a row with `n` deferred fires says while they wait."
+  [n ^Instant due]
+  (clip (if (= 1 n)
+          (str waiting-note-opening "the release grace of the row this fire"
+               " names; fires at " due ".")
+          (str waiting-note-opening "the release grace of the rows " n
+               " fires name; they fire at " due "."))))
+
+(defn clear-wake
+  "`data` with nothing waiting: the pending flag, its due moment, the
+  waiting texts, and the waiting note `defer-fire!` wrote. A note the
+  provider wrote stays."
+  [data]
+  (cond-> (dissoc data :wake_pending :wake_due_at :wake_text :wake_texts
+                  :wake_textless)
+    (waiting-note? (:note data)) (dissoc :note)))
+
 (defn- defer-fire!
   "Keep a fire that must wait for a release grace (ticket afb445d4) the
   way a deferred wake is kept: `wake_pending`, `wake_due_at` at the
   lift — forward only, as `wakes/due-at` holds it — and the fire's text
-  as `wake_text`, so `wakes/release!` sends it then with its words. One
-  maintenance write, and no transition."
+  among the waiting texts (`keep-waiting`), so `wakes/release!` sends
+  it then with its words. The row's `note` says that a fire waits and
+  until when (ticket 58573175), unless the provider's own sentence
+  stands there. One maintenance write, and no transition."
   [eng schedule-row ^Instant lift text]
   (let [held (instant-of (get-in schedule-row [:data :wake_due_at]))
-        due (if (and held (.isAfter ^Instant held lift)) held lift)]
+        due (if (and held (.isAfter ^Instant held lift)) held lift)
+        data (keep-waiting (:data schedule-row) text)
+        note (get-in schedule-row [:data :note])]
     (store/with-tx (:storage eng)
       (fn [tx]
         (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                            (assoc (:data schedule-row)
-                                   :wake_pending true
-                                   :wake_due_at (str due)
-                                   :wake_text text)
+                            (cond-> (assoc data :wake_due_at (str due))
+                              (or (nil? note) (waiting-note? note))
+                              (assoc :note (waiting-note
+                                            (count (waiting-texts data)) due)))
                             (:next-flip-at schedule-row)))))
   nil)
 
