@@ -180,9 +180,14 @@ The boot step in `workqueue10.main` asks for one thing more:
 demo engine serves the factory kinds. A boot with `WAYMARK10_SEED` set
 and `FACTORY10` unset refuses with a sentence.
 
-If the engine already holds a member row from the seed's cast, the
-seed was applied before (a restarted task on the same database). The
-loader then skips the whole seed and says so.
+After the last step the loader writes a completion marker: one more
+member row, `seed-<name>`, born through the member door as the
+registrar. If the engine already holds the marker, the seed was applied
+before (a restarted task on the same database). The loader then skips
+the whole seed and says so. If the engine holds a member row from the
+seed's cast and no marker, a seed failed half-way on this database: the
+loader refuses with a sentence and the boot ends, so the half seed is
+not served.
 
 ### Postgres or the in-memory twin
 
