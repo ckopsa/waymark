@@ -57,7 +57,10 @@
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan), WAYMARK10_OIDC_* (the family
   IdP — waymark10.server.oidc/from-env names them; absent = the
-  dev-header resolver, unchanged).
+  dev-header resolver, unchanged), WAYMARK10_SEED (a demo engine
+  only, docs/spec-demo-clones.md § 1: the name of the seed loaded
+  through the doors at boot — it needs FACTORY10=1, an engine named
+  demo-…, and no IdP, and the boot refuses otherwise).
 
   Schema evolution: `make migrate-queue` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
@@ -123,6 +126,7 @@
             [waymark10.server.oidc-rp :as oidc-rp]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.schedules :as schedules]
+            [waymark10.server.seed :as seed]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
@@ -834,6 +838,20 @@
 
 (defonce ^:private dev (atom nil))
 
+(defn- seed-on-boot!
+  "The demo seed (docs/spec-demo-clones.md § 1), behind WAYMARK10_SEED
+  and nothing otherwise. The seed's tickets are rows of a factory
+  kind, so a demo engine boots with FACTORY10=1 and this refuses one
+  that does not. `seed/boot!` refuses an engine not named `demo-…` or
+  one with an IdP, and a step the law refuses. Every refusal throws,
+  so the boot ends before the server listens."
+  [eng]
+  (when-some [seed-name (some-> (System/getenv "WAYMARK10_SEED") str not-empty)]
+    (when-not (= "1" (System/getenv "FACTORY10"))
+      (throw (ex-info "WAYMARK10_SEED is set and FACTORY10 is not 1: the seed's tickets need the factory kinds, so a demo engine boots with FACTORY10=1."
+                      {:seed seed-name})))
+    (seed/boot! eng seed-name)))
+
 (defn start!
   "Boot and serve. Returns the engine."
   []
@@ -940,6 +958,10 @@
         _ (when (= "1" (System/getenv "FACTORY10"))
             (forge/finish-merged-parents! eng))
         _ (connections/ensure-connections! eng (connection-descriptors))
+        ;; the demo seed, after every other boot row and before the
+        ;; server listens: a refusal throws here, so a half-seeded
+        ;; engine is never served
+        _ (seed-on-boot! eng)
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before
