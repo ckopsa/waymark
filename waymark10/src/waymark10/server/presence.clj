@@ -466,6 +466,33 @@
       (when-some [rdef (rdef-of-plural eng (nth parts 2))]
         [rdef (nth parts 3)]))))
 
+(defn- collection-of
+  "A collection self, exactly /api/{plural} → its rdef; nil for anything
+  else, a trailing slash and a query string included (self-visible?'s
+  rule for the same self)."
+  [eng self]
+  (let [self (str self)
+        parts (str/split self #"/")]
+    (when (and (= 3 (count parts)) (= "api" (nth parts 1))
+               (not (str/ends-with? self "/")))
+      (rdef-of-plural eng (nth parts 2)))))
+
+(defn- dialog-door
+  "The door a dialog on `self` names → [rdef id door], or nil when the
+  kind has none by that name. On a row self it is one of the kind's
+  actions. On a collection self it is one of the kind's create actions,
+  with no id, and its form is the kind's own schema where the action
+  declares no input."
+  [eng self action]
+  (when-some [k (some-> action name not-empty keyword)]
+    (if-some [[rdef id] (row-of eng self)]
+      (when-some [door (get-in rdef [:actions k])]
+        [rdef id door])
+      (when-some [rdef (collection-of eng self)]
+        (when (contains? (set (:create-action-names rdef)) k)
+          [rdef nil (merge {:input (:schema rdef)}
+                           (get-in rdef [:actions k]))])))))
+
 (defn- secret-props?
   "A secret-marked argument: the engine's own :secret, :x-secret,
   writeOnly, or a password format (invitations' spelling)."
@@ -533,7 +560,8 @@
 (defn- clean-ui
   "A reported ui part as the registry may store it: the four parts and
   nothing else, selves normalized, a dialog naming no action of its
-  row's kind dropped with its fields, fields read from the shared live
+  row's kind (or, on a collection self, no create action of the kind)
+  dropped with its fields, fields read from the shared live
   draft where the action has one, secret arguments REMOVED (never
   stored, so never on pg_notify), and the whole under the cap. Runs
   before the lock: the draft read touches the store."
@@ -547,8 +575,8 @@
         dself (normalize-self (when (map? dialog) (:self dialog)))
         a (when (map? dialog) (:action dialog))
         action (when (or (string? a) (keyword? a)) (not-empty (name a)))
-        [rdef id] (when (and action (valid-self? dself)) (row-of eng dself))
-        door (when rdef (get-in rdef [:actions (keyword action)]))
+        [rdef id door] (when (and action (valid-self? dself))
+                         (dialog-door eng dself action))
         secret (when door (secret-keys (:input door) (:schema rdef)))
         cself (normalize-self (when (map? collection) (:self collection)))
         fself (normalize-self focus)]
@@ -557,7 +585,7 @@
       :fields (when door
                 (into {}
                       (remove (fn [[k _]] (contains? secret (keyword (name k)))))
-                      (or (draft-fields reg rdef id (keyword action) door)
+                      (or (when id (draft-fields reg rdef id (keyword action) door))
                           (when (map? fields) fields))))
       :collection (when (valid-self? cself)
                     (cond-> {:self cself}
@@ -570,13 +598,13 @@
   "The keys of `input` a dialog on `self`'s `action` may show, in the
   order the action's input schema declares them: a secret argument is
   left out, as clean-ui removes it, and a key the schema does not name
-  comes last. nil when `self` names no row of a served kind, or the
-  kind has no such action. It is how the connector types a form one
-  value at a time (docs/spec-agent-demo-walks.md § 2)."
+  comes last. nil when `self` names no row and no collection of a
+  served kind, or the kind has no such action there (dialog-door). It
+  is how the connector types a form one value at a time
+  (docs/spec-agent-demo-walks.md § 2)."
   [eng self action input]
-  (let [[rdef _] (row-of eng (normalize-self self))
-        door (when (and rdef action)
-               (get-in rdef [:actions (keyword (name action))]))]
+  (let [[rdef _ door] (when action
+                        (dialog-door eng (normalize-self self) action))]
     (when door
       (let [secret (secret-keys (:input door) (:schema rdef))
             form (:input door)
@@ -598,6 +626,12 @@
   (let [held (get-in @(:local reg) [pid :entry :ui])]
     (and (some? held) (= held (clean-ui reg ui)))))
 
+(defn gaze
+  "The self `pid`'s last beat in this process named, by any door; nil
+  when the registry holds no beat of theirs."
+  [reg pid]
+  (get-in @(:local reg) [pid :entry :self]))
+
 (defn- next-seq
   "Counts up per principal, across processes too: one past the last
   seq this entry carried, and never below the wall clock."
@@ -615,10 +649,16 @@
   this beat made, after it published: a `move` when the gaze changed
   and the `ui` frame when the beat carried one. It is how a person's
   own walk is recorded with nobody following (walks/self-recorder); a
-  curtained beat makes no frame, so its tap sees none."
+  curtained beat makes no frame, so its tap sees none. An optional
+  `since`, {:from self}, says where the gaze was before the call this
+  beat shows, and the `move` is judged from there: a grant-scoped GET
+  marks the gaze itself (`read!`), with no tap, so the beat that
+  follows that read would find the gaze already on its row and its tap
+  would see no `move`."
   ([reg principal self] (report! reg principal self nil nil))
   ([reg principal self ui] (report! reg principal self ui nil))
-  ([reg principal self ui tap]
+  ([reg principal self ui tap] (report! reg principal self ui tap nil))
+  ([reg principal self ui tap since]
   (let [self (normalize-self self)]
     (check-self! self)
     (when (= (:id principal) (:id t/anonymous))
@@ -640,7 +680,9 @@
         (evict-local! reg pid)
         (let [e (entry-of reg principal self "heartbeat")
               cv (curtain-view reg [pid])
-              before (get-in @(:local reg) [pid :entry])]
+              before (if (contains? since :from)
+                       {:self (:from since)}
+                       (get-in @(:local reg) [pid :entry]))]
           (locking (:lock reg)
             (swap! (:local reg) update pid
                    (fn [st] (let [st (or st {:streams {}})]
@@ -869,7 +911,9 @@
 (defn ui-redactor
   "One follower's redaction of a `ui` frame, judged under the
   FOLLOWER's visibility, never the reporter's: the dialog crosses iff
-  :row? admits its row and :action? its action, else it is null and
+  :row? admits its row and :action? its action (a create's dialog, on
+  a collection self, iff the follower sees the WHOLE kind and the
+  action is one of its creates), else it is null and
   its fields go with it; each fields key crosses iff :arg? admits it
   and is REMOVED otherwise, never blanked; collection.self follows the
   whole-kind rule, its filter keeps the keys :field? admits and a sort
@@ -885,11 +929,19 @@
           field? (or (:field? vis) (constantly true))]
       (fn [frame]
         (let [{:keys [dialog fields collection focus]} (:ui frame)
-              [rdef id] (row-of eng (:self dialog))
+              [rdef id] (or (row-of eng (:self dialog))
+                            (when-some [r (collection-of eng (:self dialog))]
+                              [r nil]))
               kind (:kind rdef)
               action (some-> (:action dialog) name keyword)
               dialog' (when (and rdef action
-                                 ((:row? vis) kind id)
+                                 (if id
+                                   ((:row? vis) kind id)
+                                   ;; a create's form: no row to ask
+                                   ;; about, so whole-kind sight judges
+                                   (and (visible? (:self dialog))
+                                        (contains? (set (:create-action-names rdef))
+                                                   action)))
                                  ((:action? vis) kind action))
                         dialog)
               fields' (when (and dialog' (map? fields))

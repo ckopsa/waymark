@@ -957,7 +957,8 @@ function replayActor(f) {
   return {id: f.who || "", display: c.display || f.who || "someone",
           type: c.type || "human"};
 }
-/* the row and the door a recorded dialog names, as a document
+/* the row (or, for a create, the collection) and the door a recorded
+   dialog names, as a document
    actionDialog can draw: every field the recording typed into, as
    text. The export carries no schema, so none is invented. */
 function replayDialogDoc(d) {
@@ -967,9 +968,12 @@ function replayDialogDoc(d) {
   const held = replay.docs.get(d.self);
   if (held && (held.actions || {})[d.action]) return {ok: true, body: held};
   const names = replay.fields.get(d.self + " " + d.action) || new Set();
+  /* a create's dialog is on the collection: there is no row behind it,
+     and the kind is the recorded screen's when the walk carries one */
   const row = replay.rows.get(d.self) || {};
   return {ok: true, body: {
-    self: d.self, kind: row.kind || "", state: row.state || null,
+    self: d.self, kind: row.kind || (held && held.kind) || "",
+    state: row.state || null,
     actions: {[d.action]: {
       safety: {idempotent: true},
       input: {type: "object", properties: Object.fromEntries(
