@@ -622,6 +622,34 @@
     row
     (assoc-in row [:data :runners] (vec (:runners inp)))))
 
+;; ONE SEED DOOR PER STATE (waymark ticket 86c7501b): every schedule
+;; door names one to-state, and the seed must leave a paused, pending
+;; or broken row where it stands. So each state the seed may meet has
+;; a door that stays in it, and the seed takes the row's own.
+(def seed-doors
+  "The boot seed's door for each state a schedule may be seeded in."
+  {:live :seed_runners
+   :paused :seed_runners_paused
+   :pending :seed_runners_pending
+   :broken :seed_runners_broken})
+
+(defn- seed-door [state]
+  {:from #{state} :to state
+   :input [:map
+           [:runners {:x-display {:hidden true}}
+            [:vector {:min 1 :max 20} [:string {:min 1 :max 200}]]]]
+   :record true
+   :guards [engine-writes-schedules]
+   :edit {:prefill [:runners] :fence false
+          :unfenced-reason
+          "Written by the boot seed, which read the row in this pass; it writes only a list that is empty."}
+   :safety {:idempotent true :reversible false :confirm false
+            :one-way "The engine names the link it seeded from this row; Runner links restates the list."}
+   :handler seed-runners
+   :display {:label (str "Runner list seeded"
+                         (when-not (= :live state)
+                           (str " while " (name state))))}})
+
 (defresource schedule
   {:kind :schedule
    :plural "schedules"
@@ -1092,22 +1120,13 @@
      :display {:label "Routine throttled"}}
 
     ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
-    ;; and a no-op on a row that already names a list. Only a live row:
-    ;; the seed must not wake a paused one.
-    :seed_runners
-    {:from #{:live} :to :live
-     :input [:map
-             [:runners {:x-display {:hidden true}}
-              [:vector {:min 1 :max 20} [:string {:min 1 :max 200}]]]]
-     :record true
-     :guards [engine-writes-schedules]
-     :edit {:prefill [:runners] :fence false
-            :unfenced-reason
-            "Written by the boot seed, which read the row in this pass; it writes only a list that is empty."}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The engine names the link it seeded from this row; Runner links restates the list."}
-     :handler seed-runners
-     :display {:label "Runner list seeded"}}}
+    ;; and a no-op on a row that already names a list. One door per
+    ;; state (`seed-doors`), each staying where it is: the seed must
+    ;; not wake a paused row, nor mend a broken one.
+    :seed_runners (seed-door :live)
+    :seed_runners_paused (seed-door :paused)
+    :seed_runners_pending (seed-door :pending)
+    :seed_runners_broken (seed-door :broken)}
    :deviations
    ["The schedule is NOT declared through server/mirror, though R-12.0 names the calendar as the precedent. Three reasons: mirror's authority points inward (a pull wins; R-12.3 wants a read-back that reports and never repairs), mirror refuses a kind that declares its own :states (R-12.1 names four), and MirrorAdapter has no pause, resume or delete (calendar10 had to hang delete-event! off the side of the protocol). The seam is ScheduleAdapter instead, and the bookkeeping posture — hidden system doors over ordinary data fields — is borrowed from mirror whole."
     "R-12.1 lists four states; this kind has five. `ended` is where a retired or merged seat's schedule lands once the copy is deleted. The alternative was returning the row to `pending`, which means \"no copy yet\" and invites the next push to make one."
