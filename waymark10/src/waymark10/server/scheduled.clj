@@ -248,7 +248,13 @@
   "The door a target names, read from this engine's registry under the
   grant the scheduler wears: `{:rdef :kind :action :id :defn}`, with no
   `:id` and no `:defn` for the kind's create, or `{:problem}`. A door
-  the grant does not admit reads as a door that is not there."
+  the grant does not admit reads as a door that is not there.
+
+  AN AGENT THAT WEARS NO LIVE GRANT HAS NO DOOR TO SCHEDULE. The create
+  is open to every caller with no grant on this kind, so the absence of
+  a grant cannot read as leave: an agent with none is scoped to nothing,
+  as `unless-granted` reads it. A person carries no grant and reads the
+  registry, and so does the engine's own run."
   [target ctx]
   (let [kind-name (some-> (:kind target) str not-empty)
         action (some-> (:action target) str not-empty keyword)
@@ -257,7 +263,11 @@
                (when kind-name (rdef-of kind-name)))
         kind (:kind rdef)
         grant (:grant ctx)
-        admits? (fn [k & args] (if-some [f (get grant k)] (apply f args) true))
+        bare? (and (nil? grant) (= :agent (get-in ctx [:principal :type])))
+        admits? (fn [k & args]
+                  (cond
+                    bare? false
+                    :else (if-some [f (get grant k)] (apply f args) true)))
         defn' (when-some [d (when action (get-in rdef [:actions action]))]
                 (when-not (:bulk d) (assoc d :name action)))
         create? (and action
@@ -1016,7 +1026,13 @@
    ;; WHOEVER SCHEDULED IT READS IT AND STOPS IT WITH NO FURTHER GRANT
    ;; (R-1). The guards still judge both doors; this only decides that
    ;; the scheduler can see its own row well enough to knock.
-   :own-surface {:by :scheduler :actions #{:cancel :reschedule}}
+   ;;
+   ;; SCHEDULING NEEDS NO GRANT ON THIS KIND EITHER (R-7.2). A caller
+   ;; schedules any call it could make itself, so `create` rides the
+   ;; same courtesy. What it may schedule is the scheduling check's to
+   ;; say (`door-of`, under the grant the caller wears), and `born`
+   ;; stamps `scheduler` and `acts_as` from the caller, never the body.
+   :own-surface {:by :scheduler :actions #{:create :cancel :reschedule}}
    :schema
    (-> [:map
         target-field

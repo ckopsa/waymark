@@ -1974,7 +1974,12 @@
   id, `run_at` on the scheduler's clock, the rule and the summary line.
   `dry_run` rehearses the same create and passes its verdict through.
   Many rows at once are refused here: a scheduled bulk call is a
-  scheduled job, and that is its own design."
+  scheduled job, and that is its own design.
+
+  The create carries the sitting this session is bound to, as an
+  invoke does, so the stored call is that sitting's act and its answer
+  is one served answer on it. The run at `run_at` counts on no sitting
+  (R-4.2)."
   [eng call session rdef aname {:keys [id ids items at input dry_run] :as args}]
   (if (or ids items)
     (refusal (p/problem :invalid-arguments 422 "One call at a time"
@@ -1983,18 +1988,20 @@
                                       "built. Give `id` in place of ids or items, one call for "
                                       "each row.")}))
     (let [sdef (rdef-of eng "scheduled_action")
-          resp (call (request session :post (str "/api/" (:plural sdef))
-                              {:body (cond-> (into {:target (cond-> {:kind (name (:kind rdef))
-                                                                     :action (name aname)}
-                                                              id (assoc :id (str id)))
-                                                    :run_at at}
-                                                   (filter (comp some? val))
-                                                   (select-keys args schedule-keys))
-                                       input (assoc :input input))
-                               :query (when dry_run "dry_run=1")
-                               :headers {"idempotency-key"
-                                         (origin-key (get-in session [:principal :id])
-                                                     (random-uuid))}}))
+          resp (call (assoc (request session :post (str "/api/" (:plural sdef))
+                                     {:body (cond-> (into {:target (cond-> {:kind (name (:kind rdef))
+                                                                            :action (name aname)}
+                                                                     id (assoc :id (str id)))
+                                                           :run_at at}
+                                                          (filter (comp some? val))
+                                                          (select-keys args schedule-keys))
+                                              input (assoc :input input))
+                                      :query (when dry_run "dry_run=1")
+                                      :headers {"idempotency-key"
+                                                (origin-key (get-in session [:principal :id])
+                                                            (random-uuid))}})
+                            :waymark10/sitting
+                            (bound-sitting eng (:mcp-session-id session))))
           row (when (and (not dry_run) (<= 200 (:status resp 500) 299))
                 (body-json resp))
           ;; the envelope carries the address, not the id
