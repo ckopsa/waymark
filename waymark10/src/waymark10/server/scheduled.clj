@@ -1,6 +1,6 @@
 (ns waymark10.server.scheduled
   "The scheduled action (docs/spec-scheduled-actions.md, children 1a,
-  1b, 1c, 2, 4a and 5): a call stored for a time, as a kind of its own.
+  1b, 1c, 2, 4a, 5 and 6): a call stored for a time, as a kind of its own.
 
   THIS NAMESPACE IS THE KIND, ITS SCHEDULING CHECK, ITS RUN AND ITS
   CLOCK. The create validates, checks and stores. `start!` claims a row
@@ -48,7 +48,14 @@
   THE ENGINE NEVER GUESSES UTC (R-7.2). `run_at` is RFC 3339 with an
   offset, or a local time read in the `zone` the body names, else in
   the zone on the scheduler's member row or its person's. From then
-  on it is an instant in whole minutes."
+  on it is an instant in whole minutes.
+
+  THE PERSON IS TOLD HOW IT ENDED (R-6). The birth stamps who that is:
+  the scheduler, or the person an agent or a seat acts for, on
+  `tell_done` and `tell_problem` as `tell` allows. The engine declares
+  one notice rule per ending (held-calls/engine-rules), and the
+  notifier's consumer sends the kept sentence, `outcome_why`, the way
+  it sends any addressed notice. `cancelled` has no rule."
   (:require [clojure.string :as str]
             [waymark10.confirm :as confirm]
             [waymark10.guards :as g]
@@ -151,6 +158,25 @@
                      (some-> (:acts-for p) str not-empty))]
       (keep #(some-> (get-in % [:data :zone]) str not-empty)
             [m (when person (named person))]))))
+
+(defn- person-of
+  "R-6.1: the member an ending is told to, as a row id, or nil. A person
+  who schedules is told. An agent or a seat is not: the person it acts
+  for is, read from its member row and then from the principal."
+  [ctx]
+  (when (and (:read ctx) (:find ctx))
+    (let [named (fn [who]
+                  (when-some [who (some-> who str not-empty)]
+                    (or ((:read ctx) :member who)
+                        (first ((:find ctx) :member {:subject who} {:limit 1})))))
+          p (:principal ctx)
+          m (named (:id p))
+          person (or (some-> (get-in m [:data :acts_for]) str not-empty)
+                     (some-> (:acts-for p) str not-empty))
+          told (cond
+                 person (named person)
+                 (= :human (or (:type p) :human)) m)]
+      (some-> (:id told) str not-empty))))
 
 (defn- time-of
   "The instant one door's input names. A reschedule that names no zone
@@ -524,9 +550,13 @@
   wore. `run_at` becomes the instant the body named, in whole minutes,
   and `zone` the zone it is shown in. `snapshot` is the target as the
   scheduling check met it. A call the check found held is born
-  `proposed`, naming the held call `ask!` mints for it (R-4.3)."
+  `proposed`, naming the held call `ask!` mints for it (R-4.3).
+  `tell_done` and `tell_problem` name the member each ending is told
+  to, as `tell` allows (R-6.1)."
   [row ctx]
   (let [p (:principal ctx)
+        tell (or (some-> (get-in row [:data :tell]) str not-empty) "all")
+        told (when (not= "none" tell) (person-of ctx))
         {:keys [instant zone]} (time-of nil (:data row) ctx)
         acts-for (some-> (:acts-for p) str not-empty)
         grant (some-> (get-in ctx [:grant :id]) str not-empty)
@@ -542,7 +572,9 @@
                                     :zone zone)
                        grant (assoc :grant grant)
                        snapshot (assoc :snapshot snapshot)
-                       held (assoc :held_call (str (random-uuid)))))
+                       held (assoc :held_call (str (random-uuid)))
+                       (and told (= "all" tell)) (assoc :tell_done told)
+                       told (assoc :tell_problem told)))
       held (assoc :state :proposed))))
 
 (defhandler move-time [row inp ctx]
@@ -605,6 +637,32 @@
 
 (defn- call-of [door]
   (str "`" (name (:action door)) "` on " (name (:kind door))))
+
+(def ^:private ^DateTimeFormatter hour-and-minute
+  (DateTimeFormatter/ofPattern "HH:mm"))
+
+(defn- clock-of
+  "An instant as the row's zone shows it, in hours and minutes."
+  [^Instant i zone]
+  (.format hour-and-minute (.atZone i ^ZoneId (or (zone-id zone) ZoneOffset/UTC))))
+
+(defn- ran-words
+  "R-6.2: the sentence of a call that ran, in the row's zone. A run that
+  began in a later minute than `run_at` names both times."
+  [door data]
+  (let [^Instant due (:run_at data)
+        ^Instant ran (or (:ran_at data) due)
+        zone (:zone data)]
+    (cond
+      (nil? due)
+      (str "Ran " (call-of door) " as scheduled.")
+
+      (.isAfter (whole-minute ran) due)
+      (str "Ran " (call-of door) " at " (clock-of ran zone)
+           "; it was scheduled for " (clock-of due zone) ".")
+
+      :else
+      (str "Ran " (call-of door) " at " (clock-of due zone) ", as scheduled."))))
 
 (defn- model-at-scheduling
   "The model the scheduling session declared, read off the row's first
@@ -919,7 +977,7 @@
                                     :else (carry-out eng id door data principal
                                                      (:grant leash)))]
         (end! eng id end
-              (or why (str "Ran " (call-of door) " as scheduled."))
+              (or why (ran-words door data))
               (or before (when (= :land end) (outcome-of eng door res))))))))
 
 ;; ── the clock (R-5) ─────────────────────────────────────────────────
@@ -956,14 +1014,6 @@
                                   {:target :data :field field :cast "timestamptz"
                                    :op op :value (str at)}]
                                  {:limit sweep-cap}))))))
-
-(def ^:private ^DateTimeFormatter hour-and-minute
-  (DateTimeFormatter/ofPattern "HH:mm"))
-
-(defn- clock-of
-  "An instant as the row's zone shows it, in hours and minutes."
-  [^Instant i zone]
-  (.format hour-and-minute (.atZone i ^ZoneId (or (zone-id zone) ZoneOffset/UTC))))
 
 (defn- grace-words [^long seconds]
   (cond
@@ -1359,6 +1409,14 @@
                 :x-display {:label "Approved by"
                             :help "The held call that carries a person's yes, when the call needed one."}}
     [:maybe :waymark/ref]]
+   [:tell_done {:optional true :kind :member
+                :x-display {:label "Told when it runs"
+                            :help "The person told when the call ran: the scheduler, or the person it acts for. Stamped by the engine at birth, and empty unless `tell` is all."}}
+    [:maybe :waymark/ref]]
+   [:tell_problem {:optional true :kind :member
+                   :x-display {:label "Told when it does not"
+                               :help "The person told when the call was skipped or failed. Stamped by the engine at birth, and empty when `tell` is none."}}
+    [:maybe :waymark/ref]]
    [:ran_at {:optional true
              :x-display {:label "Ran at" :help "When the run began."}}
     [:maybe :waymark/instant]]
@@ -1489,7 +1547,10 @@
     "R-1 lists `etag` in the snapshot. An etag is spelled from the kind, the id and the version, so the snapshot keeps `version` and a reader spells the etag from it."
     "R-1 says `reschedule` runs the scheduling check again. It does not yet: the check runs at the create, and a moved row meets its door at the run."
     "R-3.1 asks a confirm door for its sentence. The sentence is asked of a row's door; a create target is rehearsed in full and asked for none."
-    "R-6.2 says the summary is `outcome_why` after an ending. A summary is one template, so the line stays `{target} · {run_at} · {state}` and the sentence is read from the field."
+    "R-6.2 says the summary is `outcome_why` after an ending. A summary is one template, so the line stays `{target} · {run_at} · {state}` and the sentence is read from the field. The notice of an ending says the sentence."
+    "R-6.1 says one engine-declared notice rule per ending. A `notice_rule` is a row a person writes, and it names a notifier the engine cannot choose. The three rules are declared in code (held-calls/engine-rules) and the notifier's consumer reads them beside the rows: the told member's own notifier makes the text and carries the send, and sent, failed and held are counted on that notifier, because a declared rule has no row to count on."
+    "R-6.1 narrows the telling by `tell`. A rule matches a transition by equality and reads no field, so the birth stamps who is told on two refs: `tell_done` under `all`, `tell_problem` under `all` and `problems`. Under `none`, and for an agent or a seat that acts for nobody, both are empty and the rule has nobody to address."
+    "R-6.2's examples spell the action as a participle (Groomed, Not reopened). The engine has the action's name and not its participle, so the done line is `Ran <action> on <kind> at <time>`, and a skip or a failure says its reason as the run met it."
     "R-7.2 states the zone rules for `at`. The same rules are applied here to `run_at` on the create and on `reschedule`, and an instant written with an offset and no zone anywhere is shown in that offset."
     "R-2 reads the target under the runner's grant as it is then. The run reads the grant by its id and judges the door, the row and the call's guards under it. The validity rule's own read of the row's state and version is the engine's, so a row the grant no longer shows is skipped in the grant's sentence and not in the sentence of a row that is gone. A `conditions` row's fields (R-2.3) are judged under that grant: a condition on a field it no longer shows plain skips the row."
     "R-4.2 names three ways a grant stops a run: revoked, expired, narrowed. They are one sentence here, and a seat that is not open has its own. A seat held for named models is judged with the model the scheduling session declared, read off this row's first transition, because a run has no session to declare one."

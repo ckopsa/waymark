@@ -1475,6 +1475,13 @@
 ;; "member"}` reads the moved row's `plan_id`, loads the row it names
 ;; and reads that row's `member`. The wall judges every hop; the send
 ;; resolves the chain at send time, and an empty hop is unaddressed.
+;;
+;; The engine declares rules of its own (`engine-rules`): the same
+;; `when` and `address`, with no row and no notifier. The addressed
+;; member's own notifier makes the text and carries the send, and sent,
+;; failed and held are counted on that notifier, since there is no rule
+;; row to count on. `says` names the field on the moved row whose
+;; sentence is the notice's line.
 
 (defn- ref-named
   "The ref field of this resource named `field`, or nil."
@@ -1696,8 +1703,9 @@
 (defn- address!
   "One addressed notice: the member the rule's field names, reached the
   way the member's `notify` says, with the rule's notifier's text.
-  → [outcome error], the outcome :sent, :held, :failed, :skipped,
-  :unaddressed or :self. Counts nothing; never throws."
+  → [outcome error carrier], the outcome :sent, :held, :failed,
+  :skipped, :unaddressed or :self, and the carrier the id of the
+  notifier a send went through. Counts nothing; never throws."
   [eng rule t]
   (let [count! (fn [outcome error] [outcome error])]
     (try
@@ -1706,10 +1714,21 @@
                                     (address-path (get-in rule [:data :address])))
             member (when addressee (decoded-row eng :member addressee))
             notify (get-in member [:data :notify])
-            texter (decoded-row eng :notifier (get-in rule [:data :notifier]))
-            carrier (or (some->> (:notifier notify) str not-empty
-                                 (decoded-row eng :notifier))
-                        texter)
+            own (some->> (:notifier notify) str not-empty
+                         (decoded-row eng :notifier))
+            ;; a rule the engine declares names no notifier: the
+            ;; member's own makes the text
+            texter (if-some [named (some-> (get-in rule [:data :notifier])
+                                           str not-empty)]
+                     (decoded-row eng :notifier named)
+                     own)
+            carrier (or own texter)
+            ;; `says`: the moved row's own sentence is the line
+            said (some->> (get-in rule [:data :says]) str not-empty keyword
+                          (conj [:data]) (get-in row) str not-empty)
+            values (fn []
+                     (cond-> (notice-values eng texter t)
+                       said (assoc :summary said)))
             ;; a held call's birth is the engine's hand: the person
             ;; who caused it is the row's `caller`
             causers (cond-> #{(actor-id (:actor t))}
@@ -1723,29 +1742,39 @@
           (or (nil? member) (empty? notify)) (count! :skipped nil)
           (nil? texter) (count! :failed "the rule's notifier is gone")
           (quiet? notify (now-of eng))
-          (do (hold-quiet! eng (:id member) (notice-values eng texter t))
-              (count! :held nil))
+          (do (hold-quiet! eng (:id member) (values))
+              [:held nil (:id carrier)])
           :else
           (let [args (merge (render-notice (get-in texter [:data :input_template])
-                                           (notice-values eng texter t))
+                                           (values))
                             (:input notify))
                 answer (servers/call! eng (notifier-tool eng carrier) args)]
             (if (:isError answer)
-              (count! :failed (or (some-> answer :content first :text)
-                                  "the tool answered an error"))
-              (count! :sent nil)))))
+              [:failed (or (some-> answer :content first :text)
+                           "the tool answered an error")
+               (:id carrier)]
+              [:sent nil (:id carrier)]))))
       (catch Exception e
         (warn! "notice rule " (get-in rule [:data :name]) " could not tell for "
                "transition " (:id t) " — " (ex-message e))
         (count! :failed (or (ex-message e) (str e)))))))
 
 (defn- tell!
-  "One addressed notice, counted on the rule in place.
+  "One addressed notice, counted on the rule in place. A rule the
+  engine declares has no row, and the notifier that carried it counts.
   → :sent, :held, :failed, :skipped, :unaddressed or :self; never throws."
   [eng rule t]
-  (let [[outcome error] (address! eng rule t)]
-    (if (= :self outcome)
-      :self
+  (let [[outcome error carrier] (address! eng rule t)]
+    (cond
+      (= :self outcome) :self
+
+      (nil? (:id rule))
+      (do (when (and carrier (#{:sent :failed :held} outcome))
+            (try (tally! eng carrier outcome error)
+                 (catch Exception _ nil)))
+          outcome)
+
+      :else
       (try (tally-row! eng :notice_rule (:id rule) outcome error)
            outcome
            (catch Exception _ :failed)))))
@@ -1753,13 +1782,42 @@
 (defn- at-field [rule]
   (some-> (get-in rule [:data :at :field]) str not-empty keyword))
 
+(def engine-rules
+  "The notice rules the engine declares itself, by the kind they hear.
+  A scheduled action's three endings (docs/spec-scheduled-actions.md
+  R-6.1): each addresses the ref the birth stamped, as `tell` allowed,
+  and says the sentence the run kept. `cancelled` has no rule: the
+  person did it."
+  {:scheduled_action
+   [{:name "A scheduled action ran"
+     :when {:to_state "done"}
+     :address {:field "tell_done"}
+     :says "outcome_why"}
+    {:name "A scheduled action was skipped"
+     :when {:to_state "skipped"}
+     :address {:field "tell_problem"}
+     :says "outcome_why"}
+    {:name "A scheduled action failed"
+     :when {:to_state "failed"}
+     :address {:field "tell_problem"}
+     :says "outcome_why"}]})
+
+(defn- declared-rules
+  "The engine's own rules for the moved kind, in a rule row's shape and
+  with no id."
+  [t]
+  (let [k (keyword (name (:kind t)))]
+    (mapv (fn [r] {:data (assoc r :kind (name k))})
+          (get engine-rules k))))
+
 (defn notice-rules-transition!
   "One transition → one addressed notice per active notice rule that
-  matches it. A rule with `at` hears no transition; the sweep below
-  tells it. Never throws."
+  matches it, the rows and then the rules the engine declares. A rule
+  with `at` hears no transition; the sweep below tells it. Never
+  throws."
   [eng t]
   (try
-    (doseq [r (active-rows eng :notice_rule)
+    (doseq [r (concat (active-rows eng :notice_rule) (declared-rules t))
             :when (nil? (at-field r))
             :when (rule-matches? r t)]
       (tell! eng r t))
