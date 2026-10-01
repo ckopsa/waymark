@@ -464,6 +464,8 @@ window.addEventListener("hashchange", followChip);
    on every transition of that row the firehose carries. ───────────── */
 let walkthroughId = localStorage.getItem("wm10.walkthrough.id") || null;
 let walkthroughDoc = null;
+/* the author this walkthrough's Start made the tab follow, or null */
+let walkthroughFollow = localStorage.getItem("wm10.walkthrough.follow") || null;
 function stepLine(n, of, title) {
   return `Step ${n} of ${of}` + (title ? ` · ${title}` : "");
 }
@@ -482,7 +484,37 @@ function takeWalkthrough(id) {
 function dropWalkthrough() {
   walkthroughId = walkthroughDoc = null;
   localStorage.removeItem("wm10.walkthrough.id");
+  /* the follow this walkthrough began ends with it */
+  if (walkthroughFollow && followId === walkthroughFollow) unfollow();
+  walkthroughFollow = null;
+  localStorage.removeItem("wm10.walkthrough.follow");
   walkthroughChip();
+}
+/* watching an agent step (docs/spec-walkthrough.md §5): Start and
+   Resume also follow the author in guided mode in this tab. The tap is
+   the follower's ask docs/spec-guided-follow.md §2 requires; the author
+   shares its `ui` frames or it does not. A follow the person already
+   held stands when the walkthrough leaves the hand. */
+function followAuthor() {
+  const author = ((walkthroughDoc || {}).data || {}).author;
+  if (!author || author === viewerId()) return;
+  const held = followId === author;
+  if (held && followUi) return;
+  if (!held) {
+    walkthroughFollow = author;
+    localStorage.setItem("wm10.walkthrough.follow", author);
+  }
+  follow({id: author, display: held ? followName : author}, {ui: true});
+}
+/* on an agent step the screen goes to the step's `self`, where the
+   person watches what the agent reports. Never out of a dialog the
+   person opened; a guided one is the agent's own and does not hold it. */
+function showAgentStep() {
+  const doc = walkthroughDoc, d = (doc || {}).data || {};
+  if (!doc || doc.state !== "running" || d.waiting_on !== "agent") return;
+  const self = ((d.steps || [])[(d.current || 1) - 1] || {}).self;
+  if (!self || self === hereHref() || $("dialog[open]:not([data-guided])")) return;
+  location.hash = "#" + self;
 }
 async function refreshWalkthrough() {
   const id = walkthroughId;
@@ -578,18 +610,26 @@ function walkthroughSteps(doc) {
 }
 /* the next step arrives by itself: the firehose's half (210-ledger.js
    hands every transition here). A transition of the row in hand redraws
-   the chip; the person's own start or resume takes the row in hand; an
-   invitation born for the walkthrough in hand and addressed to the
-   viewer opens, unless a dialog the person opened is on screen. */
+   the chip; the person's own start or resume takes the row in hand and
+   follows its author in guided mode; an agent step takes the screen to
+   its row; an invitation born for the walkthrough in hand and addressed
+   to the viewer opens, over a guided dialog, unless a dialog the person
+   opened is on screen. */
 async function ledFrame(ev) {
   if (replay) return;
   const me = viewerId();
   if (ev.kind === "walkthrough") {
     const id = String(ev.self || "").split("/").pop();
-    if (id === walkthroughId) return refreshWalkthrough();
-    if (!walkthroughId && me && ["start", "resume"].includes(ev.action) &&
-        String((ev.actor || {}).id || "").replace(/^member:/, "") === me)
-      return takeWalkthrough(id);
+    /* the person's own Start or Resume */
+    const tapped = !!me && ["start", "resume"].includes(ev.action) &&
+      String((ev.actor || {}).id || "").replace(/^member:/, "") === me;
+    if (id === walkthroughId) await refreshWalkthrough();
+    else if (!walkthroughId && tapped) await takeWalkthrough(id);
+    else return;
+    if (tapped) followAuthor();
+    /* one beat later: a follow's first jump goes where the author looks
+       now, and the step's own row is where the screen rests */
+    setTimeout(showAgentStep, 0);
     return;
   }
   if (ev.kind !== "invitation" || ev.action !== "create" || !walkthroughId) return;
