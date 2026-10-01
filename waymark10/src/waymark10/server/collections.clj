@@ -166,8 +166,29 @@
           (keep (fn [[f v]] (when-not (contains? named f) [(name f) (str v)])))
           (:default-filters rdef))))
 
+(defn sort-terms
+  "One sort spelling — a, -a,b or a vector of those — → the keys it
+  names, in order: [{:field kw :desc bool} …]. A declared :sortable
+  :default and the sort= param read through this one door."
+  [spec]
+  (into []
+        (comp (mapcat #(str/split % #","))
+              (map str/trim)
+              (remove str/blank?)
+              (map (fn [t]
+                     (let [desc? (str/starts-with? t "-")]
+                       {:field (keyword (if desc? (subs t 1) t)) :desc desc?}))))
+        (if (string? spec) [spec] spec)))
+
+(defn- sort-of
+  "Sort keys → the :sort shape: the first key as {:field :desc}, any
+  later ones under :then, so a one-field reader keeps reading one map."
+  [terms]
+  (when-some [[t & more] (seq terms)]
+    (cond-> t (seq more) (assoc :then (vec more)))))
+
 (defn parse-query
-  "Query params ({string string}) → {:conds […] :sort {:field :desc}
+  "Query params ({string string}) → {:conds […] :sort {:field :desc :then}
   :page {:size :number} :filters sorted-map :applied sorted-map}, or
   one 422 problem naming every unknown/malformed parameter.
 
@@ -186,7 +207,12 @@
   nothing rather than answering 422 — it is how a client says 'this
   field, deliberately unfiltered', which is the only way to clear a
   default. A blank sort= is still a 422: sort hides no rows, so there
-  is nothing to clear."
+  is nothing to clear.
+
+  sort= (and :sortable :default) may name several keys, comma
+  separated (a vector for the default): rows order by the first, then
+  by the next among its ties, and id breaks the last tie. :then
+  carries the keys after the first."
   ([rdef params] (parse-query rdef params nil))
   ([rdef params {:keys [defaults?] :or {defaults? true}}]
    (let [g (grammar rdef)
@@ -199,15 +225,21 @@
           (fn [acc pname raw]
             (cond
               (= "sort" pname)
-              (let [desc? (str/starts-with? raw "-")
-                    base (if desc? (subs raw 1) raw)]
-                (if (some #(= base %) sortable)
-                  (assoc acc :sort {:field (keyword base) :desc desc?})
+              (let [terms (sort-terms raw)
+                    bad (into [] (comp (map (comp name :field))
+                                       (remove (set sortable)))
+                              terms)
+                    one-of (vec (mapcat (fn [f] [f (str "-" f)]) sortable))]
+                (if (and (seq terms) (empty? bad))
+                  (assoc acc :sort (sort-of terms))
                   (update acc :errors assoc pname
-                          [(if (seq sortable)
-                             (str "must be one of "
-                                  (vec (mapcat (fn [f] [f (str "-" f)]) sortable)))
-                             "this kind declares no sortable fields")])))
+                          [(cond
+                             (empty? sortable)
+                             "this kind declares no sortable fields"
+                             (< 1 (count terms))
+                             (str (str/join ", " bad) " cannot sort; each key "
+                                  "must be one of " one-of)
+                             :else (str "must be one of " one-of))])))
 
               (= "page[size]" pname)
               (let [n (parse-long raw)]
@@ -273,9 +305,7 @@
      (-> acc
          (dissoc :errors)
          (assoc :applied (into (sorted-map) params))
-         (update :sort #(or % (when default-sort
-                                {:field (keyword (str/replace-first default-sort "-" ""))
-                                 :desc (str/starts-with? default-sort "-")})))))))
+         (update :sort #(or % (some-> default-sort sort-terms sort-of)))))))
 
 ;; ── the query affordance's input schema ─────────────────────────────
 
@@ -354,7 +384,8 @@
                                                             (str "-" (name f))])
                                                    sortable))}
                          (get-in rdef [:sortable :default])
-                         (assoc :default (get-in rdef [:sortable :default])))))
+                         (assoc :default (let [d (get-in rdef [:sortable :default])]
+                                           (if (string? d) d (str/join "," d)))))))
         props (reduce-kv (fn [props f v]
                            (let [pname (name f)]
                              (cond-> props
@@ -735,6 +766,7 @@
             {:rows (store/search-rows st tx (:kind rdef) conds
                                       {:order-by (:field sort)
                                        :desc (:desc sort)
+                                       :then-by (:then sort)
                                        :limit (:size page)
                                        :offset (* (:size page)
                                                   (dec (:number page)))})

@@ -142,25 +142,31 @@
 (defn- order-rows
   "search-rows's ordering: the promoted field's value (or state, or
   either engine timestamp, or created_at), ASC nulls last / DESC nulls
-  first, id tiebreak. The row map spells the timestamps in kebab
-  (:created-at/:updated-at) where the declaration names the column."
-  [rows order-by desc]
-  (let [keyfn (case order-by
-                nil #(:created-at %)
-                :state #(name (:state %))
-                :created_at #(:created-at %)
-                :updated_at #(:updated-at %)
-                #(sort-value (get-in % [:data order-by])))
-        cmp2 (fn [a b]
-               (let [ka (keyfn a) kb (keyfn b)
+  first, then each then-by key among the ties, id tiebreak. The row
+  map spells the timestamps in kebab (:created-at/:updated-at) where
+  the declaration names the column."
+  [rows order-by desc then-by]
+  (let [keyfn (fn [f]
+                (case f
+                  nil #(:created-at %)
+                  :state #(name (:state %))
+                  :created_at #(:created-at %)
+                  :updated_at #(:updated-at %)
+                  #(sort-value (get-in % [:data f]))))
+        ks (mapv (fn [{:keys [field desc]}] [(keyfn field) desc])
+                 (cons {:field order-by :desc desc} then-by))
+        cmp1 (fn [[k desc] a b]
+               (let [ka (k a) kb (k b)
                      c (cond
                          (= ka kb) 0
                          ;; nulls last ASC / first DESC = "nil is largest"
                          (nil? ka) 1
                          (nil? kb) -1
-                         :else (compare ka kb))
-                     c (if desc (- c) c)]
-                 (if (zero? c) (compare (:id a) (:id b)) c)))]
+                         :else (compare ka kb))]
+                 (if desc (- c) c)))
+        cmp2 (fn [a b]
+               (or (some #(let [c (cmp1 % a b)] (when-not (zero? c) c)) ks)
+                   (compare (:id a) (:id b))))]
     (sort cmp2 rows)))
 
 ;; ── the storage ─────────────────────────────────────────────────────
@@ -443,13 +449,13 @@
 
   ;; ── phase 7 ─────────────────────────────────────────────────────────
 
-  (search-rows [_ _tx kind conds {:keys [order-by desc limit offset]}]
+  (search-rows [_ _tx kind conds {:keys [order-by desc then-by limit offset]}]
     (let [rows (filter #(matches-all? % conds)
                        (vals (get-in @state [:tables kind])))]
       (into []
             (comp (drop (long (or offset 0)))
                   (take (long (or limit 100))))
-            (order-rows rows order-by desc))))
+            (order-rows rows order-by desc then-by))))
 
   (facet-counts [_ _tx kind field conds array?]
     (let [rows (filter #(matches-all? % conds)
