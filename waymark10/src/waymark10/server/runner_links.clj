@@ -70,7 +70,7 @@
   {:judges [:seeded_from]
    :reads [:principal]
    :explain "Where a link was copied from is written by the engine's boot seed alone, never by hand. Make the link without seeded_from."
-   :open "The way out is in this same form: leave seeded_from out. No door makes a caller the engine's boot seed."}
+   :remedies [:runner_link/create]}
   [_row inp ctx]
   (if (or (nil? (:seeded_from inp))
           (= :system (get-in ctx [:principal :type])))

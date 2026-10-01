@@ -332,7 +332,7 @@
 (g/defguard link-not-written-by-hand
   {:judges [:fire_url :fire_token]
    :explain "The Routine's fire URL and its token are written by link alone, never by hand. Add the model first, then link the Routine to it."
-   :open "The way out is in this same form: leave fire_url and fire_token out. The model's link door writes them afterward."}
+   :remedies [:model/link]}
   [_row inp _ctx]
   (if (or (contains? inp :fire_url) (contains? inp :fire_token))
     (t/deny)
