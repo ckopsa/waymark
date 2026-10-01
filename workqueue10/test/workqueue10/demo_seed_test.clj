@@ -3,6 +3,8 @@
   loaded where its own kinds are: the factory's kinds over the
   in-memory twin. This is what keeps the seed true as the kinds change:
   a step the law now refuses fails here before it fails a clone's boot.
+  The boot step that reads the two variables is here too, given their
+  values as arguments.
 
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.demo-seed-test"
   (:require [clojure.test :refer [deftest is testing]]
@@ -10,7 +12,8 @@
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seed :as seed]
-            [waymark10.server.store :as store]))
+            [waymark10.server.store :as store]
+            [workqueue10.main :as main]))
 
 (defn- moves [eng kind id]
   (store/with-tx (:storage eng)
@@ -50,3 +53,46 @@
     (testing "a restarted task does not seed twice"
       (is (false? (:seeded (seed/load! eng demo {}))))
       (is (= (count tickets) (count (dev/rows eng :ticket)))))))
+
+;; ── the boot step ───────────────────────────────────────────────────
+
+(def ^:private seed-on-boot! @#'main/seed-on-boot!)
+
+(def ^:private factory-refusal
+  "WAYMARK10_SEED is set and FACTORY10 is not 1: the seed's tickets need the factory kinds, so a demo engine boots with FACTORY10=1.")
+
+(defn- booted
+  "What `seed/boot!` was called with while `f` ran: a vector of
+  [engine seed-name] pairs, the seed itself never loaded."
+  [f]
+  (let [calls (atom [])]
+    (with-redefs [seed/boot! (fn [eng seed-name]
+                               (swap! calls conj [eng seed-name])
+                               nil)]
+      (f))
+    @calls))
+
+(deftest a-seed-without-the-factory-kinds-refuses-the-boot
+  (doseq [factory [nil "" "0" "true"]]
+    (testing (pr-str factory)
+      (let [thrown (atom nil)
+            calls (booted #(try (seed-on-boot! ::eng "demo" factory)
+                                (catch clojure.lang.ExceptionInfo e
+                                  (reset! thrown e))))]
+        (is (some? @thrown))
+        (is (= factory-refusal (some-> @thrown ex-message)))
+        (is (= {:seed "demo"} (some-> @thrown ex-data)))
+        (is (= [] calls) "the refusal comes before the seed is read")))))
+
+(deftest no-seed-named-does-nothing
+  (doseq [seed [nil ""]
+          factory [nil "1"]]
+    (testing (pr-str [seed factory])
+      (let [answer (atom ::unset)
+            calls (booted #(reset! answer (seed-on-boot! ::eng seed factory)))]
+        (is (nil? @answer))
+        (is (= [] calls))))))
+
+(deftest a-seed-with-the-factory-kinds-boots-it-by-name
+  (is (= [[::eng "demo"]]
+         (booted #(seed-on-boot! ::eng "demo" "1")))))
