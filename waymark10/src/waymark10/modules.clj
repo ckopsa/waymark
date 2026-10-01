@@ -426,7 +426,20 @@
                        eng {:interval-ms
                             (get-in eng [:services :seats :clock-ms]
                                     300000)}))
-             :stop defs/stop-clock-sweeper!}]
+             :stop defs/stop-clock-sweeper!}
+            ;; the scheduled actions' clock (spec-scheduled-actions
+            ;; R-5): every due row claimed and run, on a loop of its
+            ;; own and not a line in the wake tick, because a household
+            ;; engine with no seat must still groom a ticket at 08:30.
+            ;; Elected, and `start` is the claim under it (R-5.2).
+            {:hook :scheduled-actions
+             :elected :scheduled-actions
+             :start (fn [eng _]
+                      (scheduled/start-sweeper!
+                       eng {:interval-ms
+                            (get-in eng [:services :scheduled-actions :sweep-ms]
+                                    scheduled/default-sweep-ms)}))
+             :stop scheduled/stop-sweeper!}]
     :pack packs/core}
 
    {:module :attachments
