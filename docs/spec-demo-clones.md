@@ -94,14 +94,23 @@ name. The engine at that commit owns what the name means.
 
 Enough for a walk to look like a working engine, and no more:
 
-- **Two households**, each with three or four members. The members
-  have demo names that are plainly invented, a display name and a
-  role. One member in each household is an agent, because the walks
-  show an agent leading a person.
-- **Tickets in every state the ticket kind declares**, two or three in
-  each, with titles a stranger can read. Each one reached its state by
-  the doors, so its history page shows the moves.
-- **One held call**, waiting for a person's tap.
+- **Two households**, each with three or four members. A household is
+  a set of members and not a kind: the engine has no household row, so
+  the seed's cast names each member's household and the seed file
+  keeps each household's tickets together. The members have demo names
+  that are plainly invented, a display name and an actor type. One
+  member in each household is an agent that acts for a person of that
+  household, because the walks show an agent leading a person.
+- **Tickets in every state the ticket kind declares but `in_review`**,
+  two or three in each, with titles a stranger can read. Each one
+  reached its state by the doors, so its history page shows the moves.
+  `in_review` is out because only a change's `submit` reaches it, and
+  `submit` needs a bench. A demo clone has none.
+- **One held call**, waiting for a person's tap. The loader mints it
+  with `held-calls/hold!` as the engine. That is the door the power
+  door uses, and it is the one step that is not an ordinary invoke: no
+  hand at the wire may create a held call. The seed file names the
+  step `:hold`.
 - **One open invitation** (spec-guided-follow § 3), addressed to the
   member the person will sign in as.
 - Nothing else. No connection, no credential, no seat, no schedule, no
@@ -116,16 +125,21 @@ The seed is a cast and an ordered list of steps:
 
 ```clojure
 {:seed "demo" :version 1
- :cast  {:ada  {:id "ada"  :display "Ada Example" :type :human}
-         :plan {:id "plan" :display "Planner"     :type :agent}}
+ :cast  {:ada  {:id "ada"  :display "Ada Example" :type :human
+                :household "Harbour House"}
+         :plan {:id "plan" :display "Planner"     :type :agent
+                :household "Harbour House" :acts-for :ada}}
  :steps [{:as :ada  :kind :ticket :create {:title "…"} :ref :t1}
          {:as :ada  :kind :ticket :on :t1 :action "groom"}
          {:as :plan :kind :ticket :on :t1 :action "…"
-          :input {:due [:days 3]}}]}
+          :input {:due [:days 3]}}
+         {:hold {:tool "…" :caller [:cast :plan] :why "…"} :ref :h1}]}
 ```
 
 `:ref` names the row a step created, and `:on` and `[:ref :t1]` point
-back to it, because ids are minted at load. A date is written relative
+back to it, because ids are minted at load. `[:self :t1]` is the same
+row as a path, which is how an invitation names it, and `[:cast :ada]`
+is a cast member's id. `:hold` is the held call's step. A date is written relative
 to the boot (`[:days 3]`, `[:days -2]`), so the seed never goes stale.
 
 ### How it is loaded
@@ -160,6 +174,11 @@ These make a seed on a working engine impossible by construction: a
 production engine is not named `demo-…` and has an IdP. A step the law
 refuses also ends the boot. `up` then reports the failure and tears
 the clone down. A half-seeded engine is never served.
+
+The boot step in `workqueue10.main` asks for one thing more:
+`FACTORY10=1`. The seed's tickets are rows of a factory kind, so a
+demo engine serves the factory kinds. A boot with `WAYMARK10_SEED` set
+and `FACTORY10` unset refuses with a sentence.
 
 If the engine already holds a member row from the seed's cast, the
 seed was applied before (a restarted task on the same database). The
@@ -328,8 +347,10 @@ Children 1 and 2 are in ckopsa/waymark and depend on nothing. Children
    `a-seeded-engine-is-not-seeded-twice`, and
    `a-relative-date-is-counted-from-the-boot`. One more where the
    seed's own kinds are loaded, in `workqueue10`'s suite:
-   `the-demo-seed-loads-and-reaches-every-ticket-state`. That test is
-   what keeps the seed true as the kinds change.
+   `the-demo-seed-loads-and-reaches-every-ticket-state-but-in-review`.
+   That test is what keeps the seed true as the kinds change. It
+   leaves `in_review` out for section 1's reason: a demo clone has no
+   bench, so no change is submitted.
 2. *The engine says when it ends, and the UI warns* (ckopsa/waymark).
    Covers `WAYMARK_ENGINE_EXPIRES_AT` in the well-known document and
    the banner of section 3. Tests in `waymark10.ui-test`:
@@ -339,7 +360,8 @@ Children 1 and 2 are in ckopsa/waymark and depend on nothing. Children
 3. *`seed` on clone-mcp's `up`* (ckopsa/waymark-doors). Covers the
    argument, the empty database, the environment (`WAYMARK10_SEED`,
    `WAYMARK_ENGINE_NAME=demo-<short id>`, `WAYMARK_ENGINE_EXPIRES_AT`,
-   `WAYMARK10_AUTO_MIGRATE=1`, no `WAYMARK10_OIDC_*`), and the failed
+   `WAYMARK10_AUTO_MIGRATE=1`, `FACTORY10=1` because the seed's
+   tickets are factory kinds, no `WAYMARK10_OIDC_*`), and the failed
    seed that tears the clone down. Tests:
    `up-with-a-seed-restores-no-snapshot`,
    `up-with-a-seed-asks-no-tap`,

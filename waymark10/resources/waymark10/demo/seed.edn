@@ -1,0 +1,134 @@
+;; The demo seed (docs/spec-demo-clones.md § 1). Written by hand and
+;; reviewed as text: no row here is copied from a working engine.
+;; waymark10.server.seed walks it at boot when WAYMARK10_SEED=demo.
+;;
+;; Every step is an ordinary create or invoke by the cast member :as
+;; names, EXCEPT the one :hold step. A held call is minted by the
+;; engine's own door (held-calls/hold!, the one the power door uses),
+;; because no hand at the wire may create one.
+;;
+;; A household is a set of members, not a kind: :household groups the
+;; cast, and each household's tickets are kept together below.
+;;
+;; No ticket stands in `in_review`: only a change's submit reaches it,
+;; and a demo clone has no bench.
+{:seed "demo"
+ :version 1
+ :cast
+ {:ada  {:id "ada"  :display "Ada Example"    :type :human :household "Harbour House"}
+  :ben  {:id "ben"  :display "Ben Sample"     :type :human :household "Harbour House"}
+  :cleo {:id "cleo" :display "Cleo Specimen"  :type :human :household "Harbour House"}
+  :plan {:id "plan" :display "Planner"        :type :agent :household "Harbour House"
+         :acts-for :ada}
+  :dov  {:id "dov"  :display "Dov Placeholder" :type :human :household "Orchard Flat"}
+  :eve  {:id "eve"  :display "Eve Mockup"     :type :human :household "Orchard Flat"}
+  :fay  {:id "fay"  :display "Fay Figment"    :type :human :household "Orchard Flat"}
+  :tidy {:id "tidy" :display "Tidy"           :type :agent :household "Orchard Flat"
+         :acts-for :dov}}
+ :steps
+ [;; ── Harbour House ──────────────────────────────────────────────
+  ;; draft: the agent filed it, and nobody has groomed it
+  {:as :plan :kind :ticket :ref :h-draft
+   :create {:title "Show the week's weather beside the plan"
+            :detail "The day plan shows what is on. Put the forecast for each day next to it, so nobody plans a picnic in the rain."
+            :type "feature" :priority 3}}
+  ;; open: the queue
+  {:as :ada :kind :ticket :ref :h-open
+   :create {:title "Let a guest add a dish to the shared menu"
+            :detail "A guest opens the menu from a link and adds one dish. Done is a dish on the menu with the guest's name beside it."
+            :type "feature" :priority 1}}
+  {:as :ada :kind :ticket :on :h-open :action "groom"}
+  {:as :ben :kind :ticket :ref :h-next
+   :create {:title "Sort the chore list by who is home"
+            :detail "Chores for people who are away go to the bottom of the list."
+            :type "task" :priority 2}}
+  {:as :ben :kind :ticket :on :h-next :action "groom"}
+  ;; blocked: it waits on the open one
+  {:as :cleo :kind :ticket :ref :h-blocked
+   :create {:title "Print the shared menu as one page"
+            :detail "One page, for the fridge door. It needs the guests' dishes first."
+            :type "task" :priority 2}}
+  {:as :cleo :kind :ticket :on :h-blocked :action "groom"}
+  {:as :cleo :kind :ticket :on :h-blocked :action "block"
+   :input {:blocked_by [[:ref :h-open]]}}
+  ;; deferred: not now
+  {:as :ada :kind :ticket :ref :h-deferred
+   :create {:title "Plan the spring garden beds"
+            :detail "Which bed gets what, and when to sow it."
+            :type "task" :priority 3}}
+  {:as :ada :kind :ticket :on :h-deferred :action "groom"}
+  {:as :ada :kind :ticket :on :h-deferred :action "defer"
+   :input {:defer_until [:days 14]}}
+  ;; done
+  {:as :plan :kind :ticket :ref :h-done
+   :create {:title "Fix the reminder that rang an hour late"
+            :detail "The evening reminder rang at eight instead of seven after the clocks changed."
+            :type "bug" :priority 1}}
+  {:as :ada :kind :ticket :on :h-done :action "groom"}
+  {:as :ada :kind :ticket :on :h-done :action "complete"
+   :input {:close_reason "Fixed: the reminder now reads the house's own time zone."}}
+  ;; dropped: let go before anyone groomed it
+  {:as :ben :kind :ticket :ref :h-dropped
+   :create {:title "Add a second calendar for the cat"
+            :type "feature" :priority 4}}
+  {:as :ben :kind :ticket :on :h-dropped :action "drop"
+   :input {:close_reason "No longer wanted: the cat keeps no appointments."}}
+
+  ;; ── Orchard Flat ───────────────────────────────────────────────
+  {:as :tidy :kind :ticket :ref :o-draft
+   :create {:title "Draft a rota for the shared bins"
+            :detail "Three people, two bins, one collection a week."
+            :type "task" :priority 3}}
+  {:as :dov :kind :ticket :ref :o-open
+   :create {:title "Label the pantry shelves in the stock list"
+            :detail "Each item in the stock list says which shelf it lives on."
+            :type "task" :priority 2}}
+  {:as :dov :kind :ticket :on :o-open :action "groom"}
+  {:as :eve :kind :ticket :ref :o-blocked
+   :create {:title "Order what the pantry is short of each Friday"
+            :detail "A Friday list of what ran low. It needs the shelves labelled first."
+            :type "feature" :priority 2}}
+  {:as :eve :kind :ticket :on :o-blocked :action "groom"}
+  {:as :eve :kind :ticket :on :o-blocked :action "block"
+   :input {:blocked_by [[:ref :o-open]]}}
+  {:as :fay :kind :ticket :ref :o-deferred
+   :create {:title "Review the winter energy plan"
+            :detail "Read last winter's numbers before the heating goes on."
+            :type "chore" :priority 3}}
+  {:as :fay :kind :ticket :on :o-deferred :action "groom"}
+  {:as :fay :kind :ticket :on :o-deferred :action "defer"
+   :input {:defer_until [:days 30]}}
+  {:as :tidy :kind :ticket :ref :o-done
+   :create {:title "Stop the grocery list repeating last week's items"
+            :detail "Items bought last week came back onto this week's list."
+            :type "bug" :priority 1}}
+  {:as :dov :kind :ticket :on :o-done :action "groom"}
+  {:as :eve :kind :ticket :on :o-done :action "complete"
+   :input {:close_reason "Fixed: a bought item leaves the list and stays off it."}}
+  {:as :fay :kind :ticket :ref :o-dropped
+   :create {:title "Translate every chore into three languages"
+            :type "feature" :priority 4}}
+  {:as :fay :kind :ticket :on :o-dropped :action "groom"}
+  {:as :dov :kind :ticket :on :o-dropped :action "drop"
+   :input {:close_reason "Let go: nobody in the flat asked for it."}}
+
+  ;; ── the held call ──────────────────────────────────────────────
+  ;; NOT an ordinary invoke: the engine mints it, as the power door
+  ;; would for a call that waits on a person. Planner acts for Ada, so
+  ;; it waits on Ada's tap. No server stands behind the tool's name.
+  {:hold {:tool "mail__send"
+          :caller [:cast :plan]
+          :why "Ben asked for the weekend menu by mail, and sending mail waits for Ada's tap."
+          :input {:to "ben@harbour-house.example"
+                  :subject "The weekend menu"}}
+   :ref :held}
+
+  ;; ── the invitation ─────────────────────────────────────────────
+  ;; an ordinary create, addressed to the member the person signs in as
+  {:as :ben :kind :invitation :ref :invite
+   :create {:subject [:cast :ada]
+            :self [:self :h-next]
+            :action "prioritize"
+            :field "priority"
+            :note "Pick how soon the house wants this one."
+            :suggest {:priority 1}}}]}
