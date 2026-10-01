@@ -3,6 +3,8 @@
   loaded where its own kinds are: the factory's kinds over the
   in-memory twin. This is what keeps the seed true as the kinds change:
   a step the law now refuses fails here before it fails a clone's boot.
+  The boot step that reads the two variables is here too, given their
+  values as arguments.
 
   The seeded held call is allowed here too (§ 4), as Ada: with no wall
   it ends `failed` with the engine's no-server sentence, and behind a
@@ -19,7 +21,8 @@
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
-            [waymark10.wire :as wire])
+            [waymark10.wire :as wire]
+            [workqueue10.main :as main])
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
            (java.io InputStream OutputStream)
            (java.net InetSocketAddress)))
@@ -62,6 +65,54 @@
     (testing "a restarted task does not seed twice"
       (is (false? (:seeded (seed/load! eng demo {}))))
       (is (= (count tickets) (count (dev/rows eng :ticket)))))))
+
+;; ── the boot step ───────────────────────────────────────────────────
+
+(def ^:private seed-on-boot! @#'main/seed-on-boot!)
+
+(def ^:private factory-refusal
+  "WAYMARK10_SEED is set and FACTORY10 is not 1: the seed's tickets need the factory kinds, so a demo engine boots with FACTORY10=1.")
+
+(defn- booted
+  "What `seed/boot!` was called with while `f` ran: a vector of
+  [engine seed-name opts] triples, the seed itself never loaded."
+  [f]
+  (let [calls (atom [])]
+    (with-redefs [seed/boot! (fn [eng seed-name opts]
+                               (swap! calls conj [eng seed-name opts])
+                               nil)]
+      (f))
+    @calls))
+
+(deftest a-seed-without-the-factory-kinds-refuses-the-boot
+  (doseq [factory [nil "" "0" "true"]]
+    (testing (pr-str factory)
+      (let [thrown (atom nil)
+            calls (booted #(try (seed-on-boot! ::eng "demo" factory nil)
+                                (catch clojure.lang.ExceptionInfo e
+                                  (reset! thrown e))))]
+        (is (some? @thrown))
+        (is (= factory-refusal (some-> @thrown ex-message)))
+        (is (= {:seed "demo"} (some-> @thrown ex-data)))
+        (is (= [] calls) "the refusal comes before the seed is read")))))
+
+(deftest no-seed-named-does-nothing
+  (doseq [seed [nil ""]
+          factory [nil "1"]]
+    (testing (pr-str [seed factory])
+      (let [answer (atom ::unset)
+            calls (booted #(reset! answer (seed-on-boot! ::eng seed factory nil)))]
+        (is (nil? @answer))
+        (is (= [] calls))))))
+
+(deftest a-seed-with-the-factory-kinds-boots-it-by-name
+  (testing "with no wall named"
+    (doseq [wall [nil ""]]
+      (is (= [[::eng "demo" {:wall-url nil}]]
+             (booted #(seed-on-boot! ::eng "demo" "1" wall))))))
+  (testing "with the clone's wall"
+    (is (= [[::eng "demo" {:wall-url "http://wall.test"}]]
+           (booted #(seed-on-boot! ::eng "demo" "1" "http://wall.test"))))))
 
 ;; ── allowing the seeded held call (§ 4) ─────────────────────────────
 

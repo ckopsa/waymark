@@ -846,14 +846,16 @@
   one with an IdP, and a step the law refuses. Every refusal throws,
   so the boot ends before the server listens. WAYMARK_WALL_URL is the
   clone's wall (§ 4): when it is set the seed's walled servers are
-  made at it, so the seeded held call is forwarded to the wall."
-  [eng]
-  (when-some [seed-name (some-> (System/getenv "WAYMARK10_SEED") str not-empty)]
-    (when-not (= "1" (System/getenv "FACTORY10"))
+  made at it, so the seeded held call is forwarded to the wall. `seed`,
+  `factory` and `wall-url` are the three variables' values as `start!`
+  read them."
+  [eng seed factory wall-url]
+  (when-some [seed-name (some-> seed str not-empty)]
+    (when-not (= "1" factory)
       (throw (ex-info "WAYMARK10_SEED is set and FACTORY10 is not 1: the seed's tickets need the factory kinds, so a demo engine boots with FACTORY10=1."
                       {:seed seed-name})))
     (seed/boot! eng seed-name
-                {:wall-url (some-> (System/getenv "WAYMARK_WALL_URL") str not-empty)})))
+                {:wall-url (some-> wall-url str not-empty)})))
 
 (defn start!
   "Boot and serve. Returns the engine."
@@ -964,7 +966,10 @@
         ;; the demo seed, after every other boot row and before the
         ;; server listens: a refusal throws here, so a half-seeded
         ;; engine is never served
-        _ (seed-on-boot! eng)
+        _ (seed-on-boot! eng
+                         (System/getenv "WAYMARK10_SEED")
+                         (System/getenv "FACTORY10")
+                         (System/getenv "WAYMARK_WALL_URL"))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before
@@ -1041,6 +1046,11 @@
   (or (some-> (System/getenv "WORKQUEUE10_DRAIN_MS") parse-long) 20000))
 
 (defn -main [& _]
+  ;; a boot refusal (the seed's, schema drift) throws out of here
+  ;; uncaught, and that ends the image non-zero: the Dockerfile's
+  ;; `clojure -M:dev` is clojure.main, whose `main` catches the
+  ;; Throwable, prints the sentence and calls (System/exit 1) — an exit,
+  ;; so a live non-daemon thread does not keep the process up
   (start!)
   ;; SIGTERM drains: the server stops taking connections and lets the
   ;; calls already in flight answer, then everything else stops. Until
