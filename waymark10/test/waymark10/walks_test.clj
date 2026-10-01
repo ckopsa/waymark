@@ -676,6 +676,31 @@
            {:event "move" :principal {:id "planner"} :self (errand-path a)})
           (is (= 1 (count (frames-of eng (:id w))))))))))
 
+;; ── the frame ceiling (docs/spec-agent-demo-walks.md § 4) ───────────
+
+(deftest a-walk-seals-itself-at-the-frame-ceiling
+  (with-redefs [walks/frame-ceiling 3]
+    (let [eng (fresh-engine)
+          w (walk! eng)
+          frame! #(walks/record-frame! eng (:id w) nil {:type "move" :body {}})]
+      (is (some? (frame!)))
+      (is (some? (frame!)))
+      (is (= "recording" (name (:state (row-of eng :walk (:id w)))))
+          "under the ceiling the walk still records")
+      (testing "the frame that reaches the ceiling is kept, and the engine seals the walk"
+        (is (some? (frame!)))
+        (let [row (row-of eng :walk (:id w))]
+          (is (= "sealed" (name (:state row))))
+          (is (some? (get-in row [:data :ended_at])))
+          (is (= 3 (get-in row [:data :frame_count])))))
+      (testing "it takes no more frames"
+        (is (nil? (frame!)))
+        (is (= 3 (get-in (row-of eng :walk (:id w)) [:data :frame_count])))
+        (is (= 3 (count (frames-of eng (:id w))))))
+      (testing "the walk's history says why"
+        (is (= 1 (count (filter #(str/includes? (pr-str %) "frame ceiling")
+                                (log-of eng)))))))))
+
 ;; ── captions (docs/spec-agent-demo-walks.md § 3) ────────────────────
 
 (def ^:private locker
