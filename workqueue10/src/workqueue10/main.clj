@@ -838,6 +838,22 @@
 
 (defonce ^:private dev (atom nil))
 
+(defn- gate-row-on-boot!
+  "The bridge of Gate's deprecation (spec-mcp-servers § 3 step 1): one
+  mcp_server row named gate, passthrough, at the Gate
+  WORKQUEUE10_GATE_URL names, seeded once and never overwritten. The
+  sources and the power door resolve every <rig>__<tool> name through
+  it until each rig has its own row. A demo engine (WAYMARK10_SEED,
+  docs/spec-demo-clones.md § 4) gets none, whatever the url says: a
+  passthrough row answers to every unprefixed tool name, so the seeded
+  held call would be forwarded at Gate's address and not refused with
+  the no-server sentence. `gate-url` and `seed` are the two variables'
+  values as `start!` read them."
+  [eng gate-url seed]
+  (when-not (some-> seed str not-empty)
+    (when-some [url (some-> gate-url str not-empty)]
+      (mcp-servers/ensure-gate-row! eng {:url url}))))
+
 (defn- seed-on-boot!
   "The demo seed (docs/spec-demo-clones.md § 1), behind WAYMARK10_SEED
   and nothing otherwise. The seed's tickets are rows of a factory
@@ -938,14 +954,11 @@
         _ (runner-links/ensure-seeded-links! eng)
         ;; one runner_provider row per provider, its cap empty
         _ (runner-links/ensure-providers! eng)
-        ;; the bridge of Gate's deprecation (spec-mcp-servers § 3
-        ;; step 1): one mcp_server row named gate, passthrough, at the
-        ;; Gate WORKQUEUE10_GATE_URL names, seeded once and never
-        ;; overwritten — the sources and the power door resolve every
-        ;; <rig>__<tool> name through it until each rig has its own row
-        _ (when-some [url (some-> (System/getenv "WORKQUEUE10_GATE_URL")
-                                  str not-empty)]
-            (mcp-servers/ensure-gate-row! eng {:url url}))
+        ;; the bridge of Gate's deprecation, and none of it on a demo
+        ;; engine — see `gate-row-on-boot!`
+        _ (gate-row-on-boot! eng
+                             (System/getenv "WORKQUEUE10_GATE_URL")
+                             (System/getenv "WAYMARK10_SEED"))
         ;; the one vocabulary (waymark-fp62.10.4), run AFTER the rows
         ;; are seeded because it is the rows it reads: a dotted token
         ;; a server's powers name is real because that row says so, so
