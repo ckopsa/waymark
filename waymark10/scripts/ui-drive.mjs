@@ -1445,7 +1445,59 @@ async function guidedStory() {
                  !document.querySelector("#followchip [data-guided-mark]")`, "guided mode off");
   ok("the guided mark turns guided mode off, and the follow stands",
      await B.js(`followId`) === "ada");
-  A.close(); B.close();
+  B.close();
+
+  console.log("· record: ada's own screen, with nobody following");
+  const recordBtn = `document.querySelector("#recordbtn")`;
+  const recordingOn = `${recordBtn}.getAttribute("aria-pressed") === "true" &&
+    ${recordBtn}.textContent.startsWith("■ Stop")`;
+  const frameCount = async () =>
+    must(await call("GET", walkSelf, null, "ada"), 200, "ada reads the walk").body.data.frame_count;
+  ok("the record button is off before a recording",
+     await A.js(`${recordBtn}.getAttribute("aria-pressed")`) === "false");
+  await A.js(`window.prompt = () => "Ada writes a recipe"; ${recordBtn}.click(); true`);
+  await A.until(recordingOn, "the recording to start");
+  const walkSelf = await A.js(`recording.self`);
+  ok("record starts a walk of ada by ada, and turns sharing on for this tab",
+     await A.js(`sessionStorage.getItem("wm10.share.ui")`) === "1" &&
+     await (async () => {
+       const d = must(await call("GET", walkSelf, null, "ada"), 200, "ada reads the walk").body;
+       return d.state === "recording" && d.data.recorder === "ada" && d.data.followed === "ada";
+     })());
+  await boot(A, "ada");
+  await A.until(`${recordingOn} && recording.self === ${JSON.stringify(walkSelf)}`,
+                "the recording to come back after the reload");
+  ok("reloading the tab keeps recording", true);
+  await A.js(`location.hash = "/api/meals"; true`);
+  await A.until(`!!${recipeButton}`, "ada's recipe door on the row");
+  const before = await frameCount();
+  await A.js(`${recipeButton}.click(); true`);
+  await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
+  let count = before;
+  for (let i = 0; i < 30 && count <= before; i++) {
+    await sleep(500);
+    count = await frameCount();
+  }
+  ok("the walk takes ada's dialog with no follower stream open", count > before);
+  await A.js(`${recordBtn}.click(); true`);
+  await A.until(`hereHref() === ${JSON.stringify(walkSelf)} &&
+                 ${recordBtn}.getAttribute("aria-pressed") === "false"`, "the sealed walk's page");
+  ok("stop seals the walk, opens its page and turns sharing off again",
+     must(await call("GET", walkSelf, null, "ada"), 200, "ada reads the walk").body.state === "sealed" &&
+     await A.js(`sessionStorage.getItem("wm10.share.ui")`) === null);
+  await press(A, "dialog[open] .dlgfoot", "Cancel");
+  await A.until(`!document.querySelector("dialog[open]") &&
+                 !!document.querySelector("[data-replay-walk]")`, "Replay on the walk's page");
+  await A.js(`document.querySelector("[data-replay-walk]").click(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the replay to reach its last frame", 60000);
+  ok("the sealed walk replays the dialog ada opened, read-only",
+     await A.js(`{ const g = document.querySelector(${JSON.stringify(
+         `dialog[open][data-guided="${recipeKey}"]`)});
+       const inputs = g ? [...g.querySelectorAll("input, select, textarea")] : [];
+       inputs.length > 0 && inputs.every(n => n.disabled) }`));
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+  A.close();
   await chrome.close();
 }
 
