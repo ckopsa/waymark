@@ -1928,7 +1928,7 @@
               (fan-out-store! engine kind marker digest idempotency-key doc)
               {:report doc})))))))
 
-(defn- create-law-revision
+(defn create-law-revision
   "Creates stamp the kind's current law (phase 5); an after=true pilot
   claims new creates for the piloted revision. Engines built without
   the definitions boot carry no law slots and keep the phase-2 stub

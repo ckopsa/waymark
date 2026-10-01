@@ -1,11 +1,18 @@
 (ns waymark10.server.scheduled
-  "The scheduled action (docs/spec-scheduled-actions.md, children 1a
-  and 1b): a call stored for a time, as a kind of its own.
+  "The scheduled action (docs/spec-scheduled-actions.md, children 1a,
+  1b and 1c): a call stored for a time, as a kind of its own.
 
-  THIS NAMESPACE IS THE KIND AND ITS SCHEDULING CHECK. The create
-  validates, checks and stores. The run is child 1c's: `start`, `land`,
-  `skip` and `fail` are declared so the machine is whole, and only the
-  engine's own hand walks them.
+  THIS NAMESPACE IS THE KIND, ITS SCHEDULING CHECK AND ITS RUN. The
+  create validates, checks and stores. `start!` claims a row and `run!`
+  carries it out; the clock that calls them is child 2's. `start`,
+  `land`, `skip` and `fail` are the engine's own hand, and no hand at
+  the wire walks them.
+
+  CHECKED AGAIN AT THE RUN (R-3.3). The claim, then the validity rule
+  the row chose (R-2), then the confirm sentence read again, then a dry
+  run, then the call under the key `scheduled_action:<id>`, so a
+  repeated run lands once. A refusal a rehearsal could have given is a
+  skip. `failed` is kept for what a rehearsal cannot see.
 
   WHAT WOULD BE REFUSED NOW IS REFUSED NOW (R-3.1). At the create the
   target door is rehearsed as the scheduler, under the grant it wears,
@@ -29,6 +36,9 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
+            [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.nio.charset StandardCharsets)
            (java.time DateTimeException Instant LocalDateTime OffsetDateTime
@@ -422,6 +432,183 @@
           (into {} (filter (comp some? val))
                 (select-keys inp [:outcome :outcome_why]))))
 
+;; ── the run (R-2, R-3.3) ────────────────────────────────────────────
+
+(defn- registry-ctx
+  "What `door-of` reads, outside any write: this engine's registry and
+  no grant. The grant read by id at `run_at` is child 2's."
+  [eng]
+  {:rdef-of (fn [token]
+              (let [rs (inv/resources eng)
+                    t (name token)]
+                (or (get rs (keyword t))
+                    (some (fn [[_ r]] (when (= t (:plural r)) r)) rs))))})
+
+(defn- stored-row
+  "One row as it stands now, decoded, or nil."
+  [eng kind id]
+  (let [st (:storage eng)]
+    (when-some [rdef (get (inv/resources eng) kind)]
+      (store/with-tx st
+        (fn [tx]
+          (some->> (store/load-row st tx kind (str id) {})
+                   (inv/decode-row rdef)))))))
+
+(defn- said
+  "A refusal's own sentence."
+  [^Throwable e]
+  (str (or (:detail (ex-data e)) (ex-message e))))
+
+(defn- call-of [door]
+  (str "`" (name (:action door)) "` on " (name (:kind door))))
+
+(defn- runner-of
+  "Who the run runs as (R-4.1): the scheduler, built now from its member
+  row, roles read now and not carried. `{:principal}`, or `{:why}` for
+  a scheduler who is gone or whom the gate refuses."
+  [eng row]
+  (try
+    (if-some [p (members/principal-for eng (get-in row [:data :acts_as :id]))]
+      {:principal p}
+      {:why "Whoever scheduled this is no longer a member here."})
+    (catch clojure.lang.ExceptionInfo e
+      {:why (said e)})))
+
+(defn- stale
+  "The validity rule the row chose, and the confirm gate read again,
+  against the target as it is now: the sentence that skips the run, or
+  nil. `strict` is the snapshot's version (R-2.1). `state` is the
+  snapshot's state, or the expected one, and a door still declared from
+  it (R-2.2). A create has no row: `strict` pins the law a birth is
+  stamped by (R-2.4). A row that is gone and a row the runner cannot
+  see are one sentence (R-2)."
+  [eng {:keys [rdef kind action id] defn' :defn} data]
+  (let [{:keys [version state law_revision]} (:snapshot data)
+        strict? (= "strict" (:validity data))
+        label (name kind)]
+    (if id
+      (let [row (stored-row eng kind id)
+            at (some-> (:state row) name)]
+        (cond
+          (nil? row)
+          (str "The " label " is gone.")
+
+          (and strict? (not= version (:version row)))
+          (str "The " label " changed since this was scheduled (version "
+               version ", now " (:version row) ").")
+
+          (and state (not= state at))
+          (str "The " label " is `" at "`, and this runs only while it is `" state "`.")
+
+          (not (contains? (:from defn') (:state row)))
+          (str "`" (name action) "` is not a door of a " label " that is `" at "`.")
+
+          ;; R-3.3: the scheduler agreed to a sentence, not to a verb
+          (and (get-in defn' [:safety :confirm])
+               (not= (sentence-of defn' (:state row)) (:acknowledge data)))
+          "The consequence changed since this was acknowledged."))
+      (when strict?
+        (let [law (some-> (inv/create-law-revision eng rdef kind) str)]
+          (when (not= law_revision law)
+            (str "The law of " label " changed since this was scheduled (revision "
+                 law_revision ", now " law ").")))))))
+
+(defn- attempt
+  "The call itself, as the runner: the door's invoke, or the kind's
+  create when the target names no row."
+  [eng {:keys [kind action id]} data opts]
+  (let [body (or (:input data) {})]
+    (if id
+      (inv/invoke! eng kind id action body opts)
+      (inv/create! eng kind body opts))))
+
+(defn- carry-out
+  "R-3.3: a dry run, then the invoke under the derived key. They are
+  two transactions and the row may move between them, so the invoke's
+  own judgment is the one that counts: `{:end :land :res}`, `{:end
+  :skip :why}` for a refusal a rehearsal could have given, `{:end :fail
+  :why}` for what it could not see."
+  [eng id {target :id :as door} data principal]
+  (let [version (get-in data [:snapshot :version])
+        opts (cond-> {:principal principal
+                      :acknowledged (into #{} (map keyword) (:acknowledge_warnings data))}
+               ;; R-2.1: strict sends the snapshot's etag as If-Match
+               (and target version (= "strict" (:validity data)))
+               (assoc :if-match (inv/etag (:kind door) target version)))]
+    (try
+      (let [warned (:warnings (attempt eng door data (assoc opts :dry-run true)))]
+        (if (seq warned)
+          {:end :skip
+           :why (str (call-of door) " met a warning nobody accepted: "
+                     (str/join ", " (keep #(some-> (:name %) name) warned)) ".")}
+          {:end :land
+           :res (attempt eng door data
+                         (assoc opts :idempotency-key (str "scheduled_action:" id)))}))
+      (catch clojure.lang.ExceptionInfo e
+        (if (:waymark10/problem (ex-data e))
+          {:end :skip :why (str (call-of door) " was refused: " (said e))}
+          {:end :fail :why (str (call-of door) " failed: " (said e))}))
+      (catch Exception e
+        {:end :fail :why (str (call-of door) " failed: " (said e))}))))
+
+(defn- outcome-of
+  "`{kind, action, id, state}` of the row the call wrote. A replayed
+  call answers no row, so the row is read again."
+  [eng {:keys [kind action id]} res]
+  (let [written (:row res)
+        id (or (some-> (:id written) str not-empty) id)
+        now (or written (when id (stored-row eng kind id)))]
+    (cond-> {:kind (name kind) :action (name action)}
+      id (assoc :id id)
+      (:state now) (assoc :state (name (:state now))))))
+
+(defn- end!
+  "Write one ending with the engine's own hand, and answer its state."
+  [eng id action why outcome]
+  (let [why (str why)
+        why (if (< 240 (count why)) (str (subs why 0 239) "…") why)]
+    (inv/invoke! eng kind (str id) action
+                 (cond-> {:outcome_why why}
+                   outcome (assoc :outcome outcome))
+                 {:principal engine-actor})
+    ({:land :done :skip :skipped :fail :failed} action)))
+
+(defn start!
+  "The claim: move a `scheduled` row to `running` with the engine's own
+  hand. Answers the row, or nil when this call did not claim it: the
+  row is not `scheduled`, or another caller's `start` is what a replay
+  answered. One caller holds a row."
+  [eng id]
+  (try
+    (let [res (inv/invoke! eng kind (str id) :start {} {:principal engine-actor})]
+      (when-not (:replayed? res)
+        (:row res)))
+    (catch clojure.lang.ExceptionInfo e
+      (when-not (#{:wrong-state :not-found} (:waymark10/problem (ex-data e)))
+        (throw e)))))
+
+(defn run!
+  "The run of a row `start!` claimed (R-3.3): who it runs as, the
+  validity rule, the confirm sentence read again, a dry run, then the
+  call under the key `scheduled_action:<id>`. Answers the ending,
+  `:done`, `:skipped` or `:failed`. A row that is not `running` is left
+  as it is and answers nil."
+  [eng id]
+  (let [row (stored-row eng kind id)]
+    (when (= :running (:state row))
+      (let [data (:data row)
+            door (door-of (:target data) (registry-ctx eng))
+            {:keys [principal why]} (runner-of eng row)
+            why (or why
+                    (some->> (:problem door) (str "The door is gone: "))
+                    (stale eng door data))
+            {:keys [end why res]} (if why
+                                    {:end :skip :why why}
+                                    (carry-out eng id door data principal))]
+        (end! eng id end
+              (or why (str "Ran " (call-of door) " as scheduled."))
+              (when (= :land end) (outcome-of eng door res)))))))
+
 ;; ── the kind ────────────────────────────────────────────────────────
 
 (def ^:private time-fields
@@ -653,4 +840,7 @@
     "R-1 says `reschedule` runs the scheduling check again. It does not yet: the check runs at the create, and a moved row meets its door at the run."
     "R-3.1 asks a confirm door for its sentence. The sentence is asked of a row's door; a create target is rehearsed in full and asked for none."
     "R-6.2 says the summary is `outcome_why` after an ending. A summary is one template, so the line stays `{target} · {run_at} · {state}` and the sentence is read from the field."
-    "R-7.2 states the zone rules for `at`. The same rules are applied here to `run_at` on the create and on `reschedule`, and an instant written with an offset and no zone anywhere is shown in that offset."]})
+    "R-7.2 states the zone rules for `at`. The same rules are applied here to `run_at` on the create and on `reschedule`, and an instant written with an offset and no zone anywhere is shown in that offset."
+    "R-2 reads the target under the runner's grant as it is then. The run reads no grant yet: it runs as the scheduler's principal, built from its member row at the run, and the grant read by id is child 2's."
+    "R-2.1 sends the snapshot's etag as If-Match. The fence judges it only on a fenced door, so the run also compares the row's version with the snapshot's before the call; on an unfenced door a write between that read and the call is not caught."
+    "R-2.2 asks that the row's envelope still advertises the action. The run reads the door's declared from-states and leaves the rest to the dry run, which judges the guards the envelope would."]})
