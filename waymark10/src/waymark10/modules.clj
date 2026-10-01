@@ -173,6 +173,7 @@
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.routes.ui :as ui-routes]
             [waymark10.server.routes.worksheet :as worksheet-routes]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.wakes :as wakes]
             [waymark10.server.webhooks :as webhooks]
@@ -312,7 +313,14 @@
              {:kind :walk :enroll :always
               :kinds (fn [_] [walks/walk])}
              {:kind :walk_frame :enroll :always
-              :kinds (fn [_] [walks/walk-frame])}]
+              :kinds (fn [_] [walks/walk-frame])}
+             ;; the scheduled action (docs/spec-scheduled-actions.md
+             ;; R-1): a call stored for a time. Core's beside the held
+             ;; call, which it carries a typed ref to, and for the
+             ;; spec's own reason: a household engine with no seat must
+             ;; still groom a ticket at 08:30.
+             {:kind :scheduled_action :enroll :always
+              :kinds (fn [_] [scheduled/scheduled-action])}]
     ;; the three surfaces no waymark engine is a waymark engine
     ;; without: the outbox reader every other surface rides, the
     ;; law-refresh consumer (a core need in any multi-process

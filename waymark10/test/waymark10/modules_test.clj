@@ -95,7 +95,11 @@
            :invitation
            ;; …and the recorded walk and its frames (§ 4), core's
            ;; beside the invitation
-           :walk :walk_frame}
+           :walk :walk_frame
+           ;; …and the scheduled action
+           ;; (docs/spec-scheduled-actions.md R-1), core's beside the
+           ;; held call it carries a ref to
+           :scheduled_action}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
