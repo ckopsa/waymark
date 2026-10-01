@@ -204,7 +204,12 @@
                     ;; …and the principal the BEARER resolved: the app tools
                     ;; read the person from it (docs/spec-mcp-apps.md § 2)
                     true (assoc :bearer principal)
-                    (:app-ui entry) (assoc :app-ui true))
+                    (:app-ui entry) (assoc :app-ui true)
+                    ;; …and the clientInfo it named, which the sit copies
+                    ;; onto the sitting (ticket b9f90987)
+                    (:client-name entry) (assoc :client-name (:client-name entry))
+                    (:client-version entry)
+                    (assoc :client-version (:client-version entry)))
           with-session (fn [resp]
                          (cond-> resp
                            minted (assoc-in [:headers session-header] minted)))]
