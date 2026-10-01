@@ -481,7 +481,12 @@
   (store/with-tx (:storage eng)
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (cond-> (assoc (:data schedule-row) :wake_fired_at (str at))
+                          ;; a fire that went out is past the fuel wall, so
+                          ;; the `halted` a wall hold stamped comes off, as
+                          ;; a sit clear of the wall takes it off
+                          (cond-> (-> (:data schedule-row)
+                                      (assoc :wake_fired_at (str at))
+                                      (dissoc :halted))
                             clear-pending? (schedules/clear-wake))
                           (:next-flip-at schedule-row))))
   nil)
@@ -612,19 +617,35 @@
               (grants/spent-this-week eng (:id seat-row) at)
               (get-in seat-row [:data :budget_usd_per_week]))))))
 
+(defn- wall-mark
+  "The schedule's `halted` for a wake the fuel wall held, in the
+  spelling a halted sit stamps (`seats/halt-mark`): the wall, and the
+  sentence with the wall's own two numbers. A seat whose wakes are all
+  held never sits, so the hold has to say it."
+  [eng seat-row ^Instant at]
+  {:wall "budget"
+   :detail (str "The seat is against a wall. The week's fuel is spent: "
+                (grants/spent-this-week eng (:id seat-row) at) " of "
+                (or (get-in seat-row [:data :budget_usd_per_week]) 0M)
+                " over this seat's sittings of the last seven days. The"
+                " wall lifts on its own as the window rolls.")})
+
 (defn- hold-at-the-wall!
   "A match the fuel wall held: remembered as `wake_pending`, so the
   first release after the window rolls fires it, and
-  `last_halted_wake` stamped beside it, so a person reading the
-  schedule row can see why the seat stayed quiet. One maintenance
-  write, for `write-pending!`'s reason."
-  [eng schedule-row ^Instant at]
+  `last_halted_wake` stamped beside it with `halted`, the wall and its
+  sentence (`wall-mark`), so a person reading the schedule row can see
+  why the seat stayed quiet. The first fire that goes out takes
+  `halted` off (`stamp-fired!`). One maintenance write, for
+  `write-pending!`'s reason."
+  [eng schedule-row seat-row ^Instant at]
   (store/with-tx (:storage eng)
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
                           (assoc (schedules/keep-textless (:data schedule-row))
                                  :wake_pending true
-                                 :last_halted_wake (str at))
+                                 :last_halted_wake (str at)
+                                 :halted (wall-mark eng seat-row at))
                           (:next-flip-at schedule-row))))
   nil)
 
@@ -879,7 +900,7 @@
 
         ;; the fuel wall: the wake waits, and says it was held
         (at-the-fuel-wall? eng (raw-row eng :seat (:id seat)) at)
-        (hold-at-the-wall! eng row at)
+        (hold-at-the-wall! eng row (raw-row eng :seat (:id seat)) at)
 
         ;; the row the wake names is withheld by name (ticket 80a8e60b):
         ;; a groom that leaves a ticket open beside its submitted change
