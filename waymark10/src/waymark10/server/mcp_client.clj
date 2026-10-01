@@ -60,15 +60,37 @@
 
 ;; ── the refusal ─────────────────────────────────────────────────────
 
+(defn saying
+  "The same problem, carrying what the server itself said when it
+  refused: `words` is {:sentence :context}, the server's own sentence
+  and the engine's short account of where it read it. The words ride
+  the problem's cause and not its data, because a problem's data is
+  its wire body. nil words answer the problem as it came."
+  [problem words]
+  (if words
+    (ex-info (ex-message problem) (ex-data problem)
+             (ex-info (str (:sentence words)) {::said words}))
+    problem))
+
+(defn said
+  "What the server itself said on the refusal `e`, as `saying` put it
+  there: {:sentence :context}, or nil when it said nothing."
+  [e]
+  (some-> e ex-cause ex-data ::said))
+
 (defn unreachable
   "The 502 every client throws when the server did not answer. The
   type keeps the name `gate-unreachable` the surface has always
-  spoken, so a caller that reads it reads the same word."
-  [detail]
-  (p/problem :gate-unreachable 502 "Server unreachable"
-             {:detail (str "The server did not answer this engine: " detail
-                           " Nothing was read and nothing was done; the"
-                           " grant was judged here either way.")}))
+  spoken, so a caller that reads it reads the same word. `words` is
+  what the server itself said, when it said anything (`saying`)."
+  ([detail] (unreachable detail nil))
+  ([detail words]
+   (saying
+    (p/problem :gate-unreachable 502 "Server unreachable"
+               {:detail (str "The server did not answer this engine: " detail
+                             " Nothing was read and nothing was done; the"
+                             " grant was judged here either way.")})
+    words)))
 
 (defn dead?
   "Should the row go dark for the failure this client just had?"
@@ -113,21 +135,40 @@
                             (wire/write-json msg))))
         resp (.send http req (HttpResponse$BodyHandlers/ofString))
         hs (.headers resp)
-        ctype (.orElse (.firstValue hs "content-type") "")]
+        ctype (.orElse (.firstValue hs "content-type") "")
+        ^String body (.body resp)]
     {:status (.statusCode resp)
      :session-id (.orElse (.firstValue hs "mcp-session-id") nil)
-     :answer (let [^String body (.body resp)]
-               (cond
-                 (str/blank? (str body)) nil
-                 (str/includes? ctype "text/event-stream") (sse-answer body)
-                 :else (try (wire/read-json body)
-                            (catch Exception _ nil))))}))
+     :text (when-not (str/blank? (str body)) (str/trim (str body)))
+     :answer (cond
+               (str/blank? (str body)) nil
+               (str/includes? ctype "text/event-stream") (sse-answer body)
+               :else (try (wire/read-json body)
+                          (catch Exception _ nil)))}))
+
+(def sentence-limit
+  "The most characters of a text body a refusal keeps as the server's
+  sentence."
+  500)
+
+(defn- refusal-sentence
+  "The server's own sentence on a response that refused: `error.message`
+  when the body is JSON-RPC, else a non-empty text body (trimmed, its
+  first `sentence-limit` characters), else nil."
+  [{:keys [answer text]}]
+  (let [error (when (map? answer) (:error answer))
+        s (if (some? error)
+            (when (map? error) (some-> (:message error) str str/trim))
+            text)]
+    (when-not (str/blank? s)
+      (subs s 0 (min (count s) (long sentence-limit))))))
 
 (defn http-client
   "A JSON-RPC caller over streamable HTTP: (fn [method params]) → the
   :result. `headers-fn` answers the extra request headers on every
   call (nil for none). A JSON-RPC error or a transport failure
-  surfaces as the 502 problem."
+  surfaces as the 502 problem, and a refusal the server put a sentence
+  on carries it (`said`)."
   ([url] (http-client url nil))
   ([url {:keys [headers-fn timeout-ms] :or {timeout-ms 30000}}]
    (let [http (-> (HttpClient/newBuilder)
@@ -138,9 +179,11 @@
          ;; row; :rpc (a JSON-RPC error on a call that arrived) is not
          state (atom {:session nil :id 0 :last nil})
          next-id! #(:id (swap! state update :id inc))
-         fail! (fn [kind detail]
-                 (swap! state assoc :last kind)
-                 (throw (unreachable detail)))
+         fail! (fn fail!
+                 ([kind detail] (fail! kind detail nil))
+                 ([kind detail words]
+                  (swap! state assoc :last kind)
+                  (throw (unreachable detail words))))
          raw! (fn [msg]
                 (try (post-message! http url (:session @state)
                                     (when headers-fn (headers-fn))
@@ -148,7 +191,7 @@
                      (catch Exception e
                        (fail! :wire (ex-message e)))))
          handshake! (fn []
-                      (let [{:keys [status session-id answer]}
+                      (let [{:keys [status session-id answer] :as resp}
                             (raw! {:jsonrpc "2.0" :id (next-id!)
                                    :method "initialize"
                                    :params {:protocolVersion protocol-version
@@ -156,9 +199,11 @@
                                             :clientInfo client-info}})]
                         (when (or (:error answer)
                                   (not (<= 200 (long status) 299)))
-                          (fail! :wire
-                                 (str "initialize answered " status " "
-                                      (some-> (:error answer) :message))))
+                          (let [context (str "initialize answered " status)
+                                s (refusal-sentence resp)]
+                            (fail! :wire
+                                   (str context (if s (str " " s) "."))
+                                   (when s {:sentence s :context context}))))
                         (swap! state assoc :session session-id)
                         (raw! {:jsonrpc "2.0"
                                :method "notifications/initialized"})))
@@ -168,20 +213,25 @@
      (with-meta
        (fn rpc [method params]
          (when (nil? (:session @state)) (handshake!))
-         (let [{:keys [status answer]} (request! method params)
-               {:keys [status answer]} (if (= 404 (long status))
-                                         (do (swap! state assoc :session nil)
-                                             (handshake!)
-                                             (request! method params))
-                                         {:status status :answer answer})]
+         (let [{:keys [status] :as resp} (request! method params)
+               {:keys [status answer] :as resp}
+               (if (= 404 (long status))
+                 (do (swap! state assoc :session nil)
+                     (handshake!)
+                     (request! method params))
+                 resp)
+               s (refusal-sentence resp)]
            (cond
              (:error answer)
-             (fail! :rpc (str method " answered JSON-RPC error "
-                              (get-in answer [:error :code]) ": "
-                              (get-in answer [:error :message])))
+             (let [context (str method " answered JSON-RPC error "
+                                (get-in answer [:error :code]))]
+               (fail! :rpc (str context ": " (get-in answer [:error :message]))
+                      (when s {:sentence s :context context})))
 
              (not (<= 200 (long status) 299))
-             (fail! :wire (str method " answered HTTP " status "."))
+             (let [context (str method " answered HTTP " status)]
+               (fail! :wire (str context "." (when s (str " " s)))
+                      (when s {:sentence s :context context})))
 
              :else (do (swap! state assoc :last nil)
                        (:result answer)))))

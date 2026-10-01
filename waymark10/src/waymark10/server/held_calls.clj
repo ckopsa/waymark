@@ -57,6 +57,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.patch :as patch]
             [waymark10.server.store :as store]
@@ -966,7 +967,11 @@
 
 (defn- forward-tool!
   "The tool call's forward, as it always was: `mcp-servers/call!` on
-  the tool the row names, with the arguments the row carries."
+  the tool the row names, with the arguments the row carries.
+
+  A failure the server put a sentence on records that sentence FIRST
+  and the engine's context after it, in brackets, so the cut at the
+  field's width takes the engine's words and not the server's."
   [eng row]
   (let [tool (str (get-in row [:data :tool]))
         args (or (get-in row [:data :forward]) {})]
@@ -977,7 +982,11 @@
         (finish! eng (:id row) :land {:answer text :dropped dropped})
         :done)
       (catch Exception e
-        (let [{:keys [text]} (capped (str (ex-message e)) 240)]
+        (let [{:keys [sentence context]} (mcp-client/said e)
+              {:keys [text]} (capped (if sentence
+                                       (str sentence " [" context "]")
+                                       (str (ex-message e)))
+                                     240)]
           (finish! eng (:id row) :fail {:reason text}))
         :failed))))
 
