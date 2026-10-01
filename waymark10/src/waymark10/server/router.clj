@@ -1343,11 +1343,14 @@
 
         :else
         ;; R-10.6: a partial bulk's per-item 409s count on the
-        ;; sitting as a thrown one would (waymark-fp62.7.11)
+        ;; sitting as a thrown one would (waymark-fp62.7.11), and the
+        ;; last refused item's problem type and guard stamp its
+        ;; :last_refusal, as wrap-refusals-counted does for a thrown one
         (do (when (pos? (or (:conflicts result) 0))
               (when-some [sitting-id (counted-sitting-id eng req)]
                 (dotimes [_ (:conflicts result)]
-                  (seats/bump-counter! eng sitting-id :refusals))))
+                  (seats/bump-counter! eng sitting-id :refusals
+                                       (:last-conflict result)))))
             (report-response result))))))
 
 (defn- batch-action [eng]
