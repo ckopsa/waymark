@@ -371,7 +371,8 @@
                           {:created now :touched now :bound nil
                            :app-ui (boolean (:app-ui declared))
                            :client-name (:client-name declared)
-                           :client-version (:client-version declared)}))))
+                           :client-version (:client-version declared)
+                           :client-caps (:client-caps declared)}))))
       id)))
 
 (defn touch-session!
@@ -1267,14 +1268,18 @@
 (defn app-declaration
   "What an `initialize` said about its client, as the session entry
   keeps it: whether the io.modelcontextprotocol/ui extension names
-  `app-mime`, and the clientInfo, so a person can read what a host says."
+  `app-mime`, and the clientInfo, so a person can read what a host says.
+  `:client-caps` is the shape of everything it declared, for the client
+  whose `:app-ui` is false: of clientInfo only the name and the version
+  are kept, and of the capabilities no value but the extension lists."
   [params]
   (let [mimes (get-in params [:capabilities :extensions
                               (keyword "io.modelcontextprotocol/ui") :mimeTypes])]
     {:app-ui (boolean (and (sequential? mimes)
                            (some #(= app-mime (str %)) mimes)))
      :client-name (some-> (get-in params [:clientInfo :name]) str)
-     :client-version (some-> (get-in params [:clientInfo :version]) str)}))
+     :client-version (some-> (get-in params [:clientInfo :version]) str)
+     :client-caps (sessions/caps-shape (:capabilities params))}))
 
 (defn- app-session?
   "Does this session get the app tools? Its client declared the
@@ -4204,6 +4209,15 @@
             ;; sitting it opened, so a lost bind can find its way back
             _ (when (and fired? sitting)
                 (seats/keep-fire-key! eng (:id sitting) (:key args)))
+            ;; … and what this session's client declared at initialize
+            ;; rides the sitting, written at every sit (ticket b9f90987):
+            ;; one read then answers why a host got no waymark_show
+            _ (when sitting
+                (seats/stamp-client! eng (:id sitting)
+                                     {:client-name (:client-name session)
+                                      :client-version (:client-version session)
+                                      :app-ui (:app-ui session)
+                                      :app-tools (app-session? eng session)}))
             ;; g'' · the transcript's key (docs/spec-transcript.md R-4):
             ;; born with the first sit, a fresh key at each sit after,
             ;; and nil when the seat keeps no transcript of this
