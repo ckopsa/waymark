@@ -57,13 +57,9 @@ function onPresenceFrame({event, data: f}) {
     clearTimeout(followMoveTimer);
     followMoveTimer = setTimeout(() => {
       /* an armed jump (a fresh approve) spends itself leaving the
-         balcony; passive following still parks there */
-      if (f.self !== hereHref() &&
-          (hereHref() !== "access" || followJumpArmed) &&
-          !$("dialog[open]")) {
-        followJumpArmed = false;
-        location.hash = "#" + f.self;
-      }
+         balcony; passive following still parks there. A replay holds
+         the screen until it is stopped. */
+      if (!replay) applyFollowMove(f.self);
     }, 250);
   }
 }
@@ -73,6 +69,9 @@ async function presenceBeat() {
      only — the SERVER's suppression (presence.clj, the member row's
      :curtain) is the law, and holds for clients that ignore this */
   if (localStorage.getItem("wm10.curtain")) return;
+  /* a replay (200-events-follow.js) writes nothing, not even where
+     this tab looks: the screen shows a recording, not a gaze */
+  if (replay) return;
   const here = hereHref();
   if (!principalId() || !here.startsWith("/api/")) return;
   /* share my screen (200-events-follow.js): the ui part rides the beat

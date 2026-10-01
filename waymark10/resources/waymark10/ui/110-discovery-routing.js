@@ -129,6 +129,12 @@ async function render() {
   const raw = location.hash.slice(1) || null;
   const {href, viewName} = splitViewParam(raw);
   const view = $("#view");               // superseded render never blanks
+  /* a replay holds the screen (200-events-follow.js): a row or a
+     collection is drawn from the recording, never from a read */
+  if (replay && href && /^\/api\//.test(href)) {
+    clearLiveTimers(); view.textContent = ""; lawStamp(null);
+    return renderReplay(view, href);
+  }
   renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
   /* home is the dashboard (the feed document that once stood here
      was retired 2026-09); it keeps its own address too */

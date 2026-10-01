@@ -861,6 +861,112 @@ async function accessStory() {
        [${JSON.stringify(held.owner)}, ${JSON.stringify("seat:" + sid)},
         ${JSON.stringify(sid)}].includes(s.title))`));
 
+  /* replay (docs/spec-guided-follow.md §4): the boot sealed one walk
+     of a move, a ui frame with the restate dialog open, and a
+     transition. Replay on its row page plays the export on this
+     screen: the one request is the export GET, the screen goes to the
+     recorded row, the dialog opens read-only with the recorded
+     fields, and the transition is drawn from its own frame. The same
+     text from a file makes no request at all. */
+  console.log("· replay: the sealed walk, read-only");
+  const walks = await get("/api/walks?state=sealed");
+  ok("the boot sealed one walk", (walks.data?.items || []).length === 1);
+  const walkSelf = walks.data.items[0].self;
+  const exportText = await (await fetch(BASE + walkSelf + "/export", {headers: h})).text();
+  const [walkHead, ...walkFrames] = exportText.trim().split("\n").map(l => JSON.parse(l));
+  ok("its export is a move, a ui frame and a transition",
+     walkHead.format === "waymark-walk/1" &&
+     walkFrames.map(f => f.type).join() === "move,ui,transition");
+  const [, uiFrame, transFrame] = walkFrames;
+  const actor = walkHead.cast[uiFrame.who].display;
+  const replayState = `document.querySelector("#replaychip")?.getAttribute("data-replay-state")`;
+  /* every fetch the page starts from here on, as "METHOD url" */
+  const watchFetch = `(() => {
+    window.__reqs = [];
+    if (!window.__fetch) {
+      window.__fetch = window.fetch;
+      window.fetch = (...a) => {
+        window.__reqs.push(((a[1] || {}).method || a[0]?.method || "GET") + " " +
+                           String(a[0]?.url || a[0]));
+        return window.__fetch.apply(window, a);
+      };
+    }
+    return true; })()`;
+  const replayed = async () => {
+    const s = await evaljs(`(() => {
+      const d = document.querySelector("dialog[open][data-guided]");
+      const n = d && d.querySelector('[name="charter"]');
+      return {here: hereHref(),
+              screen: !!document.querySelector("#view [data-replay-screen]"),
+              dialog: !!d,
+              value: n ? n.value : null,
+              disabled: !!(n && n.disabled),
+              note: d?.querySelector("[data-guided-note]")?.textContent || "",
+              buttons: d ? [...d.querySelectorAll(".dlgfoot button")].map(b => b.textContent) : [],
+              who: document.querySelector("[data-replay-who]")?.textContent || "",
+              heading: document.querySelector("#view [data-replay-screen] h2")?.textContent || "",
+              transition: document.querySelector("#view [data-replay-transition]")
+                ?.getAttribute("data-replay-transition") || null,
+              reqs: window.__reqs}; })()`);
+    console.log("  requests during the replay: " + JSON.stringify(s.reqs));
+    return s;
+  };
+
+  await evaljs(`location.hash = ${JSON.stringify(walkSelf)}; true`);
+  await waitFor(`!!document.querySelector("[data-replay-walk]")`,
+                "Replay on the sealed walk's row page");
+  ok("a sealed walk's row page offers Replay", true);
+  await sleep(1500);   /* the row page's own reads settle first */
+  await evaljs(watchFetch);
+  await evaljs(`document.querySelector("[data-replay-walk]").click(); true`);
+  await waitFor(`${replayState} === "ended"`, "the replay to reach its last frame");
+  const first = await replayed();
+  ok("the screen navigates to the recorded row, drawn from the recording",
+     first.here === uiFrame.self && first.screen);
+  ok("the dialog opens read-only with the recorded fields",
+     first.dialog && first.disabled && first.value === uiFrame.ui.fields.charter &&
+     first.buttons.join() === "Cancel");
+  ok("the cast's display names label who is acting",
+     first.note.includes(actor) &&
+     first.who === walkHead.cast[transFrame.who].display);
+  ok("the transition renders from its own frame",
+     first.transition === transFrame.action && first.heading === transFrame.summary);
+  ok("the replay makes no request but the export GET",
+     first.reqs.length === 1 && first.reqs[0] === "GET " + walkSelf + "/export");
+
+  await evaljs(`document.querySelector("[data-replay-stop]").click(); true`);
+  await waitFor(`!${replayState} && !document.querySelector("dialog[open]") &&
+                 hereHref() === ${JSON.stringify(walkSelf)} &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "the live walk page to come back");
+  ok("stopping the replay returns the live screen", true);
+
+  /* the file a person picks: paused, sped up to 4x, played to its end */
+  await sleep(1500);
+  await evaljs(watchFetch);
+  const held2 = await evaljs(`(async () => {
+    await replayFile(new File([${JSON.stringify(exportText)}], "walk.ndjson"));
+    document.querySelector("[data-replay-toggle]").click();
+    const paused = ${replayState};
+    const speed = document.querySelector("[data-replay-speed]");
+    speed.value = "4";
+    speed.dispatchEvent(new Event("change"));
+    await new Promise(r => setTimeout(r, 1200));
+    const at = replay.at;
+    document.querySelector("[data-replay-toggle]").click();
+    return {paused, at, speed: replay.speed}; })()`);
+  ok("pause holds the replay and the speed choice takes",
+     held2.paused === "paused" && held2.at === 0 && held2.speed === 4);
+  await waitFor(`${replayState} === "ended"`, "the file's replay to reach its last frame");
+  const second = await replayed();
+  ok("a picked file replays the same way, with no request at all",
+     second.here === uiFrame.self && second.dialog &&
+     second.value === uiFrame.ui.fields.charter && second.reqs.length === 0);
+  await evaljs(`document.querySelector("[data-replay-stop]").click();
+                window.fetch = window.__fetch; delete window.__fetch; true`);
+  await waitFor(`!${replayState} && !document.querySelector("dialog[open]")`,
+                "the second replay to stop");
+
   /* signed in the way a person is: a session cookie off the magic
      link, the dev box EMPTY. An open invitation addressed to that
      member offers "Take this step" on its row page and in its

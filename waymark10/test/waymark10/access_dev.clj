@@ -5,7 +5,8 @@
   drops at boot, and the boot seeds what the drive reads: a member, a
   seat whose sitter acts for that member, and one held seat-restate
   held_call whose owner is the member and whose caller and door author
-  are the seat (held_call_test's seat and hold-door! seeds). The RP's
+  are the seat (held_call_test's seat and hold-door! seeds), and one
+  sealed walk the drive replays. The RP's
   session doors are composed (no identity provider, require-auth off,
   so the dev headers still speak): the drive signs a guest in through
   /auth/guest and reads the UI with a session cookie alone.
@@ -23,14 +24,18 @@
             [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.walks :as walks]
             [waymark10.test.db :as db]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time Instant)))
 
 (def ^:private colton (t/principal {:id "colton" :display "Colton"}))
 
 (defn seed!
-  "The member, the seat and its one held restate. → {:member :seat
-  :held}, each an id string."
+  "The member, the seat, its one held restate, and one sealed walk of
+  three frames by the seat's sitter (a move to the seat, a ui frame
+  with the restate dialog open, a transition) for the drive's replay.
+  → {:member :seat :held :walk}, each an id string."
   [eng]
   (let [member (:row (inv/create! eng :member
                                   {:display "Jack Tester" :actor_type "human"}
@@ -51,8 +56,32 @@
         h (held/hold-door! eng {:kind "seat" :action "restate" :id sid
                                 :body {:charter "Answer the household's mail, briefly."}
                                 :caller sitter :author sitter :owner mid
-                                :why "Restate the desk's charter."})]
-    {:member mid :seat sid :held (str (:id h))}))
+                                :why "Restate the desk's charter."})
+        walk (:row (inv/create! eng :walk
+                                {:followed sitter
+                                 :title "Restating the desk's charter"}
+                                {:principal colton}))
+        wid (str (:id walk))
+        self (str "/api/seats/" sid)
+        by {:id sitter :type "agent" :display "mail-desk"}
+        state (or (some-> (:state seat) name) "open")
+        ;; a pause before each frame: the replay has a gap to keep
+        frame! (fn [type body]
+                 (Thread/sleep 300)
+                 (walks/record-frame! eng wid nil {:type type :body body}))]
+    (frame! "move" {:principal by :self self :event "move" :source "ui"})
+    (frame! "ui" {:principal by :self self :event "ui"
+                  :ui {:dialog {:self self :action "restate"}
+                       :fields {:charter "Answer the household's mail, briefly."}
+                       :collection nil
+                       :focus nil}})
+    (frame! "transition" {:kind "seat" :self self :action "restate"
+                          :from state :to state
+                          :at (str (Instant/now))
+                          :summary "mail-desk, restated"
+                          :actor by})
+    (inv/invoke! eng :walk wid :seal {} {:principal colton})
+    {:member mid :seat sid :held (str (:id h)) :walk wid}))
 
 (defn start! [port]
   (let [st (pg/storage db/dsn)]

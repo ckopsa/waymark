@@ -211,10 +211,12 @@
                border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
   #grantchip button { border: none; background: none; color: var(--warn);
                       padding: 0 0 0 6px; font-weight: 700; cursor: pointer; }
-  #followchip { background: var(--verdigris-wash); color: var(--verdigris-deep);
+  #followchip, #replaychip {
+                background: var(--verdigris-wash); color: var(--verdigris-deep);
                 border-radius: 999px; padding: 3px 12px; font-size: 12px;
                 font-weight: 600; display: none; white-space: nowrap; }
-  #followchip button { border: none; background: none;
+  #followchip button, #replaychip button, #replaychip select {
+                       border: none; background: none;
                        color: var(--verdigris-deep); padding: 0 0 0 6px;
                        font-weight: 700; cursor: pointer; }
   #followchip a { color: var(--verdigris-deep); }

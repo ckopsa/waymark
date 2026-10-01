@@ -271,6 +271,20 @@ function unfollow() {
   if (wasUi) sseReopen(liveHref);
 }
 
+/* a replay in progress (the last section of this file), or null. While
+   one plays it holds this screen: live frames do not steer it, and
+   nothing is read from the engine or written to it. */
+let replay = null;
+/* a `move` applied: go where they look. Never out of an open dialog,
+   and off the Access panel only for an armed jump (a fresh approve)
+   or a replay; passive following parks there. */
+function applyFollowMove(self) {
+  if (self === hereHref() || $("dialog[open]") ||
+      (hereHref() === "access" && !followJumpArmed && !replay)) return;
+  followJumpArmed = false;
+  location.hash = "#" + self;
+}
+
 /* ── guided follow, the follower's side: a `ui` frame applied ──────── */
 let guidedSeq = -1;          // the last seq applied; an older one drops
 let guidedFocus = null;      // their focused row's self
@@ -291,10 +305,11 @@ function closeGuided() {
 }
 async function openGuidedDialog(d, name, key) {
   guidedOpening = key;
-  const res = await api(d.self);
+  /* a replay reads nothing: its dialog is built from the frames */
+  const res = replay ? replayDialogDoc(d) : await api(d.self);
   if (guidedOpening !== key) return;     // overtaken by a newer frame
   guidedOpening = null;
-  if (!res.ok || !followUi || $("dialog[open]")) return;
+  if (!res.ok || !(followUi || replay) || $("dialog[open]")) return;
   const entry = (res.body.actions || {})[d.action];
   if (!entry) return;                    // not a door this person sees
   await actionDialog({name: d.action, entry, doc: res.body,
@@ -303,7 +318,7 @@ async function openGuidedDialog(d, name, key) {
   if (g && g.guidedSet) g.guidedSet(guidedLastFields);
 }
 function applyGuidedUi(f) {
-  if (!followUi || !followId || !f || !f.ui ||
+  if (replay || !followUi || !followId || !f || !f.ui ||
       (f.principal || {}).id !== followId) return;
   /* seq counts up per principal: a frame arriving late across
      processes is dropped */
@@ -311,12 +326,19 @@ function applyGuidedUi(f) {
     if (f.seq <= guidedSeq) return;
     guidedSeq = f.seq;
   }
+  applyUiFrame(f);
+}
+/* one `ui` frame applied to this screen: a live one, or a replay's.
+   The navigation, the dialog and the focused row are the same code
+   either way. */
+function applyUiFrame(f) {
   const ui = f.ui, d = ui.dialog, c = ui.collection;
   guidedLastFields = ui.fields || {};
   guidedFocus = ui.focus || null;
   /* the existing guards: the Access panel parks, and a dialog this
      person opened themselves is never replaced */
-  if (hereHref() !== "access" && !$("dialog[open]:not([data-guided])")) {
+  if ((replay || hereHref() !== "access") &&
+      !$("dialog[open]:not([data-guided])")) {
     const target = c && c.self ? collectionHrefOf(c) : f.self;
     const here = c && c.self
       ? collectionHrefOf(collectionShareOf(location.hash.slice(1)) || {self: ""})
@@ -443,4 +465,259 @@ if ($share) $share.addEventListener("click", toggleShareUi);
 shareChip();
 /* a new screen has no focused row until one is picked */
 window.addEventListener("hashchange", () => { UI_SHARE.focus = null; });
+
+/* ── replay (docs/spec-guided-follow.md §4): a sealed walk's export,
+   `waymark-walk/1`, played on this screen on a timer. A `move` goes
+   through applyFollowMove and a `ui` frame through applyUiFrame, the
+   code the live streams use. It is read-only: the one request is the
+   export GET (none for a file), render() draws each screen from the
+   recording (renderReplay), the dialog is built from the frame, a
+   `transition` renders from its own body, and the presence beat is
+   held. The cast's display names say who is acting. ─────────────── */
+const REPLAY_SPEEDS = [1, 2, 4];
+/* a long silence in the recording is cut to this many ms, before speed */
+const REPLAY_MAX_GAP = 3000;
+function parseWalk(text) {
+  let docs;
+  try {
+    docs = String(text || "").split("\n").filter(l => l.trim())
+      .map(l => JSON.parse(l));
+  } catch (_e) { return null; }
+  const [header, ...frames] = docs;
+  if (!header || header.format !== "waymark-walk/1") return null;
+  return {header,
+          frames: frames.filter(f => f && typeof f.type === "string")
+                        .sort((a, b) => (a.t || 0) - (b.t || 0))};
+}
+function startReplay(text) {
+  const walk = parseWalk(text);
+  if (!walk) { toast("That is not a waymark-walk/1 recording"); return false; }
+  /* where the person was: stopping goes back there */
+  const back = replay ? replay.back : location.hash;
+  stopReplay(true);
+  closeGuided();
+  const r = {title: walk.header.title || "a walk", engine: walk.header.engine,
+             cast: walk.header.cast || {}, frames: walk.frames,
+             at: 0, speed: 1, playing: false, timer: null, who: null, back,
+             rows: new Map(),     // self → {kind, state, summary, log}
+             known: new Set(),    // every row self the recording names
+             fields: new Map()};  // dialog key → its field names
+  for (const f of walk.frames) {
+    const ui = (f.type === "ui" && f.ui) || {}, d = ui.dialog;
+    for (const s of [f.self, ui.focus, d && d.self])
+      if (s) r.known.add(String(s).split("?")[0]);
+    if (d) {
+      const key = d.self + " " + d.action;
+      const names = r.fields.get(key) || new Set();
+      for (const k of Object.keys(ui.fields || {})) names.add(k);
+      r.fields.set(key, names);
+    }
+  }
+  replay = r;
+  guidedFocus = null;
+  guidedLastFields = {};
+  guidedDismissed = null;
+  render();
+  playReplay();
+  return true;
+}
+function replayActor(f) {
+  const c = replay.cast[f.who] || {};
+  return {id: f.who || "", display: c.display || f.who || "someone",
+          type: c.type || "human"};
+}
+/* the row and the door a recorded dialog names, as a document
+   actionDialog can draw: every field the recording typed into, as
+   text. The export carries no schema, so none is invented. */
+function replayDialogDoc(d) {
+  const names = replay.fields.get(d.self + " " + d.action) || new Set();
+  const row = replay.rows.get(d.self) || {};
+  return {ok: true, body: {
+    self: d.self, kind: row.kind || "", state: row.state || null,
+    actions: {[d.action]: {
+      safety: {idempotent: true},
+      input: {type: "object", properties: Object.fromEntries(
+        [...names].map(k =>
+          [k, {type: "string", "x-display": {widget: "textarea"}}]))}}}}};
+}
+function applyReplayFrame(f) {
+  const actor = replayActor(f);
+  replay.who = actor;
+  if (f.type === "move") {
+    if (f.self) applyFollowMove(f.self);
+  } else if (f.type === "ui") {
+    applyUiFrame({self: f.self, ui: f.ui || {}, principal: actor});
+  } else if (f.type === "transition" && f.self) {
+    const row = replay.rows.get(f.self) || {log: []};
+    row.kind = f.kind;
+    row.state = f.to;
+    row.summary = f.summary || row.summary;
+    row.log.push({...f, actor});
+    replay.rows.set(f.self, row);
+    /* as the firehose steers: go where they wrote, unless a dialog is
+       open; a row already on screen is drawn again from the frame */
+    if (f.self === hereHref()) render();
+    else if (!$("dialog[open]")) location.hash = "#" + f.self;
+  }
+  /* an `invitation` frame has no surface here yet: it is counted and
+     passed over */
+  replayChip();
+}
+function replaySchedule() {
+  const r = replay;
+  clearTimeout(r.timer);
+  if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
+  const prev = r.at ? (r.frames[r.at - 1].t || 0) : 0;
+  const gap = Math.min(REPLAY_MAX_GAP,
+                       Math.max(0, (r.frames[r.at].t || 0) - prev));
+  r.timer = setTimeout(replayStep, gap / r.speed);
+}
+function replayStep() {
+  const r = replay;
+  if (!r || !r.playing || r.at >= r.frames.length) return;
+  applyReplayFrame(r.frames[r.at++]);
+  if (replay === r) replaySchedule();
+}
+function playReplay() {
+  const r = replay;
+  if (!r) return;
+  if (r.at >= r.frames.length) {       // again, from the start
+    r.at = 0;
+    r.who = null;
+    r.rows.clear();
+    closeGuided();
+    guidedFocus = null;
+    guidedDismissed = null;
+  }
+  r.playing = true;
+  replayChip();
+  replaySchedule();
+}
+function pauseReplay() {
+  if (!replay) return;
+  replay.playing = false;
+  clearTimeout(replay.timer);
+  replayChip();
+}
+function setReplaySpeed(x) {
+  if (!replay) return;
+  replay.speed = x;
+  if (replay.playing) replaySchedule();
+  replayChip();
+}
+/* stop: the live screen comes back where the person was. `quiet` is
+   one replay giving way to the next. */
+function stopReplay(quiet) {
+  const r = replay;
+  if (!r) return;
+  clearTimeout(r.timer);
+  closeGuided();
+  replay = null;
+  guidedFocus = null;
+  guidedLastFields = {};
+  guidedDismissed = null;
+  guidedSeq = -1;
+  replayChip();
+  if (quiet) return;
+  /* a hashchange renders and beats on its own */
+  if (location.hash !== r.back) location.hash = r.back;
+  else { render(); presenceBeat(); }
+}
+function replayChip() {
+  const chip = $("#replaychip");
+  if (!chip) return;
+  chip.textContent = "";
+  chip.style.display = replay ? "inline-block" : "none";
+  chip.removeAttribute("data-replay-state");
+  if (!replay) return;
+  const r = replay, ended = r.at >= r.frames.length;
+  chip.setAttribute("data-replay-state",
+    r.playing ? "playing" : ended ? "ended" : "paused");
+  chip.title = `replaying “${r.title}”`
+    + (r.engine ? `, recorded on the engine ${r.engine}` : "")
+    + " — read-only: nothing is read from the engine or written to it";
+  chip.append(`replay · ${r.title} · `,
+    el("span", {"data-replay-who": "",
+                title: "who is acting in the recording"},
+      r.who ? r.who.display : "—"),
+    ` · ${r.at}/${r.frames.length}`,
+    el("button", {"data-replay-toggle": "",
+        title: r.playing ? "pause" : ended ? "play again from the start" : "play",
+        onclick: () => (r.playing ? pauseReplay() : playReplay())},
+      r.playing ? "⏸" : ended ? "↻" : "▶"));
+  const speed = el("select", {"data-replay-speed": "", title: "speed"},
+    REPLAY_SPEEDS.map(x => el("option", {value: String(x)}, x + "x")));
+  speed.value = String(r.speed);
+  speed.addEventListener("change", () => setReplaySpeed(Number(speed.value)));
+  chip.append(speed,
+    el("button", {"data-replay-stop": "",
+        title: "stop the replay and go back to the live screen",
+        onclick: () => stopReplay()}, "✕"));
+}
+/* a screen during a replay (render() hands every /api/ address here):
+   what the recording itself says about this address, and no read. A
+   row shows its transitions so far, each from its own frame; a
+   collection lists the rows the recording names under it, so the
+   focused one can be lit. */
+function renderReplay(view, href) {
+  const r = replay;
+  const [path, query] = href.split("?");
+  const self = decodeURIComponent(path);
+  const row = r.rows.get(self);
+  const panel = el("div", {class: "panel", "data-replay-screen": self});
+  panel.append(el("div", {class: "crumbs"}, "Replay / ",
+    el("span", {class: "id", title: self}, self)));
+  panel.append(el("h2", {class: "prose"}, (row && row.summary) || self));
+  if (row && row.state)
+    panel.append(el("div", {},
+      el("span", {class: "statechip", title: row.kind || ""}, row.state)));
+  panel.append(el("p", {class: "muted", "data-replay-note": ""},
+    `From the recording “${r.title}”. Nothing on this screen is read `
+    + `from the engine, and nothing is written.`));
+  if (query) panel.append(el("p", {class: "muted mono"}, "?" + query));
+  for (const ev of (row ? row.log : []))
+    panel.append(el("div", {class: "ev", "data-replay-transition": ev.action || ""},
+      el("div", {class: "ev-head"}, evTime(ev.at), " ", ev.actor.display),
+      el("div", {class: "ev-body"},
+        `${pretty(ev.action || "")} · ${pretty(ev.kind || "")}: `
+        + `${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to || "")}`)));
+  const under = [...r.known].filter(s => s.startsWith(self + "/")).sort();
+  if (under.length)
+    panel.append(el("table", {}, el("tbody", {}, under.map(s => {
+      const known = r.rows.get(s) || {};
+      return el("tr", {"data-self": s},
+        el("td", {}, el("a", {href: "#" + s},
+          known.summary || s.split("/").pop().slice(0, 8))),
+        el("td", {}, known.state || ""));
+    }))));
+  view.append(panel);
+  paintGuidedFocus();
+}
+/* the two ways in: a sealed walk's row page (160-resource-surface.js),
+   whose export is the one read a replay makes, and a .ndjson file the
+   person picks, which makes none */
+async function replayWalk(self) {
+  let text = null;
+  try {
+    const res = await fetch(self + "/export", {headers: principalHeaders()});
+    if (res.ok) text = await res.text();
+  } catch (_e) { /* told below */ }
+  if (text === null) { toast("This walk's export could not be read"); return; }
+  startReplay(text);
+}
+async function replayFile(file) {
+  if (!file) return;
+  let text = null;
+  try { text = await file.text(); } catch (_e) { /* told below */ }
+  if (text === null) { toast("That file could not be read"); return; }
+  startReplay(text);
+}
+const $replaybtn = $("#replaybtn"), $replayfile = $("#replayfile");
+if ($replaybtn && $replayfile) {
+  $replaybtn.addEventListener("click", () => $replayfile.click());
+  $replayfile.addEventListener("change", () => {
+    replayFile($replayfile.files[0]);
+    $replayfile.value = "";
+  });
+}
 
