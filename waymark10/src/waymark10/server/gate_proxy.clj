@@ -893,6 +893,41 @@
     (gate-args args)
     (dissoc (or args {}) :why :__why)))
 
+(defn- stored
+  "One row as it stands now, decoded, or nil."
+  [eng kind id]
+  (when-some [rdef (get (inv/resources eng) kind)]
+    (let [st (:storage eng)]
+      (some->> (store/with-tx st
+                 (fn [tx] (store/load-row st tx kind (str id) {})))
+               (inv/decode-row rdef)))))
+
+(defn- approved-run?
+  "Is this call the run of a scheduled action a person approved when it
+  was scheduled (docs/spec-scheduled-actions.md R-4.3)? `:within` names
+  the row. It must be `running`, name this tool and this caller, and
+  name a held call that is `done` by a person's allow of `arm` on that
+  same row: `holds/allowed-hold`'s second shape, for a call that has no
+  engine door. Only the engine's own run passes `:within`; a hand at the
+  wire passes a caller and a sitting."
+  [eng tools {:keys [within caller]}]
+  (let [{wkind :kind waction :action sid :id} within]
+    (boolean
+     (when (and (= :scheduled_action wkind) (= :run waction) sid)
+       (when-some [s (stored eng :scheduled_action sid)]
+         (let [{:keys [acts_as held_call target]} (:data s)
+               h (some->> held_call str not-empty (stored eng :held_call))
+               door (get-in h [:data :door])]
+           (and (= :running (:state s))
+                (contains? tools (str (:tool target)))
+                (= (str caller) (str (:id acts_as)))
+                (= :done (:state h))
+                (not (str/blank? (str (get-in h [:data :decided_by]))))
+                (= "scheduled_action" (str (:kind door)))
+                (= "arm" (str (:action door)))
+                (= (str sid) (str (:id door)))
+                (= (str caller) (str (get-in h [:data :caller]))))))))))
+
 (defn invoke-for
   "POST /api/-/gate/{tool} and waymark_power: the NAME resolved to a
   tool, the tool resolved to its row by prefix, the entry's power
@@ -940,7 +975,11 @@
            args (bench-protected tname args protected)
            verdict (when gentry (filter-verdict (:filters gentry) args))
            prepare-block (bench-prepare-block eng vis tname args)
-           hold-block (bench-hold-block eng tname args opts)]
+           hold-block (bench-hold-block eng tname args opts)
+           ;; the person said yes when this call was scheduled, so its
+           ;; run forwards and nobody is asked twice
+           approved (and (= :person approval)
+                         (approved-run? eng (hash-set asked tname) opts))]
        (cond
          (nil? gentry)
          (refuse-invoke
@@ -965,7 +1004,8 @@
          (and why (not (carries-why? args)))
          (refuse-why tname)
 
-         (and (= :person approval) (some-> (:caller opts) str not-empty))
+         (and (= :person approval) (not approved)
+              (some-> (:caller opts) str not-empty))
          (:answer (held/hold!
                    eng
                    {:server (:id row)
@@ -977,7 +1017,7 @@
                     :caller (:caller opts)
                     :sitting (:sitting opts)}))
 
-         (= :person approval)
+         (and (= :person approval) (not approved))
          (refuse-anonymous tname)
 
          :else

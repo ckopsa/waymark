@@ -2426,6 +2426,10 @@
                              (and (admits? (:fields e) f)
                                   (not (contains? (:hashed e) f)))
                              (own-kind? k))))
+               ;; a power token this leash names: what a scheduled
+               ;; power call may name (docs/spec-scheduled-actions.md
+               ;; R-4.4)
+               :power? (fn [token] (contains? surface (str token)))
                :substitute (true? (get-in row [:data :substitute]))})
      :kind? (fn [kind]
               (let [k (name kind)]
