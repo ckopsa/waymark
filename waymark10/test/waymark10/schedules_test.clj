@@ -485,7 +485,9 @@
              ;; the runner pool and the link the last run took (d16b71bf)
              :runners :last_runner
              ;; the order the pool is tried in (529deb73)
-             :runner_order}
+             :runner_order
+             ;; the text a fire held by a release grace waits with (afb445d4)
+             :wake_text}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
       (doseq [a [:claim :observe :pause :resume :fail :end :fired]]

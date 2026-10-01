@@ -5009,6 +5009,30 @@
             (when (str/starts-with? born groomed-walk-prefix)
               (not-empty (subs born (count groomed-walk-prefix))))))))))
 
+(defn fire-deferred-until
+  "When a fire whose `text` names a walk row (`named-row`, read back to
+  its ticket by `named-walk-row`) must wait: the moment that row's
+  release grace lifts (`grace-lifts-at`), when only a CLOSED sitting's
+  grace holds it (ticket afb445d4). A run fired now would sit, be told
+  the row is held, and stop. A row an OPEN sitting of the seat holds is
+  the sit's to say, as it was, and a free row fires at once. → an
+  Instant after `now`, or nil."
+  [eng seat-row text now]
+  (when-some [named (some->> (named-row seat-row text)
+                             (named-walk-row eng (get-in seat-row [:data :walk])))]
+    (let [st (:storage eng)
+          open (store/with-tx st
+                 (fn [tx]
+                   (into #{}
+                         (comp (mapcat #(get-in % [:data :walked_rows]))
+                               (keep #(some-> % str not-empty)))
+                         (store/query-rows st tx :sitting
+                                           {:seat (str (:id seat-row)) :state :open}
+                                           {:limit open-sitting-page
+                                            :newest-first true}))))]
+      (when-not (contains? open named)
+        (grace-lifts-at eng seat-row [named] now)))))
+
 (defn- ticket-ended?
   "Has the ticket `id` ended, `done` or `dropped`? False for a ticket
   the store does not hold."
