@@ -240,6 +240,9 @@
    :refused_out_run 2
    ;; this many cut_short sittings in a row
    :cut_short_run 3
+   ;; this many sittings in a row that walked nothing, while rows of the
+   ;; kind the seat walks wait outside its grant
+   :walked_nothing_run 3
    ;; this many sittings in a row that carry the flag
    :flag_run {:test_thrash 3 :rewalk 2}})
 
@@ -2203,8 +2206,10 @@
        (:refused_out_run health-alert-defaults) " refused out in a row, "
        (:cut_short_run health-alert-defaults) " cut short in a row, test_thrash on "
        (get-in health-alert-defaults [:flag_run :test_thrash])
-       " in a row and rewalk on "
-       (get-in health-alert-defaults [:flag_run :rewalk]) " in a row."))
+       " in a row, rewalk on "
+       (get-in health-alert-defaults [:flag_run :rewalk]) " in a row, and "
+       (:walked_nothing_run health-alert-defaults)
+       " in a row that walked nothing while rows wait outside its grant."))
 
 (def ^:private health-breaker-help
   "Tick it and a new breach caps this seat to one sitting at a time until somebody closes the breaker. It does nothing for a seat that runs one sitting at once, and the number the seat states is never lowered.")
@@ -2225,6 +2230,9 @@
     [:maybe [:int {:min 1 :max 100}]]]
    [:cut_short_run {:optional true
                     :x-display {:label "Cut short in a row"}}
+    [:maybe [:int {:min 1 :max 100}]]]
+   [:walked_nothing_run {:optional true
+                         :x-display {:label "Walked nothing in a row, rows outside its grant"}}
     [:maybe [:int {:min 1 :max 100}]]]
    ;; the flags are declared one by one, so a form offers a number for
    ;; each and no box that wants JSON (usability's spelled-by-hand)
@@ -4736,6 +4744,14 @@
   [flag]
   (subs (str (flag-key flag)) 1))
 
+(defn- walked-nothing?
+  "Did this sitting end with nothing walked: its sit handed it no rows
+  (`stamp-walked-nothing!`) and it moved nothing after. A hook closes
+  such a wake within a few turns, so `cut_short` counts beside `idle`."
+  [sitting]
+  (and (true? (:walked_nothing sitting))
+       (contains? #{"idle" "cut_short"} (some-> (:outcome sitting) name))))
+
 (defn health-breach
   "The alert rule a seat's window breaks, or nil when it breaks none.
   `alerts` is the seat's `health_alerts`, laid over
@@ -4743,10 +4759,12 @@
   first, and `health` their rollup (`seat-health`). A run is counted
   from the newest sitting back, so one sitting that is not of the run
   ends it. The rules are judged in one order and the first that breaks
-  is the answer. Pure. → the rule's name."
-  [alerts health sittings]
+  is the answer. `hidden` is how many rows of the kind the seat walks
+  wait outside its grant (`hidden-waiting`), and `walked_nothing_run`
+  breaks only while there are some. Pure. → the rule's name."
+  [alerts health sittings & [hidden]]
   (let [{:keys [submit_rate_below never_sat_any refused_out_run
-                cut_short_run flag_run]}
+                cut_short_run flag_run walked_nothing_run]}
         (merge health-alert-defaults
                (into {} (remove (comp nil? val)) alerts))
         outcome? (fn [o] #(= o (some-> (:outcome %) name)))
@@ -4756,6 +4774,10 @@
     (cond
       (and (true? never_sat_any) (some (outcome? "never_sat") sittings))
       "never_sat_any"
+
+      (and (pos? (long (or hidden 0)))
+           (reached? walked_nothing_run (run walked-nothing?)))
+      "walked_nothing_run"
 
       (reached? refused_out_run (run (outcome? "refused_out")))
       "refused_out_run"
@@ -4776,12 +4798,86 @@
                      (neg? (compare (bigdec rate) (bigdec submit_rate_below))))
             "submit_rate_below")))))
 
+;; ── seat health 4: rows wait outside the grant (ticket fd930ff1) ────
+;;
+;; A sitting never learns of the rows its grant hides. The person who
+;; owns the seat should: a seat that keeps walking nothing while rows of
+;; the kind it walks wait outside its scope entry's filter is leashed
+;; too short. The engine counts those rows with its own hand, and the
+;; count goes to the ticket and to no answer a sitting reads.
+
+(def ^:private hidden-scan-limit
+  "The most rows of the walked kind one count reads. A count that
+  reaches it says that many or more."
+  200)
+
+(defn- hidden-str
+  "A state or a field's value as a filter spells it."
+  [v]
+  (if (keyword? v) (name v) (str v)))
+
+(defn- hidden-waiting
+  "The rows of the kind this seat walks that wait where its grant does
+  not reach: in the state its walk reads — the filter's own, or the
+  kind's default, or any state that is not terminal — and outside the
+  other fields of its scope entry's filter (`walk-filter`). Read
+  through the store and not through the seat's grant. A seat whose
+  entry filters by no field hides none, and a judgment seat walks the
+  judgment's queue and is not counted. Best effort.
+  → {:count :state :plural :fields}, or nil when none waits."
+  [eng tx seat-row]
+  (try
+    (let [kind (some-> (get-in seat-row [:data :walk]) str not-empty keyword)
+          rdef (get (inv/resources eng) kind)
+          flt (into {}
+                    (map (fn [[f v]] [(name f) (hidden-str v)]))
+                    (walk-filter seat-row))
+          fields (dissoc flt "state")]
+      (when (and rdef (seq fields)
+                 (nil? (some-> (get-in seat-row [:data :judgment]) str not-empty)))
+        (let [state (or (not-empty (get flt "state"))
+                        (some-> (get-in rdef [:default-filters :state])
+                                hidden-str not-empty))
+              terminal (into #{} (map hidden-str) (:terminal rdef))
+              waits? (fn [row]
+                       (or (some? state)
+                           (not (contains? terminal (hidden-str (:state row))))))
+              admitted? (fn [row]
+                          (every? (fn [[f v]]
+                                    (= v (some-> (get-in row [:data (keyword f)])
+                                                 hidden-str)))
+                                  fields))
+              n (count (filter #(and (waits? %) (not (admitted? %)))
+                               (store/query-rows (:storage eng) tx kind
+                                                 (if state {:state (keyword state)} {})
+                                                 {:limit hidden-scan-limit})))]
+          (when (pos? n)
+            {:count n
+             :state state
+             :plural (:plural rdef)
+             :fields (vec (sort (keys fields)))}))))
+    (catch Exception _ nil)))
+
+(defn- hidden-sentence
+  "What the person is told of a `walked_nothing_run` breach: how many
+  times the seat walked nothing and how many rows waited outside its
+  grant. The count and the kind, and no row's id."
+  [seat sittings {n :count :keys [state plural fields]}]
+  (str (get-in seat [:data :name]) " walked nothing "
+       (count (take-while walked-nothing? sittings)) " times while "
+       n " " (when state (str state " ")) plural
+       " sat outside its grant (" (str/join ", " fields)
+       " filter or scope)."))
+
 (defn- breach-detail
   "What the ticket says: the seat, the rule, and each sitting of the
-  window with what it came to, its flags and its link."
-  [seat rule sittings]
+  window with what it came to, its flags and its link. A
+  `walked_nothing_run` breach opens with `hidden-sentence`."
+  [seat rule sittings hidden]
   (let [data (:data seat)]
-    (str "Seat " (:name data) " (/api/seats/" (:id seat)
+    (str (when (and hidden (= "walked_nothing_run" rule))
+           (str (hidden-sentence seat sittings hidden) "\n\n"))
+         "Seat " (:name data) " (/api/seats/" (:id seat)
          ") broke its health alert `" rule "` at "
          (get-in data [:health :breach :at]) ".\n\n"
          "Its last " (count sittings) " sittings, newest first:\n"
@@ -4807,14 +4903,14 @@
   (`judgments/file-ticket!`'s posture). Best effort: an engine that
   serves no `ticket` kind files none, and a refusal leaves the breach
   recorded without one. → the ticket's id, or nil."
-  [eng seat sittings]
+  [eng seat sittings hidden]
   (when (get (inv/resources eng) :ticket)
     (let [{:keys [rule at]} (get-in seat [:data :health :breach])]
       (try
         (some-> (inv/create! eng :ticket
                              {:title (str "seat " (get-in seat [:data :name])
                                           " health breach: " rule)
-                              :detail (breach-detail seat rule sittings)
+                              :detail (breach-detail seat rule sittings hidden)
                               :repo "ckopsa/waymark"
                               :type "bug"
                               :priority 1}
@@ -4874,6 +4970,11 @@
   runs several sittings at once, and files one ticket after the write
   commits. The same rule at the next close keeps its record and files
   nothing; no rule clears it.
+
+  SEAT HEALTH 4: when the newest sitting walked nothing, the rows of
+  the walked kind that wait outside the seat's grant are counted in the
+  same transaction (`hidden-waiting`) for `walked_nothing_run`. The
+  count rides to the ticket and is not written on the seat row.
   → the map written, or nil when there was nothing to write."
   [eng seat-id]
   (when (and seat-id
@@ -4883,7 +4984,7 @@
       (let [st (:storage eng)
             seat-id (str seat-id)
             started #(->instant (:started_at %))]
-        (when-some [{:keys [seat sittings health new?]}
+        (when-some [{:keys [seat sittings health new? hidden]}
                     (store/with-tx st
                       (fn [tx]
                         (when-some [seat (store/load-row st tx :seat seat-id
@@ -4908,8 +5009,10 @@
                                                       (some-> (peek sittings) started))
                                         at)
                                 was (get-in seat [:data :health :breach])
+                                hidden (when (walked-nothing? (first sittings))
+                                         (hidden-waiting eng tx seat))
                                 rule (health-breach (get-in seat [:data :health_alerts])
-                                                    health sittings)
+                                                    health sittings (:count hidden))
                                 new? (and (some? rule)
                                           (not= rule (some-> (:rule was) str)))
                                 trip? (and new?
@@ -4928,10 +5031,11 @@
                             {:seat (assoc seat :data data)
                              :sittings sittings
                              :health health
-                             :new? new?}))))]
+                             :new? new?
+                             :hidden hidden}))))]
           ;; the ticket is its own write, after the rollup's commit
           (or (when new?
-                (when-some [ticket (file-breach-ticket! eng seat sittings)]
+                (when-some [ticket (file-breach-ticket! eng seat sittings hidden)]
                   (stamp-breach-ticket! eng seat-id
                                         (get-in health [:breach :rule])
                                         ticket)))
