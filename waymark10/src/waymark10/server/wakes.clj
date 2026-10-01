@@ -1263,6 +1263,11 @@
                            :served {}
                            :missed true
                            :closed_by "missed"
+                           ;; seat health 1: no close judges a row
+                           ;; born closed, so its outcome is written
+                           ;; here — a fire nobody sat in never sat
+                           :outcome "never_sat"
+                           :flags []
                            :note (missed-note fired deadline schedule)}
                     model (assoc :model model))
                   {:principal seats/seats-actor :state :closed})

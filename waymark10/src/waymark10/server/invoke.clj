@@ -584,6 +584,14 @@
                           (or (get rs (keyword t))
                               (some (fn [[_ r]] (when (= t (:plural r)) r))
                                     rs))))
+             ;; the log read by LEASH (seat health 1, ticket fad586b7):
+             ;; the transitions an actor carrying this grant made in a
+             ;; window, a nil bound open — how a sitting's close reads
+             ;; what the sitting moved. The write's own transaction.
+             :transitions-under
+             (fn [grant-id since until]
+               (store/transitions-under-grant (:storage engine) tx
+                                              (str grant-id) since until {}))
              :actor-of (fn [row transition]
                          ;; the newest matching transition's actor id
                          (some (fn [rec]
