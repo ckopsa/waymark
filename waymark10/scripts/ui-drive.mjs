@@ -909,6 +909,48 @@ async function accessStory() {
     ?.querySelector("[data-invite-open]")`,
                 "Take this step on the invitation's collection row");
   ok("the collection offers the signed-in viewer Take this step", true);
+
+  /* the same session, seen by another. This tab (A) is still the
+     guest, the dev box empty; tab B is priya, in her own browser
+     context. A's beat is gated on the engine's identity (220-boot.js
+     presenceBeat, viewerId), so B's presence holds A, and A's
+     share-my-screen `ui` frame reaches B in guided mode. The id is
+     read off A's page: presence names the principal as the engine
+     resolved it. */
+  console.log("· signed in by session: seen by a second viewer");
+  await send("Emulation.setFocusEmulationEnabled", {enabled: true});
+  const pid = await evaljs(`window.signedinPrincipal.id`);
+  ok("the session viewer stands on the invitations, the dev box still empty",
+     await evaljs(`$("#who").value === "" && hereHref() === "/api/invitations"`));
+  const chrome = await openChrome();
+  const B = await chrome.openTab("priya");
+  await B.call("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await B.js(`localStorage.setItem("wm10.principal", "priya"); true`);
+  await B.call("Page.navigate", {url: BASE + "/api/-/ui?follow=" +
+    encodeURIComponent(pid) + "&follow_name=Guest"});
+  await sleep(1200);
+  await B.until(`!!document.querySelector("#sharebtn") && !!document.querySelector("#followchip")`,
+                "priya's shell");
+  const seen = `PRESENCE.get(${JSON.stringify(pid)})`;
+  await B.until(`${seen}?.self === "/api/invitations"`,
+                "the session viewer in priya's presence", 15000);
+  ok("a session-signed-in viewer appears in a second viewer's presence", true);
+
+  await evaljs(`document.querySelector("#sharebtn").click(); true`);
+  await waitFor(`document.querySelector("#sharebtn").getAttribute("aria-pressed") === "true"`,
+                "the session viewer's share toggle on");
+  const guideMe = `[...document.querySelectorAll("#followchip button")]
+    .find(b => b.textContent.startsWith("guide me"))`;
+  await B.until(`!!${guideMe}`, "the guide-me offer");
+  await B.js(`${guideMe}.click(); true`);
+  await B.until(`!!document.querySelector("#followchip [data-guided-mark]")`, "the guided mark");
+  await B.until(`${seen}?.ui?.collection?.self === "/api/invitations"`,
+                "the session viewer's ui frame on priya's screen", 15000);
+  ok("the session viewer's share-my-screen ui frame reaches a guided follower", true);
+  await evaljs(`document.querySelector("#sharebtn").click(); true`);
+  B.close();
+  await chrome.close();
 }
 
 /* ════ invitation: one tap from the collection, and a decline ═════════
@@ -1007,45 +1049,10 @@ async function invitationStory() {
   ok("Decline moves the invitation to declined", await stateOf(declined) === "declined");
 }
 
-/* ════ guided follow: two people, two browser contexts ═══════════════
-   Against waymark10.batch-a-dev/start! (the meal fixture on
-   Postgres: the recipe door keeps a shared live draft, which a memory
-   engine cannot store; the drive seeds through the API). ui-test
-   pins the page's strings (ui-follow-offers-guided-mode,
-   ui-sharing-is-off-by-default); this executes them, per
-   docs/spec-guided-follow.md §2 and §3. Tab A (ada) turns on share my
-   screen, filters the meals, focuses a row, pages, opens a dialog and
-   types; tab B (bo) follows ada in guided mode and sees each land.
-   Then the guards: the Access panel parks, a dialog bo opened is never
-   replaced, and an invitation to bo opens in bo's own hand. Each tab
-   is its own browser context, so each holds its own localStorage —
-   two principals in one chromium. */
-async function guidedStory() {
-  const tag = Date.now().toString(36);
-  const call = async (method, path, body, pid) => {
-    const res = await fetch(BASE + path,
-      {method, headers: {"Content-Type": "application/json",
-                         "x-waymark-principal": pid},
-       body: body ? JSON.stringify(body) : null});
-    return {status: res.status, body: await res.json().catch(() => null)};
-  };
-  const must = (r, status, what) => {
-    if (r.status !== status)
-      throw new Error(what + ": " + r.status + " " + JSON.stringify(r.body));
-    return r;
-  };
-
-  console.log("· seeding three meals as ada, two of them on the list");
-  const meals = [];
-  for (const name of ["soup", "stew", "pie"])
-    meals.push(must(await call("POST", "/api/meals",
-      {name: `Guided ${name} ${tag}`, themes: ["guided"]}, "ada"),
-      201, "ada creates a meal").body.self);
-  for (const self of meals.slice(0, 2))
-    must(await call("POST", self + "/-/accept", null, "ada"), 200, "ada accepts " + self);
-  must(await call("GET", "/api/invitations", null, "bo"), 200,
-       "this engine serves invitations");
-
+/* ── more tabs: each its own browser context, so each holds its own
+   localStorage and cookies — two people in one chromium. → {openTab,
+   close}; close disposes every context openTab made. ─────────────── */
+async function openChrome() {
   /* one CDP socket per target: the browser's, and each tab's */
   const cdp = async url => {
     const sock = new WebSocket(url);
@@ -1099,6 +1106,55 @@ async function guidedStory() {
     };
     return {call: c.call, js, until, close: c.close};
   };
+  const close = async () => {
+    for (const ctx of contexts)
+      await browser.call("Target.disposeBrowserContext", {browserContextId: ctx});
+    browser.close();
+  };
+  return {openTab, close};
+}
+
+/* ════ guided follow: two people, two browser contexts ═══════════════
+   Against waymark10.batch-a-dev/start! (the meal fixture on
+   Postgres: the recipe door keeps a shared live draft, which a memory
+   engine cannot store; the drive seeds through the API). ui-test
+   pins the page's strings (ui-follow-offers-guided-mode,
+   ui-sharing-is-off-by-default); this executes them, per
+   docs/spec-guided-follow.md §2 and §3. Tab A (ada) turns on share my
+   screen, filters the meals, focuses a row, pages, opens a dialog and
+   types; tab B (bo) follows ada in guided mode and sees each land.
+   Then the guards: the Access panel parks, a dialog bo opened is never
+   replaced, and an invitation to bo opens in bo's own hand. Each tab
+   is its own browser context, so each holds its own localStorage —
+   two principals in one chromium. */
+async function guidedStory() {
+  const tag = Date.now().toString(36);
+  const call = async (method, path, body, pid) => {
+    const res = await fetch(BASE + path,
+      {method, headers: {"Content-Type": "application/json",
+                         "x-waymark-principal": pid},
+       body: body ? JSON.stringify(body) : null});
+    return {status: res.status, body: await res.json().catch(() => null)};
+  };
+  const must = (r, status, what) => {
+    if (r.status !== status)
+      throw new Error(what + ": " + r.status + " " + JSON.stringify(r.body));
+    return r;
+  };
+
+  console.log("· seeding three meals as ada, two of them on the list");
+  const meals = [];
+  for (const name of ["soup", "stew", "pie"])
+    meals.push(must(await call("POST", "/api/meals",
+      {name: `Guided ${name} ${tag}`, themes: ["guided"]}, "ada"),
+      201, "ada creates a meal").body.self);
+  for (const self of meals.slice(0, 2))
+    must(await call("POST", self + "/-/accept", null, "ada"), 200, "ada accepts " + self);
+  must(await call("GET", "/api/invitations", null, "bo"), 200,
+       "this engine serves invitations");
+
+  const chrome = await openChrome();
+  const openTab = chrome.openTab;
   const boot = async (tab, pid, query) => {
     await tab.call("Page.navigate", {url: BASE + "/api/-/ui"});
     await sleep(1200);
@@ -1284,9 +1340,7 @@ async function guidedStory() {
   ok("the guided mark turns guided mode off, and the follow stands",
      await B.js(`followId`) === "ada");
   A.close(); B.close();
-  for (const ctx of contexts)
-    await browser.call("Target.disposeBrowserContext", {browserContextId: ctx});
-  browser.close();
+  await chrome.close();
 }
 
 if (MODE === "batch-a") await batchAStory();
