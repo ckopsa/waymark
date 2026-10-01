@@ -138,6 +138,10 @@
                                     delegate (spec-connector-door.md)
     WAYMARK10_OIDC_RESOURCE_SCOPES  comma-separated scopes the
                                     protected-resource document advertises
+    WAYMARK10_MCP_APP_CLIENTS       delegate client ids trusted with the
+                                    MCP Apps tools (docs/spec-mcp-apps.md)
+    WAYMARK10_MCP_APP_TICKET_SECRET the app ticket's HMAC key; unset, the
+                                    app tools are listed for nobody
 
   WAYMARK10_OIDC_APP_URL is read at the top level too (:app-url), with
   or without a client id: the challenge and the protected-resource
@@ -152,7 +156,14 @@
    (when-some [issuer (env "WAYMARK10_OIDC_ISSUER")]
      (let [client-id (env "WAYMARK10_OIDC_CLIENT_ID")
            delegates (parse-delegates (env "WAYMARK10_OIDC_DELEGATE_CLIENTS"))
-           scopes (parse-list (env "WAYMARK10_OIDC_RESOURCE_SCOPES"))]
+           scopes (parse-list (env "WAYMARK10_OIDC_RESOURCE_SCOPES"))
+           app-clients (parse-list (env "WAYMARK10_MCP_APP_CLIENTS"))
+           ticket-secret (some-> (env "WAYMARK10_MCP_APP_TICKET_SECRET")
+                                 str str/trim not-empty)]
+       (when-not ticket-secret
+         (binding [*out* *err*]
+           (println "waymark10 mcp apps: WAYMARK10_MCP_APP_TICKET_SECRET is not"
+                    "set, so the app tools are listed for nobody.")))
        (cond-> {:issuer issuer
                 :audience (or (env "WAYMARK10_OIDC_AUDIENCE") client-id)
                 :jwks-uri (or (env "WAYMARK10_OIDC_JWKS_URI")
@@ -164,6 +175,10 @@
          (assoc :delegate-clients delegates)
          (seq scopes)
          (assoc :resource-scopes scopes)
+         (seq app-clients)
+         (assoc :app-clients app-clients)
+         ticket-secret
+         (assoc :app-ticket-secret ticket-secret)
          client-id
          (assoc :rp
                 (cond-> {:client-id client-id

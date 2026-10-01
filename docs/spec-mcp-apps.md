@@ -341,6 +341,13 @@ The declaration is remembered on the session entry `open-session!`
 writes at `initialize`. A caller that sends no `Mcp-Session-Id` is the
 stateless caller the door has always served, and it is text-only.
 
+Over Postgres the entry is a row of `waymark10_mcp_sessions`, which
+gains three columns: `app_ui boolean NOT NULL DEFAULT false`,
+`client_name text` and `client_version text` (the `clientInfo` the
+client sent). A row written before them reads `app_ui` false, and the
+in-memory entry keeps the same three keys. The bearer is **not**
+stored: `rpc-post` resolves it per request, as it always did.
+
 `listing` therefore takes the session after all. The promise of
 waymark-912p is kept in the form that matters: the list does not move
 with a **grant** or a law change. It now has two shapes, chosen once
@@ -353,8 +360,13 @@ it is.
   No engine test can prove a host keeps its model from an app-only
   tool. The `:app-clients` list is where that judgment is recorded.
   It is empty by default, so the module ships dark.
-- **The ticket needs a signing key.** The first child names it. It is
-  the engine's own secret and never an OIDC client secret.
+- **The ticket needs a signing key.** It is
+  `WAYMARK10_MCP_APP_TICKET_SECRET`, read where
+  `WAYMARK10_MCP_APP_CLIENTS` is read, and the ticket is HMAC-SHA256
+  over its own bytes. Unset or empty, the whole module is dark: the
+  three tools are absent from every listing, even for a listed client,
+  and the server logs one line at boot saying so. It is the engine's
+  own secret, never an OIDC client secret and never a seat key.
 - **No list surface.** *What is waiting on me* as one frame of several
   held calls is not here. One show is one row. It is the natural sixth
   surface if the count says the first is used.
