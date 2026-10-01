@@ -273,6 +273,39 @@
     (is (str/includes? body "\"data-export-walk\""))
     (is (str/includes? body "onclick: () => exportWalk(doc.self)"))))
 
+(deftest ui-replay-draws-a-row-from-its-doc
+  ;; docs/spec-agent-demo-walks.md §8a: a `doc` frame is kept as the
+  ;; replay passes it, and the screen it names is drawn by the code that
+  ;; draws a live row or collection, inert, with every request held
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "replay.docs.set(self, f.doc);"))
+    (is (str/includes? body "if (doc && doc.kind) return renderReplayDoc(view, doc);"))
+    (is (str/includes? body "\"data-replay-doc\": \"\", inert: \"\"});"))
+    (is (str/includes? body "if (String(doc.kind).endsWith(\"_collection\")) renderCollection(screen, doc, hints);"))
+    (is (str/includes? body "else renderResource(screen, doc, hints).catch(() => {});"))
+    (testing "a dialog is drawn from the document's input schema"
+      (is (str/includes? body "if (held && (held.actions || {})[d.action]) return {ok: true, body: held};")))
+    (testing "it makes no read and no write"
+      (is (str/includes? body "apiHeld = walk.frames.some(f => f.type === \"doc\");"))
+      (is (str/includes? body "if (apiHeld) return {res: null, status: 0, ok: false, body: null, etag: null};"))
+      (is (str/includes? body "if (apiHeld) return dataHintsCache[kind] || {};"))
+      (is (str/includes? body "if (loaded || apiHeld) return;")))))
+
+(deftest ui-replay-falls-back-without-a-doc
+  ;; a screen the walk holds no document for is today's panel, and a
+  ;; walk with no document at all holds no request
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        from-doc "if (doc && doc.kind) return renderReplayDoc(view, doc);"
+        panel "const panel = el(\"div\", {class: \"panel\", \"data-replay-screen\": self});"]
+    (is (str/includes? body "const doc = r.docs.get(self);"))
+    (is (str/includes? body panel))
+    (is (< (str/index-of body from-doc) (str/index-of body panel))
+        "the panel is what is left when no document is held")
+    (is (str/includes? body "let apiHeld = false;"))
+    (testing "playing again forgets the documents, and stopping lets requests go"
+      (is (str/includes? body "r.rows.clear();\n    r.docs.clear();"))
+      (is (str/includes? body "replay = null;\n  apiHeld = false;")))))
+
 (defn- render! [headers body]
   (let [resp (*h* {:request-method :post :uri "/api/-/render/markdown"
                    :headers (merge {"content-type" "application/json"} headers)

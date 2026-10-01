@@ -675,3 +675,164 @@
           ((:presence (walks/recorder eng person nil "planner"))
            {:event "move" :principal {:id "planner"} :self (errand-path a)})
           (is (= 1 (count (frames-of eng (:id w))))))))))
+
+;; ── the screens a walk carries (docs/spec-agent-demo-walks.md § 8a) ──
+
+(defn- doc-walk! [eng]
+  (walk! eng {:followed "colton" :title "A walk with its screens" :docs true}))
+
+(defn- look!
+  "The person's own beat lands on `self`: the recorder's tap takes the move."
+  [rec self]
+  ((:presence rec) {:event "move" :principal {:id "colton"} :self self}))
+
+(defn- docs-in [eng walk-id]
+  (filterv #(= "doc" (:type %)) (frames-in eng walk-id)))
+
+(defn- types-in [eng walk-id]
+  (frequencies (map :type (frames-in eng walk-id))))
+
+(defn- room! [eng id room]
+  (inv/invoke! eng :errand (str id) :rename {:title "Dishes" :room room}
+               {:principal person}))
+
+(deftest a-doc-follows-a-move-and-a-transition
+  (let [eng (stream-engine)
+        a (errand! eng "Dishes")
+        plain (self-walk! eng)
+        w (doc-walk! eng)
+        rec (walks/self-recorder eng person nil)]
+    (look! rec (errand-path a))
+    (walks/record-own! eng person nil (rename! eng a "Towels" person))
+    (look! rec "/api/errands")
+    (let [docs (docs-in eng (:id w))
+          of (fn [self] (filterv #(= self (get-in % [:body :self])) docs))]
+      (is (= {"move" 2 "transition" 1 "doc" 3} (types-in eng (:id w))))
+      (is (= 6 (get-in (row-of eng :walk (:id w)) [:data :frame_count])))
+      (testing "a move to a row and a transition are each followed by the row's envelope"
+        (is (= #{"Dishes" "Towels"}
+               (set (map #(get-in % [:body :doc :data :title]) (of (errand-path a))))))
+        (is (every? #(= "errand" (get-in % [:body :doc :kind])) (of (errand-path a))))
+        (is (some? (get-in (first (of (errand-path a)))
+                           [:body :doc :actions :rename :input]))
+            "the envelope holds the door's input schema, so a dialog needs no frame"))
+      (testing "a move to a collection is followed by its page"
+        (let [[page] (of "/api/errands")]
+          (is (= "errand_collection" (get-in page [:body :doc :kind])))
+          (is (= [(errand-path a)]
+                 (mapv :self (get-in page [:body :doc :data :items]))))))
+      (testing "a walk made without docs records none"
+        (is (= {"move" 2 "transition" 1} (types-in eng (:id plain))))))))
+
+(deftest a-doc-holds-only-what-the-recorder-saw
+  (let [eng (stream-engine)
+        seen (errand! eng "Dishes")
+        hidden (errand! eng "Laundry")
+        _ (room! eng seen "Kitchen")
+        w (doc-walk! eng)
+        sight (assoc (vis-of seen)
+                     :field? (fn [_kind field] (not= "room" (name field))))
+        rec (walks/self-recorder eng person sight)]
+    (look! rec (errand-path seen))
+    (look! rec (errand-path hidden))
+    (look! rec "/api/errands")
+    (let [frames (frames-in eng (:id w))
+          [doc :as docs] (docs-in eng (:id w))]
+      (is (= {"move" 1 "doc" 1} (types-in eng (:id w)))
+          "the unseen row and the collection it cannot read whole leave nothing")
+      (is (= 1 (count docs)))
+      (is (= (errand-path seen) (get-in doc [:body :self])))
+      (is (= "Dishes" (get-in doc [:body :doc :data :title])))
+      (is (not (contains? (get-in doc [:body :doc :data]) :room))
+          "the document is rendered under the recorder's sight")
+      (doseq [never ["Kitchen" "Laundry" (str hidden)]]
+        (is (not (str/includes? (pr-str frames) never)) (str never " was recorded"))))))
+
+(deftest an-unchanged-doc-is-not-recorded-twice
+  (let [eng (stream-engine)
+        a (errand! eng "Dishes")
+        w (doc-walk! eng)
+        rec (walks/self-recorder eng person nil)
+        titles #(set (map (fn [f] (get-in f [:body :doc :data :title]))
+                          (docs-in eng (:id w))))]
+    (look! rec (errand-path a))
+    (look! rec (errand-path a))
+    (is (= {"move" 2 "doc" 1} (types-in eng (:id w)))
+        "the same screen, byte for byte, is one document")
+    (walks/record-own! eng person nil (rename! eng a "Towels" person))
+    (look! rec (errand-path a))
+    (is (= {"move" 3 "transition" 1 "doc" 2} (types-in eng (:id w)))
+        "the changed row is recorded once more, and not again")
+    (is (= #{"Dishes" "Towels"} (titles)))))
+
+(deftest a-doc-over-the-cap-is-left-out
+  (let [eng (stream-engine)
+        a (errand! eng "Dishes")
+        w (doc-walk! eng)
+        rec (walks/self-recorder eng person nil)]
+    (is (= [(* 64 1024) (* 8 1024 1024)] [walks/doc-cap walks/docs-cap]))
+    (testing "a document over the cap is not recorded, and its move still is"
+      (with-redefs [walks/doc-cap 64]
+        (look! rec (errand-path a)))
+      (is (= {"move" 1} (types-in eng (:id w)))))
+    (testing "a walk's documents stop at the total"
+      (look! rec (errand-path a))
+      (let [[doc] (docs-in eng (:id w))
+            held (long (get-in doc [:body :bytes]))]
+        (is (pos? held))
+        (with-redefs [walks/docs-cap (+ held 16)]
+          (walks/record-own! eng person nil (rename! eng a "Towels" person)))
+        (is (= {"move" 2 "transition" 1 "doc" 1} (types-in eng (:id w))))))))
+
+(deftest an-exported-doc-is-redacted-under-the-exporter
+  (let [eng (stream-engine)
+        seen (errand! eng "Dishes")
+        hidden (errand! eng "Laundry")
+        _ (room! eng seen "Kitchen")
+        w (doc-walk! eng)
+        rec (walks/self-recorder eng person nil)
+        selves [(errand-path seen) (errand-path hidden) "/api/errands"]
+        docs-of (fn [export] (filterv #(= "doc" (:type %)) (:lines export)))]
+    (doseq [self selves] (look! rec self))
+    (seal! eng w)
+    (let [whole (docs-of (export-of eng w nil))
+          vis (assoc (vis-of seen)
+                     :field? (fn [_kind field] (not= "room" (name field)))
+                     :action? (fn [_kind action] (not= "finish" (name action))))
+          narrow (export-of eng w vis)
+          [doc :as crossed] (docs-of narrow)]
+      (testing "an unscoped exporter reads each document whole"
+        (is (= (set selves) (set (map :self whole))))
+        (is (= "Kitchen"
+               (get-in (first (filter #(= (errand-path seen) (:self %)) whole))
+                       [:doc :data :room]))))
+      (testing "the row must pass the exporter's :row?"
+        (is (= [(errand-path seen)] (mapv :self crossed))))
+      (testing "data keeps the keys :field? admits"
+        (is (= "Dishes" (get-in doc [:doc :data :title])))
+        (is (not (contains? (get-in doc [:doc :data]) :room))))
+      (testing "actions keeps the entries :action? admits"
+        (is (contains? (get-in doc [:doc :actions]) :rename))
+        (is (not (contains? (get-in doc [:doc :actions]) :finish))))
+      (is (nil? (:who doc)) "a document is nobody's act")
+      (doseq [never ["Kitchen" "Laundry" (str hidden)]]
+        (is (not (str/includes? (:text narrow) never)) (str never " crossed"))))))
+
+(deftest an-exported-doc-names-principals-by-alias
+  (let [eng (stream-engine)
+        about (walk! eng)
+        w (doc-walk! eng)]
+    (is (some? (walks/record-doc! eng (:id w) person nil
+                                  (str "/api/walks/" (:id about)) nil)))
+    (seal! eng w)
+    (let [{:keys [text header lines]} (export-of eng w nil)
+          data (get-in (first lines) [:doc :data])
+          cast (set (map name (keys (:cast header))))]
+      (is (= ["doc"] (mapv :type lines)))
+      (is (= "Filing a ticket" (:title data)))
+      (is (contains? cast (:recorder data))
+          "the recorder of the row on screen crosses as a cast alias")
+      (is (contains? cast (:followed data)))
+      (is (not= (:recorder data) (:followed data)))
+      (doseq [never ["colton" "planner"]]
+        (is (not (str/includes? text never)) (str never " crossed"))))))
