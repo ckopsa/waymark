@@ -1963,6 +1963,35 @@ async function guidedStory() {
   ok("replaying the file made no write",
      (await A.js(`window.__replayWrites.join(", ")`)) === "");
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a staged call's write");
+  await A.until(`!replay && !document.querySelector("dialog[open]")`, "the replay to stop");
+  const stagedDialog = {self: meals[1], action: "update_recipe"};
+  const stagedFile = [
+    {format: "waymark-walk/1", title: "An agent writes a recipe",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+    {t: 10, type: "ui", who: "a1", self: meals[1], ui: {dialog: stagedDialog, fields: {}}},
+    {t: 20, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: stagedDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 30, type: "transition", who: "a1", kind: "meal", self: meals[1],
+     action: "update_recipe", from: "on_list", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided stew ${tag}`},
+    {t: 40, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+  ].map(l => JSON.stringify(l)).join("\n");
+  await A.js(`startReplay(${JSON.stringify(stagedFile)})`);
+  const written = `document.querySelectorAll("dialog[open][data-guided] .dlgfoot [data-replay-write]")`;
+  /* the close waits for the mark: the replay is paused there for the check */
+  await A.until(`${written}.length === 1 && (pauseReplay(), true)`, "the marked submit");
+  ok("a replayed staged call marks one submit, lit, before the frame that closes its form",
+     await A.js(`{ const b = ${written};
+       b.length === 1 && b[0].classList.contains("invited") && replay.at === 4 &&
+       document.querySelector("dialog[open][data-guided] [name=recipe]")?.value === "Brown the roux." }`));
+  await A.js(`playReplay(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !document.querySelector("dialog[open]")`, "the form to close after the mark", 15000);
+  ok("the marked form closes", true);
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
   A.close();
   await chrome.close();
 }

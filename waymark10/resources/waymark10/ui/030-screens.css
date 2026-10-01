@@ -45,6 +45,15 @@
                    font-family: var(--serif); font-size: 16px;
                    pointer-events: none; }
 
+  /* ── a replayed write and a replayed look: the submit button lit as an
+     invited field is, without the wash that would take a button's own
+     colour; and the main panel of the screen the gaze arrived at,
+     outlined as a focused row is ─────────────────────────────────── */
+  .dlgfoot button.invited { animation: none; }
+  html[data-replay-gaze] .panel[data-replay-screen],
+  html[data-replay-gaze] [data-replay-doc] > .panel:first-of-type {
+    outline: 2px solid #7a5cff; outline-offset: 2px; }
+
   /* ── film mode (docs/spec-agent-demo-walks.md §8b): the page played
      for a camera. The chrome a film must not show is gone, a title
      card covers the screen, and a caption is a band across the bottom:

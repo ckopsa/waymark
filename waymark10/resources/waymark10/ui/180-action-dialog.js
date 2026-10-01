@@ -599,8 +599,20 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     dlg.setAttribute("data-guided", guided.key);
     for (const n of form.querySelectorAll("input, select, textarea, button"))
       n.disabled = true;
+    /* the button that writes is the footer's last */
+    const foot = dlg.querySelector(".dlgfoot"), write = foot.lastElementChild;
     for (const b of dlg.querySelectorAll(".dlgfoot button"))
       if (b.textContent !== "Cancel") b.remove();
+    /* the moment of their write: that button drawn again, lit as an
+       invited field is, with nothing behind it to press. A replayed
+       write shows it before its form closes (200-events-follow.js). */
+    dlg.guidedWrite = () => {
+      const lit = el("button", {class: write.className + " invited",
+                               type: "button", "data-guided-write": ""},
+        write.textContent);
+      foot.append(lit);
+      return lit;
+    };
     form.prepend(el("p", {class: "guided-note", "data-guided-note": ""},
       guided.note || `${guided.name} is filling this in`));
     /* a note beside the fields it names, as an invitation's: a replayed
