@@ -678,6 +678,11 @@ demoBoot().catch(() => { /* engine not started, or restarting */ });
 const REPLAY_SPEEDS = [1, 2, 4];
 /* a long silence in the recording is cut to this many ms, before speed */
 const REPLAY_MAX_GAP = 3000;
+/* the beats of one connector call are recorded milliseconds apart
+   (docs/spec-agent-demo-walks.md §2): two frames closer than
+   REPLAY_BURST_MS are played REPLAY_BURST_GAP apart, before speed. No
+   browser makes such a burst, since a form's reports are debounced. */
+const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
 function parseWalk(text) {
   let docs;
   try {
@@ -701,6 +706,7 @@ function startReplay(text) {
              cast: walk.header.cast || {}, frames: walk.frames,
              at: 0, speed: 1, playing: false, timer: null, who: null, back,
              rows: new Map(),     // self → {kind, state, summary, log}
+             docs: new Map(),     // self, the document recorded for it so far
              known: new Set(),    // every row self the recording names
              fields: new Map()};  // dialog key → its field names
   for (const f of walk.frames) {
@@ -722,6 +728,9 @@ function startReplay(text) {
     }
   }
   replay = r;
+  /* a walk that carries its screens has them drawn by the live screen
+     code, whose reads are held for as long as the replay lasts */
+  apiHeld = walk.frames.some(f => f.type === "doc");
   guidedFocus = null;
   guidedLastFields = {};
   guidedDismissed = null;
@@ -738,6 +747,11 @@ function replayActor(f) {
    actionDialog can draw: every field the recording typed into, as
    text. The export carries no schema, so none is invented. */
 function replayDialogDoc(d) {
+  /* a walk that carries this row's document
+     (docs/spec-agent-demo-walks.md §8a) has the dialog drawn from that
+     document's own input schema */
+  const held = replay.docs.get(d.self);
+  if (held && (held.actions || {})[d.action]) return {ok: true, body: held};
   const names = replay.fields.get(d.self + " " + d.action) || new Set();
   const row = replay.rows.get(d.self) || {};
   return {ok: true, body: {
@@ -773,6 +787,18 @@ async function openReplayInvitation(f, actor) {
   g.guidedSet(f.suggest || {});
 }
 function applyReplayFrame(f) {
+  /* a `doc` frame is a screen and nobody's act: it is kept for
+     renderReplay, and its screen is drawn again when it is the one
+     showing */
+  if (f.type === "doc") {
+    const self = String(f.self || "").split("?")[0];
+    if (self && f.doc) {
+      replay.docs.set(self, f.doc);
+      if (self === String(hereHref() || "").split("?")[0]) render();
+    }
+    replayChip();
+    return;
+  }
   const actor = replayActor(f);
   replay.who = actor;
   if (f.type === "move") {
@@ -804,8 +830,9 @@ function replaySchedule() {
   clearTimeout(r.timer);
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
   const prev = r.at ? (r.frames[r.at - 1].t || 0) : 0;
+  const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);
   const gap = Math.min(REPLAY_MAX_GAP,
-                       Math.max(0, (r.frames[r.at].t || 0) - prev));
+                       r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);
   r.timer = setTimeout(replayStep, gap / r.speed);
 }
 function replayStep() {
@@ -821,6 +848,7 @@ function playReplay() {
     r.at = 0;
     r.who = null;
     r.rows.clear();
+    r.docs.clear();
     closeGuided();
     guidedFocus = null;
     guidedDismissed = null;
@@ -849,6 +877,7 @@ function stopReplay(quiet) {
   clearTimeout(r.timer);
   closeGuided();
   replay = null;
+  apiHeld = false;
   guidedFocus = null;
   guidedLastFields = {};
   guidedDismissed = null;
@@ -900,6 +929,10 @@ function renderReplay(view, href) {
   const [path, query] = href.split("?");
   const self = decodeURIComponent(path);
   const row = r.rows.get(self);
+  /* the latest document at or before the playhead draws the product's
+     own screen; with none, the panel below stands */
+  const doc = r.docs.get(self);
+  if (doc && doc.kind) return renderReplayDoc(view, doc);
   const panel = el("div", {class: "panel", "data-replay-screen": self});
   panel.append(el("div", {class: "crumbs"}, "Replay / ",
     el("span", {class: "id", title: self}, self)));
@@ -927,6 +960,20 @@ function renderReplay(view, href) {
         el("td", {}, known.state || ""));
     }))));
   view.append(panel);
+  paintGuidedFocus();
+}
+/* a screen the walk carries (docs/spec-agent-demo-walks.md §8a): the
+   document recorded for this address, handed to the code that draws a
+   live row or collection. The screen is inert, so no action on it can
+   be taken, and apiHeld answers every read that code makes with
+   nothing. The hints are the ones this page already holds. */
+function renderReplayDoc(view, doc) {
+  const screen = el("div", {"data-replay-screen": doc.self || "",
+                            "data-replay-doc": "", inert: ""});
+  view.append(screen);
+  const hints = dataHintsCache[String(doc.kind).replace(/_collection$/, "")] || {};
+  if (String(doc.kind).endsWith("_collection")) renderCollection(screen, doc, hints);
+  else renderResource(screen, doc, hints).catch(() => {});
   paintGuidedFocus();
 }
 /* the two ways in: a sealed walk's row page (160-resource-surface.js),
