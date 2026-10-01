@@ -119,45 +119,12 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.verdict :as verdict]))
 
 (set! *warn-on-reflection* true)
 
 ;; ── what a pull request writes back onto the row ────────────────────
-
-(defn- short-sha [sha] (subs sha 0 (min 7 (count sha))))
-
-(defn- reopen-what-judged-the-old-head!
-  "Reopen every standing verdict about this change that was said at
-  another head than `head` (ticket 35600491). A verdict keeps the
-  head it judged as `subject_head` (waymark10.verdict); one said at a
-  head the pull request no longer holds is evidence about code nobody
-  is merging, so it goes back to its judgment's queue through the
-  ordinary `reopen`, which wakes the seat that walks it. A verdict
-  with no `subject_head` was said before heads were kept, and stands.
-
-  BEST-EFFORT, as the merge's completion is: a verdict that refuses is
-  said in the log, and the observe stands. A rehearsal carries no pen,
-  and reopens nothing."
-  [row head ctx]
-  (let [find' (:find ctx)
-        invoke' (:invoke ctx)]
-    (when (and find' invoke')
-      ;; an engine that serves no verdicts has none to reopen
-      (doseq [v (try (find' :verdict {:subject_kind "change"
-                                      :subject_id (str (:id row))
-                                      :state "said"}
-                            {:limit 100})
-                     (catch Exception _ nil))
-              :let [judged (some-> (get-in v [:data :subject_head]) str not-empty)]
-              :when (and judged (not= judged head))]
-        (try
-          (invoke' :verdict (str (:id v)) :reopen
-                   {:note (str "head moved " (short-sha judged) " -> " (short-sha head))})
-          (catch Exception e
-            (binding [*out* *err*]
-              (println "factory10 change observe: the verdict" (:id v)
-                       "was not reopened -" (ex-message e)))))))))
 
 (defhandler observe-the-pull-request [row inp ctx]
   ;; The source hands the facts it read. A fact it did not read is
@@ -165,10 +132,10 @@
   ;; machine advances the state, never this handler.
   ;;
   ;; A HEAD THAT MOVES takes back what judged the old one (ticket
-  ;; 35600491): see `reopen-what-judged-the-old-head!`.
+  ;; 35600491): see `waymark10.verdict/reopen-stale-verdicts!`.
   (let [head (some-> (:head_sha inp) str not-empty)]
     (when (and head (not= head (some-> (get-in row [:data :head_sha]) str not-empty)))
-      (reopen-what-judged-the-old-head! row head ctx)))
+      (verdict/reopen-stale-verdicts! ctx :change (:id row) head)))
   (update row :data merge (into {} (remove (comp nil? val)) inp)))
 
 (defhandler adopt-the-pull-request [row inp _ctx]

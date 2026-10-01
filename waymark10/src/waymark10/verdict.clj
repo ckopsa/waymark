@@ -453,11 +453,12 @@
 ;; ── the hands ───────────────────────────────────────────────────────
 
 (defn- subject-head-of
-  "The commit the subject stands at as it is judged — its `head_sha`,
-  the field a change carries (factory10) — or nil for a subject that
-  carries none, or when no read is in scope. The verdict keeps it as
+  "The commit the subject stands at as it is judged — its `head_sha`
+  (factory10's change), else its `head` (colton-tools' change, which
+  keeps Bitbucket's 12 characters) — or nil for a subject that carries
+  neither, or when no read is in scope. The verdict keeps it as
   `subject_head`: an answer about one commit, so the subject's next
-  head can reopen it (factory10.resources.change)."
+  head can reopen it (`reopen-stale-verdicts!`)."
   [row ctx]
   (let [read' (:read ctx)
         k (some-> (get-in row [:data :subject_kind]) str str/trim not-empty)
@@ -466,7 +467,52 @@
                        (:kind (rdef-of k))
                        (keyword k)))]
     (when (and read' kind sid)
-      (some-> (read' kind sid) (get-in [:data :head_sha]) str str/trim not-empty))))
+      (let [data (:data (read' kind sid))
+            field #(some-> (get data %) str str/trim not-empty)]
+        (or (field :head_sha) (field :head))))))
+
+(defn- short-sha [sha] (subs sha 0 (min 7 (count sha))))
+
+(defn- same-commit?
+  "Two heads name one commit when either is a prefix of the other: a
+  forge may answer 12 characters where another answers 40."
+  [a b]
+  (or (str/starts-with? a b) (str/starts-with? b a)))
+
+(defn reopen-stale-verdicts!
+  "Reopen every standing verdict about `subject-id` of `subject-kind`
+  that was said at another commit than `new-head` (tickets 35600491,
+  8ef24689). A verdict keeps the head it judged as `subject_head`; one
+  said at a head the subject no longer holds is evidence about code
+  nobody is merging, so it goes back to its judgment's queue through
+  the ordinary `reopen`, which wakes the seat that walks it. A verdict
+  with no `subject_head` was said before heads were kept, and stands.
+  Heads compare by prefix (`same-commit?`), so any change kind's
+  observe may call this with whatever length its forge answers.
+
+  BEST-EFFORT: a verdict that refuses is said in the log, and the
+  caller's write stands. A rehearsal carries no pen, and reopens
+  nothing."
+  [ctx subject-kind subject-id new-head]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)
+        head (some-> new-head str str/trim not-empty)]
+    (when (and find' invoke' head)
+      ;; an engine that serves no verdicts has none to reopen
+      (doseq [v (try (find' verdict-kind {:subject_kind (name subject-kind)
+                                          :subject_id (str subject-id)
+                                          :state standing-state}
+                            {:limit 100})
+                     (catch Exception _ nil))
+              :let [judged (some-> (get-in v [:data :subject_head]) str str/trim not-empty)]
+              :when (and judged (not (same-commit? judged head)))]
+        (try
+          (invoke' verdict-kind (str (:id v)) :reopen
+                   {:note (str "head moved " (short-sha judged) " -> " (short-sha head))})
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "verdict reopen: the verdict" (:id v)
+                       "was not reopened -" (ex-message e)))))))))
 
 (defhandler stamp-and-overrule
   [row ctx]
