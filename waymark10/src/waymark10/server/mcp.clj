@@ -5254,6 +5254,7 @@
                      ;; rides in from here, exactly as the bench's
                      ;; office does.
                      who {:caller (:id (:principal session))
+                          :principal (:principal session)
                           :sitting (bound-sitting
                                     eng (:mcp-session-id session))}]
                  (if (some? (:at args))
