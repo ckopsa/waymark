@@ -2226,9 +2226,27 @@
    [:cut_short_run {:optional true
                     :x-display {:label "Cut short in a row"}}
     [:maybe [:int {:min 1 :max 100}]]]
+   ;; the flags are declared one by one, so a form offers a number for
+   ;; each and no box that wants JSON (usability's spelled-by-hand)
    [:flag_run {:optional true
                :x-display {:label "In a row, by flag"}}
-    [:maybe [:map-of :keyword [:int {:min 1 :max 100}]]]]])
+    [:maybe
+     [:map
+      [:test_thrash {:optional true
+                     :x-display {:label "test_thrash in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]
+      [:read_heavy {:optional true
+                    :x-display {:label "read_heavy in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]
+      [:rewalk {:optional true
+                :x-display {:label "rewalk in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]
+      [:over_budget {:optional true
+                     :x-display {:label "over_budget in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]
+      [:refusals_high {:optional true
+                       :x-display {:label "refusals_high in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]]]]])
 
 (def fire-keys-schema
   "What the seat keeps of the keys its firings carried (R-12.37): one
