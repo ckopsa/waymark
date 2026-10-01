@@ -80,6 +80,7 @@
             [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
+            [waymark10.server.walks :as walks]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
@@ -851,7 +852,8 @@
   the call is judged under, wider or narrower than the day it was
   cited. `{:why}` skips the row: a grant revoked, expired or narrowed
   past this call, or a seat that is not open. nil for a row scheduled
-  under no grant.
+  under no grant. `:sight` beside the view is that grant's whole
+  visibility, the one the scheduler's walk records the run under.
 
   THE VIEW CARRIES NO ID. A sitting's transitions are the log rows
   whose actor names its grant, so a run that stamped the grant would
@@ -875,7 +877,7 @@
         (or (nil? view) (:problem door))
         {:why grant-gone}
 
-        :else {:grant view}))))
+        :else {:grant view :sight vis}))))
 
 (defn- stale
   "The validity rule the row chose, and the confirm gate read again,
@@ -1046,7 +1048,14 @@
   A call that already landed under that key ends the row from its
   stored answer and nothing is judged again. Answers the ending,
   `:done`, `:skipped` or `:failed`. A row that is not `running` is left
-  as it is and answers nil."
+  as it is and answers nil.
+
+  A CALL THAT LANDS IS HANDED TO THE SCHEDULER'S OWN WALK
+  (docs/spec-agent-demo-walks.md § 7). The sweep makes the run and no
+  request does, so no write door hands its transition to
+  `walks/record-own!`. The run is the scheduler's own act, so it goes
+  there as that principal, under the visibility of the grant read at
+  the run."
   [eng id]
   (let [row (stored-row eng kind id)]
     (when (= :running (:state row))
@@ -1066,6 +1075,8 @@
                                     why {:end :skip :why why}
                                     :else (carry-out eng id door data principal
                                                      (:grant leash)))]
+        (when (= :land end)
+          (walks/record-own! eng principal (:sight leash) res))
         (end! eng id end
               (or why (ran-words door data))
               (or before (when (= :land end) (outcome-of eng door res))))))))

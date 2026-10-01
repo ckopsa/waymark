@@ -123,11 +123,16 @@
 (defn- born
   "The birth stamps: the recorder is the principal that created the
   row, never the body; the clock starts now; a walk naming no
-  retention gets the default."
+  retention gets the default. The clock is the recording's: on a demo
+  engine whose own clock is shifted (clock-shift), `started_at` is real
+  time, because each frame's `t` counts real time from it."
   [row ctx]
   (-> row
       (assoc-in [:data :recorder] (str (get-in ctx [:principal :id])))
-      (assoc-in [:data :started_at] (or (:now ctx) (Instant/now)))
+      (assoc-in [:data :started_at] (or (some-> (get-in ctx [:services :recording-clock])
+                                                (apply []))
+                                        (:now ctx)
+                                        (Instant/now)))
       (assoc-in [:data :frame_count] 0)
       (update-in [:data :retention_days] #(or % default-retention-days))))
 
@@ -305,7 +310,10 @@
                (or (not= "transition" type)
                    (some? (events/visible-transition sight body))))
       (let [st (:storage eng)
-            ^Instant now ((:now-fn eng))
+            ;; recording time, not engine time: a demo engine's shifted
+            ;; clock (clock-shift) must not reorder the frames
+            ^Instant now ((or (get-in eng [:services :recording-clock])
+                              (:now-fn eng)))
             id (str walk-id)]
         (store/with-tx st
           (fn [tx]
