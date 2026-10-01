@@ -466,6 +466,107 @@ shareChip();
 /* a new screen has no focused row until one is picked */
 window.addEventListener("hashchange", () => { UI_SHARE.focus = null; });
 
+/* ── record myself (§4): a walk of my own screen, nobody following.
+   ● Record creates a walk whose `followed` is me and turns ⧉ sharing
+   on for this tab, so each beat carries the `ui` part the engine
+   writes to the walk. ■ Stop seals it and opens its row page, where
+   ▶ Replay and the export are. The open walk is read from the engine
+   at boot, so a reload keeps recording. */
+let recording = null, recordTimer = null;   // {self, since}
+/* the walks door and who I am to the engine; null when this engine
+   serves no walks */
+async function recordDoor() {
+  let w = null;
+  try { w = await wellKnown(); } catch (_e) { return null; }
+  const href = ((w.resources || {}).walk || {}).href;
+  const p = w.principal || {};
+  const me = principalId() || p.id || "";
+  return href ? {href, me, name: principalId() || p.display || me} : null;
+}
+function recordChip() {
+  const b = $("#recordbtn");
+  if (!b) return;
+  clearInterval(recordTimer);
+  b.setAttribute("aria-pressed", String(!!recording));
+  if (!recording) {
+    b.textContent = "● Record";
+    b.title = "record my own screen as a walk: this tab's screens, dialogs "
+      + "and writes, to replay or export afterwards";
+    return;
+  }
+  const tick = () => {
+    const s = Math.max(0, Math.floor((Date.now() - recording.since) / 1000));
+    b.textContent = `■ Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  b.title = "recording this tab — click to stop and open the walk";
+  tick();
+  recordTimer = setInterval(tick, 1000);
+}
+function recordingOf(doc) {
+  const since = Date.parse((doc.data || {}).started_at || "");
+  return {self: doc.self, since: Number.isNaN(since) ? Date.now() : since};
+}
+async function startRecording() {
+  const door = await recordDoor();
+  if (!door || !door.me) { toast("Recording needs a named principal"); return; }
+  const title = prompt("What does this walk show?",
+                       `${door.name}, ${new Date().toLocaleString()}`);
+  if (title === null) return;
+  const r = await api(door.href, {method: "POST",
+    body: JSON.stringify({followed: door.me, title: title.trim() || door.name})});
+  if (!r.ok || !r.body || !r.body.self) {
+    toast("The recording could not start");
+    return;
+  }
+  recording = recordingOf(r.body);
+  recordChip();
+  /* the walk takes `ui` frames only while this tab shares; sharing
+     this button turned on goes off again at the stop */
+  if (uiSharing()) presenceBeat();
+  else {
+    toggleShareUi();
+    try { sessionStorage.setItem("wm10.record.shared", "1"); }
+    catch (_e) { /* no storage, no sharing */ }
+  }
+}
+async function stopRecording() {
+  const self = recording.self;
+  const r = await api(self + "/-/seal", {method: "POST", body: "{}"});
+  if (!r.ok) { toast("The recording could not be stopped"); return; }
+  recording = null;
+  recordChip();
+  let mine = false;
+  try {
+    mine = sessionStorage.getItem("wm10.record.shared") === "1";
+    sessionStorage.removeItem("wm10.record.shared");
+  } catch (_e) { /* no storage */ }
+  if (mine && uiSharing()) toggleShareUi();
+  location.hash = "#" + self;
+}
+/* my open self walk, read at boot: a reload keeps recording */
+async function resumeRecording() {
+  const b = $("#recordbtn");
+  const door = await recordDoor();
+  if (!door) { if (b) b.style.display = "none"; return; }
+  if (!door.me) return;
+  const me = encodeURIComponent(door.me);
+  const r = await api(`${door.href}?recorder=${me}&followed=${me}&state=recording`);
+  const item = r.ok && ((r.body.data || {}).items || [])[0];
+  if (!item || !item.self) return;
+  const doc = await api(item.self);
+  if (doc.ok && doc.body.state === "recording" && !recording) {
+    recording = recordingOf(doc.body);
+    recordChip();
+  }
+}
+const $record = $("#recordbtn");
+if ($record) {
+  $record.addEventListener("click",
+    () => (recording ? stopRecording() : startRecording()));
+  recordChip();
+  resumeRecording().catch(() => { /* engine not started, or restarting */ });
+}
+
 /* ── replay (docs/spec-guided-follow.md §4): a sealed walk's export,
    `waymark-walk/1`, played on this screen on a timer. A `move` goes
    through applyFollowMove and a `ui` frame through applyUiFrame, the

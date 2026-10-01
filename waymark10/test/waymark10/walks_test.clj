@@ -579,3 +579,98 @@
                                              (vis-of c "inv-1" colton planner))))))))
     (testing "an exporter that cannot see the invitation gets no line"
       (is (empty? (:lines (export-of eng w (vis-of c colton planner))))))))
+
+;; ── the self walk: a person's own screen, nobody following ──────────
+
+(defn- self-walk! [eng]
+  (walk! eng {:followed "colton" :title "Colton, alone"}))
+
+(defn- with-registry
+  "A stream engine and its presence registry, and no stream of anyone's."
+  [f]
+  (let [eng (stream-engine)
+        reg (presence/start! eng {:hb-ms 600000})]
+    (try (f eng reg)
+         (finally (presence/stop! reg)))))
+
+(defn- rename! [eng id title who]
+  (inv/invoke! eng :errand (str id) :rename {:title title} {:principal who}))
+
+(deftest a-self-walk-records-its-own-beat-and-write-with-no-stream-open
+  (with-registry
+    (fn [eng reg]
+      (let [a (errand! eng "Dishes")
+            w (self-walk! eng)
+            rec (walks/self-recorder eng person nil)
+            ui {:dialog {:self (errand-path a) :action "rename"}
+                :fields {:title "Dishes, twice"}}]
+        (is (= "colton" (get-in w [:data :recorder]) (get-in w [:data :followed]))
+            "the create door admits followed = recorder")
+        (presence/report! reg person (errand-path a) ui (:presence rec))
+        (walks/record-own! eng person nil (rename! eng a "Towels" person))
+        (testing "someone else's write is not in this person's walk"
+          (walks/record-own! eng other nil (rename! eng a "Sheets" other)))
+        (let [frames (frames-in eng (:id w))
+              of (fn [type] (filterv #(= type (:type %)) frames))]
+          (is (= ["move" "transition" "ui"] (sort (map :type frames))))
+          (is (= 3 (get-in (row-of eng :walk (:id w)) [:data :frame_count])))
+          (is (= (errand-path a) (get-in (first (of "move")) [:body :self])))
+          (is (= "rename" (get-in (first (of "ui")) [:body :ui :dialog :action])))
+          (is (= "Dishes, twice"
+                 (get-in (first (of "ui")) [:body :ui :fields :title])))
+          (is (= {:kind "errand" :self (errand-path a) :action "rename"}
+                 (select-keys (:body (first (of "transition")))
+                              [:kind :self :action])))
+          (is (= "colton"
+                 (str (get-in (first (of "transition")) [:body :actor :id])))))
+        (testing "sealed, it takes no more"
+          (walks/record-own! eng person nil (seal! eng w))
+          (presence/report! reg person (errand-path a) ui (:presence rec))
+          (walks/record-own! eng person nil (rename! eng a "Dishes" person))
+          (is (= 3 (count (frames-of eng (:id w))))))))))
+
+(deftest a-self-walk-holds-no-row-its-person-cannot-see
+  (with-registry
+    (fn [eng reg]
+      (let [seen (errand! eng "Dishes")
+            hidden (errand! eng "Laundry")
+            w (self-walk! eng)
+            sight (vis-of seen)
+            rec (walks/self-recorder eng person sight)
+            ui {:dialog {:self (errand-path hidden) :action "rename"}
+                :fields {:title "Unseen"}}]
+        (presence/report! reg person (errand-path hidden) ui (:presence rec))
+        (walks/record-own! eng person sight (rename! eng hidden "Towels" person))
+        (is (empty? (frames-of eng (:id w)))
+            "neither the beat nor the write on the unseen row is written")
+        (testing "a dialog on the unseen row crosses as a plain move"
+          (presence/report! reg person (errand-path seen) ui (:presence rec))
+          (let [frames (frames-in eng (:id w))]
+            (is (seq frames))
+            (is (= #{"move"} (set (map :type frames))))
+            (is (= #{(errand-path seen)}
+                   (set (map #(get-in % [:body :self]) frames))))
+            (is (not (str/includes? (pr-str frames) "Unseen")))))
+        (testing "a write on the row the person sees is written"
+          (walks/record-own! eng person sight (rename! eng seen "Plates" person))
+          (is (= [(errand-path seen)]
+                 (->> (frames-in eng (:id w))
+                      (filter #(= "transition" (:type %)))
+                      (mapv #(get-in % [:body :self]))))))))))
+
+(deftest a-walk-of-someone-else-still-records-only-from-the-follower-stream
+  (with-registry
+    (fn [eng reg]
+      (let [a (errand! eng "Dishes")
+            w (walk! eng)
+            ui {:focus (errand-path a)}]
+        (doseq [who [person guide]
+                :let [rec (walks/self-recorder eng who nil)]]
+          (presence/report! reg who (errand-path a) ui (:presence rec))
+          (walks/record-own! eng who nil (rename! eng a "Towels" who)))
+        (is (empty? (frames-of eng (:id w)))
+            "neither the recorder's own beat and write nor the followed principal's")
+        (testing "the follower's stream is still what records it"
+          ((:presence (walks/recorder eng person nil "planner"))
+           {:event "move" :principal {:id "planner"} :self (errand-path a)})
+          (is (= 1 (count (frames-of eng (:id w))))))))))
