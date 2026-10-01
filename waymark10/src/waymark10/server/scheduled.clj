@@ -1,6 +1,6 @@
 (ns waymark10.server.scheduled
   "The scheduled action (docs/spec-scheduled-actions.md, children 1a,
-  1b, 1c, 2 and 4a): a call stored for a time, as a kind of its own.
+  1b, 1c, 2, 4a and 5): a call stored for a time, as a kind of its own.
 
   THIS NAMESPACE IS THE KIND, ITS SCHEDULING CHECK, ITS RUN AND ITS
   CLOCK. The create validates, checks and stores. `start!` claims a row
@@ -22,6 +22,12 @@
   over, each only when the scheduler names it (R-3.2): a state
   (`expect_state`) and guards (`expect_refusals`). Neither loosens the
   run.
+
+  CONDITIONS ARE THE COLLECTION'S FILTER, OVER ONE ROW (R-2.3). At the
+  create they are parsed by `collections/parse-query` for the target
+  kind, and its refusal is thrown as it wrote it. At the run the store
+  is asked for this row where they hold, under the grant read again by
+  its id.
 
   NOBODY SCHEDULES AS SOMEBODY ELSE (R-4.2). `scheduler`, `acts_as`
   and `grant` are stamped at birth, and the closed create model
@@ -49,10 +55,12 @@
             [waymark10.holds :as holds]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.collections :as collections]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
+            [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -170,13 +178,6 @@
 
       ;; whether the door is there to take is the scheduling check's (1b)
       :else (t/allow))))
-
-(g/defguard the-rule-is-built
-  {:explain "The `conditions` rule is child 5 of docs/spec-scheduled-actions.md (conditions), which is not built yet. Schedule this under `strict` or `state`, and leave `conditions` out."}
-  [_row inp _ctx]
-  (if (or (= "conditions" (:validity inp)) (seq (:conditions inp)))
-    (t/deny)
-    (t/allow)))
 
 (g/defguard the-input-fits
   {:vars [:bytes :limit]
@@ -440,6 +441,58 @@
     (t/deny {:vars {:problem problem}})
     (t/allow)))
 
+;; ── the conditions (R-2.3) ──────────────────────────────────────────
+
+(defn- condition-params
+  "`conditions` as the collection reads a query: parameter to string, in
+  the order of the parameters' names."
+  [conditions]
+  (into (sorted-map) (map (fn [[k v]] [(name k) (str v)])) conditions))
+
+(defn- unfit
+  "The 422 of a body whose `field` does not fit the rule it chose."
+  [field sentence]
+  (p/schema-invalid :create {field [sentence]}))
+
+(g/defguard the-conditions-are-the-collections
+  {:reads [:grant :storage]
+   :explain "A scheduled action's conditions are the target kind's collection filter, named with the `conditions` rule."}
+  [_row inp ctx]
+  (let [rule? (= "conditions" (:validity inp))
+        params (condition-params (:conditions inp))
+        {:keys [problem rdef id]} (when (map? (:target inp))
+                                    (door-of (:target inp) ctx))]
+    (cond
+      (and (not rule?) (empty? params)) nil
+
+      (not rule?)
+      (throw (unfit :validity "`conditions` are read only under the `conditions` rule. Send `validity: conditions`, or leave `conditions` out."))
+
+      (empty? params)
+      (throw (unfit :conditions "The `conditions` rule names at least one condition. Send `conditions`, or schedule this under `state` or `strict`."))
+
+      ;; a door that is not there is the scheduling check's to refuse
+      (or problem (nil? rdef)) nil
+
+      ;; R-2.4
+      (nil? id)
+      (throw (unfit :conditions "A create has no row to read, so it takes no conditions. Schedule it under `state` or `strict`."))
+
+      :else
+      (do
+        (when-some [blank (seq (filter (comp str/blank? val) params))]
+          (throw (p/schema-invalid
+                  :create
+                  (into {} (map (fn [[pname _]] [pname ["a condition compares a field with a value, and this one has none"]]))
+                        blank))))
+        ;; the collection's own refusal, with its vocabulary; a field
+        ;; the grant does not show plain is refused as an unknown one is
+        (let [{:keys [conds]} (collections/parse-query rdef params {:defaults? false})]
+          (when-some [plain? (get-in ctx [:grant :plain?])]
+            (grants/check-query! {:field? plain? :hashed? (constantly false)}
+                                 rdef conds nil)))))
+    (t/allow)))
+
 (defn- snapshot-of
   "What the target was when this was scheduled (R-1): the row's version,
   state and law revision. Under `expect_state` it is the expected state
@@ -583,6 +636,64 @@
     (catch clojure.lang.ExceptionInfo e
       {:why (said e)})))
 
+(defn- shown
+  "A value as a skip's sentence shows it, cut so the rest still fits."
+  [v]
+  (when (some? v)
+    (let [s (if (instance? clojure.lang.Named v) (name v) (str v))]
+      (if (< 60 (count s)) (str (subs s 0 59) "…") s))))
+
+(defn- unmet-condition
+  "R-2.3: the scheduler's conditions against the row as it is now, under
+  the runner's grant as it is now: the sentence that skips the run, or
+  nil. The evaluator is the collection's. The store is asked for this
+  row where `parse-query`'s conds hold, and answers one row or none.
+  When it answers none the conditions are asked one at a time, in the
+  order of their names, and the first that fails is named with the
+  value it met. A condition on a field the grant no longer shows plain
+  skips the row and shows no value."
+  [eng rdef row data principal]
+  (let [st (:storage eng)
+        vis (when-some [grant (:grant data)]
+              (grants/visibility eng grant principal))
+        this-row {:target :id :op := :value (str (:id row))}
+        holds? (fn [conds]
+                 (store/with-tx st
+                   (fn [tx]
+                     (pos? (long (store/count-matching
+                                  st tx (:kind rdef) (conj (vec conds) this-row)))))))
+        admitted? (fn [conds]
+                    (try (grants/check-query! vis rdef conds nil)
+                         true
+                         (catch clojure.lang.ExceptionInfo _ false)))
+        named (fn [[pname raw]] (str pname "=" (shown raw)))]
+    (try
+      (let [each (mapv (fn [[pname raw :as entry]]
+                         [entry (:conds (collections/parse-query
+                                         rdef {pname raw} {:defaults? false}))])
+                       (condition-params (:conditions data)))]
+        (or (some (fn [[entry conds]]
+                    (when-not (admitted? conds)
+                      (str "Not run: the condition " (named entry)
+                           " names a field this grant no longer admits.")))
+                  each)
+            (when-not (holds? (into [] (mapcat second) each))
+              (some (fn [[entry conds]]
+                      (when-not (holds? conds)
+                        (let [{:keys [target field]} (first conds)
+                              field (if (= :data target) field target)
+                              met (shown (if (= :state field)
+                                           (:state row)
+                                           (get-in row [:data field])))]
+                          (str "Not run: " (name field) " is " (or met "not set")
+                               ", and the condition was " (named entry) "."))))
+                    each))))
+      (catch clojure.lang.ExceptionInfo e
+        ;; the kind's law moved, and its collection no longer answers one
+        (if (:waymark10/problem (ex-data e))
+          "Not run: a condition is no longer one this kind's collection answers."
+          (throw e))))))
+
 (def ^:private grant-gone
   "The grant this was scheduled under no longer admits it.")
 
@@ -623,16 +734,19 @@
   against the target as it is now: the sentence that skips the run, or
   nil. `strict` is the snapshot's version (R-2.1). `state` is the
   snapshot's state, or the expected one, and a door still declared from
-  it (R-2.2). A create has no row: `strict` pins the law a birth is
-  stamped by (R-2.4). A row that is gone and a row the runner cannot
-  see are one sentence (R-2)."
-  [eng {:keys [rdef kind action id] defn' :defn} data]
+  it (R-2.2). `conditions` is `state`, and the scheduler's conditions
+  read between the state and the door (R-2.3). A create has no row:
+  `strict` pins the law a birth is stamped by (R-2.4). A row that is
+  gone and a row the runner cannot see are one sentence (R-2)."
+  [eng {:keys [rdef kind action id] defn' :defn} data principal]
   (let [{:keys [version state law_revision]} (:snapshot data)
         strict? (= "strict" (:validity data))
         label (name kind)]
     (if id
       (let [row (stored-row eng kind id)
-            at (some-> (:state row) name)]
+            at (some-> (:state row) name)
+            unmet (delay (when (= "conditions" (:validity data))
+                           (unmet-condition eng rdef row data principal)))]
         (cond
           (nil? row)
           (str "The " label " is gone.")
@@ -643,6 +757,8 @@
 
           (and state (not= state at))
           (str "The " label " is `" at "`, and this runs only while it is `" state "`.")
+
+          @unmet @unmet
 
           (not (contains? (:from defn') (:state row)))
           (str "`" (name action) "` is not a door of a " label " that is `" at "`.")
@@ -796,7 +912,7 @@
                   (or why
                       (some->> (:problem door) (str "The door is gone: "))
                       (:why leash)
-                      (stale eng door data)))
+                      (stale eng door data principal)))
             {:keys [end why res]} (cond
                                     before {:end :land}
                                     why {:end :skip :why why}
@@ -1166,7 +1282,7 @@
     [:enum "strict" "state" "conditions"]]
    [:conditions {:optional true
                  :x-display {:label "Conditions"
-                             :help "The scheduler's own conditions over the row's fields, in the collection filter's grammar. Not built yet: a row that names any is refused."
+                             :help "The scheduler's own conditions over the row's fields, in the collection filter's grammar: a filter parameter of the target kind and its value. All of them must hold at the time, and they are read only under the `conditions` rule."
                              :spelled-by-hand "A map of filter parameter to value, the one a collection query takes; the target kind names its own filterable fields, so no fixed form can offer them."}}
     [:maybe [:map-of :keyword :string]]]
    [:expect_state {:optional true
@@ -1316,9 +1432,10 @@
                 :scheduler #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "scheduled"}
-   :create-guards [the-target-is-an-engine-door the-rule-is-built the-input-fits
+   :create-guards [the-target-is-an-engine-door the-input-fits
                    the-time-names-one-instant the-time-is-in-range
-                   the-scheduler-has-room the-door-would-take-it]
+                   the-scheduler-has-room the-door-would-take-it
+                   the-conditions-are-the-collections]
    :on-create born
    :actions
    {:reschedule
@@ -1374,11 +1491,13 @@
     "R-3.1 asks a confirm door for its sentence. The sentence is asked of a row's door; a create target is rehearsed in full and asked for none."
     "R-6.2 says the summary is `outcome_why` after an ending. A summary is one template, so the line stays `{target} · {run_at} · {state}` and the sentence is read from the field."
     "R-7.2 states the zone rules for `at`. The same rules are applied here to `run_at` on the create and on `reschedule`, and an instant written with an offset and no zone anywhere is shown in that offset."
-    "R-2 reads the target under the runner's grant as it is then. The run reads the grant by its id and judges the door, the row and the call's guards under it. The validity rule's own read of the row's state and version is the engine's, so a row the grant no longer shows is skipped in the grant's sentence and not in the sentence of a row that is gone."
+    "R-2 reads the target under the runner's grant as it is then. The run reads the grant by its id and judges the door, the row and the call's guards under it. The validity rule's own read of the row's state and version is the engine's, so a row the grant no longer shows is skipped in the grant's sentence and not in the sentence of a row that is gone. A `conditions` row's fields (R-2.3) are judged under that grant: a condition on a field it no longer shows plain skips the row."
     "R-4.2 names three ways a grant stops a run: revoked, expired, narrowed. They are one sentence here, and a seat that is not open has its own. A seat held for named models is judged with the model the scheduling session declared, read off this row's first transition, because a run has no session to declare one."
     "R-4.2 says the run counts on no sitting. A sitting's transitions are the log rows whose actor names its grant, so the run's actor names no grant: it carries `scheduled`, and the grant's id stays on this row."
     "R-5.1 takes due rows oldest first. `run_at` has no promoted column to order by, so a pass takes up to its cap of the due rows in the order they were scheduled and runs that page oldest `run_at` first."
     "R-5.3's sentence says the engine was down. The sweep cannot tell a stopped engine from a slow pass, and says it either way."
     "R-5.4 fails a power tool that was left `running`. Targets are engine doors until child 4, so every row left `running` is run again under its key."
     "R-2.1 sends the snapshot's etag as If-Match. The fence judges it only on a fenced door, so the run also compares the row's version with the snapshot's before the call; on an unfenced door a write between that read and the call is not caught."
-    "R-2.2 asks that the row's envelope still advertises the action. The run reads the door's declared from-states and leaves the rest to the dry run, which judges the guards the envelope would."]})
+    "R-2.2 asks that the row's envelope still advertises the action. The run reads the door's declared from-states and leaves the rest to the dry run, which judges the guards the envelope would."
+    "R-2.3 does not say whether a condition must hold when it is scheduled. It need not: the grammar and the grant are judged at scheduling, and the conditions are read at the run."
+    "R-6.2 writes a skipped condition as \"Not reopened: …\". A door's name has no past participle the engine can spell, so the sentence opens \"Not run:\" and then names the field, the value it met and the condition."]})

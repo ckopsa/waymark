@@ -160,16 +160,21 @@
     (is (zero? (scheduled-count eng)))
     (is (= "open" (chore-state eng c)))))
 
-(deftest conditions-are-refused-naming-child-5
+(deftest conditions-ride-the-call-with-their-rule
   (let [eng (fresh-engine)
         c (chore! eng)]
-    (doseq [[label extra] [["the rule" {:validity "conditions"}]
-                           ["a condition" {:conditions {:state "open"}}]]]
+    (doseq [[label extra] [["the rule alone" {:validity "conditions"}]
+                           ["a condition alone" {:conditions {:state "open"}}]]]
       (testing label
         (let [out (later eng c extra)]
           (is (true? (:isError out)))
-          (is (re-find #"child 5" (str (:detail (doc out))))))))
-    (is (zero? (scheduled-count eng)))))
+          (is (= 422 (:status (doc out)))))))
+    (is (zero? (scheduled-count eng)))
+    (testing "the two together are stored"
+      (let [d (doc (later eng c {:validity "conditions"
+                                 :conditions {:state "open"}}))]
+        (is (true? (:scheduled d)))
+        (is (= "conditions" (:validity d)))))))
 
 ;; ── under a grant that names no scheduled_action (ticket 14c69581) ──
 

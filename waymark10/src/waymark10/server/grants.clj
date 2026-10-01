@@ -2417,6 +2417,15 @@
      ;; stand-in.
      :grant (when (and live? (seq surface))
               {:id (str grant-id) :action? action?* :row? row?*
+               ;; a field this leash shows plain, neither hidden nor
+               ;; hashed: what a scheduled action's conditions may
+               ;; name (docs/spec-scheduled-actions.md R-2.3)
+               :plain? (fn [kind field]
+                         (let [k (name kind) f (name field)]
+                           (if-some [e (get surface k)]
+                             (and (admits? (:fields e) f)
+                                  (not (contains? (:hashed e) f)))
+                             (own-kind? k))))
                :substitute (true? (get-in row [:data :substitute]))})
      :kind? (fn [kind]
               (let [k (name kind)]
