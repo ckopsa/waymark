@@ -1098,8 +1098,17 @@ jobs:
         run: |
           # CLJ_SDEPS (setup-clojure's local repository) with the test
           # path beside it: -Sdeps is read once, so one map carries both.
+          #
+          # -Sthreads 1: the CLI builds the classpath before the engine's
+          # JVM starts, and tools.deps expands the dependency tree on a
+          # thread pool over one Maven session. This job died there once
+          # (run 36792755139: "HashMap$Node cannot be cast to
+          # HashMap$TreeNode", a java.util.HashMap written from two
+          # threads) and passed on rerun of the same tree. Nothing under
+          # waymark10/ holds a java.util.HashMap, so the expansion is
+          # serialised: one thread, no shared map to tear.
           sdeps="${CLJ_SDEPS%\}} :aliases {:fx {:extra-paths [\"test\"]}}}"
-          nohup clojure -Sdeps "$sdeps" -M:fx -e \
+          nohup clojure -Sthreads 1 -Sdeps "$sdeps" -M:fx -e \
             "(do ((requiring-resolve 'waymark10.access-dev/start!) 8124) nil) @(promise)" \
             > "$RUNNER_TEMP/access-dev.log" 2>&1 &
           for _ in $(seq 1 120); do
@@ -1167,8 +1176,9 @@ jobs:
         env:
           WAYMARK10_TEST_DSN: jdbc:postgresql://localhost:5432/waymark10_ui_test?user=ckopsa
         run: |
+          # -Sthreads 1, as in ui-access: one thread builds the classpath.
           sdeps="${CLJ_SDEPS%\}} :aliases {:fx {:extra-paths [\"test\"]}}}"
-          nohup clojure -Sdeps "$sdeps" -M:fx -e \
+          nohup clojure -Sthreads 1 -Sdeps "$sdeps" -M:fx -e \
             "(do ((requiring-resolve 'waymark10.batch-a-dev/start!) 8123) nil) @(promise)" \
             > "$RUNNER_TEMP/guided-dev.log" 2>&1 &
           for _ in $(seq 1 120); do
