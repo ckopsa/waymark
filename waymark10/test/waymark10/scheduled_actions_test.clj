@@ -281,8 +281,12 @@
     (member! eng "colton" {:zone "America/Denver"})
     (member! eng "iris" {})
     (testing "the scheduler's own member row, and a delegate's person's"
-      (doseq [who [person planner]]
-        (let [row (schedule! eng c local {:principal who})]
+      (doseq [opts [{:principal person}
+                    {:principal planner
+                     :grant {:id "grant-planner"
+                             :action? (fn [_ _] true)
+                             :row? (fn [_ _] true)}}]]
+        (let [row (schedule! eng c local opts)]
           (is (= (Instant/parse "2026-10-02T14:30:00Z") (get-in row [:data :run_at])))
           (is (= "America/Denver" (get-in row [:data :zone]))))))
     (testing "the zone the body names wins over the member's"
