@@ -1499,6 +1499,15 @@ fire while the seat's busy count has reached `max_open_sittings`, and
 it fires at most once in `fire_interval_seconds`. A match the damper stops sets
 `wake_pending`, and one fire goes out when the damper lifts.
 
+The close of a seat's sitting is a further evaluation point. When a
+sitting closes (door, hook or sweep) and nothing is pending, the
+engine counts each of that seat's `at_least` entries once, under the
+same filter, and fires the seat under the same damper when one holds:
+a close inside `fire_interval_seconds` sets `wake_pending`. When none
+holds, nothing fires. The close is not a transition of the counted
+kind, and a count wake still has no clock. A transition wake is not
+replayed on close.
+
 The cadence stays. A seat with a count wake and a cadence fires when
 the queue reaches the size, or when the interval passes, whichever
 comes first. Example: the entry `{inbox_item, at_least: 20}` on a

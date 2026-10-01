@@ -37,7 +37,9 @@
   `at_most` is a COUNT wake: the seat is not woken by a row, it is
   woken by a queue reaching a size. It does not poll — the count is
   read only when a transition of that kind matches the entry's
-  actions, which is the one moment the number can have changed — and
+  actions, which is the one moment the number can have changed, and
+  again when one of the seat's sittings closes (`judge-count-on-close`),
+  since a seat's work seldom moves the kind it counts — and
   the count itself is the collection's own (`count-under`), so the
   number in the text is the number the list page would show under the
   same filter.
@@ -1153,20 +1155,57 @@
     (release! eng (raw-row eng :seat seat-id) schedule-row
               (str "wake:" seat-id ":link:" (:id t)) (now eng))))
 
+(defn- count-wake-holds?
+  "Does one of the seat's COUNT wakes (`at_least`) still hold now? The
+  count is `entry-count`'s, the one the consumer itself would take."
+  [eng seat-row]
+  (let [walk-rdef (some->> (get-in seat-row [:data :walk]) str not-empty
+                           keyword (get (inv/resources eng)))]
+    (boolean
+     (some (fn [e]
+             (when-some [at-least (:at_least e)]
+               (when-some [n (entry-count eng seat-row e)]
+                 (>= (long n) (long at-least)))))
+           (seats/effective-wake-on seat-row walk-rdef)))))
+
+(defn- judge-count-on-close
+  "The close is a further evaluation point for the seat's count wakes
+  (R-12.32, ticket 668a845d). A seat that takes one row per sitting
+  usually writes another kind than the one it counts, so no transition
+  of the counted kind follows its close, and the rows left would wait
+  for the cadence. When nothing is pending yet and an `at_least` entry
+  still holds, the wake is marked pending here, as a damped match is,
+  and `release!` fires it under the usual damper. An empty queue marks
+  nothing. A replayed close is heard once. → the schedule row as it
+  stands after."
+  [eng seat-row schedule-row t]
+  (if (and seat-row schedule-row
+           (= :active (:state seat-row))
+           (schedules/fires-out? eng schedule-row)
+           (not (get-in schedule-row [:data :wake_pending]))
+           (not (heard? schedule-row t))
+           (count-wake-holds? eng seat-row))
+    (do (mark-pending! eng (remember-heard! eng schedule-row t))
+        (schedules/schedule-for-seat eng (:id seat-row)))
+    schedule-row))
+
 (defn- release-for-sitting!
   "A sitting closed or abandoned: the seat it belonged to may have a
-  wake waiting on exactly that. Keyed by the sitting's own transition,
+  wake waiting on exactly that, or a count wake that still holds
+  (`judge-count-on-close`). Keyed by the sitting's own transition,
   so a replayed close releases once. A seat of several slots may fire
   with nothing pending, when a slot and a row for it are free."
   [eng t ^Instant at]
   (when-some [sitting (raw-row eng :sitting (:resource-id t))]
     (when-some [seat-id (some-> (get-in sitting [:data :seat]) str not-empty)]
-      (release! eng
-                (raw-row eng :seat seat-id)
-                (schedules/schedule-for-seat eng seat-id)
-                (str "wake:" seat-id ":release:" (:id t))
-                at
-                true))))
+      (let [seat-row (raw-row eng :seat seat-id)]
+        (release! eng
+                  seat-row
+                  (judge-count-on-close
+                   eng seat-row (schedules/schedule-for-seat eng seat-id) t)
+                  (str "wake:" seat-id ":release:" (:id t))
+                  at
+                  true)))))
 
 (defn sweep-pending!
   "Every schedule row carrying a pending wake, released where the
@@ -1287,19 +1326,6 @@
       s
       (subs s 0 missed-note-cap))))
 
-(defn- count-wake-holds?
-  "Does one of the seat's COUNT wakes (`at_least`) still hold now? The
-  count is `entry-count`'s, the one the consumer itself would take."
-  [eng seat-row]
-  (let [walk-rdef (some->> (get-in seat-row [:data :walk]) str not-empty
-                           keyword (get (inv/resources eng)))]
-    (boolean
-     (some (fn [e]
-             (when-some [at-least (:at_least e)]
-               (when-some [n (entry-count eng seat-row e)]
-                 (>= (long n) (long at-least)))))
-           (seats/effective-wake-on seat-row walk-rdef)))))
-
 (defn- last-sitting-missed?
   "Was the seat's newest sitting itself a missed one? Two missed runs
   in a row stop the re-arm, so a Routine that is dark does not loop."
@@ -1409,7 +1435,8 @@
   "One transition → the wake it implies, or nothing.
 
       seat <anything>          the active-seat cache is stale; drop it
-      sitting close, abandon   release that seat's pending wake
+      sitting close, abandon   release that seat's pending wake, and
+                               judge its count wakes once more
       seat, sitting, schedule,
       subscription             nothing else — these are the engine's
                                own writing about wakes, and a seat
