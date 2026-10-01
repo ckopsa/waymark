@@ -581,7 +581,9 @@
   birth of an invitation the follower can see; nil otherwise. The body
   is pinned: {id, author, subject, self, action, field, fields, note,
   suggest}; a row born before `fields` carries `field` alone,
-  and `suggest` keeps only the keys the follower's `:arg?` admits."
+  and `suggest` keeps only the keys the follower's `:arg?` admits. A
+  walkthrough's step carries {walkthrough, step, of} beside them
+  (docs/spec-walkthrough.md § 6)."
   [eng sight t]
   (when (and (= "invitation" (some-> (:kind t) name))
              (nil? (:from-state t))
@@ -592,12 +594,68 @@
       (when (and rdef (or (nil? sight) ((:row? sight) :invitation id)))
         (when-some [row (store/with-tx st
                           (fn [tx] (store/load-row st tx :invitation id {})))]
-          (let [d (:data (inv/decode-row rdef row))]
+          (let [d (:data (inv/decode-row rdef row))
+                led (cond-> (into {} (filter (comp some? val))
+                                  (select-keys d [:step :of]))
+                      (some? (:walkthrough d))
+                      (assoc :walkthrough (str (:walkthrough d))))]
             {:type "invitation"
-             :body (assoc (select-keys d [:author :subject :self :action
-                                          :field :fields :note])
+             :body (assoc (merge (select-keys d [:author :subject :self :action
+                                                 :field :fields :note])
+                                 led)
                           :id id
                           :suggest (suggest-for eng sight d))}))))))
+
+(defn- invitation-birth? [t]
+  (and (= "invitation" (some-> (:kind t) name))
+       (nil? (:from-state t))
+       (some? (:resource-id t))))
+
+(defn- answers?
+  "Whether `t`, the recorder's own transition, answers an invitation the
+  followed principal `pid` wrote for the recorder `fid`: it takes the
+  invited (self, action), or it declines the invitation itself. The
+  stream and the invitations' consumer hear the log apart, so the
+  invitation is either still `open` and no younger than `t`, or already
+  `answered` with `t`'s own log id."
+  [eng pid fid t]
+  (let [st (:storage eng)
+        rs (inv/resources eng)
+        idef (get rs :invitation)
+        rdef (get rs (some-> (:kind t) keyword))
+        asked? (fn [row]
+                 (and (= pid (str (get-in row [:data :author])))
+                      (= fid (str (get-in row [:data :subject])))))
+        rows (fn [f]
+               (store/with-tx st
+                 (fn [tx] (mapv #(inv/decode-row idef %) (f tx)))))]
+    (boolean
+     (when (and idef rdef (:resource-id t) (:action t))
+       (let [action (name (:action t))]
+         (if (= :invitation (:kind rdef))
+           (and (= "decline" action)
+                (some asked?
+                      (rows (fn [tx]
+                              (some-> (store/load-row st tx :invitation
+                                                      (str (:resource-id t)) {})
+                                      vector)))))
+           (let [self (str "/api/" (:plural rdef) "/" (:resource-id t))
+                 at (instant-of (:at t))]
+             (some (fn [row]
+                     (let [d (:data row)
+                           born (instant-of (:created-at row))]
+                       (and (asked? row)
+                            (= self (str (:self d)))
+                            (= action (str/trim (str (:action d))))
+                            (case (some-> (:state row) name)
+                              "answered" (= (str (:id t)) (str (:answered_by d)))
+                              "open" (not (and at born (.isBefore at born)))
+                              false))))
+                   (rows (fn [tx]
+                           (store/query-rows st tx :invitation
+                                             {:subject fid :author pid}
+                                             {:limit recorder-page
+                                              :newest-first true})))))))))))
 
 (defn recorder
   "One stream's recorder (docs/spec-guided-follow.md § 4): the taps a
@@ -610,6 +668,13 @@
   `ui`. `:event` takes a firehose event and records a `transition` when
   its actor is the followed principal, and an `invitation` beside it
   when that transition created one (`invitation-frame`).
+
+  A walkthrough's steps are made by the engine's hand and answered by
+  the recorder's (docs/spec-walkthrough.md § 6), so `:event` also takes
+  two events of other actors: the birth of an invitation whose `author`
+  is the followed principal and whose `subject` is the follower, as an
+  `invitation` frame, and the follower's own transition that answers
+  such an invitation (`answers?`), as a `transition` frame.
 
   Each frame goes through `record-frame!` to every walk the follower
   is recording of `followed` at that moment. The walks are read per
@@ -640,15 +705,36 @@
            (write! event (fn [] [{:type event :body frame}])))))
      :event
      (fn [t]
-       (when (and (not= :derivation (::events/class t))
-                  (= pid (str (get-in t [:actor :id]))))
-         (write! "transition"
-                 (fn []
-                   (keep identity
-                         [{:type "transition"
-                           :body (walk/keywordize-keys
-                                  (events/transition-payload eng t))}
-                          (invitation-frame eng sight t)])))))}))
+       (when (not= :derivation (::events/class t))
+         (let [actor (str (get-in t [:actor :id]))
+               transition (fn []
+                            {:type "transition"
+                             :body (walk/keywordize-keys
+                                    (events/transition-payload eng t))})]
+           (cond
+             (= pid actor)
+             (write! "transition"
+                     (fn []
+                       (keep identity
+                             [(transition) (invitation-frame eng sight t)])))
+
+             ;; keyed on the invitation's `author`, not on the hand that
+             ;; made it: the engine opens a walkthrough's steps
+             (invitation-birth? t)
+             (write! "invitation"
+                     (fn []
+                       (when-some [f (invitation-frame eng sight t)]
+                         (when (and (= pid (str (get-in f [:body :author])))
+                                    (= fid (str (get-in f [:body :subject]))))
+                           [f]))))
+
+             ;; the recorder's own answer: without it the replay shows
+             ;; the question and never what the row became
+             (= fid actor)
+             (write! "transition"
+                     (fn []
+                       (when (answers? eng pid fid t)
+                         [(transition)])))))))}))
 
 ;; ── the self walk (a person's own screen, nobody following) ─────────
 
@@ -1029,7 +1115,7 @@
                                        ((:row? vis) :invitation (str id))))
                        (let [suggested (suggest (assoc body :self self))]
                          (cond-> (assoc (select-keys body [:action :field :fields
-                                                           :note])
+                                                           :note :step :of])
                                         :type "invitation"
                                         ::subject (some-> (:subject body) str))
                            self (assoc :self self)

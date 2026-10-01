@@ -618,6 +618,10 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   if (invitation)
     markInvited(form, invitation.fields
       || (invitation.field ? [invitation.field] : []), invitation.note);
+  /* a walkthrough's step says how far along it is, above the form */
+  if (invitation && invitation.step && invitation.of)
+    form.prepend(el("p", {class: "invite-step", "data-invite-step": ""},
+      `Step ${invitation.step} of ${invitation.of}`));
 }
 /* a note and the fields it points at: an invitation's note in the
    invited person's dialog, and a replayed caption's beside its field
