@@ -431,7 +431,8 @@
             ;; R-14), so a selection that names :jobs still carries
             ;; both
             :mcp-discover :held-call-expiry :notifier
-            :invitations :invitation-expiry :walk-retention :seat-clock
+            :invitations :invitation-expiry :walkthroughs :walk-retention
+            :seat-clock
             :scheduled-actions
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))

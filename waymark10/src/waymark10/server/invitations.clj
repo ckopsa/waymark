@@ -264,7 +264,9 @@
     (t/deny)))
 
 (g/defguard only-the-engine-names-a-walkthrough
-  {:judges [:walkthrough :step :of]
+  ;; it judges `walkthrough`, the reference; `step` and `of` are the
+  ;; engine's count beside it and have no vocabulary a form could offer
+  {:judges [:walkthrough]
    :reads [:principal]
    :open "The wall is about who: the engine opens a walkthrough's steps, and no field of this door makes anyone else the engine. Leave `walkthrough`, `step` and `of` out, and the invitation stands alone."
    :explain "Only the engine names a walkthrough, a step or a step count on an invitation; it opens each step when the one before it ends."}
