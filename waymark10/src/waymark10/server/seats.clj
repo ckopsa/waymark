@@ -5972,16 +5972,12 @@
                                                          id)}
                                         {:limit live-change-scan-limit})))))))))
 
-(defn named-open-beside-a-submitted-change?
-  "Is the ticket a fire named `open` while a change born from it is
-  `submitted` (ticket 6ca380da)? A groom, unblock or resume that puts a
-  stuck pull request back under review leaves its ticket open, and the
-  fire that follows names it; the round is in the house's hands, so the
-  named walk withholds it as the plain walk does (ticket 60c2ec22). A
-  ticket in review is still handed by name (ticket 7af7d506). Only a
-  change in the ticket's own repository counts, when the ticket names
-  one (ticket 80a8e60b). False for any other walk."
-  [eng walk id]
+(defn named-beside-a-submitted-change?
+  "Does the ticket a fire named stand in one of `states`, a set of state
+  names, while a change born from it is `submitted`? Only a change in
+  the ticket's own repository counts, when the ticket names one (ticket
+  80a8e60b). False for any other walk."
+  [eng walk id states]
   (boolean
    (when-some [rdef (when (= "ticket" (str walk))
                       (get (inv/resources eng) :change))]
@@ -5993,7 +5989,7 @@
                                    (store/load-row st tx :ticket (str id) {})))
                                (inv/decode-row tdef))
                       (catch Exception _ nil))]
-         (when (= "open" (some-> (:state ticket) name))
+         (when (contains? states (some-> (:state ticket) name))
            (some (let [repo (some-> (get-in ticket [:data :repo]) str not-empty)]
                    #(and (= "submitted" (some-> (:state %) name))
                          (or (nil? repo)
@@ -6005,6 +6001,18 @@
                                             {:born_from (str groomed-walk-prefix
                                                              id)}
                                             {:limit live-change-scan-limit})))))))))))
+
+(defn named-open-beside-a-submitted-change?
+  "Is the ticket a fire named `open` while a change born from it is
+  `submitted` (ticket 6ca380da)? The round is in the house's hands, so
+  the named walk withholds it as the plain walk does (ticket 60c2ec22).
+  A groom, unblock or resume that puts a stuck pull request back under
+  review sends its ticket out for review after it (ticket 7e01dbe5); a
+  ticket whose follow-up was refused, or whose change was submitted by
+  another path, is the one left open here. A ticket in review is still
+  handed by name (ticket 7af7d506)."
+  [eng walk id]
+  (named-beside-a-submitted-change? eng walk id #{"open"}))
 
 (defn unwalkable-rows
   "The walk row ids a sit of this seat would not hand now: the rows
