@@ -16,6 +16,14 @@
   by `held-calls/hold!` as the engine, which is the door the power
   door uses, because no hand at the wire may create one.
 
+  AND ONE MINTS A GRANT: `:grant`. An agent that presents no grant
+  authors no invitation (`the-author-sees-the-step`), and nobody is
+  there at a boot to approve an ask. So the grant is minted the way an
+  approved ask mints one (`grants/approval-effects!`): created through
+  the grant door as the approvals actor, then accepted through the
+  grant's own accept. A later step that names it under `:wearing` is
+  walked by its cast member with that grant presented.
+
   IT REFUSES A WORKING ENGINE. The engine's name must begin with
   `demo-` and no IdP may be configured. A step the law refuses throws,
   and the boot ends. An engine that already holds a member of the cast
@@ -28,6 +36,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
@@ -129,21 +138,48 @@
 (defn- kind-of [refs step]
   (cond
     (:hold step) :held_call
+    (:grant step) :grant
     (contains? step :create) (:kind step)
     :else (:kind (ref-of refs (:on step)))))
 
+(defn- mint-grant!
+  "A grant for a cast member, minted the way an approved ask mints one
+  (`grants/approval-effects!`): the approvals actor creates it through
+  the grant door, so the scope guards judge it, and accepts it through
+  the grant's own accept. → the accepted row."
+  [eng input]
+  (let [made (:row (inv/create! eng :grant input
+                                {:principal grants/approvals-actor}))]
+    (:row (inv/invoke! eng :grant (str (:id made)) :accept nil
+                       {:principal grants/approvals-actor}))))
+
+(defn- hand-of
+  "The invoke options for the cast member a step is `:as`: its
+  principal, and the guard's-eye view of the grant the step is
+  `:wearing`, when it names one."
+  [{:keys [eng cast refs]} step]
+  (let [p (principal-of cast (:as step))]
+    (cond-> {:principal p}
+      (:wearing step)
+      (assoc :grant (:grant (grants/visibility
+                             eng (:id (ref-of refs (:wearing step))) p))))))
+
 (defn- step!
   "Walk one step. → the row it made or moved."
-  [{:keys [eng cast refs] :as ctx} step]
+  [{:keys [eng refs] :as ctx} step]
   (cond
     ;; the one step that is not an ordinary invoke: the engine's own
     ;; door, the one the power door mints a held call through
     (:hold step)
     (:row (held-calls/hold! eng (value-of ctx (:hold step))))
 
+    ;; the grant an agent of the cast wears: the approval effect's mint
+    (:grant step)
+    (mint-grant! eng (value-of ctx (:grant step)))
+
     (contains? step :create)
     (:row (inv/create! eng (:kind step) (value-of ctx (:create step))
-                       {:principal (principal-of cast (:as step))}))
+                       (hand-of ctx step)))
 
     :else
     (let [{:keys [kind id]} (ref-of refs (:on step))
@@ -151,7 +187,7 @@
           rdef (get (inv/resources eng) kind)
           ;; a fenced door names the version it read (dev/act!'s rule)
           fenced? (get-in rdef [:actions action :safety :fence])
-          opts (cond-> {:principal (principal-of cast (:as step))}
+          opts (cond-> (hand-of ctx step)
                  fenced? (assoc :if-match
                                 (inv/etag kind id
                                           (:version (inv/decode-row

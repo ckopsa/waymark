@@ -5,7 +5,10 @@
 ;; Every step is an ordinary create or invoke by the cast member :as
 ;; names, EXCEPT the one :hold step. A held call is minted by the
 ;; engine's own door (held-calls/hold!, the one the power door uses),
-;; because no hand at the wire may create one.
+;; because no hand at the wire may create one. And EXCEPT the one
+;; :grant step: the engine mints that grant and accepts it, as an
+;; approved ask would, because nobody approves an ask at a boot. A step
+;; that names the grant under :wearing is walked with it presented.
 ;;
 ;; A household is a set of members, not a kind: :household groups the
 ;; cast, and each household's tickets are kept together below.
@@ -123,9 +126,20 @@
                   :subject "The weekend menu"}}
    :ref :held}
 
+  ;; ── the agent's grant ──────────────────────────────────────────
+  ;; NOT an ordinary create: the engine mints it and accepts it, as an
+  ;; approved ask would. An invitation points at a step its author can
+  ;; see and take, so the leash reads the tickets, admits the one door
+  ;; the invitation hands over, and admits the invitation's own create.
+  {:grant {:audience [:cast :plan]
+           :scope [{:kind "ticket" :actions ["prioritize"]}
+                   {:kind "invitation" :actions ["create"]}]}
+   :ref :plan-grant}
+
   ;; ── the invitation ─────────────────────────────────────────────
-  ;; an ordinary create, addressed to the member the person signs in as
-  {:as :ben :kind :invitation :ref :invite
+  ;; an ordinary create by the household's agent, wearing its grant,
+  ;; addressed to the member the person signs in as
+  {:as :plan :wearing :plan-grant :kind :invitation :ref :invite
    :create {:subject [:cast :ada]
             :self [:self :h-next]
             :action "prioritize"
