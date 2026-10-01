@@ -479,6 +479,19 @@ function invitationRowOpen(item) {
     (!subject || subject === viewerId());
 }
 
+/* a walkthrough's invitation, as a collection row: "step 2 of 4" before
+   its note, from the row's own `step` and `of`, with no second read
+   (docs/spec-walkthrough.md §5) */
+function walkthroughMark(item) {
+  const f = item.fields || {};
+  const isInvitation = item.kind === "invitation" ||
+    /\/invitations\/[^/?#]+$/.test(item.self || "");
+  return isInvitation && f.step && f.of
+    ? el("span", {class: "walk-mark", "data-walk-mark": ""},
+        `step ${f.step} of ${f.of}`)
+    : null;
+}
+
 /* one tap from the collection: summaries drop data, so read the whole
    envelope first, then hand it to openInvitation (180-action-dialog.js) */
 async function openInvitationRow(item) {
@@ -553,7 +566,7 @@ function itemTable(items, opts) {
         el("input", {type: "checkbox", "data-bulk-check": "",
           onclick: e => e.stopPropagation()})) : null,
       el("td", {class:"c-state"}, el("span", {class:"statechip"}, item.state)),
-      el("td", {class:"c-summary"}, el("a", {class:"rowlink",
+      el("td", {class:"c-summary"}, walkthroughMark(item), el("a", {class:"rowlink",
         href:"#"+item.self, title: item.self}, item.summary),
         /* teaser-flagged prose (the wire truncates it server-side, and
            only :x-display {:teaser true} fields ride rows at all)
