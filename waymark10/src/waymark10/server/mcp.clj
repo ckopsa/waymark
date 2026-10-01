@@ -3247,13 +3247,53 @@
                      " the window rolls.")
        "lifts_at" (some-> (seat-routes/lifts-at eng seat now) str)})))
 
+(defn- walk-filter-left-out
+  "What the walk's filter left out of an empty walk (ticket 6ea8f277):
+  the walked kind read once more AS THE SITTER with the filter taken
+  off — the judgment's `queue` for a seat that says a judgment, the
+  scope entry's filter for every other — so the count is the kind's
+  own queue under the seat's own grant.
+  → {\"kind\" \"filter\" \"count\"}, or nil.
+
+  nil when the walk was not empty under its filter, when rows were
+  withheld (they are the reason then), when the walk has no filter,
+  and when the read without it counts no row. A row the grant does
+  not admit is not on that page either, so it is never counted and
+  never named: what a grant conceals stays absent here as at every
+  other door."
+  [eng call session seat walk]
+  (when (and walk
+             (empty? (get walk "withheld"))
+             (not (some-> (get walk "total") pos?)))
+    (when-some [rdef (get (inv/resources eng) (keyword (get walk "kind")))]
+      (let [judgment (row-of eng :judgment (get-in seat [:data :judgment]))
+            params (not-empty
+                    (if judgment
+                      (queue-params judgment)
+                      (some-> (seats/walk-filter seat) filter-params)))]
+        (when params
+          (let [resp (call (request session :get (str "/api/" (:plural rdef))
+                                    {:query (query-string {"page[size]" "1"})}))
+                doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))
+                total (when (collection-doc? doc) (get-in doc ["data" "total"]))]
+            (when (and (number? total) (pos? total))
+              {"kind" (get walk "kind")
+               "filter" (str/join ", " (map (fn [[k v]] (str k "=" v))
+                                           (sort-by key params)))
+               "count" total})))))))
+
 (defn- walked-nothing-why
   "One sentence for a sitting its walk handed no rows (ticket
   ae64b57c): the queue rows the walk left out, each with its reason —
   the `withheld` the sit already answers — or that the queue had no
   rows under the walk's filter, or that no queue was read at all. The
-  sit keeps it on the sitting as `walked_nothing_why`."
-  [walk]
+  sit keeps it on the sitting as `walked_nothing_why`.
+
+  `left-out` is `walk-filter-left-out`'s answer: when the filter, and
+  not an empty queue, left the walk empty, the sentence names the
+  filter and counts the rows the seat can see past it (ticket
+  6ea8f277)."
+  [walk left-out]
   (let [withheld (get walk "withheld")
         total (get walk "total")
         s (cond
@@ -3269,6 +3309,12 @@
             (and (number? total) (pos? total))
             (str "The queue held " total " rows under the walk's filter, and "
                  "none was free to hand.")
+
+            left-out
+            (let [n (get left-out "count")]
+              (str "Your walk filter (" (get left-out "filter") ") leaves out "
+                   n " " (get left-out "kind") (if (= 1 n) " row" " rows")
+                   " this seat can see."))
 
             :else
             "The queue held no rows under the walk's filter and the seat's grant.")]
@@ -4694,7 +4740,12 @@
                       (empty? (get-in sitting [:data :walked_rows])))
                  ;; … with the reason it was empty, and a seat at a
                  ;; wall stamped with the wall instead (ticket ae64b57c)
-                 {:why (walked-nothing-why walk) :halted halted}))
+                 ;; … and with the rows its filter left out, counted
+                 ;; under the seat's own grant (ticket 6ea8f277)
+                 {:why (walked-nothing-why
+                        walk
+                        (walk-filter-left-out eng call sitter-sees seat walk))
+                  :halted halted}))
             ;; … and the schedule says the wall too, beside the wake
             ;; it holds back
             _ (seats/stamp-halted-schedule! eng seat-id halted)
