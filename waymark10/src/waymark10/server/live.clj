@@ -136,6 +136,17 @@
      :frame intents/frame
      :close! (fn [] (intents/unsubscribe reg sub))}))
 
+(defn tapped
+  "A source that shows `tap` every event it renders, before it renders
+  it: the seam a walk's recorder hangs on (walks/recorder). The tap
+  sees the event as the stream sends it, once, on the source's own
+  pump thread, and what it answers is ignored. A nil source or a nil
+  tap is the source unchanged."
+  [source tap]
+  (if (and source tap)
+    (update source :frame (fn [frame] (fn [evt] (tap evt) (frame evt))))
+    source))
+
 ;; ── the multiplexer ─────────────────────────────────────────────────
 
 (def ^:private closed-sentinel ::closed)

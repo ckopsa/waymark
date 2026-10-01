@@ -1024,7 +1024,9 @@
   BEFORE it is enqueued, so a concealed presence is byte-level
   absent. Heartbeat comments double as the disconnect probe (the
   events surface's discipline). No id lines: no replay. opts is
-  subscribe's guided-follow opt-in; nil is today's stream."
+  subscribe's guided-follow opt-in; nil is today's stream. Its :tap,
+  when given, is shown each frame before it is sent: a walk's recorder
+  (walks/recorder)."
   [eng reg visible? req & [opts]]
   (let [hb-ms (:sse-heartbeat-ms eng 15000)
         sub (subscribe reg visible? opts)]
@@ -1052,9 +1054,10 @@
                            (nil? evt) (when (and (http/send! ch ": hb\n\n" false)
                                                  (events/channel-alive? ch))
                                         (recur))
-                           :else (when (and (http/send! ch (frame evt) false)
-                                            (events/channel-alive? ch))
-                                   (recur)))))
+                           :else (do (when-some [tap (:tap opts)] (tap evt))
+                                     (when (and (http/send! ch (frame evt) false)
+                                                (events/channel-alive? ch))
+                                       (recur))))))
                      (finally (unsubscribe reg sub))))
                  (str "waymark10-presence-sse-" (:id sub)))]
           (doto ^Thread t (.setDaemon true) (.start))))
