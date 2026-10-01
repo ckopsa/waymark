@@ -323,6 +323,16 @@ the seat's `sitting_idle_seconds`, with `closed_by` `sweep` and the
 note `silent since {last_call_at}`. The two cadences above stay as
 the outer bound.
 
+A sitting's calls are the connector's (the owner's ruling,
+2026-10-01). The connector is the one door that names the calling
+sitting and keeps its tally, its refusals and its walls, so the stamp
+above is written there. A sitter's call over plain HTTP is its
+bearer's, the delegate's or the person's, and not the seat's: it
+stamps no sitting, and there is no `x-waymark-sitting` header. A
+delegate that presents a seat's grant as `X-Waymark-Grant` at the
+HTTP door must be refused `403` with a sentence that names the
+connector as the seat's door.
+
 **R-7.7** A hard stop must raise an alert. The owner's ruling,
 2026-09-17: the three walls of R-5.2 (the seat not active, the model
 outside its list, the budget reached) stay hard, and each must reach
