@@ -65,6 +65,18 @@
   "A walk naming no retention keeps its frames a month."
   30)
 
+(def frame-ceiling
+  "The most frames one walk takes (docs/spec-agent-demo-walks.md § 4).
+  At this count the engine seals the walk with its own hand, so a walk
+  nobody seals does not grow without bound."
+  20000)
+
+(def ceiling-actor
+  "The hand that seals a walk at `frame-ceiling`: the engine's own actor,
+  displayed so the walk's history says why it was sealed."
+  (t/principal {:id "waymark10-walks" :type :system
+                :display "Walks (the frame ceiling was reached)"}))
+
 (def frame-types ["move" "ui" "transition" "invitation"])
 
 (def never-recorded
@@ -287,13 +299,24 @@
       id (boolean (some-> (:row? sight) (apply [k id])))
       :else (boolean (some-> (:whole-kind? sight) (apply [k]))))))
 
+(defn- seal-at-ceiling!
+  "Seal a walk that reached `frame-ceiling`, under the engine's hand
+  (`the-recorder-or-the-sweep` admits the system actor)."
+  [eng id]
+  (try
+    (inv/invoke! eng kind id :seal {} {:principal ceiling-actor})
+    (catch Exception e
+      (warn! "walk " id " could not be sealed at the frame ceiling ("
+             (ex-message e) ")"))))
+
 (defn record-frame!
   "Write one frame of a recording walk, as the recorder's stream
   received it. `sight` is the recorder's own visibility; `frame` is
   {:type :body}, and `(:self body)` names what the frame is about.
   → the frame row, or nil when nothing was written: the walk is not
   recording, the type is not a frame type, or the recorder could not
-  see the frame's `self`."
+  see the frame's `self`. The frame that brings the walk to
+  `frame-ceiling` is written, and the engine then seals the walk."
   [eng walk-id sight {:keys [type body]}]
   (let [type (some-> type name)
         body (scrub (or body {}))
@@ -306,23 +329,32 @@
                    (some? (events/visible-transition sight body))))
       (let [st (:storage eng)
             ^Instant now ((:now-fn eng))
-            id (str walk-id)]
-        (store/with-tx st
-          (fn [tx]
-            (when-some [row (store/load-row st tx kind id {:for-update true})]
-              (when (= "recording" (some-> (:state row) name))
-                (let [d (:data row)
-                      started (instant-of (:started_at d))
-                      ms (if started
-                           (max 0 (.toMillis (Duration/between started now)))
-                           0)
-                      frame (inv/insert-quiet! eng tx frame-kind
-                                               {:walk id :t ms :type type :body body}
-                                               {:principal engine-actor})]
-                  (store/update-data! st tx kind id
-                                      (update d :frame_count #(inc (long (or % 0))))
-                                      (:next-flip-at row))
-                  frame)))))))))
+            id (str walk-id)
+            ceiling (long frame-ceiling)
+            {:keys [frame full?]}
+            (store/with-tx st
+              (fn [tx]
+                (when-some [row (store/load-row st tx kind id {:for-update true})]
+                  (when (= "recording" (some-> (:state row) name))
+                    (let [d (:data row)
+                          had (long (or (:frame_count d) 0))]
+                      (if (>= had ceiling)
+                        ;; an earlier seal at the ceiling did not land
+                        {:full? true}
+                        (let [started (instant-of (:started_at d))
+                              ms (if started
+                                   (max 0 (.toMillis (Duration/between started now)))
+                                   0)
+                              frame (inv/insert-quiet! eng tx frame-kind
+                                                       {:walk id :t ms :type type :body body}
+                                                       {:principal engine-actor})]
+                          (store/update-data! st tx kind id
+                                              (assoc d :frame_count (inc had))
+                                              (:next-flip-at row))
+                          {:frame frame :full? (>= (inc had) ceiling)})))))))]
+        ;; the seal is its own transition, after the frame's commit
+        (when full? (seal-at-ceiling! eng id))
+        frame))))
 
 ;; ── the recorder (a follower's own stream) ──────────────────────────
 

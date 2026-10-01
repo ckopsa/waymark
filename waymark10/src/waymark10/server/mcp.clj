@@ -155,6 +155,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.walks :as walks]
             [waymark10.text :as text]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -921,17 +922,22 @@
         "meta blocks. Use summary to read a row's values when you "
         "already know the kind's doors from waymark_schema; use "
         "envelope before acting, since the consequence sentence and "
-        "each action's availability on THIS row live only there.")
+        "each action's availability on THIS row live only there. "
+        "\"export\" is for a sealed walk: what its export file is — "
+        "format, header, frames, bytes, sha256, href — with its first "
+        "lines up to 64 KB and `truncated` when that was not all of "
+        "it. The whole file is read at href over HTTP.")
    :input-schema {:type "object"
                   :properties {:kind {:type "string"}
                                :id {:type "string"}
                                :depth {:type "string" :enum ["full" "summary"]
                                        :description "summary drops data and parts."}
-                               :return {:type "string" :enum ["envelope" "summary"]
+                               :return {:type "string" :enum ["envelope" "summary" "export"]
                                         :description (str "envelope (default): the row's "
                                                           "document, byte for byte. summary: "
                                                           "id/kind/state/summary/data only, "
-                                                          "without the actions block.")}}
+                                                          "without the actions block. export: "
+                                                          "a sealed walk's file, described.")}}
                   :required ["kind" "id"]
                   :additionalProperties false}})
 
@@ -1631,14 +1637,107 @@
      return
      #(when (collection-doc? %) (collection-summary %)))))
 
+;; return: export — a sealed walk's file, described and not carried
+;; (docs/spec-agent-demo-walks.md § 4). The export is a route and not an
+;; action, so no tool reached it. A megabyte of frames in a model's
+;; context is cost and no use, so the answer is the file's size, its
+;; digest and its first lines; `href` is where the whole of it is read.
+
+(def export-lines-cap
+  "How many bytes of a walk's export ride the answer as `lines`."
+  (* 64 1024))
+
+(defn- export-sha256 [^bytes bs]
+  (apply str (map #(format "%02x" %)
+                  (.digest (MessageDigest/getInstance "SHA-256") bs))))
+
+(defn- first-lines
+  "The first of `lines` that fit in `cap` bytes, each counted with its
+  newline."
+  [lines cap]
+  (let [cap (long cap)]
+    (loop [kept [] used 0 more (seq lines)]
+      (if-some [l (first more)]
+        (let [used (+ used 1 (alength (.getBytes ^String l StandardCharsets/UTF_8)))]
+          (if (> used cap)
+            kept
+            (recur (conj kept l) used (next more))))
+        kept))))
+
+(defn- export-digest
+  "What an agent needs to know about a walk's export, read off the
+  route's own bytes: `bytes` and `sha256` are of the whole file, and
+  `lines` is its first lines, the header line among them."
+  [href ^String text]
+  (let [bs (.getBytes text StandardCharsets/UTF_8)
+        all (str/split-lines text)
+        lines (first-lines all export-lines-cap)
+        header (try (j/read-value (first all) verbatim-mapper)
+                    (catch Exception _ nil))]
+    (array-map "format" (get header "format")
+               "header" header
+               "frames" (max 0 (dec (count all)))
+               "bytes" (alength bs)
+               "sha256" (export-sha256 bs)
+               "href" href
+               "lines" lines
+               "truncated" (< (count lines) (count all)))))
+
+(defn- not-sealed
+  "The refusal for an export of a walk that is not sealed. A recording
+  walk names `seal` as the remedy; a purged one has no frames left."
+  [state]
+  (p/problem
+   :wrong-state 409 "Wrong state"
+   (if (= "recording" state)
+     {:detail (str "Only a sealed walk exports; this walk is recording. "
+                   "Seal it first: waymark_invoke with kind \"walk\" and "
+                   "action \"seal\".")
+      :state state
+      :becomes-available {:in-states ["sealed"]}
+      :remedies ["walk.seal"]}
+     {:detail (str "Only a sealed walk exports; this walk is " state
+                   ", and its frames are gone.")
+      :state state})))
+
+(defn- walk-export
+  "`waymark_get` with `return: \"export\"`. The row is read first, so a
+  walk the session cannot see answers the row's own not-found; the
+  export is then the route's answer under the session's visibility,
+  the same bytes GET /api/walks/{id}/export gives."
+  [eng call session {:keys [kind id]}]
+  (let [rdef (rdef-of eng kind)]
+    (when-not (= walks/kind (:kind rdef))
+      (throw (p/problem :invalid-argument 422 "Invalid argument"
+                        {:detail (str "return: \"export\" reads a sealed walk; "
+                                      (name (:kind rdef)) " has no export.")
+                         :argument "return"
+                         :given "export"})))
+    (let [self (str "/api/" (:plural rdef) "/" id)
+          row (call (request session :get self {}))]
+      (if-not (<= 200 (:status row 500) 299)
+        (pass-through row)
+        (let [state (str (get (verbatim-json row) "state"))]
+          (if (not= "sealed" state)
+            (refusal (not-sealed state))
+            (let [href (str self "/export")
+                  resp (call (request session :get href {}))]
+              (if (<= 200 (:status resp 500) 299)
+                (result (j/write-value-as-string
+                         (export-digest href (body-text resp))
+                         verbatim-mapper))
+                (pass-through resp)))))))))
+
 (defn- get-row [eng call session {:keys [kind id depth] :as args}]
-  (let [return (return-of args)
-        rdef (rdef-of eng kind)]
-    (answer
-     (call (request session :get (str "/api/" (:plural rdef) "/" id)
-                    {:query (when depth (query-string {"depth" (str depth)}))}))
-     return
-     #(when (row-doc? %) (row-summary %)))))
+  (if (= "export" (some-> (:return args) str))
+    (walk-export eng call session args)
+    (let [return (return-of args)
+          rdef (rdef-of eng kind)]
+      (answer
+       (call (request session :get (str "/api/" (:plural rdef) "/" id)
+                      {:query (when depth (query-string {"depth" (str depth)}))}))
+       return
+       #(when (row-doc? %) (row-summary %))))))
 
 ;; the confirm gate — the one refusal this namespace issues in its own
 ;; voice, and the reason the spec calls MCP a safety surface rather
