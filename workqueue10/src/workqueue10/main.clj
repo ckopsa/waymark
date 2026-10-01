@@ -119,6 +119,7 @@
             [waymark10.dsl :refer [in-domain]]
             [waymark10.saved-view :refer [saved-view]]
             [waymark10.server.capabilities :as cap :refer [capability]]
+            [waymark10.server.clock-shift :as clock-shift]
             [waymark10.server.engine :as engine]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.mirror :as mirror]
@@ -873,6 +874,21 @@
     (seed/boot! eng seed-name
                 {:wall-url (some-> wall-url str not-empty)})))
 
+(defn- clocked-engine
+  "The engine `build` makes of `opts`, with the demo clock
+  (docs/spec-agent-demo-walks.md § 7) assembled behind WAYMARK10_SEED
+  and nothing otherwise: the `clock_shift` kind, the `:now-fn` its shifts
+  move, and the offset read back from the rows, so a restarted clone
+  keeps its time. A working engine is built from `opts` as they are: it
+  serves no such kind and has no offset to read. `seed-on-boot!` then
+  refuses a seeded engine not named `demo-…` or one with an IdP, and
+  the kind's own guard asks that again at each shift. `seed` is the
+  variable's value as `start!` read it."
+  [seed build opts]
+  (if (some-> seed str not-empty)
+    (clock-shift/install! (build (clock-shift/with-clock opts)))
+    (build opts)))
+
 (defn start!
   "Boot and serve. Returns the engine."
   []
@@ -889,8 +905,9 @@
         ;; with-push: task declares :push-on-write, and engine boot
         ;; does not auto-wire the post-commit push pass (the recorded
         ;; seam in mirror/with-push) — the embedding wraps
-        eng (mirror/with-push
-             (engine/engine {:storage storage
+        eng (clocked-engine (System/getenv "WAYMARK10_SEED")
+                            #(mirror/with-push (engine/engine %))
+                            {:storage storage
                              :resources (resources
                                          (sources ha-src)
                                          media-srcs
@@ -944,7 +961,7 @@
                                               ;; bench and rides that
                                               ;; row's one client
                                               :bench-rpc
-                                              (mcp-servers/rpc-of engine-ref))}))
+                                              (mcp-servers/rpc-of engine-ref))})
         ;; the in-process sources' late binding: delivered BEFORE
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
