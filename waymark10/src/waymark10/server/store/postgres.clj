@@ -801,21 +801,26 @@
 
   ;; ── phase 7: the collection surface and the draft rows ─────────────
 
-  (search-rows [_ tx kind conds {:keys [order-by desc limit offset]}]
+  (search-rows [_ tx kind conds {:keys [order-by desc then-by limit offset]}]
     (let [table (table-for tables kind)
           parts (map cond-sql conds)
-          order (cond
-                  (nil? order-by) "created_at"
-                  (= :state order-by) "state"
-                  ;; the engine's own timestamps are columns already —
-                  ;; they promote nothing, so there is no f_ twin
-                  (contains? store/sortable-timestamps order-by)
-                  (store/definition-checked-name order-by)
-                  :else (str "f_" (store/definition-checked-name order-by)))
+          column (fn [f]
+                   (cond
+                     (nil? f) "created_at"
+                     (= :state f) "state"
+                     ;; the engine's own timestamps are columns already —
+                     ;; they promote nothing, so there is no f_ twin
+                     (contains? store/sortable-timestamps f)
+                     (store/definition-checked-name f)
+                     :else (str "f_" (store/definition-checked-name f))))
+          order (str/join ", "
+                          (map (fn [{:keys [field desc]}]
+                                 (str (column field) (when desc " DESC")))
+                               (cons {:field order-by :desc desc} then-by)))
           sql (str "SELECT * FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts))))
-                   " ORDER BY " order (when desc " DESC") ", id"
+                   " ORDER BY " order ", id"
                    " LIMIT " (long (or limit 100))
                    " OFFSET " (long (or offset 0)))]
       (mapv row->map (jdbc/execute! tx (into [sql] (mapcat second parts))

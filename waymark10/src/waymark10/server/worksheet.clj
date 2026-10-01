@@ -223,6 +223,7 @@
                   (store/search-rows st tx (:kind rdef) conds
                                      {:order-by (:field sort)
                                       :desc (:desc sort)
+                                      :then-by (:then sort)
                                       :limit (inc export-cap)})))]
      (when (> (count rows) export-cap)
        (throw (p/schema-invalid
