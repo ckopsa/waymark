@@ -38,6 +38,7 @@
     its columns. Order is spelling; the entries are law."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.fingerprint :as fp]
+            [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
             [waymark10.server.grants :as grants]
@@ -403,3 +404,48 @@
   (testing "owned by nobody and owned by everybody are not one typo apart"
     (is (re-find #"names neither :by"
                  (refusal (assoc minimal :own-surface {:actions #{"create"}}))))))
+
+;; ── the pacing sentence, per declared unit ──────────────────────────
+;; waymark-iqa.19 folded the unit into :asks-are-paced's :explain. The
+;; hourly bytes are pinned by the-canonical-hash above; the other two
+;; units had no reader until this.
+
+(defn- paced-refusal
+  "The sentence an asker reads when `pacing` refuses a second ask made
+  thirty seconds after the first."
+  [pacing]
+  (let [r (r/normalize-resource (assoc-in minimal [:decision :pacing] pacing))
+        paced (first (filter #(= :asks-are-paced (:name %)) (:create-guards r)))
+        now (java.time.Instant/parse "2026-08-24T18:00:00Z")
+        ctx (t/ctx {:principal (t/principal {:id "agent-ari" :type :agent})
+                    :now now
+                    :find (fn [_kind _where _opts]
+                            [{:id "ask-1" :created-at (.minusSeconds now 30)}])})
+        verdict ((:check paced) nil {} ctx)]
+    (is (= :deny (:verdict verdict))
+        (str (pr-str pacing) " refuses the ask past its limit"))
+    (g/render-reason paced verdict nil)))
+
+(deftest the-pacing-sentence-names-the-declared-unit
+  (testing ":per :day says a day, and the window reopens a day on"
+    (is (= "Asks are paced to 1 a day; the window reopens at 2026-08-25T17:59:30Z."
+           (paced-refusal {:limit 1 :per :day}))))
+  (testing ":per :minute says a minute, and the window reopens a minute on"
+    (is (= "Asks are paced to 1 a minute; the window reopens at 2026-08-24T18:00:30Z."
+           (paced-refusal {:limit 1 :per :minute}))))
+  (testing "the hourly sentence is the one a blank :per also speaks"
+    (is (= "Asks are paced to 1 an hour; the window reopens at 2026-08-24T18:59:30Z."
+           (paced-refusal {:limit 1 :per :hour})
+           (paced-refusal {:limit 1}))))
+  (testing "the declared :explain carries the unit, not a {per} hole"
+    (let [explain (fn [pacing]
+                    (->> (r/normalize-resource
+                          (assoc-in minimal [:decision :pacing] pacing))
+                         :create-guards
+                         (filter #(= :asks-are-paced (:name %)))
+                         first
+                         :explain))]
+      (is (= "Asks are paced to {limit} a day; the window reopens at {retry_at}."
+             (explain {:limit 3 :per :day})))
+      (is (= "Asks are paced to {limit} a minute; the window reopens at {retry_at}."
+             (explain {:limit 3 :per :minute}))))))
