@@ -632,6 +632,50 @@
                                      {:headers as}))))
         "the refused row stays untouched")))
 
+(deftest a-partial-bulks-per-item-409-stamps-last-refusal-on-the-sitting
+  (let [{:keys [h]} (world)
+        model (add-model! h "bulk-stamp-model")
+        seat (open-seat! h "clerk-bulk-stamp"
+                         {:scope [{:kind "seat_bulk_vault"
+                                   :actions ["create" "seal"]}]})
+        gid (sit! h (sitter "ari-stamp") "clerk-bulk-stamp" {})
+        as (sitter "ari-stamp" {:grant gid})
+        made (req h :post "/api/sittings"
+                  {:headers as :body {:seat seat :model model
+                                      :grant gid}})
+        sid (id-of made)
+        last-refusal (fn []
+                       (:last_refusal
+                        (:data (json (req h :get (str "/api/sittings/" sid)
+                                          {:headers human})))))
+        v (req h :post "/api/seat_bulk_vaults" {:headers as :body {:name "lockbox"}})
+        _ (is (= 201 (:status v)))
+        ;; a row that is not there is a 404 in the report: no refusal
+        ;; the sitting counts, so nothing to stamp
+        none (req h :post "/api/seat_bulk_vaults/-/seal"
+                  {:headers as :body {:ids [(str (random-uuid))]}})
+        before (last-refusal)
+        ;; the guard's 409, then a 404 after it: the stamp names the 409
+        bulk (req h :post "/api/seat_bulk_vaults/-/seal"
+                  {:headers as
+                   :body {:ids [(id-of v) (str (random-uuid))]}})
+        stamped (last-refusal)
+        again (req h :post "/api/seat_bulk_vaults/-/seal"
+                   {:headers as :body {:ids [(str (random-uuid))]}})]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (is (< (:status none) 300) (pr-str (json none)))
+    (is (nil? before)
+        "a bulk with no 409 leaves last_refusal as it was")
+    (is (< (:status bulk) 300) (pr-str (json bulk)))
+    (is (re-find #"guard-refused$" (str (:type stamped)))
+        "the refused item's problem type")
+    (is (re-find #"sealed-for-good$" (str (:guard stamped)))
+        "the guard that refused it")
+    (is (string? (:at stamped)))
+    (is (< (:status again) 300) (pr-str (json again)))
+    (is (= stamped (last-refusal))
+        "a later bulk with no 409 leaves the stamp unchanged")))
+
 (deftest a-closed-sitting-shows-the-rows-a-person-reversed
   (let [{:keys [h]} (world)
         model (add-model! h "correct-model")
