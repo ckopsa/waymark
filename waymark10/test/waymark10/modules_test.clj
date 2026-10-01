@@ -99,7 +99,11 @@
            ;; …and the scheduled action
            ;; (docs/spec-scheduled-actions.md R-1), core's beside the
            ;; held call it carries a ref to
-           :scheduled_action}
+           :scheduled_action
+           ;; …and the walkthrough (docs/spec-walkthrough.md § 1): an
+           ;; ordered run of invitation-shaped steps, core's beside
+           ;; the invitation each step is judged as
+           :walkthrough}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -126,7 +130,8 @@
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
-             :judgment :verdict :invitation :walk :walk_frame :scheduled_action}
+             :judgment :verdict :invitation :walk :walk_frame :scheduled_action
+             :walkthrough}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
