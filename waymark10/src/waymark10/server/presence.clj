@@ -563,8 +563,10 @@
   row's kind (or, on a collection self, no create action of the kind)
   dropped with its fields, fields read from the shared live
   draft where the action has one, secret arguments REMOVED (never
-  stored, so never on pg_notify), and the whole under the cap. Runs
-  before the lock: the draft read touches the store."
+  stored, so never on pg_notify), and the whole under the cap. `focus`
+  is an /api/ href, or the name of a field the dialog shows: the
+  argument a staged call is typing. Runs before the lock: the draft
+  read touches the store."
   [reg ui]
   (when-not (map? ui)
     (throw (p/schema-invalid
@@ -579,20 +581,25 @@
                          (dialog-door eng dself action))
         secret (when door (secret-keys (:input door) (:schema rdef)))
         cself (normalize-self (when (map? collection) (:self collection)))
-        fself (normalize-self focus)]
-    (fit-ui
-     {:dialog (when door {:self dself :action action})
-      :fields (when door
+        fself (normalize-self focus)
+        shown (when door
                 (into {}
                       (remove (fn [[k _]] (contains? secret (keyword (name k)))))
                       (or (when id (draft-fields reg rdef id (keyword action) door))
                           (when (map? fields) fields))))
+        typing (when (and (string? focus)
+                          (some #(= focus (name (key %))) shown))
+                 focus)]
+    (fit-ui
+     {:dialog (when door {:self dself :action action})
+      :fields shown
       :collection (when (valid-self? cself)
                     (cond-> {:self cself}
                       (map? (:filter collection)) (assoc :filter (:filter collection))
                       (string? (:sort collection)) (assoc :sort (:sort collection))
                       (integer? (:page collection)) (assoc :page (:page collection))))
-      :focus (when (valid-self? fself) fself)})))
+      :focus (cond (valid-self? fself) fself
+                   typing typing)})))
 
 (defn typed-keys
   "The keys of `input` a dialog on `self`'s `action` may show, in the
@@ -917,7 +924,8 @@
   its fields go with it; each fields key crosses iff :arg? admits it
   and is REMOVED otherwise, never blanked; collection.self follows the
   whole-kind rule, its filter keeps the keys :field? admits and a sort
-  on a refused field is dropped; focus needs :row?. A frame whose
+  on a refused field is dropped; focus needs :row?, and one that names
+  a typed argument crosses with its field. A frame whose
   every part was redacted crosses as a plain move — it never says
   that something was hidden. nil vis (an unscoped follower) sees the
   frame whole."
@@ -958,7 +966,10 @@
                               (and (some? (:sort collection))
                                    (not (keep? (str/replace (str (:sort collection)) #"^-" ""))))
                               (dissoc :sort)))
-              focus' (when (and (string? focus) (visible? focus)) focus)]
+              focus' (when (string? focus)
+                       (if (str/starts-with? focus "/")
+                         (when (visible? focus) focus)
+                         (when (some #(= focus (name (key %))) fields') focus)))]
           (if (and (some some? [dialog collection focus])
                    (every? nil? [dialog' collection' focus']))
             (frame-of "move" frame)

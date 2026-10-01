@@ -266,6 +266,19 @@
                 [:ui nil {}]]
                (beats eng w)))))))
 
+(deftest each-typing-beat-names-its-argument-in-focus
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            w (self-walk! h)]
+        (is (tool h "waymark_invoke" {:kind "errand" :id a :action "rename"
+                                      :input {:room "Kitchen" :title "Towels"}}))
+        (is (= [nil "title" "room" nil]
+               (->> (frames eng w)
+                    (filter #(= "ui" (:type %)))
+                    (mapv #(get-in % [:body :ui :focus]))))
+            "the opening beat and the closing beat type nothing")))))
+
 (deftest a-dry-run-leaves-the-dialog-open-and-the-invoke-does-not-retype
   (with-stage
     (fn [eng h _reg]

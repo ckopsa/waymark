@@ -288,6 +288,7 @@ function applyFollowMove(self) {
 /* ── guided follow, the follower's side: a `ui` frame applied ──────── */
 let guidedSeq = -1;          // the last seq applied; an older one drops
 let guidedFocus = null;      // their focused row's self
+let guidedTyping = null;     // the field their staged call is typing
 let guidedLastFields = {};   // their form, as last reported
 let guidedOpening = null;    // the dialog key being fetched right now
 let guidedDismissed = null;  // the dialog key this person closed by hand
@@ -316,6 +317,7 @@ async function openGuidedDialog(d, name, key) {
     guided: {name, key, onDismiss: () => { guidedDismissed = key; }}});
   const g = $("dialog[open][data-guided]");
   if (g && g.guidedSet) g.guidedSet(guidedLastFields);
+  if (g && g.guidedLight) g.guidedLight(guidedTyping);
   /* a replayed caption about this form is drawn in it */
   if (replay) replayCaption();
 }
@@ -336,7 +338,12 @@ function applyGuidedUi(f) {
 function applyUiFrame(f) {
   const ui = f.ui, d = ui.dialog, c = ui.collection;
   guidedLastFields = ui.fields || {};
-  guidedFocus = ui.focus || null;
+  /* `focus` is their focused row, or, on a typing beat of a staged call
+     (docs/spec-agent-demo-walks.md §2), the name of the field the beat
+     adds: that field alone is lit in the dialog */
+  const typing = !!d && typeof ui.focus === "string" && !ui.focus.startsWith("/");
+  guidedTyping = typing ? ui.focus : null;
+  guidedFocus = typing ? null : ui.focus || null;
   /* the existing guards: the Access panel parks, and a dialog this
      person opened themselves is never replaced; nor is a replayed
      invitation's, which stands where the invited person's own stood */
@@ -350,7 +357,10 @@ function applyUiFrame(f) {
     const g = $("dialog[open][data-guided]");
     const key = d ? d.self + " " + d.action : null;
     if (!d) { guidedDismissed = null; closeGuided(); }
-    else if (g && g.getAttribute("data-guided") === key) g.guidedSet(guidedLastFields);
+    else if (g && g.getAttribute("data-guided") === key) {
+      g.guidedSet(guidedLastFields);
+      g.guidedLight(guidedTyping);
+    }
     else if (key !== guidedDismissed && key !== guidedOpening) {
       closeGuided();
       openGuidedDialog(d, f.principal.display || f.principal.id, key);
@@ -929,7 +939,9 @@ function startReplay(text) {
       && f.self && f.action;
     const d = inv ? {self: String(f.self).split("?")[0], action: f.action}
                   : ui.dialog;
-    for (const s of [f.self, ui.focus, d && d.self])
+    /* a typing beat's `focus` names a field, not a row */
+    const row = String(ui.focus || "").startsWith("/") ? ui.focus : null;
+    for (const s of [f.self, row, d && d.self])
       if (s) r.known.add(String(s).split("?")[0]);
     if (d) {
       const key = d.self + " " + d.action;

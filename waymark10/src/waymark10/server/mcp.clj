@@ -1714,8 +1714,10 @@
   secret one out). A create's `self` is the collection, and its form is
   the kind's create. When the last beat already shows this form with
   these values (a rehearsal typed them, or a refused call left them),
-  nothing is typed again. An action the kind does not declare opens no
-  form, and only the gaze moves."
+  nothing is typed again. Each typing beat names in `focus` the
+  argument it adds (the last of them, when it adds several), so a
+  replay lights that field. An action the kind does not declare opens
+  no form, and only the gaze moves."
   [eng st self aname input]
   (let [dialog {:self self :action (name aname)}
         ks (presence/typed-keys eng self (name aname) input)
@@ -1723,13 +1725,15 @@
         shown? (and ks
                     (try (presence/shows? (:reg st) (:id (:principal st))
                                           {:dialog dialog
-                                           :fields (select-keys given ks)})
+                                           :fields (select-keys given ks)
+                                           :focus (some-> (last ks) name)})
                          (catch Exception _ false)))]
     (if (or (nil? ks) shown?)
       (beat! st self nil)
       (do (beat! st self {:dialog dialog :fields {}})
           (doseq [fields (typed-steps given ks)]
-            (beat! st self {:dialog dialog :fields fields}))))))
+            (beat! st self {:dialog dialog :fields fields
+                            :focus (name (nth ks (dec (count fields))))}))))))
 
 (defn- stage-close!
   "The beat after a write that landed: the form closes. A refused call
