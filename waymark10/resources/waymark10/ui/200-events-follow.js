@@ -316,6 +316,8 @@ async function openGuidedDialog(d, name, key) {
     guided: {name, key, onDismiss: () => { guidedDismissed = key; }}});
   const g = $("dialog[open][data-guided]");
   if (g && g.guidedSet) g.guidedSet(guidedLastFields);
+  /* a replayed caption about this form is drawn in it */
+  if (replay) replayCaption();
 }
 function applyGuidedUi(f) {
   if (replay || !followUi || !followId || !f || !f.ui ||
@@ -683,6 +685,11 @@ const REPLAY_MAX_GAP = 3000;
    REPLAY_BURST_MS are played REPLAY_BURST_GAP apart, before speed. No
    browser makes such a burst, since a form's reports are debounced. */
 const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
+/* the frame after a caption waits for the caption to be read
+   (docs/spec-agent-demo-walks.md §3): REPLAY_READ_MS for each
+   character, at least REPLAY_READ_MIN and at most REPLAY_READ_MAX,
+   before speed, and on top of the gap the long-silence cut allows. */
+const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;
 function parseWalk(text) {
   let docs;
   try {
@@ -705,6 +712,7 @@ function startReplay(text) {
   const r = {title: walk.header.title || "a walk", engine: walk.header.engine,
              cast: walk.header.cast || {}, frames: walk.frames,
              at: 0, speed: 1, playing: false, timer: null, who: null, back,
+             caption: null,       // the caption frame on screen
              rows: new Map(),     // self → {kind, state, summary, log}
              docs: new Map(),     // self, the document recorded for it so far
              known: new Set(),    // every row self the recording names
@@ -712,8 +720,10 @@ function startReplay(text) {
   for (const f of walk.frames) {
     const ui = (f.type === "ui" && f.ui) || {};
     /* an invitation names a dialog as well: its row's door, with the
-       invited field and the suggested ones */
-    const inv = f.type === "invitation" && f.self && f.action;
+       invited field and the suggested ones; and so does a caption
+       anchored to a field */
+    const inv = (f.type === "invitation" || (f.type === "caption" && f.field))
+      && f.self && f.action;
     const d = inv ? {self: String(f.self).split("?")[0], action: f.action}
                   : ui.dialog;
     for (const s of [f.self, ui.focus, d && d.self])
@@ -822,7 +832,11 @@ function applyReplayFrame(f) {
     else if (!$("dialog[open]")) location.hash = "#" + f.self;
   } else if (f.type === "invitation" && f.self && f.action) {
     openReplayInvitation(f, actor);
+  } else if (f.type === "caption") {
+    /* one line about the step that follows; an empty one clears it */
+    replay.caption = f.text ? f : null;
   }
+  replayCaption();
   replayChip();
 }
 function replaySchedule() {
@@ -831,9 +845,45 @@ function replaySchedule() {
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
   const prev = r.at ? (r.frames[r.at - 1].t || 0) : 0;
   const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);
-  const gap = Math.min(REPLAY_MAX_GAP,
+  const read = replayReadingTime(r.at ? r.frames[r.at - 1] : null);
+  const gap = read + Math.min(REPLAY_MAX_GAP,
                        r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);
   r.timer = setTimeout(replayStep, gap / r.speed);
+}
+/* how long the frame after `f` waits for `f` to be read: nothing,
+   unless `f` is a caption with a line in it */
+function replayReadingTime(f) {
+  if (!f || f.type !== "caption" || !f.text) return 0;
+  return Math.min(REPLAY_READ_MAX,
+                  Math.max(REPLAY_READ_MIN, REPLAY_READ_MS * f.text.length));
+}
+/* the caption on screen (docs/spec-agent-demo-walks.md §3): a band
+   holds the line until the next caption replaces it or an empty one
+   clears it. While the form the caption is about is open, the line is
+   drawn in it as well, by the code that draws an invitation's note:
+   beside its field, with the field lit, when the caption names one. */
+function replayCaption() {
+  const c = replay && replay.caption;
+  let band = $("#replaycaption");
+  if (!band && c)
+    document.body.append(band = el("div", {id: "replaycaption", role: "status"}));
+  if (band) {
+    band.textContent = c ? c.text : "";
+    band.style.display = c ? "block" : "none";
+  }
+  const g = $("dialog[open][data-guided]:not([data-replay-invite])");
+  if (!g || !g.guidedMark) return;
+  const here = !!c && !!c.action &&
+    String(c.self).split("?")[0] + " " + c.action === g.getAttribute("data-guided");
+  const old = g.querySelector("[data-caption-note]");
+  if (old && here && old.textContent === c.text) return;
+  if (old) {
+    old.remove();
+    for (const s of g.querySelectorAll(".invited")) s.classList.remove("invited");
+  }
+  if (here)
+    g.guidedMark(c.field ? [c.field] : [], c.text)
+      .setAttribute("data-caption-note", "");
 }
 function replayStep() {
   const r = replay;
@@ -847,6 +897,7 @@ function playReplay() {
   if (r.at >= r.frames.length) {       // again, from the start
     r.at = 0;
     r.who = null;
+    r.caption = null;
     r.rows.clear();
     r.docs.clear();
     closeGuided();
@@ -854,6 +905,7 @@ function playReplay() {
     guidedDismissed = null;
   }
   r.playing = true;
+  replayCaption();
   replayChip();
   replaySchedule();
 }
@@ -882,6 +934,7 @@ function stopReplay(quiet) {
   guidedLastFields = {};
   guidedDismissed = null;
   guidedSeq = -1;
+  replayCaption();
   replayChip();
   if (quiet) return;
   /* a hashchange renders and beats on its own */

@@ -273,3 +273,43 @@
         (is (tool h "waymark_history" {:kind "errand" :id a}))
         (is (empty? @(:local reg)) "no presence was reported")
         (is (empty? (frames eng w)))))))
+
+;; ── 4. captions (docs/spec-agent-demo-walks.md § 3) ─────────────────
+
+(deftest a-caption-is-written-before-the-calls-beats
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            line "The agent renames the errand."]
+        (testing "with no recording walk the arguments do nothing"
+          (is (tool h "waymark_invoke" {:kind "errand" :id a :action "assign"
+                                        :input {:assignee "marco"}
+                                        :caption line :caption_field "pin"})))
+        (let [w (self-walk! h)]
+          (is (tool h "waymark_invoke" {:kind "errand" :id a :action "rename"
+                                        :input {:title "Towels"}
+                                        :caption line :caption_field "title"}))
+          (is (= [["caption"]
+                  [:move (path a)]
+                  [:ui "rename" {}]
+                  [:ui "rename" {:title "Towels"}]
+                  [:transition "rename"]
+                  [:ui nil {}]]
+                 (beats eng w)))
+          (is (= {:self (path a) :action "rename" :field "title" :text line}
+                 (select-keys (:body (first (frames eng w)))
+                              [:self :action :field :text])))
+          (testing "a secret argument is no anchor, and the call is not made"
+            (is (not (tool h "waymark_invoke" {:kind "errand" :id a :action "assign"
+                                               :input {:assignee "marco"}
+                                               :caption line :caption_field "pin"})))
+            (is (= 6 (count (frames eng w)))))
+          (testing "a get and a query take one, and the empty one is a frame too"
+            (is (tool h "waymark_get" {:kind "errand" :id a :caption "The row."}))
+            (is (tool h "waymark_query" {:kind "errand" :caption ""}))
+            (is (= [["The row." (path a)] ["" "/api/errands"]]
+                   (->> (frames eng w)
+                        (drop 6)
+                        (filter #(= "caption" (:type %)))
+                        (mapv (juxt #(get-in % [:body :text])
+                                    #(get-in % [:body :self]))))))))))))
