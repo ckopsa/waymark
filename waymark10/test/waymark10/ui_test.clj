@@ -179,6 +179,36 @@
     (is (str/includes? body
                        "invokeBare(invitation.doc.actions.decline, invitation.doc)"))))
 
+(deftest ui-draws-step-n-of-m-on-an-invited-dialog
+  ;; docs/spec-walkthrough.md §5: an invitation that has a walkthrough
+  ;; opens as any other does, with "Step 2 of 4 · <title>" above the form,
+  ;; and the chip says the same on every screen
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function stepLine(n, of, title)"))
+    (is (str/includes? body "return `Step ${n} of ${of}`"))
+    (is (str/includes? body "walkthrough: d.walkthrough ? ledStep(d) : null"))
+    (is (str/includes? body "data-walk-step"))
+    (is (str/includes? body "stepLine(led.step, led.of, led.title)"))
+    (is (str/includes? body "<span id=\"walkchip\"></span>"))
+    (is (str/includes? body "`step ${f.step} of ${f.of}`"))))
+
+(deftest ui-offers-skip-and-stop-inside-a-walkthrough
+  ;; the Decline button reads Skip and still walks the invitation's own
+  ;; decline door; Stop sits beside it and walks the walkthrough's stop
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "led ? \"Skip\" : \"Decline\""))
+    (is (str/includes? body "data-walk-stop"))
+    (is (str/includes? body "async function stopLed()"))
+    (is (str/includes? body "const stop = row.ok && (row.body.actions || {}).stop;"))
+    (is (str/includes? body "btn(\"data-walk-skip\", \"Skip\", skipLedStep)"))))
+
+(deftest ui-walkthrough-page-lists-its-steps
+  ;; the row page lists every step's note in order, before the start
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "if (kind === \"walkthrough\") panel.append(walkthroughSteps(doc));"))
+    (is (str/includes? body "function walkthroughSteps(doc)"))
+    (is (str/includes? body "data-walk-steps"))))
+
 (deftest ui-offers-do-this-later
   ;; docs/spec-scheduled-actions.md R-7.3: a row's dialog schedules the
   ;; same call, with the zone named and the rule in plain words; a confirm
