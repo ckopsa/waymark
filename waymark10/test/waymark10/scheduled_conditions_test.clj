@@ -285,11 +285,17 @@
             id (schedule! eng e (under {:priority "2"}) (worn))]
         (is (= gid (get-in (row-of eng :scheduled_action id) [:data :grant])))
         (is (= "done" (run! eng id)))))
-    (testing "a grant that ended before the time skips, and shows no value"
+    ;; a grant that ended is skipped before the rule, in the grant's own
+    ;; sentence (child 2); this one still admits the door and hides the field
+    (testing "a grant narrowed past the field before the time skips, and shows no value"
       (let [e (errand! eng)
-            id (schedule! eng e (under {:priority "2"}) (worn))]
-        (reset! clock (Instant/parse "2026-10-02T14:30:00Z"))
-        (is (= "skipped" (run! eng id)))
+            id (schedule! eng e (under {:priority "2"}) (worn))
+            seen grants/visibility]
+        (with-redefs [grants/visibility
+                      (fn [& args]
+                        (assoc (apply seen args)
+                               :field? (fn [_ f] (not= "priority" (name f)))))]
+          (is (= "skipped" (run! eng id))))
         (is (= "open" (errand-state eng e)))
         (is (= "Not run: the condition priority=2 names a field this grant no longer admits."
                (why-of eng id)))))))

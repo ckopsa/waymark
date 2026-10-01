@@ -1,12 +1,12 @@
 (ns waymark10.server.scheduled
   "The scheduled action (docs/spec-scheduled-actions.md, children 1a,
-  1b, 1c and 5): a call stored for a time, as a kind of its own.
+  1b, 1c, 2 and 5): a call stored for a time, as a kind of its own.
 
-  THIS NAMESPACE IS THE KIND, ITS SCHEDULING CHECK AND ITS RUN. The
-  create validates, checks and stores. `start!` claims a row and `run!`
-  carries it out; the clock that calls them is child 2's. `start`,
-  `land`, `skip` and `fail` are the engine's own hand, and no hand at
-  the wire walks them.
+  THIS NAMESPACE IS THE KIND, ITS SCHEDULING CHECK, ITS RUN AND ITS
+  CLOCK. The create validates, checks and stores. `start!` claims a row
+  and `run!` carries it out; `sweep-due!` is the clock that calls them
+  (R-5), on a loop of its own. `start`, `land`, `skip` and `fail` are
+  the engine's own hand, and no hand at the wire walks them.
 
   CHECKED AGAIN AT THE RUN (R-3.3). The claim, then the validity rule
   the row chose (R-2), then the confirm sentence read again, then a dry
@@ -31,7 +31,10 @@
 
   NOBODY SCHEDULES AS SOMEBODY ELSE (R-4.2). `scheduler`, `acts_as`
   and `grant` are stamped at birth, and the closed create model
-  refuses a body that names one.
+  refuses a body that names one. At the run the member row is read
+  again, and the grant by its id: a grant that is gone or that no
+  longer admits the call skips the row, and so does a seat that is not
+  open. The run's transition counts on no sitting.
 
   THE ENGINE NEVER GUESSES UTC (R-7.2). `run_at` is RFC 3339 with an
   offset, or a local time read in the `zone` the body names, else in
@@ -48,11 +51,14 @@
             [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
            (java.time DateTimeException Instant LocalDateTime OffsetDateTime
-                      ZoneId ZonedDateTime)
-           (java.time.temporal ChronoUnit)))
+                      ZoneId ZoneOffset ZonedDateTime)
+           (java.time.format DateTimeFormatter)
+           (java.time.temporal ChronoUnit)
+           (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
 
@@ -500,7 +506,7 @@
 
 (defn- registry-ctx
   "What `door-of` reads, outside any write: this engine's registry and
-  no grant. The grant read by id at `run_at` is child 2's."
+  no grant. The run lays the grant it read by id over it (`leash-of`)."
   [eng]
   {:rdef-of (fn [token]
               (let [rs (inv/resources eng)
@@ -526,14 +532,32 @@
 (defn- call-of [door]
   (str "`" (name (:action door)) "` on " (name (:kind door))))
 
+(defn- model-at-scheduling
+  "The model the scheduling session declared, read off the row's first
+  transition, or nil. A run has no session to declare one, and a seat
+  held for named models serves nothing to a hand that declares none."
+  [eng id]
+  (let [st (:storage eng)]
+    (some-> (store/with-tx st
+              (fn [tx]
+                (first (store/transitions st tx
+                                          {:kind kind :resource-id (str id)}
+                                          {:limit 1}))))
+            :actor :model str not-empty)))
+
 (defn- runner-of
   "Who the run runs as (R-4.1): the scheduler, built now from its member
   row, roles read now and not carried. `{:principal}`, or `{:why}` for
-  a scheduler who is gone or whom the gate refuses."
+  a scheduler who is gone or whom the gate refuses. The principal
+  carries `:scheduled`, this row's id, which the transition's actor
+  keeps (invoke/actor-map): the hand is the scheduler's, and the log
+  says the clock moved it (R-4.2)."
   [eng row]
   (try
     (if-some [p (members/principal-for eng (get-in row [:data :acts_as :id]))]
-      {:principal p}
+      (let [model (model-at-scheduling eng (:id row))]
+        {:principal (cond-> (assoc p :scheduled (str (:id row)))
+                      model (assoc :model model))})
       {:why "Whoever scheduled this is no longer a member here."})
     (catch clojure.lang.ExceptionInfo e
       {:why (said e)})))
@@ -596,6 +620,41 @@
           "Not run: a condition is no longer one this kind's collection answers."
           (throw e))))))
 
+(def ^:private grant-gone
+  "The grant this was scheduled under no longer admits it.")
+
+(defn- leash-of
+  "R-4.2: the grant the row was scheduled under, read by its id as it
+  stands now and never as it stood. `{:grant}` is the guard's-eye view
+  the call is judged under, wider or narrower than the day it was
+  cited. `{:why}` skips the row: a grant revoked, expired or narrowed
+  past this call, or a seat that is not open. nil for a row scheduled
+  under no grant.
+
+  THE VIEW CARRIES NO ID. A sitting's transitions are the log rows
+  whose actor names its grant, so a run that stamped the grant would
+  count on whatever sitting is open at the time. The row keeps the
+  grant's id, and the actor carries `scheduled`."
+  [eng data principal]
+  (when-some [gid (some-> (:grant data) str not-empty)]
+    (let [vis (when (= :active (:standing (grants/grant-standing eng gid)))
+                (grants/visibility eng gid principal))
+          wall (get-in vis [:seat :reason])
+          view (some-> (:grant vis) (dissoc :id))
+          door (when view
+                 (door-of (:target data) (assoc (registry-ctx eng) :grant view)))]
+      (cond
+        (= "seat_not_active" wall)
+        {:why "The seat this was scheduled from is not open, and a seat that is not open does nothing."}
+
+        wall
+        {:why (str "The seat this was scheduled from serves nothing now (" wall ").")}
+
+        (or (nil? view) (:problem door))
+        {:why grant-gone}
+
+        :else {:grant view}))))
+
 (defn- stale
   "The validity rule the row chose, and the confirm gate read again,
   against the target as it is now: the sentence that skips the run, or
@@ -655,10 +714,11 @@
   own judgment is the one that counts: `{:end :land :res}`, `{:end
   :skip :why}` for a refusal a rehearsal could have given, `{:end :fail
   :why}` for what it could not see."
-  [eng id {target :id :as door} data principal]
+  [eng id {target :id :as door} data principal grant]
   (let [version (get-in data [:snapshot :version])
         opts (cond-> {:principal principal
                       :acknowledged (into #{} (map keyword) (:acknowledge_warnings data))}
+               grant (assoc :grant grant)
                ;; R-2.1: strict sends the snapshot's etag as If-Match
                (and target version (= "strict" (:validity data)))
                (assoc :if-match (inv/etag (:kind door) target version)))]
@@ -714,10 +774,43 @@
       (when-not (#{:wrong-state :not-found} (:waymark10/problem (ex-data e)))
         (throw e)))))
 
+(defn- landed
+  "What the call wrote, when it already landed under the row's derived
+  key: `{kind, action, id, state}` from the stored answer, or nil. A
+  row a stopped engine left `running` may have made its call, and the
+  validity rule would then read the row the call itself moved, so the
+  run asks here before it reads that rule (R-5.4)."
+  [eng id {:keys [rdef kind action] target :id}]
+  (let [st (:storage eng)
+        hit (store/with-tx st
+              (fn [tx]
+                (store/idempotency-lookup st tx (str "scheduled_action:" id) kind)))
+        did (some-> (:action hit) name)
+        births (into #{} (map name) (:create-action-names rdef))]
+    (when (and did (or (= did (name action))
+                       (and (nil? target) (contains? births did))))
+      (let [answer (:response hit)
+            doc (cond
+                  (map? answer) answer
+                  (string? answer) (try (wire/read-json answer)
+                                        (catch Exception _ nil)))
+            doc (when (map? doc) doc)
+            ;; an envelope names its row by `self`, never by a field
+            self (some-> (:self doc) str (str/split #"/") last not-empty)
+            written (or target (some-> (:id doc) str not-empty) self)
+            state (or (some-> (:state doc) name not-empty)
+                      (some-> (when written (stored-row eng kind written))
+                              :state name))]
+        (cond-> {:kind (name kind) :action (name action)}
+          written (assoc :id written)
+          state (assoc :state state))))))
+
 (defn run!
-  "The run of a row `start!` claimed (R-3.3): who it runs as, the
-  validity rule, the confirm sentence read again, a dry run, then the
-  call under the key `scheduled_action:<id>`. Answers the ending,
+  "The run of a row `start!` claimed (R-3.3): who it runs as, the grant
+  read again by its id, the validity rule, the confirm sentence read
+  again, a dry run, then the call under the key `scheduled_action:<id>`.
+  A call that already landed under that key ends the row from its
+  stored answer and nothing is judged again. Answers the ending,
   `:done`, `:skipped` or `:failed`. A row that is not `running` is left
   as it is and answers nil."
   [eng id]
@@ -725,16 +818,162 @@
     (when (= :running (:state row))
       (let [data (:data row)
             door (door-of (:target data) (registry-ctx eng))
-            {:keys [principal why]} (runner-of eng row)
-            why (or why
-                    (some->> (:problem door) (str "The door is gone: "))
-                    (stale eng door data principal))
-            {:keys [end why res]} (if why
-                                    {:end :skip :why why}
-                                    (carry-out eng id door data principal))]
+            before (when-not (:problem door) (landed eng id door))
+            {:keys [principal why]} (when-not before (runner-of eng row))
+            leash (when (and principal (nil? (:problem door)))
+                    (leash-of eng data principal))
+            why (when-not before
+                  (or why
+                      (some->> (:problem door) (str "The door is gone: "))
+                      (:why leash)
+                      (stale eng door data principal)))
+            {:keys [end why res]} (cond
+                                    before {:end :land}
+                                    why {:end :skip :why why}
+                                    :else (carry-out eng id door data principal
+                                                     (:grant leash)))]
         (end! eng id end
               (or why (str "Ran " (call-of door) " as scheduled."))
-              (when (= :land end) (outcome-of eng door res)))))))
+              (or before (when (= :land end) (outcome-of eng door res))))))))
+
+;; ── the clock (R-5) ─────────────────────────────────────────────────
+
+(def sweep-cap
+  "The most rows a pass takes of each sort. The rest wait one pass."
+  200)
+
+(def stuck-seconds
+  "A row `running` for longer than this has no live runner (R-5.4)."
+  300)
+
+(def default-sweep-ms
+  "Thirty seconds. `run_at` is whole minutes, so a row runs in the pass
+  after its minute begins; overridable per engine as `[:services
+  :scheduled-actions :sweep-ms]`."
+  30000)
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 scheduled actions: " parts))))
+
+(defn- rows-where
+  "Decoded rows in `state` whose instant `field` is `op` `at`, in the
+  order they were scheduled, up to the cap."
+  [eng state field op ^Instant at]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) kind)]
+    (store/with-tx st
+      (fn [tx]
+        (mapv #(inv/decode-row rdef %)
+              (store/search-rows st tx kind
+                                 [{:target :state :op := :value (name state)}
+                                  {:target :data :field field :cast "timestamptz"
+                                   :op op :value (str at)}]
+                                 {:limit sweep-cap}))))))
+
+(def ^:private ^DateTimeFormatter hour-and-minute
+  (DateTimeFormatter/ofPattern "HH:mm"))
+
+(defn- clock-of
+  "An instant as the row's zone shows it, in hours and minutes."
+  [^Instant i zone]
+  (.format hour-and-minute (.atZone i ^ZoneId (or (zone-id zone) ZoneOffset/UTC))))
+
+(defn- grace-words [^long seconds]
+  (cond
+    (= 3600 seconds) "one-hour"
+    (zero? (mod seconds 3600)) (str (quot seconds 3600) "-hour")
+    (zero? (mod seconds 60)) (str (quot seconds 60) "-minute")
+    :else (str seconds "-second")))
+
+(defn- late
+  "R-5.3: the sentence that skips a row found past its grace, or nil
+  while it may still run late."
+  [data ^Instant now]
+  (let [^Instant at (:run_at data)
+        grace (long (or (:grace_seconds data) 3600))]
+    (when (and at (.isAfter now (.plusSeconds at grace)))
+      (str "Not run: the engine was down at " (clock-of at (:zone data))
+           " and came back at " (clock-of now (:zone data))
+           ", past this action's " (grace-words grace) " grace."))))
+
+(defn- quietly
+  "One row's step, with its failure warned and survived, so the pass
+  goes on to the next row. A row another hand moved first is no
+  failure."
+  [id step]
+  (try
+    (step)
+    (catch clojure.lang.ExceptionInfo e
+      (when-not (#{:wrong-state :not-found} (:waymark10/problem (ex-data e)))
+        (warn! "the row " id " failed: " (ex-message e)))
+      nil)
+    (catch Exception e
+      (warn! "the row " id " failed: " (ex-message e))
+      nil)))
+
+(defn sweep-due!
+  "One pass of the clock, and the one call a test makes instead of
+  waiting for it (R-5.1). Answers how many rows each step ended:
+  `{:ran :late :recovered}`.
+
+  RECOVERED: a row `running` for more than five minutes has no live
+  runner, and is run again under its key (R-5.4). LATE: a `scheduled`
+  row past its grace is skipped with a sentence (R-5.3). RAN: every
+  other `scheduled` row whose minute has begun is claimed and run,
+  oldest `run_at` first.
+
+  `start!` IS THE CLAIM (R-5.2). The hook that runs this is elected,
+  and two processes may still both believe they hold the role during a
+  roll. Only the hand that moved the row to `running` runs its call."
+  [eng]
+  (if-not (contains? (inv/resources eng) kind)
+    {:ran 0 :late 0 :recovered 0}
+    (let [^Instant now ((:now-fn eng))
+          stuck (rows-where eng :running :ran_at :<
+                            (.minusSeconds now (long stuck-seconds)))
+          recovered (count (filter (fn [row]
+                                     (quietly (:id row) #(run! eng (:id row))))
+                                   stuck))
+          due (sort-by #(get-in % [:data :run_at])
+                       (rows-where eng :scheduled :run_at :<= now))]
+      (reduce (fn [tally row]
+                (let [id (:id row)
+                      why (late (:data row) now)
+                      step (quietly id
+                                    (fn []
+                                      (cond
+                                        why (do (end! eng id :skip why nil) :late)
+                                        (start! eng id) (when (run! eng id) :ran))))]
+                  (cond-> tally step (update step inc))))
+              {:ran 0 :late 0 :recovered recovered}
+              due))))
+
+(defn start-sweeper!
+  "The clock's loop, on `wakes/start-tick!`'s shape: a daemon thread, a
+  latch, and a failure that is warned and survived. ONE process per
+  database should run it, and that is not decided here: core's hook
+  carries `:elected :scheduled-actions` (waymark10.modules). Returns
+  the handle `stop-sweeper!` takes."
+  [eng {:keys [interval-ms] :or {interval-ms default-sweep-ms}}]
+  (let [stop (CountDownLatch. 1)
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop (long interval-ms)
+                                         TimeUnit/MILLISECONDS)
+                         (try (sweep-due! eng)
+                              (catch Exception e
+                                (warn! "the sweep failed: "
+                                       (ex-message e))))
+                         (recur))))
+                   "waymark10-scheduled-actions")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn stop-sweeper! [{:keys [^CountDownLatch stop]}]
+  (some-> stop .countDown)
+  nil)
 
 ;; ── the kind ────────────────────────────────────────────────────────
 
@@ -975,7 +1214,12 @@
     "R-3.1 asks a confirm door for its sentence. The sentence is asked of a row's door; a create target is rehearsed in full and asked for none."
     "R-6.2 says the summary is `outcome_why` after an ending. A summary is one template, so the line stays `{target} · {run_at} · {state}` and the sentence is read from the field."
     "R-7.2 states the zone rules for `at`. The same rules are applied here to `run_at` on the create and on `reschedule`, and an instant written with an offset and no zone anywhere is shown in that offset."
-    "R-2 reads the target under the runner's grant as it is then. The run reads no grant yet: it runs as the scheduler's principal, built from its member row at the run, and the grant read by id is child 2's. The one read that is under a grant is a `conditions` row's (R-2.3): the grant is read again by its id for the runner, and a condition on a field it no longer shows plain skips the row."
+    "R-2 reads the target under the runner's grant as it is then. The run reads the grant by its id and judges the door, the row and the call's guards under it. The validity rule's own read of the row's state and version is the engine's, so a row the grant no longer shows is skipped in the grant's sentence and not in the sentence of a row that is gone. A `conditions` row's fields (R-2.3) are judged under that grant: a condition on a field it no longer shows plain skips the row."
+    "R-4.2 names three ways a grant stops a run: revoked, expired, narrowed. They are one sentence here, and a seat that is not open has its own. A seat held for named models is judged with the model the scheduling session declared, read off this row's first transition, because a run has no session to declare one."
+    "R-4.2 says the run counts on no sitting. A sitting's transitions are the log rows whose actor names its grant, so the run's actor names no grant: it carries `scheduled`, and the grant's id stays on this row."
+    "R-5.1 takes due rows oldest first. `run_at` has no promoted column to order by, so a pass takes up to its cap of the due rows in the order they were scheduled and runs that page oldest `run_at` first."
+    "R-5.3's sentence says the engine was down. The sweep cannot tell a stopped engine from a slow pass, and says it either way."
+    "R-5.4 fails a power tool that was left `running`. Targets are engine doors until child 4, so every row left `running` is run again under its key."
     "R-2.1 sends the snapshot's etag as If-Match. The fence judges it only on a fenced door, so the run also compares the row's version with the snapshot's before the call; on an unfenced door a write between that read and the call is not caught."
     "R-2.2 asks that the row's envelope still advertises the action. The run reads the door's declared from-states and leaves the rest to the dry run, which judges the guards the envelope would."
     "R-2.3 does not say whether a condition must hold when it is scheduled. It need not: the grammar and the grant are judged at scheduling, and the conditions are read at the run."

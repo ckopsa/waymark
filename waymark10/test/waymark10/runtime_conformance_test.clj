@@ -172,6 +172,9 @@
              ;; core's sixth: the seat's clock, so a transcript seals
              ;; and an idle sitting closes between deploys
              :seat-clock
+             ;; core's seventh: the scheduled actions' clock
+             ;; (spec-scheduled-actions R-5), elected like the rest
+             :scheduled-actions
              :attachments-purge :webhooks-deliverer
              :jobs-worker :jobs-orphan-sweeper
              :schedules-mirror :schedules-drift :wakes :judgments
