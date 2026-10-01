@@ -104,8 +104,9 @@
             [waymark10.server.problems :as p]
             [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
-            ;; loaded for the PostgresStorage record class alone
-            [waymark10.server.store.postgres]
+            ;; the PostgresStorage record class, and the LISTEN
+            ;; connection that comes back
+            [waymark10.server.store.postgres :as pg]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (com.zaxxer.hikari HikariDataSource)
@@ -608,16 +609,6 @@
 
 ;; ── lifecycle ───────────────────────────────────────────────────────
 
-(defn- intents-connection
-  "A dedicated raw LISTEN connection — never from the Hikari pool
-  (getNotifications parks it; the dispatcher's discipline)."
-  ^Connection [storage]
-  (let [url (.getJdbcUrl ^HikariDataSource (:ds storage))
-        conn (DriverManager/getConnection url)]
-    (with-open [stmt (.createStatement conn)]
-      (.execute stmt (str "LISTEN " intents-channel)))
-    conn))
-
 (defrecord Registry []
   ;; The announcement, as CORE knocks on it (waymark-db9.7). The
   ;; router used to require this namespace so a dry-run door could
@@ -653,13 +644,10 @@
         _ (when-not pg?
             (warn! "fan-out is a Postgres surface; intents stay"
                    " process-local (recorded scope)"))
-        conn (when pg?
-               (try (intents-connection storage)
-                    (catch Exception e
-                      (warn! "no LISTEN connection (" (ex-message e)
-                             "); intents stay process-local")
-                      nil)))
-        pg-conn (some-> ^Connection conn (.unwrap PGConnection))
+        ;; a dedicated LISTEN connection, never from the Hikari pool
+        ;; (the dispatcher's discipline); the listener reopens it when
+        ;; it dies, and the heartbeat runs on the clock meanwhile
+        listener (when pg? (pg/listener storage [intents-channel] warn!))
         sub (when dispatcher (events/subscribe dispatcher {}))
         ;; the curtain consult (waymark-tti.4): the engine's shared
         ;; component, or a private one for a standalone registry
@@ -681,7 +669,7 @@
               :outcomes (atom {})
               :subs (atom #{})
               :running (atom true)
-              :conn conn
+              :listener listener
               :dispatcher dispatcher
               :sub sub})
         listen-t
@@ -691,10 +679,10 @@
            (let [last-hb (atom 0)]
              (while @(:running reg)
                (try
-                 (if pg-conn
+                 (if listener
                    (doseq [^PGNotification n
-                           (.getNotifications ^PGConnection pg-conn
-                                              (int (min hb-ms 1000)))]
+                           (pg/await-notifications! listener
+                                                    (min hb-ms 1000))]
                      (on-notification! reg (.getParameter n)))
                    (Thread/sleep (long (min hb-ms 1000))))
                  (let [now (System/currentTimeMillis)]
@@ -749,7 +737,7 @@
   ;; only a registry that STARTED its own curtain stops one — the
   ;; engine's shared component outlives every surface that reads it
   (some-> (:own-curtain reg) curtain/stop!)
-  (some-> ^Connection (:conn reg) .close)
+  (pg/close-listener! (:listener reg))
   (some-> ^Thread (:thread reg) .interrupt)
   nil)
 
