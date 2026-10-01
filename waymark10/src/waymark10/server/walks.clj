@@ -364,7 +364,8 @@
 (defn- invitation-frame
   "The `invitation` frame of one firehose event, when that event is the
   birth of an invitation the follower can see; nil otherwise. The body
-  is pinned: {id, author, subject, self, action, field, note, suggest},
+  is pinned: {id, author, subject, self, action, field, fields, note,
+  suggest}; a row born before `fields` carries `field` alone,
   and `suggest` keeps only the keys the follower's `:arg?` admits."
   [eng sight t]
   (when (and (= "invitation" (some-> (:kind t) name))
@@ -379,7 +380,7 @@
           (let [d (:data (inv/decode-row rdef row))]
             {:type "invitation"
              :body (assoc (select-keys d [:author :subject :self :action
-                                          :field :note])
+                                          :field :fields :note])
                           :id id
                           :suggest (suggest-for eng sight d))}))))))
 
@@ -630,7 +631,8 @@
                      (when (and id (or (nil? vis)
                                        ((:row? vis) :invitation (str id))))
                        (let [suggested (suggest (assoc body :self self))]
-                         (cond-> (assoc (select-keys body [:action :field :note])
+                         (cond-> (assoc (select-keys body [:action :field :fields
+                                                           :note])
                                         :type "invitation"
                                         ::subject (some-> (:subject body) str))
                            self (assoc :self self)

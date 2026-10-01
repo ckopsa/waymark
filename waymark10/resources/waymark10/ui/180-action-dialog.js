@@ -613,13 +613,27 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   dlg.addEventListener("close", () => dlg.remove());
   dlg.showModal();
   if (invitation) {
-    const node = invitation.field &&
-      form.querySelector(`[name="${CSS.escape(invitation.field)}"]`);
-    const spot = node ? (node.closest("label") || node.parentElement) : null;
+    /* every named field is lit, in the author's reading order; one this
+       person's own form does not show is passed over without a message */
+    const names = invitation.fields
+      || (invitation.field ? [invitation.field] : []);
+    const lit = names.map(f => {
+      const node = form.querySelector(`[name="${CSS.escape(f)}"]`);
+      return node && {node, spot: node.closest("label") || node.parentElement};
+    }).filter(l => l && l.spot);
+    const node = lit.length ? lit[0].node : null;
+    const spot = lit.length ? lit[0].spot : null;
     const note = el("p", {class: "invite-note", "data-invite-note": ""},
       invitation.note || "");
-    if (spot) { spot.after(note); spot.classList.add("invited"); }
+    /* the note sits beside the first, once */
+    if (spot) spot.after(note);
     else form.prepend(note);
+    lit.forEach((l, i) => {
+      l.spot.classList.add("invited");
+      /* the ordinal the note's "then" points at */
+      if (i > 0) l.spot.prepend(el("span",
+        {class: "invite-ordinal", "data-invite-ordinal": ""}, String(i + 1)));
+    });
     requestAnimationFrame(() => {
       (spot || note).scrollIntoView({behavior: "smooth", block: "center"});
       if (node) node.focus({preventScroll: true});
@@ -678,7 +692,9 @@ async function openInvitation(inv) {
     return;
   }
   actionDialog({name: d.action, entry, doc: target, suggest: d.suggest || {},
-                invitation: {doc: inv, field: d.field, note: d.note},
+                /* a row born before `fields` holds `field` alone */
+                invitation: {doc: inv, note: d.note,
+                             fields: d.fields || (d.field ? [d.field] : [])},
                 onDone: () => render()});
 }
 

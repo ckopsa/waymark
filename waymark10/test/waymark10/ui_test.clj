@@ -151,6 +151,17 @@
     (is (str/includes? body "data-invite-note"))
     (is (str/includes? body "@keyframes invited"))))
 
+(deftest ui-lights-every-invited-field
+  ;; docs/spec-walkthrough.md §4: every named field is lit, the note sits
+  ;; beside the first, each further one shows its ordinal, and a row born
+  ;; before `fields` reads as a list of one
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "fields: d.fields || (d.field ? [d.field] : [])"))
+    (is (str/includes? body "l.spot.classList.add(\"invited\")"))
+    (is (str/includes? body "if (spot) spot.after(note);"))
+    (is (str/includes? body "data-invite-ordinal"))
+    (is (str/includes? body ".invite-ordinal {"))))
+
 (deftest ui-opens-an-invitation-from-the-collection
   ;; the collection row of an open invitation to the viewer takes the
   ;; step in one tap, reading the full envelope first (summaries drop data)
