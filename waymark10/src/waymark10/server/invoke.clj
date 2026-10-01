@@ -320,7 +320,8 @@
                               st tx {:kind (:kind row) :resource-id (:id row)}
                               {:newest-first true :limit 1}))))))}))
 
-(declare invoke-in-tx! create-in-tx!)
+(declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
+         create-guard-pass)
 
 (defn- make-ctx
   "The invocation context for ONE write. `opts`:
@@ -485,6 +486,51 @@
                                      :action create-action
                                      :res res})
                    res)))
+             ;; the REHEARSAL door (docs/spec-scheduled-actions.md
+             ;; R-3.1): one door of another kind, judged as this
+             ;; principal under this leash and written nowhere — the
+             ;; invoke door's own dry run inside this transaction, or
+             ;; the create rehearsal in full when `id` is nil. It throws
+             ;; what the write would throw, an unacknowledged warning
+             ;; included. A guard may hold it: it is no pen.
+             :rehearse
+             (fn ctx-rehearse [target-kind id action-name body & [opts]]
+               (let [trdef (or (get (resources engine) target-kind)
+                               (throw (p/not-found target-kind id)))
+                     acknowledged (or (:acknowledged opts) #{})
+                     res (if (nil? id)
+                           (let [model (or (:create-schema trdef) (:schema trdef))
+                                 inp (schema/apply-defaults
+                                      model (schema/decode model (or body {})))]
+                             (when-some [errors (schema/closed-errors model inp)]
+                               (throw (p/schema-invalid :create errors)))
+                             {:valid? true
+                              :warnings (not-empty
+                                         (:warned
+                                          (create-guard-pass
+                                           (create-walled-guards trdef) inp
+                                           (make-ctx engine tx :dry-run principal
+                                                     {:grant grant})
+                                           acknowledged)))})
+                           (invoke-in-tx!
+                            engine tx trdef target-kind (str id)
+                            (or (some-> (get-in trdef [:actions action-name])
+                                        (assoc :name action-name))
+                                (throw (p/no-such-action target-kind
+                                                         action-name)))
+                            (body-digest body) body
+                            {:principal principal
+                             :grant grant
+                             :dry-run true
+                             :acknowledged acknowledged}))]
+                 (when-some [warned (seq (:warnings res))]
+                   (throw (p/warning-refused (if id action-name :create) warned)))
+                 res))
+             ;; …and the law a birth of a kind would be stamped by now
+             ;; (R-2.4): what a scheduled create pins
+             :law-of (fn [target-kind]
+                       (when-some [trdef (get (resources engine) target-kind)]
+                         (create-law-revision engine trdef target-kind)))
              ;; the cross-resource read hooks (phase 8): guards declared
              ;; :reads [:kind] and on-create resolution read OTHER kinds
              ;; through the write's own transaction — decoded rows, the

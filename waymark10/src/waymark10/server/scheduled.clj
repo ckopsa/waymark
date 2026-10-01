@@ -1,11 +1,20 @@
 (ns waymark10.server.scheduled
-  "The scheduled action (docs/spec-scheduled-actions.md, child 1a): a
-  call stored for a time, as a kind of its own.
+  "The scheduled action (docs/spec-scheduled-actions.md, children 1a
+  and 1b): a call stored for a time, as a kind of its own.
 
-  THIS NAMESPACE IS THE KIND AND NOTHING ELSE. The create validates
-  and stores. The scheduling check is child 1b's and the run is child
-  1c's: `start`, `land`, `skip` and `fail` are declared so the machine
-  is whole, and only the engine's own hand walks them.
+  THIS NAMESPACE IS THE KIND AND ITS SCHEDULING CHECK. The create
+  validates, checks and stores. The run is child 1c's: `start`, `land`,
+  `skip` and `fail` are declared so the machine is whole, and only the
+  engine's own hand walks them.
+
+  WHAT WOULD BE REFUSED NOW IS REFUSED NOW (R-3.1). At the create the
+  target door is rehearsed as the scheduler, under the grant it wears,
+  through the ctx `:rehearse` door: the invoke door's own dry run, or
+  the create rehearsal in full. The door's own refusal is thrown as
+  the door wrote it and no row is written. Two refusals are passed
+  over, each only when the scheduler names it (R-3.2): a state
+  (`expect_state`) and guards (`expect_refusals`). Neither loosens the
+  run.
 
   NOBODY SCHEDULES AS SOMEBODY ELSE (R-4.2). `scheduler`, `acts_as`
   and `grant` are stamped at birth, and the closed create model
@@ -16,8 +25,10 @@
   the zone on the scheduler's member row or its person's. From then
   on it is an instant in whole minutes."
   (:require [clojure.string :as str]
+            [waymark10.confirm :as confirm]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
             [waymark10.types :as t])
   (:import (java.nio.charset StandardCharsets)
            (java.time DateTimeException Instant LocalDateTime OffsetDateTime
@@ -214,18 +225,180 @@
     (t/allow)
     (t/deny)))
 
+;; ── the scheduling check (R-3.1, R-3.2) ─────────────────────────────
+
+(defn- door-of
+  "The door a target names, read from this engine's registry under the
+  grant the scheduler wears: `{:rdef :kind :action :id :defn}`, with no
+  `:id` and no `:defn` for the kind's create, or `{:problem}`. A door
+  the grant does not admit reads as a door that is not there."
+  [target ctx]
+  (let [kind-name (some-> (:kind target) str not-empty)
+        action (some-> (:action target) str not-empty keyword)
+        id (some-> (:id target) str not-empty)
+        rdef (when-some [rdef-of (:rdef-of ctx)]
+               (when kind-name (rdef-of kind-name)))
+        kind (:kind rdef)
+        grant (:grant ctx)
+        admits? (fn [k & args] (if-some [f (get grant k)] (apply f args) true))
+        defn' (when-some [d (when action (get-in rdef [:actions action]))]
+                (when-not (:bulk d) (assoc d :name action)))
+        create? (and action
+                     (contains? (set (map name (:create-action-names rdef)))
+                                (name action)))]
+    (cond
+      (or (nil? rdef) (nil? action)
+          (not (admits? :action? kind action))
+          (and id (not (admits? :row? kind id))))
+      {:problem (str "there is no door `" (:action target) "` on `" (:kind target) "`"
+                     (when id (str " for the row `" id "`"))
+                     " that you may schedule.")}
+
+      (and id defn') {:rdef rdef :kind kind :action action :id id :defn defn'}
+
+      id {:problem (str "`" kind-name "` has no action `" (name action) "` that acts on a row.")}
+
+      create? {:rdef rdef :kind kind :action action}
+
+      defn' {:problem (str "`" (name action) "` acts on a row, so `target` names the row's `id`.")}
+
+      :else {:problem (str "`" kind-name "` has no action `" (name action) "`.")})))
+
+(defn- sentence-of
+  "A confirm door's consequence sentence as the row states it in
+  `state`: the entry the envelope renders, read through the one
+  accessor every confirm gate shares."
+  [defn' state]
+  (let [{:keys [safety display]} defn'
+        consequence (:consequence safety)
+        said (if (map? consequence) (get consequence state) consequence)]
+    (confirm/consequence-of
+     {:display (cond-> display
+                 (and said (nil? (:description display)))
+                 (assoc :description said))})))
+
+(defn- confirm-problem
+  "A confirm door demands its sentence at scheduling, as it does on an
+  invoke (R-3.1). The sentence is the one the row states in `state`."
+  [defn' state inp]
+  (when (get-in defn' [:safety :confirm])
+    (let [sentence (sentence-of defn' state)]
+      (when (not= sentence (:acknowledge inp))
+        (str "`" (name (:name defn')) "` is a confirm door, and it takes its consequence sentence at scheduling as it does on an invoke. Send `acknowledge` exactly as written: "
+             sentence)))))
+
+(defn- input-problem
+  "What the door's input schema refuses in a stored input, as one
+  sentence, or nil. Read under `expect_state`, where the door itself
+  cannot be rehearsed."
+  [defn' input]
+  (let [model (:input defn')
+        errors (if model
+                 (schema/closed-errors
+                  model (schema/apply-defaults model (schema/decode model (or input {}))))
+                 (when (seq input) input))
+        named #(if (instance? clojure.lang.Named %) (name %) (str %))]
+    (when (seq errors)
+      (str "the input does not fit `" (name (:name defn')) "`; look at "
+           (str/join ", " (map #(str "`" (named (key %)) "`") errors)) "."))))
+
+(defn- rehearse!
+  "R-3.1: the call, rehearsed as the scheduler under the grant it wears.
+  The door's own refusal is thrown as the door wrote it, unless it is a
+  guard the scheduler named in `expect_refusals` (R-3.2)."
+  [{:keys [kind action id]} inp ctx]
+  (let [expected (set (:expect_refusals inp))
+        accepted (into #{} (map keyword) (:acknowledge_warnings inp))]
+    (try
+      ((:rehearse ctx) kind id action (or (:input inp) {}) {:acknowledged accepted})
+      (catch clojure.lang.ExceptionInfo e
+        (let [{:keys [guard] :as d} (ex-data e)]
+          (when-not (and (= :guard-refused (:waymark10/problem d))
+                         guard
+                         (contains? expected (name guard)))
+            (throw e)))))))
+
+(defn- refused-now
+  "The scheduling check. Answers the sentence of a refusal this kind
+  writes, or nil; throws the door's own refusal."
+  [inp ctx]
+  (let [{:keys [problem kind action id] defn' :defn :as door} (door-of (:target inp) ctx)
+        row (when (and id (nil? problem))
+              (when-some [read (:read ctx)] (read kind id)))
+        named (some-> (:expect_state inp) str not-empty keyword)
+        ;; R-3.2: a state is expected only when the row is not in it now
+        expect (when (and named (not= named (:state row))) named)]
+    (cond
+      problem problem
+
+      (and expect (nil? id))
+      "a create has no row, so there is no state to expect. Leave `expect_state` out."
+
+      ;; no guard is judged against a row in the wrong state: the schema
+      ;; and the declared from-state are all that can be read honestly
+      (and expect row)
+      (cond
+        (= "strict" (:validity inp))
+        (str "`strict` pins the row's version, and a row that has not reached `"
+             (name expect) "` has no version to pin. Schedule this under `state`.")
+
+        (not (contains? (:from defn') expect))
+        (str "`" (name action) "` is not declared from `" (name expect) "`; it leaves "
+             (str/join ", " (map #(str "`" (name %) "`") (sort (:from defn')))) ".")
+
+        :else (or (input-problem defn' (:input inp))
+                  (confirm-problem defn' expect inp)))
+
+      :else (do (rehearse! door inp ctx)
+                (when row (confirm-problem defn' (:state row) inp))))))
+
+(g/defguard the-door-would-take-it
+  {:reads [:principal :grant :storage]
+   :vars [:problem]
+   :explain "A scheduled action is checked against its door when it is scheduled: {problem}"}
+  [_row inp ctx]
+  (if-some [problem (when (and (:rehearse ctx) (map? (:target inp)))
+                      (refused-now inp ctx))]
+    (t/deny {:vars {:problem problem}})
+    (t/allow)))
+
+(defn- snapshot-of
+  "What the target was when this was scheduled (R-1): the row's version,
+  state and law revision. Under `expect_state` it is the expected state
+  and no version, because a row that has not got there has none to pin
+  (R-3.2). A create has no row, and keeps the law a birth would be
+  stamped by now (R-2.4)."
+  [data ctx]
+  (let [{:keys [problem kind id]} (door-of (:target data) ctx)
+        row (when (and id (nil? problem))
+              (when-some [read (:read ctx)] (read kind id)))
+        at (some-> (:state row) name)
+        named (some-> (:expect_state data) str not-empty)
+        expect (when (and row (not= named at)) named)
+        law (cond
+              row (:law-revision row)
+              (and (nil? id) (nil? problem)) (when-some [law-of (:law-of ctx)]
+                                               (law-of kind)))]
+    (not-empty
+     (into {} (filter (comp some? val))
+           {:version (when-not expect (:version row))
+            :state (or expect at)
+            :law_revision (some-> law str)}))))
+
 ;; ── handlers ────────────────────────────────────────────────────────
 
 (defn- born
   "The birth stamps, read from the principal and never from the body:
   who scheduled it, who the run runs as, and the id of the grant it
   wore. `run_at` becomes the instant the body named, in whole minutes,
-  and `zone` the zone it is shown in."
+  and `zone` the zone it is shown in. `snapshot` is the target as the
+  scheduling check met it."
   [row ctx]
   (let [p (:principal ctx)
         {:keys [instant zone]} (time-of nil (:data row) ctx)
         acts-for (some-> (:acts-for p) str not-empty)
-        grant (some-> (get-in ctx [:grant :id]) str not-empty)]
+        grant (some-> (get-in ctx [:grant :id]) str not-empty)
+        snapshot (snapshot-of (:data row) ctx)]
     (update row :data
             #(cond-> (assoc %
                             :scheduler (str (:id p))
@@ -234,7 +407,8 @@
                                        acts-for (assoc :acts_for acts-for))
                             :run_at instant
                             :zone zone)
-               grant (assoc :grant grant)))))
+               grant (assoc :grant grant)
+               snapshot (assoc :snapshot snapshot)))))
 
 (defhandler move-time [row inp ctx]
   (let [{:keys [instant zone]} (time-of row inp ctx)]
@@ -439,7 +613,7 @@
    :default-filters {:state "scheduled"}
    :create-guards [the-target-is-an-engine-door the-rule-is-built the-input-fits
                    the-time-names-one-instant the-time-is-in-range
-                   the-scheduler-has-room]
+                   the-scheduler-has-room the-door-would-take-it]
    :on-create born
    :actions
    {:reschedule
@@ -475,6 +649,8 @@
    :deviations
    ["R-1 draws `proposed` and `arm`. They are child 4's (approval at scheduling) and are not declared here, so a row is always born `scheduled` and `cancel` leaves from `scheduled` alone."
     "R-1 says `input` is capped as held_calls/capped caps. A cut input is a different call, so an input over the same 16 KB ceiling is refused at scheduling with a sentence and never stored cut."
-    "R-1 lists `snapshot`, `expect_state`, `expect_refusals`, `acknowledge` and `acknowledge_warnings`. The fields are declared and stored; the scheduling check that reads them and writes the snapshot is child 1b's."
+    "R-1 lists `etag` in the snapshot. An etag is spelled from the kind, the id and the version, so the snapshot keeps `version` and a reader spells the etag from it."
+    "R-1 says `reschedule` runs the scheduling check again. It does not yet: the check runs at the create, and a moved row meets its door at the run."
+    "R-3.1 asks a confirm door for its sentence. The sentence is asked of a row's door; a create target is rehearsed in full and asked for none."
     "R-6.2 says the summary is `outcome_why` after an ending. A summary is one template, so the line stays `{target} · {run_at} · {state}` and the sentence is read from the field."
     "R-7.2 states the zone rules for `at`. The same rules are applied here to `run_at` on the create and on `reschedule`, and an instant written with an offset and no zone anywhere is shown in that offset."]})
