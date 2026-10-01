@@ -140,7 +140,12 @@
           self (:self body)]
       (when (reportable-self? eng req presence/normalize-self self)
         (presence/report! reg (router/principal-of req) self
-                          (reportable-ui eng req (:ui body))))
+                          (reportable-ui eng req (:ui body))
+                          ;; a person recording their own screen: this
+                          ;; beat's frames go to their self walk
+                          (:presence (walks/self-recorder
+                                      eng (router/principal-of req)
+                                      (router/visibility-of req)))))
       {:status 204 :headers {}})))
 
 (defn- intents-registry

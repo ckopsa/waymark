@@ -309,7 +309,10 @@
     (seats/count-correction! eng kind
                              (or (get-in result [:transition :resource-id])
                                  (get-in result [:row :id]))))
-  result)
+  ;; a person recording their own screen has this write put in their
+  ;; walk, under this request's sight (walks/record-own!,
+  ;; spec-guided-follow § 4); it answers the result it was handed
+  (walks/record-own! eng (principal-of req) (visibility-of req) result))
 
 ;; ── the visibility checks (phase 9a, concealment) ───────────────────
 
