@@ -18,6 +18,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
+            [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.members :as members]
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
@@ -122,6 +123,45 @@
   (testing "with the clone's wall"
     (is (= [[::eng "demo" {:wall-url "http://wall.test"}]]
            (booted #(seed-on-boot! ::eng "demo" "1" "http://wall.test"))))))
+
+;; ── the gate row's boot step ────────────────────────────────────────
+
+(def ^:private gate-row-on-boot! @#'main/gate-row-on-boot!)
+
+(defn- gate-rows-asked
+  "What `mcp-servers/ensure-gate-row!` was called with while `f` ran: a
+  vector of [engine opts] pairs, no row ever made."
+  [f]
+  (let [calls (atom [])]
+    (with-redefs [mcp-servers/ensure-gate-row! (fn [eng opts]
+                                                 (swap! calls conj [eng opts])
+                                                 nil)]
+      (f))
+    @calls))
+
+(deftest a-seeded-boot-makes-no-gate-row
+  (testing "whatever the gate url says"
+    (doseq [url [nil "" "http://gate.test/mcp/"]]
+      (is (= [] (gate-rows-asked #(gate-row-on-boot! ::eng url "demo")))
+          (pr-str url))))
+  (testing "on an engine with the kind: no row named gate afterwards"
+    (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})]
+      (is (nil? (gate-row-on-boot! eng "http://gate.test/mcp/" "demo")))
+      (is (not-any? #(= "gate" (get-in % [:data :name]))
+                    (dev/rows eng :mcp_server))))))
+
+(deftest an-unseeded-boot-makes-the-gate-row-at-the-url-named
+  (testing "with no url named, none"
+    (doseq [url [nil ""]
+            seed [nil ""]]
+      (is (= [] (gate-rows-asked #(gate-row-on-boot! ::eng url seed)))
+          (pr-str [url seed]))))
+  (testing "with a url"
+    (doseq [seed [nil ""]]
+      (is (= [[::eng {:url "http://gate.test/mcp/"}]]
+             (gate-rows-asked
+              #(gate-row-on-boot! ::eng "http://gate.test/mcp/" seed)))
+          (pr-str seed)))))
 
 ;; ── allowing the seeded held call (§ 4) ─────────────────────────────
 
