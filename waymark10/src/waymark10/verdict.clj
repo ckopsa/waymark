@@ -452,6 +452,22 @@
 
 ;; ── the hands ───────────────────────────────────────────────────────
 
+(defn- subject-head-of
+  "The commit the subject stands at as it is judged — its `head_sha`,
+  the field a change carries (factory10) — or nil for a subject that
+  carries none, or when no read is in scope. The verdict keeps it as
+  `subject_head`: an answer about one commit, so the subject's next
+  head can reopen it (factory10.resources.change)."
+  [row ctx]
+  (let [read' (:read ctx)
+        k (some-> (get-in row [:data :subject_kind]) str str/trim not-empty)
+        sid (some-> (get-in row [:data :subject_id]) str str/trim not-empty)
+        kind (when k (if-some [rdef-of (:rdef-of ctx)]
+                       (:kind (rdef-of k))
+                       (keyword k)))]
+    (when (and read' kind sid)
+      (some-> (read' kind sid) (get-in [:data :head_sha]) str str/trim not-empty))))
+
 (defhandler stamp-and-overrule
   [row ctx]
   ;; TWO THINGS, and the second is what makes a correction a
@@ -463,10 +479,14 @@
   ;; A correction an agent's person allowed is the PERSON's: the replay
   ;; runs as the agent, and the held call names who tapped Allow, so
   ;; R-3's count of corrections keeps measuring what it measured.
+  ;; A third: the head the subject stood at, when it carries one (see
+  ;; `subject-head-of`), so a later head can take this answer back.
   (let [allowed (holds/allowed-hold ctx verdict-kind :judge nil)
-        row (assoc-in row [:data :said_by]
-                      (or (some-> (get-in allowed [:data :decided_by]) str not-empty)
-                          (:id (:principal ctx))))
+        head (subject-head-of row ctx)
+        row (cond-> (assoc-in row [:data :said_by]
+                              (or (some-> (get-in allowed [:data :decided_by]) str not-empty)
+                                  (:id (:principal ctx))))
+              head (assoc-in [:data :subject_head] head))
         cited (some-> (get-in row [:data :corrects]) str str/trim not-empty)]
     (when (and cited (:invoke ctx))
       ((:invoke ctx) verdict-kind cited :overrule nil))
@@ -556,6 +576,11 @@
    {:x-display
     {:label "Why it was reopened"
      :help "The one sentence the reopener gave for putting the subject back in the judgment's queue."}}
+   :subject_head
+   {:x-display
+    {:raw true
+     :label "Judged at"
+     :help "The commit the subject stood at when this was said, for a subject that has one. A new head on the subject reopens this verdict, because it judged code the subject no longer holds."}}
    :corrects
    {:x-display
     {:label "Corrects"
@@ -619,7 +644,11 @@
     (entry :reopened_by {:optional true :filter #{:eq}
                          :x-ref {:principal true}}
            [:maybe [:string {:max 128}]])
-    (entry :reopen_note {:optional true} [:maybe [:string {:max 240}]])]
+    (entry :reopen_note {:optional true} [:maybe [:string {:max 240}]])
+    ;; written by the judge's own hand from the subject, never a body's
+    ;; (`subject-head-of`) — not in the create model either
+    (entry :subject_head {:optional true :filter #{:eq}}
+           [:maybe [:string {:max 64}]])]
    ;; :said_by is NOT in the create model, and that is the difference
    ;; from `verdict_reason`'s deliberate redundancy. There the field is
    ;; declared so a body naming somebody else can be refused by NAME;
