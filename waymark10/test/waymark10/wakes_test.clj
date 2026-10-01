@@ -2042,6 +2042,164 @@
           (is (nil? (get-in (sched-of seat) [:data :wake_text]))))
         (seat-do! seat :retire)))))
 
+;; ── more than one wake waiting out one grace ────────────────────────
+;;
+;; `wake_text` held one string, so a second fire deferred in the same
+;; grace took the first's words, and a text beside a waiting wake of no
+;; text turned that queue walk into a one-row run. Each waiting text now
+;; goes out as its own run, the wake of no text as its own fire, and the
+;; schedule row says that a fire waits and until when (ticket 58573175).
+
+(deftest two-fires-deferred-in-one-grace-each-go-out-with-their-own-text
+  (let [fn' :fire-grace-two-fires
+        _ (drain-fires! fn')
+        one (item! "grace-two")
+        two (item! "grace-two")
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))
+        text-one (str "Walk " one " again.")
+        text-two (str "Walk " two " again.")]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "gracetwo"
+                          {:walk "wake_item"
+                           :scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                    :filter {:batch "grace-two"}}]}
+                          fn')
+            closed (sitting! seat)]
+        (close-sitting! closed)
+        (walked-and-ended! closed [one two] t0)
+        (drain-fires! fn')
+
+        (testing "two fires inside the grace send nothing, and both texts
+                  wait, each one time"
+          (at 10)
+          (fire-with! seat text-one)
+          (drain-fires! fn')
+          (at 20)
+          (fire-with! seat text-two)
+          (fire-with! seat text-two)
+          (drain-fires! fn')
+          (is (empty? (fires-of token)))
+          (is (= [text-one text-two]
+                 (vec (get-in (sched-of seat) [:data :wake_texts]))))
+          (is (not (get-in (sched-of seat) [:data :wake_textless])))
+          (is (= (.plusSeconds t0 120) (due-of seat))))
+
+        (testing "when the grace lifts each goes out as its own run, with
+                  its own text"
+          (at 121)
+          (wakes/tick! *eng*)
+          (drain-fires! fn')
+          (is (= [text-one text-two]
+                 (mapv #(get-in % [:inputs :text])
+                       (take-last 2 (seat-fires seat)))))
+          (let [fs (fires-of token)]
+            (is (= 2 (count fs)))
+            (is (clojure.string/includes? (str (:text (first fs))) (str one)))
+            (is (clojure.string/includes? (str (:text (second fs))) (str two))))
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (nil? (get-in (sched-of seat) [:data :wake_texts])))
+          (is (nil? (get-in (sched-of seat) [:data :wake_text]))))
+        (seat-do! seat :retire)))))
+
+(deftest a-damped-wake-of-no-text-still-fires-textless-beside-a-deferred-text
+  (let [wn :wake-grace-textless
+        fn' :wake-grace-textless-fires
+        _ (drain-fires! fn')
+        item (item! "grace-textless")
+        _ (drain-wakes! wn)
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))
+        text (str "Walk " item " again.")]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "gracetextless"
+                          {:walk "wake_item"
+                           :scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                    :filter {:batch "grace-textless"}}]
+                           :wake_on [{:kind "wake_item" :actions ["touch"]
+                                      :filter {:batch "grace-textless"}}]}
+                          fn')
+            open (sitting! seat)]
+        (testing "a match under an open sitting is damped: it waits, with
+                  no text"
+          (item-do! item :touch)
+          (drain-wakes! wn)
+          (is (empty? (seat-fires seat)))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+          (is (empty? (sch/waiting-texts (:data (sched-of seat))))))
+
+        (testing "the sitting closes having walked the row: the wake waits
+                  for the grace"
+          (close-sitting! open)
+          (walked-and-ended! open [item] t0)
+          (drain-wakes! wn)
+          (is (empty? (seat-fires seat)))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+        (testing "a fire naming the held row waits beside it, and the wake
+                  of no text is kept as its own"
+          (at 10)
+          (fire-with! seat text)
+          (drain-fires! fn')
+          (is (empty? (fires-of token)))
+          (is (= [text] (vec (get-in (sched-of seat) [:data :wake_texts]))))
+          (is (true? (get-in (sched-of seat) [:data :wake_textless]))))
+
+        (testing "when the grace lifts two runs start: the fire's text, and
+                  the queue walk with none"
+          (at 121)
+          (wakes/tick! *eng*)
+          (drain-fires! fn')
+          (is (= [text nil]
+                 (mapv #(get-in % [:inputs :text])
+                       (take-last 2 (seat-fires seat)))))
+          (is (= 2 (count (fires-of token))))
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (not (get-in (sched-of seat) [:data :wake_textless]))))
+        (seat-do! seat :retire)))))
+
+(deftest a-deferred-fire-says-on-the-schedule-row-that-it-waits
+  (let [fn' :fire-grace-note-fires
+        _ (drain-fires! fn')
+        item (item! "grace-note")
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))
+        text (str "Walk " item " again.")]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "gracenote"
+                          {:walk "wake_item"
+                           :scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                    :filter {:batch "grace-note"}}]}
+                          fn')
+            closed (sitting! seat)]
+        (close-sitting! closed)
+        (walked-and-ended! closed [item] t0)
+        (drain-fires! fn')
+
+        (testing "a person's fire that waits leaves a note that says so,
+                  and until when"
+          (at 10)
+          (fire-with! seat text)
+          (drain-fires! fn')
+          (is (empty? (fires-of token)))
+          (let [note (str (get-in (sched-of seat) [:data :note]))]
+            (is (clojure.string/starts-with? note "Waiting for "))
+            (is (clojure.string/includes? note (str (.plusSeconds t0 120))))))
+
+        (testing "the note is cleared when the fire goes out"
+          (at 121)
+          (wakes/tick! *eng*)
+          (drain-fires! fn')
+          (is (= 1 (count (fires-of token))))
+          (is (nil? (get-in (sched-of seat) [:data :note]))))
+        (seat-do! seat :retire)))))
+
 (deftest a-fire-naming-a-free-row-starts-at-once
   (let [fn' :fire-free-fires
         _ (drain-fires! fn')
