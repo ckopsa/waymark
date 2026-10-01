@@ -1127,7 +1127,8 @@
               (:law-revision row) (assoc :law-revision (:law-revision row)))})))
 
 (defn envelope-summary
-  "Depth summary: the full envelope minus data AND parts — state,
+  "Depth summary: the full envelope minus data, parts AND refs (a ref
+  label names a data field, so it leaves with data) — state,
   summary, fields (the bounded grid-column projection — envelope
   only ever dissocs \"data\"/\"parts\" here, so fields rides through
   unchanged), the COMPLETE actions/unavailable partition, links and
@@ -1137,4 +1138,4 @@
   [rdef row ctx-opts]
   (if (= :none (:rows ctx-opts))
     (envelope-stub rdef row ctx-opts)
-    (dissoc (envelope rdef row ctx-opts) "data" "parts")))
+    (dissoc (envelope rdef row ctx-opts) "data" "parts" "refs")))

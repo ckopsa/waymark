@@ -258,9 +258,11 @@
   :fields (the bounded grid-column projection of :data — every
   vector/prose field excluded) is always present, full depth or
   summary alike, so it joins the base set rather than riding as
-  optional. :parts (batch A) and :display (DX round 3 — the resolved
+  optional. :parts (batch A), :display (DX round 3 — the resolved
   page-title advertisement, carried only by kinds that declare one)
-  are reserved-but-optional, so the shape check tolerates their
+  and :refs (the per-field {href, summary} of each plain :kind ref
+  the reader's grant admits, carried only by a row GET that holds
+  one) are reserved-but-optional, so the shape check tolerates their
   absence; parts' co-conspirators are refused via the parts
   obligations below."
   #{:waymark :kind :self :state :summary :data :fields :actions
@@ -288,10 +290,10 @@
         etag (:etag m)
         summary (:summary env)]
     (cond-> []
-      (not= envelope-keys (disj (set (keys env)) :parts :display))
+      (not= envelope-keys (disj (set (keys env)) :parts :display :refs))
       (conj (str where ": envelope keys " (vec (sort (keys env)))
                  " are not exactly the reserved " (vec (sort envelope-keys))
-                 " (+ optional :parts/:display)"))
+                 " (+ optional :parts/:display/:refs)"))
 
       (not= "10" (:waymark env))
       (conj (str where ": waymark is " (pr-str (:waymark env)) ", not \"10\""))
