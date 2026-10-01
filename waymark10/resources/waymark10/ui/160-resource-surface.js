@@ -168,6 +168,7 @@ async function renderResource(view, doc, hints) {
         : "The plan — what apply would do"),
       worksheetReport(doc)));
   view.append(...partsSections(doc));
+  if (kind !== "scheduled_action") view.append(scheduledSection(doc));
   const dataPanel = el("div", {class:"panel"},
     el("details", {open:""},
       el("summary", {class:"muted"}, "Data"),
@@ -181,6 +182,60 @@ async function renderResource(view, doc, hints) {
   view.append(dataPanel);
   watchScope({self: doc.self});
   paintPresence();
+}
+
+/* ── a row's pending scheduled actions (docs/spec-scheduled-actions.md
+   R-7.3): the calls waiting on this row, each with its reschedule and
+   cancel doors. The kind filters by state and by scheduler, not by
+   target, so the page reads the viewer's pending rows — the own
+   surface answers them, and one scheduler holds at most 100 — and
+   keeps the ones aimed at this row. The panel stays hidden while there
+   are none, and for a viewer the collection does not answer. ──────── */
+const VALIDITY_WORDS = {strict: "only if nothing about it changes",
+                        state: "as long as its state holds",
+                        conditions: "only if its conditions hold"};
+function scheduledSection(doc) {
+  const box = el("div", {class: "panel", "data-scheduled": "",
+                         style: "display:none"});
+  const id = doc.self.split("?")[0].split("/").pop();
+  api("/api/scheduled_actions?state=scheduled&page%5Bsize%5D=100").then(res => {
+    const mine = ((res.ok && (res.body || {}).items) || []).filter(item => {
+      const t = (item.fields || {}).target || {};
+      return t.kind === doc.kind && t.id === id;
+    });
+    if (!mine.length) return;
+    box.append(el("h3", {}, "Scheduled"));
+    for (const item of mine) {
+      const f = item.fields || {}, acts = item.actions || {};
+      const conds = Object.entries(f.conditions || {})
+        .map(([k, v]) => `${k}=${v}`).join(", ");
+      /* the time as this viewer's clock reads it, the way the picker
+         that wrote it did */
+      const at = localStamp(f.run_at);
+      box.append(el("div", {class: "actions", "data-scheduled-row": item.self},
+        el("a", {href: "#" + item.self}, `${pretty(f.target.action)} · ${at}`),
+        el("span", {class: "muted"},
+          ` ${VALIDITY_WORDS[f.validity] || f.validity || ""}` +
+          (conds ? ` (${conds})` : "")),
+        acts.reschedule
+          ? el("button", {"data-scheduled-reschedule": "", onclick: () =>
+              actionDialog({name: "reschedule", entry: acts.reschedule, doc: item,
+                prefill: {run_at: at.replace(" ", "T"),
+                          zone: Intl.DateTimeFormat().resolvedOptions().timeZone},
+                onDone: () => render()})}, "Reschedule")
+          : null,
+        acts.cancel
+          ? el("button", {class: "danger", "data-scheduled-cancel": "",
+              onclick: async () => {
+                const res = await invokeBare(acts.cancel, item);
+                if (res.ok) { toast("Cancelled"); render(); }
+                else box.append(problemBox(res.body));
+              }}, "Cancel")
+          : null));
+    }
+    box.style.display = "";
+  }).catch(() => {});
+  return box;
 }
 
 /* ── the surface screen: the composed decision view (wire 10 shape:
