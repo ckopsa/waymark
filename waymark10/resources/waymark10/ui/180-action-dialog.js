@@ -26,6 +26,9 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
      (waymark-iqa.7). */
   const idemKey = callerKey || (safety.idempotent ? null : uuid());
   let acknowledged = [];
+  /* an invitation a walkthrough opened (docs/spec-walkthrough.md §5):
+     {id, step, of, title}, and null for one that stands alone */
+  const led = (invitation && invitation.walkthrough) || null;
 
   /* drafts: half-written effort is server state. Wire 10: GET 404s
      until something was saved and answers {values, base_version,
@@ -113,6 +116,10 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         (safety.fence ? " · fenced (If-Match)" : "") +
         (safety.idempotent ? "" : " · idempotency-key attached"))),
     el("div", {class: "dlgbody"},
+      /* how far along the walkthrough is, above the form */
+      led ? el("p", {class: "walk-step", "data-walk-step": ""},
+                 stepLine(led.step, led.of, led.title))
+          : null,
       safety.confirm
         ? el("div", {class: "consequence"},
             el("b", {}, "Confirm: "),
@@ -134,8 +141,11 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         ? el("button", {onclick: () => check()}, "Check") : null,
       invitation && (invitation.doc.actions || {}).decline
         ? el("button", {class: "danger", "data-invite-decline": "",
-                        onclick: () => declineInvitation()}, "Decline")
+                        onclick: () => declineInvitation()},
+            led ? "Skip" : "Decline")
         : null,
+      led ? el("button", {"data-walk-stop": "", onclick: () => stopLed()}, "Stop")
+          : null,
       el("button", {onclick: () => closeDlg()}, "Cancel"),
       laterable
         ? el("button", {"data-later": "", onclick: () => openLater()},
@@ -406,7 +416,23 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     if (!res.ok) { showErrors(res.body); return; }
     disarmDraft();
     closeDlg();
-    toast("Declined");
+    toast(led ? "Skipped" : "Declined");
+    onDone && onDone(res.body);
+  }
+  /* Stop pauses the whole walkthrough, through its own stop door; the
+     engine takes the open invitation back */
+  async function stopLed() {
+    const row = await api("/api/walkthroughs/" + encodeURIComponent(led.id));
+    const stop = row.ok && (row.body.actions || {}).stop;
+    if (!stop) {
+      toast("Stop is not open to you on this walkthrough right now");
+      return;
+    }
+    const res = await invokeBare(stop, row.body);
+    if (!res.ok) { showErrors(res.body); return; }
+    disarmDraft();
+    closeDlg();
+    toast("Stopped");
     onDone && onDone(res.body);
   }
   async function submit() {
@@ -618,6 +644,10 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   if (invitation)
     markInvited(form, invitation.fields
       || (invitation.field ? [invitation.field] : []), invitation.note);
+  /* a walkthrough's step says how far along it is, above the form */
+  if (invitation && invitation.step && invitation.of)
+    form.prepend(el("p", {class: "invite-step", "data-invite-step": ""},
+      `Step ${invitation.step} of ${invitation.of}`));
 }
 /* a note and the fields it points at: an invitation's note in the
    invited person's dialog, and a replayed caption's beside its field
@@ -702,7 +732,8 @@ async function openInvitation(inv) {
   actionDialog({name: d.action, entry, doc: target, suggest: d.suggest || {},
                 /* a row born before `fields` holds `field` alone */
                 invitation: {doc: inv, note: d.note,
-                             fields: d.fields || (d.field ? [d.field] : [])},
+                             fields: d.fields || (d.field ? [d.field] : []),
+                             walkthrough: d.walkthrough ? ledStep(d) : null},
                 onDone: () => render()});
 }
 

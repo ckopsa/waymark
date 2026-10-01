@@ -79,12 +79,13 @@
 
 (deftest a-draft-is-groomed-by-a-person-and-never-by-a-seat
   (testing "a person at a draft meets groom, and the doors that shape it"
-    (is (= #{:restate :groom :block :complete :drop :merge_after_draft}
+    (is (= #{:restate :groom :block :complete :drop :merge_after_draft
+             :reparent_draft}
            (offers (at :draft) (ctx the-person)))
         "prioritize and defer are absent: a draft is not in the queue,
          so it has no rank there and nothing to park"))
   (testing "a seat at a draft meets everything but groom"
-    (is (= #{:restate :block :complete :drop :merge_after_draft}
+    (is (= #{:restate :block :complete :drop :merge_after_draft :reparent_draft}
            (offers (at :draft) (ctx the-seat)))
         "a seat that could groom could fill its own queue")
     (let [shut (refusal (at :draft) (ctx the-seat) :groom)]
@@ -100,23 +101,25 @@
 
 (deftest an-open-ticket-is-the-queue-and-offers-every-working-door
   (testing "a seat at an open ticket meets the doors that end or park it"
-    (is (= #{:prioritize :block :defer :complete :drop :merge_after}
+    (is (= #{:prioritize :block :defer :complete :drop :merge_after :reparent}
            (offers (at :open) (ctx the-seat)))
         "restate is absent — a groomed statement is what the seat builds
          — and reopen, unblock and resume are absent — nothing ended it
          and nothing holds it"))
   (testing "a person meets the same doors and the way back to draft"
-    (is (= #{:prioritize :block :defer :complete :drop :ungroom :merge_after}
+    (is (= #{:prioritize :block :defer :complete :drop :ungroom :merge_after
+             :reparent}
            (offers (at :open) (ctx the-person)))
         "what a seat may reach at all is the grant's question, not this
          kind's; ungroom is the one door here that is a person's")))
 
 (deftest a-blocked-ticket-is-out-of-the-queue-and-waits
   (let [row (at :blocked {:blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]})]
-    (is (= #{:block :unblock :merge_after_blocked} (offers row (ctx the-person)))
-        "restate the blockers, clear them, or state what it merges after
-         — nothing else, because a blocked ticket is not worked and not
-         ended")
+    (is (= #{:block :unblock :merge_after_blocked :reparent_blocked}
+           (offers row (ctx the-person)))
+        "restate the blockers, clear them, state what it merges after or
+         what it is a piece of — nothing else, because a blocked ticket
+         is not worked and not ended")
     (let [shut (refusal row (ctx the-person) :complete)]
       (is (= :unavailable (:status shut)))
       (is (nil? (:denier shut))
@@ -283,6 +286,68 @@
         (is (= :deny (judge-parent "P")) "a parent below the ticket it waits on")
         (is (= :allow (judge-parent "U")))
         (is (= :allow (judge-parent nil)))))))
+
+(deftest a-ticket-is-re-parented-under-the-parent-walls
+  ;; ticket 03658863: `parent` was a birth field alone, so its walls
+  ;; never judged a write at the wire
+  (let [rows {"G" (at :open {} "G")
+              "P" (at :open {:parent "G"} "P")
+              "C" (at :blocked {:parent "P" :blocked_by ["B"]} "C")
+              "K" (at :open {:parent "C"} "K")
+              "B" (at :open {} "B")
+              "BK" (at :open {:parent "B"} "BK")
+              "U" (at :open {} "U")
+              "E" (at :done {:close_reason "done"} "E")}
+        row (get rows "C")
+        door (get (:actions ticket) :reparent_blocked)
+        c (ctx the-person rows)
+        ;; the door's guards in its order, as the door will judge them:
+        ;; the first that denies, by name, with what it said
+        judge (fn [parent]
+                (or (some (fn [guard]
+                            (let [[v _] (g/evaluate guard row {:parent parent} c)]
+                              (when (= :deny (:verdict v))
+                                {:verdict :deny
+                                 :guard (:name guard)
+                                 :said (pr-str v)})))
+                          (:guards door))
+                    {:verdict :allow}))
+        moved (fn [parent]
+                (get-in ((:handler door) row {:parent parent} c) [:data :parent]))]
+    (testing "each waiting state has the door, with the same walls"
+      (doseq [[action state] {:reparent :open
+                              :reparent_draft :draft
+                              :reparent_blocked :blocked}]
+        (let [a (get (:actions ticket) action)]
+          (is (= #{state} (:from a)))
+          (is (= state (:to a)) "a self-loop: the parent moves, the state does not")
+          (is (= (:guards door) (:guards a)))
+          (is (true? (:record a))
+              "the transition keeps the old parent beside the new one"))))
+    (testing "re-parenting to an open ticket works"
+      (is (= :allow (:verdict (judge "U"))))
+      (is (= "U" (moved "U"))))
+    (testing "to a ticket this one is blocked by, or one under it, refuses"
+      (let [v (judge "B")]
+        (is (= :deny (:verdict v)))
+        (is (= :the-parent-is-not-waited-on (:guard v)))
+        (is (re-find #"B is this ticket's parent" (:said v))))
+      (let [v (judge "BK")]
+        (is (= :the-parent-is-not-waited-on (:guard v)))
+        (is (re-find #"B is an ancestor of this ticket" (:said v)))))
+    (testing "to one of its own descendants, or to itself, refuses"
+      (let [v (judge "K")]
+        (is (= :deny (:verdict v)))
+        (is (= :the-parent-is-not-below-it (:guard v)))
+        (is (re-find #"K is under this ticket" (:said v))))
+      (let [v (judge "C")]
+        (is (= :the-parent-is-not-below-it (:guard v)))
+        (is (re-find #"this ticket names itself" (:said v)))))
+    (testing "to a ticket that has ended refuses, as a birth under it does"
+      (is (= :the-parent-is-open-at-birth (:guard (judge "E")))))
+    (testing "clearing the parent works"
+      (is (= :allow (:verdict (judge nil))))
+      (is (nil? (moved nil))))))
 
 (deftest a-child-is-born-under-an-open-parent
   (let [rows {"P-open" (at :open {} "P-open")
