@@ -42,6 +42,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.resources.ticket :as tk]
             [factory10.sources.forge :as forge]
             [waymark10.holds :as holds]
             [waymark10.resource :as r]
@@ -3660,7 +3661,8 @@
         "the ticket's move put the pull request back under review")
     (is (zero? (long (get-in row [:data :rounds]))))
     (is (nil? (get-in row [:data :failing_checks])))
-    (is (= "open" (ticket-state w)))
+    (is (= "in_review" (ticket-state w))
+        "and its follow-up sent the ticket out for review with it")
     (mirror-moves-change! w :fail a-conflict)
     (let [row (first (changes-of (:eng w)))]
       (is (= "failing" (name (:state row)))
@@ -3696,8 +3698,10 @@
     (back-under-review-and-red? w)))
 
 (deftest a-groomed-ticket-whose-pull-request-is-back-under-review-is-not-walked
-  ;; ticket 6ca380da: the groom leaves the ticket open beside a submitted
-  ;; change, and neither the plain walk nor the fire naming it hands it
+  ;; ticket 6ca380da, and 7e01dbe5 after it: the groom's follow-up sends
+  ;; the ticket out for review behind its submitted change, so the plain
+  ;; walk leaves it out. A ticket left OPEN beside that change is still
+  ;; handed by neither the plain walk nor the fire naming it
   (let [w (ticket-world)
         ticket-id (str (:id (:ticket w)))
         url (do (stalled-with-a-pull-request! w 95)
@@ -3712,11 +3716,15 @@
                        (doc-of (call! (:h w) (:sid w) "waymark_sit"
                                       {:key k :seat "bench-seat"}))))]
     (is (= "submitted" (change-state w)))
-    (is (= "open" (ticket-state w)))
+    (is (= "in_review" (ticket-state w)))
     (testing "the plain walk leaves it out"
       (is (empty? (get-in (sit-again! w) [:walk :rows]))))
-    (testing "the fire naming it leaves it out too"
-      (is (empty? (get-in (sit-fired!) [:walk :rows]))))
+    (testing "left open beside its submitted change, the sit's skip holds"
+      (force-ticket-state! w :open)
+      (is (empty? (get-in (sit-again! w) [:walk :rows])))
+      (is (empty? (get-in (sit-fired!) [:walk :rows]))
+          "the fire naming it leaves it out too")
+      (force-ticket-state! w :in_review))
     (testing "a red head hands it back with its feedback"
       (mirror-moves-change! w :fail a-conflict)
       (let [answer (sit-again! w)]
@@ -3728,6 +3736,88 @@
       (is (= "done" (ticket-state w)))
       (is (= (str "Merged: " url ".")
              (get-in (ticket-row w) [:data :close_reason]))))))
+
+;; ── the ticket follows its pull request back under review (ticket 7e01dbe5)
+;;
+;; The groom's own landing is `open`. Its handler queues `rejoin_review`
+;; through ctx :follow-up, and the engine walks that door after the
+;; groom commits, so the ticket reads in_review when the call returns.
+
+(deftest a-groom-that-reworks-a-pull-request-lands-its-ticket-in-review
+  (let [w (ticket-world)
+        _ (stalled-with-a-pull-request! w 96)
+        res (person-moves-ticket! w :groom)]
+    (is (= [{:kind :ticket :id (str (:id (:ticket w))) :action :rejoin_review}]
+           (mapv #(select-keys % [:kind :id :action]) (:followed res)))
+        "the groom queued one follow-up, the ticket's own move")
+    (is (every? :res (:followed res)) "and its door let it through")
+    (is (= "submitted" (change-state w)))
+    (is (= "in_review" (ticket-state w))
+        "the ticket is out for review once the groom returns")
+    (is (= :rejoin_review (:action (last-ticket-move w))))))
+
+(deftest a-groom-with-no-pull-request-behind-it-lands-open
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        res (person-moves-ticket! w :groom)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (empty? (:followed res)) "no pull request, so nothing is queued")
+    (is (= "open" (change-state w)))
+    (is (= "open" (ticket-state w)) "the seat builds it again, as before")))
+
+(deftest a-refused-follow-up-leaves-the-groom-standing
+  (let [w (ticket-world)
+        _ (stalled-with-a-pull-request! w 97)
+        born @#'tk/changes-born-from
+        res (with-redefs-fn
+              ;; the follow-up's guard finds no submitted change, so its
+              ;; door refuses; the groom's own read of the stuck one stands
+              {#'tk/changes-born-from
+               (fn [row states find']
+                 (when-not (= ["submitted"] states)
+                   (born row states find')))}
+              #(person-moves-ticket! w :groom))]
+    (is (string? (:refused (first (:followed res))))
+        "the follow-up was refused, and said so")
+    (is (= "submitted" (change-state w))
+        "the groom committed first: its change is back under review")
+    (is (= "open" (ticket-state w)) "and the ticket stands where the groom landed it")
+    (is (true? (seats/named-open-beside-a-submitted-change?
+                (:eng w) "ticket" (str (:id (:ticket w)))))
+        "where the sit's skip keeps a seat off it (ticket 6ca380da)")))
+
+(deftest a-groom-wake-naming-the-ticket-it-sent-to-review-fires-nothing
+  (let [w (ticket-world)
+        eng (:eng w)
+        seat-id (str (:id (:seat w)))
+        ticket-id (str (:id (:ticket w)))
+        _ (stalled-with-a-pull-request! w 98)
+        _ (person-moves-ticket! w :groom)
+        _ (close-sittings! eng seat-id)
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng seat-id)))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_benchseat/fire")
+                        :token "rk-test-benchseat-0123456789abcdef"}
+                       {:principal person})
+        fire (schedules/fake-fire)
+        woke (#'wakes/wake-seat! (assoc eng :fire-adapter fire)
+              {:id seat-id :interval 3600 :max-open 1}
+              {:id "groom-that-sent-its-ticket-to-review" :kind :ticket
+               :resource-id ticket-id :action :groom}
+              ((:now-fn eng))
+              {:text (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id "\"}")})]
+    (is (= "in_review" (ticket-state w)))
+    (is (= "submitted" (change-state w)))
+    (is (false? (seats/named-open-beside-a-submitted-change?
+                 eng "ticket" ticket-id))
+        "a ticket in review is still handed by name (ticket 7af7d506)")
+    (is (not woke) "but the groom's own wake answers that no fire went out")
+    (is (empty? (schedules/fires fire)))
+    (is (= ticket-id (get-in (schedules/schedule-for-seat eng seat-id)
+                             [:data :last_withheld_wake]))
+        "withheld by name, as a ticket open beside its submitted change is")))
 
 (deftest a-groom-leaves-a-closed-pull-request-alone
   (let [w (ticket-world)]
