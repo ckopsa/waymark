@@ -863,8 +863,13 @@
       (or (contains? principal-names n) (str/ends-with? n "_by")) "a principal"
       (and nested? (= :id k) (contains? sibling-keys :kind)) "id beside kind")))
 
-(defn check-unref'd-ids
-  "A plain string field named after a kind the registry serves, or
+(defn unref'd-id-hits
+  "The fields check-unref'd-ids refuses in one kind, a string each
+  (`<where> field <k> (<reading>)`), empty when it refuses none: its
+  own door so the assembly gate can list every kind's hits in one
+  failure. The rule:
+
+  A plain string field named after a kind the registry serves, or
   `<kind>_id`, holds that kind's row id — and without `:kind` nothing
   says so: the form draws a free-text box and the dangling-ref wall
   never resolves it. member's notify.notifier was one, and a saved
@@ -881,35 +886,45 @@
   assembly (waymark10.checks-assembly) over every form
   `deep-surfaces` walks, nested maps at any depth."
   [r kinds]
-  (let [hits (for [[where form nested?] (deep-surfaces r)
-                   :let [entries (schema/entry-map form)
-                         siblings (set (keys entries))]
-                   [k {:keys [properties schema]}] entries
-                   :let [by-kind (contains? kinds (named-kind k))
-                         reading (reads-as-id k kinds siblings nested?)]
-                   :when (and reading
-                              (string-shape? schema)
-                              (nil? (:kind properties))
-                              ;; a principal, an address or a kind-from
-                              ;; ref says what it holds (8ca09ba7)
-                              (nil? (:x-ref properties))
-                              (not (if by-kind
-                                     (plainly-no-id? properties schema)
-                                     (prose-widget? properties))))
-                   :let [why (:not-a-ref properties)]
-                   :when (not (and (string? why) (not (str/blank? why))))]
-               (str where " field " k " (" reading ")"))]
+  (for [[where form nested?] (deep-surfaces r)
+        :let [entries (schema/entry-map form)
+              siblings (set (keys entries))]
+        [k {:keys [properties schema]}] entries
+        :let [by-kind (contains? kinds (named-kind k))
+              reading (reads-as-id k kinds siblings nested?)]
+        :when (and reading
+                   (string-shape? schema)
+                   (nil? (:kind properties))
+                   ;; a principal, an address or a kind-from
+                   ;; ref says what it holds (8ca09ba7)
+                   (nil? (:x-ref properties))
+                   (not (if by-kind
+                          (plainly-no-id? properties schema)
+                          (prose-widget? properties))))
+        :let [why (:not-a-ref properties)]
+        :when (not (and (string? why) (not (str/blank? why))))]
+    (str where " field " k " (" reading ")")))
+
+(def unref'd-ids-remedy
+  "What an [unref'd-ids] failure tells the author to do about its hits:
+  said once a failure, however many fields and kinds it names."
+  (str "each is named after a kind or a principal, or is an "
+       "id beside a kind, and holds a string, so it reads as a "
+       "row id, but nothing declares it a ref. Declare it "
+       ":waymark/ref with its :kind, or give it an :x-ref form "
+       "({:principal true}, {:address true}, {:kind-from f}), or, "
+       "when it holds no id (a "
+       "name, say), waive it with {:not-a-ref \"why\"} in its "
+       "properties."))
+
+(defn check-unref'd-ids
+  "One kind through unref'd-id-hits: refuses naming every hit, then the
+  remedy."
+  [r kinds]
+  (let [hits (unref'd-id-hits r kinds)]
     (when (seq hits)
       (err r :unref'd-ids
-           (str (str/join "; " hits)
-                ": each is named after a kind or a principal, or is an "
-                "id beside a kind, and holds a string, so it reads as a "
-                "row id, but nothing declares it a ref. Declare it "
-                ":waymark/ref with its :kind, or give it an :x-ref form "
-                "({:principal true}, {:address true}, {:kind-from f}), or, "
-                "when it holds no id (a "
-                "name, say), waive it with {:not-a-ref \"why\"} in its "
-                "properties.")))))
+           (str (str/join "; " hits) ": " unref'd-ids-remedy)))))
 
 ;; ── the query surface ───────────────────────────────────────────────
 
