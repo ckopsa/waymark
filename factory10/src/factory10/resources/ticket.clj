@@ -107,6 +107,10 @@
   ;; stands.
   (update row :data merge inp))
 
+(defhandler reparent-the-ticket [row inp _ctx]
+  ;; nil clears it: the ticket is a piece of nothing
+  (assoc-in row [:data :parent] (:parent inp)))
+
 (defhandler rank-the-ticket [row inp _ctx]
   (assoc-in row [:data :priority] (:priority inp)))
 
@@ -589,6 +593,31 @@
                  :errors {:parent [problem]}}))
       (t/allow))))
 
+;; NO TICKET IS ITS OWN ANCESTOR (ticket 03658863). A birth cannot make
+;; that loop, because nothing is under a ticket that is not yet born; a
+;; re-parenting can, by naming the ticket itself or one below it.
+
+(defguardfn the-parent-is-not-below-it
+  {:judges [:parent]
+   :reads [:ticket]
+   :vars [:which]
+   ;; the-parent-is-not-waited-on's acknowledgment: the chain above the
+   ;; parent named is read from the rows at the write
+   :open "The tickets above the parent named are read from their rows at the write, up the parent chain; no form can recite them. Name a parent that is not under this ticket."
+   :explain "A ticket cannot be a piece of itself: {which}. Name a parent that is not this ticket nor any ticket under it, or leave the parent empty."}
+  [row inp ctx]
+  (let [self (some-> (:id row) str)
+        parent (some-> (:parent inp) str not-empty)
+        problem (cond
+                  (or (nil? self) (nil? parent)) nil
+                  (= self parent) "this ticket names itself"
+                  (some #{self} (lineage parent (:read ctx)))
+                  (str parent " is under this ticket, so this ticket would be its own ancestor"))]
+    (if problem
+      (t/deny {:vars {:which problem}
+               :errors {:parent [problem]}})
+      (t/allow))))
+
 (defguardfn a-person-or-their-delegate-grooms
   {:reads [:principal]
    :open "No door here changes this verdict. Grooming is a person's reading of an ask — that it is stated well enough to build as written — and a model alone does not stand behind its own statement. A seat that wants a ticket groomed says so where an agent may, and a person taps."
@@ -971,6 +1000,24 @@
 (def ^:private merge-after-description
   "Name the tickets that must be done before this one's change merges")
 
+(def ^:private reparent-input
+  [:map
+   [:parent {:kind :ticket
+             :x-display
+             {:label "Part of"
+              :help "The larger ask this one is a piece of. It must be open, and not a ticket this one waits on or one under this one. Leave it empty and this ticket is a piece of nothing."}}
+    [:maybe :waymark/ref]]])
+
+(def ^:private reparent-guards
+  [the-parent-is-open-at-birth the-parent-is-not-waited-on
+   the-parent-is-not-below-it])
+
+(def ^:private reparent-safety
+  {:idempotent true :reversible true :confirm false})
+
+(def ^:private reparent-description
+  "Move this ask under another one, or out from under its parent")
+
 ;; ── :ticket — one ask of the factory ────────────────────────────────
 
 (defresource ticket
@@ -1125,6 +1172,46 @@
      :safety merge-after-safety
      :display {:label "Merges after" :order 20
                :description merge-after-description}}
+
+    ;; THE PARENT, AFTER BIRTH (ticket 03658863). The birth's walls on
+    ;; `parent` stand here too, and one more: no ticket goes under
+    ;; itself. It is its own door and not a field of `restate`, because
+    ;; a draft holds no blockers and `the-parent-is-not-waited-on`
+    ;; would have nothing to judge there. One door per state, for
+    ;; `merge_after`'s reason. `:record` keeps the old parent beside
+    ;; the new one.
+    :reparent
+    {:from #{:open} :to :open
+     :input reparent-input
+     :guards reparent-guards
+     :handler reparent-the-ticket
+     :record true
+     :edit {:prefill [:parent]}
+     :safety reparent-safety
+     :display {:label "Part of" :order 23
+               :description reparent-description}}
+
+    :reparent_draft
+    {:from #{:draft} :to :draft
+     :input reparent-input
+     :guards reparent-guards
+     :handler reparent-the-ticket
+     :record true
+     :edit {:prefill [:parent]}
+     :safety reparent-safety
+     :display {:label "Part of" :order 24
+               :description reparent-description}}
+
+    :reparent_blocked
+    {:from #{:blocked} :to :blocked
+     :input reparent-input
+     :guards reparent-guards
+     :handler reparent-the-ticket
+     :record true
+     :edit {:prefill [:parent]}
+     :safety reparent-safety
+     :display {:label "Part of" :order 25
+               :description reparent-description}}
 
     :unblock
     {:from #{:blocked} :to :open
@@ -1346,6 +1433,7 @@
    ["`restate` serves `draft` alone and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
     "`complete`, `drop` and `block` are one-way, not reversible. Each leaves from more than one state and its reverse lands in one (`reopen` in `draft`, `unblock` in `open`), and checks/check-reversible asks a reversible door for a way back to each `:from`. The way back is real in every case, and the `:one-way` sentence names it."
     "`merge_after` is four doors, one self-loop for each state a change can wait in (`draft`, `open`, `in_review`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. `merge_after_in_review` is the one door a hand may take on a ticket under review, because it holds the merge and moves no state."
+    "`reparent` is three doors, one self-loop for each state a hand shapes the tree in (`draft`, `open`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. It is not a field of `restate`: that door serves `draft` alone, a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse there. A ticket under review or deferred is not re-parented; it is when it returns."
     "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket
