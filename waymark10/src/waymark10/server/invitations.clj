@@ -8,8 +8,10 @@
   who must find it again outside the follow view.
 
   THE CREATE GUARDS JUDGE THE AUTHOR, NEVER THE SUBJECT. The author's
-  own grant must see `self` and admit `action`, and `field` must be a
-  non-secret argument of that action's input. Whether the SUBJECT may
+  own grant must see `self` and admit `action`, and every name in
+  `fields` (`field` alone is the spelling for a list of one) and every
+  key of `suggest` must be a non-secret argument of that action's
+  input (docs/spec-walkthrough.md § 4). Whether the SUBJECT may
   take the door is judged where it always is, at the subject's own
   invoke: an invitation to a door the person lacks meets that door's
   refusal, which is the honest answer. What the ROW can take now is
@@ -95,6 +97,34 @@
        (= "password" (some-> (:format props) name))
        (= "password" (some-> (get-in props [:json-schema :format]) name)))))
 
+(defn- arg-name
+  "An argument's name as the author wrote it: a string or a keyword."
+  [x]
+  (str/trim (if (keyword? x) (name x) (str x))))
+
+(defn- named-fields
+  "The arguments an invitation points at, in the author's reading
+  order: `fields`, or `field` alone as a list of one. A row born before
+  `fields` holds only `field` and reads the same way."
+  [{:keys [field fields]}]
+  (cond
+    (sequential? fields) (mapv arg-name fields)
+    (some? fields) [(arg-name fields)]
+    (some? field) [(arg-name field)]
+    :else []))
+
+(defn- argument-problem
+  "Why `arg` cannot be shown to a person as an argument of `action`; nil
+  when it can. `where` says where the author named it."
+  [entries action where arg]
+  (let [k (keyword arg)]
+    (cond
+      (not (contains? entries k))
+      (str "`" arg "`" where " is not an argument of `" (name action) "`.")
+
+      (secret? (get-in entries [k :properties]))
+      (str "`" arg "`" where " is a secret argument, and nobody is invited to type a secret."))))
+
 (defn- shut-now
   "Why the row cannot take the door now, in the words its envelope's
   `unavailable` uses; nil when it can. A denier reading the principal
@@ -156,27 +186,36 @@
           (t/allow))))))
 
 (g/defguard the-field-is-an-open-argument
-  {:judges [:action :field]
+  {:judges [:action :field :fields :suggest]
    :reads [:storage]
    :vars [:problem]
-   :open "The field is the action's own input schema; name one of its arguments that is not secret."
-   :explain "An invitation points at one argument of the action a person may be shown: {problem}"}
+   :open "The fields are the action's own input schema; name arguments of it that are not secret, in `fields` or in `field` alone, and suggest values only for such arguments."
+   :explain "An invitation points at arguments of the action a person may be shown: {problem}"}
   [_row inp ctx]
   (let [{:keys [action door]} (step-of inp ctx)
-        f (keyword (str/trim (str (:field inp))))
-        entries (some-> (:input door) schema/entry-map)]
+        entries (some-> (:input door) schema/entry-map)
+        names (named-fields inp)
+        suggest (:suggest inp)]
     (cond
       ;; the step does not resolve: the-author-sees-the-step says so
       (nil? door) (t/allow)
 
-      (not (contains? entries f))
-      (t/deny {:vars {:problem (str "`" (name f) "` is not an argument of `"
-                                    (name action) "`.")}})
+      (and (some? (:field inp)) (some? (:fields inp)))
+      (t/deny {:vars {:problem "name `fields`, or `field` alone for a list of one, and not both."}})
 
-      (secret? (get-in entries [f :properties]))
-      (t/deny {:vars {:problem (str "`" (name f) "` is a secret argument, and nobody is invited to type a secret.")}})
+      (empty? names)
+      (t/deny {:vars {:problem "name at least one argument, in `fields` or in `field`."}})
 
-      :else (t/allow))))
+      :else
+      ;; one bad name refuses the whole create, and the refusal names it
+      (if-some [problem (or (some #(argument-problem entries action "" %) names)
+                            (when (map? suggest)
+                              (some #(argument-problem entries action
+                                                       ", a key of `suggest`,"
+                                                       (arg-name %))
+                                    (keys suggest))))]
+        (t/deny {:vars {:problem problem}})
+        (t/allow)))))
 
 (g/defguard the-subject-declines
   {:reads [:principal]
@@ -209,14 +248,18 @@
 
 (defn- born
   "The birth stamps: the author is the principal that created the row,
-  never the body, and an invitation naming no expiry gets the default."
+  never the body, `fields` is what the row stores, with `field` its
+  first for a reader that knows only that one, and an invitation naming
+  no expiry gets the default."
   [row ctx]
-  (-> row
-      (assoc-in [:data :author] (str (get-in ctx [:principal :id])))
-      (assoc-in [:data :subject_name] (subject-name (get-in row [:data :subject]) ctx))
-      (update-in [:data :expires_at]
-                 #(or % (.plusSeconds ^Instant (:now ctx)
-                                      (long default-ttl-seconds))))))
+  (let [names (named-fields (:data row))]
+    (-> (cond-> row
+          (seq names) (update :data assoc :fields names :field (first names)))
+        (assoc-in [:data :author] (str (get-in ctx [:principal :id])))
+        (assoc-in [:data :subject_name] (subject-name (get-in row [:data :subject]) ctx))
+        (update-in [:data :expires_at]
+                   #(or % (.plusSeconds ^Instant (:now ctx)
+                                        (long default-ttl-seconds)))))))
 
 (defhandler record-answer [row inp _ctx]
   (assoc-in row [:data :answered_by] (:transition inp)))
@@ -239,10 +282,15 @@
                          :label "The door"
                          :help "The action on that row the person is invited to take."}}
     [:string {:min 1 :max 60}]]
-   [:field {:x-display {:raw true
+   [:fields {:optional true
+             :x-display {:label "The fields"
+                         :help "The arguments of that action the person is pointed at, one to eight, in the order they are read. A secret argument is refused."}}
+    [:maybe [:vector {:min 1 :max 8} [:string {:min 1 :max 60}]]]]
+   [:field {:optional true
+            :x-display {:raw true
                         :label "The field"
-                        :help "The argument of that action the person is pointed at. A secret argument is refused."}}
-    [:string {:min 1 :max 60}]]
+                        :help "The one-field spelling of `fields`: name this or `fields`, never both. The engine stamps it with the first of `fields`."}}
+    [:maybe [:string {:min 1 :max 60}]]]
    [:note {:examples ["Pick the repository this ticket belongs to."]
            :x-display {:widget "prose"
                        :label "Note"

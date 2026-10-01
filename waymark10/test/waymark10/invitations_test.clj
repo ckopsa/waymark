@@ -17,7 +17,7 @@
   (:import (java.time Instant)))
 
 (def ^:private chore
-  "The row a step acts on: one door, one plain argument and one secret."
+  "The row a step acts on: one door, two plain arguments and one secret."
   (r/resource
    {:kind :chore
     :plural "chores"
@@ -28,6 +28,8 @@
     :schema
     [:map
      [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]
+     [:room {:optional true :x-display {:label "Room"}}
+      [:maybe [:string {:max 40}]]]
      [:pin {:optional true :x-display {:label "Lock code"}}
       [:maybe [:string {:max 12}]]]]
     :filterable {:state #{:eq :in}}
@@ -36,11 +38,13 @@
               :input [:map
                       [:title {:x-display {:label "Title"}}
                        [:string {:min 1 :max 80}]]
+                      [:room {:optional true :x-display {:label "Room"}}
+                       [:maybe [:string {:max 40}]]]
                       [:pin {:optional true :x-secret true
                              :x-display {:label "Lock code"}}
                        [:maybe [:string {:max 12}]]]]
               :handler (fn [row inp _ctx]
-                         (update row :data merge (select-keys inp [:title :pin])))
+                         (update row :data merge (select-keys inp [:title :room :pin])))
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Rename" :order 1}}
      :finish {:from #{:open} :to :done
@@ -140,6 +144,67 @@
     (is (some? (refusal #(invite! eng c {:field "colour"})))
         "a field the action does not take")
     (is (nil? (refusal #(invite! eng c {:field "title"}))))))
+
+;; docs/spec-walkthrough.md § 4: `fields`, with `field` the spelling for
+;; a list of one. `invite!` names `field`, so a case naming `fields`
+;; alone nulls it.
+
+(deftest an-invitation-names-several-fields
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")
+        row (invite! eng c {:field nil :fields ["room" "title"]})
+        stored (row-of eng :invitation (:id row))]
+    (is (= ["room" "title"] (get-in stored [:data :fields]))
+        "the row stores the list in the author's reading order")
+    (is (= "room" (get-in stored [:data :field]))
+        "the engine stamps `field` with the first of `fields`")
+    (testing "one to eight names"
+      (is (some? (refusal #(invite! eng c {:field nil :fields []}))))
+      (is (some? (refusal #(invite! eng c {:field nil
+                                           :fields (vec (repeat 9 "title"))})))))
+    (rename! eng c person "Dishes, then floors")
+    (drain! eng)
+    (is (= "answered" (state-of eng :invitation (:id row)))
+        "the person's one transition answers it, however many fields it lit")))
+
+(deftest field-alone-still-creates-and-reads-as-a-list-of-one
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")
+        row (invite! eng c {})
+        stored (row-of eng :invitation (:id row))]
+    (is (= "title" (get-in stored [:data :field])))
+    (is (= ["title"] (get-in stored [:data :fields])))))
+
+(deftest field-and-fields-together-are-refused
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")
+        why (refusal #(invite! eng c {:field "title" :fields ["title" "room"]}))]
+    (is (some? why))
+    (is (str/includes? (str why) "not both"))
+    (testing "a body that names neither"
+      (is (some? (refusal #(invite! eng c {:field nil})))))))
+
+(deftest one-secret-among-the-fields-refuses-the-create
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")
+        why (refusal #(invite! eng c {:field nil :fields ["title" "pin" "room"]}))]
+    (is (some? why))
+    (is (str/includes? (str why) "pin") "the refusal names the bad one")
+    (is (some? (refusal #(invite! eng c {:field nil :fields ["title" "colour"]})))
+        "a name the action does not take")
+    (is (nil? (refusal #(invite! eng c {:field nil :fields ["title" "room"]}))))))
+
+(deftest a-suggest-key-that-is-secret-or-no-argument-is-refused
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")
+        why (refusal #(invite! eng c {:suggest {:title "Dishes, twice" :pin "1234"}}))]
+    (is (some? why) "nobody is shown a value for a secret argument")
+    (is (str/includes? (str why) "suggest"))
+    (is (some? (refusal #(invite! eng c {:suggest {:colour "red"}})))
+        "a key the action does not take")
+    (is (nil? (refusal #(invite! eng c {:suggest {:title "Dishes, twice"
+                                                  :room "Kitchen"}})))
+        "a suggested argument need not be one of the lit fields")))
 
 (deftest another-actors-transition-does-not-answer-it
   (let [eng (fresh-engine)

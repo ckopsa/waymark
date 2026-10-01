@@ -482,7 +482,7 @@
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
                           (cond-> (assoc (:data schedule-row) :wake_fired_at (str at))
-                            clear-pending? (dissoc :wake_pending :wake_due_at))
+                            clear-pending? (dissoc :wake_pending :wake_due_at :wake_text))
                           (:next-flip-at schedule-row))))
   nil)
 
@@ -497,7 +497,8 @@
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
                           (if pending?
                             (assoc (:data schedule-row) :wake_pending true)
-                            (dissoc (:data schedule-row) :wake_pending :wake_due_at))
+                            (dissoc (:data schedule-row) :wake_pending :wake_due_at
+                                    :wake_text))
                           (:next-flip-at schedule-row))))
   nil)
 
@@ -553,16 +554,19 @@
   match remembers itself as `wake_pending`, exactly as a damped match
   does, and writes `wake_due_at` beside it, so `release!` knows the
   wake is not ready. One maintenance write, and no transition, for
-  `write-pending!`'s reason."
-  [eng schedule-row ^Instant due]
+  `write-pending!`'s reason. `text`, when given, is kept as
+  `wake_text` for the release to fire with (ticket afb445d4)."
+  ([eng schedule-row due] (mark-settling! eng schedule-row due nil))
+  ([eng schedule-row ^Instant due text]
   (store/with-tx (:storage eng)
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (assoc (:data schedule-row)
-                                 :wake_pending true
-                                 :wake_due_at (str due))
+                          (cond-> (assoc (:data schedule-row)
+                                         :wake_pending true
+                                         :wake_due_at (str due))
+                            text (assoc :wake_text text))
                           (:next-flip-at schedule-row))))
-  nil)
+  nil))
 
 (defn- settled?
   "Has the quiet time passed? A row with no `wake_due_at` has nothing
@@ -879,6 +883,20 @@
                      " fires nothing")
               nil))
 
+        ;; the row the wake names rests in a closed sitting's grace
+        ;; while others wait (ticket afb445d4): the wake waits for the
+        ;; grace to lift and then fires with its own text, rather than
+        ;; a run that is told its row is held and stops
+        (and (some? text)
+             (some? (seats/fire-deferred-until
+                     eng (raw-row eng :seat (:id seat)) text at)))
+        (mark-settling! eng row
+                        (due-at row (or (seats/fire-deferred-until
+                                         eng (raw-row eng :seat (:id seat)) text at)
+                                        at)
+                                0)
+                        text)
+
         :else
         (if (fire! eng (:id seat) text
                    (str "wake:" (:id seat) ":" (:id t)))
@@ -1001,7 +1019,9 @@
 (defn release!
   "The pending wake of one seat, released now that the damper has
   lifted: a fire with NO TEXT, so the session walks the queue rather
-  than one row (R-12.22), and then the flag is cleared.
+  than one row (R-12.22), and then the flag is cleared. A fire that
+  waited out a release grace goes with the text it was given
+  (`wake_text`, ticket afb445d4), so its run walks the row it named.
 
   Silence when there is nothing pending, when the seat is not active,
   when a sitting is still open, when the gap has not passed, when the
@@ -1053,7 +1073,9 @@
       nil
 
       :else
-      (when (fire! eng (:id seat-row) nil key)
+      (when (fire! eng (:id seat-row)
+                   (some-> (get-in schedule-row [:data :wake_text]) str not-empty)
+                   key)
         (stamp-fired! eng schedule-row at true)
         true)))))
 
@@ -1263,6 +1285,11 @@
                            :served {}
                            :missed true
                            :closed_by "missed"
+                           ;; seat health 1: no close judges a row
+                           ;; born closed, so its outcome is written
+                           ;; here — a fire nobody sat in never sat
+                           :outcome "never_sat"
+                           :flags []
                            :note (missed-note fired deadline schedule)}
                     model (assoc :model model))
                   {:principal seats/seats-actor :state :closed})
