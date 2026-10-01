@@ -414,7 +414,7 @@
       (testing "well-known lists the own surface beside the granted —
                 the negotiation kinds and the jobs the principal asked for"
         (let [b (json (req :get "/api/.well-known/waymark" nil own-scoped))]
-          (is (= #{"approval_request" "grant" "job" "plan"
+          (is (= #{"approval_request" "grant" "job" "plan" "scheduled_action"
                    ;; spec-seat.md (waymark-fp62.1): and the sittings it
                    ;; opened — own-surface by :member
                    "sitting"

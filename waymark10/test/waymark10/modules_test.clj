@@ -126,7 +126,7 @@
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
-             :judgment :verdict :invitation :walk :walk_frame}
+             :judgment :verdict :invitation :walk :walk_frame :scheduled_action}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
