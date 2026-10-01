@@ -189,6 +189,58 @@
    "sweep" "Sweep — closed by the engine after the sitting went idle"
    "missed" "Missed — a fire nobody sat in, born closed"})
 
+(def outcomes
+  "What a closed sitting came to (seat health 1, ticket fad586b7): ONE
+  value, the first of these that holds, in this order. `sitting-health`
+  is the judge, and nothing else writes the field."
+  ["submitted" "stalled" "never_sat" "refused_out" "cut_short" "idle"])
+
+(def ^:private outcome-choices
+  {"submitted" "Submitted — it submitted a change"
+   "stalled" "Stalled — it stalled a change"
+   "never_sat" "Never sat — a missed fire, or a run that took no turn"
+   "refused_out" "Refused out — its last write was a refusal"
+   "cut_short" "Cut short — the hook closed it after a few turns"
+   "idle" "Idle — it walked rows and moved nothing"})
+
+(def health-thresholds
+  "The numbers seat health judges a sitting by, in ONE place. The
+  `outcome` and `flags` field help spell these same values, and piece 2
+  and the Seat Health page read them here rather than restating them."
+  {;; a hook close under this many turns is `cut_short`
+   :cut-short-turns 10
+   ;; more bench.test calls than this is `test_thrash`
+   :test-calls 6
+   ;; more bench.read plus bench.find bytes than this is `read_heavy`
+   :read-bytes 150000
+   ;; …and so is more than this share of the bytes served, dropped
+   :dropped-share 1/2
+   ;; this many earlier unsubmitted sittings on one row is `rewalk`
+   :rewalk-sittings 2
+   ;; a sitting that cost more dollars than this is `over_budget`
+   :cost-usd 3M
+   ;; this many refusals or more is `refusals_high`
+   :refusals 5
+   ;; how far back `backfill-health!` judges the sittings closed
+   ;; before the close judged them
+   :backfill-days 7})
+
+(def ^:private outcome-help
+  (str "Written by the engine at the close; the first that holds. submitted: a change was submitted under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal. cut_short: closed by the hook in under "
+       (:cut-short-turns health-thresholds)
+       " turns. idle: none of these; it moved nothing."))
+
+(def ^:private flags-help
+  (let [{:keys [test-calls read-bytes dropped-share rewalk-sittings
+                cost-usd refusals]} health-thresholds]
+    (str "Written by the engine at the close; any number of them. test_thrash: more than "
+         test-calls " bench.test calls, or a cancelled run. read_heavy: bench.read plus bench.find over "
+         read-bytes " bytes, or more than " dropped-share
+         " of the bytes served dropped. rewalk: a row it walked was walked by "
+         rewalk-sittings " or more earlier sittings of the seat that did not submit. over_budget: it cost over $"
+         cost-usd ". refusals_high: " refusals
+         " or more refusals. A refused_out sitting also carries refused:<type> and refused_by:<guard>.")))
+
 (def halt-reasons
   "The walls of R-5.2, and the only reasons a seat halts. Each is HARD
   (the grant scopes to nothing) and each must reach a person, which is
@@ -1593,6 +1645,139 @@
       (contains? (set (:roles p)) hook-role) "hook"
       :else "door")))
 
+;; ── seat health: the outcome and the flags (ticket fad586b7) ────────
+;; Pure over the sitting's document, the transitions made under it and
+;; the earlier sittings of its seat. No model reads any of it.
+
+(defn- change-moved?
+  "Do the sitting's transitions hold this action on a change?"
+  [transitions action]
+  (boolean (some #(and (= "change" (some-> (:kind %) name))
+                       (= action (some-> (:action %) name)))
+                 transitions)))
+
+(defn- refused-last?
+  "Was the newest refusal the sitting's last write: no transition under
+  it is newer than `last_refusal`. A bench write that was allowed
+  leaves no stamp of its own, so the transitions are the only later
+  writes the row can show."
+  [data transitions]
+  (when-some [^java.time.Instant at (->instant (get-in data [:last_refusal :at]))]
+    (not-any? (fn [t]
+                (when-some [^java.time.Instant moved (->instant (:at t))]
+                  (.isAfter moved at)))
+              transitions)))
+
+(defn- served-of
+  "One count of `served` (`:calls`, `:bytes`, `:dropped`), summed over
+  the named tools, or over every tool when none is named."
+  [served k tools]
+  (reduce + 0 (map #(long (or (get-in served [% k]) 0))
+                   (or tools (keys served)))))
+
+(defn- rewalked?
+  "Was a row this sitting walked already walked by `:rewalk-sittings`
+  or more of `earlier` — the documents of its seat's earlier sittings —
+  that were judged and did not submit? A sitting that carries no
+  outcome was never judged, and is not counted."
+  [data earlier]
+  (let [unsubmitted (filter #(when-some [o (some-> (:outcome %) name)]
+                               (not= "submitted" o))
+                            earlier)
+        walks (frequencies (mapcat #(distinct (map str (:walked_rows %)))
+                                   unsubmitted))]
+    (boolean (some #(<= (long (:rewalk-sittings health-thresholds))
+                        (long (get walks (str %) 0)))
+                   (:walked_rows data)))))
+
+(defn sitting-health
+  "A closed sitting's `outcome` and `flags`, from its document, the
+  transitions made under it (`sitting-transitions`' rows) and the
+  documents of its seat's earlier sittings. `outcomes` names the order
+  the first match is taken in, and `health-thresholds` the numbers.
+  → {:outcome str :flags [str …]}."
+  [data transitions earlier]
+  (let [{:keys [cut-short-turns test-calls read-bytes dropped-share
+                cost-usd refusals]} health-thresholds
+        closed (some-> (:closed_by data) name)
+        turns (long (or (:turns data) 0))
+        served (:served data)
+        refusal (:last_refusal data)
+        outcome (cond
+                  (change-moved? transitions "submit") "submitted"
+                  (change-moved? transitions "stall") "stalled"
+                  (or (= "missed" closed) (true? (:missed data))
+                      (and (zero? turns) (empty? served))) "never_sat"
+                  (refused-last? data transitions) "refused_out"
+                  (and (= "hook" closed) (< turns cut-short-turns)) "cut_short"
+                  :else "idle")]
+    {:outcome outcome
+     :flags (cond-> []
+              (or (> (served-of served :calls [:bench__test]) test-calls)
+                  (pos? (long (or (:cancelled_runs data) 0))))
+              (conj "test_thrash")
+
+              (or (> (served-of served :bytes [:bench__read :bench__find])
+                     read-bytes)
+                  (> (served-of served :dropped nil)
+                     (* dropped-share (served-of served :bytes nil))))
+              (conj "read_heavy")
+
+              (rewalked? data earlier) (conj "rewalk")
+
+              (some-> (:cost_usd data) bigdec (> cost-usd))
+              (conj "over_budget")
+
+              (>= (long (or (:refusals data) 0)) refusals)
+              (conj "refusals_high")
+
+              ;; which law refused it out, beside the outcome
+              (= "refused_out" outcome)
+              (into (keep (fn [[label v]]
+                            (when-some [s (some-> v str not-empty)]
+                              (str label ":" s))))
+                    [["refused" (:type refusal)]
+                     ["refused_by" (:guard refusal)]]))}))
+
+(def ^:private seat-health-page
+  "The most of one seat's sittings a close reads for `rewalk`, newest
+  first. A row walked again after this many sittings is past the page."
+  100)
+
+(defn- earlier-sittings
+  "The documents of the sittings in `rows` — one seat's newest page —
+  that started before the sitting `id`, whose document is `data`."
+  [rows id data]
+  (let [^java.time.Instant mine (->instant (:started_at data))]
+    (into []
+          (comp (remove #(= (str id) (str (:id %))))
+                (filter (fn [r]
+                          (when-some [^java.time.Instant theirs
+                                      (->instant (get-in r [:data :started_at]))]
+                            (and mine (.isBefore theirs mine)))))
+                (map :data))
+          rows)))
+
+(defn- stamp-health
+  "The close's last write: `outcome` and `flags`, judged from the row as
+  the close leaves it. The transitions are read by the sitting's grant
+  from its start to now, and the seat's earlier sittings through the
+  write's own transaction. A ctx with no such hook judges the row
+  alone."
+  [row ctx]
+  (let [data (:data row)
+        grant (some-> (:grant data) str not-empty)
+        under (:transitions-under ctx)
+        find-rows (:find ctx)
+        moved (when (and grant under)
+                (under grant (->instant (:started_at data)) nil))
+        seat-rows (when find-rows
+                    (find-rows :sitting {:seat (str (:seat data))}
+                               {:limit seat-health-page :newest-first true}))]
+    (update row :data merge
+            (sitting-health data moved
+                            (earlier-sittings seat-rows (:id row) data)))))
+
 (defhandler close-sitting [row inp ctx]
   ;; R-10.4: the model's prices are read AT THIS MOMENT, the cost is
   ;; computed from them, and the prices used are written beside it —
@@ -1616,7 +1801,10 @@
         (assoc-in [:data :ended_at] (:now ctx))
         (assoc-in [:data :closed_by] (closed-by ctx))
         (assoc-in [:data :prices] prices)
-        (assoc-in [:data :cost_usd] (cost-of counts prices)))))
+        (assoc-in [:data :cost_usd] (cost-of counts prices))
+        ;; seat health 1: judged LAST, from the counts, the hand and
+        ;; the cost this close has just written
+        (stamp-health ctx))))
 
 (defhandler tally-sitting [row inp ctx]
   ;; R-12.25, R-12.27: the same five counts as a close, written onto a
@@ -3730,7 +3918,24 @@
                  {:label "How it was closed"
                   :choices closed-by-choices
                   :spelled-by-hand "Written by the engine at the close: door, hook, sweep, or missed for a fire nobody sat in."}}
-     (into [:enum] closed-by-paths)]]
+     (into [:enum] closed-by-paths)]
+    ;; WHAT IT CAME TO, AND WHY (seat health 1, ticket fad586b7). Both
+    ;; are written at every path that ends a sitting closed, beside
+    ;; `closed_by`, by `sitting-health`: one outcome, and the flags
+    ;; that explain it. No model judges either. `outcome` is an enum
+    ;; and not :maybe, so it promotes and filters; `flags` is a
+    ;; vocabulary array, so it filters by membership.
+    [:outcome {:optional true
+               :x-display
+               {:label "What it came to"
+                :choices outcome-choices
+                :help outcome-help}}
+     (into [:enum] outcomes)]
+    [:flags {:optional true
+             :x-display
+             {:label "Health flags"
+              :help flags-help}}
+     [:vector [:waymark/vocab {:open true}]]]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -3798,6 +4003,7 @@
                 :grant #{:eq}
                 :missed #{:eq}
                 :closed_by #{:eq :in}
+                :outcome #{:eq :in}
                 :started_at #{:after :before :range}}
    :sortable {:fields [:started_at] :default "-started_at"}
    :links [{:rel "seat" :kind :seat
@@ -4195,6 +4401,67 @@
               (->instant (:started_at data))
               (->instant (:ended_at data))
               opts))))))))
+
+(def ^:private backfill-page
+  "The most closed sittings one `backfill-health!` pass reads, newest
+  first: a week of every seat's wakes, with room."
+  2000)
+
+(defn backfill-health!
+  "Stamp `outcome` and `flags` on the closed sittings that carry none
+  and started in the last `:backfill-days` days: the rows closed before
+  the close judged them (ticket fad586b7). Oldest first, so `rewalk`
+  reads earlier sittings this pass has already judged. A MAINTENANCE
+  write, `bump-counter!`'s spelling. A judged row is never judged
+  again, so a second pass writes nothing. → the number stamped."
+  [eng]
+  (if (get (inv/resources eng) :sitting)
+    (let [st (:storage eng)
+          ^java.time.Instant now ((or (:now-fn eng) #(java.time.Instant/now)))
+          since (.minus now (java.time.Duration/ofDays
+                             (long (:backfill-days health-thresholds))))
+          started #(->instant (get-in % [:data :started_at]))
+          due (store/with-tx st
+                (fn [tx]
+                  (->> (store/query-rows st tx :sitting {:state :closed}
+                                         {:limit backfill-page
+                                          :newest-first true})
+                       (filter (fn [row]
+                                 (when-some [^java.time.Instant at (started row)]
+                                   (and (nil? (get-in row [:data :outcome]))
+                                        (.isAfter at since)))))
+                       (sort-by started)
+                       (mapv (comp str :id)))))]
+      (count
+       (filterv
+        (fn [id]
+          (store/with-tx st
+            (fn [tx]
+              (when-some [row (store/load-row st tx :sitting id
+                                              {:for-update true})]
+                (let [data (:data row)
+                      grant (some-> (:grant data) str not-empty)]
+                  (when (and (= :closed (:state row)) (nil? (:outcome data)))
+                    (let [moved (when grant
+                                  (store/transitions-under-grant
+                                   st tx grant
+                                   (->instant (:started_at data))
+                                   (->instant (:ended_at data))
+                                   {}))
+                          seat-rows (store/query-rows
+                                     st tx :sitting {:seat (str (:seat data))}
+                                     {:limit seat-health-page
+                                      :newest-first true})]
+                      (store/update-data!
+                       st tx :sitting id
+                       (merge data
+                              (sitting-health
+                               data moved
+                               (earlier-sittings seat-rows id data)))
+                       nil)
+                      true)))))))
+        due)))
+    0))
 
 (defn- a-persons-write?
   "A logged actor a person answers for: a human, or a held call a person
