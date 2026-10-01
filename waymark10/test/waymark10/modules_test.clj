@@ -376,6 +376,9 @@
             ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
             ;; R-12.25; spec-transcript.md R-9)
             :seat-clock
+            ;; and its seventh: the scheduled actions' clock
+            ;; (spec-scheduled-actions R-5)
+            :scheduled-actions
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
@@ -423,6 +426,7 @@
             ;; both
             :mcp-discover :held-call-expiry :notifier
             :invitations :invitation-expiry :walk-retention :seat-clock
+            :scheduled-actions
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))

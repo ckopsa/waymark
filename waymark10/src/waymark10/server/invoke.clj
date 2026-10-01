@@ -183,14 +183,19 @@
   `allowed_by` is the person whose Allow this write replays (held-
   calls/door-principal sets it from the held call's `decided_by`), so
   the hand stays the author's and the log still says whose yes it was;
-  the correction count reads it (store/corrections-by-model)."
+  the correction count reads it (store/corrections-by-model).
+
+  `scheduled` is the scheduled action whose run this write is
+  (scheduled/runner-of, docs/spec-scheduled-actions.md R-4.2): the hand
+  is the scheduler's, and the log says the clock moved it."
   [principal grant-id]
   (cond-> {:type (name (:type principal))
            :id (:id principal)
            :display (:display principal)}
     grant-id (assoc :grant grant-id)
     (:model principal) (assoc :model (:model principal))
-    (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))))
+    (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))
+    (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))))
 
 (defn- body-digest [body]
   ;; exact decimals in a wire body digest as their {"dec" …} nodes
