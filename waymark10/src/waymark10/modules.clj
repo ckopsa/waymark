@@ -160,6 +160,7 @@
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.walks :as walks]
+            [waymark10.server.walkthroughs :as walkthroughs]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.routes.dashboard :as dashboard-routes]
@@ -306,6 +307,11 @@
              ;; creates one, and grants are core's.
              {:kind :invitation :enroll :always
               :kinds (fn [_] [invitations/invitation])}
+             ;; the walkthrough (docs/spec-walkthrough.md § 1): the
+             ;; order several such steps are taken in. Core's beside
+             ;; the invitation, which each person step becomes.
+             {:kind :walkthrough :enroll :always
+              :kinds (fn [_] [walkthroughs/walkthrough])}
              ;; the recorded walk and its frames (docs/spec-guided-follow.md
              ;; § 4): core's beside the invitation, whose sibling it is,
              ;; and for the transcript's reason — a record of what a

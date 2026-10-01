@@ -482,7 +482,7 @@
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
                           (cond-> (assoc (:data schedule-row) :wake_fired_at (str at))
-                            clear-pending? (dissoc :wake_pending :wake_due_at :wake_text))
+                            clear-pending? (schedules/clear-wake))
                           (:next-flip-at schedule-row))))
   nil)
 
@@ -496,15 +496,19 @@
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
                           (if pending?
-                            (assoc (:data schedule-row) :wake_pending true)
-                            (dissoc (:data schedule-row) :wake_pending :wake_due_at
-                                    :wake_text))
+                            (assoc (schedules/keep-textless (:data schedule-row))
+                                   :wake_pending true)
+                            (schedules/clear-wake (:data schedule-row)))
                           (:next-flip-at schedule-row))))
   nil)
 
 (defn- mark-pending! [eng schedule-row]
-  (when-not (true? (get-in schedule-row [:data :wake_pending]))
-    (write-pending! eng schedule-row true))
+  ;; a wake with no text beside waiting texts is its own fire (ticket
+  ;; 58573175), so it is written even when the flag already stands
+  (let [data (:data schedule-row)]
+    (when-not (and (true? (:wake_pending data))
+                   (= data (schedules/keep-textless data)))
+      (write-pending! eng schedule-row true)))
   nil)
 
 (def ^:private heard-cap
@@ -554,17 +558,18 @@
   match remembers itself as `wake_pending`, exactly as a damped match
   does, and writes `wake_due_at` beside it, so `release!` knows the
   wake is not ready. One maintenance write, and no transition, for
-  `write-pending!`'s reason. `text`, when given, is kept as
-  `wake_text` for the release to fire with (ticket afb445d4)."
+  `write-pending!`'s reason. `text`, when given, joins the waiting
+  texts for the release to fire with (ticket afb445d4, and
+  `schedules/keep-waiting`)."
   ([eng schedule-row due] (mark-settling! eng schedule-row due nil))
   ([eng schedule-row ^Instant due text]
   (store/with-tx (:storage eng)
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (cond-> (assoc (:data schedule-row)
-                                         :wake_pending true
-                                         :wake_due_at (str due))
-                            text (assoc :wake_text text))
+                          (assoc (cond-> (:data schedule-row)
+                                   text (schedules/keep-waiting text))
+                                 :wake_pending true
+                                 :wake_due_at (str due))
                           (:next-flip-at schedule-row))))
   nil))
 
@@ -617,7 +622,7 @@
   (store/with-tx (:storage eng)
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (assoc (:data schedule-row)
+                          (assoc (schedules/keep-textless (:data schedule-row))
                                  :wake_pending true
                                  :last_halted_wake (str at))
                           (:next-flip-at schedule-row))))
@@ -846,10 +851,16 @@
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
     (when (and (schedules/fires-out? eng row)
                (not (heard? row t)))
-      (let [row (remember-heard! eng row t)]
+      (let [row (remember-heard! eng row t)
+            ;; when the grace of the row this wake names lifts: asked
+            ;; one time, and only by the branch that reads it
+            deferred (delay (when (some? text)
+                              (seats/fire-deferred-until
+                               eng (raw-row eng :seat (:id seat)) text at)))]
        (cond
         settle
-        (mark-settling! eng row (due-at row at settle))
+        (mark-settling! eng (update row :data schedules/keep-textless)
+                        (due-at row at settle))
 
         ;; a broken Routine fires nothing: the wake waits for the link
         ;; that mends it (waymark ticket bb19404d)
@@ -893,7 +904,8 @@
         (if-some [lift (grace-lift eng (raw-row eng :seat (:id seat)) at)]
           ;; the row rests in a closed sitting's grace: the wake waits
           ;; for the grace to end rather than being spent now
-          (mark-settling! eng row (due-at row lift 0))
+          (mark-settling! eng (update row :data schedules/keep-textless)
+                          (due-at row lift 0))
           (do (warn! "seat " (:id seat) " has an empty walk — its wake"
                      " fires nothing")
               nil))
@@ -902,15 +914,8 @@
         ;; while others wait (ticket afb445d4): the wake waits for the
         ;; grace to lift and then fires with its own text, rather than
         ;; a run that is told its row is held and stops
-        (and (some? text)
-             (some? (seats/fire-deferred-until
-                     eng (raw-row eng :seat (:id seat)) text at)))
-        (mark-settling! eng row
-                        (due-at row (or (seats/fire-deferred-until
-                                         eng (raw-row eng :seat (:id seat)) text at)
-                                        at)
-                                0)
-                        text)
+        (some? @deferred)
+        (mark-settling! eng row (due-at row @deferred 0) text)
 
         :else
         (if (fire! eng (:id seat) text
@@ -1034,8 +1039,11 @@
   "The pending wake of one seat, released now that the damper has
   lifted: a fire with NO TEXT, so the session walks the queue rather
   than one row (R-12.22), and then the flag is cleared. A fire that
-  waited out a release grace goes with the text it was given
-  (`wake_text`, ticket afb445d4), so its run walks the row it named.
+  waited out a release grace goes with the text it was given (ticket
+  afb445d4), so its run walks the row it named: one run for each
+  waiting text (`schedules/waiting-texts`, ticket 58573175), each under
+  a key of its own, and a wake with no text that waited beside them
+  (`wake_textless`) as its own fire after them.
 
   Silence when there is nothing pending, when the seat is not active,
   when a sitting is still open, when the gap has not passed, when the
@@ -1087,11 +1095,19 @@
       nil
 
       :else
-      (when (fire! eng (:id seat-row)
-                   (some-> (get-in schedule-row [:data :wake_text]) str not-empty)
-                   key)
-        (stamp-fired! eng schedule-row at true)
-        true)))))
+      (let [texts (schedules/waiting-texts (:data schedule-row))
+            sends (if (seq texts)
+                    (cond-> (vec (map-indexed
+                                  (fn [i text]
+                                    [text (if (zero? i) key (str key ":" i))])
+                                  texts))
+                      (get-in schedule-row [:data :wake_textless])
+                      (conj [nil (str key ":queue")]))
+                    [[nil key]])
+            sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k)) sends)]
+        (when (some true? sent)
+          (stamp-fired! eng schedule-row at true)
+          true))))))
 
 (defn release-linked!
   "The wake a broken schedule held, released by the link that mended
@@ -1341,7 +1357,10 @@
                                             " missed fire not recorded — "
                                             (ex-message e))
                                      false))
-                            (inc n)
+                            ;; seat health 2: a sitting born closed
+                            ;; is a close too, and no door ran for it
+                            (do (seats/roll-health! eng (:id seat-row))
+                                (inc n))
                             n))
                         n
                         found)))))

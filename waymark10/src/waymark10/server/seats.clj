@@ -223,7 +223,10 @@
    :refusals 5
    ;; how far back `backfill-health!` judges the sittings closed
    ;; before the close judged them
-   :backfill-days 7})
+   :backfill-days 7
+   ;; the closed sittings a seat's `health` is rolled over, for a seat
+   ;; that names no `health_window`
+   :window 10})
 
 (def ^:private outcome-help
   (str "Written by the engine at the close; the first that holds. submitted: a change was submitted under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal. cut_short: closed by the hook in under "
@@ -1333,7 +1336,7 @@
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
-   :release_grace_seconds
+   :release_grace_seconds :health_window
    :delegates])
 
 (def ^:private wall-inputs
@@ -2428,6 +2431,49 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them, so a run whose close came early is not overtaken mid-call. Zero hands them on at once."}}
      [:int {:min 0 :max 3600}]]
+    ;; SEAT HEALTH 2 (ticket 64a835b4). `health` is the rollup of the
+    ;; seat's last `health_window` closed sittings, written again each
+    ;; time one of them closes (`roll-health!`). WRITTEN BY NO DOOR,
+    ;; `fire_keys`' own way: neither the create door nor the restate
+    ;; declares `health`, so a body that carries it is refused as an
+    ;; unknown key. The window is the person's, and both doors take it.
+    [:health_window {:default (:window health-thresholds)
+                     :examples [(:window health-thresholds)]
+                     :x-display
+                     {:label "Sittings its health is read over"
+                      :help "The seat's health is counted over this many of its last closed sittings. A smaller window answers sooner to a change; a larger one is steadier."}}
+     [:int {:min 1 :max 100}]]
+    [:health {:optional true
+              :x-display
+              {:label "Health of its last sittings"
+               :spelled-by-hand "Written by the engine each time a sitting of this seat closes: what its last sittings came to, what they cost and which flags they carried. Never typed."}}
+     [:maybe [:map
+              [:sittings {:x-display {:label "Sittings in the window"}} :int]
+              [:outcomes {:x-display {:label "Sittings by outcome"}}
+               [:map-of :keyword :int]]
+              [:submit_rate {:optional true
+                             :x-display {:label "Share that submitted"}}
+               [:maybe [:decimal {:min 0}]]]
+              [:cost_usd {:x-display {:label "What they cost, in dollars"}}
+               [:decimal {:min 0}]]
+              [:cost_per_submit {:optional true
+                                 :x-display {:label "Dollars for each submit"}}
+               [:maybe [:decimal {:min 0}]]]
+              [:flags {:x-display {:label "Sittings by flag"}}
+               [:map-of :keyword :int]]
+              [:merged_prs {:x-display {:label "Changes merged since the window opened"}}
+               :int]
+              [:cost_per_merge {:optional true
+                                :x-display {:label "Dollars for each merge"}}
+               [:maybe [:decimal {:min 0}]]]
+              [:last_submit_at {:optional true
+                                :x-display {:label "Last submit"}}
+               [:maybe :waymark/instant]]
+              [:last_outcome {:optional true
+                              :x-display {:label "What the newest came to"}}
+               [:maybe [:string {:max 40}]]]
+              [:computed_at {:x-display {:label "Counted at"}}
+               :waymark/instant]]]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2671,6 +2717,12 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Two minutes is the default."}}
      [:int {:min 0 :max 3600}]]
+    [:health_window {:default (:window health-thresholds)
+                     :examples [(:window health-thresholds)]
+                     :x-display
+                     {:label "Sittings its health is read over"
+                      :help "The seat's health is counted over this many of its last closed sittings. Ten is the default."}}
+     [:int {:min 1 :max 100}]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -2851,6 +2903,12 @@
                                       {:label "Grace before a closed sitting's rows are handed on, in seconds"
                                        :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Raise it when a run's close can come before its last call does."}}
               [:int {:min 0 :max 3600}]]
+             [:health_window {:default (:window health-thresholds)
+                              :examples [(:window health-thresholds)]
+                              :x-display
+                              {:label "Sittings its health is read over"
+                               :help "The seat's health is counted over this many of its last closed sittings. The next close counts it over the new window."}}
+              [:int {:min 1 :max 100}]]
              [:delegates {:optional true
                           :x-display
                           {:label "What it may author"
@@ -2890,7 +2948,7 @@
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
                       :fire_interval_seconds :max_open_sittings
-                      :release_grace_seconds :delegates]
+                      :release_grace_seconds :health_window :delegates]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
@@ -4462,6 +4520,132 @@
                       true)))))))
         due)))
     0))
+
+;; ── seat health 2: the seat's own rollup (ticket 64a835b4) ──────────
+;;
+;; A sitting says what ONE wake came to. The seat row says what the
+;; last few came to, so a page or a mayor reads every seat's health off
+;; the seat collection in one call and opens no sitting to do it.
+
+(defn- divided
+  "`num` ÷ `den` to `scale` decimal places, or nil when there is nothing
+  to divide by. Exact decimals, `cost-of`'s own rule."
+  [num den scale]
+  (when (pos? (long den))
+    (.divide ^java.math.BigDecimal (bigdec num)
+             ^java.math.BigDecimal (bigdec den)
+             (int scale) RoundingMode/HALF_UP)))
+
+(defn- flag-key
+  "The key one flag is counted under. `refused:<type>` counts as
+  `refused`: a problem type is an address, and an address is no key.
+  `refused_by:<guard>` keeps its guard, because which law refuses a
+  seat out is the thing a reader wants."
+  [flag]
+  (let [s (if (keyword? flag) (subs (str flag) 1) (str flag))]
+    (keyword (if (str/starts-with? s "refused:") "refused" s))))
+
+(defn seat-health
+  "A seat's `health` over `sittings`: the documents of its last closed
+  and judged sittings, newest first. `merged` is how many of the seat's
+  changes merged since the oldest of them started, and `at` the moment
+  of the count. Pure. → the map the seat row carries."
+  [sittings merged at]
+  (let [n (count sittings)
+        outcome-of #(some-> (:outcome %) name)
+        counts (frequencies (keep outcome-of sittings))
+        submits (long (get counts "submitted" 0))
+        merged (long (or merged 0))
+        cost (transduce (keep #(some-> (:cost_usd %) bigdec)) + 0M sittings)]
+    {:sittings n
+     :outcomes (into {}
+                     (map (fn [o] [(keyword o) (long (get counts o 0))]))
+                     outcomes)
+     :submit_rate (divided submits n 4)
+     :cost_usd cost
+     :cost_per_submit (divided cost submits cost-scale)
+     :flags (frequencies (map flag-key (mapcat :flags sittings)))
+     :merged_prs merged
+     :cost_per_merge (divided cost merged cost-scale)
+     :last_submit_at (some->> sittings
+                              (filter #(= "submitted" (outcome-of %)))
+                              first
+                              :ended_at
+                              ->instant
+                              str)
+     :last_outcome (some-> (first sittings) outcome-of)
+     :computed_at (str at)}))
+
+(defn- merged-since
+  "How many of this seat's changes merged at or after `since`: the rows
+  of the `change` kind in `merged` whose author is the seat's name,
+  read by the moment each row last moved — a merged change is over, so
+  that moment is the merge unless a later maintenance write touched the
+  row. An engine that serves no such kind has merged none."
+  [eng tx seat-row ^java.time.Instant since]
+  (let [author (some-> (get-in seat-row [:data :name]) str not-empty)]
+    (if (and since author (get (inv/resources eng) :change))
+      (count
+       (filter (fn [row]
+                 (when-some [^java.time.Instant at (->instant (:updated-at row))]
+                   (not (.isBefore at since))))
+               (store/query-rows (:storage eng) tx :change
+                                 {:state :merged :author author}
+                                 {:limit seat-health-page :newest-first true})))
+      0)))
+
+(defn roll-health!
+  "Write the seat's `health` again, over its last `health_window` closed
+  sittings that carry an outcome (`seat-health`). A sitting closed
+  before the close judged it is not in the window. A MAINTENANCE write,
+  `bump-counter!`'s spelling: document only, version untouched, no
+  transition. Best-effort — a rollup that cannot be counted leaves the
+  last one standing and never fails the close that asked for it.
+  → the map written, or nil when there was nothing to write."
+  [eng seat-id]
+  (when (and seat-id
+             (get (inv/resources eng) :seat)
+             (get (inv/resources eng) :sitting))
+    (try
+      (let [st (:storage eng)
+            seat-id (str seat-id)
+            started #(->instant (:started_at %))]
+        (store/with-tx st
+          (fn [tx]
+            (when-some [seat (store/load-row st tx :seat seat-id
+                                             {:for-update true})]
+              (let [window (max 1 (long (or (get-in seat [:data :health_window])
+                                            (:window health-thresholds))))
+                    sittings (->> (store/query-rows
+                                   st tx :sitting
+                                   {:seat seat-id :state :closed}
+                                   {:limit seat-health-page :newest-first true})
+                                  (map :data)
+                                  (filter #(and (some? (:outcome %)) (started %)))
+                                  (sort-by started #(compare %2 %1))
+                                  (take window)
+                                  vec)
+                    health (seat-health
+                            sittings
+                            (merged-since eng tx seat
+                                          (some-> (peek sittings) started))
+                            (call-stamp eng))]
+                (store/update-data! st tx :seat seat-id
+                                    (assoc (:data seat) :health health)
+                                    (:next-flip-at seat))
+                health)))))
+      (catch Exception _ nil))))
+
+(defn after-write
+  "The engine's `:maintain` hook, this module's arm (seat health 2): a
+  committed write that leaves a sitting closed rolls its seat's
+  `health`. It answers nil for every write, so the composition keeps
+  the row the passes before it decided on."
+  [eng kind _action-name res]
+  (when (and (= :sitting kind)
+             (= "closed" (some-> (get-in res [:row :state]) name)))
+    (roll-health! eng (get-in res [:row :data :seat])))
+  nil)
 
 (defn- a-persons-write?
   "A logged actor a person answers for: a human, or a held call a person

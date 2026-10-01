@@ -565,6 +565,38 @@
                       (integer? (:page collection)) (assoc :page (:page collection))))
       :focus (when (valid-self? fself) fself)})))
 
+(defn typed-keys
+  "The keys of `input` a dialog on `self`'s `action` may show, in the
+  order the action's input schema declares them: a secret argument is
+  left out, as clean-ui removes it, and a key the schema does not name
+  comes last. nil when `self` names no row of a served kind, or the
+  kind has no such action. It is how the connector types a form one
+  value at a time (docs/spec-agent-demo-walks.md § 2)."
+  [eng self action input]
+  (let [[rdef _] (row-of eng (normalize-self self))
+        door (when (and rdef action)
+               (get-in rdef [:actions (keyword (name action))]))]
+    (when door
+      (let [secret (secret-keys (:input door) (:schema rdef))
+            form (:input door)
+            declared (when (vector? form)
+                       (into [] (comp (filter vector?) (map first) (filter keyword?))
+                             (rest form)))
+            rank (zipmap declared (range))]
+        (->> (keys input)
+             (map #(keyword (name %)))
+             (remove secret)
+             (sort-by #(get rank % (count declared)))
+             vec)))))
+
+(defn shows?
+  "Does `pid`'s last beat in this process already show `ui`? Both are
+  read as clean-ui stores them, so a secret argument and an elided
+  value compare as the registry holds them."
+  [reg pid ui]
+  (let [held (get-in @(:local reg) [pid :entry :ui])]
+    (and (some? held) (= held (clean-ui reg ui)))))
+
 (defn- next-seq
   "Counts up per principal, across processes too: one past the last
   seq this entry carried, and never below the wall clock."
