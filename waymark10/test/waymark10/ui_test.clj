@@ -306,6 +306,19 @@
     (is (str/includes? body "const read = replayReadingTime(r.at ? r.frames[r.at - 1] : null);"))
     (is (str/includes? body "const gap = read + Math.min(REPLAY_MAX_GAP,"))))
 
+(deftest ui-replay-holds-on-a-write
+  ;; the frame after a `transition` waits at least 1500 ms, and the frame
+  ;; after a `move` to another row at least 800 ms. The hold is a floor
+  ;; under the gap and no addition to it, so a recorded 60-second silence
+  ;; still plays in REPLAY_MAX_GAP; film mode schedules by the same code
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_MAX_GAP = 3000;"))
+    (is (str/includes? body "const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;"))
+    (is (str/includes? body "if (f.type === \"transition\") return REPLAY_WRITE_HOLD;"))
+    (is (str/includes? body "return row(frames[j].self) === row(f.self) ? 0 : REPLAY_MOVE_HOLD;"))
+    (is (str/includes? body "const gap = Math.max(replayGap(r), replayHoldTime(r.frames, r.at));"))
+    (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
+
 (deftest ui-replay-anchors-a-caption-to-its-field
   ;; docs/spec-agent-demo-walks.md §3: a caption that names a field is
   ;; drawn beside it, with the field lit, by the code that draws an

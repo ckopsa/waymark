@@ -887,6 +887,12 @@ const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
    character, at least REPLAY_READ_MIN and at most REPLAY_READ_MAX,
    before speed, and on top of the gap the long-silence cut allows. */
 const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;
+/* a write and the screen it lands on are held for the eye: the frame
+   after a `transition` waits at least REPLAY_WRITE_HOLD, and the frame
+   after a `move` to another row at least REPLAY_MOVE_HOLD, before
+   speed. A hold is a floor under the gap and no addition to it, so
+   REPLAY_MAX_GAP is still the most a recorded silence plays. */
+const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;
 function parseWalk(text) {
   let docs;
   try {
@@ -1045,12 +1051,37 @@ function replaySchedule() {
   clearTimeout(r.timer);
   if (film && r.at >= r.frames.length) filmEnd();
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
+  const gap = Math.max(replayGap(r), replayHoldTime(r.frames, r.at));
+  r.timer = setTimeout(replayStep, gap / r.speed);
+}
+/* the wait before the frame at `r.at`, as it was recorded: a burst is
+   spread, a long silence is cut, and a caption is given its reading
+   time on top */
+function replayGap(r) {
   const prev = r.at ? (r.frames[r.at - 1].t || 0) : 0;
   const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);
   const read = replayReadingTime(r.at ? r.frames[r.at - 1] : null);
   const gap = read + Math.min(REPLAY_MAX_GAP,
                        r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);
-  r.timer = setTimeout(replayStep, gap / r.speed);
+  return gap;
+}
+/* the least the frame at `at` waits for the act before it to be seen.
+   A `doc` frame is a screen and nobody's act: it is never held back,
+   and the act before it is the one that counts. A `move` is to another
+   row when the act before it was on a different one. */
+function replayHoldTime(frames, at) {
+  if (!frames[at] || frames[at].type === "doc") return 0;
+  let i = at - 1;
+  while (i >= 0 && frames[i].type === "doc") i--;
+  const f = frames[i];
+  if (!f) return 0;
+  if (f.type === "transition") return REPLAY_WRITE_HOLD;
+  if (f.type !== "move" || !f.self) return 0;
+  const row = s => String(s).split("?")[0];
+  for (let j = i - 1; j >= 0; j--)
+    if (frames[j].type !== "doc" && frames[j].self)
+      return row(frames[j].self) === row(f.self) ? 0 : REPLAY_MOVE_HOLD;
+  return REPLAY_MOVE_HOLD;
 }
 /* how long the frame after `f` waits for `f` to be read: nothing,
    unless `f` is a caption with a line in it */
