@@ -25,9 +25,28 @@
     try { return JSON.parse(text).detail || text; } catch (_e) { return text; }
   }
   function failed(e) { said = (e && e.message) || "The host refused."; render(); }
+  // A scope, one line per entry: the kind, its actions or "read only",
+  // then the ids and the filter that narrow it.
+  function scopeOf(entries) {
+    var dd = el("dd"), ul = el("ul");
+    entries.forEach(function (e) {
+      var entry = e || {}, actions = entry.actions || [];
+      var line = String(entry.kind || "") + ": " +
+        (actions.length ? actions.join(", ") : "read only");
+      if (entry.ids && entry.ids.length) line += " · ids " + entry.ids.join(", ");
+      if (entry.filter)
+        line += " · filter " + (typeof entry.filter === "string"
+          ? entry.filter : JSON.stringify(entry.filter));
+      ul.appendChild(el("li", line));
+    });
+    dd.appendChild(ul);
+    return dd;
+  }
   function doorOf(door, row) {
+    var lengths = door.lengths || {};
     var boxes = (door.inputs || []).map(function (name) {
       var label = el("label", name + " "), box = el("input");
+      if (lengths[name]) box.maxLength = lengths[name];
       label.appendChild(box);
       row.appendChild(label);
       return [name, box];
@@ -36,21 +55,32 @@
     b.addEventListener("click", function () {
       var input = {};
       boxes.forEach(function (nb) { if (nb[1].value) input[nb[0]] = nb[1].value; });
-      act(door.action, input);
+      // a confirm door's sentence is the read's own, never typed here
+      act(door.action, input, door.consequence);
     });
     row.appendChild(b);
   }
   function render() {
     app.replaceChildren();
     if (view) {
-      var dl = el("dl"), row = el("p");
+      var dl = el("dl"), row = el("p"), cards = [];
       (view.fields || []).forEach(function (f) {
         dl.appendChild(el("dt", f.label));
-        dl.appendChild(el("dd", f.value));
+        dl.appendChild(f.label === "scope" && Array.isArray(f.value)
+          ? scopeOf(f.value) : el("dd", f.value));
       });
-      (view.doors || []).forEach(function (d) { if (d.available) doorOf(d, row); });
+      (view.doors || []).forEach(function (d) {
+        if (!d.available) return;
+        if (!d.consequence) { doorOf(d, row); return; }
+        // a confirm door: its consequence sentence, on the button's card
+        var card = el("div", null, "card");
+        card.appendChild(el("p", d.consequence));
+        doorOf(d, card);
+        cards.push(card);
+      });
       app.appendChild(el("h3", view.summary));
       app.appendChild(dl);
+      cards.forEach(function (c) { app.appendChild(c); });
       app.appendChild(row);
     }
     if (said) app.appendChild(el("p", said));
@@ -65,10 +95,11 @@
         render();
       }, failed);
   }
-  function act(action, input) {
-    request("tools/call", { name: "waymark_app_act", arguments: {
-      kind: subject.kind, id: subject.id, action: action, input: input,
-      ticket: view.ticket } })
+  function act(action, input, acknowledge) {
+    var args = { kind: subject.kind, id: subject.id, action: action, input: input,
+                 ticket: view.ticket };
+    if (acknowledge) args.acknowledge = acknowledge;
+    request("tools/call", { name: "waymark_app_act", arguments: args })
       .then(function (result) {
         said = result.isError ? detailOf(result) : result.structuredContent.line;
         // one engine-made line for the model, and never ui/message
