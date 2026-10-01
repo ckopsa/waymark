@@ -505,6 +505,37 @@
                         :safety {:idempotent true :reversible false
                                  :confirm false}})))))
 
+(defn- restating
+  "base holding name and note, with a restate action over the given
+  input fields and :edit declaration."
+  [fields edit]
+  (with-action (assoc base :schema [:map
+                                    [:name [:string {:max 100}]]
+                                    [:note [:string {:max 100}]]])
+    :restate
+    {:from #{:open} :to :open
+     :input (into [:map] fields)
+     :edit edit
+     :safety {:idempotent true :reversible false :confirm false}}))
+
+(deftest prefill-covers-its-input
+  (let [fields [[:name [:string {:max 100}]]
+                [:note [:string {:max 100}]]]]
+    (testing "a partial prefill warns, naming the fields it leaves out"
+      (warns "[edit] action restate's prefill leaves out [:note]; a patch restate writes their defaults"
+             (restating fields {:prefill [:name]})))
+    (testing "a full prefill does not"
+      (does-not-warn "prefill leaves out"
+                     (restating fields {:prefill [:name :note]})))
+    (testing ":prefill-partial true says the gap is meant"
+      (does-not-warn "prefill leaves out"
+                     (restating fields {:prefill [:name]
+                                        :prefill-partial true})))
+    (testing "patch is the restate's switch, never a field to prefill"
+      (does-not-warn "prefill leaves out"
+                     (restating (conj fields [:patch {:optional true} :boolean])
+                                {:prefill [:name :note]})))))
+
 (deftest prose-required-warns
   (warns "demands composition with no draft"
          (with-action base :annotate
