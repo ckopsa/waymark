@@ -1730,6 +1730,60 @@
              (:head_sha (:arguments (last (calls-of st "bench__merge"))))))
       (is (= 1 (count (calls-of st "bench__update_branch")))))))
 
+;; ── a head parked as not mergeable (ticket 4df76da5) ────────────────────────
+
+(defn- row-says!
+  "Another writer, putting `mergeable` on the submitted change's row at
+  the head it has."
+  [w mergeable]
+  (bench/mark-row! (:eng w) :change (str (:id (change-row w)))
+                   {:mergeable mergeable} #{}))
+
+(deftest the-pass-that-finds-a-conflict-says-conflicted-on-the-line
+  (let [w (submitted-world house-policy)
+        st (:state w)]
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (bench/merge-green! (:eng w) (atom {}))
+    (is (= {:line_why "conflicted"}
+           (select-keys (:data (change-row w))
+                        [:line_place :line_why :line_reason]))
+        "the line reads the row after the conflict was written on it")))
+
+(deftest a-parked-conflict-whose-row-turns-clean-is-offered-again
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (bench/merge-green! (:eng w) seen)
+    (is (= 1 (count (calls-of st "bench__merge"))))
+    (row-says! w "clean")
+    (answer! st "bench__merge" {:state "merged"})
+    (bench/merge-green! (:eng w) seen)
+    (let [calls (calls-of st "bench__merge")]
+      (is (= 2 (count calls))
+          "a clean row at the parked head un-parks it, and the rig is asked")
+      (is (= a-commit (:head_sha (:arguments (last calls))))
+          "the same head, offered once more"))
+    (is (= "clean" (get-in (change-row w) [:data :mergeable]))
+        "a clean row is not written back to conflicted")))
+
+(deftest a-parked-conflict-whose-row-loses-the-word-is-marked-again
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (bench/merge-green! (:eng w) seen)
+    (row-says! w "unknown")
+    (bench/merge-green! (:eng w) seen)
+    (is (= 1 (count (calls-of st "bench__merge")))
+        "the head stays parked: the rig already said it conflicts")
+    (is (= "conflicted" (get-in (change-row w) [:data :mergeable]))
+        "the conflict is on the row again, so the failing pass has it")
+    (is (= "conflicted" (get-in (change-row w) [:data :line_why])))))
+
 (defn- the-policy
   "The one policy row of a world, as stored."
   [{:keys [eng]}]
