@@ -953,3 +953,63 @@
                                 true))
           "no slot is left a row to take, so the close is no wake")
       (is (empty? (fires))))))
+
+;; ── 10 · an empty walk says when its filter emptied it (ticket 6ea8f277) ─
+
+(def ^:private empty-queue-sentence
+  "The queue held no rows under the walk's filter and the seat's grant.")
+
+(defn- empty-sit!
+  "One run's sit → [result answer why], `why` being the sentence the
+  sit kept on its sitting."
+  [eng h]
+  (let [sid (initialize! h)
+        r (call! h (with-session sid) "waymark_sit"
+                 {:key seat-key :session "run-empty"})
+        answer (doc-of r)]
+    [r answer (get-in (raw-of eng :sitting (:sitting answer))
+                      [:data :walked_nothing_why])]))
+
+(deftest an-empty-walk-says-when-its-filter-left-rows-out
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        _ (expense! eng "Tyre place" "garage" "2026-09-18T07:00:00Z")
+        _ (expense! eng "Oil depot" "garage" "2026-09-18T08:00:00Z")
+        _ (expense! eng "Paint shop" "garage" "2026-09-18T09:00:00Z")
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (empty? (get-in answer [:walk :rows])))
+    (is (= (str "Your walk filter (team=kitchen) leaves out 3 expense rows "
+                "this seat can see.")
+           why)
+        "the seat sees three expenses, and its judgment's queue takes none")))
+
+(deftest an-empty-walk-counts-no-row-the-grant-conceals
+  ;; the scope entry's filter is the seat's sight: the garage's
+  ;; expenses are outside it, so they are neither counted nor named
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment
+                            {:scope [{:kind "expense" :actions []
+                                      :filter {:team "kitchen"}}
+                                     {:kind "verdict" :actions ["judge"]}]})
+        _ (expense! eng "Tyre place" "garage" "2026-09-18T07:00:00Z")
+        _ (expense! eng "Oil depot" "garage" "2026-09-18T08:00:00Z")
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (empty? (get-in answer [:walk :rows])))
+    (is (= empty-queue-sentence why)
+        "the plain sentence, with no count of what the grant cannot see")))
+
+(deftest an-empty-queue-with-nothing-filtered-keeps-its-sentence
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (empty? (get-in answer [:walk :rows])))
+    (is (= empty-queue-sentence why))))
