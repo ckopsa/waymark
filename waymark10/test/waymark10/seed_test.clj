@@ -112,6 +112,23 @@
     (is (string? (:skipped twice)) "and it says so")
     (is (= 1 (count (dev/rows eng :chore))) "no second row")))
 
+(deftest a-seed-that-failed-half-way-is-refused-on-a-restart
+  (let [eng (engine)
+        ;; the schema refuses a chore with no title
+        bad (update toy :steps conj
+                    {:as :ada :kind :chore :create {:title ""}})
+        first-e (refused #(seed/load! eng bad {}))
+        again (try (seed/load! eng bad {})
+                   (catch ExceptionInfo e e))]
+    (is (= 3 (:step (ex-data first-e))) "the last step is refused")
+    (is (some? (dev/row eng :member "ada")) "and the cast is already written")
+    (is (instance? ExceptionInfo again) "the second load refuses; it never answers skipped")
+    (is (true? (:waymark10/seed-refused (ex-data again))))
+    (is (re-find #"half-way" (str (ex-message again))))
+    (is (= 1 (count (dev/rows eng :chore))) "and no step is walked again")
+    (testing "a whole seed is refused there too, and is not skipped"
+      (is (some? (refused #(seed/load! eng toy {})))))))
+
 (deftest a-relative-date-is-counted-from-the-boot
   (let [eng (engine)
         dated (assoc toy :steps

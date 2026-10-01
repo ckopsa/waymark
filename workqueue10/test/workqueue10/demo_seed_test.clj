@@ -6,14 +6,26 @@
   The boot step that reads the two variables is here too, given their
   values as arguments.
 
+  The seeded held call is allowed here too (§ 4), as Ada: with no wall
+  it ends `failed` with the engine's no-server sentence, and behind a
+  wall served in-process it ends `failed` with the wall's sentence.
+
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.demo-seed-test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [factory10.main :as factory]
             [waymark10.dev :as dev]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
-            [workqueue10.main :as main]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]
+            [workqueue10.main :as main])
+  (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
+           (java.io InputStream OutputStream)
+           (java.net InetSocketAddress)))
 
 (defn- moves [eng kind id]
   (store/with-tx (:storage eng)
@@ -63,11 +75,11 @@
 
 (defn- booted
   "What `seed/boot!` was called with while `f` ran: a vector of
-  [engine seed-name] pairs, the seed itself never loaded."
+  [engine seed-name opts] triples, the seed itself never loaded."
   [f]
   (let [calls (atom [])]
-    (with-redefs [seed/boot! (fn [eng seed-name]
-                               (swap! calls conj [eng seed-name])
+    (with-redefs [seed/boot! (fn [eng seed-name opts]
+                               (swap! calls conj [eng seed-name opts])
                                nil)]
       (f))
     @calls))
@@ -76,7 +88,7 @@
   (doseq [factory [nil "" "0" "true"]]
     (testing (pr-str factory)
       (let [thrown (atom nil)
-            calls (booted #(try (seed-on-boot! ::eng "demo" factory)
+            calls (booted #(try (seed-on-boot! ::eng "demo" factory nil)
                                 (catch clojure.lang.ExceptionInfo e
                                   (reset! thrown e))))]
         (is (some? @thrown))
@@ -89,10 +101,94 @@
           factory [nil "1"]]
     (testing (pr-str [seed factory])
       (let [answer (atom ::unset)
-            calls (booted #(reset! answer (seed-on-boot! ::eng seed factory)))]
+            calls (booted #(reset! answer (seed-on-boot! ::eng seed factory nil)))]
         (is (nil? @answer))
         (is (= [] calls))))))
 
 (deftest a-seed-with-the-factory-kinds-boots-it-by-name
-  (is (= [[::eng "demo"]]
-         (booted #(seed-on-boot! ::eng "demo" "1")))))
+  (testing "with no wall named"
+    (doseq [wall [nil ""]]
+      (is (= [[::eng "demo" {:wall-url nil}]]
+             (booted #(seed-on-boot! ::eng "demo" "1" wall))))))
+  (testing "with the clone's wall"
+    (is (= [[::eng "demo" {:wall-url "http://wall.test"}]]
+           (booted #(seed-on-boot! ::eng "demo" "1" "http://wall.test"))))))
+
+;; ── allowing the seeded held call (§ 4) ─────────────────────────────
+
+(defn- ada
+  "Ada as the identity gate hands her over: the seeded member's id and
+  the roles her own row holds."
+  [eng]
+  (t/principal {:id "ada" :display "Ada Example"
+                :roles (members/held-roles eng "ada")}))
+
+(defn- allow-as-ada!
+  "Ada's tap on the one seeded held call, and the wire-boundary effect
+  the router walks after it. → the row afterwards."
+  [eng]
+  (let [id (str (:id (first (dev/rows eng :held_call))))
+        rdef (get (inv/resources eng) :held_call)
+        out (inv/invoke! eng :held_call id :allow {} {:principal (ada eng)})]
+    (held/after-allow! eng rdef :allow out)
+    (first (dev/rows eng :held_call))))
+
+(def ^:private wall-sentence "The demo sends no mail.")
+
+(defn- wall!
+  "An in-process wall: every request answers 403 with a JSON-RPC error
+  that carries the wall's sentence. → {:url :hits :stop}."
+  []
+  (let [hits (atom 0)
+        ^bytes body (.getBytes ^String (wire/write-json
+                                        {:jsonrpc "2.0" :id nil
+                                         :error {:code -32000
+                                                 :message wall-sentence}})
+                               "UTF-8")
+        ^HttpServer server (HttpServer/create
+                            (InetSocketAddress. "127.0.0.1" 0) 0)]
+    (.createContext server "/"
+                    (reify HttpHandler
+                      (handle [_ exchange]
+                        (let [^HttpExchange exchange exchange]
+                          (swap! hits inc)
+                          (with-open [^InputStream in (.getRequestBody exchange)]
+                            (.readAllBytes in))
+                          (.add (.getResponseHeaders exchange)
+                                "Content-Type" "application/json")
+                          (.sendResponseHeaders exchange 403 (long (alength body)))
+                          (with-open [^OutputStream out (.getResponseBody exchange)]
+                            (.write out body))))))
+    (.start server)
+    {:url (str "http://127.0.0.1:" (.getPort (.getAddress server)) "/mcp/")
+     :hits hits
+     :stop #(.stop server 0)}))
+
+(deftest allowing-the-seeded-held-call-with-no-wall-fails-with-the-no-server-sentence
+  (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})
+        _ (seed/load! eng (seed/read-seed "demo") {})
+        servers (dev/rows eng :mcp_server)
+        row (allow-as-ada! eng)]
+    (testing "with no wall named, the seed makes no server row"
+      (is (empty? servers)))
+    (is (= :failed (state-of row)))
+    (is (= "Not found: No power \"mail__send\"." (get-in row [:data :reason])))
+    (is (nil? (get-in row [:data :answer])))))
+
+(deftest allowing-the-seeded-held-call-behind-a-wall-fails-with-the-walls-sentence
+  (let [{:keys [url hits stop]} (wall!)]
+    (try
+      (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})
+            _ (seed/load! eng (seed/read-seed "demo") {:wall-url url})
+            servers (dev/rows eng :mcp_server)
+            before @hits
+            row (allow-as-ada! eng)]
+        (testing "the seed makes one server row, at the wall"
+          (is (= ["mail"] (mapv #(get-in % [:data :name]) servers)))
+          (is (= url (get-in (first servers) [:data :url]))))
+        (is (= :failed (state-of row)))
+        (is (str/includes? (str (get-in row [:data :reason])) wall-sentence)
+            (pr-str (get-in row [:data :reason])))
+        (is (nil? (get-in row [:data :answer])))
+        (is (< before @hits) "the allow reached the wall"))
+      (finally (stop)))))

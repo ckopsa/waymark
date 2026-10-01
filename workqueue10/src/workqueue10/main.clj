@@ -844,14 +844,18 @@
   kind, so a demo engine boots with FACTORY10=1 and this refuses one
   that does not. `seed/boot!` refuses an engine not named `demo-…` or
   one with an IdP, and a step the law refuses. Every refusal throws,
-  so the boot ends before the server listens. `seed` and `factory` are
-  the two variables' values as `start!` read them."
-  [eng seed factory]
+  so the boot ends before the server listens. WAYMARK_WALL_URL is the
+  clone's wall (§ 4): when it is set the seed's walled servers are
+  made at it, so the seeded held call is forwarded to the wall. `seed`,
+  `factory` and `wall-url` are the three variables' values as `start!`
+  read them."
+  [eng seed factory wall-url]
   (when-some [seed-name (some-> seed str not-empty)]
     (when-not (= "1" factory)
       (throw (ex-info "WAYMARK10_SEED is set and FACTORY10 is not 1: the seed's tickets need the factory kinds, so a demo engine boots with FACTORY10=1."
                       {:seed seed-name})))
-    (seed/boot! eng seed-name)))
+    (seed/boot! eng seed-name
+                {:wall-url (some-> wall-url str not-empty)})))
 
 (defn start!
   "Boot and serve. Returns the engine."
@@ -964,7 +968,8 @@
         ;; engine is never served
         _ (seed-on-boot! eng
                          (System/getenv "WAYMARK10_SEED")
-                         (System/getenv "FACTORY10"))
+                         (System/getenv "FACTORY10")
+                         (System/getenv "WAYMARK_WALL_URL"))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before
