@@ -229,6 +229,29 @@
            (stamps (delegate "other" "colton") ui-capability))
         "a declared session on an unlisted delegate client")))
 
+(deftest the-read-says-the-call-in-words-and-links-the-row
+  (let [{:keys [eng h] :as w} (world {:app-url "https://work.example/"})
+        {:keys [as sitter]} (seat-sat! w)
+        id (hold! eng sitter "colton")
+        view (:structuredContent (tool h as "waymark_app_read" {:kind "held_call" :id id}))
+        allow (some #(when (= "allow" (:action %)) %) (:doors view))
+        page (get-in (json (rpc h as "resources/read" {:uri mcp/app-resource-uri}))
+                     [:result :contents 0 :text])]
+    (is (= (str "https://work.example/#/api/held_calls/" id) (:link view)))
+    (is (= "apps-clerk wants to create meal" (:title view))
+        "the seat by its name, the action in words")
+    (is (= "create · meal" (some #(when (= "door" (:label %)) (:value %)) (:fields view))))
+    (is (not-any? #{"patch"} (:inputs allow)) "the edit-door flag is no person's field")
+    (is (not-any? #{"shown"} (map :label (:fields view))))
+    (is (str/includes? (str page) "p.refusal") "the page carries 030-app.css"))
+  (testing "a caller the person cannot read stays its bare id, and no :app-url is no link"
+    (let [{:keys [eng h]} (world)
+          as (initialize! h colton ui-capability)
+          id (hold! eng "seat:somebody" "colton")
+          view (:structuredContent (tool h as "waymark_app_read" {:kind "held_call" :id id}))]
+      (is (= "seat:somebody wants to create meal" (:title view)))
+      (is (nil? (:link view))))))
+
 (deftest somebody-elses-call-is-refused-by-the-second-wall
   (let [{:keys [eng h]} (world)
         id (hold! eng "seat:somebody" "colton")

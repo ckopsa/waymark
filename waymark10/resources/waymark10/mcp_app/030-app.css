@@ -1,0 +1,32 @@
+  /* ── the MCP Apps row page (docs/spec-mcp-apps.md) ──────────────────
+     One row inside a host's frame. 020-base's tokens and nothing else:
+     no colour is named here, so light and dark follow the base's own
+     prefers-color-scheme block. */
+  body { padding: 12px 14px; background: var(--panel); }
+  h3.title { margin: 0 0 8px; font: 600 15px/1.35 var(--sans); }
+  h3.title .chip { margin-left: 6px; vertical-align: 1px; font-weight: 400;
+                   text-transform: capitalize; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px;
+       margin: 0 0 10px; }
+  dt { color: var(--muted); font-size: 12px; line-height: 21px; }
+  dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  dd ul { margin: 0; padding-left: 16px; }
+  dd summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  dd pre { margin: 4px 0 0; padding: 6px 8px; overflow-x: auto;
+           background: var(--chipbg); border-radius: var(--radius);
+           font: 12px/1.45 var(--mono); }
+  /* each door with its own inputs: Allow alone, Refuse beside its reason */
+  .doors { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+           margin: 10px 0 0; }
+  .door { display: flex; align-items: center; gap: 6px; }
+  .door input { width: 180px; }
+  .card { margin: 10px 0 0; padding: 8px 10px; background: var(--paper);
+          border: 1px solid var(--line); border-radius: var(--radius); }
+  .card p { margin: 0 0 6px; }
+  /* the engine-made line after a tap, and a refusal apart from it */
+  p.said { margin: 10px 0 0; color: var(--muted); }
+  p.refusal { margin: 10px 0 0; padding: 6px 8px; color: var(--refusal);
+              background: var(--refusal-wash); border-radius: var(--radius); }
+  button.open { margin: 10px 0 0; padding: 0; border: 0; background: none;
+                color: var(--verdigris); font-size: 12px; }
+  button.open:hover { text-decoration: underline; }
