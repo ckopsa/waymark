@@ -638,7 +638,8 @@
             data (held! why)]
         (is (= 400 (count why)))
         (is (= why (:why data)))
-        (is (false? (:why_cut data)))))
+        (is (not (contains? data :why_cut))
+            "a whole why carries no stamp: absent reads as not cut")))
 
     (testing "a 1200-character why is cut at a word, marked, and flagged"
       (let [why (subs said 0 1200)

@@ -456,8 +456,10 @@
            {:label "Why"
             :help "The caller's one sentence of reason. An approval that held a call and had nothing to show would be a notice with no words on it."}}
      [:string {:min 1 :max 1000}]]
-    ;; the engine's stamp beside the why (ticket e9f65194): a row
-    ;; written before it carries none, and its why is as it was stored
+    ;; the engine's stamp beside the why (ticket e9f65194), written
+    ;; ONLY when a cut happened: absent reads as not cut, so a whole
+    ;; why costs the row nothing, and a row written before it keeps
+    ;; its why as it was stored
     [:why_cut {:optional true
                :x-display {:label "Why was cut"
                            :help "True when the caller's why was longer than the row keeps, and the stored one ends with … at a word boundary."}}
@@ -742,12 +744,12 @@
                    eng :held_call
                    (cond-> {:tool (str tool)
                             :why why
-                            :why_cut cut
                             :caller (str caller)
                             :input (or input {})
                             :forward (or forward {})
                             :shown (:text (capped (shown-text entry input why)
                                                   140))}
+                     cut (assoc :why_cut true)
                      (some-> server str not-empty) (assoc :server (str server))
                      (some-> sitting str not-empty) (assoc :sitting (str sitting)))
                    {:principal engine-actor}))]
@@ -836,7 +838,6 @@
            eng :held_call
            (cond-> {:tool (str kind "." action)
                     :why (:text kept)
-                    :why_cut (:cut kept)
                     :caller (str caller)
                     :forward (or body {})
                     :shown (:text (capped shown 140))
@@ -845,6 +846,7 @@
                             (some-> author str not-empty) (assoc :author (str author))
                             (some-> if-match str not-empty) (assoc :if_match (str if-match))
                             digests (assoc :prefill_digests digests))}
+             (:cut kept) (assoc :why_cut true)
              changes (assoc :changes changes)
              (some-> owner str not-empty) (assoc :owner (str owner)))
            {:principal engine-actor}))))
