@@ -980,6 +980,7 @@
                          [(store/search-rows st tx (:kind trdef) conds
                                              {:order-by (:field sort)
                                               :desc (:desc sort)
+                                              :then-by (:then sort)
                                               :limit (:size page)
                                               :offset (* (:size page) (dec (:number page)))})
                           (store/count-matching st tx (:kind trdef) conds)]))

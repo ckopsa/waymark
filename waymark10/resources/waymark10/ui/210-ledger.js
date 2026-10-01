@@ -185,6 +185,9 @@ function onRowFrame({event, id, data: ev}) {
   if (seen.has(key)) return;
   seen.add(key);
   tickerLine(ev);
+  /* a walkthrough in hand hears its own row, and its next step
+     (200-events-follow.js) */
+  onLedFrame(ev);
   const isFollowed = !!(followId && ev.actor && ev.actor.id === followId);
   let lawLine = false;
   if (ev.kind === "definition") {

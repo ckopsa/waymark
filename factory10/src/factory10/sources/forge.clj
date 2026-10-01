@@ -224,6 +224,18 @@
     when the check names no job. Throws when the forge does not
     answer."))
 
+(defprotocol ForgeBudget
+  "The forge's rate limit as the source last heard it (ticket
+  cdba1f6a). A protocol of its own: a source that does not implement it
+  has no budget to print and is never held."
+  (forge-budget [s]
+    "Answers {:remaining n :limit n :reset instant :unchanged n
+    :held-until instant}, each absent when the forge has not said it.
+    `:unchanged` counts the answers of this pass the forge did not
+    count against the limit. `:held-until` stands while the source
+    holds every call for a spent limit, and no read of the forge
+    answers before that instant. Never throws."))
+
 ;; ── what the two kinds take ─────────────────────────────────────────
 
 (def change-create-fields
@@ -353,13 +365,30 @@
   [row]
   (some-> (:state row) name keyword))
 
+(defn- holds-conflict?
+  "Does the row's `conflicted` stand against what the forge reads now
+  (ticket bf8ba0a6)? The merge pass writes `conflicted` when the rig's
+  merge is refused as not mergeable, and parks that head: nothing writes
+  it a second time. GitHub's own read of the same head may still say
+  `unknown` or `blocked` — it has not computed the merge, or the policy
+  word outranks it — and that word used to replace the conflict before
+  the failing pass read it, so #706 sat submitted and parked. Neither
+  word says the conflict is gone: only `clean`, or a new head, does."
+  [row doc]
+  (and (= "conflicted" (str (get-in row [:data :mergeable])))
+       (contains? #{"unknown" "blocked"} (str (:mergeable doc)))
+       (or (nil? (:head_sha doc))
+           (= (str (:head_sha doc)) (str (get-in row [:data :head_sha]))))))
+
 (defn- changed-facts
   "The facts that moved under the row. A value equal to the stored one
-  is not written again, so a pass that saw nothing new logs nothing."
+  is not written again, so a pass that saw nothing new logs nothing. A
+  conflict the row holds (`holds-conflict?`) is not written over."
   [row doc]
   (into {}
         (keep (fn [[k v]] (when (not= v (get-in row [:data k])) [k v])))
-        (present doc change-observe-fields)))
+        (present (cond-> doc (holds-conflict? row doc) (dissoc :mergeable))
+                 change-observe-fields)))
 
 (defn- state-door
   "The one door from the row's state to the forge's. nil when the row
@@ -2134,6 +2163,13 @@
 ;; alone, so the log carries one transition when a repository goes dark
 ;; and one when it comes back.
 
+(defn- budget-of
+  "What the source last heard of the forge's rate limit, or nothing
+  from a source that keeps no budget (ticket cdba1f6a)."
+  [source]
+  (when (satisfies? ForgeBudget source)
+    (forge-budget source)))
+
 (defn- source-note-pass!
   [eng refusals answered census log-fn]
   (let [answered (set answered)]
@@ -2190,35 +2226,43 @@
           census (assoc fresh-census
                         :repositories (count repositories)
                         :complete? (boolean complete?))
+          ;; a spent rate limit holds the whole pass (ticket cdba1f6a):
+          ;; nothing below may ask the forge, and a row whose forge was
+          ;; not read is not moved, noted or failed
+          held (:held-until (budget-of source))
           ;; the base pass runs whatever a pass before it did (ticket
           ;; c4bac627): a throw above it is thrown again only after
           ;; every base was read
           [census thrown]
-          (try
-            (let [census (source-note-pass! eng refusals answered census
-                                            log-fn)
-                  refused (volatile! [])
-                  census (change-pass! eng changes census log-fn refused)
-                  _ (retry-refused! source @refused log-fn)
-                  census (unknown-pass! eng source changes census log-fn)
-                  read-checks (head-reader source)
-                  census (run-pass! eng source
-                                    (into (vec checks)
-                                          (live-reds eng read-checks checks
-                                                     log-fn))
-                                    census log-fn)
-                  census (stale-pass! eng changes census log-fn)
-                  census (label-pass! eng source census log-fn)
-                  census (failing-pass! eng source read-checks census log-fn)
-                  census (staleness-pass! eng source read-checks census
+          (if held
+            [census nil]
+            (try
+              (let [census (source-note-pass! eng refusals answered census
+                                              log-fn)
+                    refused (volatile! [])
+                    census (change-pass! eng changes census log-fn refused)
+                    _ (retry-refused! source @refused log-fn)
+                    census (unknown-pass! eng source changes census log-fn)
+                    read-checks (head-reader source)
+                    census (run-pass! eng source
+                                      (into (vec checks)
+                                            (live-reds eng read-checks checks
+                                                       log-fn))
+                                      census log-fn)
+                    census (stale-pass! eng changes census log-fn)
+                    census (label-pass! eng source census log-fn)
+                    census (failing-pass! eng source read-checks census
                                           log-fn)
-                  census (adoption-note-pass! eng source census log-fn)]
-              [census nil])
-            (catch Exception e [census e]))
-          census (base-pass! eng source census log-fn)
+                    census (staleness-pass! eng source read-checks census
+                                            log-fn)
+                    census (adoption-note-pass! eng source census log-fn)]
+                [census nil])
+              (catch Exception e [census e])))
+          census (if held census (base-pass! eng source census log-fn))
           census (floor-pass! eng census log-fn)
           _ (when thrown (throw thrown))
-          census (assoc census :calls (forge-calls source))]
+          census (merge (assoc census :calls (forge-calls source))
+                        (budget-of source))]
       (log-fn (:calls census) " calls, " (count changes) " pull requests, "
               (:minted census) " changes minted, " (:adopted census)
               " changes adopted, " (:moved census)
@@ -2252,7 +2296,19 @@
                 (str ", " (:floor-filed census) " groom-floor tickets filed"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
-              (when-not (:complete? census)
+              (when-some [left (:remaining census)]
+                (str ", " left
+                     (when-some [limit (:limit census)] (str " of " limit))
+                     " calls left"
+                     (when-some [reset (:reset census)]
+                       (str " until " reset))))
+              (when (:unchanged census)
+                (str ", " (:unchanged census)
+                     " answers unchanged and not counted"))
+              (when-some [until (:held-until census)]
+                (str ", every call held until " until
+                     ": the forge's rate limit is spent"))
+              (when-not (or (:complete? census) (:held-until census))
                 ", and a repository did not answer — the cursor stands"))
       census)))
 

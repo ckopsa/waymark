@@ -1066,6 +1066,81 @@ async function accessStory() {
   await waitFor(`!${replayState} && !document.querySelector("dialog[open]")`,
                 "the second replay to stop");
 
+  /* a walkthrough (docs/spec-walkthrough.md §5 and §7 item 5). The boot
+     seeded three steps by the mail-desk sitter for priya: a person
+     step naming two fields, an agent step with no action, a person
+     step. The page leads her through the person steps, and nothing
+     here reloads it: the mark set first is read again at step 3. */
+  console.log("· a walkthrough: the page leads through the person steps");
+  const wt = ((await get("/api/walkthroughs?state=open&subject=priya")).data?.items || [])[0];
+  ok("the boot seeded one walkthrough offered to the viewer", !!wt);
+  const wtSteps = (await get(wt.self)).data.steps;
+  await evaljs(`window.__led = true; location.hash = ${JSON.stringify(wt.self)}; true`);
+  await waitFor(`document.querySelectorAll("[data-walk-steps] li").length === 3 &&
+                 !!document.querySelector('[data-action="start"]')`,
+                "the walkthrough's row page");
+  ok("the row page lists every step before the start", true);
+  await evaljs(`document.querySelector('[data-action="start"]').click(); true`);
+  /* Start is the row's own door: its dialog, when it shows one, is
+     confirmed. A step's own dialog is never touched here. */
+  await waitFor(`!!document.querySelector("dialog[open]") || !!walkthroughId`,
+                "Start to ask or to land");
+  await evaljs(`(() => { const d = document.querySelector("dialog[open]");
+    if (d && !d.querySelector("[data-walk-step]"))
+      d.querySelector(".dlgfoot button.primary").click();
+    return true; })()`);
+  const wtDlg = `document.querySelector("dialog[open] [data-walk-step]")`;
+  const wtChip = `document.querySelector("#walkchip").textContent`;
+  await waitFor(`${wtDlg}?.textContent.startsWith("Step 1 of 3")`,
+                "step 1's dialog, opened off the firehose", 15000);
+  ok("Start opens step 1's dialog under its step line", true);
+  const wtFirst = await evaljs(`({
+    lit: document.querySelectorAll("dialog[open] .invited").length,
+    skip: document.querySelector("dialog[open] [data-invite-decline]")?.textContent,
+    stop: !!document.querySelector("dialog[open] [data-walk-stop]")})`);
+  ok("both named fields are lit", wtFirst.lit === 2);
+  ok("inside a walkthrough the dialog offers Skip and Stop",
+     wtFirst.skip === "Skip" && wtFirst.stop);
+  await waitFor(`${wtChip}.includes("Step 1 of 3")`, "the chip on step 1");
+  ok("the chip says the same step", true);
+  await evaljs(`(() => {
+    const set = (name, v) => {
+      const i = document.querySelector('dialog[open] [name="' + name + '"]');
+      i.value = v;
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+    };
+    set("title", "Sorted mail"); set("room", "Front desk");
+    document.querySelector("dialog[open] .dlgfoot button.primary").click();
+    return true; })()`);
+  await waitFor(`${wtChip}.includes("Step 2 of 3") && ${wtChip}.includes("is working: ")`,
+                "the chip's agent line", 15000);
+  const wtAgent = await evaljs(`({text: ${wtChip},
+    skip: !!document.querySelector("#walkchip [data-walk-skip]"),
+    stop: !!document.querySelector("#walkchip [data-walk-stop]")})`);
+  ok("after the answer the chip reads the agent's step and its note",
+     wtAgent.text.includes(wtSteps[1].note));
+  ok("an agent step offers Stop and no Skip", wtAgent.stop && !wtAgent.skip);
+  /* the sitter ends its own step through the API; the page hears it */
+  const wtAuthor = (await get(wt.self)).data.author;
+  const wtAdvanced = await fetch(BASE + wt.self + "/-/advance", {method: "POST",
+    headers: {"Content-Type": "application/json", "x-waymark-principal": wtAuthor,
+              "Idempotency-Key": "ui-drive-advance-" + Date.now()},
+    body: "{}"});
+  ok("the sitter advances its own step through the API", wtAdvanced.status < 400);
+  await waitFor(`${wtDlg}?.textContent.startsWith("Step 3 of 3")`,
+                "step 3's dialog, with no reload", 15000);
+  ok("the next person step opens by itself, with no reload",
+     await evaljs(`window.__led === true`));
+  await evaljs(`document.querySelector("dialog[open] [data-invite-decline]").click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]") &&
+                 document.querySelector("#walkchip").style.display === "none"`,
+                "the walkthrough to finish and leave the hand", 15000);
+  const wtEnded = await get(wt.self);
+  ok("the walkthrough is finished: answered, done, skipped",
+     wtEnded.state === "finished" &&
+     (wtEnded.data.outcomes || []).map(o => o.outcome).join() === "answered,done,skipped");
+
   /* signed in the way a person is: a session cookie off the magic
      link, the dev box EMPTY. An open invitation addressed to that
      member offers "Take this step" on its row page and in its

@@ -131,6 +131,14 @@ async function render() {
   const raw = location.hash.slice(1) || null;
   const {href, viewName} = splitViewParam(raw);
   const view = $("#view");               // superseded render never blanks
+  /* film mode (200-events-follow.js): the film's own address is no
+     screen. It stays blank under the title card, and the walk's frames
+     name every screen after it */
+  if (filmWalkOf(raw)) {
+    clearLiveTimers(); view.textContent = ""; lawStamp(null);
+    if (!replay) renderNav(null);
+    return;
+  }
   /* a replay holds the screen (200-events-follow.js): a row or a
      collection is drawn from the recording, never from a read */
   if (replay && href && /^\/api\//.test(href)) {

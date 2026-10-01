@@ -179,6 +179,36 @@
     (is (str/includes? body
                        "invokeBare(invitation.doc.actions.decline, invitation.doc)"))))
 
+(deftest ui-draws-step-n-of-m-on-an-invited-dialog
+  ;; docs/spec-walkthrough.md §5: an invitation that has a walkthrough
+  ;; opens as any other does, with "Step 2 of 4 · <title>" above the form,
+  ;; and the chip says the same on every screen
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function stepLine(n, of, title)"))
+    (is (str/includes? body "return `Step ${n} of ${of}`"))
+    (is (str/includes? body "walkthrough: d.walkthrough ? ledStep(d) : null"))
+    (is (str/includes? body "data-walk-step"))
+    (is (str/includes? body "stepLine(led.step, led.of, led.title)"))
+    (is (str/includes? body "<span id=\"walkchip\"></span>"))
+    (is (str/includes? body "`step ${f.step} of ${f.of}`"))))
+
+(deftest ui-offers-skip-and-stop-inside-a-walkthrough
+  ;; the Decline button reads Skip and still walks the invitation's own
+  ;; decline door; Stop sits beside it and walks the walkthrough's stop
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "led ? \"Skip\" : \"Decline\""))
+    (is (str/includes? body "data-walk-stop"))
+    (is (str/includes? body "async function stopLed()"))
+    (is (str/includes? body "const stop = row.ok && (row.body.actions || {}).stop;"))
+    (is (str/includes? body "btn(\"data-walk-skip\", \"Skip\", skipLedStep)"))))
+
+(deftest ui-walkthrough-page-lists-its-steps
+  ;; the row page lists every step's note in order, before the start
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "if (kind === \"walkthrough\") panel.append(walkthroughSteps(doc));"))
+    (is (str/includes? body "function walkthroughSteps(doc)"))
+    (is (str/includes? body "data-walk-steps"))))
+
 (deftest ui-offers-do-this-later
   ;; docs/spec-scheduled-actions.md R-7.3: a row's dialog schedules the
   ;; same call, with the zone named and the rule in plain words; a confirm
@@ -309,6 +339,27 @@
     (is (str/includes? body "\"data-export-walk\""))
     (is (str/includes? body "onclick: () => exportWalk(doc.self)"))))
 
+(deftest ui-replay-draws-an-invitation-frame
+  ;; docs/spec-walkthrough.md §6: replay opens an `invitation` frame's
+  ;; dialog read-only, with every named field lit, the note and the
+  ;; "Step 2 of 4" line, and the next `transition` frame closes it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "async function openReplayInvitation(f, actor)"))
+    (is (str/includes? body "openReplayInvitation(f, actor);"))
+    (is (str/includes? body "g.setAttribute(\"data-replay-invite\", \"\");"))
+    (testing "every named field has an input and is lit"
+      (is (str/includes? body "const typed = inv ? [f.field, ...(f.fields || []),"))
+      (is (str/includes? body "fields: f.fields || (f.field ? [f.field] : [])},")))
+    (testing "the step line is drawn from the frame's own `step` and `of`"
+      (is (str/includes? body "invitation: {doc: {}, note: f.note, step: f.step, of: f.of,"))
+      (is (str/includes? body "if (invitation && invitation.step && invitation.of)"))
+      (is (str/includes? body "`Step ${invitation.step} of ${invitation.of}`"))
+      (is (str/includes? body "data-invite-step"))
+      (is (str/includes? body ".invite-step {")))
+    (testing "the transition that answers it closes it"
+      (is (str/includes? body "const inv = $(\"dialog[open][data-replay-invite]\");"))
+      (is (str/includes? body "if (inv && inv.getAttribute(\"data-guided\") === f.self + \" \" + f.action)")))))
+
 (deftest ui-replay-draws-a-row-from-its-doc
   ;; docs/spec-agent-demo-walks.md §8a: a `doc` frame is kept as the
   ;; replay passes it, and the screen it names is drawn by the code that
@@ -341,6 +392,53 @@
     (testing "playing again forgets the documents, and stopping lets requests go"
       (is (str/includes? body "r.rows.clear();\n    r.docs.clear();"))
       (is (str/includes? body "replay = null;\n  apiHeld = false;")))))
+
+(deftest ui-film-mode-hides-the-chrome
+  ;; docs/spec-agent-demo-walks.md §8b: /#/api/walks/<id>?film=1 plays a
+  ;; sealed walk for a camera; the dev principal box, the replay chip,
+  ;; the demo banner and every toast are hidden, and the film's own
+  ;; address is no screen and no gaze
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "return /^\\/api\\/walks\\/[^/]+$/.test(path) &&"))
+    (is (str/includes? body "new URLSearchParams(query || \"\").get(\"film\") === \"1\" ? path : null;"))
+    (is (str/includes? body "html[data-film] #who, html[data-film] #replaychip,"))
+    (is (str/includes? body "html[data-film] #demobanner, html[data-film] #toast { display: none !important; }"))
+    (testing "the chrome is gone before the walk is read"
+      (is (< (str/index-of body "filmState(\"\");")
+             (str/index-of body "const res = await fetch(self + \"/export\", {headers: principalHeaders()});\n    if (res.ok) text = await res.text();\n  } catch (_e) { /* never ready */ }"))))
+    (is (str/includes? body "if (filmWalkOf(raw)) {"))
+    (is (str/includes? body "if (film) return;"))))
+
+(deftest ui-film-mode-says-when-it-has-ended
+  ;; the root element's data-film is what the camera reads: `ready` under
+  ;; the title card for 2 s, `playing` once play starts by itself at 1×,
+  ;; and `ended` when the last screen has held for 1.5 s
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        ready "filmState(\"ready\");"
+        playing "filmState(\"playing\");\n    startReplay(text);\n  }, FILM_TITLE_MS);"]
+    (is (str/includes? body "const FILM_TITLE_MS = 2000, FILM_HOLD_MS = 1500;"))
+    (is (str/includes? body "function filmState(s) { document.documentElement.setAttribute(\"data-film\", s); }"))
+    (is (str/includes? body "el(\"h1\", {}, walk.header.title || \"a walk\"));"))
+    (is (str/includes? body ready))
+    (is (str/includes? body playing))
+    (is (< (str/index-of body ready) (str/index-of body playing))
+        "the title card comes before the play")
+    (is (str/includes? body "if (film && r.at >= r.frames.length) filmEnd();"))
+    (is (str/includes? body "setTimeout(() => filmState(\"ended\"), FILM_HOLD_MS);"))
+    (is (str/includes? body "speed: 1, playing: false")
+        "a replay starts at 1×")))
+
+(deftest ui-film-mode-draws-a-caption-as-a-band
+  ;; a caption on video is a band across the bottom, two lines at most
+  ;; and in large type; one that names a field is drawn beside the lit
+  ;; field instead, once its form is open
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "html[data-film] #replaycaption { left: 0; right: 0; bottom: 0; transform: none;"))
+    (is (str/includes? body "border-radius: 0; box-shadow: none; font-size: 34px;"))
+    (is (str/includes? body "line-height: 1.3; max-height: 2.6em; overflow: hidden; }"))
+    (is (str/includes? body "band.style.display = c && !filmBeside(c) ? \"block\" : \"none\";"))
+    (is (str/includes? body "const g = film && c.field && c.action &&"))
+    (is (str/includes? body "String(c.self).split(\"?\")[0] + \" \" + c.action === g.getAttribute(\"data-guided\");"))))
 
 (defn- render! [headers body]
   (let [resp (*h* {:request-method :post :uri "/api/-/render/markdown"

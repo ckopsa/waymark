@@ -7,14 +7,17 @@
             [clojure.test :refer [deftest is testing]]
             [clojure.walk :as walk]
             [waymark10.resource :as r]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.events :as events]
+            [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live :as live]
             [waymark10.server.presence :as presence]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.walks :as walks]
+            [waymark10.server.walkthroughs :as walkthroughs]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -580,6 +583,210 @@
                                              (vis-of c "inv-1" colton planner))))))))
     (testing "an exporter that cannot see the invitation gets no line"
       (is (empty? (:lines (export-of eng w (vis-of c colton planner))))))))
+
+;; ── a walkthrough is recorded (docs/spec-walkthrough.md § 6) ────────
+
+(def ^:private seeing-all
+  "The guard's-eye view of a grant that sees every row and admits every
+  door: the planner's, when it writes the steps."
+  {:id "grant-planner"
+   :action? (fn [_kind _action] true)
+   :row? (fn [_kind _id] true)})
+
+(defn- settle!
+  "Drain the invitations' and the walkthroughs' consumers until neither
+  hears anything."
+  [eng]
+  (loop [left 20]
+    (let [n (+ (consumers/drain-consumer! eng invitations/consumer-name
+                                          (invitations/consumer-fn eng))
+               (consumers/drain-consumer! eng walkthroughs/consumer-name
+                                          (walkthroughs/consumer-fn eng)))]
+      (when (and (pos? n) (pos? left))
+        (recur (dec left))))))
+
+(defn- led-engine []
+  (doto (stream-engine)
+    ;; seed both cursors before any write, so every later one is heard
+    (settle!)))
+
+(defn- lead!
+  "The planner offers Colton three person steps on one errand."
+  [eng errand-id]
+  (let [step (fn [fields note]
+               {:who "person" :self (errand-path errand-id) :action "rename"
+                :fields fields :note note})]
+    (:row (inv/create! eng :walkthrough
+                       {:subject "colton"
+                        :title "Naming the errand"
+                        :steps [(step ["title" "room"] "Pick the title, then the room.")
+                                (step ["room"] "Now the room alone.")
+                                (step ["title"] "And the title once more.")]}
+                       {:principal guide :grant seeing-all}))))
+
+(defn- move! [eng w principal action input]
+  (inv/invoke! eng :walkthrough (str (:id w)) action input {:principal principal}))
+
+(defn- answer! [eng errand-id title]
+  (inv/invoke! eng :errand (str errand-id) :rename {:title title :room "Hall"}
+               {:principal person}))
+
+(defn- open-invitation
+  "The invitation open to Colton now."
+  [eng]
+  (let [st (:storage eng)]
+    (first (store/with-tx st
+             (fn [tx]
+               (vec (store/query-rows st tx :invitation
+                                      {:state :open :subject "colton"}
+                                      {:limit 10})))))))
+
+(defn- hearer
+  "A recorder's event tap fed from the log by hand → a function that
+  hands it every entry it has not heard yet."
+  [eng rec]
+  (let [seen (atom 0)]
+    (fn []
+      (let [log (log-of eng)]
+        (doseq [t (subvec log @seen)]
+          ((:event rec) t))
+        (reset! seen (count log))))))
+
+(defn- state-of [eng k row]
+  (some-> (row-of eng k (:id row)) :state name))
+
+(deftest a-walkthroughs-invitation-is-recorded-whatever-hand-made-it
+  (let [eng (led-engine)
+        c (errand! eng "Dishes")
+        w (walk! eng)
+        watching (:row (inv/create! eng :walk
+                                    {:followed "planner" :title "Iris watches"}
+                                    {:principal other}))
+        lead (lead! eng c)
+        of (fn [walk type] (filterv #(= type (:type %)) (frames-in eng (:id walk))))]
+    (move! eng lead person :start {:walk (str (:id w))})
+    (settle! eng)
+    (let [led (walks/recorder eng person nil "planner")
+          bystander (walks/recorder eng other nil "planner")]
+      (doseq [t (log-of eng)]
+        ((:event led) t)
+        ((:event bystander) t)))
+    (testing "the engine made it, and it is keyed on its author"
+      (is (= [{:author "planner"
+               :subject "colton"
+               :self (errand-path c)
+               :action "rename"
+               :field "title"
+               :fields ["title" "room"]
+               :note "Pick the title, then the room."
+               :walkthrough (str (:id lead))
+               :step 1
+               :of 3}]
+             (mapv #(select-keys (:body %) [:author :subject :self :action :field
+                                            :fields :note :walkthrough :step :of])
+                   (of w "invitation")))))
+    (testing "the engine's create is no transition of the followed principal"
+      (is (= ["walkthrough"] (mapv #(get-in % [:body :kind]) (of w "transition")))))
+    (testing "a follower it was not addressed to records no such frame"
+      (is (empty? (of watching "invitation"))))))
+
+(deftest the-recorders-own-answer-is-a-frame
+  (let [eng (led-engine)
+        c (errand! eng "Dishes")
+        d (errand! eng "Laundry")
+        w (walk! eng)
+        lead (lead! eng c)
+        hear! (hearer eng (walks/recorder eng person nil "planner"))
+        mine (fn []
+               (->> (frames-in eng (:id w))
+                    (filter #(and (= "transition" (:type %))
+                                  (= "colton" (str (get-in % [:body :actor :id])))))
+                    (mapv #(vector (get-in % [:body :kind]) (get-in % [:body :action])))))]
+    (move! eng lead person :start {:walk (str (:id w))})
+    (settle! eng)
+    (hear!)
+    (testing "a write of the recorder's that answers nothing is not recorded"
+      (inv/invoke! eng :errand (str d) :rename {:title "Sheets"} {:principal person})
+      (hear!)
+      (is (= [] (mine))))
+    (testing "the answer, heard while the invitation is still open"
+      (answer! eng c "Towels")
+      (hear!)
+      (is (= [["errand" "rename"]] (mine))))
+    (testing "the answer, heard after the engine answered the invitation"
+      (settle! eng)
+      (answer! eng c "Towels, twice")
+      (settle! eng)
+      (hear!)
+      (is (= [["errand" "rename"] ["errand" "rename"]] (mine))))
+    (testing "a skip is the recorder's answer too"
+      (inv/invoke! eng :invitation (str (:id (open-invitation eng))) :decline {}
+                   {:principal person})
+      (hear!)
+      (is (= [["errand" "rename"] ["errand" "rename"] ["invitation" "decline"]]
+             (mine))))
+    (testing "each question was recorded before its answer"
+      (is (= [[1 3] [2 3] [3 3]]
+             (->> (frames-in eng (:id w))
+                  (filter #(= "invitation" (:type %)))
+                  (mapv #(vector (get-in % [:body :step]) (get-in % [:body :of])))))))
+    (testing "the export carries the step line's numbers"
+      (settle! eng)
+      (is (= "sealed" (state-of eng :walk w)))
+      (is (= [[1 3] [2 3] [3 3]]
+             (->> (:lines (export-of eng w nil))
+                  (filter #(= "invitation" (:type %)))
+                  (mapv (juxt :step :of))))))))
+
+(deftest finish-seals-the-walkthroughs-walk
+  (let [eng (led-engine)
+        c (errand! eng "Dishes")
+        w (walk! eng)
+        lead (lead! eng c)]
+    (move! eng lead person :start {:walk (str (:id w))})
+    (settle! eng)
+    (is (= (str (:id w))
+           (str (get-in (row-of eng :walkthrough (:id lead)) [:data :walk]))))
+    (testing "a stop does not seal it"
+      (move! eng lead person :stop {})
+      (settle! eng)
+      (is (= "recording" (state-of eng :walk w)))
+      (move! eng lead person :resume {})
+      (settle! eng))
+    (doseq [title ["Towels" "Towels, twice" "Towels, thrice"]]
+      (answer! eng c title)
+      (settle! eng))
+    (is (= "finished" (state-of eng :walkthrough lead)))
+    (is (= "sealed" (state-of eng :walk w)))
+    (testing "a withdraw seals it too"
+      (let [again (walk! eng)
+            lead (lead! eng c)]
+        (move! eng lead person :start {:walk (str (:id again))})
+        (settle! eng)
+        (move! eng lead guide :withdraw {})
+        (settle! eng)
+        (is (= "withdrawn" (state-of eng :walkthrough lead)))
+        (is (= "sealed" (state-of eng :walk again)))))))
+
+(deftest start-refuses-a-walk-that-is-not-the-subjects-own
+  (let [eng (led-engine)
+        c (errand! eng "Dishes")
+        lead (lead! eng c)
+        mine (walk! eng)
+        theirs (:row (inv/create! eng :walk
+                                  {:followed "planner" :title "Iris's own"}
+                                  {:principal other}))
+        of-another (walk! eng {:followed "iris"})
+        sealed (walk! eng)]
+    (seal! eng sealed)
+    (doseq [[why walk] [["another person's walk" theirs]
+                        ["a walk that follows someone else" of-another]
+                        ["a walk that is not recording" sealed]]]
+      (is (some? (refusal #(move! eng lead person :start {:walk (str (:id walk))})))
+          why))
+    (is (= "open" (state-of eng :walkthrough lead)))
+    (is (nil? (refusal #(move! eng lead person :start {:walk (str (:id mine))}))))
+    (is (= "running" (state-of eng :walkthrough lead)))))
 
 ;; ── the self walk: a person's own screen, nobody following ──────────
 

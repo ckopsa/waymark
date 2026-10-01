@@ -1720,10 +1720,15 @@
         (err (str (name f) " is :secret and :filterable — a filter is a "
                   "value oracle over what the projection conceals")))
       (let [sortable (into (set (get-in rmap [:sortable :fields]))
-                           (when-some [d (get-in rmap [:sortable :default])]
-                             [(keyword (if (str/starts-with? d "-")
-                                         (subs d 1)
-                                         d))]))]
+                           ;; a default may name several keys: a, -b or [a -b]
+                           (for [d (let [d (get-in rmap [:sortable :default])]
+                                     (if (string? d) [d] d))
+                                 t (str/split d #",")
+                                 :let [t (str/trim t)]
+                                 :when (seq t)]
+                             (keyword (if (str/starts-with? t "-")
+                                        (subs t 1)
+                                        t))))]
         (doseq [f (sort (filter secret sortable))]
           (err (str (name f) " is :secret and sortable — ordering by a "
                     "concealed value tells its story"))))
