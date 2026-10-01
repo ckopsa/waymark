@@ -520,6 +520,7 @@ async function startRecording() {
   }
   recording = recordingOf(r.body);
   recordChip();
+  demoRefresh();
   /* the walk takes `ui` frames only while this tab shares; sharing
      this button turned on goes off again at the stop */
   if (uiSharing()) presenceBeat();
@@ -535,6 +536,7 @@ async function stopRecording() {
   if (!r.ok) { toast("The recording could not be stopped"); return; }
   recording = null;
   recordChip();
+  demoRefresh();
   let mine = false;
   try {
     mine = sessionStorage.getItem("wm10.record.shared") === "1";
@@ -566,6 +568,101 @@ if ($record) {
   recordChip();
   resumeRecording().catch(() => { /* engine not started, or restarting */ });
 }
+
+/* ── the demo engine's end (docs/spec-demo-clones.md §3): an engine
+   whose well-known carries `expires_at` is a demo clone, and the
+   reaper takes every row with it. The banner says when, on every
+   screen; it turns to a warning at 15 minutes and again at 5, and it
+   names each walk of mine the reaper would take: one still recording,
+   or one sealed and not exported in this browser. A working engine
+   sets no expiry and shows no banner. */
+const DEMO_WARN_MS = 15 * 60000, DEMO_LAST_MS = 5 * 60000;
+const DEMO_TICK_MS = 30000;
+let demoEnds = null, demoWalks = [];   // ms since the epoch; my unexported walks
+/* the walks this browser downloaded. The engine keeps no record of an
+   export, so the browser's own storage is the only one there is. */
+function exportedWalks() {
+  try {
+    const v = JSON.parse(localStorage.getItem("wm10.walk.exported") || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch (_e) { return []; }
+}
+function markWalkExported(self) {
+  try {
+    localStorage.setItem("wm10.walk.exported",
+      JSON.stringify([...new Set([...exportedWalks(), self])]));
+  } catch (_e) { /* no storage: the banner keeps naming the walk */ }
+}
+/* my walks the reaper would take. `state=` clears the collection's
+   default, and the two states are picked here. */
+async function unexportedWalks() {
+  const door = await recordDoor();
+  if (!door || !door.me) return [];
+  const r = await api(`${door.href}?recorder=${encodeURIComponent(door.me)}&state=`);
+  const items = r.ok ? ((r.body.data || {}).items || []) : [];
+  const done = new Set(exportedWalks());
+  return items.filter(i => i && i.self &&
+    (i.state === "recording" || (i.state === "sealed" && !done.has(i.self))));
+}
+function demoLevel(left) {
+  return left <= DEMO_LAST_MS ? "last" : left <= DEMO_WARN_MS ? "warn" : "note";
+}
+function demoBanner() {
+  const box = $("#demobanner");
+  if (!box) return;
+  if (demoEnds === null) { box.hidden = true; return; }
+  box.hidden = false;
+  box.setAttribute("data-demo-level", demoLevel(demoEnds - Date.now()));
+  box.textContent = "";
+  const at = new Date(demoEnds)
+    .toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  box.append(`Demo engine. It ends at ${at} and takes everything with it.`);
+  for (const w of demoWalks)
+    box.append(" ", el("span", {"data-demo-walk": w.state},
+      "Your walk is not exported. ",
+      w.state === "recording" ? "Seal and export it now: " : "Export it now: ",
+      el("a", {href: "#" + w.self}, w.summary || "the walk"), "."));
+}
+async function demoRefresh() {
+  if (demoEnds === null) return;
+  /* a replay reads nothing from the engine and a hidden tab holds no
+     connection: both repaint from what is already known */
+  if (!replay && !document.hidden) {
+    try { demoWalks = await unexportedWalks(); }
+    catch (_e) { /* the engine is restarting: keep the last answer */ }
+  }
+  demoBanner();
+}
+/* the export as a download in this browser: the one thing that leaves
+   a demo clone. The walk is marked exported only once the file is
+   handed to the browser. */
+async function exportWalk(self) {
+  let text = null;
+  try {
+    const res = await fetch(self + "/export", {headers: principalHeaders()});
+    if (res.ok) text = await res.text();
+  } catch (_e) { /* told below */ }
+  if (text === null) { toast("This walk's export could not be read"); return; }
+  const url = URL.createObjectURL(new Blob([text], {type: "application/x-ndjson"}));
+  const a = el("a", {href: url,
+    download: `walk-${self.split("/").pop().slice(0, 8)}.ndjson`});
+  document.body.append(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  markWalkExported(self);
+  demoRefresh();
+}
+async function demoBoot() {
+  const w = await wellKnown();
+  const at = Date.parse(w.expires_at || "");
+  if (Number.isNaN(at)) return;
+  demoEnds = at;
+  demoBanner();
+  await demoRefresh();
+  setInterval(demoRefresh, DEMO_TICK_MS);
+}
+demoBoot().catch(() => { /* engine not started, or restarting */ });
 
 /* ── replay (docs/spec-guided-follow.md §4): a sealed walk's export,
    `waymark-walk/1`, played on this screen on a timer. A `move` goes

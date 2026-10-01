@@ -113,6 +113,12 @@ async function renderResource(view, doc, hints) {
     bar.append(el("button", {"data-replay-walk": "",
       title: "play this recording on this screen, read-only — nothing is written",
       onclick: () => replayWalk(doc.self)}, "▶ Replay"));
+  /* …and leaves as a file: the download is the only copy that outlives
+     a demo engine (docs/spec-demo-clones.md §3) */
+  if (kind === "walk" && doc.state === "sealed")
+    bar.append(el("button", {"data-export-walk": "",
+      title: "download this recording as a .ndjson file",
+      onclick: () => exportWalk(doc.self)}, "⬇ Export"));
   /* an open invitation addressed to this viewer: one tap lands on the
      invited row with its door open in their own hand */
   if (kind === "invitation" && doc.state === "open" &&
