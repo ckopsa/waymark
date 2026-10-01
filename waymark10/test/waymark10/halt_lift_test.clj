@@ -437,3 +437,50 @@
       (req h :get "/api/halt_pantries" {:headers passing})
       (is (= 1 (count (clears eng seat)))
           "a seat with no line is not written again"))))
+
+;; ── the welcome's standing-grant block, for a sitter ─────────────────
+;;
+;; A seat grant omits its scope: the seat's is read fresh at every
+;; request. The block once answered the grant row's own `scope`, so a
+;; sitter read an empty leash and no seat. This file holds the seat
+;; fixture, so the two cases stand here.
+
+(defn- standing-grant
+  "The welcome document's standing-grant block, as this principal
+  reads it."
+  [h who]
+  (let [resp (req h :get "/api/-/welcome" {:headers who})]
+    (assert (= 200 (:status resp)) (pr-str (json resp)))
+    (get-in (json resp) [:home :grant])))
+
+(deftest a-sitters-welcome-names-the-seat-and-lists-its-scope
+  (let [{:keys [h]} (world)
+        seat (open-seat! h "clerk-welcome")
+        who (sitter "ari-welcome")
+        gid (sit! h who "clerk-welcome")
+        grant (standing-grant h who)]
+    (is (= gid (:id grant)))
+    (testing "the seat the grant cites, by id and by name"
+      (is (= {:id seat :name "clerk-welcome"} (:seat grant))))
+    (testing "and the scope the grant carries, which is the seat's"
+      (is (= ["halt_pantry"] (mapv :kind (:scope grant))))
+      (is (= ["create" "finish"] (:actions (first (:scope grant))))))))
+
+(deftest a-delegates-welcome-is-unchanged
+  (let [{:keys [h]} (world)
+        who (sitter "bo-welcome")
+        asked (req h :post "/api/approval_requests"
+                   {:headers who
+                    :body {:task "Finish what the pantry holds."
+                           :scope [{:kind "halt_pantry" :actions ["finish"]}]}})
+        _ (assert (= 201 (:status asked)) (pr-str (json asked)))
+        approved (req h :post (str "/api/approval_requests/" (id-of asked)
+                                   "/-/approve")
+                      {:headers human})
+        _ (assert (= 200 (:status approved)) (pr-str (json approved)))
+        grant (standing-grant h who)]
+    (is (= (get-in (json approved) [:data :grant_id]) (:id grant)))
+    (is (not (contains? grant :seat))
+        "a grant that carries its own scope cites no seat")
+    (is (= ["halt_pantry"] (mapv :kind (:scope grant))))
+    (is (= ["finish"] (:actions (first (:scope grant)))))))

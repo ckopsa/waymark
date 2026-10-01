@@ -1596,18 +1596,23 @@
 (defn- home-grant
   "The agent's standing grant (audience == pid), if one lives — the
   leash it already holds, so it arrives scoped and need not re-ask.
-  Own by construction: the audience IS the reader."
+  Own by construction: the audience IS the reader. A seat grant omits
+  its scope (the seat's is read fresh at every request), so it answers
+  the seat it cites and that seat's scope; any other grant reads as it
+  always did."
   [eng pid]
   (when (get (inv/resources eng) :grant)
     (when-some [g (grants/standing-grant-for eng pid)]
-      {:href (str "/api/grants/" (:id g))
-       :id (:id g)
-       :state (name (:state g))
-       :scope (get-in g [:data :scope])
-       :expires_at (some-> (get-in g [:data :expires_at]) str)
-       :wear {:header "X-Waymark-Grant" :value (:id g)
-              :note (str "send this on every request — it selects your "
-                         "standing scope, already yours")}})))
+      (let [seat (grants/seat-of-grant eng g)]
+        (cond-> {:href (str "/api/grants/" (:id g))
+                 :id (:id g)
+                 :state (name (:state g))
+                 :scope (if seat (:scope seat) (get-in g [:data :scope]))
+                 :expires_at (some-> (get-in g [:data :expires_at]) str)
+                 :wear {:header "X-Waymark-Grant" :value (:id g)
+                        :note (str "send this on every request — it selects your "
+                                   "standing scope, already yours")}}
+          seat (assoc :seat (select-keys seat [:id :name])))))))
 
 (def ^:private home-letters-opened-recent 3)
 
