@@ -50,6 +50,14 @@
       (let [invited (dev/rows eng :invitation)]
         (is (= [:open] (mapv state-of invited)))
         (is (= "ada" (get-in (first invited) [:data :subject])))))
+    (testing "the household's agent authored it, wearing the grant the seed minted"
+      (let [invited (first (dev/rows eng :invitation))
+            author (get-in invited [:data :author])
+            granted (filter #(= author (get-in % [:data :audience]))
+                            (dev/rows eng :grant))]
+        (is (= "plan" author))
+        (is (= "agent" (get-in (dev/row eng :member author) [:data :actor_type])))
+        (is (= [:accepted] (mapv state-of granted)))))
     (testing "a restarted task does not seed twice"
       (is (false? (:seeded (seed/load! eng demo {}))))
       (is (= (count tickets) (count (dev/rows eng :ticket)))))))
