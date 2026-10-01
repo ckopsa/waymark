@@ -168,12 +168,25 @@
 
 ;; ── the restatement, and the rig it tells ───────────────────────────
 
+(declare policy-fields)
+
 (defhandler restate-the-policy [row inp ctx]
   ;; THE WHOLE POLICY, AGAIN. A restate is the authority saying what it
   ;; holds now, so every field the door collects lands; the machine
   ;; keeps the row where it stands. Then the engine tells the rig, and
   ;; the row says whether the rig took it (R-2).
-  (bench/enrolled (update row :data merge inp) ctx))
+  ;;
+  ;; WHOLE MEANS AN OMITTED FIELD IS GONE (ticket 606a6209): every
+  ;; policy field leaves the row before the input lands, so a restate
+  ;; without `test` or `check` clears the block, and the engine's own
+  ;; fields stay. A `patch: true` restate needs no second branch here:
+  ;; the invoke path (waymark10.server.patch/resolve-input) fills each
+  ;; omitted prefill field from the row BEFORE this handler runs, and
+  ;; the prefill is these same fields, so `inp` is already whole.
+  (bench/enrolled
+   (update row :data
+           #(merge (apply dissoc % (map first policy-fields)) inp))
+   ctx))
 
 (defn- enrol-at-birth
   "The create's enrolment (R-2). A create cannot walk a door on a row
