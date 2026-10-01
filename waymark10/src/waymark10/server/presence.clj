@@ -598,6 +598,12 @@
   (let [held (get-in @(:local reg) [pid :entry :ui])]
     (and (some? held) (= held (clean-ui reg ui)))))
 
+(defn gaze
+  "The self `pid`'s last beat in this process named, by any door; nil
+  when the registry holds no beat of theirs."
+  [reg pid]
+  (get-in @(:local reg) [pid :entry :self]))
+
 (defn- next-seq
   "Counts up per principal, across processes too: one past the last
   seq this entry carried, and never below the wall clock."
@@ -615,10 +621,16 @@
   this beat made, after it published: a `move` when the gaze changed
   and the `ui` frame when the beat carried one. It is how a person's
   own walk is recorded with nobody following (walks/self-recorder); a
-  curtained beat makes no frame, so its tap sees none."
+  curtained beat makes no frame, so its tap sees none. An optional
+  `since`, {:from self}, says where the gaze was before the call this
+  beat shows, and the `move` is judged from there: a grant-scoped GET
+  marks the gaze itself (`read!`), with no tap, so the beat that
+  follows that read would find the gaze already on its row and its tap
+  would see no `move`."
   ([reg principal self] (report! reg principal self nil nil))
   ([reg principal self ui] (report! reg principal self ui nil))
-  ([reg principal self ui tap]
+  ([reg principal self ui tap] (report! reg principal self ui tap nil))
+  ([reg principal self ui tap since]
   (let [self (normalize-self self)]
     (check-self! self)
     (when (= (:id principal) (:id t/anonymous))
@@ -640,7 +652,9 @@
         (evict-local! reg pid)
         (let [e (entry-of reg principal self "heartbeat")
               cv (curtain-view reg [pid])
-              before (get-in @(:local reg) [pid :entry])]
+              before (if (contains? since :from)
+                       {:self (:from since)}
+                       (get-in @(:local reg) [pid :entry]))]
           (locking (:lock reg)
             (swap! (:local reg) update pid
                    (fn [st] (let [st (or st {:streams {}})]

@@ -1673,16 +1673,29 @@
   self the session could not GET makes none: the gate `presence-report`
   keeps for a browser on a private kind, kept for every kind here. It
   never throws: a walk that could not take a frame does not fail the
-  call it shows."
-  [{:keys [reg principal tap visible?]} self ui]
+  call it shows. `since`, {:from self}, is where the gaze was before
+  the call (`gaze-before`), for a call whose own read moves it."
+  ([st self ui] (beat! st self ui nil))
+  ([{:keys [reg principal tap visible?]} self ui since]
   (try
     (when (visible? self)
-      (presence/report! reg principal self ui tap))
+      (presence/report! reg principal self ui tap since))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 mcp staging: a beat was not reported -"
                  (ex-message e)))))
-  nil)
+  nil))
+
+(defn- gaze-before
+  "Where the stage's principal is looking now, as {:from self}, read
+  before a call whose route marks the gaze itself: a grant-scoped GET
+  is its caller's gaze already (`presence/read!`), and that door has no
+  tap, so the beat after it would find the gaze on the row and the walk
+  would take no `move`. It never throws."
+  [{:keys [reg principal]}]
+  (try
+    {:from (presence/gaze reg (:id principal))}
+    (catch Exception _ nil)))
 
 (defn- typed-steps
   "The `fields` of each typing beat, in order: each adds one value, and
@@ -1900,13 +1913,16 @@
           self (str "/api/" (:plural rdef) "/" id)
           ;; captioned (§ 3): the line is written before the call's beat
           refused (stage-caption! eng session rdef self nil args)
+          ;; staged (§ 2): the stage is set before the read, which moves
+          ;; a scoped caller's gaze with no frame (`gaze-before`)
+          st (when-not refused (stage eng session rdef))
+          since (some-> st gaze-before)
           resp (when-not refused
                  (call (request session :get self
                                 {:query (when depth (query-string {"depth" (str depth)}))})))]
-      ;; staged (§ 2): the gaze goes to the row that was read
-      (when (<= 200 (:status resp 500) 299)
-        (when-some [st (stage eng session rdef)]
-          (beat! st self nil)))
+      ;; the gaze goes to the row that was read
+      (when (and st (<= 200 (:status resp 500) 299))
+        (beat! st self nil since))
       (or refused
           (answer resp return #(when (row-doc? %) (row-summary %)))))))
 
