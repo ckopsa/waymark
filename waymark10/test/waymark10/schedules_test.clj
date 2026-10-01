@@ -801,6 +801,56 @@
     (seat-do! linked :retire)
     (seat-do! bare :retire)))
 
+(deftest the-boot-seeds-a-paused-or-broken-schedule-where-it-stands
+  (let [cn :sched-seed-states
+        _ (drain! cn)
+        chair (model! "claude-chair-seed-states")
+        _ (link-model! chair a-chair-url a-chair-token)
+        paused (seat! "seed-paused-clerk" 3600 [chair])
+        broken (seat! "seed-broken-clerk" 3600 [chair])
+        _ (drain! cn)
+        own-token "rk-test-seed-states-0123456789abcdef"
+        paused-sched (:id (sched-of paused))
+        broken-sched (:id (sched-of broken))
+        state-of #(name (:state (sched-of %)))
+        engine! (fn [id action body]
+                  (inv/invoke! *eng* :schedule (str id) action body
+                               {:principal sch/system-actor}))]
+    (link-schedule! paused-sched a-seat-url own-token)
+    (link-schedule! broken-sched a-seat-url own-token)
+    (drain! cn)
+    (engine! paused-sched :pause nil)
+    (engine! broken-sched :fail {:note "The provider refused the link."})
+    (is (= "paused" (state-of paused)))
+    (is (= "broken" (state-of broken)))
+    (is (nil? (runners-of :schedule paused-sched)))
+    (is (nil? (runners-of :schedule broken-sched)))
+    (rl/ensure-seeded-links! *eng*)
+
+    (testing "a paused schedule stays paused and names exactly its seeded link"
+      (let [[s & more] (seeded (str "schedule:" paused-sched))]
+        (is (some? s))
+        (is (empty? more))
+        (is (= "paused" (state-of paused)))
+        (is (= [(str (:id s))] (runners-of :schedule paused-sched)))))
+
+    (testing "a broken schedule stays broken and names exactly its seeded link"
+      (let [[s & more] (seeded (str "schedule:" broken-sched))]
+        (is (some? s))
+        (is (empty? more))
+        (is (= "broken" (state-of broken)))
+        (is (= [(str (:id s))] (runners-of :schedule broken-sched)))))
+
+    (testing "a second boot adds none and moves neither"
+      (rl/ensure-seeded-links! *eng*)
+      (is (= 1 (count (seeded (str "schedule:" paused-sched)))))
+      (is (= 1 (count (seeded (str "schedule:" broken-sched)))))
+      (is (= "paused" (state-of paused)))
+      (is (= "broken" (state-of broken))))
+
+    (seat-do! paused :retire)
+    (seat-do! broken :retire)))
+
 (def ^:private mayor (t/principal {:id "mayor" :type :agent :display "Mayor"}))
 
 (deftest link-like-copies-a-link-without-a-credential-crossing
@@ -1142,3 +1192,112 @@
             doc (wire/read-json ((:render-fn *eng*) plain (sched-of seat-id)))]
         (is (nil? (get-in doc [:data :fires_through])))
         (is (= "plain" (get-in doc [:data :plain])))))))
+
+;; ── 12 · the one link and its provider's account (ticket b99c8b77) ──
+;; A schedule that fires through its own single link has no runner
+;; link, but the run still goes out on the claude_routine account:
+;; `fire-by-pool-or-link!` asks `rl/account-hold` before the fire and
+;; writes the answer through `rl/count-account!` (5c499772). Section 10
+;; and runner_links_test reach the provider row only through a pool.
+
+(defn- account
+  "The claude_routine provider row, as the store holds it now."
+  []
+  (let [id (str (:id (rl/provider-row *eng* "claude_routine")))]
+    (some->> (raw :runner_provider id)
+             (inv/decode-row (get (inv/resources *eng*) :runner_provider)))))
+
+(defn- set-account-cap! [cap]
+  (let [row (account)
+        id (str (:id row))]
+    (inv/invoke! *eng* :runner_provider id :restate {:cap cap}
+                 {:principal elena
+                  :if-match (inv/etag :runner_provider id (:version row))})))
+
+(defn- open-account-window!
+  "The account's window opened now with no runs and no throttle held,
+  written through the engine's own door as a landing fire writes it."
+  []
+  (inv/invoke! *eng* :runner_provider (str (:id (account))) :fired
+               {:window_started_at (str (java.time.Instant/now))
+                :runs_in_window 0}
+               {:principal sch/system-actor}))
+
+(defn- instant [x]
+  (some-> x str not-empty java.time.Instant/parse))
+
+(deftest a-single-link-fire-counts-toward-and-waits-on-its-account
+  (let [cn :sched-account
+        _ (drain! cn)
+        _ (rl/ensure-providers! *eng*)
+        chair (model! "claude-chair-account")
+        tokens (mapv #(str "rk-test-account" % "-0123456789abcdef") (range 4))
+        own! (fn [nm token]
+               (let [seat-id (seat! nm 3600 [chair])]
+                 (drain! cn)
+                 (link-schedule! (:id (sched-of seat-id)) a-seat-url token)
+                 seat-id))
+        [counted capped waited throttled :as seats]
+        (mapv own!
+              ["account-counted-clerk" "account-capped-clerk"
+               "account-waited-clerk" "account-throttled-clerk"]
+              tokens)
+        fire! (fn [seat-id]
+                (fire-seat! seat-id "Out on the account.")
+                (drain! cn)
+                (sched-of seat-id))]
+    (open-account-window!)
+    (set-account-cap! nil)
+    (try
+      (testing "each fire here goes out through the one link, not a pool"
+        (is (every? #(nil? (sch/pool-of *eng* (sched-of %) (raw :seat %))) seats)))
+
+      (testing "a started fire counts one run in the account's window"
+        (let [row (fire! counted)]
+          (is (= 1 (count (fires-of (tokens 0)))))
+          (is (some? (get-in row [:data :last_fired_at])))
+          (is (= 1 (get-in (account) [:data :runs_in_window])))))
+
+      (testing "a spent cap throttles the schedule until the window closes, and fires nothing"
+        (set-account-cap! {:runs 1 :window_seconds 18000})
+        (let [closes (some-> (instant (get-in (account) [:data :window_started_at]))
+                             (.plusSeconds 18000))
+              row (fire! capped)]
+          (is (some? closes))
+          (is (empty? (fires-of (tokens 1))))
+          (is (= closes (instant (get-in row [:data :retry_after]))))
+          (is (nil? (get-in row [:data :last_fired_at])))
+          (is (= 1 (get-in (account) [:data :runs_in_window]))
+              "a held fire is not a run")))
+
+      (testing "a retry_after on the account throttles the schedule with that instant"
+        (set-account-cap! nil)
+        (let [until (.plusSeconds (.truncatedTo (java.time.Instant/now)
+                                                java.time.temporal.ChronoUnit/SECONDS)
+                                  600)
+              _ (inv/invoke! *eng* :runner_provider (str (:id (account))) :throttle
+                             {:retry_after (str until)}
+                             {:principal sch/system-actor})
+              row (fire! waited)]
+          (is (empty? (fires-of (tokens 2))))
+          (is (= until (instant (get-in row [:data :retry_after]))))
+          (is (str/includes? (str (get-in row [:data :note])) "claude_routine account"))))
+
+      (testing "a 429 that names the account holds the account's row"
+        (open-account-window!)
+        (is (nil? (rl/account-hold *eng* "claude_routine")))
+        (sch/answer! *fire* 429 {:retry-after "30" :body "The account has no free run."})
+        (let [before (java.time.Instant/now)
+              row (fire! throttled)
+              held (instant (get-in (account) [:data :retry_after]))]
+          (is (= 1 (count (fires-of (tokens 3)))) "the fire went out and was refused")
+          (is (some? held))
+          (is (some-> held (.isAfter before)))
+          (is (= held (rl/account-hold *eng* "claude_routine")))
+          (is (some? (get-in row [:data :retry_after])) "the schedule waits as well")))
+
+      (finally
+        (sch/answer! *fire* nil)
+        (set-account-cap! nil)
+        (open-account-window!)))
+    (doseq [s seats] (seat-do! s :retire))))
