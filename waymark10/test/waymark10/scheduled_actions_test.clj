@@ -1,10 +1,12 @@
 (ns waymark10.scheduled-actions-test
   "The scheduled_action kind (docs/spec-scheduled-actions.md, children
-  1a and 1b): its stamps, its walls, its limits, its zone rules and its
-  scheduling check. Memory storage, the real engine and a fixed clock.
-  The run is child 1c's and is not exercised here."
+  1a, 1b and 1c): its stamps, its walls, its limits, its zone rules, its
+  scheduling check and its run. Memory storage, the real engine and a
+  fixed clock. The clock that starts a run is child 2's, so a test
+  claims a row and runs it by hand."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.confirm :as confirm]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
@@ -58,7 +60,16 @@
      :scrap {:from #{:open} :to :done
              :safety {:idempotent true :reversible true :confirm true
                       :consequence "The chore is closed without being done."}
-             :display {:label "Scrap" :order 5}}}}))
+             :display {:label "Scrap" :order 5}}
+     ;; an edit: the title moves and the state does not
+     :retitle {:from #{:open} :to :open
+               :input [:map
+                       [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]]
+               :handler file-under
+               :edit {:fence false
+                      :unfenced-reason "The title is written whole, and a test has one writer."}
+               :safety {:idempotent true :reversible true :confirm false}
+               :display {:label "Retitle" :order 6}}}}))
 
 (def ^:private now (Instant/parse "2026-10-01T12:00:00Z"))
 
@@ -444,3 +455,151 @@
     (testing "the sentence, exactly as written, is stored with the call"
       (let [row (schedule! eng c (on c "scrap" {:acknowledge sentence}))]
         (is (= sentence (get-in row [:data :acknowledge])))))))
+
+;; ── the run (child 1c) ──────────────────────────────────────────────
+
+(defn- run!
+  "Claim the row and run it, as the clock will: the ending's name."
+  [eng id]
+  (when (scheduled/start! eng id)
+    (some-> (scheduled/run! eng id) name)))
+
+(defn- why-of [eng id] (get-in (row-of eng id) [:data :outcome_why]))
+
+(defn- chore-state [eng c] (some-> (chore-of eng c) :state name))
+
+(defn- retitle! [eng c]
+  (inv/invoke! eng :chore (str c) :retitle {:title "Pans"} {:principal person}))
+
+(deftest strict-skips-on-any-version-move
+  (let [eng (fresh-engine)
+        c (chore! eng)]
+    (member! eng "colton" {})
+    (testing "a row nobody wrote since runs, and the row keeps what it wrote"
+      (let [id (:id (schedule! eng c {:validity "strict"}))]
+        (is (= "done" (run! eng id)))
+        (is (= "done" (chore-state eng c)))
+        (is (= {:kind "chore" :action "finish" :id (str c) :state "done"}
+               (get-in (row-of eng id) [:data :outcome])))
+        (is (= now (get-in (row-of eng id) [:data :ran_at])))))
+    (testing "an edit leaves the state alone and still moves the version"
+      (chore-move! eng c :reopen)
+      (let [id (:id (schedule! eng c {:validity "strict"}))
+            was (:version (chore-of eng c))]
+        (retitle! eng c)
+        (is (= "skipped" (run! eng id)))
+        (is (= "open" (chore-state eng c)))
+        (is (str/includes? (why-of eng id)
+                           (str "(version " was ", now " (inc was) ")")))))))
+
+(deftest state-runs-past-an-edit-and-skips-on-a-state-move
+  (let [eng (fresh-engine)]
+    (member! eng "colton" {})
+    (testing "an edit that did not move the state does not matter"
+      (let [c (chore! eng)
+            id (:id (schedule! eng c {}))]
+        (retitle! eng c)
+        (is (= "done" (run! eng id)))
+        (is (= "done" (chore-state eng c)))))
+    (testing "a row that left the state and came back runs"
+      (let [c (chore! eng)
+            id (:id (schedule! eng c {}))]
+        (chore-move! eng c :finish)
+        (chore-move! eng c :reopen)
+        (is (= "done" (run! eng id)))
+        (is (= "done" (chore-state eng c)))))
+    (testing "a row that left the state is skipped"
+      (let [c (chore! eng)
+            id (:id (schedule! eng c (on c "file" {:input {:title "Filed"}})))]
+        (chore-move! eng c :finish)
+        (is (= "skipped" (run! eng id)))
+        (is (str/includes? (why-of eng id) "`done`"))
+        (is (nil? (get-in (row-of eng id) [:data :outcome])))))
+    (testing "an expected state is the state the run reads"
+      (let [c (chore! eng)
+            id (:id (schedule! eng c (on c "reopen" {:expect_state "done"})))]
+        (chore-move! eng c :finish)
+        (is (= "done" (run! eng id)))
+        (is (= "open" (chore-state eng c)))))
+    (testing "a guard that still refuses at the time skips, in its own sentence"
+      (let [c (chore! eng)
+            id (:id (schedule! eng c (on c "scrub" {:expect_refusals ["not-before-monday"]})))]
+        (is (= "skipped" (run! eng id)))
+        (is (str/includes? (why-of eng id) "from Monday on"))
+        (is (= "open" (chore-state eng c)))))
+    (testing "a scheduler who is no member at the time is skipped"
+      (let [c (chore! eng)
+            id (:id (schedule! eng c {} {:principal other}))]
+        (is (= "skipped" (run! eng id)))
+        (is (= "open" (chore-state eng c)))))))
+
+(deftest a-create-runs-under-both-rules
+  (let [eng (fresh-engine)
+        c (chore! eng)
+        create (fn [title validity]
+                 (:id (schedule! eng c {:validity validity
+                                        :target {:kind "chore" :action "create"}
+                                        :input {:title title}})))
+        born #(get-in (row-of eng %) [:data :outcome])]
+    (member! eng "colton" {})
+    (doseq [validity ["state" "strict"]]
+      (testing validity
+        (let [id (create "Laundry" validity)]
+          (is (= "done" (run! eng id)))
+          (is (= "create" (:action (born id))))
+          (is (= "open" (:state (born id))))
+          (is (= "open" (chore-state eng (:id (born id))))))))
+    (testing "strict pins the law a birth is stamped by"
+      (let [id (create "Windows" "strict")]
+        (with-redefs [inv/create-law-revision (constantly "another-law")]
+          (is (= "skipped" (run! eng id))))
+        (is (nil? (born id)))
+        (is (str/includes? (why-of eng id) "now another-law"))))))
+
+(deftest the-confirm-sentence-is-read-again
+  (let [eng (fresh-engine)
+        sentence "The chore is closed without being done."
+        scrap (fn [c] (:id (schedule! eng c (on c "scrap" {:acknowledge sentence}))))]
+    (member! eng "colton" {})
+    (testing "the sentence the scheduler agreed to still stands"
+      (let [c (chore! eng)]
+        (is (= "done" (run! eng (scrap c))))
+        (is (= "done" (chore-state eng c)))))
+    (testing "a sentence that changed skips the row"
+      (let [c (chore! eng)
+            id (scrap c)]
+        (with-redefs [confirm/consequence-of (constantly "The chore is deleted.")]
+          (is (= "skipped" (run! eng id))))
+        (is (= "open" (chore-state eng c)))
+        (is (= "The consequence changed since this was acknowledged."
+               (why-of eng id)))))))
+
+(deftest the-run-lands-once-under-a-repeated-call
+  (let [eng (fresh-engine)
+        c (chore! eng)
+        id (:id (schedule! eng c {}))
+        finishes (fn []
+                   (let [st (:storage eng)]
+                     (store/with-tx st
+                       (fn [tx]
+                         (count (filter #(= "finish" (name (:action %)))
+                                        (store/transitions
+                                         st tx {:kind :chore :resource-id c} {})))))))]
+    (member! eng "colton" {})
+    (testing "a row nobody claimed does not run"
+      (is (nil? (scheduled/run! eng id)))
+      (is (= "open" (chore-state eng c))))
+    (testing "one caller claims it"
+      (is (= "running" (some-> (scheduled/start! eng id) :state name)))
+      (is (nil? (scheduled/start! eng id))))
+    (testing "the call lands once"
+      (is (= :done (scheduled/run! eng id)))
+      (is (nil? (scheduled/run! eng id)))
+      (is (nil? (scheduled/start! eng id)))
+      (is (= 1 (finishes)))
+      (is (= "done" (state-of eng id))))
+    (testing "it went under the key the row derives"
+      (is (= :idempotency
+             (:replayed? (inv/invoke! eng :chore (str c) :finish {}
+                                      {:principal person
+                                       :idempotency-key (str "scheduled_action:" id)})))))))
