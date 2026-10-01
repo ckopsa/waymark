@@ -232,6 +232,27 @@ by the time a tool runs; `mcp.clj` never learns the word.
    RP flow; now also read at the top level),
    `WAYMARK10_OIDC_DELEGATE_CLIENTS=waymark10-connector-claude=Claude`,
    `WAYMARK10_OIDC_RESOURCE_SCOPES=waymark-workqueue10`.
+
+   For MCP Apps (`spec-mcp-apps.md` § 1), two more:
+   - `WAYMARK10_MCP_APP_CLIENTS=<client-id>,...` lists the delegate
+     clients whose host the owner trusts to keep its model away from
+     app-only tools. For claude.ai that is `waymark10-connector-claude`,
+     the id `scripts/connector-client.sh new claude` makes. It must be a
+     subset of the delegate clients. Empty by default.
+   - `WAYMARK10_MCP_APP_TICKET_SECRET` is the engine's own HMAC key for
+     the per-render ticket (e.g. `openssl rand -base64 32`). Unset or
+     empty, the three app tools are listed for nobody and the server
+     logs one line at boot.
+
+   Both are read in `waymark10.server.oidc/from-env`, so both need
+   `WAYMARK10_OIDC_ISSUER` set.
+
+   **Where the engine's environment is set:** the workqueue10 job's env
+   in the home-infrastructure repo (rendered by terraform), and the two
+   MCP Apps variables go beside `WAYMARK10_OIDC_DELEGATE_CLIENTS`
+   there; secrets come from `terraform/secrets.local.json`. It is not a
+   Nomad variable: `nomad/jobs/workqueue10/deploy` holds only
+   `image_tag` (see `.github/scripts/dispatch-roll.sh`).
 4. **claude.ai → Settings → Connectors → Add custom connector**: URL
    `https://work.kopsa.info/api/-/mcp`, client id and secret under
    advanced settings. Log in through Keycloak. The six tools appear, plus
