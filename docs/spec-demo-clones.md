@@ -180,9 +180,14 @@ The boot step in `workqueue10.main` asks for one thing more:
 demo engine serves the factory kinds. A boot with `WAYMARK10_SEED` set
 and `FACTORY10` unset refuses with a sentence.
 
-If the engine already holds a member row from the seed's cast, the
-seed was applied before (a restarted task on the same database). The
-loader then skips the whole seed and says so.
+After the last step the loader writes a completion marker: one more
+member row, `seed-<name>`, born through the member door as the
+registrar. If the engine already holds the marker, the seed was applied
+before (a restarted task on the same database). The loader then skips
+the whole seed and says so. If the engine holds a member row from the
+seed's cast and no marker, a seed failed half-way on this database: the
+loader refuses with a sentence and the boot ends, so the half seed is
+not served.
 
 ### Postgres or the in-memory twin
 
@@ -309,6 +314,18 @@ states them:
   if it did.
 - **TTL, reaper, `down`.** Unchanged.
 
+**The seed's held call ends at the wall.** The seed holds one call
+that waits on a person, `mail__send`. A held tool call is answered by
+the `approver` role, so the seed gives Ada that role. When the job
+names its wall (`WAYMARK_WALL_URL`), the loader makes one `mcp_server`
+row, `mail`, at that address, with the power the held call names. A
+person's Allow is then forwarded to the wall, the wall answers its
+sentence, and the held call ends `failed` with that sentence on it,
+which a walk can show. With no `WAYMARK_WALL_URL` (a test, or a clone
+with no wall task) the row is not made, and Allow ends `failed` with
+the engine's own sentence that no server answers to the tool. Neither
+path leaves the clone.
+
 The differences, all of them:
 
 | | bug clone | demo clone |
@@ -359,6 +376,8 @@ Children 1 and 2 are in ckopsa/waymark and depend on nothing. Children
    `ui-names-an-unexported-walk-in-the-warning`.
 3. *`seed` on clone-mcp's `up`* (ckopsa/waymark-doors). Covers the
    argument, the empty database, the environment (`WAYMARK10_SEED`,
+   `WAYMARK_WALL_URL`, which is the wall's address and is where the
+   seed's held call is forwarded (section 4),
    `WAYMARK_ENGINE_NAME=demo-<short id>`, `WAYMARK_ENGINE_EXPIRES_AT`,
    `WAYMARK10_AUTO_MIGRATE=1`, `FACTORY10=1` because the seed's
    tickets are factory kinds, no `WAYMARK10_OIDC_*`), and the failed
