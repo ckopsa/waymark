@@ -159,6 +159,7 @@
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invitations :as invitations]
+            [waymark10.server.walks :as walks]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.routes.dashboard :as dashboard-routes]
@@ -172,6 +173,7 @@
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.routes.ui :as ui-routes]
             [waymark10.server.routes.worksheet :as worksheet-routes]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.wakes :as wakes]
             [waymark10.server.webhooks :as webhooks]
@@ -303,7 +305,22 @@
              ;; its sibling hand-off: a grant names the door that
              ;; creates one, and grants are core's.
              {:kind :invitation :enroll :always
-              :kinds (fn [_] [invitations/invitation])}]
+              :kinds (fn [_] [invitations/invitation])}
+             ;; the recorded walk and its frames (docs/spec-guided-follow.md
+             ;; § 4): core's beside the invitation, whose sibling it is,
+             ;; and for the transcript's reason — a record of what a
+             ;; principal saw that a grant can query and a sweep purges.
+             {:kind :walk :enroll :always
+              :kinds (fn [_] [walks/walk])}
+             {:kind :walk_frame :enroll :always
+              :kinds (fn [_] [walks/walk-frame])}
+             ;; the scheduled action (docs/spec-scheduled-actions.md
+             ;; R-1): a call stored for a time. Core's beside the held
+             ;; call, which it carries a typed ref to, and for the
+             ;; spec's own reason: a household engine with no seat must
+             ;; still groom a ticket at 08:30.
+             {:kind :scheduled_action :enroll :always
+              :kinds (fn [_] [scheduled/scheduled-action])}]
     ;; the three surfaces no waymark engine is a waymark engine
     ;; without: the outbox reader every other surface rides, the
     ;; law-refresh consumer (a core need in any multi-process
@@ -386,6 +403,16 @@
                             (get-in eng [:services :invitations :sweep-ms]
                                     300000)}))
              :stop invitations/stop-expiry-sweeper!}
+            ;; the walks' retention (spec-guided-follow § 4), elected
+            ;; for the expiry's reason
+            {:hook :walk-retention
+             :elected :walk-retention
+             :start (fn [eng _]
+                      (walks/start-sweeper!
+                       eng {:interval-ms
+                            (get-in eng [:services :walks :sweep-ms]
+                                    3600000)}))
+             :stop walks/stop-sweeper!}
             ;; the seat's clock (spec-seat.md R-7.6, R-12.25;
             ;; spec-transcript.md R-9): the sittings nobody ended and
             ;; the transcripts past their grace, swept on a cadence
@@ -399,7 +426,20 @@
                        eng {:interval-ms
                             (get-in eng [:services :seats :clock-ms]
                                     300000)}))
-             :stop defs/stop-clock-sweeper!}]
+             :stop defs/stop-clock-sweeper!}
+            ;; the scheduled actions' clock (spec-scheduled-actions
+            ;; R-5): every due row claimed and run, on a loop of its
+            ;; own and not a line in the wake tick, because a household
+            ;; engine with no seat must still groom a ticket at 08:30.
+            ;; Elected, and `start` is the claim under it (R-5.2).
+            {:hook :scheduled-actions
+             :elected :scheduled-actions
+             :start (fn [eng _]
+                      (scheduled/start-sweeper!
+                       eng {:interval-ms
+                            (get-in eng [:services :scheduled-actions :sweep-ms]
+                                    scheduled/default-sweep-ms)}))
+             :stop scheduled/stop-sweeper!}]
     :pack packs/core}
 
    {:module :attachments

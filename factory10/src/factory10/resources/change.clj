@@ -817,6 +817,21 @@
   [row _inp _ctx]
   (if (has-a-pull-request? row) (t/deny) (t/allow)))
 
+(defguardfn the-mirror-or-its-tickets-ending-closes-it
+  {:reads [:principal :within]
+   :hide true
+   :explain "The mirror closes this row, or the ending of the ticket it was built for does. A person and a model read it."}
+  [_row _inp ctx]
+  ;; `mirror/the-mirror-writes-this-row`, and one hand more (ticket
+  ;; 458d65c5): a ticket's ending closes the unmerged changes born from
+  ;; it inside its own transaction, whoever's hand ended it.
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (or (= :system (:type (:principal ctx)))
+            (and (= :ticket kind)
+                 (contains? #{:complete :drop :land :mend :finish} action)))
+      (t/allow)
+      (t/deny))))
+
 (defguardfn only-a-person-closes-a-change
   {:reads [:principal :within]
    :hold true
@@ -1050,7 +1065,7 @@
     ;; serves reads as a reference by convention (checks-assembly's
     ;; id-target), and this one is not a reference to another change —
     ;; it is THIS row's own address at GitHub.
-    [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+    [:change_id {:x-ref {:address true}
                  :x-display
                  {:raw true
                   :label "The pull request's own id"
@@ -1081,7 +1096,7 @@
               :help "The pull request title, exactly as it stands on GitHub. This is what the card reads."}}
      [:maybe [:string {:max 400}]]]
     [:author {:optional true
-              :not-a-ref "bare today; swept by 5cb6a0c7"
+              :not-a-ref "A GitHub login, or the name of the seat that opened it: a handle, not a row id or a principal here."
               :x-display
               {:label "Who opened it"
                :help "The GitHub login of the person or the seat that opened the pull request."}}
@@ -1290,11 +1305,11 @@
     ;; the adoption does not touch: the merge reads it to finish the
     ;; task this change was built for. Hidden, like every other fact
     ;; the engine writes and nobody types.
-    [:born_from {:optional true :x-display {:hidden true}}
+    [:born_from {:optional true :x-ref {:address true} :x-display {:hidden true}}
      [:maybe [:string {:max 250}]]]
     ;; the merged change a duplicate was closed for (ticket 3ec37f66):
     ;; written by `supersede` and by nothing else. Hidden, as the url is.
-    [:superseded_by {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+    [:superseded_by {:optional true :not-a-ref "The web address (a URL) of the pull request that merged in this one's place, not a row id."
                      :x-display {:hidden true}}
      [:maybe [:string {:max 500}]]]]
    ;; THE BIRTH DOOR IS THE MIRROR'S, AND IT IS HIDDEN. A person meets
@@ -1306,7 +1321,7 @@
    [:map
     ;; github:owner/repo#number from the source, and <kind>:<row id>
     ;; from a seat's own sit (spec-seat.md R-12.32)
-    [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+    [:change_id {:x-ref {:address true}
                  :x-display {:label "The pull request's own id"}}
      [:string {:min 1 :max 250}]]
     [:repository {:x-display {:label "The repository"}}
@@ -1316,7 +1331,7 @@
      [:maybe [:int {:min 1}]]]
     [:title {:optional true :x-display {:raw true :label "Title"}}
      [:maybe [:string {:max 400}]]]
-    [:author {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+    [:author {:optional true :not-a-ref "A GitHub login, or the name of the seat that opened it: a handle, not a row id or a principal here."
               :x-display {:label "Who opened it"}}
      [:maybe [:string {:max 120}]]]
     [:base_branch {:optional true :x-display {:label "The base branch"}}
@@ -1331,7 +1346,7 @@
      [:maybe [:string {:max 500}]]]
     ;; the seat's own mint writes it and the forge never does
     ;; (waymark-fp62.6.3.14)
-    [:born_from {:optional true :x-display {:hidden true}}
+    [:born_from {:optional true :x-ref {:address true} :x-display {:hidden true}}
      [:maybe [:string {:max 250}]]]]
    :actions
    {;; THE MIRROR'S REFRESH. A self-loop on `open`: the pull request
@@ -1495,10 +1510,10 @@
     ;; one's ticket has just ended.
     :supersede
     {:from #{:open :submitted :failing :stuck} :to :closed
-     :guards [the-mirror-writes-this-row]
+     :guards [the-mirror-or-its-tickets-ending-closes-it]
      :handler write-what-superseded-it
      :input [:map
-             [:superseded_by {:not-a-ref "bare today; swept by 5cb6a0c7"
+             [:superseded_by {:not-a-ref "The web address (a URL) of the pull request that merged in this one's place, not a row id."
                               :x-display {:hidden true}}
               [:string {:min 1 :max 500}]]]
      :waives #{:edit-shape}
@@ -1530,7 +1545,7 @@
      :guards [the-mirror-writes-this-row]
      :handler adopt-the-pull-request
      :input [:map
-             [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+             [:change_id {:x-ref {:address true}
                           :x-display {:raw true}}
               [:string {:min 1 :max 250}]]
              [:number {:optional true} [:maybe [:int {:min 1}]]]
@@ -1556,7 +1571,7 @@
      :guards [the-mirror-writes-this-row]
      :handler adopt-the-pull-request
      :input [:map
-             [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+             [:change_id {:x-ref {:address true}
                           :x-display {:raw true}}
               [:string {:min 1 :max 250}]]
              [:number {:optional true} [:maybe [:int {:min 1}]]]
@@ -1583,7 +1598,7 @@
      :guards [the-mirror-writes-this-row]
      :handler adopt-the-pull-request
      :input [:map
-             [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+             [:change_id {:x-ref {:address true}
                           :x-display {:raw true}}
               [:string {:min 1 :max 250}]]
              [:number {:optional true} [:maybe [:int {:min 1}]]]
@@ -1599,7 +1614,7 @@
      :guards [the-mirror-writes-this-row]
      :handler adopt-the-pull-request
      :input [:map
-             [:change_id {:not-a-ref "The pull request's address at GitHub, not another change's row id."
+             [:change_id {:x-ref {:address true}
                           :x-display {:raw true}}
               [:string {:min 1 :max 250}]]
              [:number {:optional true} [:maybe [:int {:min 1}]]]
@@ -1634,7 +1649,7 @@
     ;; Hidden, and the mirror's hand alone.
     :note_adoption
     {:from #{:submitted} :to :submitted
-     :guards [the-mirror-writes-this-row]
+     :guards [the-mirror-or-its-tickets-ending-closes-it]
      :handler note-the-adoption
      :input [:map
              [:unadopted_since {:optional true :x-display {:hidden true}}

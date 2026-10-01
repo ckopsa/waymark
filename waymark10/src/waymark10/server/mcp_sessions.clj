@@ -34,7 +34,8 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [waymark10.server.store :as store]
-            [waymark10.server.store.postgres])
+            [waymark10.server.store.postgres]
+            [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
            (java.security MessageDigest)
            (java.sql Timestamp)
@@ -56,6 +57,13 @@
       bound_seat text,
       bound_sitting text,
       binding text)"
+   ;; what the client declared at initialize (docs/spec-mcp-apps.md § 5)
+   "ALTER TABLE waymark10_mcp_sessions
+      ADD COLUMN IF NOT EXISTS app_ui boolean NOT NULL DEFAULT false"
+   "ALTER TABLE waymark10_mcp_sessions ADD COLUMN IF NOT EXISTS client_name text"
+   "ALTER TABLE waymark10_mcp_sessions ADD COLUMN IF NOT EXISTS client_version text"
+   ;; the SHAPE of the capabilities it declared (`caps-shape`), as JSON
+   "ALTER TABLE waymark10_mcp_sessions ADD COLUMN IF NOT EXISTS client_caps text"
    "CREATE INDEX IF NOT EXISTS ix_wm10_mcp_sessions_touched
       ON waymark10_mcp_sessions (touched)"])
 
@@ -111,25 +119,116 @@
     (instance? OffsetDateTime t) (.toInstant ^OffsetDateTime t)
     :else t))
 
+;; ── what the client declared, as a shape ────────────────────────────
+;;
+;; `app_ui` is one boolean read from one key. A false cannot tell a
+;; client that declared nothing from one that declared the same thing
+;; under a key or a shape the parser does not read, so the table keeps
+;; the shape of the whole declaration beside it, for a person to read.
+
+(def client-caps-max-bytes
+  "The most `client_caps` holds, in UTF-8 bytes."
+  2048)
+
+(def ^:private caps-max-depth
+  "How many keys deep the shape follows a declaration."
+  4)
+
+(def ^:private verbatim-roots
+  "The capability keys under which a list of strings is kept as it was
+  declared: they are mime types and feature names, not secrets."
+  #{"extensions" "experimental"})
+
+(defn- key-name [k]
+  (if (keyword? k) (subs (str k) 1) (str k)))
+
+(defn- leaf-type [v]
+  (cond
+    (string? v) "string"
+    (boolean? v) "bool"
+    (number? v) "number"
+    (nil? v) "null"
+    (map? v) "object"
+    (sequential? v) "list"
+    :else "other"))
+
+(defn- shape
+  "`v`, found under the keys `path`, with every leaf replaced by its
+  type. A map deeper than `max-depth` keys is \"object\"."
+  [v path max-depth]
+  (cond
+    (map? v)
+    (if (< (count path) (long max-depth))
+      (into (sorted-map)
+            (map (fn [[k x]]
+                   (let [k (key-name k)]
+                     [k (shape x (conj path k) max-depth)])))
+            v)
+      "object")
+
+    (sequential? v)
+    (cond
+      (empty? v) "list"
+
+      (and (every? string? v)
+           (< 1 (count path))
+           (contains? verbatim-roots (first path)))
+      (vec v)
+
+      :else
+      (let [types (distinct (map leaf-type v))]
+        (str "list<" (if (= 1 (count types)) (first types) "mixed") ">")))
+
+    :else (leaf-type v)))
+
+(defn caps-shape
+  "The `capabilities` of an initialize reduced to a SHAPE, as compact
+  JSON with sorted keys: every key path down to four keys, each leaf
+  replaced by its type (\"string\", \"bool\", \"number\", \"null\",
+  \"list<string>\"), so no value a client sent is kept — EXCEPT a list
+  of strings under `extensions.*` or `experimental.*`, which is kept
+  verbatim. nil when `capabilities` is not a map.
+
+  At most `client-caps-max-bytes`: a shape over that is cut one key
+  shallower, again until it fits, so what is stored is always whole
+  JSON. Cut to no keys at all it is the one word \"object\"."
+  [capabilities]
+  (when (map? capabilities)
+    (some (fn [depth]
+            (let [s (wire/write-json (shape capabilities [] depth))]
+              (when (<= (alength (.getBytes s StandardCharsets/UTF_8))
+                        (long client-caps-max-bytes))
+                s)))
+          (range caps-max-depth -1 -1))))
+
 ;; ── the table's verbs ───────────────────────────────────────────────
 
 (defn open!
   "Insert a fresh session under `id`, touched now, after sweeping every
-  row untouched since `cutoff`. Answers the id."
-  [storage id ^Instant now ^Instant cutoff]
+  row untouched since `cutoff`. Answers the id. `declared` is {:app-ui
+  :client-name :client-version :client-caps}; nil or a missing key
+  writes false / NULL. `:client-caps` is `caps-shape`'s text."
+  [storage id ^Instant now ^Instant cutoff & [declared]]
   (store/with-tx storage
     (fn [tx]
       (ensure! storage tx)
       (jdbc/execute! tx ["DELETE FROM waymark10_mcp_sessions WHERE touched < ?"
                          (ts cutoff)])
       (jdbc/execute! tx ["INSERT INTO waymark10_mcp_sessions
-                            (id_hash, created, touched)
-                          VALUES (?, ?, ?)"
-                         (id-hash id) (ts now) (ts now)])))
+                            (id_hash, created, touched,
+                             app_ui, client_name, client_version,
+                             client_caps)
+                          VALUES (?, ?, ?, ?, ?, ?, ?)"
+                         (id-hash id) (ts now) (ts now)
+                         (boolean (:app-ui declared))
+                         (some-> (:client-name declared) str)
+                         (some-> (:client-version declared) str)
+                         (some-> (:client-caps declared) str)])))
   id)
 
 (defn touch!
-  "The entry `id` names, {:created :touched :bound}, with `touched`
+  "The entry `id` names, {:created :touched :bound :app-ui :client-name
+  :client-version :client-caps}, with `touched`
   moved to now when it is older than `touch-every-seconds` — or nil
   when no row answers the id, or the row was untouched since `cutoff`,
   in which case it is evicted here."
@@ -139,7 +238,9 @@
       (ensure! storage tx)
       (let [h (id-hash id)
             row (jdbc/execute-one!
-                 tx ["SELECT created, touched, binding
+                 tx ["SELECT created, touched, binding,
+                            app_ui, client_name, client_version,
+                            client_caps
                         FROM waymark10_mcp_sessions WHERE id_hash = ?" h]
                  jdbc-opts)]
         (when row
@@ -156,7 +257,11 @@
                                      (ts now) h]))
                 {:created (instant (:created row))
                  :touched (if stale? now touched)
-                 :bound (read-binding (:binding row))}))))))))
+                 :bound (read-binding (:binding row))
+                 :app-ui (boolean (:app_ui row))
+                 :client-name (:client_name row)
+                 :client-version (:client_version row)
+                 :client-caps (:client_caps row)}))))))))
 
 (defn bind!
   "Write `binding` onto the session `id` names, whole — a second bind

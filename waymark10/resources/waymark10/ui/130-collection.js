@@ -4,6 +4,35 @@ function parseHrefQuery(href) {
   return {path, params: new URLSearchParams(q || "")};
 }
 
+/* guided follow (docs/spec-guided-follow.md §1): a collection screen's
+   query as the `ui` part carries it — {self, filter, sort, page}, or
+   null off a collection — and back into the href a follower goes to */
+function collectionShareOf(href) {
+  const {path, params} = parseHrefQuery(href || "");
+  const self = decodeURIComponent(path);
+  if (!/^\/api\/[^/?]+$/.test(self) || self === "/api/-") return null;
+  const filter = {};
+  let page = null;
+  for (const [k, v] of params) {
+    if (k === "page" || k === "page[number]") { page = v; continue; }
+    if (k === "sort" || k === "rows" || k.startsWith("page[")) continue;
+    filter[k] = v;
+  }
+  return {self, filter, sort: params.get("sort") || null,
+          page: /^\d+$/.test(page || "") ? Number(page) : null};
+}
+function collectionHrefOf(c) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(c.filter || {}))
+    if (v != null) params.set(k, String(v));
+  if (c.sort) params.set("sort", c.sort);
+  /* the collection route reads page[number] (collections.clj
+     parse-query) and answers a bare page= with a 422 */
+  if (c.page != null) params.set("page[number]", String(c.page));
+  const q = params.toString();
+  return c.self + (q ? "?" + q : "");
+}
+
 /* Active scalar filters whose names exactly match create-input
    properties become prefills — the user was already looking at that
    slice, so the form starts there (still editable). */
@@ -439,10 +468,37 @@ function sortSelect(query, currentSort, onSort, hints) {
    means (go() for a top-level collection, an embed.<rel>.sort
    override for an embedded table), itemTable only knows "a header
    was clicked." */
+/* an open invitation addressed to this viewer, as a collection row: the
+   subject, when the row carries it, must be the viewer (the full
+   envelope is judged again before the dialog opens) */
+function invitationRowOpen(item) {
+  const isInvitation = item.kind === "invitation" ||
+    /\/invitations\/[^/?#]+$/.test(item.self || "");
+  const subject = (item.fields || {}).subject;
+  return isInvitation && item.state === "open" &&
+    (!subject || subject === viewerId());
+}
+
+/* one tap from the collection: summaries drop data, so read the whole
+   envelope first, then hand it to openInvitation (180-action-dialog.js) */
+async function openInvitationRow(item) {
+  const res = await api(item.self);
+  if (!res.ok) {
+    toast(`The invitation cannot be read: ${(res.body || {}).detail || res.status}`);
+    return;
+  }
+  const doc = res.body;
+  if (doc.state !== "open" || (doc.data || {}).subject !== viewerId()) {
+    toast("This invitation is not open to you");
+    return;
+  }
+  openInvitation(doc);
+}
+
 function itemTable(items, opts) {
   opts = opts || {};
   if (!items.length) return el("p", {class:"muted"}, "No rows.");
-  const anyActions = !!opts.rowAction ||
+  const anyActions = !!opts.rowAction || items.some(invitationRowOpen) ||
     items.some(i => (i.actions && Object.keys(i.actions).length) ||
                     Object.values(i.links || {}).some(l => l && (l.download || l.external)));
   const cols = fieldColumns(items, opts.query, opts.hints);
@@ -492,7 +548,7 @@ function itemTable(items, opts) {
     anyActions ? el("th", {}, "") : null);
   const tbody = el("tbody", {});
   for (const item of items) {
-    const row = el("tr", {},
+    const row = el("tr", {"data-self": item.self},
       opts.selectable ? el("td", {class:"c-check"},
         el("input", {type: "checkbox", "data-bulk-check": "",
           onclick: e => e.stopPropagation()})) : null,
@@ -514,6 +570,11 @@ function itemTable(items, opts) {
         fieldCell(opts.hints, f, (item.fields || {})[f], item.fields))),
       el("td", {class:"metaline mono c-updated"},
         localStamp((item.meta || {}).updated_at)));
+    /* guided follow: the followed principal's focused row, lit; and
+       this row as the focus this tab shares while sharing is on */
+    if (guidedFocus && guidedFocus === item.self) markGuidedFocus(row, true);
+    row.addEventListener("focusin", () => shareUi({focus: item.self}));
+    row.addEventListener("click", () => shareUi({focus: item.self}));
     if (opts.selectable) {
       const box = row.querySelector("[data-bulk-check]");
       const id = item.self.split("/").pop();
@@ -525,6 +586,10 @@ function itemTable(items, opts) {
     }
     if (anyActions) {
       const cell = el("td", {class:"rowactions partactions"});
+      if (invitationRowOpen(item))
+        cell.append(el("button", {class: "primary small", "data-invite-open": "",
+          onclick: e => { e.stopPropagation(); openInvitationRow(item); }},
+          "Take this step"));
       const extra = opts.rowAction ? opts.rowAction(item) : null;
       if (extra) cell.append(extra);
       for (const [name, entry] of Object.entries(item.actions || {}))

@@ -1058,8 +1058,158 @@ jobs:
   # ubuntu-latest deliberately, not the CI_RUNNER expression: the gate
   # does no work, and the one check a merge waits on must not queue
   # behind the cluster's load.
+  # ── THE ACCESS UI DRIVE ──────────────────────────────────────────────
+  #
+  # waymark10.access-dev boots the access and seat kinds and seeds one
+  # held seat-restate; ui-drive.mjs's `access` mode opens its row page
+  # in headless chromium and asserts the held call's owner, caller,
+  # door author and door row render as names. On a GitHub-hosted VM,
+  # for its chrome and its loopback: the drive reaches the engine and
+  # the CDP port on localhost. batch-a's drive still runs by hand.
+  ui-access:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ckopsa
+          POSTGRES_DB: waymark10_ui_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ckopsa -d waymark10_ui_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Boot the access engine
+        working-directory: waymark10
+        env:
+          WAYMARK10_TEST_DSN: jdbc:postgresql://localhost:5432/waymark10_ui_test?user=ckopsa
+        run: |
+          # CLJ_SDEPS (setup-clojure's local repository) with the test
+          # path beside it: -Sdeps is read once, so one map carries both.
+          #
+          # -Sthreads 1: the CLI builds the classpath before the engine's
+          # JVM starts, and tools.deps expands the dependency tree on a
+          # thread pool over one Maven session. This job died there once
+          # (run 36792755139: "HashMap$Node cannot be cast to
+          # HashMap$TreeNode", a java.util.HashMap written from two
+          # threads) and passed on rerun of the same tree. Nothing under
+          # waymark10/ holds a java.util.HashMap, so the expansion is
+          # serialised: one thread, no shared map to tear.
+          sdeps="${CLJ_SDEPS%\}} :aliases {:fx {:extra-paths [\"test\"]}}}"
+          nohup clojure -Sthreads 1 -Sdeps "$sdeps" -M:fx -e \
+            "(do ((requiring-resolve 'waymark10.access-dev/start!) 8124) nil) @(promise)" \
+            > "$RUNNER_TEMP/access-dev.log" 2>&1 &
+          for _ in $(seq 1 120); do
+            if curl -fsS http://localhost:8124/api/-/ui > /dev/null 2>&1; then
+              cat "$RUNNER_TEMP/access-dev.log"
+              exit 0
+            fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/access-dev.log"
+          echo "the access engine never answered on 8124"
+          exit 1
+      - name: Start headless chromium
+        run: |
+          nohup google-chrome --headless=new --remote-debugging-port=9223 \
+            --no-sandbox --user-data-dir="$RUNNER_TEMP/chrome" about:blank \
+            > "$RUNNER_TEMP/chrome.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9223/json/version > /dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/chrome.log"
+          exit 1
+      - name: Drive the access UI
+        run: node waymark10/scripts/ui-drive.mjs access
+      - name: Engine log
+        if: failure()
+        run: cat "$RUNNER_TEMP/access-dev.log" || true
+
+  # ── THE GUIDED-FOLLOW UI DRIVE ──────────────────────────────────────────────
+  #
+  # ui-drive.mjs's `guided` mode opens two browser contexts, one per
+  # person: one shares its screen, the other follows it in guided mode
+  # and sees the dialog, the fields, the collection query and the
+  # focused row, then the guards. ui-test pins the page's strings; this
+  # runs them, against the batch-a engine: the recipe door's shared
+  # draft needs Postgres.
+  ui-guided:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ckopsa
+          POSTGRES_DB: waymark10_ui_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ckopsa -d waymark10_ui_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Boot the batch-a engine
+        working-directory: waymark10
+        env:
+          WAYMARK10_TEST_DSN: jdbc:postgresql://localhost:5432/waymark10_ui_test?user=ckopsa
+        run: |
+          # -Sthreads 1, as in ui-access: one thread builds the classpath.
+          sdeps="${CLJ_SDEPS%\}} :aliases {:fx {:extra-paths [\"test\"]}}}"
+          nohup clojure -Sthreads 1 -Sdeps "$sdeps" -M:fx -e \
+            "(do ((requiring-resolve 'waymark10.batch-a-dev/start!) 8123) nil) @(promise)" \
+            > "$RUNNER_TEMP/guided-dev.log" 2>&1 &
+          for _ in $(seq 1 120); do
+            if curl -fsS http://localhost:8123/api/-/ui > /dev/null 2>&1; then
+              cat "$RUNNER_TEMP/guided-dev.log"
+              exit 0
+            fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/guided-dev.log"
+          echo "the batch-a engine never answered on 8123"
+          exit 1
+      - name: Start headless chromium
+        run: |
+          nohup google-chrome --headless=new --remote-debugging-port=9223 \
+            --no-sandbox --user-data-dir="$RUNNER_TEMP/chrome" about:blank \
+            > "$RUNNER_TEMP/chrome.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9223/json/version > /dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/chrome.log"
+          exit 1
+      - name: Drive guided follow
+        run: node waymark10/scripts/ui-drive.mjs guided
+      - name: Engine log
+        if: failure()
+        run: cat "$RUNNER_TEMP/guided-dev.log" || true
+
   gate:
-    needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue]
+    needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue, ui-access, ui-guided]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1071,6 +1221,8 @@ jobs:
           TEST_FACTORY: ${{ needs.test-factory.result }}
           TEST10: ${{ needs.test10.result }}
           TEST_QUEUE: ${{ needs.test-queue.result }}
+          UI_ACCESS: ${{ needs.ui-access.result }}
+          UI_GUIDED: ${{ needs.ui-guided.result }}
           DISCOVER: ${{ needs.discover.result }}
           ONLY: ${{ inputs.only }}
           ORDER: ${{ inputs.order }}
@@ -1122,7 +1274,9 @@ jobs:
           for job in "quick $QUICK $quick_sel" \
                      "test-factory $TEST_FACTORY ${RUN_FACTORY10:-}" \
                      "test10 $TEST10 ${RUN_WAYMARK10:-}" \
-                     "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}"; do
+                     "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}" \
+                     "ui-access $UI_ACCESS ${RUN_WAYMARK10:-}" \
+                     "ui-guided $UI_GUIDED ${RUN_WAYMARK10:-}"; do
             read -r name r selected <<< "$job"
             if [ -n "${ONLY:-}${ORDER:-}" ] && [ "$r" = "skipped" ]; then
               continue
@@ -1132,7 +1286,7 @@ jobs:
               continue
             fi
             if [ "$r" != "success" ]; then
-              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE)."
+              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE ui-access=$UI_ACCESS ui-guided=$UI_GUIDED)."
               exit 1
             fi
           done

@@ -38,6 +38,7 @@
     its columns. Order is spelling; the entries are law."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.fingerprint :as fp]
+            [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
             [waymark10.server.grants :as grants]
@@ -100,10 +101,10 @@
                            :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}
              [:maybe :waymark/instant]]
             [:requested_by {:optional true :x-display {:raw true}
-                            :not-a-ref "bare today; swept by 5cb6a0c7"}
+                            :x-ref {:principal true}}
              [:maybe [:string {:max 128}]]]
             [:approved_by {:optional true :x-display {:raw true}
-                           :not-a-ref "bare today; swept by 5cb6a0c7"}
+                           :x-ref {:principal true}}
              [:maybe [:string {:max 128}]]]
             [:note {:optional true
                     :not-a-ref "The verdict's reason, in words: never a row id, whatever the field is called."}
@@ -278,16 +279,15 @@
   ;; gained `seat` and `substitute`, its `scope` became optional
   ;; because two of the three ask shapes carry none, and `approve`
   ;; gained the one-full-sitter wall — a guard on a verdict, which is
-  ;; machine-facet law. The value below is the PRE-SEAT hash and is
-  ;; now wrong on purpose: the sandbox this was written in could not
-  ;; resolve the dependency repository, so the new hash could not be
-  ;; computed here. Re-pin it from the first CI run — the failure
-  ;; prints the hash to paste — and keep this paragraph as the note
+  ;; machine-facet law. Re-pinned from the first CI run (fc587884) —
+  ;; the failure prints the hash to paste. This paragraph is the note
   ;; the comment above asks for.
   ;;
-  ;; THE LAW MOVED AGAIN (waymark-7v7v): create gained
+  ;; A CREATE WALL JOINED (waymark-7v7v): create gained
   ;; an-anchorless-ask-names-its-grant, which refuses an anchorless ask
-  ;; from a holder of several live grants. Re-pin from CI the same way.
+  ;; from a holder of several live grants. The hash did NOT move and no
+  ;; re-pin was owed: create-door guards were outside the fingerprint
+  ;; until waymark-442.9, below.
   ;;
   ;; THE LAW MOVED AGAIN (waymark-442.9): create-door guards joined the
   ;; fingerprint (create.guards, absent when a kind declares none), so
@@ -404,3 +404,48 @@
   (testing "owned by nobody and owned by everybody are not one typo apart"
     (is (re-find #"names neither :by"
                  (refusal (assoc minimal :own-surface {:actions #{"create"}}))))))
+
+;; ── the pacing sentence, per declared unit ──────────────────────────
+;; waymark-iqa.19 folded the unit into :asks-are-paced's :explain. The
+;; hourly bytes are pinned by the-canonical-hash above; the other two
+;; units had no reader until this.
+
+(defn- paced-refusal
+  "The sentence an asker reads when `pacing` refuses a second ask made
+  thirty seconds after the first."
+  [pacing]
+  (let [r (r/normalize-resource (assoc-in minimal [:decision :pacing] pacing))
+        paced (first (filter #(= :asks-are-paced (:name %)) (:create-guards r)))
+        now (java.time.Instant/parse "2026-08-24T18:00:00Z")
+        ctx (t/ctx {:principal (t/principal {:id "agent-ari" :type :agent})
+                    :now now
+                    :find (fn [_kind _where _opts]
+                            [{:id "ask-1" :created-at (.minusSeconds now 30)}])})
+        verdict ((:check paced) nil {} ctx)]
+    (is (= :deny (:verdict verdict))
+        (str (pr-str pacing) " refuses the ask past its limit"))
+    (g/render-reason paced verdict nil)))
+
+(deftest the-pacing-sentence-names-the-declared-unit
+  (testing ":per :day says a day, and the window reopens a day on"
+    (is (= "Asks are paced to 1 a day; the window reopens at 2026-08-25T17:59:30Z."
+           (paced-refusal {:limit 1 :per :day}))))
+  (testing ":per :minute says a minute, and the window reopens a minute on"
+    (is (= "Asks are paced to 1 a minute; the window reopens at 2026-08-24T18:00:30Z."
+           (paced-refusal {:limit 1 :per :minute}))))
+  (testing "the hourly sentence is the one a blank :per also speaks"
+    (is (= "Asks are paced to 1 an hour; the window reopens at 2026-08-24T18:59:30Z."
+           (paced-refusal {:limit 1 :per :hour})
+           (paced-refusal {:limit 1}))))
+  (testing "the declared :explain carries the unit, not a {per} hole"
+    (let [explain (fn [pacing]
+                    (->> (r/normalize-resource
+                          (assoc-in minimal [:decision :pacing] pacing))
+                         :create-guards
+                         (filter #(= :asks-are-paced (:name %)))
+                         first
+                         :explain))]
+      (is (= "Asks are paced to {limit} a day; the window reopens at {retry_at}."
+             (explain {:limit 3 :per :day})))
+      (is (= "Asks are paced to {limit} a minute; the window reopens at {retry_at}."
+             (explain {:limit 3 :per :minute}))))))

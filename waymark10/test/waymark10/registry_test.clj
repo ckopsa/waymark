@@ -203,6 +203,29 @@
           #(assemble :c (update calendar-day :schema conj
                                 [:project [:string {:max 64}]]))))
 
+(deftest unrefd-ids-one-line-a-hit-across-kinds
+  ;; two kinds flag a field each: every hit is its own line with its
+  ;; kind in front, and the remedy is said once, last
+  (try
+    (assemble :c (update calendar-day :schema conj
+                         [:project [:string {:max 64}]])
+              :p (update project :schema conj
+                         [:ticket_id [:string {:max 40}]]))
+    (is false "expected [unref'd-ids] to refuse this assembly")
+    (catch clojure.lang.ExceptionInfo e
+      (let [lines (str/split-lines (ex-message e))
+            hits (butlast lines)]
+        (is (= :unref'd-ids (:check (ex-data e))) (ex-message e))
+        (is (every? #(re-find #"^(definition error: )?\w+ \[unref'd-ids\] .+ field :\w+ \(" %)
+                    hits)
+            (ex-message e))
+        (is (str/includes? (first lines)
+                           "calendar_day [unref'd-ids] data field :project"))
+        (is (some #(str/starts-with? % "project [unref'd-ids] data field :ticket_id")
+                  hits))
+        (is (str/includes? (last lines) ":not-a-ref"))
+        (is (not-any? #(str/includes? % ":not-a-ref") hits))))))
+
 (deftest owns-child-unregistered
   (breaks :owns #(reg-of (res project) (res calendar-day))))
 

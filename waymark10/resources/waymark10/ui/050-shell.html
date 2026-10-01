@@ -11,6 +11,7 @@
   <span id="lawstamp"></span>
   <span id="grantchip"></span>
   <span id="followchip"></span>
+  <span id="replaychip"></span>
   <div class="spacer"></div>
   <!-- the theme control: three states, and one of them is "don't
        decide" — System hands the question back to the operating
@@ -32,6 +33,24 @@
   <button id="curtainbtn" style="font-size:12px;padding:4px 10px"
           type="button"
           title="the house did not say whether your curtain is drawn — click to ask again">⛨ ?</button>
+  <!-- share my screen with followers (docs/spec-guided-follow.md §2):
+       this tab only, off by default; 200-events-follow.js wires it -->
+  <button id="sharebtn" style="font-size:12px;padding:4px 10px"
+          type="button" aria-pressed="false"
+          title="share my screen with followers — off">⧉</button>
+  <!-- record my own screen as a walk (docs/spec-guided-follow.md §4):
+       nobody has to follow; it turns sharing on for this tab while it
+       runs; 200-events-follow.js wires it -->
+  <button id="recordbtn" style="font-size:12px;padding:4px 10px"
+          type="button" aria-pressed="false"
+          title="record my own screen as a walk">● Record</button>
+  <!-- replay a recorded walk from a file (docs/spec-guided-follow.md
+       §4): the .ndjson is read in this tab and played read-only;
+       200-events-follow.js wires it -->
+  <button id="replaybtn" style="font-size:12px;padding:4px 10px"
+          type="button"
+          title="replay a recorded walk from a .ndjson file — read-only">▶ file</button>
+  <input id="replayfile" type="file" accept=".ndjson,application/x-ndjson" hidden>
   <button id="ledgertoggle" style="font-size:12px;padding:4px 10px"
           aria-expanded="false" aria-controls="ledger"
           title="the live ledger — every transition as it lands">
@@ -40,6 +59,9 @@
 <div id="drawerback" class="drawer-backdrop"></div>
 <aside id="drawer" class="drawer" aria-label="global navigation"></aside>
 <main>
+  <!-- a demo engine's end (docs/spec-demo-clones.md §3): hidden unless
+       well-known carries expires_at; 200-events-follow.js fills it -->
+  <div id="demobanner" role="status" aria-live="polite" hidden></div>
   <section id="view"></section>
 </main>
 <aside id="ledger" role="complementary" aria-label="Activity" tabindex="-1">

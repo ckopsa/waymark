@@ -111,8 +111,12 @@
   one the person allowed, or nil. `:within` names the held row, and
   the row is read back through the write's own transaction: it must be
   `allowed`, name this kind and this row, and name this caller.
-  `target` is the row id, nil at a create door. The modules' own
-  holds share the check (holds/allowed-hold)."
+  `target` is the row id, nil at a create door. The run of a scheduled
+  action the person approved at scheduling is the second shape of the
+  same yes: `:within` names a `scheduled_action` that is `running`,
+  names this door and this caller, and whose held call is `done` by an
+  allow (docs/spec-scheduled-actions.md R-4.3). The modules' own holds
+  share the check (holds/allowed-hold)."
   [ctx kind target]
   (holds/allowed-hold ctx kind target))
 
@@ -349,6 +353,7 @@
 
 (g/defguard the-persons-lever
   {:hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and an author that could pull this lever would be approving its own child."
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
@@ -366,6 +371,7 @@
 
 (g/defguard promotes-under-a-parked-child
   {:hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a promote the person has not seen could change work already under way."
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
@@ -389,6 +395,7 @@
 
 (g/defguard the-persons-judgment
   {:hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a judgment in force is the person's to replace."
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}

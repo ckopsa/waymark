@@ -324,14 +324,15 @@
 (defn- passthrough? [row]
   (true? (get-in row [:data :passthrough])))
 
-(defn resolve-tool
-  "A prefixed tool name → {:row :bare :entry :token :why}, or nil
+(defn resolve-among
+  "Over rows already read, as a guard holds them inside its own
+  transaction (docs/spec-scheduled-actions.md R-4.4): a prefixed tool name → {:row :bare :entry :token :why}, or nil
   when no row answers to it. The row wearing the prefix wins. When
   none does, a passthrough row answers the full name: the one whose
   powers name it, else the first."
-  [eng tool]
+  [rs tool]
   (let [tool (str tool)
-        rs (rows eng)
+        rs (remove #(= :retired (:state %)) rs)
         by-prefix (when-some [[prefix bare] (split-name tool)]
                     (some (fn [row]
                             (when (and (= prefix (str (get-in row [:data :name])))
@@ -354,6 +355,11 @@
                ;; `approval person` demands one too
                :why (boolean (and entry (why-demanded? entry)))
                :approval (if entry (approval-of entry) :none))))))
+
+(defn resolve-tool
+  "`resolve-among`, over every row of this engine that is not retired."
+  [eng tool]
+  (resolve-among (rows eng) tool))
 
 (defn capability-of
   "The power token a prefixed tool name is bound to, or nil."
@@ -605,6 +611,16 @@
              (ex-message e) ")")))
   (drop-client! (:id row)))
 
+(defn- dark-words
+  "What the server said on the probe that just failed (`client/said`),
+  with the dark row named in its context. nil when it said nothing."
+  [row refusal]
+  (some-> (client/said refusal)
+          (update :context #(str "server " (get-in row [:data :name])
+                                 " is dark: " %))))
+
+(declare revived)
+
 (defn revive!
   "One live probe of a row the engine darkened: tools/list on a fresh
   client, and when the server answers, the engine's own `mark_live`,
@@ -618,37 +634,51 @@
   the other's refusal is caught, and the row read afterwards is live
   either way."
   [eng row]
+  (:row (revived eng row)))
+
+(defn- revived
+  "`revive!`'s probe, with both of its answers: {:row row} when the
+  server answered and the row is live, {:refusal e} when the probe
+  threw, and nil when there was no probe to make or `mark_live` did
+  not land."
+  [eng row]
   (when (and (= :dark (:state row)) (not (person-darkened? row)))
     (let [seam (seam-of eng)
-          answered? (try
-                      (fetch-tools! seam row)
-                      true
-                      (catch Exception _
-                        (drop-client! (:id row))
-                        false))]
-      (when answered?
-        (try
-          (inv/invoke! eng :mcp_server (str (:id row)) :mark_live nil
-                       {:principal engine-actor})
-          (catch Exception e
-            (warn! "mark_live for " (get-in row [:data :name])
-                   " did not land (" (ex-message e) ")")))
-        (let [now (row-by-name eng (get-in row [:data :name]))]
-          (when (= :live (:state now)) now))))))
+          refusal (try
+                    (fetch-tools! seam row)
+                    nil
+                    (catch Exception e
+                      (drop-client! (:id row))
+                      e))]
+      (if refusal
+        {:refusal refusal}
+        (do
+          (try
+            (inv/invoke! eng :mcp_server (str (:id row)) :mark_live nil
+                         {:principal engine-actor})
+            (catch Exception e
+              (warn! "mark_live for " (get-in row [:data :name])
+                     " did not land (" (ex-message e) ")")))
+          (let [now (row-by-name eng (get-in row [:data :name]))]
+            (when (= :live (:state now)) {:row now})))))))
 
 (defn call!
   "One tools/call by prefixed name, past the grant — the engine's own
   hand. → the CallToolResult. Refuses 404 when no row answers to the
   name. A dark row gets one live probe first (`revive!`): when the
   server answers the row is live again and the call goes out, and
-  otherwise the call refuses 503. A failure the client calls fatal
-  marks the row dark and rethrows."
+  otherwise the call refuses 503, carrying what the server said on
+  that probe (`dark-words`). A failure the client calls fatal marks
+  the row dark and rethrows."
   [eng tool args]
   (let [{:keys [row bare] :as hit} (resolve-tool eng tool)]
     (when (nil? hit)
       (throw (p/not-found "power" (str tool))))
     (let [row (if (= :dark (:state row))
-                (or (revive! eng row) (throw (dark-problem row)))
+                (let [{live :row refusal :refusal} (revived eng row)]
+                  (or live
+                      (throw (client/saying (dark-problem row)
+                                            (dark-words row refusal)))))
                 row)
           seam (seam-of eng)]
       (try

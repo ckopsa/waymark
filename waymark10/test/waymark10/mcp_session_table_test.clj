@@ -192,6 +192,105 @@
             (is (not= sid (sessions/id-hash sid)))
             (is (not (str/includes? (pr-str rows) sid)))))))))
 
+(deftest the-table-remembers-what-the-client-declared
+  ;; docs/spec-mcp-apps.md § 5: the three columns, read on the OTHER engine
+  (with-two-engines
+    (fn [eng-a eng-b]
+      (let [st (:storage eng-a)
+            ^Instant now ((:now-fn eng-a))
+            cutoff (.minusSeconds now mcp/session-ttl-seconds)
+            declared #(select-keys (sessions/touch! (:storage eng-b) % now cutoff)
+                                   [:app-ui :client-name :client-version])
+            nothing {:app-ui false :client-name nil :client-version nil}]
+        (let [said {:app-ui true :client-name "claude-ai" :client-version "1"}]
+          (sessions/open! st "declared" now cutoff said)
+          (is (= said (declared "declared")) "what open wrote, touch answers"))
+        (sessions/open! st "silent" now cutoff nil)
+        (is (= nothing (declared "silent")) "opened with nothing declared")
+        (testing "a row written with only the old columns"
+          (store/with-tx st
+            (fn [tx]
+              (jdbc/execute! tx ["INSERT INTO waymark10_mcp_sessions
+                                    (id_hash, created, touched)
+                                  VALUES (?, ?, ?)"
+                                 (sessions/id-hash "old")
+                                 (java.sql.Timestamp/from now)
+                                 (java.sql.Timestamp/from now)])))
+          (is (= nothing (declared "old"))))))))
+
+(deftest the-table-keeps-the-shape-of-what-the-client-declared
+  ;; ticket deab6d9c: client_caps is the shape of initialize's
+  ;; capabilities, so a false app_ui can be read for what was said instead
+  (with-two-engines
+    (fn [eng-a eng-b]
+      (let [st (:storage eng-a)
+            ^Instant now ((:now-fn eng-a))
+            cutoff (.minusSeconds now mcp/session-ttl-seconds)
+            ui (keyword "io.modelcontextprotocol/ui")
+            round-trip (fn [id capabilities]
+                         (sessions/open! st id now cutoff
+                                         (mcp/app-declaration
+                                          {:capabilities capabilities
+                                           :clientInfo {:name "claude-ai"
+                                                        :version "1"}}))
+                         (sessions/touch! (:storage eng-b) id now cutoff))]
+        (testing "claude.ai's declaration: the extension's mime types, verbatim"
+          (let [e (round-trip "claude-ai"
+                              {:extensions {ui {:mimeTypes [mcp/app-mime]}}})]
+            (is (= (str "{\"extensions\":{\"io.modelcontextprotocol/ui\":"
+                        "{\"mimeTypes\":[\"text/html;profile=mcp-app\"]}}}")
+                   (:client-caps e)))
+            (is (true? (:app-ui e)))))
+        (testing "the same list under experimental is kept, and app_ui keeps its rule"
+          (let [e (round-trip "experimental"
+                              {:experimental {:ui {:mimeTypes [mcp/app-mime]}}})]
+            (is (= (str "{\"experimental\":{\"ui\":"
+                        "{\"mimeTypes\":[\"text/html;profile=mcp-app\"]}}}")
+                   (:client-caps e)))
+            (is (false? (:app-ui e)))))
+        (testing "empty capabilities, and none"
+          (is (= "{}" (:client-caps (round-trip "empty" {}))))
+          (is (nil? (:client-caps (round-trip "none" nil)))))
+        (testing "a long string leaf stores its type, not the string"
+          (let [secret (apply str (repeat 400 "s3cret-"))
+                caps (:client-caps
+                      (round-trip "long"
+                                  {:roots {:listChanged true :token secret}
+                                   :sampling {}
+                                   :labels ["a" "b"]
+                                   :extensions {:x {:note secret
+                                                    :names ["a" "b"]
+                                                    :n 3
+                                                    :mixed ["a" 1]}}}))]
+            (is (= (str "{\"extensions\":{\"x\":{\"mixed\":\"list<mixed>\","
+                        "\"n\":\"number\",\"names\":[\"a\",\"b\"],"
+                        "\"note\":\"string\"}},"
+                        "\"labels\":\"list<string>\","
+                        "\"roots\":{\"listChanged\":\"bool\",\"token\":\"string\"},"
+                        "\"sampling\":{}}")
+                   caps))
+            (is (not (str/includes? caps "s3cret")))))
+        (testing "the handler writes it at initialize, and no more of clientInfo"
+          (initialize! (engine/handler eng-a))
+          (is (= ["{}"]
+                 (mapv :client_caps (filter #(= "routine" (:client_name %))
+                                            (session-rows eng-b))))))))))
+
+(deftest the-shape-stops-at-four-keys-and-at-two-kilobytes
+  (is (nil? (sessions/caps-shape nil)))
+  (is (nil? (sessions/caps-shape "not a map")))
+  (is (= "{\"a\":{\"b\":{\"c\":{\"d\":\"object\"}}}}"
+         (sessions/caps-shape {:a {:b {:c {:d {:e "x"}}}}}))
+      "a map under four keys is named, not followed")
+  (testing "a shape over the cap is cut shallower, and is still whole JSON"
+    (let [wide (into {} (map (fn [i] [(keyword (str "k" i)) {:inner {:leaf (str i)}}]))
+                     (range 100))
+          ^String s (sessions/caps-shape wide)
+          doc (wire/read-json s)]
+      (is (<= (count (.getBytes s "UTF-8")) sessions/client-caps-max-bytes))
+      (is (= 100 (count doc)))
+      (is (= "object" (:k0 doc))))))
+
 (deftest an-unknown-id-still-answers-404-and-an-expired-one-is-evicted
   (with-two-engines
     (fn [eng-a eng-b]

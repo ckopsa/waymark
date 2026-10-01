@@ -123,6 +123,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.walks :as walks]
             [waymark10.server.history :as history]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
@@ -131,6 +132,7 @@
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.runtime :as runtime]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.resource :as res]
             [waymark10.server.seams :as seams]
             [waymark10.server.seats :as seats]
@@ -308,7 +310,10 @@
     (seats/count-correction! eng kind
                              (or (get-in result [:transition :resource-id])
                                  (get-in result [:row :id]))))
-  result)
+  ;; a person recording their own screen has this write put in their
+  ;; walk, under this request's sight (walks/record-own!,
+  ;; spec-guided-follow § 4); it answers the result it was handed
+  (walks/record-own! eng (principal-of req) (visibility-of req) result))
 
 ;; ── the visibility checks (phase 9a, concealment) ───────────────────
 
@@ -548,6 +553,9 @@
       (json-response
        200
        (cond-> {:waymark "10"
+                ;; the engine's own name (engine's :name option), so a
+                ;; reader can tell a demo engine from a working one
+                :name (or (:name eng) "waymark")
                 :kinds (vec (sort (map (comp name key) resources)))
                 :resources (into (sorted-map)
                                  (map (fn [[k r]]
@@ -583,6 +591,12 @@
                                                   {:by (some-> (res/decision r)
                                                                :by name)}))]))
                                  resources)}
+         ;; when the engine ends (engine's :expires-at, a demo clone's
+         ;; WAYMARK_ENGINE_EXPIRES_AT — docs/spec-demo-clones.md § 3).
+         ;; Absent on a working engine, and the UI shows its banner
+         ;; only when this is here
+         (:expires-at eng)
+         (assoc :expires_at (str (:expires-at eng)))
          ;; global navigation between the deployable's applications:
          ;; every distinct declared domain, sorted — present only when
          ;; some kind declares one, so single-domain wires are unchanged
@@ -789,10 +803,15 @@
           result (try
                    (count-committed!
                     eng req (:kind rdef)
-                    (inv/create! eng (:kind rdef) body
-                                 (select-keys opts [:principal :acknowledged
-                                                    :idempotency-key :dry-run
-                                                    :grant])))
+                    ;; a scheduled call that waits on a person has its
+                    ;; held call minted out here (scheduled/after-write!,
+                    ;; docs/spec-scheduled-actions.md R-4.3)
+                    (scheduled/after-write!
+                     eng rdef (first (:create-action-names rdef))
+                     (inv/create! eng (:kind rdef) body
+                                  (select-keys opts [:principal :acknowledged
+                                                     :idempotency-key :dry-run
+                                                     :grant]))))
                    (catch clojure.lang.ExceptionInfo e
                      (if-some [resp (held-instead eng opts (:kind rdef)
                                                   (first (:create-action-names rdef))
@@ -1050,6 +1069,33 @@
                                      (visibility-of req))
                   instant))
 
+(defn- ref-summary-hook
+  "The ctx-opt :ref-summary (ticket 6ef1473c): one target row's
+  {:href :summary} under THIS request's visibility — nil when its
+  grant does not admit the row, or no such row stands. It is the
+  answer the client's own depth=summary GET of that row would get,
+  without the GET: the same `:row?` check-row! asks, the same
+  projected summary. One instance per request, so a target two fields
+  name is read once."
+  [eng req]
+  (let [vis (visibility-of req)
+        st (:storage eng)
+        seen (atom {})]
+    (fn [kind id]
+      (let [k [kind id]]
+        (if-some [e (find @seen k)]
+          (val e)
+          (let [trdef (get (inv/resources eng) kind)
+                raw (when (and trdef
+                               (or (nil? vis) ((:row? vis) kind id)))
+                      (store/with-tx st #(store/load-row st % kind id {})))
+                v (when raw
+                    {:href (str "/api/" (:plural trdef) "/" id)
+                     :summary (render/target-summary
+                               trdef (inv/decode-row trdef raw) vis)})]
+            (swap! seen assoc k v)
+            v))))))
+
 (defn- get-one-live
   "The live row read: the envelope, as it has always been."
   [eng rdef plural id req]
@@ -1075,7 +1121,14 @@
         opts (render-opts eng req)
         env (if (= :summary depth)
               (render/envelope-summary rdef row opts)
-              (splice-embeds eng rdef (render/envelope rdef row opts) opts
+              ;; the full row alone carries its refs' labels: a
+              ;; summary has no data for them to label
+              (splice-embeds eng rdef
+                             (render/envelope
+                              rdef row
+                              (assoc opts :ref-summary
+                                     (ref-summary-hook eng req)))
+                             opts
                              (embed-overrides req)))]
     (mark-read! eng req (str "/api/" plural "/" id))
     (json-response 200 env media-type
@@ -1144,14 +1197,24 @@
                     ;; …and a person's purge of a transcript deletes
                     ;; its lines out here (transcripts/after-purge!,
                     ;; docs/spec-transcript.md R-9.5), thousands of
-                    ;; deletes kept out of the transition's own commit
-                    (transcripts/after-purge!
+                    ;; deletes kept out of the transition's own commit,
+                    ;; and a recorder's purge of a walk its frames
+                    ;; (walks/after-purge!, spec-guided-follow § 4)
+                    (walks/after-purge!
                      eng rdef (keyword action)
-                     (held/after-allow!
+                     (transcripts/after-purge!
                       eng rdef (keyword action)
-                      (grants/approval-effects!
+                      (held/after-allow!
                        eng rdef (keyword action)
-                       (inv/invoke! eng (:kind rdef) id (keyword action) body opts)))))
+                       (grants/approval-effects!
+                        eng rdef (keyword action)
+                        ;; …and a scheduled call that waits on a person
+                        ;; is asked about again when its time moves, and
+                        ;; cancelled by a refusal, out here
+                        ;; (scheduled/after-write!, R-4.3)
+                        (scheduled/after-write!
+                         eng rdef (keyword action)
+                         (inv/invoke! eng (:kind rdef) id (keyword action) body opts)))))))
                    (catch Exception e
                      (let [d (ex-data e)
                            held (held-instead eng opts (:kind rdef)
@@ -2112,6 +2175,21 @@
                      (ex-message e))))))
     (handler req)))
 
+(defn- walk-export
+  "GET /api/walks/{id}/export — a sealed walk as `waymark-walk/1`,
+  newline-delimited JSON (walks/export), redacted again under the
+  caller's visibility. A route and not an action, because the answer
+  is not an envelope. A walk the caller's grant cannot see and a walk
+  that is not sealed answer the same not-found."
+  [eng]
+  (fn [{{:keys [id]} :path-params :as req}]
+    (check-row! req {:kind walks/kind} id)
+    (if-some [body (walks/export eng id (visibility-of req))]
+      {:status 200
+       :headers {"Content-Type" "application/x-ndjson"}
+       :body body}
+      (throw (p/not-found walks/kind id)))))
+
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
   well-known document, the per-kind JSON schema, the SSE firehose, the
@@ -2125,6 +2203,8 @@
      {:get (well-known eng (into #{} (comp (mapcat :static) (map first))
                                  route-sets))}]
     ["/api/schemas/:kind" {:get (kind-schema eng)}]
+    ;; a core kind's one non-envelope answer (spec-guided-follow § 4)
+    ["/api/walks/:id/export" {:get (walk-export eng)}]
     ["/api/-/events" {:get (firehose-events eng)}]
     ["/api/-/welcome" {:get (welcome-doc eng)}]
     ["/api/-/grant-check" {:get (grant-check eng)}]

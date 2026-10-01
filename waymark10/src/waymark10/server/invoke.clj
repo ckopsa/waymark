@@ -183,14 +183,19 @@
   `allowed_by` is the person whose Allow this write replays (held-
   calls/door-principal sets it from the held call's `decided_by`), so
   the hand stays the author's and the log still says whose yes it was;
-  the correction count reads it (store/corrections-by-model)."
+  the correction count reads it (store/corrections-by-model).
+
+  `scheduled` is the scheduled action whose run this write is
+  (scheduled/runner-of, docs/spec-scheduled-actions.md R-4.2): the hand
+  is the scheduler's, and the log says the clock moved it."
   [principal grant-id]
   (cond-> {:type (name (:type principal))
            :id (:id principal)
            :display (:display principal)}
     grant-id (assoc :grant grant-id)
     (:model principal) (assoc :model (:model principal))
-    (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))))
+    (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))
+    (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))))
 
 (defn- body-digest [body]
   ;; exact decimals in a wire body digest as their {"dec" …} nodes
@@ -320,7 +325,8 @@
                               st tx {:kind (:kind row) :resource-id (:id row)}
                               {:newest-first true :limit 1}))))))}))
 
-(declare invoke-in-tx! create-in-tx!)
+(declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
+         create-guard-pass)
 
 (defn- make-ctx
   "The invocation context for ONE write. `opts`:
@@ -361,9 +367,15 @@
     and never reaches a wire, so `guard-ctx` drops it beside the
     pen. It follows the hand into an inner invoke, as `:grant` does,
     and a birth carries none: a create door reads no mail.
-    `inbox_item.research` is the first handler to read it."
+    `inbox_item.research` is the first handler to read it.
+  - `:idempotency-key` — the `Idempotency-Key` this invoke rides
+    under, or nil. It rides the ctx as `(:idempotency-key ctx)`, the
+    same string `land!` stamps on the transition, so a handler can say
+    which door a write came through. `held_call`'s two verdicts are
+    the first to read it."
   ([engine tx mode principal] (make-ctx engine tx mode principal nil))
-  ([engine tx mode principal {:keys [correlation-id self within grant power]}]
+  ([engine tx mode principal {:keys [correlation-id self within grant power
+                                     idempotency-key]}]
    (let [;; the cross-WRITE door (waymark9 Ctx.invoke): handlers and
          ;; on-create hooks write OTHER rows through the same
          ;; transaction and the full per-item algorithm. Only a real
@@ -389,6 +401,9 @@
              ;; the write this ctx was opened inside of, or nil at the
              ;; wire — see the docstring
              :within within
+             ;; the key this invoke rides under, as the transition
+             ;; will carry it — see the docstring
+             :idempotency-key idempotency-key
              :invoke
              (when sink
                (fn ctx-invoke [target-kind id action-name body & [opts]]
@@ -476,6 +491,51 @@
                                      :action create-action
                                      :res res})
                    res)))
+             ;; the REHEARSAL door (docs/spec-scheduled-actions.md
+             ;; R-3.1): one door of another kind, judged as this
+             ;; principal under this leash and written nowhere — the
+             ;; invoke door's own dry run inside this transaction, or
+             ;; the create rehearsal in full when `id` is nil. It throws
+             ;; what the write would throw, an unacknowledged warning
+             ;; included. A guard may hold it: it is no pen.
+             :rehearse
+             (fn ctx-rehearse [target-kind id action-name body & [opts]]
+               (let [trdef (or (get (resources engine) target-kind)
+                               (throw (p/not-found target-kind id)))
+                     acknowledged (or (:acknowledged opts) #{})
+                     res (if (nil? id)
+                           (let [model (or (:create-schema trdef) (:schema trdef))
+                                 inp (schema/apply-defaults
+                                      model (schema/decode model (or body {})))]
+                             (when-some [errors (schema/closed-errors model inp)]
+                               (throw (p/schema-invalid :create errors)))
+                             {:valid? true
+                              :warnings (not-empty
+                                         (:warned
+                                          (create-guard-pass
+                                           (create-walled-guards trdef) inp
+                                           (make-ctx engine tx :dry-run principal
+                                                     {:grant grant})
+                                           acknowledged)))})
+                           (invoke-in-tx!
+                            engine tx trdef target-kind (str id)
+                            (or (some-> (get-in trdef [:actions action-name])
+                                        (assoc :name action-name))
+                                (throw (p/no-such-action target-kind
+                                                         action-name)))
+                            (body-digest body) body
+                            {:principal principal
+                             :grant grant
+                             :dry-run true
+                             :acknowledged acknowledged}))]
+                 (when-some [warned (seq (:warnings res))]
+                   (throw (p/warning-refused (if id action-name :create) warned)))
+                 res))
+             ;; …and the law a birth of a kind would be stamped by now
+             ;; (R-2.4): what a scheduled create pins
+             :law-of (fn [target-kind]
+                       (when-some [trdef (get (resources engine) target-kind)]
+                         (create-law-revision engine trdef target-kind)))
              ;; the cross-resource read hooks (phase 8): guards declared
              ;; :reads [:kind] and on-create resolution read OTHER kinds
              ;; through the write's own transaction — decoded rows, the
@@ -1173,6 +1233,7 @@
                            :within within
                            :grant grant
                            :power power
+                           :idempotency-key idempotency-key
                            :self {:kind kind :action action-name}})
             ;; guards judge; they never write — the pen stays with the
             ;; handler (and :on-create), so guard evaluation gets a
@@ -1872,7 +1933,7 @@
               (fan-out-store! engine kind marker digest idempotency-key doc)
               {:report doc})))))))
 
-(defn- create-law-revision
+(defn create-law-revision
   "Creates stamp the kind's current law (phase 5); an after=true pilot
   claims new creates for the piloted revision. Engines built without
   the definitions boot carry no law slots and keep the phase-2 stub

@@ -290,7 +290,8 @@
 
 (g/defguard a-person-at-the-chair
   {:reads [:principal]
-   :explain "The chair's key and the chair's link are a person's to write: a person mints the key, a person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes both here. An agent does not write a chair's credential."}
+   :explain "The chair's key and the chair's link are a person's to write: a person mints the key, a person makes the Routine by hand, and a person — or a tool that person is signed in to — pastes both here. An agent does not write a chair's credential."
+   :open "No door changes who the caller is: ask the person to write the chair's key and its link."}
   [_row _inp ctx]
   ;; `a-person`'s three-line check, spelled again rather than reused,
   ;; and schedules.clj's `a-person-or-a-delegate` makes the same trade
@@ -330,7 +331,8 @@
 ;; written by hand is a link the engine would fire at nothing.
 (g/defguard link-not-written-by-hand
   {:judges [:fire_url :fire_token]
-   :explain "The Routine's fire URL and its token are written by link alone, never by hand. Add the model first, then link the Routine to it."}
+   :explain "The Routine's fire URL and its token are written by link alone, never by hand. Add the model first, then link the Routine to it."
+   :remedies [:model/link]}
   [_row inp _ctx]
   (if (or (contains? inp :fire_url) (contains? inp :fire_token))
     (t/deny)
@@ -736,6 +738,7 @@
   ;; wall — `judgment-not-superseded`'s split, at the create and the
   ;; restate. Say where the house went next (ticket 86514746).
   {:judges [:judgment]
+   :open "No door revives a superseded judgment. The way out is in this same form: name the judgment the sentence names, or another promoted one."
    :reads [:judgment]
    :vars [:problem]
    :explain "A seat that says a judgment walks that judgment's own subjects and answers with its verdicts: {problem}."}
@@ -945,7 +948,8 @@
   {:judges [:author]
    :reads [:seat]
    :vars [:detail]
-   :explain "A seat is handed only to a seat that delegates, and only when it fits under that seat's ceiling: {detail}."}
+   :explain "A seat is handed only to a seat that delegates, and only when it fits under that seat's ceiling: {detail}."
+   :open "The way out is in this same form: name a seat that delegates and whose ceiling covers this one. A seat's ceiling is the delegates field of its own row, one GET away."}
   [row inp ctx]
   ;; hand_to (invariant 3 and 4 of server/delegation): the person's
   ;; tap writes the author AND the approval, so the seat must already
@@ -984,7 +988,8 @@
   {:reads [:principal :within]
    :hold true
    :vars [:seat :started_at]
-   :explain "Abandoning seat {seat}'s sitting, open since {started_at}, is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written."}
+   :explain "Abandoning seat {seat}'s sitting, open since {started_at}, is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written."
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and an agent that could abandon a sitting alone could end another seat's work."}
   [row _inp ctx]
   ;; NOT hidden (ticket be2c2c16): a door the grant admits must never
   ;; answer not-found. The sweep and a person pass; an agent's abandon,
@@ -1010,7 +1015,8 @@
 (g/defguard still-quiet-for-the-sweep
   {:reads [:within]
    :vars [:last_call_at]
-   :explain "The sweep ends only a quiet sitting, and this one made a call at {last_call_at}, inside its seat's idle limit."}
+   :explain "The sweep ends only a quiet sitting, and this one made a call at {last_call_at}, inside its seat's idle limit."
+   :open "Time clears it: the sweep ends this sitting once it has been quiet for its seat's idle limit, and no door hurries that."}
   [row _inp ctx]
   ;; ticket e3dfe60d: the sweep's pass reads `last_call_at` in one
   ;; transaction and ends the sitting in another, so a sit or a call
@@ -1097,7 +1103,8 @@
   ;; so this bites only rows written before it did.
   {:reads [:judgment]
    :vars [:judgment :problem]
-   :explain "This seat says the judgment {judgment}, which is superseded, and a seat walks only a judgment in force: {problem}, then unpark."}
+   :explain "This seat says the judgment {judgment}, which is superseded, and a seat walks only a judgment in force: {problem}, then unpark."
+   :open "No door revives a superseded judgment. The way out is this seat's own restate, naming the judgment the sentence names."}
   [row _inp ctx]
   (let [id (some-> (get-in row [:data :judgment]) str not-empty)
         read' (:read ctx)]
@@ -2168,6 +2175,7 @@
                               :help ignore-budget-help}}
      [:maybe :boolean]]
     [:walk {:optional true
+            :not-a-ref "It holds the name of the kind this seat walks, never a row id."
             :x-options {:from :kinds}
             :x-display
             {:label "The queue it walks"
@@ -2250,7 +2258,7 @@
                     :spelled-by-hand "Written at birth when a delegating seat opens this one; never typed."}}
      [:maybe :waymark/ref]]
     [:owner {:optional true
-             :not-a-ref "bare today; swept by 5cb6a0c7"
+             :x-ref {:principal true}
              :x-display
              {:raw true
               :label "For whom"
@@ -2259,7 +2267,7 @@
     ;; INVARIANT 4's record: the person's first unpark of an authored
     ;; seat, written by `unpark` and by nothing else
     [:approved_by {:optional true
-                   :not-a-ref "bare today; swept by 5cb6a0c7"
+                   :x-ref {:principal true}
                    :x-display
                    {:raw true
                     :label "Approved by"
@@ -2434,6 +2442,7 @@
                               :help ignore-budget-help}}
      :boolean]
     [:walk {:optional true
+            :not-a-ref "It holds the name of the kind this seat walks, never a row id."
             :x-options {:from :kinds}
             :x-display
             {:label "The queue it walks"
@@ -2613,6 +2622,7 @@
                                        :help ignore-budget-help}}
               :boolean]
              [:walk {:optional true
+                     :not-a-ref "It holds the name of the kind this seat walks, never a row id."
                      :x-options {:from :kinds}
                      :x-display
                      {:label "The queue it walks"
@@ -3625,6 +3635,32 @@
                   {:label "Claimed"
                    :spelled-by-hand "Stamped by the sit that last claimed this sitting for its connector session."}}
      [:maybe :waymark/instant]]
+    ;; WHAT THE CLIENT DECLARED (ticket b9f90987). The session table
+    ;; keeps what an `initialize` said and no kind serves it, so the sit
+    ;; copies it here at the bind and again at each re-sit
+    ;; (`stamp-client!`). `app_tools` is the listing's own verdict at
+    ;; that moment, so one read answers why a host got no waymark_show.
+    ;; The booleans are plain :boolean, `missed`'s spelling.
+    [:client_name {:optional true
+                   :x-display
+                   {:label "The MCP client"
+                    :spelled-by-hand "The clientInfo name the connector session's initialize declared. The sit copies it from the session; absent when the client named none."}}
+     [:maybe [:string {:max 200}]]]
+    [:client_version {:optional true
+                      :x-display
+                      {:label "The MCP client's version"
+                       :spelled-by-hand "The clientInfo version the connector session's initialize declared. The sit copies it from the session; absent when the client named none."}}
+     [:maybe [:string {:max 200}]]]
+    [:app_ui {:optional true
+              :x-display
+              {:label "Declared MCP Apps"
+               :spelled-by-hand "Written by the sit: whether the connector session's initialize declared the MCP Apps extension with the app page's MIME type."}}
+     :boolean]
+    [:app_tools {:optional true
+                 :x-display
+                 {:label "Listed the app tools"
+                  :spelled-by-hand "Written by the sit: whether the session's tool listing carried the app tools at that moment. The client declared the extension, its bearer is a delegate of a client listed for the app tools, and the ticket's signing key is set."}}
+     :boolean]
     ;; THE INBOX'S KEY. A seat that declares an `inbox` is answered a
     ;; fresh key at each sit (`issue-inbox-key!`), and its hash is kept
     ;; here, on the sitting, so the key answers only while the sitting
@@ -4082,6 +4118,34 @@
                   data (cond-> (assoc (:data row) :last_call_at at)
                          claimant (assoc :connector_session (str claimant)
                                          :claimed_at at))]
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  data nil)
+              (assoc row :data data))))))))
+
+(defn stamp-client!
+  "Stamp an open sitting with what its connector session's client
+  declared at initialize (ticket b9f90987): `client_name`,
+  `client_version`, `app_ui`, and `app_tools`, whether that session's
+  tool listing carried the app tools as the sit judged it. The sit
+  writes all four at the bind and again at each re-sit, so the row
+  reads as the session that last sat in it. The same MAINTENANCE write
+  as `stamp-call!`. → the row as stamped, or nil: no id, an unknown
+  id, or a closed sitting."
+  [eng sitting-id {:keys [client-name client-version app-ui app-tools]}]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (= :open (:state row))
+            (let [said (fn [v]
+                         (when-some [s (some-> v str not-empty)]
+                           (subs s 0 (min 200 (count s)))))
+                  data (assoc (:data row)
+                              :client_name (said client-name)
+                              :client_version (said client-version)
+                              :app_ui (boolean app-ui)
+                              :app_tools (boolean app-tools))]
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   data nil)
               (assoc row :data data))))))))
@@ -4969,15 +5033,33 @@
       (when-not (contains? open named)
         (grace-lifts-at eng seat-row [named] now)))))
 
+(defn- ticket-ended?
+  "Has the ticket `id` ended, `done` or `dropped`? False for a ticket
+  the store does not hold."
+  [eng id]
+  (boolean
+   (when-some [rdef (get (inv/resources eng) :ticket)]
+     (let [st (:storage eng)]
+       (try
+         (some->> (store/with-tx st
+                    (fn [tx] (store/load-row st tx :ticket (str id) {})))
+                  (inv/decode-row rdef)
+                  :state name keyword
+                  (contains? #{:done :dropped}))
+         (catch Exception _ false))))))
+
 (defn named-beside-a-live-change?
   "Does a live change — open, submitted, failing or stuck — stand beside
   the ticket a fire named? Such a ticket is walked whatever its own
   state (ticket 7af7d506): a seat fired on a ticket in review is handed
   it and its change, and a ticket whose change merged or closed is not.
-  False for any other walk."
+  A ticket that ended is not either (ticket 458d65c5): its ending
+  closed its changes, and a leftover is no work to hand. False for any
+  other walk."
   [eng walk id]
   (boolean
-   (when-some [rdef (when (= "ticket" (str walk))
+   (when-some [rdef (when (and (= "ticket" (str walk))
+                               (not (ticket-ended? eng id)))
                       (get (inv/resources eng) :change))]
      (let [st (:storage eng)]
        (some #(contains? #{:open :submitted :failing :stuck}

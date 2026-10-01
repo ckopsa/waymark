@@ -42,6 +42,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.sources.forge :as forge]
             [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
@@ -1497,6 +1498,78 @@
           "a patch that does not name the floor leaves it as it stood")
       (is (= 7200 (:groom_floor_settle_seconds after))
           "and its settle the same"))))
+
+;; ── a restate is whole (ticket 606a6209) ────────────────────────────────
+
+(def ^:private a-check {:command "cd workqueue10 && clojure -M:check"})
+(def ^:private a-test-block {:workflow "tests.yml" :input "only"})
+
+(defn- restate-whole!
+  "A person restates the policy whole: the fields a-policy! states and
+  no optional block, with the row's own etag."
+  [eng row]
+  (let [current (policy-row eng (:id row))]
+    (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                 (select-keys (:data current)
+                              [:repository :branch_pattern :base
+                               :max_lines :opens_pr :auto_merge
+                               :rounds_per_change :formatter
+                               :deny :orientation])
+                 {:principal person
+                  :if-match (inv/etag :repo_policy (:id row)
+                                      (:version current))})))
+
+(deftest a-whole-restate-that-omits-the-check-clears-it
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:check a-check :test a-test-block})]
+    (is (= a-check (:check (:data (policy-row eng (:id row)))))
+        "the policy is born with a check")
+    (restate-whole! eng row)
+    (let [after (:data (policy-row eng (:id row)))]
+      (is (not (contains? after :check))
+          "a whole restate that does not name the check leaves none")
+      (is (not (contains? after :test))
+          "and the test block the same")
+      (is (= a-repository (:repository after))
+          "what the restate names stands"))))
+
+(deftest a-patch-restate-that-names-the-floor-keeps-the-check-and-the-test
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:check a-check :test a-test-block})
+        current (policy-row eng (:id row))]
+    (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                 {:patch true :groom_floor 4}
+                 {:principal person
+                  :if-match (inv/etag :repo_policy (:id row)
+                                      (:version current))})
+    (let [after (:data (policy-row eng (:id row)))]
+      (is (= 4 (:groom_floor after))
+          "the patch writes what it names")
+      (is (= a-check (:check after))
+          "a patch that does not name the check keeps it")
+      (is (= a-test-block (:test after))
+          "and the test block the same"))))
+
+(deftest a-whole-restate-still-enrols-with-the-rig
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:check a-check})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))]
+    (restate-whole! eng row)
+    (is (= 2 (count (calls-of st "bench__enroll")))
+        "the create told the rig, and the restate tells it again")
+    (is (= a-check (:check (sent 0)))
+        "the create carried the check")
+    (is (= (dissoc (sent 0) :check) (sent 1))
+        "the restate carries the same sentence without the check it
+         cleared, so the rig drops its entry")
+    (let [stored (policy-row eng (:id row))]
+      (is (some? (get-in stored [:data :enrolled_at]))
+          "the engine's own field outlives a whole restate")
+      (is (nil? (get-in stored [:data :note]))
+          "with nothing to explain"))))
 
 (deftest a-select-pattern-keeps-to-what-the-python-rig-compiles
   ;; ticket 3052cdf2: the rig compiles select_pattern with Python's re
@@ -3300,6 +3373,94 @@
           "the sit answers the withheld row rather than an empty list")
       (is (re-find #"stuck" (str (:reason (first withheld))))
           "and says why it was held back"))))
+
+;; ── a ticket's ending closes its unmerged changes (ticket 458d65c5) ──
+
+(defn- change-by-id [w id]
+  (store/with-tx (:storage (:eng w))
+    (fn [tx] (store/load-row (:storage (:eng w)) tx :change (str id) {}))))
+
+(deftest dropping-a-ticket-closes-its-stuck-change
+  (let [w (ticket-world)
+        change-id (get-in (:answer w) [:change :id])
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= "stuck" (name (:state (change-by-id w change-id)))))
+    (end-ticket! w (str (:id (:ticket w))) :drop)
+    (is (= "dropped" (ticket-state w)))
+    (is (= "closed" (name (:state (change-by-id w change-id))))
+        "the drop closes the change it left stuck")
+    (is (= "ticket dropped: Ended for the test."
+           (get-in (change-by-id w change-id) [:data :superseded_by])))))
+
+(deftest completing-a-ticket-closes-its-other-unmerged-changes
+  (testing "a person's complete closes the change it left open"
+    (let [w (ticket-world)
+          change-id (get-in (:answer w) [:change :id])]
+      (end-ticket! w (str (:id (:ticket w))) :complete)
+      (is (= "closed" (name (:state (change-by-id w change-id)))))
+      (is (= "ticket done: Ended for the test."
+             (get-in (change-by-id w change-id) [:data :superseded_by])))))
+  (testing "a merge closes the other change born from its ticket, not itself"
+    (let [w (ticket-world)
+          url (submitted-and-adopted! w 85)
+          merged-id (get-in (:answer w) [:change :id])
+          other (:row (inv/create! (:eng w) :change
+                                   {:change_id "github:ckopsa/waymark#86"
+                                    :repository a-repository
+                                    :head_branch "bench/another-try"
+                                    :born_from (str "ticket:" (:id (:ticket w)))}
+                                   {:principal mirror/source-principal}))]
+      (mirror-moves-change! w :merge nil)
+      (is (landed-with? w url))
+      (is (= "merged" (name (:state (change-by-id w merged-id)))))
+      (is (= "closed" (name (:state (change-by-id w (:id other))))))
+      (is (= url (get-in (change-by-id w (:id other)) [:data :superseded_by]))
+          "and it names the pull request that merged"))))
+
+(deftest a-sit-never-hands-back-a-change-of-an-ended-ticket
+  (let [w (ticket-world)
+        change-id (str (get-in (:answer w) [:change :id]))
+        ticket-id (str (:id (:ticket w)))
+        _ (seat-invokes! w "stall" {:why a-stall-sentence})
+        ;; a leftover: the ticket ended before an ending closed its changes
+        _ (force-ticket-state! w :dropped)
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        k (seats/hold-fire-key! (:eng w) seat-row ((:now-fn (:eng w)))
+                                (str "Resolve change " change-id " and stop."))
+        answer (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                              {:key k :seat "bench-seat"}))]
+    (is (= "stuck" (name (:state (change-by-id w change-id)))))
+    (is (false? (seats/named-beside-a-live-change? (:eng w) "ticket" ticket-id)))
+    (is (empty? (get-in answer [:walk :rows]))
+        "the fire names the leftover, and the sit hands nothing")))
+
+(deftest the-sweep-closes-leftovers-and-leaves-live-ones
+  (let [w (ticket-world)
+        eng (:eng w)
+        leftover-id (get-in (:answer w) [:change :id])
+        _ (seat-invokes! w "stall" {:why a-stall-sentence})
+        _ (force-ticket-state! w :dropped)
+        live-ticket (:row (inv/create! eng :ticket
+                                       {:title "Keep the live one"
+                                        :type "feature"
+                                        :repo a-repository}
+                                       {:principal person}))
+        live (:row (inv/create! eng :change
+                                {:change_id (str "ticket:" (:id live-ticket))
+                                 :repository a-repository
+                                 :head_branch "bench/live-one"
+                                 :born_from (str "ticket:" (:id live-ticket))}
+                                {:principal mirror/source-principal}))]
+    (is (= 1 (forge/sweep-ended-tickets! eng (fn [& _]))))
+    (is (= "closed" (name (:state (change-by-id w leftover-id)))))
+    (is (str/starts-with? (str (get-in (change-by-id w leftover-id)
+                                       [:data :superseded_by]))
+                          "ticket dropped"))
+    (is (= "open" (name (:state (change-by-id w (:id live)))))
+        "a live ticket's change is left")
+    (is (= 0 (forge/sweep-ended-tickets! eng (fn [& _])))
+        "a second sweep finds nothing")))
 
 (deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
   (let [w (ticket-world)

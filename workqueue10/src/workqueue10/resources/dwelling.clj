@@ -329,7 +329,7 @@
             ;; persisted row always carries it. Filterable so own-ids
             ;; can query the agent's own row; NOT any prose body.
             [:owner (prosed self-prose {:optional true
-                                        :not-a-ref "bare today; swept by 5cb6a0c7"
+                                        :x-ref {:principal true}
                                         :x-display {:raw true}} :owner)
              [:maybe [:string {:min 1 :max 128}]]]
             [:display (prosed self-prose {} :display)
@@ -348,7 +348,7 @@
    ;; body is judged by THIS schema, so owner rides in for a person.
    :create-schema [:map
                    [:owner (prosed self-prose {:optional true
-                                               :not-a-ref "bare today; swept by 5cb6a0c7"}
+                                               :x-ref {:principal true}}
                                    :owner)
                     [:maybe [:string {:min 1 :max 128}]]]
                    [:display (prosed self-prose {} :display)
@@ -500,7 +500,7 @@
             ;; whose journal — the inhabitant agent id. Stamped by the
             ;; engine, filterable so own-ids finds an agent's entries.
             [:owner (prosed journal-prose {:optional true
-                                          :not-a-ref "bare today; swept by 5cb6a0c7"
+                                          :x-ref {:principal true}
                                           :x-display {:raw true}} :owner)
              [:maybe [:string {:min 1 :max 128}]]]
             [:title (prosed journal-prose {} :title)
@@ -512,7 +512,7 @@
              [:maybe [:string {:max 40}]]]]
    :create-schema [:map
                    [:owner (prosed journal-prose {:optional true
-                                                  :not-a-ref "bare today; swept by 5cb6a0c7"}
+                                                  :x-ref {:principal true}}
                                    :owner)
                     [:maybe [:string {:min 1 :max 128}]]]
                    [:title (prosed journal-prose {} :title)

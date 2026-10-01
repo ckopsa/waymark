@@ -13,7 +13,8 @@ const dlgStamp = t => new Date(t || Date.now())
   .toTimeString().slice(0, 8);
 
 async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
-                             idemKey: callerKey}) {
+                             idemKey: callerKey, suggest, invitation,
+                             guided}) {
   const safety = entry.safety || {};
   const input = entry.input || null;
   /* rule 3 (Part IV): a non-idempotent action gets its key at dialog
@@ -31,7 +32,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
      prefill, revs, authors}; the row's own current values are the
      fallback prefill for an :edit that was never drafted. */
   let draftView = null;
-  if (entry.draft && entry.draft.href) {
+  /* a guided dialog is someone else's: no draft is read or written */
+  if (entry.draft && entry.draft.href && !guided) {
     const d = await api(entry.draft.href);
     if (d.ok) draftView = d.body;
   }
@@ -64,12 +66,22 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
        not hold. Never for a bulk write, as above. */
     (!bulkIds && entry.prefill_values) || {},
     prefill || {},
+    /* an invitation's suggestions: in the form, marked, and sent only
+       by the person's own submit */
+    suggest || {},
     (draftView || {}).prefill || {},
     (draftView || {}).values || {});
   const kind = (doc.kind || "").replace("_collection", "");
   const form = input ? buildForm(input, initialValues, kind) : el("div", {});
 
   const errBox = el("div", {});
+  /* "Do this later" (docs/spec-scheduled-actions.md R-7.3): a row's own
+     door, in the person's own hand. A bulk write and a create have no
+     one row to hold a rule against, and a scheduled action's own doors
+     move the row that already is the later. */
+  const laterable = !bulkIds && !guided && kind !== "scheduled_action" &&
+    /^\/api\/[^/]+\/(?!-\/)[^/]+\/-\/[^/?]+$/.test(entry.href || "");
+  const laterBox = el("div", {"data-later-panel": "", style: "display:none"});
   /* the blur judge's verdict line (§23): "✓ so far" is the partial
      rehearsal speaking — every field it can already judge, judged */
   const dryNote = el("span", {class: "drynote"});
@@ -106,7 +118,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
             el("b", {}, "Confirm: "),
             entry.display?.description || "This action requires confirmation.")
         : null,
-      form, errBox, draftBar),
+      form, laterBox, errBox, draftBar),
     el("div", {class: "dlgfoot"},
       el("span", {class: "hint"},
         entry.draft ? (entry.draft.shared ? "shared draft — saved on blur"
@@ -120,7 +132,15 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       }}, "Discard draft") : null,
       input && dryRunnable(entry.href)
         ? el("button", {onclick: () => check()}, "Check") : null,
+      invitation && (invitation.doc.actions || {}).decline
+        ? el("button", {class: "danger", "data-invite-decline": "",
+                        onclick: () => declineInvitation()}, "Decline")
+        : null,
       el("button", {onclick: () => closeDlg()}, "Cancel"),
+      laterable
+        ? el("button", {"data-later": "", onclick: () => openLater()},
+            "Do this later")
+        : null,
       el("button", {class: safety.confirm ? "danger" : "primary",
                     onclick: () => submit()},
         safety.confirm
@@ -163,12 +183,12 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     } else node.value = val;
   };
   const showPeers = participants => {
-    const me = principalId() || "anonymous";
+    const me = viewerId() || "anonymous";
     const others = (participants || []).filter(p => p.id !== me);
     peers.textContent = others.length
       ? ` · editing with ${others.map(p => p.display || p.id).join(", ")}` : "";
   };
-  if (entry.draft && entry.draft.shared) {
+  if (entry.draft && entry.draft.shared && !guided) {
     try {
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(`${proto}//${location.host}${entry.draft.href}/collab`);
@@ -380,6 +400,15 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       }
     } else showErrors(res.body);
   }
+  /* decline is one door, the invitation's own: no form between */
+  async function declineInvitation() {
+    const res = await invokeBare(invitation.doc.actions.decline, invitation.doc);
+    if (!res.ok) { showErrors(res.body); return; }
+    disarmDraft();
+    closeDlg();
+    toast("Declined");
+    onDone && onDone(res.body);
+  }
   async function submit() {
     clearTimeout(dryTimer);          /* a pending blur judge must not
                                         speak over the landing */
@@ -424,9 +453,178 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     showErrors(problem);
   }
 
+  /* ── do this later (docs/spec-scheduled-actions.md R-7.3): the same
+     call, written as a scheduled_action and made at its time. The
+     picker speaks the browser's zone and the panel names it; the rule
+     the run is held to is chosen in plain words; and on a confirm door
+     the panel shows the sentence, because the tap that schedules is
+     the acknowledgment. ─────────────────────────────────────────────── */
+  const laterZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const laterConds = {};
+  /* the sentence as waymark10.confirm/consequence-of reads it */
+  const consequence = entry.display?.description || entry.display?.label ||
+    "This action requires confirmation.";
+  function paintLaterConds(box) {
+    box.replaceChildren(...Object.entries(laterConds).map(([k, v]) =>
+      el("span", {class: "chip on", "data-later-cond": k}, `${k}=${v} `,
+        el("span", {title: "remove", onclick: () => {
+          delete laterConds[k]; paintLaterConds(box);
+        }}, "×"))));
+  }
+  async function openLater() {
+    if (laterBox.firstChild) {
+      laterBox.style.display =
+        laterBox.style.display === "none" ? "block" : "none";
+      return;
+    }
+    const p = n => String(n).padStart(2, "0");
+    const t = new Date(Date.now() + 86400000);
+    const at = el("input", {type: "datetime-local", "data-later-at": "",
+      value: `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}T08:30`});
+    const condChips = el("div", {});
+    const condBox = el("div", {"data-later-conds": "", style: "display:none"},
+      condChips);
+    let condsBuilt = false;
+    /* *Only if…*: the collection's own filter control over the kind's
+       query input, so a condition is spelled the way a filter is */
+    const showConds = async on => {
+      condBox.style.display = on ? "block" : "none";
+      if (!on || condsBuilt) return;
+      condsBuilt = true;
+      const col = await api(doc.self.split("?")[0].split("/").slice(0, 3).join("/") +
+                            "?page%5Bsize%5D=1");
+      const query = (((col.body || {}).actions || {}).query || {}).input;
+      const fp = query && filterPopover(query, new URLSearchParams(), updates => {
+        for (const [k, v] of Object.entries(updates))
+          if (v !== "") laterConds[k] = v;
+        paintLaterConds(condChips);
+      });
+      condBox.append(fp || el("span", {class: "muted"},
+        `${pretty(kind)} declares no field a condition can read`));
+    };
+    const rule = (value, text) => {
+      const radio = el("input", {type: "radio", name: "later_validity", value});
+      radio.checked = value === "state";
+      radio.addEventListener("change", () => showConds(value === "conditions"));
+      return el("label", {style: "display:block"}, radio, " ", text);
+    };
+    laterBox.append(
+      el("p", {}, el("b", {}, "Do this later: "), at, " ",
+        el("span", {class: "muted", "data-later-zone": ""}, laterZone)),
+      rule("strict", "Only if nothing about it changes"),
+      rule("state", "As long as it is still " + pretty(doc.state || "as it is")),
+      rule("conditions", "Only if…"),
+      condBox,
+      safety.confirm
+        ? el("div", {class: "consequence"},
+            el("b", {}, "Scheduling confirms: "), consequence)
+        : null,
+      el("div", {class: "actions"},
+        el("button", {class: "primary", "data-later-go": "",
+                      onclick: () => schedule()}, "Schedule")));
+    laterBox.style.display = "block";
+  }
+  async function schedule() {
+    clearTimeout(dryTimer);          /* as on submit: the blur judge
+                                        stands down */
+    const at = laterBox.querySelector("[data-later-at]").value;
+    if (!at) {
+      showErrors({title: "No time", detail: "Choose the time this runs at."});
+      return;
+    }
+    const validity =
+      laterBox.querySelector("input[name=later_validity]:checked")?.value || "state";
+    /* the same target and input the submit would send */
+    const call = {
+      target: {kind, action: name, id: doc.self.split("?")[0].split("/").pop()},
+      input: input ? collectValues(form, input) : {},
+      run_at: at, zone: laterZone, validity};
+    if (validity === "conditions") call.conditions = {...laterConds};
+    if (safety.confirm) call.acknowledge = consequence;
+    const btn = laterBox.querySelector("[data-later-go]");
+    btn.disabled = true;             /* one tap, one scheduled action */
+    const res = await api("/api/scheduled_actions",
+      {method: "POST", body: JSON.stringify(call),
+       headers: {"Idempotency-Key": uuid()}});
+    btn.disabled = false;
+    if (!res.ok) { showErrors(res.body); return; }
+    closeDlg();
+    toast(`${pretty(name)} scheduled for ${at.replace("T", " ")} (${laterZone})`);
+    render();
+  }
+
+  /* an invitation (docs/spec-guided-follow.md §3): the suggested
+     values wear their mark until the person types over them; the
+     invited field scrolls into view, lit, with the author's note
+     beside it */
+  for (const k of Object.keys(suggest || {})) {
+    const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
+    if (!node) continue;
+    node.classList.add("suggested-value");
+    node.title = "suggested — yours to change";
+    node.addEventListener("input",
+      () => node.classList.remove("suggested-value"), {once: true});
+  }
+  /* guided follow (docs/spec-guided-follow.md §2): someone else's
+     dialog on this screen, read-only — every input disabled, only
+     Cancel left in the footer, the reporter named above the form.
+     Their typing lands through dlg.guidedSet. */
+  if (guided) {
+    dlg.setAttribute("data-guided", guided.key);
+    for (const n of form.querySelectorAll("input, select, textarea, button"))
+      n.disabled = true;
+    for (const b of dlg.querySelectorAll(".dlgfoot button"))
+      if (b.textContent !== "Cancel") b.remove();
+    form.prepend(el("p", {class: "guided-note", "data-guided-note": ""},
+      guided.note || `${guided.name} is filling this in`));
+    dlg.guidedSet = fields => {
+      for (const [k, v] of Object.entries(fields || {})) {
+        const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
+        if (!node) continue;
+        if (node.type === "checkbox") node.checked = !!v;
+        else node.value = v == null ? ""
+          : typeof v === "object" ? (v.elided ? "…" : JSON.stringify(v))
+          : String(v);
+      }
+    };
+    /* closed by this person's own hand: not reopened for the same step */
+    dlg.addEventListener("close", () => {
+      if (!dlg.dataset.guidedAuto && guided.onDismiss) guided.onDismiss();
+    });
+  } else if (!bulkIds) {
+    /* share my screen: this dialog, and its values as typed (debounced
+       150 ms, secrets removed), cleared when it closes */
+    const shareFields = () => {
+      try { return input ? shareableValues(collectValues(form, input), input) : {}; }
+      catch (_e) { return {}; }
+    };
+    let shareTimer = null;
+    form.addEventListener("input", () => {
+      clearTimeout(shareTimer);
+      shareTimer = setTimeout(() => shareUi({fields: shareFields()}), 150);
+    });
+    dlg.addEventListener("close", () => {
+      clearTimeout(shareTimer);
+      shareUi({dialog: null, fields: null});
+    });
+    shareUi({dialog: {self: doc.self, action: name}, fields: shareFields()});
+  }
   document.body.append(dlg);
   dlg.addEventListener("close", () => dlg.remove());
   dlg.showModal();
+  if (invitation) {
+    const node = invitation.field &&
+      form.querySelector(`[name="${CSS.escape(invitation.field)}"]`);
+    const spot = node ? (node.closest("label") || node.parentElement) : null;
+    const note = el("p", {class: "invite-note", "data-invite-note": ""},
+      invitation.note || "");
+    if (spot) { spot.after(note); spot.classList.add("invited"); }
+    else form.prepend(note);
+    requestAnimationFrame(() => {
+      (spot || note).scrollIntoView({behavior: "smooth", block: "center"});
+      if (node) node.focus({preventScroll: true});
+    });
+  }
 }
 
 /* ── the bulk report: N inputs → N verdicts, honestly partial ──────── */
@@ -457,6 +655,31 @@ function reportDialog(report) {
       el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
   document.body.append(dlg);
   dlg.showModal();
+}
+
+/* ── an invitation, opened in the person's own hand: the invited row,
+   its door's dialog with the inputs live, and the engine answering the
+   invitation when the person submits — the page does nothing extra ── */
+async function openInvitation(inv) {
+  const d = inv.data || {};
+  const res = await api(d.self);
+  if (!res.ok) {
+    toast(`The invited row cannot be read: ${(res.body || {}).detail || res.status}`);
+    return;
+  }
+  const target = res.body;
+  const entry = (target.actions || {})[d.action];
+  /* an invitation addressed to this person opens in their own hand,
+     over any guided dialog (#613) */
+  closeGuided();
+  go(target.self);
+  if (!entry) {
+    toast(`${pretty(d.action)} is not open to you on this row right now`);
+    return;
+  }
+  actionDialog({name: d.action, entry, doc: target, suggest: d.suggest || {},
+                invitation: {doc: inv, field: d.field, note: d.note},
+                onDone: () => render()});
 }
 
 /* ── undo: an inverse action present in the post-action document ───── */

@@ -278,7 +278,8 @@ walk        one row per recording
   fields: recorder (pid), followed (pid), title, started_at, ended_at,
           frame_count, retention_days (default 30)
   states: recording → sealed → purged
-  doors:  create (start; the recorder is a follower in guided mode)
+  doors:  create (start; the recorder is a follower in guided mode,
+                  or the person themselves: a self walk, below)
           seal   (stop)
           export (sealed only; answers the export document)
           purge  (the recorder, or the sweep after retention_days)
@@ -296,6 +297,22 @@ could see, and nothing needs to be redacted after the fact.
 `transition` frames carry the firehose's event projected by the
 recorder's visibility. Request headers, grant ids, keys and
 credentials are never part of a frame.
+
+**A self walk records your own screen, with nobody following.** A walk
+whose `followed` is its `recorder` is a person showing how a piece of
+work is done, to replay or export afterwards. No follower stream is
+open, so the doors that make the frames hand them to the walk: the
+beat (`presence/report!`) hands over the `move` and `ui` frames it
+made, and the write doors hand over each transition the person
+committed (`walks/self-recorder`, `walks/record-own!`). The `ui` frames
+exist only while the tab shares, so the UI's ● Record button turns ⧉
+sharing on and ■ Stop turns it off again, seals the walk and opens its
+row page. The sight needs no extra rule: the recorder is the person
+whose screen it is, each frame is judged under the visibility of the
+request that made it, and a row that person cannot see is not written.
+The walk's own create and seal are not recorded in it. A write made
+through a door other than the HTTP create and action routes (the bulk
+door, the connector) is not recorded yet.
 
 **Retention.** `retention_days` defaults to 30. A sweep purges
 `walk_frame` rows after that time and moves the walk to `purged`. The

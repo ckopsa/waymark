@@ -14,7 +14,7 @@ function paintPresence() {
   const box = $("[data-presence]");
   if (!box) return;
   const here = hereHref();
-  const me = principalId();
+  const me = viewerId();
   box.replaceChildren(...[...PRESENCE.values()]
     .filter(p => p.self === here && p.principal.id !== me)
     .map(p => el("span", {class: "viewing",
@@ -31,8 +31,16 @@ function onPresenceFrame({event, data: f}) {
     PRESENCE.clear();
     for (const p of f.presences || []) PRESENCE.set(p.principal.id, p);
   } else if (f.event === "leave") PRESENCE.delete(f.principal.id);
-  else PRESENCE.set(f.principal.id, f);   // join | move
+  else PRESENCE.set(f.principal.id, f);   // join | move | ui
   paintPresence();
+  /* guided follow (200-events-follow.js): the followed principal's
+     screen state, applied — a snapshot's entry carries its last ui */
+  if (f.event === "ui") applyGuidedUi(f);
+  else if (f.event === "snapshot" && followUi && followId) {
+    guidedSeq = -1;
+    const p = PRESENCE.get(followId);
+    if (p && p.ui) applyGuidedUi(p);
+  }
   /* the chip's gaze state: live while presence holds the followed
      principal, kept-but-faded once they leave */
   if (followId) {
@@ -49,13 +57,9 @@ function onPresenceFrame({event, data: f}) {
     clearTimeout(followMoveTimer);
     followMoveTimer = setTimeout(() => {
       /* an armed jump (a fresh approve) spends itself leaving the
-         balcony; passive following still parks there */
-      if (f.self !== hereHref() &&
-          (hereHref() !== "access" || followJumpArmed) &&
-          !$("dialog[open]")) {
-        followJumpArmed = false;
-        location.hash = "#" + f.self;
-      }
+         balcony; passive following still parks there. A replay holds
+         the screen until it is stopped. */
+      if (!replay) applyFollowMove(f.self);
     }, 250);
   }
 }
@@ -65,13 +69,28 @@ async function presenceBeat() {
      only — the SERVER's suppression (presence.clj, the member row's
      :curtain) is the law, and holds for clients that ignore this */
   if (localStorage.getItem("wm10.curtain")) return;
+  /* a replay (200-events-follow.js) writes nothing, not even where
+     this tab looks: the screen shows a recording, not a gaze */
+  if (replay) return;
   const here = hereHref();
-  if (!principalId() || !here.startsWith("/api/")) return;
+  /* the viewer, not the dev box: a person signed in by session cookie
+     beats too — the server resolves the cookie, and principalHeaders
+     adds the dev header only when the box holds a value */
+  if (!viewerId() || !here.startsWith("/api/")) return;
+  /* share my screen (200-events-follow.js): the ui part rides the beat
+     only while this tab's toggle is on; turning it off sends one empty
+     part, so followers stop seeing what was last shared */
+  const body = {self: here};
+  if (uiSharing()) body.ui = uiShareState();
+  else if (uiShareClear) {
+    body.ui = {dialog: null, fields: null, collection: null, focus: null};
+    uiShareClear = false;
+  }
   try {
     await fetch("/api/-/presence", {method: "POST",
       headers: Object.assign({"Content-Type": "application/json"},
                              principalHeaders()),
-      body: JSON.stringify({self: here})});
+      body: JSON.stringify(body)});
   } catch (_e) { /* engine not started, or restarting */ }
 }
 setInterval(presenceBeat, 10000);
@@ -92,10 +111,7 @@ presenceBeat();
    the row cannot be read we paint nothing: a chip that guesses about
    a privacy switch is worse than a blank one. ───────────────────── */
 const $curtain = $("#curtainbtn");
-function curtainId() {
-  return principalId()
-      || (window.signedinPrincipal && window.signedinPrincipal.id) || "";
-}
+function curtainId() { return viewerId(); }
 function curtainChip(drawn) {
   if (drawn !== true && drawn !== false) {   /* unknown: do not guess */
     $curtain.textContent = "⛨ ?";
@@ -290,7 +306,7 @@ $("#apphost").textContent = location.host;  // the honest app identity
    /api/{plural}/{id}/-/events) are deliberately NOT folded in: those
    are short, opened on purpose, and carry the implicit presence
    registration this stream does not. */
-sse("/api/-/live", frame => {
+sse(liveHref, frame => {
   switch (frame.event) {
     case "transition":
     case "derivation": return onRowFrame(frame);

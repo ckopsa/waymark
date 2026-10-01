@@ -211,10 +211,12 @@
                border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
   #grantchip button { border: none; background: none; color: var(--warn);
                       padding: 0 0 0 6px; font-weight: 700; cursor: pointer; }
-  #followchip { background: var(--verdigris-wash); color: var(--verdigris-deep);
+  #followchip, #replaychip {
+                background: var(--verdigris-wash); color: var(--verdigris-deep);
                 border-radius: 999px; padding: 3px 12px; font-size: 12px;
                 font-weight: 600; display: none; white-space: nowrap; }
-  #followchip button { border: none; background: none;
+  #followchip button, #replaychip button, #replaychip select {
+                       border: none; background: none;
                        color: var(--verdigris-deep); padding: 0 0 0 6px;
                        font-weight: 700; cursor: pointer; }
   #followchip a { color: var(--verdigris-deep); }
@@ -439,4 +441,15 @@
   .prose-tabs button[aria-pressed="true"] { font-weight: 600;
     background: var(--verdigris-wash); border-color: var(--verdigris);
     color: var(--verdigris-deep); }
+  /* a demo engine's end (docs/spec-demo-clones.md §3): a note until 15
+     minutes are left, a warning from there, and the last one at 5 */
+  #demobanner { margin: 0 0 12px; padding: 8px 12px; font-size: 13px;
+                border: 1px solid var(--line); border-radius: var(--radius);
+                background: var(--chipbg); color: var(--ink); }
+  #demobanner[hidden] { display: none; }
+  #demobanner[data-demo-level="warn"] { background: var(--warn-wash);
+    border-color: var(--warn); color: var(--warn); }
+  #demobanner[data-demo-level="last"] { background: var(--refusal-wash);
+    border-color: var(--refusal); color: var(--refusal); font-weight: 600; }
+  #demobanner a { color: inherit; }
 

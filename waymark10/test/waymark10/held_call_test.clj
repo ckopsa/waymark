@@ -18,6 +18,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
@@ -618,6 +619,42 @@
                                                       :held_call [])))))
         "the order is the security property: the why refuses before
          the hold mints anything")))
+
+;; ── the why is kept, and a cut says so (ticket e9f65194) ────────────
+
+(deftest a-long-why-is-kept-and-a-cut-ends-at-a-word-and-says-so
+  (let [w (world)
+        said (str/join " " (repeat 200 "refill"))
+        held! (fn [why]
+                (let [out (tool! w "waymark_power"
+                                 {:tool "emila__send"
+                                  :arguments {:to "otto@example.test"
+                                              :text "On my way."
+                                              :why why}})]
+                  (:data (held-row w (str (:held_call (doc-of out)))))))]
+
+    (testing "a 400-character why is stored whole"
+      (let [why (subs said 0 400)
+            data (held! why)]
+        (is (= 400 (count why)))
+        (is (= why (:why data)))
+        (is (not (contains? data :why_cut))
+            "a whole why carries no stamp: absent reads as not cut")))
+
+    (testing "a 1200-character why is cut at a word, marked, and flagged"
+      (let [why (subs said 0 1200)
+            data (held! why)
+            stored (str (:why data))
+            body (subs stored 0 (max 0 (dec (count stored))))]
+        (is (= 1200 (count why)))
+        (is (<= (count stored) 1000))
+        (is (str/ends-with? stored "…"))
+        (is (str/starts-with? why body)
+            "what is kept is the caller's own words, from the start")
+        (is (str/ends-with? body "refill") "the last word is whole")
+        (is (= \space (nth why (count body)))
+            "and the cut fell on the space after it")
+        (is (true? (:why_cut data)))))))
 
 ;; ── the office the call was made in ─────────────────────────────────
 
@@ -1509,3 +1546,28 @@
     (is (= 1 (count (chat-sends log))))
     (is (= 1 (:sent (notice-rule-data eng (:id r)))))
     (is (= 0 (held/sweep-quiet-digests! eng)) "nothing held, no digest")))
+
+;; ── the held seat call names its people (5cb6a0c7) ─────────────────
+
+(defn- object-arm
+  "A nilable map's published schema: the arm that carries properties."
+  [prop]
+  (some #(when (:properties %) %)
+        (concat [prop] (:oneOf prop) (:anyOf prop))))
+
+(deftest a-held-seat-restate-labels-its-owner-caller-and-author
+  ;; The page is not executed here (ui_assembly_test pins principalRef
+  ;; and the kind-from seam); this pins what it reads: a held
+  ;; seat-restate's owner, caller and door author publish the principal
+  ;; x-ref, so each `seat:`/`member:` value resolves to its row's name,
+  ;; and the door's row id reads its kind off the door's `kind`
+  (let [js (schema/json-schema (:schema held/held-call))
+        door (object-arm (get-in js [:properties :door]))]
+    (doseq [f [:owner :caller :decided_by]]
+      (is (= {:principal true} (get-in js [:properties f :x-ref])) (name f)))
+    (is (= {:principal true} (get-in door [:properties :author :x-ref])))
+    (is (= {:kind-from "kind"} (get-in door [:properties :id :x-ref])))
+    (is (= {:kind :sitting} (select-keys (get-in js [:properties :sitting :x-ref]) [:kind])))
+    (testing "no waiver of the sweep is left on the kind"
+      (is (not (str/includes? (pr-str (:schema held/held-call)) "swept by")))
+      (is (not (str/includes? (pr-str (:create-schema held/held-call)) "swept by"))))))

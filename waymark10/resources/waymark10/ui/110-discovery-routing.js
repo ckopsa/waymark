@@ -78,7 +78,10 @@ function xdisplay(schema, field) {
 function xref(prop) {
   if (!prop || typeof prop !== "object") return null;
   const sub = schemaProp(prop);
-  return prop["x-ref"] || sub["x-ref"] ||
+  const r = prop["x-ref"] || sub["x-ref"];
+  /* the wire spells the declaration's :kind-from as kind_from */
+  if (r && r.kind_from && !r["kind-from"]) return {...r, "kind-from": r.kind_from};
+  return r ||
     (prop.format === "waymark-ref" || sub.format === "waymark-ref" ? {} : null);
 }
 /* a field's human label: the declared x-display label, else — for a
@@ -126,6 +129,12 @@ async function render() {
   const raw = location.hash.slice(1) || null;
   const {href, viewName} = splitViewParam(raw);
   const view = $("#view");               // superseded render never blanks
+  /* a replay holds the screen (200-events-follow.js): a row or a
+     collection is drawn from the recording, never from a read */
+  if (replay && href && /^\/api\//.test(href)) {
+    clearLiveTimers(); view.textContent = ""; lawStamp(null);
+    return renderReplay(view, href);
+  }
   renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
   /* home is the dashboard (the feed document that once stood here
      was retired 2026-09); it keeps its own address too */

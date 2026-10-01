@@ -1831,6 +1831,58 @@
       (is (= "stuck" (name (:state row))) "after the window a person sees it")
       (is (= 1 (:stuck census))))))
 
+;; ── a stuck change with no pull request, and its ticket (ticket 91694681)
+
+(defn- a-stuck-unopened!
+  "The unadopted change walked to `stuck` by the pass itself, for having
+  no pull request after the window, with its ticket still open. → the
+  ticket's id."
+  [{:keys [engine] :as r}]
+  (let [tid (a-ticket-at! engine :open)
+        long-ago (str (.minus (java.time.Instant/now)
+                              (java.time.Duration/ofMinutes 20)))]
+    (pass! r)
+    (rewrite-unadopted! engine #(assoc-in % [:data :unadopted_since] long-ago))
+    (pass! r)
+    tid))
+
+(defn- put-ticket-at! [engine id state]
+  (let [st (:storage engine)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :ticket id {})]
+          (store/save-row! st tx :ticket
+                           (assoc row :state state
+                                  :version (inc (long (:version row))))
+                           (:version row)))))))
+
+(deftest a-stuck-change-that-never-opened-a-pull-request-closes-when-its-ticket-ends
+  (doseq [state [:done :dropped]]
+    (testing (name state)
+      (let [{:keys [engine] :as r} (unadopted-world nil)
+            tid (a-stuck-unopened! r)
+            before (the-unadopted engine)]
+        (is (= "stuck" (name (:state before))))
+        (is (nil? (get-in before [:data :number])))
+        (is (some #{"no pull request"} (get-in before [:data :failing_checks])))
+        (put-ticket-at! engine tid state)
+        (let [census (pass! r)
+              row (the-unadopted engine)]
+          (is (= "closed" (name (:state row))))
+          (is (= (str "closed: ticket " tid " ended; this change never opened"
+                      " a pull request")
+                 (get-in row [:data :superseded_by])))
+          (is (= 1 (:unopened-closed census))))))))
+
+(deftest a-stuck-change-that-never-opened-a-pull-request-stays-stuck-while-its-ticket-is-open
+  (let [{:keys [engine] :as r} (unadopted-world nil)
+        _ (a-stuck-unopened! r)
+        census (pass! r)
+        row (the-unadopted engine)]
+    (is (= "stuck" (name (:state row))) "an open ticket leaves it for a person")
+    (is (nil? (get-in row [:data :superseded_by])))
+    (is (= 0 (:unopened-closed census)))))
+
 (deftest a-change-with-a-pull-request-is-untouched-when-its-ticket-ends
   (let [{:keys [engine] :as r} (unadopted-world nil)
         _ (a-ticket-at! engine :done)]

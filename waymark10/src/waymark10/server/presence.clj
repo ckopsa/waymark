@@ -55,6 +55,19 @@
   passes 2s), and the sweep's fresh read clears the board within one
   heartbeat even if both wires were lost.
 
+  THE UI FRAME (docs/spec-guided-follow.md §1–2): a heartbeat may
+  carry a `ui` part {dialog, fields, collection, focus} — the
+  reporter's screen state, whole, never a diff. The registry keeps the
+  last one beside the entry (same TTL, gone with the leave), stamped
+  with a per-principal seq that only counts up. Secret arguments are
+  REMOVED at report time and never stored, so they never reach
+  pg_notify; a part over ui-max-bytes elides its longest fields
+  first. A `ui` frame goes ONLY to a stream that asked for that one
+  pid (?ui=<pid>), redacted part by part under the FOLLOWER's own
+  visibility (ui-redactor); a stream that did not ask receives
+  exactly what it did before, byte for byte. The curtain binds: a
+  curtained principal's entry, ui and all, is never published.
+
   CROSS-PROCESS: every local report notifies {origin, pid, entry}
   (drops notify {origin, pid}); each process re-asserts its local
   entries every :presence-heartbeat-ms and evicts a remote entry
@@ -81,7 +94,9 @@
   (:require [clojure.string :as str]
             [next.jdbc :as jdbc]
             [org.httpkit.server :as http]
+            [waymark10.schema :as schema]
             [waymark10.server.curtain :as curtain]
+            [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
@@ -108,6 +123,11 @@
   "The longest self a heartbeat may claim — each entry rides one
   pg_notify payload, whose comfort ceiling is small."
   512)
+
+(def ui-max-bytes
+  "The largest serialized `ui` part a report may store — the entry
+  rides one pg_notify payload, whose hard limit is 8000 bytes."
+  6000)
 
 (defn- pg-storage? [st]
   (instance? waymark10.server.store.postgres.PostgresStorage st))
@@ -205,12 +225,28 @@
 (defn- frame-of [event e]
   (assoc (select-keys e [:principal :self :source :at]) :event event))
 
+(defn- ui-frame-of [e]
+  (assoc (select-keys e [:principal :self :source :at :seq :ui]) :event "ui"))
+
+(defn- carry-ui
+  "A door's fresh entry keeps the last `ui` its principal reported: a
+  plain beat, read or stream moves the gaze and leaves the screen
+  state as it was."
+  [st e]
+  (merge (select-keys (:entry st) [:ui :seq]) e))
+
 (defn- fan! [reg frame]
   (doseq [sub @(:subs reg)]
     (when ((:visible? sub) (:self frame))
-      (when-not (.offer ^LinkedBlockingQueue (:queue sub) frame)
-        (warn! "subscriber queue full; dropping a frame — the snapshot"
-               " on reconnect is the recovery")))))
+      ;; a ui frame reaches only the stream that asked for its pid,
+      ;; judged part by part under that stream's own visibility
+      (when-some [frame (if (= "ui" (:event frame))
+                          (when (= (:ui sub) (get-in frame [:principal :id]))
+                            ((:redact sub) frame))
+                          frame)]
+        (when-not (.offer ^LinkedBlockingQueue (:queue sub) frame)
+          (warn! "subscriber queue full; dropping a frame — the snapshot"
+                 " on reconnect is the recovery"))))))
 
 (defn- live-local? [{:keys [streams hb-at]} now hb-ms]
   (or (boolean (some pos? (vals streams)))
@@ -265,7 +301,10 @@
               :let [o (get old pid)]]
         (cond
           (nil? o) (fan! reg (frame-of "join" e))
-          (not= (:self o) (:self e)) (fan! reg (frame-of "move" e))))
+          (not= (:self o) (:self e)) (fan! reg (frame-of "move" e)))
+        (when (and (some? (:ui e))
+                   (not= (select-keys o [:ui :seq]) (select-keys e [:ui :seq])))
+          (fan! reg (ui-frame-of e))))
       ;; a LEAVE is whatever merged-view dropped. That is why the
       ;; curtain verdict is resolved there and not here: a pid missing
       ;; from cv used to be filtered out as "curtained" and left the
@@ -413,18 +452,150 @@
             {:self [(str "must be an /api/… href of at most "
                          self-max-chars " chars")]}))))
 
+;; ── the ui part (docs/spec-guided-follow.md §1) ─────────────────────
+
+(defn- rdef-of-plural [eng plural]
+  (some (fn [[_ r]] (when (= plural (:plural r)) r)) (inv/resources eng)))
+
+(defn- row-of
+  "A row self /api/{plural}/{id} → [rdef id]; nil for anything else."
+  [eng self]
+  (let [parts (str/split (str self) #"/")]
+    (when (and (= 4 (count parts)) (= "api" (nth parts 1)))
+      (when-some [rdef (rdef-of-plural eng (nth parts 2))]
+        [rdef (nth parts 3)]))))
+
+(defn- secret-props?
+  "A secret-marked argument: the engine's own :secret, :x-secret,
+  writeOnly, or a password format (invitations' spelling)."
+  [props]
+  (boolean
+   (and (map? props)
+        (or (:secret props) (:x-secret props) (:writeOnly props)
+            (get-in props [:json-schema :writeOnly])
+            (= "password" (some-> (:format props) name))
+            (= "password" (some-> (get-in props [:json-schema :format]) name))))))
+
+(defn- secret-keys
+  "The keys these :map schemas mark secret, on the entry or on its
+  child's own properties."
+  [& forms]
+  (into #{}
+        (for [form forms
+              :when form
+              [k e] (try (schema/entry-map form) (catch Exception _ nil))
+              :let [s (:schema e)]
+              :when (or (secret-props? (:properties e))
+                        (and (vector? s) (secret-props? (second s))))]
+          k)))
+
+(defn- draft-fields
+  "The shared live draft's values for this dialog; nil when the action
+  keeps none, or none is open yet. Where one exists it IS the form,
+  and the frame reads it rather than keep a second copy."
+  [reg rdef id action door]
+  (when (and (get-in door [:edit :draft :shared])
+             (get-in door [:edit :draft :live]))
+    (try
+      (store/with-tx (:storage reg)
+        (fn [tx]
+          (some-> (store/load-draft (:storage reg) tx (:kind rdef) id
+                                    action "shared")
+                  :values drafts/document :values)))
+      (catch Exception e
+        (warn! "draft read failed: " (ex-message e))
+        nil))))
+
+(defn- json-bytes [v]
+  (count (.getBytes ^String (wire/write-json (p/wire-value v)) "UTF-8")))
+
+(defn- fit-ui
+  "Under the cap as it is, or the longest fields values become
+  {elided: true}, longest first, until it fits — 422 when even no
+  fields at all would not."
+  [ui]
+  (let [too-large #(p/problem :presence-ui-too-large 422 "The ui part is too large"
+                              {:detail (str "A ui part must fit in " ui-max-bytes
+                                            " serialized bytes with its fields elided; this one does not.")})]
+    (when (> (long (json-bytes (assoc ui :fields {}))) (long ui-max-bytes))
+      (throw (too-large)))
+    (loop [ui ui]
+      (if (<= (long (json-bytes ui)) (long ui-max-bytes))
+        ui
+        (if-some [k (->> (:fields ui)
+                         (remove (fn [[_ v]] (= {:elided true} v)))
+                         (sort-by (fn [[_ v]] (- (long (json-bytes v)))))
+                         ffirst)]
+          (recur (assoc-in ui [:fields k] {:elided true}))
+          (throw (too-large)))))))
+
+(defn- clean-ui
+  "A reported ui part as the registry may store it: the four parts and
+  nothing else, selves normalized, a dialog naming no action of its
+  row's kind dropped with its fields, fields read from the shared live
+  draft where the action has one, secret arguments REMOVED (never
+  stored, so never on pg_notify), and the whole under the cap. Runs
+  before the lock: the draft read touches the store."
+  [reg ui]
+  (when-not (map? ui)
+    (throw (p/schema-invalid
+            :presence
+            {:ui ["must be an object {dialog, fields, collection, focus}"]})))
+  (let [eng (:eng reg)
+        {:keys [dialog fields collection focus]} ui
+        dself (normalize-self (when (map? dialog) (:self dialog)))
+        a (when (map? dialog) (:action dialog))
+        action (when (or (string? a) (keyword? a)) (not-empty (name a)))
+        [rdef id] (when (and action (valid-self? dself)) (row-of eng dself))
+        door (when rdef (get-in rdef [:actions (keyword action)]))
+        secret (when door (secret-keys (:input door) (:schema rdef)))
+        cself (normalize-self (when (map? collection) (:self collection)))
+        fself (normalize-self focus)]
+    (fit-ui
+     {:dialog (when door {:self dself :action action})
+      :fields (when door
+                (into {}
+                      (remove (fn [[k _]] (contains? secret (keyword (name k)))))
+                      (or (draft-fields reg rdef id (keyword action) door)
+                          (when (map? fields) fields))))
+      :collection (when (valid-self? cself)
+                    (cond-> {:self cself}
+                      (map? (:filter collection)) (assoc :filter (:filter collection))
+                      (string? (:sort collection)) (assoc :sort (:sort collection))
+                      (integer? (:page collection)) (assoc :page (:page collection))))
+      :focus (when (valid-self? fself) fself)})))
+
+(defn- next-seq
+  "Counts up per principal, across processes too: one past the last
+  seq this entry carried, and never below the wall clock."
+  [st]
+  (max (inc (long (or (get-in st [:entry :seq]) 0)))
+       (System/currentTimeMillis)))
+
 (defn report!
   "The explicit door: one heartbeat — this principal is looking at
   self, right now. Always accepted from any named principal, scoped
   or not (where it looks is its own to say). Three missed heartbeats
-  evict."
-  [reg principal self]
+  evict. An optional `ui` part rides the same beat: cleaned by
+  clean-ui and stored beside the entry with the next seq; a beat
+  without one keeps the last. An optional `tap` is shown the frames
+  this beat made, after it published: a `move` when the gaze changed
+  and the `ui` frame when the beat carried one. It is how a person's
+  own walk is recorded with nobody following (walks/self-recorder); a
+  curtained beat makes no frame, so its tap sees none."
+  ([reg principal self] (report! reg principal self nil nil))
+  ([reg principal self ui] (report! reg principal self ui nil))
+  ([reg principal self ui tap]
   (let [self (normalize-self self)]
     (check-self! self)
     (when (= (:id principal) (:id t/anonymous))
       (throw (p/problem :presence-anonymous 422 "Presence names its principal"
                         {:detail "An anonymous heartbeat would mark nobody; present a principal."})))
-    (let [pid (:id principal)]
+    (let [pid (:id principal)
+          ;; cleaned BEFORE the curtain is asked, so a refusal answers
+          ;; the same whatever the curtain says — and the draft read
+          ;; stays outside the lock
+          ui (when (some? ui) (clean-ui reg ui))]
       ;; the curtain: a curtained principal's beat is ACCEPTED — the
       ;; response shape never changes, so the wire does not narrate
       ;; the curtain to whoever sent the beat — but it publishes
@@ -435,14 +606,27 @@
       (if (curtained? reg pid)
         (evict-local! reg pid)
         (let [e (entry-of reg principal self "heartbeat")
-              cv (curtain-view reg [pid])]
+              cv (curtain-view reg [pid])
+              before (get-in @(:local reg) [pid :entry])]
           (locking (:lock reg)
             (swap! (:local reg) update pid
-                   (fn [st] (-> (or st {:streams {}})
-                                (assoc :entry e :hb-at (:at-ms e)))))
-            (notify! reg {:event "report" :pid pid :entry e})
-            (publish! reg cv))))
-      nil)))
+                   (fn [st] (let [st (or st {:streams {}})]
+                              (assoc st
+                                     :entry (if ui
+                                              (assoc e :ui ui :seq (next-seq st))
+                                              (carry-ui st e))
+                                     :hb-at (:at-ms e)))))
+            (notify! reg {:event "report" :pid pid
+                          :entry (get-in @(:local reg) [pid :entry])})
+            (publish! reg cv))
+          ;; outside the lock: the tap writes rows
+          (when tap
+            (let [now (get-in @(:local reg) [pid :entry])]
+              (when (not= (:self before) (:self now))
+                (tap (frame-of "move" now)))
+              (when ui
+                (tap (ui-frame-of now)))))))
+      nil))))
 
 (def read-beat-ms
   "Same-self implicit reads collapse to one report per this window —
@@ -480,8 +664,9 @@
             (locking (:lock reg)
               (swap! (:local reg) update pid
                      (fn [st] (-> (or st {:streams {}})
-                                  (assoc :entry e :hb-at (:at-ms e)))))
-              (notify! reg {:event "report" :pid pid :entry e})
+                                  (assoc :entry (carry-ui st e) :hb-at (:at-ms e)))))
+              (notify! reg {:event "report" :pid pid
+                            :entry (get-in @(:local reg) [pid :entry])})
               (publish! reg cv))))))
     nil))
 
@@ -500,8 +685,9 @@
           (swap! (:local reg) update pid
                  (fn [st] (-> (or st {:streams {}})
                               (update-in [:streams self] (fnil inc 0))
-                              (assoc :entry e))))
-          (notify! reg {:event "report" :pid pid :entry e})
+                              (assoc :entry (carry-ui st e)))))
+          (notify! reg {:event "report" :pid pid
+                        :entry (get-in @(:local reg) [pid :entry])})
           (publish! reg cv))))
     nil))
 
@@ -549,13 +735,19 @@
 (defn subscribe
   "→ a presence subscription. visible? is the concealment predicate
   over a frame's self (nil = sees all); frames it refuses are never
-  enqueued — byte-level absence."
-  [reg visible?]
-  (let [sub {:id (str (random-uuid))
-             :queue (LinkedBlockingQueue. 256)
-             :visible? (or visible? (constantly true))}]
-    (swap! (:subs reg) conj sub)
-    sub))
+  enqueued — byte-level absence. opts {:ui pid :redact f} is the
+  guided-follow opt-in: `ui` frames for that ONE pid, each passed
+  through redact (ui-redactor) first. Without it no `ui` frame is
+  ever enqueued."
+  ([reg visible?] (subscribe reg visible? nil))
+  ([reg visible? {:keys [ui redact]}]
+   (let [sub {:id (str (random-uuid))
+              :queue (LinkedBlockingQueue. 256)
+              :visible? (or visible? (constantly true))
+              :ui ui
+              :redact (or redact identity)}]
+     (swap! (:subs reg) conj sub)
+     sub)))
 
 (defn unsubscribe [reg sub]
   (swap! (:subs reg) disj sub)
@@ -578,16 +770,27 @@
   so a pid that joined during the prefetch→lock window is judged by
   the warm cache and not by its absence — the first frame is the only
   one a new subscriber gets for an already-published principal, so
-  dropping a live one here hid it until it moved."
-  [reg visible?]
-  (let [cv (curtain-view reg)]
-    (locking (:lock reg)
-      (into []
-            (comp (remove (fn [[pid _]] (verdict reg cv pid true)))
-                  (map val)
-                  (filter #(visible? (:self %)))
-                  (map #(select-keys % [:principal :self :source :at])))
-            (sort-by key @(:published reg))))))
+  dropping a live one here hid it until it moved. opts is subscribe's:
+  the one pid a guided follower asked for carries its last ui and seq,
+  redacted as its frames are."
+  ([reg visible?] (snapshot reg visible? nil))
+  ([reg visible? {:keys [ui redact]}]
+   (let [cv (curtain-view reg)
+         redact (or redact identity)]
+     (locking (:lock reg)
+       (into []
+             (comp (remove (fn [[pid _]] (verdict reg cv pid true)))
+                   (map val)
+                   (filter #(visible? (:self %)))
+                   (map (fn [e]
+                          (let [base (select-keys e [:principal :self :source :at])
+                                f (when (and ui (:ui e)
+                                             (= ui (get-in e [:principal :id])))
+                                    (redact (ui-frame-of e)))]
+                            (if (= "ui" (:event f))
+                              (merge base (select-keys f [:seq :ui]))
+                              base)))))
+             (sort-by key @(:published reg)))))))
 
 ;; ── visibility (the concealment predicate) ──────────────────────────
 
@@ -629,6 +832,53 @@
              (when-some [whole-kind? (:whole-kind? vis)]
                (whole-kind? (:kind rdef))))
            :else nil))))))
+
+(defn ui-redactor
+  "One follower's redaction of a `ui` frame, judged under the
+  FOLLOWER's visibility, never the reporter's: the dialog crosses iff
+  :row? admits its row and :action? its action, else it is null and
+  its fields go with it; each fields key crosses iff :arg? admits it
+  and is REMOVED otherwise, never blanked; collection.self follows the
+  whole-kind rule, its filter keeps the keys :field? admits and a sort
+  on a refused field is dropped; focus needs :row?. A frame whose
+  every part was redacted crosses as a plain move — it never says
+  that something was hidden. nil vis (an unscoped follower) sees the
+  frame whole."
+  [eng vis]
+  (if (nil? vis)
+    identity
+    (let [visible? (self-visible? eng vis)
+          arg? (or (:arg? vis) (constantly true))
+          field? (or (:field? vis) (constantly true))]
+      (fn [frame]
+        (let [{:keys [dialog fields collection focus]} (:ui frame)
+              [rdef id] (row-of eng (:self dialog))
+              kind (:kind rdef)
+              action (some-> (:action dialog) name keyword)
+              dialog' (when (and rdef action
+                                 ((:row? vis) kind id)
+                                 ((:action? vis) kind action))
+                        dialog)
+              fields' (when (and dialog' (map? fields))
+                        (into {} (filter (fn [[k _]] (arg? kind action (name k))))
+                              fields))
+              ckind (some->> (:self collection) str (re-find #"^/api/([^/?]+)$")
+                             second (rdef-of-plural eng) :kind)
+              keep? (fn [f] (boolean (and ckind (field? ckind (name f)))))
+              collection' (when (and (map? collection) ckind
+                                     (visible? (:self collection)))
+                            (cond-> collection
+                              (map? (:filter collection))
+                              (update :filter #(into {} (filter (fn [[k _]] (keep? k))) %))
+                              (and (some? (:sort collection))
+                                   (not (keep? (str/replace (str (:sort collection)) #"^-" ""))))
+                              (dissoc :sort)))
+              focus' (when (and (string? focus) (visible? focus)) focus)]
+          (if (and (some some? [dialog collection focus])
+                   (every? nil? [dialog' collection' focus']))
+            (frame-of "move" frame)
+            (assoc frame :ui {:dialog dialog' :fields fields'
+                              :collection collection' :focus focus'})))))))
 
 ;; ── lifecycle ───────────────────────────────────────────────────────
 
@@ -786,10 +1036,13 @@
   then live join/move/leave frames — each filtered by visible?
   BEFORE it is enqueued, so a concealed presence is byte-level
   absent. Heartbeat comments double as the disconnect probe (the
-  events surface's discipline). No id lines: no replay."
-  [eng reg visible? req]
+  events surface's discipline). No id lines: no replay. opts is
+  subscribe's guided-follow opt-in; nil is today's stream. Its :tap,
+  when given, is shown each frame before it is sent: a walk's recorder
+  (walks/recorder)."
+  [eng reg visible? req & [opts]]
   (let [hb-ms (:sse-heartbeat-ms eng 15000)
-        sub (subscribe reg visible?)]
+        sub (subscribe reg visible? opts)]
     (http/as-channel
      req
      {:on-open
@@ -798,7 +1051,7 @@
                         :body (str ": stream open\n\n"
                                    (frame
                                     {:event "snapshot"
-                                     :presences (snapshot reg (:visible? sub))}))}
+                                     :presences (snapshot reg (:visible? sub) opts)}))}
                     false)
         (let [t (Thread.
                  ^Runnable
@@ -814,9 +1067,10 @@
                            (nil? evt) (when (and (http/send! ch ": hb\n\n" false)
                                                  (events/channel-alive? ch))
                                         (recur))
-                           :else (when (and (http/send! ch (frame evt) false)
-                                            (events/channel-alive? ch))
-                                   (recur)))))
+                           :else (do (when-some [tap (:tap opts)] (tap evt))
+                                     (when (and (http/send! ch (frame evt) false)
+                                                (events/channel-alive? ch))
+                                       (recur))))))
                      (finally (unsubscribe reg sub))))
                  (str "waymark10-presence-sse-" (:id sub)))]
           (doto ^Thread t (.setDaemon true) (.start))))

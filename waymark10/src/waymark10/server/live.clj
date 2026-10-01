@@ -106,17 +106,20 @@
 (defn presence-source
   "Who is looking where, on presence's own terms: subscribe with the
   request's concealment predicate, open with the snapshot frame that
-  predicate filters, render with presence/frame."
-  [reg visible?]
-  (let [sub (presence/subscribe reg visible?)]
-    {:label :presence
-     :prelude (fn [] (presence/frame {:event "snapshot"
-                                      :presences (presence/snapshot
-                                                  reg (:visible? sub))}))
-     :take (fn [ms] (presence/take-frame sub ms))
-     :closed ::presence/closed
-     :frame presence/frame
-     :close! (fn [] (presence/unsubscribe reg sub))}))
+  predicate filters, render with presence/frame. opts is
+  presence/subscribe's guided-follow opt-in ({:ui pid :redact f}),
+  handed to the snapshot too; nil is the stream without ui frames."
+  ([reg visible?] (presence-source reg visible? nil))
+  ([reg visible? opts]
+   (let [sub (presence/subscribe reg visible? opts)]
+     {:label :presence
+      :prelude (fn [] (presence/frame {:event "snapshot"
+                                       :presences (presence/snapshot
+                                                   reg (:visible? sub) opts)}))
+      :take (fn [ms] (presence/take-frame sub ms))
+      :closed ::presence/closed
+      :frame presence/frame
+      :close! (fn [] (presence/unsubscribe reg sub))})))
 
 (defn intents-source
   "What is being considered and asked, on intents' own terms — the
@@ -132,6 +135,17 @@
      :closed ::intents/closed
      :frame intents/frame
      :close! (fn [] (intents/unsubscribe reg sub))}))
+
+(defn tapped
+  "A source that shows `tap` every event it renders, before it renders
+  it: the seam a walk's recorder hangs on (walks/recorder). The tap
+  sees the event as the stream sends it, once, on the source's own
+  pump thread, and what it answers is ignored. A nil source or a nil
+  tap is the source unchanged."
+  [source tap]
+  (if (and source tap)
+    (update source :frame (fn [frame] (fn [evt] (tap evt) (frame evt))))
+    source))
 
 ;; ── the multiplexer ─────────────────────────────────────────────────
 

@@ -416,8 +416,10 @@
 
 (defn- check-edit
   "Edit declarations validate hard; edit-shaped actions that never
-  declared one get the heuristic warning, and required prose without a
-  draft gets the knowledge-floor warning (design §10)."
+  declared one get the heuristic warning, a :prefill that leaves out a
+  property of its input warns unless it says :prefill-partial, and
+  required prose without a draft gets the knowledge-floor warning
+  (design §10)."
   [r]
   (let [dform (:schema r)
         dkeys (data-keys r)]
@@ -460,8 +462,22 @@
                                        (let [{:keys [optional properties]} (entries f)]
                                          (and (not optional)
                                               (prose-widget? properties))))
-                                     ikeys))]
+                                     ikeys))
+                     ;; a hand-written prefill drifts from its input: a
+                     ;; property it leaves out is one a patch restate
+                     ;; writes at its default (repo_policy lost
+                     ;; groom_floor that way). :patch is the restate's
+                     ;; own switch, never a field to prefill
+                     prefill (get-in a [:edit :prefill])
+                     left-out (when (and prefill
+                                         (not (get-in a [:edit :prefill-partial])))
+                                (seq (remove (conj (set prefill) :patch)
+                                             ikeys)))]
                  (cond-> []
+                   left-out
+                   (conj (str "[edit] action " (name (:name a)) "'s prefill leaves "
+                              "out " (vec left-out) "; a patch restate writes "
+                              "their defaults"))
                    mirrored
                    (conj (str "[edit] action " (name (:name a)) " is edit-shaped — "
                               "input field(s) " (vec mirrored) " mirror data fields "
@@ -863,8 +879,13 @@
       (or (contains? principal-names n) (str/ends-with? n "_by")) "a principal"
       (and nested? (= :id k) (contains? sibling-keys :kind)) "id beside kind")))
 
-(defn check-unref'd-ids
-  "A plain string field named after a kind the registry serves, or
+(defn unref'd-id-hits
+  "The fields check-unref'd-ids refuses in one kind, a string each
+  (`<where> field <k> (<reading>)`), empty when it refuses none: its
+  own door so the assembly gate can list every kind's hits in one
+  failure. The rule:
+
+  A plain string field named after a kind the registry serves, or
   `<kind>_id`, holds that kind's row id — and without `:kind` nothing
   says so: the form draws a free-text box and the dangling-ref wall
   never resolves it. member's notify.notifier was one, and a saved
@@ -881,30 +902,45 @@
   assembly (waymark10.checks-assembly) over every form
   `deep-surfaces` walks, nested maps at any depth."
   [r kinds]
-  (let [hits (for [[where form nested?] (deep-surfaces r)
-                   :let [entries (schema/entry-map form)
-                         siblings (set (keys entries))]
-                   [k {:keys [properties schema]}] entries
-                   :let [by-kind (contains? kinds (named-kind k))
-                         reading (reads-as-id k kinds siblings nested?)]
-                   :when (and reading
-                              (string-shape? schema)
-                              (nil? (:kind properties))
-                              (not (if by-kind
-                                     (plainly-no-id? properties schema)
-                                     (prose-widget? properties))))
-                   :let [why (:not-a-ref properties)]
-                   :when (not (and (string? why) (not (str/blank? why))))]
-               (str where " field " k " (" reading ")"))]
+  (for [[where form nested?] (deep-surfaces r)
+        :let [entries (schema/entry-map form)
+              siblings (set (keys entries))]
+        [k {:keys [properties schema]}] entries
+        :let [by-kind (contains? kinds (named-kind k))
+              reading (reads-as-id k kinds siblings nested?)]
+        :when (and reading
+                   (string-shape? schema)
+                   (nil? (:kind properties))
+                   ;; a principal, an address or a kind-from
+                   ;; ref says what it holds (8ca09ba7)
+                   (nil? (:x-ref properties))
+                   (not (if by-kind
+                          (plainly-no-id? properties schema)
+                          (prose-widget? properties))))
+        :let [why (:not-a-ref properties)]
+        :when (not (and (string? why) (not (str/blank? why))))]
+    (str where " field " k " (" reading ")")))
+
+(def unref'd-ids-remedy
+  "What an [unref'd-ids] failure tells the author to do about its hits:
+  said once a failure, however many fields and kinds it names."
+  (str "each is named after a kind or a principal, or is an "
+       "id beside a kind, and holds a string, so it reads as a "
+       "row id, but nothing declares it a ref. Declare it "
+       ":waymark/ref with its :kind, or give it an :x-ref form "
+       "({:principal true}, {:address true}, {:kind-from f}), or, "
+       "when it holds no id (a "
+       "name, say), waive it with {:not-a-ref \"why\"} in its "
+       "properties."))
+
+(defn check-unref'd-ids
+  "One kind through unref'd-id-hits: refuses naming every hit, then the
+  remedy."
+  [r kinds]
+  (let [hits (unref'd-id-hits r kinds)]
     (when (seq hits)
       (err r :unref'd-ids
-           (str (str/join "; " hits)
-                ": each is named after a kind or a principal, or is an "
-                "id beside a kind, and holds a string, so it reads as a "
-                "row id, but nothing declares it a ref. Declare it "
-                ":waymark/ref with its :kind, or, when it holds no id (a "
-                "name, say), waive it with {:not-a-ref \"why\"} in its "
-                "properties.")))))
+           (str (str/join "; " hits) ": " unref'd-ids-remedy)))))
 
 ;; ── the query surface ───────────────────────────────────────────────
 
@@ -1699,7 +1735,7 @@
 
   `:guards` counts the guards that refuse IN WORDS: a hidden guard
   and an acknowledgable warning are not fences a caller can walk into
-  and read. `:dead-ends` are the unwaived ones — the warning list.
+  and read. `:dead-ends` are the unwaived ones — the error list.
 
   A waiver is STALE when it matches at least one guard site and every
   site it matches now carries :remedies or :open. That is R-2's
@@ -1793,6 +1829,16 @@
                 :when problem]
             (str "[remedies] guard " (:name guard) " on " (name kind) "."
                  (name door) ": remedy " problem)))))
+
+(defn remedy-error-count
+  "How many of the census's findings fail the gate: every unwaived
+  dead end, every stale waiver, and every remedy token that names no
+  door (`tokens`, remedy-token-problems' answer). A dead end counts
+  because the waiver list holds the old debt and only shrinks: a NEW
+  guard that refuses with no way out is answered with :remedies or
+  :open, never passed with a warning."
+  [c tokens]
+  (+ (count (:dead-ends c)) (count (:stale c)) (count tokens)))
 
 ;; ── the battery ─────────────────────────────────────────────────────
 

@@ -124,13 +124,17 @@
     (is (= ["approval_request" "attachment" "definition"
             "grant" "held_call" "invitation" "job" "judgment" "mcp_server" "meal"
             "member" "model" "notice_rule" "notifier"
-            "plan" "role" "runner_link" "runner_provider" "schedule" "seat"
+            "plan" "role" "runner_link" "runner_provider" "schedule"
+            ;; docs/spec-scheduled-actions.md R-1: a call stored for a time
+            "scheduled_action" "seat"
             "sitting" "subscription" "task"
             ;; docs/spec-transcript.md: and what a sitting said, one
             ;; row per sitting and one per line, core's beside the
             ;; sitting
             "transcript" "transcript_entry"
-            "verdict"]
+            "verdict"
+            ;; spec-guided-follow § 4: the recorded walk and its frames
+            "walk" "walk_frame"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))
@@ -168,6 +172,16 @@
       ;; the :ui module mounts it beside the page (routes/ui.clj)
       (is (= "/api/-/render/markdown" (get-in full [:render_markdown :href])))
       (is (= "POST" (get-in full [:render_markdown :method]))))))
+
+;; the engine's own name rides beside the protocol version, so a walk's
+;; export header and a reader can both tell a demo engine from a real one
+(deftest well-known-answers-the-engines-name
+  (is (string? (:name *eng*)))
+  (is (= (:name *eng*) (:name (json (req :get "/api/.well-known/waymark")))))
+  (let [demo (engine/handler (assoc *eng* :name "demo"))]
+    (is (= "demo" (:name (json (demo {:request-method :get
+                                      :uri "/api/.well-known/waymark"
+                                      :headers {"x-waymark-principal" "colton"}})))))))
 
 (deftest published-schema
   (let [resp (req :get "/api/schemas/plan")

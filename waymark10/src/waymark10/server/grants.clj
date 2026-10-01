@@ -981,7 +981,8 @@
 (g/defguard an-anchorless-ask-names-its-grant
   {:reads [:principal :now :grant]
    :vars [:grants]
-   :explain "You hold several live grants ({grants}); pass grant_id to name the one this ask widens."}
+   :explain "You hold several live grants ({grants}); pass grant_id to name the one this ask widens."
+   :open "The way out is in this same form: pass grant_id, one of the grants the sentence lists. No door picks among several live grants for you."}
   [_row inp ctx]
   ;; an anchorless ask from a holder of live grants would MINT a
   ;; replacement, and the session would wear it and lose the sight it
@@ -1636,6 +1637,42 @@
   (and (= :accepted (:state row))
        (let [exp (get-in row [:data :expires_at])]
          (or (nil? exp) (neg? (compare now exp))))))
+
+(defn grant-by-id
+  "The grant row with this id, decoded, as it stands now; nil when no
+  such grant exists. For a reader that is not at the wire — a scheduled
+  run holds the ID of the grant it was arranged under and no request
+  (docs/spec-scheduled-actions.md R-4.2). It conceals nothing and
+  judges nothing, so it is for the engine's own reads and never for an
+  answer a caller sees."
+  [eng grant-id]
+  (when (some? grant-id)
+    (load-decoded eng :grant (str grant-id))))
+
+(defn grant-standing
+  "Where the grant with this id stands right now: {:standing :grant}.
+  :standing is :absent (no such row), :offered (not yet accepted),
+  :active (accepted and unexpired), :revoked, or :expired. Expiry is
+  judged by the live clock, same as enforcement, so a grant past its
+  `expires_at` reads :expired before the `expire` transition is
+  written. :grant is the decoded row, nil when absent.
+
+  NARROWED is not a standing. An :active grant's scope is read off
+  :grant as it is at this moment, wider or narrower than the day it was
+  cited; whether it still admits one call is `visibility`'s answer for
+  the principal that wears it."
+  [eng grant-id]
+  (let [row (grant-by-id eng grant-id)
+        now ((:now-fn eng))
+        exp (get-in row [:data :expires_at])
+        past? (and (some? exp) (not (neg? (compare now exp))))]
+    {:standing (cond
+                 (nil? row) :absent
+                 (= :revoked (:state row)) :revoked
+                 (or past? (= :expired (:state row))) :expired
+                 (active? row now) :active
+                 :else (:state row))
+     :grant row}))
 
 (defn- mode-spec [m]
   (when m
@@ -2381,6 +2418,19 @@
      ;; stand-in.
      :grant (when (and live? (seq surface))
               {:id (str grant-id) :action? action?* :row? row?*
+               ;; a field this leash shows plain, neither hidden nor
+               ;; hashed: what a scheduled action's conditions may
+               ;; name (docs/spec-scheduled-actions.md R-2.3)
+               :plain? (fn [kind field]
+                         (let [k (name kind) f (name field)]
+                           (if-some [e (get surface k)]
+                             (and (admits? (:fields e) f)
+                                  (not (contains? (:hashed e) f)))
+                             (own-kind? k))))
+               ;; a power token this leash names: what a scheduled
+               ;; power call may name (docs/spec-scheduled-actions.md
+               ;; R-4.4)
+               :power? (fn [token] (contains? surface (str token)))
                :substitute (true? (get-in row [:data :substitute]))})
      :kind? (fn [kind]
               (let [k (name kind)]

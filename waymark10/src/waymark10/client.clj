@@ -55,6 +55,7 @@
   swaps in a ring handler as the transport — the tests drive the
   full contract against a real engine without a socket."
   (:require [clojure.string :as str]
+            [waymark10.confirm :as confirm]
             [waymark10.holds :as holds]
             [waymark10.wire :as wire])
   (:import (java.net URI)
@@ -285,13 +286,10 @@
   [doc action]
   (get-in doc [:unavailable (keyword action) :reason]))
 
-(defn- consequence-of
+(def ^:private consequence-of
   "The confirm gate's text: the declaration's :consequence rides the
-  wire as display.description."
-  [entry]
-  (or (get-in entry [:display :description])
-      (get-in entry [:display :label])
-      "This action requires confirmation."))
+  wire as display.description. The one reading, shared with the server."
+  confirm/consequence-of)
 
 (defn- attempt-key
   "The logical attempt: same action href + same input = same attempt,

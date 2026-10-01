@@ -720,19 +720,24 @@
 ;; unported; the check arrives with the feature.
 
 (defn- check-unref'd-ids
-  "Every kind through waymark10.checks/check-unref'd-ids: a string field
+  "Every kind through waymark10.checks/unref'd-id-hits: a string field
   named after a registered kind must be a ref or say why not. Judged
-  here because only the registry knows which names are kinds."
+  here because only the registry knows which names are kinds. One
+  failure for the whole registry: a line per hit with its kind in
+  front, then the remedy once, last — a summary that keeps only the
+  head of the message still shows a whole hit."
   [reg]
   (let [kinds (set (keys (:kinds reg)))
-        failures (into []
-                       (keep (fn [[_ r]]
-                               (try (checks/check-unref'd-ids r kinds) nil
-                                    (catch clojure.lang.ExceptionInfo e e))))
-                       (sort-by key (:kinds reg)))]
-    (when (seq failures)
-      (throw (ex-info (str/join "\n" (map ex-message failures))
-                      (ex-data (first failures)))))))
+        hits (into []
+                   (mapcat (fn [[kind r]]
+                             (map #(str (name kind) " [unref'd-ids] " %)
+                                  (checks/unref'd-id-hits r kinds))))
+                   (sort-by key (:kinds reg)))]
+    (when (seq hits)
+      (throw (t/definition-error
+              (str/join "\n" (conj hits (str "[unref'd-ids] "
+                                             checks/unref'd-ids-remedy)))
+              {:check :unref'd-ids})))))
 
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed

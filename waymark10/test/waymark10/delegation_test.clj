@@ -452,7 +452,8 @@
             size (count (.getBytes ^String (wire/write-json data) "UTF-8"))]
         (is (= ["scope"] (mapv name (keys (:changes data)))))
         (is (nil? (:input data)))
-        (is (< size 1024) (str size " bytes: " (wire/write-json data)))))
+        ;; the 1024 budget plus the why's growth from 240 to its whole sentence
+        (is (< size 1536) (str size " bytes: " (wire/write-json data)))))
     (inv/invoke! eng :seat (str mayor) :fire {:text "Look at the seats now."}
                  {:principal colton
                   :idempotency-key (str "held-fire:" (random-uuid))})

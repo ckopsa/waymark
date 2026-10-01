@@ -17,6 +17,7 @@
             [waymark10.wire :as wire]))
 
 (def ^:dynamic *h* nil)
+(def ^:dynamic *st* nil)
 
 (use-fixtures :once
   (fn [f]
@@ -28,7 +29,8 @@
                            "waymark10_transitions" "waymark10_idempotency"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table
                                       " CASCADE")]))))
-        (binding [*h* (engine/handler
+        (binding [*st* st
+                  *h* (engine/handler
                        (engine/engine {:storage st
                                        :resources [fx/meal fx/plan]}))]
           (f))
@@ -134,6 +136,131 @@
         "the waymark9 dev headers do not survive the port")
     (is (not (str/includes? body "wmk_"))
         "no minted bearer-token vocabulary on wire 10")))
+
+(deftest ui-renders-an-invitation-from-its-row
+  ;; docs/spec-guided-follow.md §3: the invitation's row page offers the
+  ;; step to its subject; the dialog opens on the invited row with the
+  ;; suggestions marked, the field scrolled to and lit, the note beside it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "kind === \"invitation\""))
+    (is (str/includes? body "onclick: () => openInvitation(doc)"))
+    (is (str/includes? body "async function openInvitation(inv)"))
+    (is (str/includes? body "suggest: d.suggest || {}"))
+    (is (str/includes? body "suggested-value"))
+    (is (str/includes? body "scrollIntoView({behavior: \"smooth\", block: \"center\"})"))
+    (is (str/includes? body "data-invite-note"))
+    (is (str/includes? body "@keyframes invited"))))
+
+(deftest ui-opens-an-invitation-from-the-collection
+  ;; the collection row of an open invitation to the viewer takes the
+  ;; step in one tap, reading the full envelope first (summaries drop data)
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function invitationRowOpen(item)"))
+    (is (str/includes? body "async function openInvitationRow(item)"))
+    (is (str/includes? body "const res = await api(item.self);"))
+    (is (str/includes? body "openInvitationRow(item); }"))))
+
+(deftest ui-decline-invokes-the-decline-door
+  ;; decline is one button on the dialog, straight through the
+  ;; invitation's own decline door
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "data-invite-decline"))
+    (is (str/includes? body
+                       "invokeBare(invitation.doc.actions.decline, invitation.doc)"))))
+
+(deftest ui-offers-do-this-later
+  ;; docs/spec-scheduled-actions.md R-7.3: a row's dialog schedules the
+  ;; same call, with the zone named and the rule in plain words; a confirm
+  ;; door's sentence rides the scheduling tap; and the row's page lists
+  ;; what waits on it, with reschedule and cancel
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "\"Do this later\""))
+    (is (str/includes? body "Intl.DateTimeFormat().resolvedOptions().timeZone"))
+    (is (str/includes? body "rule(\"strict\", \"Only if nothing about it changes\")"))
+    (is (str/includes? body "rule(\"state\", \"As long as it is still \""))
+    (is (str/includes? body "rule(\"conditions\","))
+    (is (str/includes? body "filterPopover(query, new URLSearchParams()")
+        "a condition is written with the collection's filter control")
+    (is (str/includes? body "api(\"/api/scheduled_actions\","))
+    (is (str/includes? body "call.acknowledge = consequence"))
+    (is (str/includes? body "function scheduledSection(doc)"))
+    (is (str/includes? body "name: \"reschedule\", entry: acts.reschedule"))
+    (is (str/includes? body "invokeBare(acts.cancel, item)"))))
+
+(deftest ui-follow-offers-guided-mode
+  ;; docs/spec-guided-follow.md §2: the follow chip offers guided mode,
+  ;; which reopens the one live stream with ?ui=<pid> and applies the
+  ;; followed principal's ui frames read-only, behind the old guards
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "follow({id: followId, display: followName}, {ui: true})"))
+    (is (str/includes? body "\"/api/-/live?ui=\" + encodeURIComponent(followId)"))
+    (is (str/includes? body "sse(liveHref, frame =>"))
+    (is (str/includes? body "if (wasUi) sseReopen(liveHref);"))
+    (is (str/includes? body "if (f.event === \"ui\") applyGuidedUi(f);"))
+    (is (str/includes? body "is filling this in"))
+    (is (str/includes? body "dialog[open]:not([data-guided])"))
+    (is (str/includes? body "data-guided-mark"))))
+
+(deftest ui-sharing-is-off-by-default
+  ;; the reporting side's opt-in: a per-tab toggle, off until pressed,
+  ;; and a beat carries a ui part only while it is on
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "id=\"sharebtn\""))
+    (is (str/includes? body "type=\"button\" aria-pressed=\"false\""))
+    (is (str/includes? body "sessionStorage.getItem(\"wm10.share.ui\") === \"1\""))
+    (is (str/includes? body "if (uiSharing()) body.ui = uiShareState();"))
+    (is (str/includes? body "shareableValues(collectValues(form, input), input)"))))
+
+(defn- well-known [h]
+  (-> (h {:request-method :get :uri "/api/.well-known/waymark"
+          :headers {"x-waymark-principal" "reader"}})
+      :body
+      wire/read-json))
+
+(deftest ui-shows-no-banner-on-an-engine-without-an-expiry
+  ;; docs/spec-demo-clones.md §3: a working engine sets no expiry, so
+  ;; its well-known document carries none and the banner stays hidden
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (not (contains? (well-known *h*) :expires_at)))
+    (is (str/includes? body "<div id=\"demobanner\" role=\"status\" aria-live=\"polite\" hidden></div>"))
+    (is (str/includes? body "#demobanner[hidden] { display: none; }"))
+    (is (str/includes? body "const at = Date.parse(w.expires_at || \"\");"))
+    (is (str/includes? body "if (Number.isNaN(at)) return;"))
+    (is (str/includes? body "if (demoEnds === null) { box.hidden = true; return; }"))))
+
+(deftest ui-warns-before-a-demo-engine-ends
+  ;; the engine reads its expiry at boot and answers it on well-known
+  ;; beside its name; the banner says when, and turns to a warning at
+  ;; 15 minutes and again at 5
+  (let [ends "2026-10-01T16:40:00Z"
+        opts {:storage *st* :resources [fx/meal fx/plan]}
+        h (engine/handler (engine/engine (assoc opts :expires-at ends)))
+        body (:body (h {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (= ends (:expires_at (well-known h))))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (engine/engine (assoc opts :expires-at "soon")))
+        "an expiry that is not an instant refuses the boot")
+    (is (str/includes? body "Demo engine. It ends at ${at} and takes everything with it."))
+    (is (str/includes? body "const DEMO_WARN_MS = 15 * 60000, DEMO_LAST_MS = 5 * 60000;"))
+    (is (str/includes? body "left <= DEMO_LAST_MS ? \"last\" : left <= DEMO_WARN_MS ? \"warn\" : \"note\""))
+    (is (str/includes? body "#demobanner[data-demo-level=\"warn\"]"))
+    (is (str/includes? body "#demobanner[data-demo-level=\"last\"]"))
+    (is (str/includes? body "setInterval(demoRefresh, DEMO_TICK_MS);"))))
+
+(deftest ui-names-an-unexported-walk-in-the-warning
+  ;; the banner names each walk of the viewer's that is still recording,
+  ;; or sealed and not exported in this browser; the export button is
+  ;; what marks a walk exported
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "?recorder=${encodeURIComponent(door.me)}&state="))
+    (is (str/includes? body "(i.state === \"recording\" || (i.state === \"sealed\" && !done.has(i.self)))"))
+    (is (str/includes? body "\"Your walk is not exported. \""))
+    (is (str/includes? body "\"Seal and export it now: \""))
+    (is (str/includes? body "el(\"a\", {href: \"#\" + w.self}, w.summary || \"the walk\")"))
+    (is (str/includes? body "localStorage.getItem(\"wm10.walk.exported\")"))
+    (is (str/includes? body "markWalkExported(self);"))
+    (is (str/includes? body "\"data-export-walk\""))
+    (is (str/includes? body "onclick: () => exportWalk(doc.self)"))))
 
 (defn- render! [headers body]
   (let [resp (*h* {:request-method :post :uri "/api/-/render/markdown"

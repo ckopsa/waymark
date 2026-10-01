@@ -22,7 +22,8 @@
             [waymark10.server.live :as live]
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
-            [waymark10.server.router :as router]))
+            [waymark10.server.router :as router]
+            [waymark10.server.walks :as walks]))
 
 (set! *warn-on-reflection* true)
 
@@ -97,17 +98,37 @@
   "GET /api/-/presence: the where-they-look stream. Unlike the
   firehose, a scoped request is not 404'd — it gets the stream
   PROJECTED: only presences on selves its visibility could GET, the
-  frames it may not see byte-level absent."
+  frames it may not see byte-level absent. ?ui=<pid> is guided
+  follow's opt-in: that ONE pid's ui frames, redacted under this
+  stream's own visibility; without it the stream is today's, byte for
+  byte. A follower recording a walk of that pid has the pid's frames
+  written to it as they are sent (walks/recorder)."
   [eng]
   (fn [req]
-    (let [reg (presence-registry eng)]
-      (presence/sse-handler eng reg
-                            (presence/self-visible?
-                             eng (router/visibility-of req))
-                            req))))
+    (let [reg (presence-registry eng)
+          vis (router/visibility-of req)
+          ui (some-> (get (router/query-params req) "ui") str/trim not-empty)]
+      (presence/sse-handler eng reg (presence/self-visible? eng vis) req
+                            (when ui
+                              {:ui ui :redact (presence/ui-redactor eng vis)
+                               :tap (:presence
+                                     (walks/recorder
+                                      eng (router/principal-of req) vis ui))})))))
+
+(defn- reportable-ui
+  "A ui part's own row selves pass the beat's gate: a dialog on a
+  private row the reporter cannot see drops with its fields, and such
+  a focus drops."
+  [eng req ui]
+  (let [ok? #(reportable-self? eng req presence/normalize-self %)]
+    (cond-> ui
+      (and (map? ui) (map? (:dialog ui)) (not (ok? (get-in ui [:dialog :self]))))
+      (assoc :dialog nil :fields nil)
+      (and (map? ui) (some? (:focus ui)) (not (ok? (:focus ui))))
+      (assoc :focus nil))))
 
 (defn- presence-report
-  "POST /api/-/presence {self}: the explicit heartbeat for clients
+  "POST /api/-/presence {self, ui}: the explicit heartbeat for clients
   that only hold the firehose (the ported UI's case). A scoped
   principal's own reporting is always accepted — and a beat on a
   private row the reporter cannot itself see is accepted too and
@@ -115,9 +136,16 @@
   [eng]
   (fn [req]
     (let [reg (presence-registry eng)
-          self (:self (router/read-body req))]
+          body (router/read-body req)
+          self (:self body)]
       (when (reportable-self? eng req presence/normalize-self self)
-        (presence/report! reg (router/principal-of req) self))
+        (presence/report! reg (router/principal-of req) self
+                          (reportable-ui eng req (:ui body))
+                          ;; a person recording their own screen: this
+                          ;; beat's frames go to their self walk
+                          (:presence (walks/self-recorder
+                                      eng (router/principal-of req)
+                                      (router/visibility-of req)))))
       {:status 204 :headers {}})))
 
 (defn- intents-registry
@@ -208,13 +236,29 @@
 
   It lives in the realtime module, not core, because two of its three
   sources do — an engine without this module has no presence or
-  intents registry to combine, and /api/-/live 404s beside them."
+  intents registry to combine, and /api/-/live 404s beside them.
+
+  ?ui=<pid> is guided follow's opt-in here as on /api/-/presence: the
+  follower's page is already near the six-connection cap, so the ui
+  frames ride this stream rather than a second one. It is also the
+  walk's recorder: one walks/recorder per stream taps the firehose and
+  the presence source, so a follower recording a walk of that pid has
+  its move, ui and transition frames written as they are sent."
   [eng]
   (fn [req]
-    (let [visible? (presence/self-visible? eng (router/visibility-of req))]
+    (let [vis (router/visibility-of req)
+          visible? (presence/self-visible? eng vis)
+          ui (some-> (get (router/query-params req) "ui") str/trim not-empty)
+          rec (when ui
+                (walks/recorder eng (router/principal-of req) vis ui))]
       (live/sse-handler eng
-                        [(live/firehose-source eng req)
-                         (live/presence-source (presence-registry eng) visible?)
+                        [(live/tapped (live/firehose-source eng req) (:event rec))
+                         (live/tapped
+                          (live/presence-source
+                           (presence-registry eng) visible?
+                           (when ui
+                             {:ui ui :redact (presence/ui-redactor eng vis)}))
+                          (:presence rec))
                          (live/intents-source (intents-registry eng) visible?)]
                         req))))
 

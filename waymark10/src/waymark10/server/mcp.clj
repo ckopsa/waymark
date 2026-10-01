@@ -132,10 +132,12 @@
   — the HTTP door is right there), and tool descriptions generated
   from prose written for humans, which will read badly for some kinds
   and is a useful forcing function on those declarations."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [jsonista.core :as j]
             [reitit.ring :as ring]
             [waymark10.client :as client]
+            [waymark10.confirm :as confirm]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as coll]
@@ -145,6 +147,7 @@
             [waymark10.server.judgments :as judgments]
             [waymark10.server.mcp-sessions :as sessions]
             [waymark10.server.members :as members]
+            [waymark10.server.oidc :as oidc]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
@@ -157,9 +160,11 @@
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
            (java.nio.charset StandardCharsets)
-           (java.security SecureRandom)
+           (java.security MessageDigest SecureRandom)
            (java.time Instant)
-           (java.util Base64)))
+           (java.util Base64)
+           (javax.crypto Mac)
+           (javax.crypto.spec SecretKeySpec)))
 
 (set! *warn-on-reflection* true)
 
@@ -354,16 +359,21 @@
 
 (defn open-session!
   "Register a fresh session and answer its id, or nil on an engine
-  that keeps none (a bare test handler built without the atom)."
-  [eng]
+  that keeps none (a bare test handler built without the atom).
+  `declared` is `app-declaration`'s map, kept on the entry."
+  [eng & [declared]]
   (when-some [a (:mcp-sessions eng)]
     (let [id (new-session-id)
           now ((:now-fn eng))]
       (if (session-table? eng)
-        (sessions/open! (:storage eng) id now (ttl-cutoff now))
+        (sessions/open! (:storage eng) id now (ttl-cutoff now) declared)
         (swap! a (fn [m]
                    (assoc (evict m now) id
-                          {:created now :touched now :bound nil}))))
+                          {:created now :touched now :bound nil
+                           :app-ui (boolean (:app-ui declared))
+                           :client-name (:client-name declared)
+                           :client-version (:client-version declared)
+                           :client-caps (:client-caps declared)}))))
       id)))
 
 (defn touch-session!
@@ -954,7 +964,16 @@
         "whose doors you know; use envelope when the next step "
         "depends on what the row affords after the move. A refusal, "
         "a dry_run verdict and a bulk report come back the same under "
-        "both.")
+        "both.\n\n"
+        "at: do this LATER. With `at` the call is not made: the engine "
+        "checks it now as it would judge it now, stores it as a "
+        "scheduled_action, and answers {scheduled, scheduled_action, "
+        "run_at, zone, validity, summary} — an answer, not a refusal. "
+        "What the door would refuse now is refused now, with the door's "
+        "own sentence. dry_run with `at` rehearses that check and "
+        "writes nothing. One row or one create at a time: `at` with "
+        "ids or items is refused. Cancel or reschedule it on the "
+        "scheduled_action row.")
    :input-schema {:type "object"
                   :properties
                   {:kind {:type "string"}
@@ -1006,6 +1025,39 @@
                    :dry_run {:type "boolean"
                              :description (str "Rehearse: validate schema and guards, "
                                                "write nothing, answer a verdict.")}
+                   :at {:type "string"
+                        :description (str "When to make this call instead of now: RFC 3339 "
+                                          "with an offset (2026-10-02T08:30:00-06:00), or a "
+                                          "local date and time (2026-10-02T08:30) read in "
+                                          "`zone`. At least one minute and at most 366 days "
+                                          "ahead. The engine never guesses UTC.")}
+                   :zone {:type "string"
+                          :description (str "With at: the IANA zone a local time is written "
+                                            "in and shown in, e.g. America/Denver. Left out, "
+                                            "a local time is read in the zone on your member row.")}
+                   :validity {:type "string" :enum ["strict" "state" "conditions"]
+                              :description (str "With at: what must still hold at the time. "
+                                                "state (default): the row is still in the state "
+                                                "it is in now. strict: nothing about the row "
+                                                "changed since. conditions: state, and every "
+                                                "entry of `conditions` holds.")}
+                   :conditions {:type "object"
+                                :description (str "With at and validity conditions: your own "
+                                                  "conditions over the row's fields, as the map "
+                                                  "waymark_query takes as `filter` for that kind "
+                                                  "(priority_gte: \"2\"). All must hold at the "
+                                                  "time, or the call is skipped. Not for a create.")}
+                   :expect_state {:type "string"
+                                  :description (str "With at: the state the row is expected to be "
+                                                    "in at the time, when it is not in it now.")}
+                   :expect_refusals {:type "array" :items {:type "string"}
+                                     :description (str "With at: guard names, as a refusal spells "
+                                                       "them, that would refuse the call now and "
+                                                       "are expected to lift by its time.")}
+                   :grace_seconds {:type "integer" :minimum 0 :maximum 86400
+                                   :description (str "With at: how late the run may be when the "
+                                                     "engine was down at its time. An hour unless "
+                                                     "said, a day at most.")}
                    :acknowledge {:type "string"
                                  :description (str "The consequence sentence, echoed "
                                                    "exactly — required when "
@@ -1242,9 +1294,138 @@
                  (str "Cut each text part at this many characters. Say 4000 "
                       "for a mail message: it is enough to decide with, and "
                       "you can ask again for the whole of the one message "
-                      "that needs it.")}}
+                      "that needs it.")}
+     :at {:type "string"
+          :description
+          (str "When to make this call instead of now: RFC 3339 with an "
+               "offset (2026-10-02T08:30:00-06:00), or a local date and "
+               "time (2026-10-02T08:30) read in `zone`. The call is not "
+               "made: it is stored as a scheduled_action, and the answer "
+               "is {scheduled, scheduled_action, run_at}. A tool that "
+               "waits on a person is approved now, for that time.")}
+     :zone {:type "string"
+            :description
+            (str "With at: the IANA zone a local time is written in and "
+                 "shown in, e.g. America/Denver.")}
+     :validity {:type "string" :enum ["strict" "state"]
+                :description
+                (str "With at: what must still hold at the time. state "
+                     "(default): the tool is still among your powers and "
+                     "its server is serving. strict: and the server's row "
+                     "has not changed since.")}
+     :grace_seconds {:type "integer" :minimum 0 :maximum 86400
+                     :description
+                     (str "With at: how late the run may be when the engine "
+                          "was down at its time. An hour unless said.")}}
     :required ["tool"]
     :additionalProperties false}})
+
+;; ── MCP Apps (docs/spec-mcp-apps.md, child 1) ───────────────────────
+;; One page and three tools, for a session `app-session?` admits; every
+;; other caller gets the door as it always was. No csp is declared.
+
+(def app-mime
+  "The page profile a client declares and the resource answers."
+  "text/html;profile=mcp-app")
+
+(def app-resource-uri "ui://waymark/row")
+
+(defn app-declaration
+  "What an `initialize` said about its client, as the session entry
+  keeps it: whether the io.modelcontextprotocol/ui extension names
+  `app-mime`, and the clientInfo, so a person can read what a host says.
+  `:client-caps` is the shape of everything it declared, for the client
+  whose `:app-ui` is false: of clientInfo only the name and the version
+  are kept, and of the capabilities no value but the extension lists."
+  [params]
+  (let [mimes (get-in params [:capabilities :extensions
+                              (keyword "io.modelcontextprotocol/ui") :mimeTypes])]
+    {:app-ui (boolean (and (sequential? mimes)
+                           (some #(= app-mime (str %)) mimes)))
+     :client-name (some-> (get-in params [:clientInfo :name]) str)
+     :client-version (some-> (get-in params [:clientInfo :version]) str)
+     :client-caps (sessions/caps-shape (:capabilities params))}))
+
+(defn- app-session?
+  "Does this session get the app tools? Its client declared the
+  extension, its BEARER is a delegate of a client the owner listed in
+  :app-clients, and the ticket's signing key is set."
+  [eng session]
+  (let [oidc (:oidc eng)
+        bearer (:bearer session)
+        person (some-> (:acts-for bearer) str not-empty)]
+    (boolean
+     (and (:app-ui session)
+          person
+          (not (str/blank? (str (:app-ticket-secret oidc))))
+          (some #(and (contains? (:delegate-clients oidc) %)
+                      (= (str (:id bearer)) (oidc/delegate-id % person)))
+                (:app-clients oidc))))))
+
+(def ^:private row-ref-schema
+  {:kind {:type "string"} :id {:type "string"}})
+
+(def ^:private show-tool
+  {:name "waymark_show"
+   :title "Put a row in front of your person"
+   :description
+   (str "Show one row to the person you act for, inline, with the doors "
+        "that are theirs. Call it after a call answers `held: true` (kind "
+        "\"held_call\", id the `held_call` it named), after you file an "
+        "approval_request or an invitation, and when waymark_invoke meets "
+        "a confirm gate that is the person's. Then read the row again.")
+   :input-schema {:type "object"
+                  :properties (assoc row-ref-schema :action {:type "string"})
+                  :required ["kind" "id"]
+                  :additionalProperties false}
+   :_meta {:ui {:resourceUri app-resource-uri}}})
+
+(def ^:private app-tools
+  ;; the host hides `visibility ["app"]` from the model
+  [show-tool
+   {:name "waymark_app_read"
+    :description "The page's read: a row, the person's doors on it, and a ticket."
+    :input-schema {:type "object" :properties row-ref-schema
+                   :required ["kind" "id"]}
+    :_meta {:ui {:resourceUri app-resource-uri :visibility ["app"]}}}
+   {:name "waymark_app_act"
+    :description "The page's tap: one door of the row it read, with that read's ticket."
+    :input-schema {:type "object"
+                   :properties (assoc row-ref-schema
+                                      :action {:type "string"}
+                                      :input {:type "object"}
+                                      :acknowledge {:type "string"}
+                                      :ticket {:type "string"})
+                   :required ["kind" "id" "action" "ticket"]}
+    :_meta {:ui {:resourceUri app-resource-uri :visibility ["app"]}}}])
+
+(def ^:private app-fragments
+  "The page's ordered fragments, by ui_assembly.clj's pattern; the look
+  is the generic UI's own 020-base.css, by path, and the page's own
+  030-app.css over it, which names that file's tokens and no colour."
+  ["waymark10/mcp_app/010-head.html"
+   "waymark10/ui/020-base.css"
+   "waymark10/mcp_app/030-app.css"
+   "waymark10/mcp_app/050-shell.html"
+   "waymark10/mcp_app/100-bridge.js"
+   "waymark10/ui/900-tail.html"])
+
+(def app-page
+  "The page as one string. The transport derefs it at handler
+  construction, so a missing fragment fails startup, never a request."
+  (delay
+    (apply str
+           (map (fn [path]
+                  (or (some-> (io/resource path) slurp)
+                      (throw (ex-info (str "MCP App fragment missing from classpath: " path)
+                                      {:fragment path}))))
+                app-fragments))))
+
+(def ^:private app-resource
+  {:uri app-resource-uri
+   :name "Waymark row"
+   :mimeType app-mime
+   :_meta {:ui {:prefersBorder true}}})
 
 (def tools
   "The fixed tools, in the order an agent meets them: the spec's six,
@@ -1271,12 +1452,14 @@
   "The `tools/list` payload — the MCP spelling of the fixed tools,
   camelCase and all. The definitions above stay kebab-cased because
   that is this codebase's spelling; the translation happens once,
-  here. It takes no caller: the list is static (waymark-912p) — what
-  a grant admits is read through waymark_powers, not off this list."
-  []
+  here. The list never moves with a grant (waymark-912p) — what a
+  grant admits is read through waymark_powers, not off this list. It
+  has two shapes, chosen once per session: `app-session?` adds the
+  three app tools after the fixed ones (docs/spec-mcp-apps.md § 5)."
+  [& [eng session]]
   (mapv (fn [t]
           (-> t (dissoc :input-schema) (assoc :inputSchema (:input-schema t))))
-        tools))
+        (cond-> tools (app-session? eng session) (into app-tools))))
 
 ;; ── tool bodies ─────────────────────────────────────────────────────
 
@@ -1462,16 +1645,15 @@
 ;; than a convenience: the engine already computes the sentence, and
 ;; echoing it is the price of a dangerous verb.
 
-(defn- consequence-of
+(def ^:private consequence-of
   "The confirm gate's text, read off the row's own rendered entry — the
   declaration's `:consequence` rides the wire as display.description,
   a per-origin map already resolved against this row's state. Same
   accessor waymark10.client uses, and it must stay the same one: two
-  readings of one sentence is a gate that can be walked around."
-  [entry]
-  (or (get-in entry [:display :description])
-      (get-in entry [:display :label])
-      "This action requires confirmation."))
+  readings of one sentence is a gate that can be walked around. It is
+  `confirm/consequence-of`, which a namespace this one requires may
+  call without requiring this one."
+  confirm/consequence-of)
 
 (defn- confirm-refusal [aname sentence given]
   (p/problem
@@ -1574,6 +1756,49 @@
                     log)]
      {:principal-prefix principal-prefix
       :total (count hits)
+      :by-principal (frequencies (map :principal hits))
+      :by-kind (frequencies (map :kind hits))
+      :by-action (frequencies (map (fn [h] (str (:kind h) "." (:action h)))
+                                   hits))
+      :scanned (count log)
+      :reached-cap (= (count log) n)})))
+
+(def app-origin-prefix
+  "The `Idempotency-Key` prefix of a person's tap. It is not `mcp/`, so
+  `actions-from-mcp` keeps counting the model's writes alone."
+  "mcp-app")
+
+(defn taps-from-app
+  "The MCP Apps experiment's number (docs/spec-mcp-apps.md, The count):
+  how many writes a person tapped in Claude, by principal, kind and
+  action.
+
+  `actions-from-mcp`'s sibling, over the same newest-first window of
+  `:limit` transitions (`log-scan-cap` by default, `:since` to walk
+  further back). It keeps the ones whose `idempotency_key` starts with
+  `app-origin-prefix` and a slash, the key `waymark_app_act` builds:
+  `mcp-app/<url-encoded bearer id>/<nonce>`. A replayed act lands no
+  second transition, so it is counted once. → `{:total :by-principal
+  :by-kind :by-action :scanned :reached-cap}`."
+  ([eng] (taps-from-app eng {}))
+  ([eng {:keys [limit since]}]
+   (let [st (:storage eng)
+         n (long (or limit log-scan-cap))
+         log (store/with-tx st
+               (fn [tx] (store/transitions st tx (cond-> {} since (assoc :since since))
+                                           {:limit n :newest-first true})))
+         lead (str app-origin-prefix "/")
+         hits (into []
+                    (keep (fn [tr]
+                            (let [k (:idempotency-key tr)]
+                              (when (and (string? k) (str/starts-with? k lead))
+                                {:principal (URLDecoder/decode
+                                             (str (second (str/split k #"/")))
+                                             "UTF-8")
+                                 :action (name (:action tr))
+                                 :kind (name (:kind tr))}))))
+                    log)]
+     {:total (count hits)
       :by-principal (frequencies (map :principal hits))
       :by-kind (frequencies (map :kind hits))
       :by-action (frequencies (map (fn [h] (str (:kind h) "." (:action h)))
@@ -1744,6 +1969,77 @@
                            :headers (invoke-headers session nil nil
                                                     acknowledge_warnings)}))))))))
 
+(def ^:private schedule-keys
+  "The scheduler's fields `waymark_invoke` carries beside `at` (R-7.2),
+  spelled as the scheduled_action create spells them."
+  [:zone :validity :conditions :expect_state :expect_refusals :grace_seconds
+   :acknowledge :acknowledge_warnings])
+
+(defn- in-zone
+  "An instant as the wire spells it, written on the clock of `zone`: a
+  scheduler reads its own time and not UTC (R-7.2). What this cannot
+  read is answered as it came."
+  [run-at zone]
+  (try
+    (.format java.time.format.DateTimeFormatter/ISO_OFFSET_DATE_TIME
+             (.atZone (java.time.Instant/parse (str run-at))
+                      (java.time.ZoneId/of (str zone))))
+    (catch Exception _ run-at)))
+
+(defn- schedule-call
+  "`at` on waymark_invoke, and on waymark_power with `{tool}` for its
+  target (docs/spec-scheduled-actions.md R-7.2, R-4.4): the
+  call is not made. It is written as a scheduled_action create — the
+  kind, the action and the id become its `target`, `at` its `run_at` —
+  and POSTed to that kind's own collection, so the scheduling check,
+  the zone rules, the limits and the grant are judged by the one door
+  that judges them, and its refusal comes back as it wrote it.
+
+  The answer to a stored call is an ANSWER, not a refusal: the row's
+  id, `run_at` on the scheduler's clock, the rule and the summary line.
+  `dry_run` rehearses the same create and passes its verdict through.
+  Many rows at once are refused here: a scheduled bulk call is a
+  scheduled job, and that is its own design.
+
+  The create carries the sitting this session is bound to, as an
+  invoke does, so the stored call is that sitting's act and its answer
+  is one served answer on it. The run at `run_at` counts on no sitting
+  (R-4.2)."
+  [eng call session target {:keys [ids items at input dry_run] :as args}]
+  (if (or ids items)
+    (refusal (p/problem :invalid-arguments 422 "One call at a time"
+                        {:detail (str "`at` schedules one call: one row's action, or one create. "
+                                      "A scheduled bulk call is a scheduled job, which is not "
+                                      "built. Give `id` in place of ids or items, one call for "
+                                      "each row.")}))
+    (let [sdef (rdef-of eng "scheduled_action")
+          resp (call (assoc (request session :post (str "/api/" (:plural sdef))
+                                     {:body (cond-> (into {:target target
+                                                           :run_at at}
+                                                          (filter (comp some? val))
+                                                          (select-keys args schedule-keys))
+                                              input (assoc :input input))
+                                      :query (when dry_run "dry_run=1")
+                                      :headers {"idempotency-key"
+                                                (origin-key (get-in session [:principal :id])
+                                                            (random-uuid))}})
+                            :waymark10/sitting
+                            (bound-sitting eng (:mcp-session-id session))))
+          row (when (and (not dry_run) (<= 200 (:status resp 500) 299))
+                (body-json resp))
+          ;; the envelope carries the address, not the id
+          sid (id-of-self (:self row))]
+      (if sid
+        (value-result {:scheduled true
+                       :scheduled_action sid
+                       :run_at (in-zone (get-in row [:data :run_at])
+                                        (get-in row [:data :zone]))
+                       :zone (get-in row [:data :zone])
+                       :validity (get-in row [:data :validity])
+                       :summary (:summary row)})
+        ;; a refusal, or a rehearsal's verdict: the door's own words
+        (pass-through resp)))))
+
 (defn- invoke
   "Read the row, then move it.
 
@@ -1760,11 +2056,18 @@
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
   [eng call session {:keys [kind id ids items action input dry_run acknowledge
-                            acknowledge_warnings if_version] :as args}]
+                            acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))]
     (cond
+      ;; `at`: the call is stored for its time, not made (R-7.2)
+      (some? at)
+      (schedule-call eng call session
+                     (cond-> {:kind (name (:kind rdef)) :action (name aname)}
+                       id (assoc :id (str id)))
+                     args)
+
       (and (or ids items) id)
       (refusal (p/problem :invalid-arguments 422 "One target, please"
                           {:detail (str "id names one row; ids and items name many. "
@@ -4048,6 +4351,15 @@
             ;; sitting it opened, so a lost bind can find its way back
             _ (when (and fired? sitting)
                 (seats/keep-fire-key! eng (:id sitting) (:key args)))
+            ;; … and what this session's client declared at initialize
+            ;; rides the sitting, written at every sit (ticket b9f90987):
+            ;; one read then answers why a host got no waymark_show
+            _ (when sitting
+                (seats/stamp-client! eng (:id sitting)
+                                     {:client-name (:client-name session)
+                                      :client-version (:client-version session)
+                                      :app-ui (:app-ui session)
+                                      :app-tools (app-session? eng session)}))
             ;; g'' · the transcript's key (docs/spec-transcript.md R-4):
             ;; born with the first sit, a fresh key at each sit after,
             ;; and nil when the seat keeps no transcript of this
@@ -4358,6 +4670,241 @@
               (get (meta result) dropped-key))
             0)))
 
+;; ── the app tools' bodies (docs/spec-mcp-apps.md § 1–3) ─────────────
+
+(def ^:private app-law
+  "The doors a show admits on a kind, and the fields the page shows."
+  {:held_call {:doors ["allow" "refuse"]
+               :fields [:tool :why :changes :call :door]}
+   :approval_request {:doors ["approve" "deny"]
+                      :fields [:task :scope :seat :substitute :expires_at
+                               :requested_by :waits_on :note]}})
+
+(def ^:private app-ticket-seconds 600)
+
+(defn- hmac ^String [secret ^String s]
+  (let [mac (doto (Mac/getInstance "HmacSHA256")
+              (.init (SecretKeySpec. (.getBytes (str secret) StandardCharsets/UTF_8)
+                                     "HmacSHA256")))]
+    (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
+                     (.doFinal mac (.getBytes s StandardCharsets/UTF_8)))))
+
+(defn- sign-ticket
+  "The ticket: base64url JSON claims, a dot, HMAC-SHA256 over them."
+  [eng claims]
+  (let [body (.encodeToString
+              (.withoutPadding (Base64/getUrlEncoder))
+              (.getBytes ^String (wire/write-json claims) StandardCharsets/UTF_8))]
+    (str body "." (hmac (:app-ticket-secret (:oidc eng)) body))))
+
+(defn- read-ticket
+  "The claims of a ticket this engine signed, or nil."
+  [eng ticket]
+  (let [[body sig] (str/split (str ticket) #"\." 2)]
+    (when (and (seq body) (seq sig)
+               (MessageDigest/isEqual
+                (.getBytes (hmac (:app-ticket-secret (:oidc eng)) body)
+                           StandardCharsets/UTF_8)
+                (.getBytes ^String sig StandardCharsets/UTF_8)))
+      (try (wire/read-json (String. (.decode (Base64/getUrlDecoder) ^String body)
+                                    StandardCharsets/UTF_8))
+           (catch Exception _ nil)))))
+
+(defn- person-session
+  "The session the app tools run as: the PERSON the bearer acts for,
+  resolved by the identity boundary's own gate, under what a human
+  presenting no grant wears. No seat binding or sitting rides it."
+  [eng session]
+  (let [person (members/gate! eng (t/principal
+                                   {:id (str (:acts-for (:bearer session)))
+                                    :type :human :roles #{}}))]
+    {:principal person :visibility (grants/unscoped-visibility eng person)}))
+
+(defn- show
+  "waymark_show: the row through the real route as the session's OWN
+  principal, so it shows nothing the agent could not already read."
+  [eng call session {:keys [kind id]}]
+  (let [r (get-row eng call session {:kind kind :id id :return "summary"})]
+    (cond-> r
+      (not (:isError r))
+      (update :content conj
+              {:type "text"
+               :text (str "This row is in front of your person now. The tap is "
+                          "theirs; read the row again to see what they chose.")}))))
+
+(defn- boolean-input?
+  "Whether a door's input property is a boolean, bare or nullable. A
+  boolean is the engine's flag (`patch` on an edit door) and never a
+  person's words, so the page draws no box for one."
+  [prop]
+  (boolean (some #(let [t (:type %)]
+                    (if (coll? t) (some #{"boolean"} t) (= "boolean" t)))
+                 (cons prop (concat (:oneOf prop) (:anyOf prop))))))
+
+(defn- app-row
+  "One row's envelope as the PERSON reads it, or nil when the kind is
+  not served or the read is refused."
+  [eng call person kind id]
+  (when-some [plural (:plural (get (inv/resources eng) (keyword (name kind))))]
+    (try (let [resp (call (request person :get (str "/api/" plural "/" id) nil))]
+           (when (= 200 (:status resp)) (body-json resp)))
+         (catch Exception _ nil))))
+
+(defn- held-words
+  "A held call in words: `:title` for the page's heading (who asks, and
+  for what) and `:door` for its one-line door field. `caller`
+  (`seat:<id>`) resolves to the seat's name and the door's row to its
+  summary, both read as the PERSON; a refused read leaves the bare id."
+  [eng call person data]
+  (let [caller (str (:caller data))
+        {:keys [kind action id]} (:door data)
+        who (or (when (str/starts-with? caller "seat:")
+                  (get-in (app-row eng call person :seat (subs caller 5))
+                          [:data :name]))
+                caller)
+        row (when (and kind id) (:summary (app-row eng call person kind id)))
+        words #(str/replace (str %) "_" " ")]
+    {:title (if action
+              (str who " wants to " (words action) " "
+                   (cond row (str "‘" row "’")
+                         id (str (words kind) " " id)
+                         :else (words kind)))
+              (str who " wants to call " (:tool data)))
+     :door (when action
+             (str/join " · " (remove nil? [action kind (or row id)])))}))
+
+(defn- app-read
+  "waymark_app_read: one row as the PERSON sees it, the law's doors on
+  its kind, and the ticket, which rides `structuredContent` alone. A
+  confirm door carries its consequence sentence, read off the row's own
+  entry, for the page to show and to send back as `acknowledge`."
+  [eng call session {:keys [kind id]}]
+  (let [rdef (rdef-of eng kind)
+        law (get app-law (:kind rdef))
+        person (person-session eng session)
+        resp (call (request person :get
+                            (str "/api/" (:plural rdef) "/" id) nil))]
+    (if-not (= 200 (:status resp))
+      (pass-through resp)
+      (let [env (body-json resp)
+            ^Instant now ((:now-fn eng))
+            held (when (= :held_call (:kind rdef))
+                   (held-words eng call person (:data env)))
+            base (some-> (:app-url (:oidc eng)) str str/trim not-empty
+                         (str/replace #"/+$" ""))
+            door (fn [aname]
+                   (let [entry (get-in env [:actions (keyword aname)])
+                         props (get-in entry [:input :properties])]
+                     (cond-> {:action aname
+                              :label (or (get-in entry [:display :label]) aname)
+                              :style (get-in entry [:display :style])
+                              :available (some? entry)
+                              ;; a box for each input a person words:
+                              ;; never `patch`, never a boolean
+                              :inputs (vec (for [[k v] props
+                                                 :when (not (or (= "patch" (name k))
+                                                                (boolean-input? v)))]
+                                             (name k)))
+                              :required (mapv name (get-in entry [:input :required]))
+                              ;; what a text box may hold, where the door says
+                              :lengths (into {} (for [[k v] props
+                                                      :when (:maxLength v)]
+                                                  [(name k) (:maxLength v)]))}
+                       (get-in entry [:safety :confirm])
+                       (assoc :consequence (consequence-of entry)))))]
+        (assoc (result (str (:summary env)))
+               :structuredContent
+               {:kind (name (:kind rdef))
+                :id (str id)
+                :state (:state env)
+                :summary (:summary env)
+                :title (:title held)
+                ;; the row's own page, the hash route `held/ui-link` builds
+                :link (when base (str base "/#/api/" (:plural rdef) "/" id))
+                :fields (vec (for [f (:fields law)
+                                   :let [v (if (and held (= :door f))
+                                             (:door held)
+                                             (get-in env [:data f]))]
+                                   ;; an empty `call` says nothing
+                                   :when (and (some? v)
+                                              (not (and (coll? v) (empty? v))))]
+                               {:label (name f) :value v}))
+                :doors (mapv door (:doors law))
+                :ticket (sign-ticket
+                         eng {:session (sessions/id-hash (:mcp-session-id session))
+                              :person (str (:acts-for (:bearer session)))
+                              :kind (name (:kind rdef))
+                              :id (str id)
+                              :version (get-in resp [:headers "ETag"])
+                              :doors (vec (:doors law))
+                              :expires (+ (.getEpochSecond now) app-ticket-seconds)
+                              :nonce (new-session-id)})})))))
+
+(defn- app-act
+  "waymark_app_act: one door of the row a read showed, taken as the
+  person. The ticket is judged before any route is touched. Then the
+  row must still be the version the read rendered, unless this nonce
+  already landed and the idempotency store answers the first result.
+  A confirm door then meets `waymark_invoke`'s own gate: `acknowledge`
+  is the consequence sentence exactly as the row states it, or the tap
+  is refused as the model's is. The door's own walls judge the tap as
+  they judge any tap."
+  [eng call session {:keys [kind id action input ticket acknowledge]}]
+  (let [rdef (rdef-of eng kind)
+        claims (read-ticket eng ticket)
+        ^Instant now ((:now-fn eng))
+        _ (when-not (and claims
+                         (= (:session claims) (sessions/id-hash (:mcp-session-id session)))
+                         (= (:person claims) (str (:acts-for (:bearer session))))
+                         (= [(:kind claims) (:id claims)] [(name (:kind rdef)) (str id)])
+                         (>= (long (:expires claims)) (.getEpochSecond now))
+                         (some #{(str action)} (:doors claims)))
+            (throw (p/problem
+                    :app-ticket-refused 403 "Ticket refused"
+                    {:detail (str "This door takes an unexpired ticket that "
+                                  "waymark_app_read answered in this session, for "
+                                  "this person, row and door. Read the row again.")})))
+        psession (person-session eng session)
+        self (str "/api/" (:plural rdef) "/" id)
+        okey (str app-origin-prefix "/"
+                  (URLEncoder/encode (str (:id (:bearer session))) "UTF-8")
+                  "/" (:nonce claims))
+        st (:storage eng)
+        replay? (some? (store/with-tx st
+                         (fn [tx] (store/idempotency-lookup st tx okey (:kind rdef)))))
+        seen (call (request psession :get self nil))
+        entry (when (= 200 (:status seen))
+                (get-in (body-json seen) [:actions (keyword (str action))]))]
+    (cond
+      (not= 200 (:status seen))
+      (pass-through seen)
+      (and (not replay?) (not= (:version claims) (get-in seen [:headers "ETag"])))
+      (refusal (p/version-conflict (keyword (str action))
+                                   {:kind (:kind rdef) :id (str id)}))
+      (and (get-in entry [:safety :confirm])
+           (not= acknowledge (consequence-of entry)))
+      (refusal (confirm-refusal (str action) (consequence-of entry) acknowledge))
+      :else
+      (let [resp (call (request psession :post (str self "/-/" action)
+                                {:body (or input {})
+                                 :headers {"idempotency-key" okey
+                                           "if-match" (str (:version claims))}}))]
+        (if (<= 200 (:status resp 500) 299)
+          ;; the one engine-made line the page hands the model
+          (let [state (:state (body-json resp))
+                line (str (name (:kind rdef)) " " id ": " action " → " state)]
+            (assoc (result line) :structuredContent {:line line :state state}))
+          (pass-through resp))))))
+
+(def ^:private app-bodies
+  {"waymark_app_read" app-read
+   "waymark_app_act" app-act})
+
+(defn- app-tool?
+  "Is this one of the page's own tools, on a session that has them?"
+  [eng session tool-name]
+  (and (app-session? eng session) (contains? app-bodies (str tool-name))))
+
 (defn call-tool
   "One `tools/call`. `call` is a `door` for this engine; `gate-rpc`
   is a gate-proxy caller for this engine (the four-arg arity builds
@@ -4425,15 +4972,26 @@
                      who {:caller (:id (:principal session))
                           :sitting (bound-sitting
                                     eng (:mcp-session-id session))}]
-                 (-> (gate/invoke-for gate-rpc (:visibility session) tname
-                                      sent who)
-                     (shaped args)
-                     (rig-dropped))))
+                 (if (some? (:at args))
+                   ;; `at`: the call is stored for its time, not made
+                   ;; (R-7.2, R-4.4)
+                   (schedule-call eng call session {:tool tname}
+                                  (assoc (select-keys args (conj schedule-keys :at))
+                                         :input sent))
+                   (-> (gate/invoke-for gate-rpc (:visibility session) tname
+                                        sent who)
+                       (shaped args)
+                       (rig-dropped)))))
 
      ;; the sit needs the Gate caller too, for the bench it prepares
      ;; (R-12.29) — the one body that is not in `bodies`
      (= "waymark_sit" tool-name)
      (attempt tool-name #(sit eng call gate-rpc session (or args {})))
+
+     ;; the one model-visible app tool. It runs as the session's own
+     ;; principal, so it is walled and counted like every tool above
+     (and (= "waymark_show" tool-name) (app-session? eng session))
+     (attempt tool-name #(show eng call session (or args {})))
 
      :else ::unknown-tool)))
 
@@ -4460,7 +5018,7 @@
   revision would make every future MCP release a waymark outage, and
   the methods this server implements have been stable across all of
   them."
-  [params]
+  [eng session params]
   {:protocolVersion (let [asked (:protocolVersion params)]
                       (if (contains? supported-versions asked)
                         asked
@@ -4469,7 +5027,10 @@
    ;; grant that widens or narrows mid-session pushes
    ;; notifications/tools/list_changed, and a client that believed
    ;; the list frozen would never re-list after the person's tap
-   :capabilities {:tools {:listChanged true}}
+   :capabilities (cond-> {:tools {:listChanged true}}
+                   ;; the page is a resource, for a session with the app tools
+                   (app-session? eng (merge session (app-declaration params)))
+                   (assoc :resources {}))
    :serverInfo server-info
    :instructions instructions})
 
@@ -4682,12 +5243,28 @@
      (str/starts-with? (str method) "notifications/")
      nil
 
+     ;; the PERSON's tap, from the page: ahead of the closed-sitting
+     ;; refusal and outside the sitting's counters
+     (and (= "tools/call" (str method)) (app-tool? eng session (:name params)))
+     (rpc-result id (attempt (:name params)
+                             #((app-bodies (str (:name params)))
+                               eng call session (or (:arguments params) {}))))
      :else
      (case (str method)
-       "initialize" (rpc-result id (initialize params))
+       "initialize" (rpc-result id (initialize eng session params))
        "ping" (rpc-result id {})
        "tools/list"
-       (rpc-result id {:tools (listing)})
+       (rpc-result id {:tools (listing eng session)})
+       ;; the page; method-not-found, as ever, without the app tools
+       ("resources/list" "resources/read")
+       (cond
+         (not (app-session? eng session))
+         (rpc-error id method-not-found (str "Method not found: " method))
+         (= "resources/list" (str method))
+         (rpc-result id {:resources [app-resource]})
+         (= app-resource-uri (str (:uri params)))
+         (rpc-result id {:contents [(assoc app-resource :text @app-page)]})
+         :else (rpc-error id -32002 (str "Resource not found: " (:uri params))))
        "tools/call"
        (let [out (or (closed-sitting-refusal eng session (:name params)
                                              (:arguments params))

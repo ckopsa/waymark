@@ -57,6 +57,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.patch :as patch]
             [waymark10.server.store :as store]
@@ -136,6 +137,32 @@
       {:text (str s) :dropped 0}
       {:text (String. b 0 (int limit) StandardCharsets/UTF_8)
        :dropped (- n (long limit))})))
+
+(def why-limit
+  "The most characters of a caller's why a row keeps (ticket e9f65194)."
+  1000)
+
+(defn kept-why
+  "`why` as the row stores it → {:text :cut}. `cut` is true only when
+  characters went.
+
+  A why of at most `why-limit` characters is kept whole. A longer one
+  is cut at the last word boundary that leaves room for the mark, and
+  ends with \"…\", so a person reads whole words and sees that more was
+  said. A why with no space in it has no boundary, and is cut at the
+  limit."
+  [why]
+  (let [s (str why)
+        room (dec (long why-limit))]
+    (if (<= (count s) (long why-limit))
+      {:text s :cut false}
+      (let [head (subs s 0 room)
+            ;; a word that ends exactly where the room does is whole
+            whole (if (str/blank? (subs s room (inc room)))
+                    head
+                    (str/replace head #"\s+\S*$" ""))
+            kept (str/trimr (if (str/blank? whole) head whole))]
+        {:text (str kept "…") :cut true}))))
 
 (defn- short-value
   "One shown value, as a person reads it on the line."
@@ -249,10 +276,35 @@
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
+(def app-key-prefix
+  "The `Idempotency-Key` prefix of a person's tap in Claude. It is
+  mcp's `app-origin-prefix`, spelled again so this kind does not
+  require the MCP door; mcp_apps_count_test holds the two equal."
+  "mcp-app")
+
+(def mcp-key-prefix
+  "The `Idempotency-Key` prefix of an invoke from the MCP door: mcp's
+  `origin-prefix`, spelled again for the same reason."
+  "mcp")
+
+(defn answered-via
+  "Which door a verdict came through, read off the key the transition
+  carries: \"mcp-app\" for a person's tap in Claude, \"mcp\" for a key
+  of `mcp/origin-key`'s three segments, and \"other\" for every other
+  key and for none."
+  [k]
+  (let [segs (when (string? k) (str/split k #"/"))]
+    (cond
+      (and segs (str/starts-with? k (str app-key-prefix "/"))) "mcp-app"
+      (and (= 3 (count segs)) (= mcp-key-prefix (first segs))
+           (not-empty (nth segs 1)) (not-empty (nth segs 2))) "mcp"
+      :else "other")))
+
 (defn- stamp-decider [row ctx]
   (update row :data assoc
           :decided_by (get-in ctx [:principal :id])
-          :decided_at (:now ctx)))
+          :decided_at (:now ctx)
+          :answered_via (answered-via (:idempotency-key ctx))))
 
 (defhandler record-allow [row _inp ctx]
   (stamp-decider row ctx))
@@ -404,8 +456,16 @@
     [:why {:x-display
            {:label "Why"
             :help "The caller's one sentence of reason. An approval that held a call and had nothing to show would be a notice with no words on it."}}
-     [:string {:min 1 :max 240}]]
-    [:caller {:not-a-ref "bare today; swept by 5cb6a0c7"
+     [:string {:min 1 :max 1000}]]
+    ;; the engine's stamp beside the why (ticket e9f65194), written
+    ;; ONLY when a cut happened: absent reads as not cut, so a whole
+    ;; why costs the row nothing, and a row written before it keeps
+    ;; its why as it was stored
+    [:why_cut {:optional true
+               :x-display {:label "Why was cut"
+                           :help "True when the caller's why was longer than the row keeps, and the stored one ends with … at a word boundary."}}
+     [:maybe :boolean]]
+    [:caller {:x-ref {:principal true}
               :x-display {:raw true
                           :label "Who called"
                           :help "The principal whose call this is, stamped by the power door. It is the field the first wall reads."}}
@@ -439,10 +499,10 @@
      [:maybe [:map
               [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
               [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
-              [:id {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+              [:id {:optional true :x-ref {:kind-from :kind}
                     :x-display {:raw true :label "Row"}}
                [:maybe [:string {:min 1 :max 128}]]]
-              [:author {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+              [:author {:optional true :x-ref {:principal true}
                         :x-display {:raw true :label "Asked by the seat"}}
                [:maybe [:string {:min 1 :max 128}]]]
               ;; the version the author read, for a fenced door: the
@@ -456,7 +516,7 @@
               [:prefill_digests {:optional true :x-display {:hidden true}}
                [:maybe [:map-of :keyword :string]]]]]]
     [:owner {:optional true
-             :not-a-ref "bare today; swept by 5cb6a0c7"
+             :x-ref {:principal true}
              :x-display {:raw true
                          :label "Waits on"
                          :help "The person a held seat call waits on: the one its author acts for. Only they answer it."}}
@@ -486,11 +546,21 @@
                           :help "The person's sentence on a refusal, or the engine's on a wire failure."}}
      [:maybe [:string {:max 240}]]]
     [:decided_by {:optional true
-                  :not-a-ref "bare today; swept by 5cb6a0c7"
+                  :x-ref {:principal true}
                   :x-display {:raw true :label "Who decided"}}
      [:maybe [:string {:max 128}]]]
     [:decided_at {:optional true :x-display {:label "When"}}
-     [:maybe :waymark/instant]]]
+     [:maybe :waymark/instant]]
+    ;; WHICH DOOR THE VERDICT CAME THROUGH (docs/spec-mcp-apps.md, The
+    ;; count): the engine stamps it on `allow` and `refuse` from the
+    ;; transition's key, and no input names it. It is not a `:maybe`,
+    ;; so it promotes a column the filter below can walk; a row
+    ;; answered before this field carries none and reads null.
+    [:answered_via {:optional true
+                    :x-display {:raw true
+                                :label "Answered through"
+                                :help "The door the verdict came through: mcp-app is a person's tap in Claude, mcp is the connector's own invoke, and other is every other door. The engine stamps it with the verdict."}}
+     [:enum "mcp-app" "mcp" "other"]]]
    ;; THE CREATE MODEL IS THE BIRTH AND NOTHING ELSE. What a verdict
    ;; and the engine's own endings write is not the power door's to
    ;; supply, so the model omits the five of them. It is the posture
@@ -514,8 +584,12 @@
      [:maybe [:map-of :keyword :any]]]
     [:why {:x-display {:label "Why"
                        :help "The caller's one sentence of reason, which the person who taps reads."}}
-     [:string {:min 1 :max 240}]]
-    [:caller {:not-a-ref "bare today; swept by 5cb6a0c7"
+     [:string {:min 1 :max 1000}]]
+    [:why_cut {:optional true
+               :x-display {:label "Why was cut"
+                           :help "True when the caller's why was longer than the row keeps."}}
+     [:maybe :boolean]]
+    [:caller {:x-ref {:principal true}
               :x-display {:raw true :label "Who called"
                           :help "The principal whose call this is."}}
      [:string {:min 1 :max 128}]]
@@ -542,10 +616,10 @@
      [:maybe [:map
               [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
               [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
-              [:id {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+              [:id {:optional true :x-ref {:kind-from :kind}
                     :x-display {:raw true :label "Row"}}
                [:maybe [:string {:min 1 :max 128}]]]
-              [:author {:optional true :not-a-ref "bare today; swept by 5cb6a0c7"
+              [:author {:optional true :x-ref {:principal true}
                         :x-display {:raw true :label "Asked by the seat"}}
                [:maybe [:string {:min 1 :max 128}]]]
               ;; the version the author read, for a fenced door: the
@@ -556,7 +630,7 @@
               [:prefill_digests {:optional true :x-display {:hidden true}}
                [:maybe [:map-of :keyword :string]]]]]]
     [:owner {:optional true
-             :not-a-ref "bare today; swept by 5cb6a0c7"
+             :x-ref {:principal true}
              :x-display {:raw true
                          :label "Waits on"
                          :help "The person a held seat call waits on: the one its author acts for. Only they answer it."}}
@@ -573,9 +647,12 @@
    ;; absent: it is a `:maybe` ref, so it promotes no column for a
    ;; filter to walk, and a filter that cannot be answered is worse
    ;; than one nobody offered.
+   ;; `answered_via` is filterable so the MCP Apps experiment is one
+   ;; query: {answered_via mcp-app} is every verdict tapped in Claude.
    :filterable {:state #{:eq :in}
                 :caller #{:eq}
-                :tool #{:eq}}
+                :tool #{:eq}
+                :answered_via #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "held"}
    :create-guards [the-power-door-mints-it]
@@ -663,7 +740,7 @@
   transition names the engine and the `caller` field names the
   caller. A hand at the wire cannot reach this door at all."
   [eng {:keys [server tool input forward why caller sitting entry]}]
-  (let [why (:text (capped why 240))
+  (let [{why :text cut :cut} (kept-why why)
         row (:row (inv/create!
                    eng :held_call
                    (cond-> {:tool (str tool)
@@ -673,6 +750,7 @@
                             :forward (or forward {})
                             :shown (:text (capped (shown-text entry input why)
                                                   140))}
+                     cut (assoc :why_cut true)
                      (some-> server str not-empty) (assoc :server (str server))
                      (some-> sitting str not-empty) (assoc :sitting (str sitting)))
                    {:principal engine-actor}))]
@@ -754,13 +832,13 @@
                                             named)))
         shown (str action " " kind (when what (str " " what))
                    (when changes
-                     (str " · " (str/join ", " (map name (keys changes))))))]
+                     (str " · " (str/join ", " (map name (keys changes))))))
+        kept (kept-why (or (some-> why str not-empty)
+                           "Held for the person's tap."))]
     (:row (inv/create!
            eng :held_call
            (cond-> {:tool (str kind "." action)
-                    :why (:text (capped (or (some-> why str not-empty)
-                                            "Held for the person's tap.")
-                                        240))
+                    :why (:text kept)
                     :caller (str caller)
                     :forward (or body {})
                     :shown (:text (capped shown 140))
@@ -769,6 +847,7 @@
                             (some-> author str not-empty) (assoc :author (str author))
                             (some-> if-match str not-empty) (assoc :if_match (str if-match))
                             digests (assoc :prefill_digests digests))}
+             (:cut kept) (assoc :why_cut true)
              changes (assoc :changes changes)
              (some-> owner str not-empty) (assoc :owner (str owner)))
            {:principal engine-actor}))))
@@ -888,7 +967,11 @@
 
 (defn- forward-tool!
   "The tool call's forward, as it always was: `mcp-servers/call!` on
-  the tool the row names, with the arguments the row carries."
+  the tool the row names, with the arguments the row carries.
+
+  A failure the server put a sentence on records that sentence FIRST
+  and the engine's context after it, in brackets, so the cut at the
+  field's width takes the engine's words and not the server's."
   [eng row]
   (let [tool (str (get-in row [:data :tool]))
         args (or (get-in row [:data :forward]) {})]
@@ -899,7 +982,11 @@
         (finish! eng (:id row) :land {:answer text :dropped dropped})
         :done)
       (catch Exception e
-        (let [{:keys [text]} (capped (str (ex-message e)) 240)]
+        (let [{:keys [sentence context]} (mcp-client/said e)
+              {:keys [text]} (capped (if sentence
+                                       (str sentence " [" context "]")
+                                       (str (ex-message e)))
+                                     240)]
           (finish! eng (:id row) :fail {:reason text}))
         :failed))))
 
@@ -1388,6 +1475,13 @@
 ;; "member"}` reads the moved row's `plan_id`, loads the row it names
 ;; and reads that row's `member`. The wall judges every hop; the send
 ;; resolves the chain at send time, and an empty hop is unaddressed.
+;;
+;; The engine declares rules of its own (`engine-rules`): the same
+;; `when` and `address`, with no row and no notifier. The addressed
+;; member's own notifier makes the text and carries the send, and sent,
+;; failed and held are counted on that notifier, since there is no rule
+;; row to count on. `says` names the field on the moved row whose
+;; sentence is the notice's line.
 
 (defn- ref-named
   "The ref field of this resource named `field`, or nil."
@@ -1609,8 +1703,9 @@
 (defn- address!
   "One addressed notice: the member the rule's field names, reached the
   way the member's `notify` says, with the rule's notifier's text.
-  → [outcome error], the outcome :sent, :held, :failed, :skipped,
-  :unaddressed or :self. Counts nothing; never throws."
+  → [outcome error carrier], the outcome :sent, :held, :failed,
+  :skipped, :unaddressed or :self, and the carrier the id of the
+  notifier a send went through. Counts nothing; never throws."
   [eng rule t]
   (let [count! (fn [outcome error] [outcome error])]
     (try
@@ -1619,10 +1714,21 @@
                                     (address-path (get-in rule [:data :address])))
             member (when addressee (decoded-row eng :member addressee))
             notify (get-in member [:data :notify])
-            texter (decoded-row eng :notifier (get-in rule [:data :notifier]))
-            carrier (or (some->> (:notifier notify) str not-empty
-                                 (decoded-row eng :notifier))
-                        texter)
+            own (some->> (:notifier notify) str not-empty
+                         (decoded-row eng :notifier))
+            ;; a rule the engine declares names no notifier: the
+            ;; member's own makes the text
+            texter (if-some [named (some-> (get-in rule [:data :notifier])
+                                           str not-empty)]
+                     (decoded-row eng :notifier named)
+                     own)
+            carrier (or own texter)
+            ;; `says`: the moved row's own sentence is the line
+            said (some->> (get-in rule [:data :says]) str not-empty keyword
+                          (conj [:data]) (get-in row) str not-empty)
+            values (fn []
+                     (cond-> (notice-values eng texter t)
+                       said (assoc :summary said)))
             ;; a held call's birth is the engine's hand: the person
             ;; who caused it is the row's `caller`
             causers (cond-> #{(actor-id (:actor t))}
@@ -1636,29 +1742,39 @@
           (or (nil? member) (empty? notify)) (count! :skipped nil)
           (nil? texter) (count! :failed "the rule's notifier is gone")
           (quiet? notify (now-of eng))
-          (do (hold-quiet! eng (:id member) (notice-values eng texter t))
-              (count! :held nil))
+          (do (hold-quiet! eng (:id member) (values))
+              [:held nil (:id carrier)])
           :else
           (let [args (merge (render-notice (get-in texter [:data :input_template])
-                                           (notice-values eng texter t))
+                                           (values))
                             (:input notify))
                 answer (servers/call! eng (notifier-tool eng carrier) args)]
             (if (:isError answer)
-              (count! :failed (or (some-> answer :content first :text)
-                                  "the tool answered an error"))
-              (count! :sent nil)))))
+              [:failed (or (some-> answer :content first :text)
+                           "the tool answered an error")
+               (:id carrier)]
+              [:sent nil (:id carrier)]))))
       (catch Exception e
         (warn! "notice rule " (get-in rule [:data :name]) " could not tell for "
                "transition " (:id t) " — " (ex-message e))
         (count! :failed (or (ex-message e) (str e)))))))
 
 (defn- tell!
-  "One addressed notice, counted on the rule in place.
+  "One addressed notice, counted on the rule in place. A rule the
+  engine declares has no row, and the notifier that carried it counts.
   → :sent, :held, :failed, :skipped, :unaddressed or :self; never throws."
   [eng rule t]
-  (let [[outcome error] (address! eng rule t)]
-    (if (= :self outcome)
-      :self
+  (let [[outcome error carrier] (address! eng rule t)]
+    (cond
+      (= :self outcome) :self
+
+      (nil? (:id rule))
+      (do (when (and carrier (#{:sent :failed :held} outcome))
+            (try (tally! eng carrier outcome error)
+                 (catch Exception _ nil)))
+          outcome)
+
+      :else
       (try (tally-row! eng :notice_rule (:id rule) outcome error)
            outcome
            (catch Exception _ :failed)))))
@@ -1666,13 +1782,42 @@
 (defn- at-field [rule]
   (some-> (get-in rule [:data :at :field]) str not-empty keyword))
 
+(def engine-rules
+  "The notice rules the engine declares itself, by the kind they hear.
+  A scheduled action's three endings (docs/spec-scheduled-actions.md
+  R-6.1): each addresses the ref the birth stamped, as `tell` allowed,
+  and says the sentence the run kept. `cancelled` has no rule: the
+  person did it."
+  {:scheduled_action
+   [{:name "A scheduled action ran"
+     :when {:to_state "done"}
+     :address {:field "tell_done"}
+     :says "outcome_why"}
+    {:name "A scheduled action was skipped"
+     :when {:to_state "skipped"}
+     :address {:field "tell_problem"}
+     :says "outcome_why"}
+    {:name "A scheduled action failed"
+     :when {:to_state "failed"}
+     :address {:field "tell_problem"}
+     :says "outcome_why"}]})
+
+(defn- declared-rules
+  "The engine's own rules for the moved kind, in a rule row's shape and
+  with no id."
+  [t]
+  (let [k (keyword (name (:kind t)))]
+    (mapv (fn [r] {:data (assoc r :kind (name k))})
+          (get engine-rules k))))
+
 (defn notice-rules-transition!
   "One transition → one addressed notice per active notice rule that
-  matches it. A rule with `at` hears no transition; the sweep below
-  tells it. Never throws."
+  matches it, the rows and then the rules the engine declares. A rule
+  with `at` hears no transition; the sweep below tells it. Never
+  throws."
   [eng t]
   (try
-    (doseq [r (active-rows eng :notice_rule)
+    (doseq [r (concat (active-rows eng :notice_rule) (declared-rules t))
             :when (nil? (at-field r))
             :when (rule-matches? r t)]
       (tell! eng r t))

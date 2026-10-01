@@ -92,7 +92,14 @@
            :runner_link :runner_provider
            ;; …and the invitation (docs/spec-guided-follow.md § 3),
            ;; the held call's sibling hand-off, which a grant names
-           :invitation}
+           :invitation
+           ;; …and the recorded walk and its frames (§ 4), core's
+           ;; beside the invitation
+           :walk :walk_frame
+           ;; …and the scheduled action
+           ;; (docs/spec-scheduled-actions.md R-1), core's beside the
+           ;; held call it carries a ref to
+           :scheduled_action}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -119,7 +126,7 @@
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
-             :judgment :verdict :invitation}
+             :judgment :verdict :invitation :walk :walk_frame :scheduled_action}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
@@ -244,6 +251,10 @@
                ;; the dashboard slot's measure (dashboard measures
                ;; 1/3): one slot's number over its time window
                "/api/dashboard_slots/:id/-/measure"
+               ;; a sealed walk's export (spec-guided-follow § 4): core's
+               ;; one non-envelope answer, static and ahead of the
+               ;; plural grammar
+               "/api/walks/:id/export"
                "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
@@ -360,11 +371,14 @@
             ;; sits beside it: the held calls' expiry (R-14, R-7)
             :mcp-discover :held-call-expiry :notifier
             ;; the invitations' resolution and expiry
-            ;; (spec-guided-follow § 3)
-            :invitations :invitation-expiry
+            ;; (spec-guided-follow § 3), and the walks' retention (§ 4)
+            :invitations :invitation-expiry :walk-retention
             ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
             ;; R-12.25; spec-transcript.md R-9)
             :seat-clock
+            ;; and its seventh: the scheduled actions' clock
+            ;; (spec-scheduled-actions R-5)
+            :scheduled-actions
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
@@ -411,7 +425,8 @@
             ;; R-14), so a selection that names :jobs still carries
             ;; both
             :mcp-discover :held-call-expiry :notifier
-            :invitations :invitation-expiry :seat-clock
+            :invitations :invitation-expiry :walk-retention :seat-clock
+            :scheduled-actions
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))

@@ -38,6 +38,14 @@
  ;; holds.
  ;; The name is the cloud connector's, `Waymark`, so the tools are
  ;; `mcp__Waymark__…` as the seats' instructions spell them.
+ ;;
+ ;; :oauth is optional (R-8.2): the fixed OAuth client, for a door that
+ ;; refuses dynamic registration. It must match the client the person
+ ;; signed in with, `claude mcp add --client-id ... --callback-port ...`:
+ ;; the same id and the same port. Both keys are required when the map
+ ;; is there.
+ ;;   :mcp {:name "Waymark" :url "https://work.kopsa.info/api/-/mcp"
+ ;;         :oauth {:client-id "localfire-claude" :callback-port 8765}}
  :mcp {:name "Waymark" :url "https://work.kopsa.info/api/-/mcp"}
 
  ;; passed to --allowedTools, one argument each. This is the default.
