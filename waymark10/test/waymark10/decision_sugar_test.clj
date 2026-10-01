@@ -278,16 +278,15 @@
   ;; gained `seat` and `substitute`, its `scope` became optional
   ;; because two of the three ask shapes carry none, and `approve`
   ;; gained the one-full-sitter wall — a guard on a verdict, which is
-  ;; machine-facet law. The value below is the PRE-SEAT hash and is
-  ;; now wrong on purpose: the sandbox this was written in could not
-  ;; resolve the dependency repository, so the new hash could not be
-  ;; computed here. Re-pin it from the first CI run — the failure
-  ;; prints the hash to paste — and keep this paragraph as the note
+  ;; machine-facet law. Re-pinned from the first CI run (fc587884) —
+  ;; the failure prints the hash to paste. This paragraph is the note
   ;; the comment above asks for.
   ;;
-  ;; THE LAW MOVED AGAIN (waymark-7v7v): create gained
+  ;; A CREATE WALL JOINED (waymark-7v7v): create gained
   ;; an-anchorless-ask-names-its-grant, which refuses an anchorless ask
-  ;; from a holder of several live grants. Re-pin from CI the same way.
+  ;; from a holder of several live grants. The hash did NOT move and no
+  ;; re-pin was owed: create-door guards were outside the fingerprint
+  ;; until waymark-442.9, below.
   ;;
   ;; THE LAW MOVED AGAIN (waymark-442.9): create-door guards joined the
   ;; fingerprint (create.guards, absent when a kind declares none), so

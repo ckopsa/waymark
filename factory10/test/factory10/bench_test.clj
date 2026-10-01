@@ -1499,6 +1499,78 @@
       (is (= 7200 (:groom_floor_settle_seconds after))
           "and its settle the same"))))
 
+;; ── a restate is whole (ticket 606a6209) ────────────────────────────────
+
+(def ^:private a-check {:command "cd workqueue10 && clojure -M:check"})
+(def ^:private a-test-block {:workflow "tests.yml" :input "only"})
+
+(defn- restate-whole!
+  "A person restates the policy whole: the fields a-policy! states and
+  no optional block, with the row's own etag."
+  [eng row]
+  (let [current (policy-row eng (:id row))]
+    (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                 (select-keys (:data current)
+                              [:repository :branch_pattern :base
+                               :max_lines :opens_pr :auto_merge
+                               :rounds_per_change :formatter
+                               :deny :orientation])
+                 {:principal person
+                  :if-match (inv/etag :repo_policy (:id row)
+                                      (:version current))})))
+
+(deftest a-whole-restate-that-omits-the-check-clears-it
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:check a-check :test a-test-block})]
+    (is (= a-check (:check (:data (policy-row eng (:id row)))))
+        "the policy is born with a check")
+    (restate-whole! eng row)
+    (let [after (:data (policy-row eng (:id row)))]
+      (is (not (contains? after :check))
+          "a whole restate that does not name the check leaves none")
+      (is (not (contains? after :test))
+          "and the test block the same")
+      (is (= a-repository (:repository after))
+          "what the restate names stands"))))
+
+(deftest a-patch-restate-that-names-the-floor-keeps-the-check-and-the-test
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:check a-check :test a-test-block})
+        current (policy-row eng (:id row))]
+    (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                 {:patch true :groom_floor 4}
+                 {:principal person
+                  :if-match (inv/etag :repo_policy (:id row)
+                                      (:version current))})
+    (let [after (:data (policy-row eng (:id row)))]
+      (is (= 4 (:groom_floor after))
+          "the patch writes what it names")
+      (is (= a-check (:check after))
+          "a patch that does not name the check keeps it")
+      (is (= a-test-block (:test after))
+          "and the test block the same"))))
+
+(deftest a-whole-restate-still-enrols-with-the-rig
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:check a-check})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))]
+    (restate-whole! eng row)
+    (is (= 2 (count (calls-of st "bench__enroll")))
+        "the create told the rig, and the restate tells it again")
+    (is (= a-check (:check (sent 0)))
+        "the create carried the check")
+    (is (= (dissoc (sent 0) :check) (sent 1))
+        "the restate carries the same sentence without the check it
+         cleared, so the rig drops its entry")
+    (let [stored (policy-row eng (:id row))]
+      (is (some? (get-in stored [:data :enrolled_at]))
+          "the engine's own field outlives a whole restate")
+      (is (nil? (get-in stored [:data :note]))
+          "with nothing to explain"))))
+
 (deftest a-select-pattern-keeps-to-what-the-python-rig-compiles
   ;; ticket 3052cdf2: the rig compiles select_pattern with Python's re
   (let [st (state)
