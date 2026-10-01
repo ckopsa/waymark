@@ -3628,6 +3628,32 @@
                   {:label "Claimed"
                    :spelled-by-hand "Stamped by the sit that last claimed this sitting for its connector session."}}
      [:maybe :waymark/instant]]
+    ;; WHAT THE CLIENT DECLARED (ticket b9f90987). The session table
+    ;; keeps what an `initialize` said and no kind serves it, so the sit
+    ;; copies it here at the bind and again at each re-sit
+    ;; (`stamp-client!`). `app_tools` is the listing's own verdict at
+    ;; that moment, so one read answers why a host got no waymark_show.
+    ;; The booleans are plain :boolean, `missed`'s spelling.
+    [:client_name {:optional true
+                   :x-display
+                   {:label "The MCP client"
+                    :spelled-by-hand "The clientInfo name the connector session's initialize declared. The sit copies it from the session; absent when the client named none."}}
+     [:maybe [:string {:max 200}]]]
+    [:client_version {:optional true
+                      :x-display
+                      {:label "The MCP client's version"
+                       :spelled-by-hand "The clientInfo version the connector session's initialize declared. The sit copies it from the session; absent when the client named none."}}
+     [:maybe [:string {:max 200}]]]
+    [:app_ui {:optional true
+              :x-display
+              {:label "Declared MCP Apps"
+               :spelled-by-hand "Written by the sit: whether the connector session's initialize declared the MCP Apps extension with the app page's MIME type."}}
+     :boolean]
+    [:app_tools {:optional true
+                 :x-display
+                 {:label "Listed the app tools"
+                  :spelled-by-hand "Written by the sit: whether the session's tool listing carried the app tools at that moment. The client declared the extension, its bearer is a delegate of a client listed for the app tools, and the ticket's signing key is set."}}
+     :boolean]
     ;; THE INBOX'S KEY. A seat that declares an `inbox` is answered a
     ;; fresh key at each sit (`issue-inbox-key!`), and its hash is kept
     ;; here, on the sitting, so the key answers only while the sitting
@@ -4085,6 +4111,34 @@
                   data (cond-> (assoc (:data row) :last_call_at at)
                          claimant (assoc :connector_session (str claimant)
                                          :claimed_at at))]
+              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                  data nil)
+              (assoc row :data data))))))))
+
+(defn stamp-client!
+  "Stamp an open sitting with what its connector session's client
+  declared at initialize (ticket b9f90987): `client_name`,
+  `client_version`, `app_ui`, and `app_tools`, whether that session's
+  tool listing carried the app tools as the sit judged it. The sit
+  writes all four at the bind and again at each re-sit, so the row
+  reads as the session that last sat in it. The same MAINTENANCE write
+  as `stamp-call!`. → the row as stamped, or nil: no id, an unknown
+  id, or a closed sitting."
+  [eng sitting-id {:keys [client-name client-version app-ui app-tools]}]
+  (when (and sitting-id (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (= :open (:state row))
+            (let [said (fn [v]
+                         (when-some [s (some-> v str not-empty)]
+                           (subs s 0 (min 200 (count s)))))
+                  data (assoc (:data row)
+                              :client_name (said client-name)
+                              :client_version (said client-version)
+                              :app_ui (boolean app-ui)
+                              :app_tools (boolean app-tools))]
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   data nil)
               (assoc row :data data))))))))

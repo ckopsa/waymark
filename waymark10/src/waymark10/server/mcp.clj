@@ -4202,6 +4202,15 @@
             ;; sitting it opened, so a lost bind can find its way back
             _ (when (and fired? sitting)
                 (seats/keep-fire-key! eng (:id sitting) (:key args)))
+            ;; … and what this session's client declared at initialize
+            ;; rides the sitting, written at every sit (ticket b9f90987):
+            ;; one read then answers why a host got no waymark_show
+            _ (when sitting
+                (seats/stamp-client! eng (:id sitting)
+                                     {:client-name (:client-name session)
+                                      :client-version (:client-version session)
+                                      :app-ui (:app-ui session)
+                                      :app-tools (app-session? eng session)}))
             ;; g'' · the transcript's key (docs/spec-transcript.md R-4):
             ;; born with the first sit, a fresh key at each sit after,
             ;; and nil when the seat keeps no transcript of this
