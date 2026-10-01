@@ -1832,6 +1832,55 @@
         (is (empty? (get-in third [:walk :rows])))
         (is (str/includes? (str (:note third)) "nothing for you to walk"))))))
 
+(deftest a-fires-prose-names-a-row-by-its-short-id
+  ;; Ticket 26c7967a: a person's prose names a row by the first 8 hex of
+  ;; its id. The key keeps that row when exactly one row's id opens with
+  ;; the word (`seats/short-id-row`).
+  (let [eng (fresh-engine [fx/meal post])
+        st (:storage eng)
+        seat (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3
+                                   :instructions fired-instructions})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        note (post! eng "The school note" "house" "2026-09-18T08:00:00Z")
+        short (fn [row] (subs (str (:id row)) 0 8))
+        ;; the key first: the row is read after the fire wrote its entry
+        named (fn [text]
+                (let [k (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                              ((:now-fn eng)) text)]
+                  (seats/fire-key-row eng (seat-row-of eng (:id seat)) k)))]
+    (testing "prose naming a row's 8-hex prefix names that row"
+      (is (= (str (:id note))
+             (named (str "Walk " (short note) " and stop."))))
+      (is (= (str (:id note))
+             (named (str "Walk " (str/upper-case (short note)) " and stop.")))
+          "in either case"))
+
+    (testing "an 8-hex word that opens no row's id names nothing"
+      (is (nil? (named "Walk 00000000 and stop."))))
+
+    (testing "a full id wins over a prefix"
+      (is (= (str (:id note))
+             (named (str "Not " (short gas) ": walk " (:id note) ".")))))
+
+    (testing "JSON wake text is read as it was: its words are not looked up"
+      (is (nil? (named (wire/write-json {:kind "meal" :id (str (:id note))
+                                         :note (short note)})))))
+
+    ;; a second row whose id opens with the gas bill's first 8 hex
+    (store/with-tx st
+      (fn [tx]
+        (store/insert-row!
+         st tx :post
+         (assoc (store/load-row st tx :post (str (:id gas)) {})
+                :id (str (short gas) "-0000-4000-8000-000000000000")))))
+
+    (testing "a prefix of two rows names nothing"
+      (is (nil? (named (str "Walk " (short gas) " and stop.")))))
+
+    (testing "the first word that names exactly one row is the one taken"
+      (is (= (str (:id note))
+             (named (str "Walk " (short gas) " or " (short note) ".")))))))
+
 (deftest a-re-sat-session-is-handed-the-row-only-when-no-other-sitting-holds-it
   ;; Ticket d7c854b3: a seat of several open sittings walks one row.
   ;; Sitting A is handed it and ends; a new sit under A's own
