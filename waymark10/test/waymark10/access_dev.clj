@@ -1,6 +1,7 @@
 (ns waymark10.access-dev
   "The access UI-drive engine: the access and seat kinds (member,
-  seat, held_call, invitation) served on a port against
+  seat, held_call, invitation) and the two ref-labelling fixture kinds
+  (ref_target, ref_card) served on a port against
   WAYMARK10_TEST_DSN, booted like waymark10.batch-a-dev. Every table
   drops at boot, and the boot seeds what the drive reads: a member, a
   seat whose sitter acts for that member, and one held seat-restate
@@ -16,6 +17,7 @@
       -e \"(do ((requiring-resolve 'waymark10.access-dev/start!) 8124) nil) @(promise)\""
   (:require [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
+            [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
@@ -30,6 +32,41 @@
   (:import (java.time Instant)))
 
 (def ^:private colton (t/principal {:id "colton" :display "Colton"}))
+
+;; the ref-labelling fixture (ticket f0eb54a6): the two x-ref forms no
+;; access kind carries. A ref_card names a ref_target by a plain :kind
+;; ref and by typed address; the drive's guest grant admits ref_card
+;; and not ref_target, so the same card is also read with its target
+;; hidden. The drive creates both rows through the API.
+(def ref-target
+  (r/resource
+   {:kind :ref_target
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.name} · {state}"
+    :schema [:map [:name [:string {:min 1 :max 40}]]]
+    :actions
+    {:finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A finished target is history."}}}}))
+
+(def ref-card
+  (r/resource
+   {:kind :ref_card
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.name} · {state}"
+    :schema [:map
+             [:name [:string {:min 1 :max 40}]]
+             [:target_id {:kind :ref_target} :waymark/ref]
+             [:about {:x-ref {:address true}} [:string {:max 100}]]
+             [:lost {:x-ref {:address true}} [:string {:max 100}]]]
+    :actions
+    {:finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A finished card is history."}}}}))
 
 (defn seed!
   "The member, the seat, its one held restate, and one sealed walk of
@@ -92,7 +129,7 @@
                                 {:builder-fn rs/as-unqualified-lower-maps})]
           (jdbc/execute! tx [(str "DROP TABLE IF EXISTS \"" t "\" CASCADE")]))))
     (let [eng (engine/engine {:storage st
-                              :resources [caps/capability]
+                              :resources [caps/capability ref-target ref-card]
                               :auto-migrate true
                               :oidc {:issuer "https://idp.test/realms/access-dev"
                                      :audience "access-dev"

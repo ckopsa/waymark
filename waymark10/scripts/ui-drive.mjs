@@ -50,8 +50,9 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs batch-a
 
-   ACCESS (the held seat call's names, against waymark10.access-dev,
-   which seeds its own member, seat and held seat-restate; CI runs it
+   ACCESS (the held seat call's names and each x-ref form's label,
+   against waymark10.access-dev, which seeds its own member, seat and
+   held seat-restate and serves the ref_card fixture; CI runs it
    in the ui-access job of .github/workflows/tests.yml):
    1. the same boot, naming waymark10.access-dev/start! on 8124
    2. the same chromium
@@ -873,6 +874,92 @@ async function accessStory() {
        [${JSON.stringify(held.owner)}, ${JSON.stringify("seat:" + sid)},
         ${JSON.stringify(sid)}].includes(s.title))`));
 
+  /* ref labelling (ticket f0eb54a6). ui_assembly_test pins fieldCell,
+     resourceRef and rowSummary as substrings; this runs them. The held
+     call on screen carries three x-ref forms: a principal (owner, and
+     caller as `seat:<id>`), a nested one (door.author) and a kind-from
+     id (door.id). Each name above is also a link to the row it names. */
+  console.log("· ref labelling: each form links to the row it names");
+  const refLinks = (href, text) => `[...document.querySelectorAll("a")]
+    .filter(a => a.getAttribute("href") === ${JSON.stringify("#" + href)} &&
+                 a.textContent.trim() === ${JSON.stringify(text)}).length`;
+  await waitFor(`${refLinks("/api/members/" + held.owner, names.member)} >= 1`,
+                "the owner's link to its member");
+  ok("a principal links to its member's row", true);
+  await waitFor(`${refLinks("/api/seats/" + sid, names.seat)} >= 3`,
+                "the caller's, the door author's and the door row's links to the seat");
+  ok("a seat principal, a nested principal and a kind-from id link to the seat's row", true);
+
+  /* a ref_card (access-dev's fixture) carries the other two forms: a
+     plain :kind ref and a typed address, both naming one ref_target,
+     and a second address naming a row that is not there. */
+  const refCreate = async (path, body) => {
+    const res = await fetch(BASE + path, {method: "POST",
+      headers: {"Content-Type": "application/json", ...h},
+      body: JSON.stringify(body)});
+    const doc = await res.json().catch(() => null);
+    if (res.status !== 201)
+      throw new Error("POST " + path + ": " + res.status + " " + JSON.stringify(doc));
+    return doc.self;
+  };
+  const refTarget = await refCreate("/api/ref_targets", {name: "Top shelf"});
+  const refTargetId = refTarget.split("/").pop();
+  const refLostId = crypto.randomUUID();
+  const refCard = await refCreate("/api/ref_cards",
+    {name: "Index card", target_id: refTargetId,
+     about: "ref_target:" + refTargetId, lost: "ref_target:" + refLostId});
+  const refSummary = (await get(refTarget)).summary;
+  const refDoc = await get(refCard);
+  ok("the card's envelope carries its plain ref's href and summary",
+     !!refSummary && refDoc.refs?.target_id?.href === refTarget &&
+     refDoc.refs?.target_id?.summary === refSummary);
+
+  /* every request the page starts from here on, by url */
+  const refWatch = `(() => {
+    window.__refGets = [];
+    window.__refFetch = window.fetch;
+    window.fetch = (...a) => {
+      window.__refGets.push(String(a[0]?.url || a[0]));
+      return window.__refFetch.apply(window, a);
+    };
+    return true; })()`;
+  const refUnwatch = `window.fetch = window.__refFetch; delete window.__refFetch; true`;
+  /* how many of them named `id`, and whether that count has stopped */
+  const refReads = async id => {
+    const n = `window.__refGets.filter(u => u.includes(${JSON.stringify(id)})).length`;
+    await sleep(1500);
+    const count = await evaljs(n);
+    await sleep(1500);
+    return {count, still: (await evaljs(n)) === count};
+  };
+  /* the value cell of one field on the row page */
+  const refCell = f => `document.querySelector('td.k[title="${f}"]')?.nextElementSibling`;
+  const refLinked = (f, href, text) => `(() => {
+    const a = ${refCell(f)}?.querySelector("a");
+    return !!a && a.getAttribute("href") === ${JSON.stringify("#" + href)} &&
+           a.textContent.trim() === ${JSON.stringify(text)}; })()`;
+
+  await evaljs(refWatch);
+  await evaljs(`location.hash = ${JSON.stringify(refCard)}; true`);
+  await waitFor(refLinked("target_id", refTarget, refSummary), "the plain kind ref's link");
+  ok("a plain kind ref reads as its target's summary and links to its row", true);
+  await waitFor(refLinked("about", refTarget, refSummary), "the typed address's link");
+  ok("a typed address reads as its target's summary and links to its row", true);
+  const refLost = await refReads(refLostId);
+  const refSeen = await evaljs(
+    `window.__refGets.filter(u => u.includes(${JSON.stringify(refTargetId)}))`);
+  console.log("  reads of the target: " + JSON.stringify(refSeen) +
+              ", of the missing row: " + refLost.count);
+  ok("both labels ride the card's envelope: the page starts no read of the target",
+     refSeen.length === 0);
+  ok("a ref to a row that is not there stays its bare token, unlinked",
+     await evaljs(`(() => { const c = ${refCell("lost")};
+       return !!c && !c.querySelector("a") &&
+              c.textContent.trim() === ${JSON.stringify("ref_target:" + refLostId)}; })()`));
+  ok("and the page asks for it and stops: no failing GET loop",
+     refLost.count >= 1 && refLost.count <= 2 && refLost.still);
+  await evaljs(refUnwatch);
+
   /* replay (docs/spec-guided-follow.md §4): the boot sealed one walk
      of a move, a ui frame with the restate dialog open, and a
      transition. Replay on its row page plays the export on this
@@ -1000,7 +1087,8 @@ async function accessStory() {
     {display: "Guest Viewer", actor_type: "agent", bind_token: tok}, admin);
   await post("/api/grants",
     {audience: guest,
-     scope: [{kind: "invitation", actions: []}, {kind: "seat", actions: []}],
+     scope: [{kind: "invitation", actions: []}, {kind: "seat", actions: []},
+             {kind: "ref_card", actions: []}],
      expires_at: new Date(Date.now() + 86400000).toISOString()}, admin);
   const note = "Restate the desk's charter in your own words.";
   const inv = await post("/api/invitations",
@@ -1015,6 +1103,40 @@ async function accessStory() {
   await waitFor(`!!window.signedinPrincipal`, "the session's identity on well-known");
   ok("the dev box is empty and the viewer is the session's member",
      await evaljs(`$("#who").value === "" && viewerId() === ${JSON.stringify(guest)}`));
+
+  /* the same card under the guest's grant, which admits ref_card and
+     not ref_target: the reader cannot see the target, so the envelope
+     names no ref, both values stay bare, and no read loops. */
+  console.log("· ref labelling: a target the reader cannot see");
+  const refUnseen = await evaljs(`(async () => {
+    const card = await api(${JSON.stringify(refCard)});
+    const target = await api(${JSON.stringify(refTarget)});
+    return {card: card.ok, refs: !!(card.body || {}).refs, target: target.ok}; })()`);
+  ok("the guest's grant shows the card and hides its target",
+     refUnseen.card && !refUnseen.target);
+  ok("so the card's envelope names no ref", !refUnseen.refs);
+  await evaljs(refWatch);
+  await evaljs(`location.hash = ${JSON.stringify(refCard)}; true`);
+  await waitFor(`!!${refCell("target_id")} && !!${refCell("about")}`,
+                "the card's row page under the guest's grant");
+  const refHidden = await refReads(refTargetId);
+  const refBare = await evaljs(`(() => {
+    const plain = ${refCell("target_id")}, about = ${refCell("about")};
+    const named = c => [...c.querySelectorAll("a")].filter(a =>
+      a.getAttribute("href") === ${JSON.stringify("#" + refTarget)}).length;
+    return {plain: plain.textContent.trim(), about: about.textContent.trim(),
+            links: named(plain) + named(about)}; })()`);
+  console.log("  the hidden target reads " + JSON.stringify(refBare) +
+              ", reads of it: " + refHidden.count);
+  ok("a plain ref to a hidden row keeps its token, not a name",
+     !refBare.plain.includes(refSummary) &&
+     refBare.plain.includes(refTargetId.slice(0, 8)));
+  ok("a typed address to a hidden row stays its bare text",
+     refBare.about === "ref_target:" + refTargetId);
+  ok("neither links to the row the reader cannot see", refBare.links === 0);
+  ok("and the page makes no failing GET loop",
+     refHidden.count <= 2 && refHidden.still);
+  await evaljs(refUnwatch);
 
   await evaljs(`location.hash = ${JSON.stringify("/api/invitations/" + inv)}; true`);
   await waitFor(`!!document.querySelector("[data-invite-open]")`,
