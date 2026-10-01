@@ -844,13 +844,16 @@
   kind, so a demo engine boots with FACTORY10=1 and this refuses one
   that does not. `seed/boot!` refuses an engine not named `demo-…` or
   one with an IdP, and a step the law refuses. Every refusal throws,
-  so the boot ends before the server listens."
+  so the boot ends before the server listens. WAYMARK_WALL_URL is the
+  clone's wall (§ 4): when it is set the seed's walled servers are
+  made at it, so the seeded held call is forwarded to the wall."
   [eng]
   (when-some [seed-name (some-> (System/getenv "WAYMARK10_SEED") str not-empty)]
     (when-not (= "1" (System/getenv "FACTORY10"))
       (throw (ex-info "WAYMARK10_SEED is set and FACTORY10 is not 1: the seed's tickets need the factory kinds, so a demo engine boots with FACTORY10=1."
                       {:seed seed-name})))
-    (seed/boot! eng seed-name)))
+    (seed/boot! eng seed-name
+                {:wall-url (some-> (System/getenv "WAYMARK_WALL_URL") str not-empty)})))
 
 (defn start!
   "Boot and serve. Returns the engine."
