@@ -614,6 +614,13 @@
                   {:label "Open at the floor"
                    :help "How many tickets were open when the engine last filed a floor ticket."}}
     [:maybe [:int {:min 0}]]]
+   [:floor_ticket {:optional true
+                   :examples ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]
+                   :x-display
+                   {:raw true
+                    :label "The floor ticket"
+                    :help "The ticket the engine filed the last time the open queue fell below the floor. While it is draft or open, no second floor ticket is filed, whatever its title says now."}}
+    [:maybe [:string {:max 64}]]]
    [:enrolled_at {:optional true
                   :examples ["2026-09-19T14:00:00Z"]
                   :x-display

@@ -376,8 +376,9 @@
             ;; sits beside it: the held calls' expiry (R-14, R-7)
             :mcp-discover :held-call-expiry :notifier
             ;; the invitations' resolution and expiry
-            ;; (spec-guided-follow § 3), and the walks' retention (§ 4)
-            :invitations :invitation-expiry :walk-retention
+            ;; (spec-guided-follow § 3), the walkthroughs' consumer
+            ;; (spec-walkthrough § 3), and the walks' retention (§ 4)
+            :invitations :invitation-expiry :walkthroughs :walk-retention
             ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
             ;; R-12.25; spec-transcript.md R-9)
             :seat-clock
@@ -430,7 +431,8 @@
             ;; R-14), so a selection that names :jobs still carries
             ;; both
             :mcp-discover :held-call-expiry :notifier
-            :invitations :invitation-expiry :walk-retention :seat-clock
+            :invitations :invitation-expiry :walkthroughs :walk-retention
+            :seat-clock
             :scheduled-actions
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))

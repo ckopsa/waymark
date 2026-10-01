@@ -577,6 +577,9 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       if (b.textContent !== "Cancel") b.remove();
     form.prepend(el("p", {class: "guided-note", "data-guided-note": ""},
       guided.note || `${guided.name} is filling this in`));
+    /* a note beside the fields it names, as an invitation's: a replayed
+       caption's anchor (docs/spec-agent-demo-walks.md §3) */
+    dlg.guidedMark = (names, text) => markInvited(form, names, text);
     dlg.guidedSet = fields => {
       for (const [k, v] of Object.entries(fields || {})) {
         const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
@@ -612,33 +615,38 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   document.body.append(dlg);
   dlg.addEventListener("close", () => dlg.remove());
   dlg.showModal();
-  if (invitation) {
-    /* every named field is lit, in the author's reading order; one this
-       person's own form does not show is passed over without a message */
-    const names = invitation.fields
-      || (invitation.field ? [invitation.field] : []);
-    const lit = names.map(f => {
-      const node = form.querySelector(`[name="${CSS.escape(f)}"]`);
-      return node && {node, spot: node.closest("label") || node.parentElement};
-    }).filter(l => l && l.spot);
-    const node = lit.length ? lit[0].node : null;
-    const spot = lit.length ? lit[0].spot : null;
-    const note = el("p", {class: "invite-note", "data-invite-note": ""},
-      invitation.note || "");
-    /* the note sits beside the first, once */
-    if (spot) spot.after(note);
-    else form.prepend(note);
-    lit.forEach((l, i) => {
-      l.spot.classList.add("invited");
-      /* the ordinal the note's "then" points at */
-      if (i > 0) l.spot.prepend(el("span",
-        {class: "invite-ordinal", "data-invite-ordinal": ""}, String(i + 1)));
-    });
-    requestAnimationFrame(() => {
-      (spot || note).scrollIntoView({behavior: "smooth", block: "center"});
-      if (node) node.focus({preventScroll: true});
-    });
-  }
+  if (invitation)
+    markInvited(form, invitation.fields
+      || (invitation.field ? [invitation.field] : []), invitation.note);
+}
+/* a note and the fields it points at: an invitation's note in the
+   invited person's dialog, and a replayed caption's beside its field
+   (docs/spec-agent-demo-walks.md §3). Every named field is lit, in the
+   author's reading order; one this person's own form does not show is
+   passed over without a message. → the note */
+function markInvited(form, names, text) {
+  const lit = names.map(f => {
+    const node = form.querySelector(`[name="${CSS.escape(f)}"]`);
+    return node && {node, spot: node.closest("label") || node.parentElement};
+  }).filter(l => l && l.spot);
+  const node = lit.length ? lit[0].node : null;
+  const spot = lit.length ? lit[0].spot : null;
+  const note = el("p", {class: "invite-note", "data-invite-note": ""},
+    text || "");
+  /* the note sits beside the first, once */
+  if (spot) spot.after(note);
+  else form.prepend(note);
+  lit.forEach((l, i) => {
+    l.spot.classList.add("invited");
+    /* the ordinal the note's "then" points at */
+    if (i > 0) l.spot.prepend(el("span",
+      {class: "invite-ordinal", "data-invite-ordinal": ""}, String(i + 1)));
+  });
+  requestAnimationFrame(() => {
+    (spot || note).scrollIntoView({behavior: "smooth", block: "center"});
+    if (node) node.focus({preventScroll: true});
+  });
+  return note;
 }
 
 /* ── the bulk report: N inputs → N verdicts, honestly partial ──────── */

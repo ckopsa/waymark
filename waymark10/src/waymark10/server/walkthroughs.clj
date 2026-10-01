@@ -17,13 +17,24 @@
 
   THE HANDLERS TOUCH NO OTHER ROW. They move `current`, `waiting_on`,
   `step_opened_at` and `outcomes` on this row. Opening and closing
-  invitations is the consumer's work (§ 3), and it is not here yet:
-  `step` and `finish` are the engine's doors, declared and guarded,
-  with no caller."
+  invitations is the consumer's work (§ 3).
+
+  ONE CONSUMER, AND ONE RULE. A durable log consumer (`:walkthroughs`)
+  hears every committed transition. An ending of the current step's
+  invitation, or the author's own transition matching the current
+  agent step, walks `step` or `stop` with the engine's hand. Any
+  walkthrough transition is RECONCILED, and reconcile is the only
+  place an invitation is opened or closed. It reads before it writes
+  and every write carries a key made from what was heard, so a
+  replayed transition changes nothing. The agent never opens a step
+  and never polls for one."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.invitations :as invitations]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -410,4 +421,271 @@
      :display {:label "Finished"}}}
    :deviations
    ["§ 1 lists a `walk` field, the recording. It arrives with `start`'s `walk` input and its guard (§ 7 item 7), so it is not declared before anything can write it."
-    "An agent step that names `fields` or `suggest` is refused at create. § 2 gives an agent step neither, and a stored `suggest` would be values nobody judged."]})
+    "An agent step that names `fields` or `suggest` is refused at create. § 2 gives an agent step neither, and a stored `suggest` would be values nobody judged."
+    "Reconcile does not seal a walk (§ 3). There is no `walk` field to read until § 7 item 7."]})
+
+;; ── the engine's own hand ───────────────────────────────────────────
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 walkthroughs: " parts))))
+
+(def ^:private sweep-cap
+  "The most rows one pass reads."
+  500)
+
+(defn- row-of
+  "One row of kind `k`, decoded; nil when it is gone."
+  [eng k id]
+  (let [st (:storage eng)]
+    (when-some [rdef (get (inv/resources eng) k)]
+      (some->> (store/with-tx st
+                 (fn [tx] (store/load-row st tx k (str id) {})))
+               (inv/decode-row rdef)))))
+
+(defn- rows-of [eng k where]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) k)]
+    (mapv #(inv/decode-row rdef %)
+          (store/with-tx st
+            (fn [tx]
+              (vec (store/query-rows st tx k where {:limit sweep-cap})))))))
+
+(defn- walk!
+  "Walk one of the engine's doors on a walkthrough, best effort: a door
+  that refuses (the row already left `running`) is a warning, never a
+  throw. `heard` names what the engine heard that made it walk, and it
+  makes the key: `step` is not idempotent, and the same transition
+  heard twice ends one step."
+  [eng id action body heard]
+  (try
+    (inv/invoke! eng kind (str id) action body
+                 {:principal engine-actor
+                  :idempotency-key (str "wt-" (name action) ":" id ":" heard)})
+    (catch Exception e
+      (warn! "walkthrough " id " could not be moved by " (name action)
+             " (" (ex-message e) ")")
+      nil)))
+
+(defn- older?
+  "Whether transition `t` was committed before the row's current step
+  opened. Such a transition ends nothing: it is the invitation's own
+  rule, read against `step_opened_at`."
+  [t row]
+  (let [at (invitations/instant-of (:at t))
+        opened (invitations/instant-of (get-in row [:data :step_opened_at]))]
+    (boolean (and at opened (.isBefore at opened)))))
+
+(defn- opening
+  "The current step's opening as a short token: the step's number and
+  `step_opened_at` to the nanosecond. A resume stamps a new
+  `step_opened_at`, so it is a new opening."
+  [row]
+  (let [at (invitations/instant-of (get-in row [:data :step_opened_at]))]
+    (str (get-in row [:data :current]) "@"
+         (when at
+           (Long/toString (+ (* (.getEpochSecond at) 1000000000)
+                             (.getNano at))
+                          36)))))
+
+(defn- sentence
+  "A refusal as one `stop_reason`: at most the 240 characters the field
+  holds, and `fallback` for a refusal that said nothing."
+  [s fallback]
+  (let [s (str/trim (str s))]
+    (cond
+      (str/blank? s) fallback
+      (> (count s) 240) (str (subs s 0 239) "…")
+      :else s)))
+
+;; ── reconcile ───────────────────────────────────────────────────────
+
+(defn- open-invitations
+  "The open invitations the engine made for this walkthrough."
+  [eng id]
+  (rows-of eng invitations/kind {:state :open :walkthrough (str id)}))
+
+(defn- invitation-of
+  "The invitation a person step becomes: the step's own fields,
+  unchanged, addressed to the walkthrough's subject and numbered."
+  [row n step]
+  (cond-> {:subject (get-in row [:data :subject])
+           :self (:self step)
+           :action (:action step)
+           :fields (vec (:fields step))
+           :note (:note step)
+           :walkthrough (str (:id row))
+           :step n
+           :of (count (get-in row [:data :steps]))}
+    (map? (:suggest step)) (assoc :suggest (:suggest step))))
+
+(defn- open-step!
+  "Create the current person step's invitation with the engine's hand.
+  The key is the walkthrough's id and the opening, so a replay opens no
+  second invitation and a resume opens a fresh one. The create meets
+  the invitation's own guards: when the row cannot take the door now,
+  or the row is gone, the walkthrough is stopped with the refusal's
+  sentence, and the author reads why."
+  [eng row n step]
+  (let [id (str (:id row))
+        heard (opening row)]
+    (try
+      (inv/create! eng invitations/kind (invitation-of row n step)
+                   {:principal engine-actor
+                    :idempotency-key (str "wt-open:" id ":" heard)})
+      (catch Exception e
+        (if (some? (ex-data e))
+          (walk! eng id :stop
+                 {:reason (sentence (inv/problem-reason e)
+                                    (str "Step " n " could not open."))}
+                 heard)
+          ;; no refusal of the engine's: a fault, and the next
+          ;; walkthrough transition reconciles again
+          (warn! "walkthrough " id " could not open step " n
+                 " (" (ex-message e) ")"))
+        nil))))
+
+(defn- withdraw!
+  "Take one open invitation back with the engine's hand, best effort."
+  [eng invitation-id]
+  (try
+    (inv/invoke! eng invitations/kind (str invitation-id) :withdraw {}
+                 {:principal engine-actor})
+    (catch Exception e
+      (warn! "invitation " invitation-id " could not be withdrawn ("
+             (ex-message e) ")")
+      nil)))
+
+(defn reconcile!
+  "Make the world match the walkthrough row. `running` and past the
+  last step: walk `finish`. `running` on a person step with no open
+  invitation of this walkthrough for that step: create one. Not
+  `running`: withdraw every open invitation of this walkthrough. It
+  reads the row as it is now, not as the transition left it."
+  [eng id]
+  (when-some [row (row-of eng kind id)]
+    (let [n (get-in row [:data :current])
+          step (current-step row)
+          open (open-invitations eng id)]
+      (if (= :running (:state row))
+        (cond
+          (and (integer? n) (> n (count (get-in row [:data :steps]))))
+          (walk! eng id :finish {} "end")
+
+          (and (= "person" (who-of step))
+               (not-any? #(= n (get-in % [:data :step])) open))
+          (open-step! eng row n step))
+        (doseq [i open]
+          (withdraw! eng (:id i))))))
+  nil)
+
+;; ── what the consumer hears ─────────────────────────────────────────
+
+(defn- invitation-ended!
+  "An ending of the current step's invitation: `answer` and `decline`
+  step the walkthrough, `expire` and the author's own `withdraw` stop
+  it. The engine's own withdraw stops nothing, and an invitation of a
+  step that is no longer current, or of an earlier opening of it, is
+  passed over."
+  [eng t]
+  (when-some [i (row-of eng invitations/kind (:resource-id t))]
+    (let [id (some-> (get-in i [:data :walkthrough]) str not-empty)
+          n (get-in i [:data :step])
+          row (some->> id (row-of eng kind))]
+      (when (and row
+                 (= :running (:state row))
+                 (= n (get-in row [:data :current]))
+                 (not (older? t row)))
+        (case (keyword (:action t))
+          :answer
+          (walk! eng id :step
+                 (cond-> {:outcome "answered"}
+                   (some? (get-in i [:data :answered_by]))
+                   (assoc :by (str (get-in i [:data :answered_by]))))
+                 (:id t))
+
+          :decline
+          (walk! eng id :step {:outcome "skipped" :by (str (:id t))} (:id t))
+
+          :expire
+          (walk! eng id :stop
+                 {:reason (str "Step " n " waited past its time.")}
+                 (:id t))
+
+          :withdraw
+          (when (= (some-> (get-in t [:actor :id]) str)
+                   (str (get-in row [:data :author])))
+            (walk! eng id :stop
+                   {:reason (str "The author took step " n " back.")}
+                   (:id t)))
+
+          nil)))))
+
+(defn- agent-step-ended!
+  "The author's own transition matching the current agent step's
+  (self, action), committed after the step opened: the step is done,
+  and `by` is the transition's log id."
+  [eng t rdef]
+  (let [actor (some-> (get-in t [:actor :id]) str not-empty)
+        system? (= "system" (some-> (get-in t [:actor :type]) name))]
+    (when (and actor (not system?))
+      (let [self (str "/api/" (:plural rdef) "/" (:resource-id t))
+            action (name (:action t))]
+        (doseq [row (rows-of eng kind {:state :running
+                                       :author actor
+                                       :waiting_on "agent"})
+                :let [step (current-step row)]
+                :when (and (= self (str/trim (str (:self step))))
+                           (= action (str/trim (str (:action step))))
+                           (not (older? t row)))]
+          (walk! eng (:id row) :step
+                 {:outcome "done" :by (str (:id t))}
+                 (:id t)))))))
+
+(def consumer-name
+  "The durable cursor's name in waymark10_cursors (consumer:walkthroughs)."
+  :walkthroughs)
+
+(defn handle-transition!
+  "One committed transition. A walkthrough's own is reconciled. An
+  invitation's ending moves the walkthrough it belongs to. Any other
+  ends the agent step it matches. Never throws: a parked cursor would
+  stop every later step from opening."
+  [eng t]
+  (try
+    (let [rs (inv/resources eng)
+          k (some-> (:kind t) keyword)
+          rdef (get rs k)]
+      (when (and rdef (contains? rs kind) (:resource-id t) (:action t))
+        (cond
+          (= kind k)
+          (reconcile! eng (:resource-id t))
+
+          (= invitations/kind k)
+          (do (invitation-ended! eng t)
+              (agent-step-ended! eng t rdef))
+
+          :else
+          (agent-step-ended! eng t rdef))))
+    (catch Exception e
+      (warn! "transition " (:id t) " could not be handled — " (ex-message e))
+      nil))
+  nil)
+
+(defn consumer-fn
+  "The consumer's function of one transition. Public because a test
+  drains it directly (`consumers/drain-consumer!`)."
+  [eng]
+  (fn [t] (handle-transition! eng t)))
+
+(defn start!
+  "Register the durable log consumer that opens each step. opts:
+  :dispatcher, :poll-ms, :from-origin?."
+  ([eng] (start! eng {}))
+  ([eng opts]
+   (consumers/register-consumer!
+    eng consumer-name (consumer-fn eng)
+    (select-keys opts [:dispatcher :poll-ms :from-origin?]))))
+
+(defn stop! [consumer]
+  (some-> consumer consumers/stop-consumer!))

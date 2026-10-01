@@ -210,9 +210,14 @@
 
 (defn max-open-of
   "The seat's `max_open_sittings`, or one for a row written before the
-  field existed. One is the seat as it always was."
+  field existed. One is the seat as it always was. An open breaker
+  (`breaker_open`, seat health 3) caps it to one and leaves the stated
+  number on the row."
   [seat-row]
-  (max 1 (long (or (get-in seat-row [:data :max_open_sittings]) 1))))
+  (let [stated (max 1 (long (or (get-in seat-row [:data :max_open_sittings]) 1)))]
+    (if (true? (get-in seat-row [:data :breaker_open]))
+      (min stated 1)
+      stated)))
 
 (defn- active-seats
   "Every active seat a wake can reach, as the three facts a match
