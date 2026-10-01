@@ -675,3 +675,158 @@
           ((:presence (walks/recorder eng person nil "planner"))
            {:event "move" :principal {:id "planner"} :self (errand-path a)})
           (is (= 1 (count (frames-of eng (:id w))))))))))
+
+;; ── captions (docs/spec-agent-demo-walks.md § 3) ────────────────────
+
+(def ^:private locker
+  "A row whose door takes one open argument and one secret one."
+  (r/resource
+   {:kind :locker
+    :plural "lockers"
+    :states [:open :done]
+    :initial :open
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:assign {:from #{:open} :to :open
+              :input [:map
+                      [:assignee {:x-display {:label "Assignee"}}
+                       [:string {:max 80}]]
+                      [:pin {:optional true :x-secret true
+                             :x-display {:label "Pin"}}
+                       [:maybe [:string {:max 12}]]]]
+              :handler (fn [row _inp _ctx] row)
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Assign" :order 1}}
+     :finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Finish" :order 2}}
+     :reopen {:from #{:done} :to :open
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Reopen" :order 3}}}}))
+
+(defn- with-captions
+  "An engine whose clock steps a millisecond on every read, so each
+  frame has its own `t`, and its presence registry → (f eng reg)."
+  [f]
+  (let [clock (atom (Instant/now))
+        eng (engine/engine
+             {:storage (memory/storage)
+              :resources [chore errand]
+              :now-fn (fn [] (swap! clock (fn [^Instant i] (.plusMillis i 1))))})
+        reg (presence/start! eng {:hb-ms 600000})]
+    (try (f eng reg)
+         (finally (presence/stop! reg)))))
+
+(deftest a-caption-is-recorded-before-its-step
+  (with-captions
+    (fn [eng reg]
+      (let [a (errand! eng "Dishes")
+            w (self-walk! eng)
+            rec (walks/self-recorder eng person nil)
+            c {:self (errand-path a) :action "rename" :field "title"
+               :text "Colton renames the errand before he finishes it."}]
+        (is (nil? (walks/caption-problem eng c)))
+        (is (= 1 (count (walks/caption! eng person nil c))))
+        (presence/report! reg person (errand-path a)
+                          {:dialog {:self (errand-path a) :action "rename"}
+                           :fields {:title "Towels"}}
+                          (:presence rec))
+        (walks/record-own! eng person nil (rename! eng a "Towels" person))
+        (let [[caption & step] (frames-in eng (:id w))]
+          (is (= "caption" (:type caption)))
+          (is (= c (select-keys (:body caption) [:self :action :field :text])))
+          (is (= "colton" (get-in caption [:body :principal :id])))
+          (is (= #{"move" "ui" "transition"} (set (map :type step))))
+          (is (every? #(< (long (:t caption)) (long (:t %))) step)
+              "the line is read, and then the act is seen"))
+        (testing "someone who records nothing writes none"
+          (is (empty? (walks/caption! eng other nil c)))
+          (is (= 4 (count (frames-of eng (:id w))))))
+        (testing "sealed, the walk takes no caption"
+          (seal! eng w)
+          (is (empty? (walks/caption! eng person nil c)))
+          (is (= 4 (count (frames-of eng (:id w))))))))))
+
+(deftest a-caption-on-a-row-the-recorder-cannot-see-is-not-written
+  (with-captions
+    (fn [eng _reg]
+      (let [seen (errand! eng "Dishes")
+            hidden (errand! eng "Laundry")
+            w (self-walk! eng)
+            sight (vis-of seen)
+            say! #(walks/caption! eng person sight {:self %1 :text %2})]
+        (is (empty? (say! (errand-path hidden) "Unseen")))
+        (is (empty? (say! "/api/errands" "The whole list"))
+            "sight of one row is not sight of the collection")
+        (is (empty? (say! "/api/-/events" "No kind at all")))
+        (is (empty? (frames-of eng (:id w))))
+        (is (= 1 (count (say! (errand-path seen) "Seen"))))
+        (is (= ["Seen"]
+               (mapv #(get-in % [:body :text]) (frames-in eng (:id w)))))))))
+
+(deftest a-caption-field-must-be-an-open-argument
+  (let [eng (engine/engine {:storage (memory/storage) :resources [locker]})
+        why (fn [c] (walks/caption-problem eng (merge {:text "A line."} c)))
+        row "/api/lockers/l-1"]
+    (is (nil? (why {:self row :action "assign" :field "assignee"})))
+    (is (nil? (why {:self "/api/lockers" :action "assign" :field "assignee"}))
+        "a create's form is on the collection, and the door is the same")
+    (is (str/includes? (str (why {:self row :action "assign" :field "colour"}))
+                       "is not an argument of `assign`"))
+    (is (str/includes? (str (why {:self row :action "assign" :field "pin"}))
+                       "secret argument"))
+    (is (some? (why {:self row :field "assignee"}))
+        "a field with no action names nothing")
+    (testing "the line itself: one line of at most 140 characters"
+      (is (nil? (why {:self row :text (apply str (repeat 140 "a"))})))
+      (is (some? (why {:self row :text (apply str (repeat 141 "a"))})))
+      (is (some? (why {:self row :text "two\nlines"})))
+      (is (some? (why {:self row :text 7})))
+      (is (nil? (why {:self row :text ""}))))))
+
+(deftest an-empty-caption-clears
+  (with-captions
+    (fn [eng _reg]
+      (let [a (errand! eng "Dishes")
+            w (self-walk! eng)
+            say! #(walks/caption! eng person nil {:self (errand-path a) :text %})]
+        (is (nil? (walks/caption-problem eng {:self (errand-path a) :text ""})))
+        (is (= 1 (count (say! "Colton looks at the errand."))))
+        (is (= 1 (count (say! ""))) "the empty line is a frame of its own")
+        (is (= ["Colton looks at the errand." ""]
+               (mapv #(get-in % [:body :text]) (frames-in eng (:id w)))))
+        (seal! eng w)
+        (is (= [["caption" "Colton looks at the errand."] ["caption" ""]]
+               (mapv (juxt :type :text) (:lines (export-of eng w nil))))
+            "and it crosses the export, so replay clears the line")))))
+
+(deftest a-caption-crosses-an-export-only-with-its-self
+  (with-captions
+    (fn [eng _reg]
+      (let [seen (errand! eng "Dishes")
+            hidden (errand! eng "Laundry")
+            w (self-walk! eng)
+            say! #(walks/caption! eng person nil %)]
+        (say! {:self (errand-path seen) :action "rename" :field "title"
+               :text "On the row the exporter sees."})
+        (say! {:self (errand-path hidden) :text "On the row it does not."})
+        (say! {:self "/api/errands" :text "On the whole list."})
+        (seal! eng w)
+        (let [whole (export-of eng w nil)
+              narrow (export-of eng w (vis-of seen))
+              captions (fn [e] (filterv #(= "caption" (:type %)) (:lines e)))
+              [line] (captions narrow)]
+          (is (= 3 (count (captions whole))))
+          (is (= ["On the row the exporter sees."] (mapv :text (captions narrow))))
+          (is (= {:self (errand-path seen) :action "rename" :field "title"}
+                 (select-keys line [:self :action :field])))
+          (is (re-matches #"[ap]1" (str (:who line)))
+              "the one who said it crosses as a cast alias")
+          (is (nil? (:principal line)))
+          (is (not (str/includes? (:text narrow) "it does not")))
+          (is (not (str/includes? (:text narrow) "whole list"))))))))

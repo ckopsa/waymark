@@ -859,6 +859,16 @@
                   :required ["kind"]
                   :additionalProperties false}})
 
+(def ^:private caption-arg
+  "The `caption` argument of the staged tools
+  (docs/spec-agent-demo-walks.md § 3)."
+  {:type "string"
+   :description (str "One line, at most 140 characters, about this step, "
+                     "for a self walk you are recording: it is written "
+                     "before the call's beats and stays until the next "
+                     "caption. An empty one clears it. With no recording "
+                     "walk it does nothing.")})
+
 (def ^:private query-tool
   {:name "waymark_query"
    :title "Query a collection"
@@ -896,6 +906,7 @@
                           :description "A declared sortable field; prefix with - for descending."}
                    :page_size {:type "integer" :minimum 1}
                    :page_number {:type "integer" :minimum 1}
+                   :caption caption-arg
                    :rows {:type "string" :enum ["none"]
                           :description "\"none\" returns totals and facets without the rows."}
                    :fields {:type "array" :items {:type "string"} :minItems 1
@@ -927,6 +938,7 @@
    :input-schema {:type "object"
                   :properties {:kind {:type "string"}
                                :id {:type "string"}
+                               :caption caption-arg
                                :depth {:type "string" :enum ["full" "summary"]
                                        :description "summary drops data and parts."}
                                :return {:type "string" :enum ["envelope" "summary"]
@@ -1016,6 +1028,11 @@
                                                 "all back. May only tighten the declaration.")}
                    :action {:type "string"
                             :description "An action name this row advertises."}
+                   :caption caption-arg
+                   :caption_field {:type "string"
+                                   :description (str "With caption: one argument of the "
+                                                     "action, not a secret one. The caption "
+                                                     "is shown beside that field.")}
                    :if_version {:type "string"
                                 :description (str "The version you read: the row's etag or "
                                                   "meta.version. An edit door then refuses "
@@ -1702,6 +1719,24 @@
   [st self]
   (beat! st self {:dialog nil}))
 
+(defn- stage-caption!
+  "A call's `caption` (docs/spec-agent-demo-walks.md § 3): one `caption`
+  frame in the caller's recording self walk, written before the call's
+  beats and anchored to the step's own `self`: the screen for a query,
+  the row for a get, the form for an invoke, and beside `caption_field`
+  when the call names one. → nil, or the refusal when the caption
+  cannot be shown (`walks/caption-problem`). With no recording self
+  walk the arguments are accepted and do nothing."
+  [eng session rdef self aname {:keys [caption caption_field]}]
+  (when (and (some? caption) (stage eng session rdef))
+    (let [c {:self self :action (some-> aname name) :field caption_field
+             :text caption}]
+      (if-some [why (walks/caption-problem eng c)]
+        (refusal (p/problem :invalid-arguments 422 "That caption cannot be shown"
+                            {:detail why}))
+        (do (walks/caption! eng (:principal session) (:visibility session) c)
+            nil)))))
+
 (defn- query [eng call session args]
   (let [{:keys [kind page_size page_number rows]} args
         return (return-of args)
@@ -1722,7 +1757,10 @@
                                      f
                                      (str/join "," (map str f))))))
         self (str "/api/" (:plural rdef))
-        resp (call (request session :get self {:query (query-string params)}))]
+        ;; captioned (§ 3): the line is written before the call's beats
+        refused (stage-caption! eng session rdef self nil args)
+        resp (when-not refused
+               (call (request session :get self {:query (query-string params)})))]
     ;; staged (§ 2): the gaze goes to the collection, and its screen
     ;; says what was asked. A query for totals alone shows nothing
     (when (and (<= 200 (:status resp 500) 299)
@@ -1733,19 +1771,24 @@
                               (map? (:filter args)) (assoc :filter (:filter args))
                               (:sort args) (assoc :sort (str (:sort args)))
                               (integer? page_number) (assoc :page page_number))})))
-    (answer resp return #(when (collection-doc? %) (collection-summary %)))))
+    (or refused
+        (answer resp return #(when (collection-doc? %) (collection-summary %))))))
 
 (defn- get-row [eng call session {:keys [kind id depth] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
         self (str "/api/" (:plural rdef) "/" id)
-        resp (call (request session :get self
-                            {:query (when depth (query-string {"depth" (str depth)}))}))]
+        ;; captioned (§ 3): the line is written before the call's beat
+        refused (stage-caption! eng session rdef self nil args)
+        resp (when-not refused
+               (call (request session :get self
+                              {:query (when depth (query-string {"depth" (str depth)}))})))]
     ;; staged (§ 2): the gaze goes to the row that was read
     (when (<= 200 (:status resp 500) 299)
       (when-some [st (stage eng session rdef)]
         (beat! st self nil)))
-    (answer resp return #(when (row-doc? %) (row-summary %)))))
+    (or refused
+        (answer resp return #(when (row-doc? %) (row-summary %))))))
 
 ;; the confirm gate — the one refusal this namespace issues in its own
 ;; voice, and the reason the spec calls MCP a safety surface rather
@@ -2166,8 +2209,19 @@
                             acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
-        aname (or (declared-action rdef action) (keyword action))]
+        aname (or (declared-action rdef action) (keyword action))
+        ;; captioned (§ 3): the line is written before the call's beats,
+        ;; on the row's form, or on the collection for a create and a
+        ;; bulk call. The two arguments go no further than here
+        refused (stage-caption! eng session rdef
+                                (str "/api/" (:plural rdef)
+                                     (when (and id (not (or ids items)))
+                                       (str "/" id)))
+                                aname args)
+        args (dissoc args :caption :caption_field)]
     (cond
+      refused refused
+
       ;; `at`: the call is stored for its time, not made (R-7.2)
       (some? at)
       (let [self (when (and id (not (or ids items)))

@@ -38,6 +38,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.events :as events]
+            [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.presence :as presence]
             [waymark10.server.store :as store]
@@ -65,7 +66,12 @@
   "A walk naming no retention keeps its frames a month."
   30)
 
-(def frame-types ["move" "ui" "transition" "invitation"])
+(def frame-types ["move" "ui" "transition" "invitation" "caption"])
+
+(def caption-max
+  "A caption is one line of at most this many characters
+  (docs/spec-agent-demo-walks.md § 3)."
+  140)
 
 (def never-recorded
   "Body keys dropped at any depth before a frame is written: a request's
@@ -236,7 +242,7 @@
                      :help "Milliseconds since the walk started. The default sort."}}
      [:int {:min 0}]]
     [:type {:x-display {:label "Type"
-                        :help "move, ui, transition or invitation: what the recorder's stream carried."}}
+                        :help "move, ui, transition, invitation or caption: what the recorder's stream carried, or the line its recorder said about a step."}}
      (into [:enum] frame-types)]
     [:body {:x-display {:raw true
                         :label "What the stream carried"
@@ -495,6 +501,69 @@
     (and (contains? (inv/resources eng) kind)
          (boolean (seq (recording-walks eng pid pid))))))
 
+;; ── captions (docs/spec-agent-demo-walks.md § 3) ────────────────────
+
+(defn caption-problem
+  "Why the caption `c`, {:self :action :field :text}, cannot be shown;
+  nil when it can. The text is one line of at most `caption-max`
+  characters, and the empty one clears. `field` names one argument of
+  `action` on `self`'s kind, and the invitation's own rule judges it
+  (`invitations/fields-problem`): the action has that argument, and the
+  argument is not secret."
+  [eng {:keys [self action field text]}]
+  (cond
+    (not (string? text))
+    "`caption` is one line of text."
+
+    (re-find #"[\r\n]" text)
+    "`caption` is one line: it holds no line break."
+
+    (> (count text) (long caption-max))
+    (str "`caption` is at most " caption-max " characters, and this one has "
+         (count text) ".")
+
+    (nil? field) nil
+
+    (str/blank? (str (some-> action name)))
+    "`caption_field` names an argument of the invoked action, and this call invokes none."
+
+    :else
+    (let [[_ plural] (re-find #"^/api/([^/?#]+)" (str self))
+          resources (inv/resources eng)]
+      (some->> (invitations/fields-problem
+                ;; the rule reads the door off a row's path, and which row
+                ;; it is does not matter to it: a create has none yet
+                {:self (str "/api/" plural "/-") :action (name action) :field field}
+                {:rdef-of (fn [p]
+                            (some (fn [[_ rdef]] (when (= p (:plural rdef)) rdef))
+                                  resources))})
+               (str "`caption_field`: ")))))
+
+(defn caption!
+  "One `caption` frame in every self walk `principal` is recording,
+  under `sight`, the request's own visibility. The body is {principal,
+  self, action, field, text}, with `action` and `field` only when the
+  caption names them. `record-frame!` writes it only when the recorder
+  can see `self`, and an empty `text` is the frame that clears the
+  line. → the frames written. It never throws."
+  [eng principal sight {:keys [self action field text]}]
+  (try
+    (let [pid (str (:id principal))
+          body (cond-> {:principal {:id pid :type (some-> (:type principal) name)}
+                        :self (str self)}
+                 (some? action) (assoc :action (name action))
+                 (some? field) (assoc :field (if (keyword? field) (name field) (str field)))
+                 true (assoc :text (str text)))]
+      (if (and (contains? (inv/resources eng) kind)
+               (not= (:id t/anonymous) (:id principal)))
+        (into []
+              (keep #(record-frame! eng % sight {:type "caption" :body body}))
+              (recording-walks eng pid pid))
+        []))
+    (catch Exception e
+      (warn! "a caption was not recorded — " (ex-message e))
+      [])))
+
 ;; ── the export (waymark-walk/1) ─────────────────────────────────────
 
 (def export-format "waymark-walk/1")
@@ -544,7 +613,7 @@
   [principal id, the actor type the frame recorded]."
   [type body]
   (let [p (case type
-            ("move" "ui") (:principal body)
+            ("move" "ui" "caption") (:principal body)
             "transition" (:actor body)
             "invitation" (:author body)
             nil)]
@@ -620,7 +689,8 @@
   and a ui frame with every part redacted crosses as a plain move;
   `transition` events/visible-transition; `invitation` :row? on the
   invitation its pinned body names by `id` (`invitation-frame`), and
-  its `suggest` keeps the keys the exporter's :arg? admits."
+  its `suggest` keeps the keys the exporter's :arg? admits; `caption`
+  presence's self rule, so the line crosses only with its `self`."
   [{:keys [vis visible? redact-ui suggest]} type body]
   (let [self (path-of (:self body))]
     (case type
@@ -646,6 +716,11 @@
                                         ::subject (some-> (:subject body) str))
                            self (assoc :self self)
                            (seq suggested) (assoc :suggest suggested)))))
+      "caption" (when (and self (visible? self))
+                  (cond-> {:type "caption" :self self}
+                    (:action body) (assoc :action (:action body))
+                    (:field body) (assoc :field (:field body))
+                    true (assoc :text (str (:text body)))))
       nil)))
 
 (defn- export-line [alias part]
