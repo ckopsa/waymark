@@ -416,8 +416,10 @@
 
 (defn- check-edit
   "Edit declarations validate hard; edit-shaped actions that never
-  declared one get the heuristic warning, and required prose without a
-  draft gets the knowledge-floor warning (design §10)."
+  declared one get the heuristic warning, a :prefill that leaves out a
+  property of its input warns unless it says :prefill-partial, and
+  required prose without a draft gets the knowledge-floor warning
+  (design §10)."
   [r]
   (let [dform (:schema r)
         dkeys (data-keys r)]
@@ -460,8 +462,22 @@
                                        (let [{:keys [optional properties]} (entries f)]
                                          (and (not optional)
                                               (prose-widget? properties))))
-                                     ikeys))]
+                                     ikeys))
+                     ;; a hand-written prefill drifts from its input: a
+                     ;; property it leaves out is one a patch restate
+                     ;; writes at its default (repo_policy lost
+                     ;; groom_floor that way). :patch is the restate's
+                     ;; own switch, never a field to prefill
+                     prefill (get-in a [:edit :prefill])
+                     left-out (when (and prefill
+                                         (not (get-in a [:edit :prefill-partial])))
+                                (seq (remove (conj (set prefill) :patch)
+                                             ikeys)))]
                  (cond-> []
+                   left-out
+                   (conj (str "[edit] action " (name (:name a)) "'s prefill leaves "
+                              "out " (vec left-out) "; a patch restate writes "
+                              "their defaults"))
                    mirrored
                    (conj (str "[edit] action " (name (:name a)) " is edit-shaped — "
                               "input field(s) " (vec mirrored) " mirror data fields "
