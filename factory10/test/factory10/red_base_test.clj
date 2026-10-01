@@ -386,6 +386,42 @@
       (is (zero? (floor-pass! eng)))
       (is (= 1 (count (floor-tickets eng)))))))
 
+;; the floor ticket is found by the id its policy keeps (ticket ba20278d)
+
+(defn- floor-past-window! [eng]
+  (floor-noted! eng (.minusSeconds (Instant/now) 7200)))
+
+(deftest a-renamed-floor-ticket-is-still-found
+  (let [eng (floor-world 5 3)]
+    (is (= 1 (floor-pass! eng)))
+    (let [id (str (:id (first (floor-tickets eng))))
+          before (count (tickets eng))]
+      (is (= id (get-in (policy-of eng) [:data :floor_ticket]))
+          "the policy keeps the id of the ticket it filed")
+      (bench/mark-row! eng :ticket id {:title "Batch seven, by hand"} #{})
+      (is (empty? (floor-tickets eng)) "no title names the floor now")
+      (testing "while it is draft, a pass past the window files none"
+        (floor-past-window! eng)
+        (is (zero? (floor-pass! eng)))
+        (is (= before (count (tickets eng)))))
+      (testing "and none while it is open"
+        (inv/invoke! eng :ticket id :groom {} {:principal a-person})
+        (floor-past-window! eng)
+        (is (zero? (floor-pass! eng)))
+        (is (= before (count (tickets eng))))))))
+
+(deftest a-floor-ticket-filed-before-the-id-was-kept-is-found-by-title
+  (let [eng (floor-world 4 3)]
+    (is (= 1 (floor-pass! eng)))
+    (let [id (str (:id (first (floor-tickets eng))))]
+      (bench/mark-row! eng :repo_policy (str (:id (policy-of eng)))
+                       {:floor_ticket nil} #{})
+      (floor-past-window! eng)
+      (is (zero? (floor-pass! eng)))
+      (is (= 1 (count (floor-tickets eng))))
+      (is (= id (get-in (policy-of eng) [:data :floor_ticket]))
+          "and the policy keeps its id from then on"))))
+
 (deftest the-floor-files-none-inside-its-settle-window
   (let [eng (floor-world 4 3)]
     (floor-noted! eng (Instant/now))
