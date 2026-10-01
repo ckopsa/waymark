@@ -666,6 +666,15 @@
       (warn! "a write was not recorded in its own walk — " (ex-message e))))
   result)
 
+(defn recording-own?
+  "Is `principal` recording a self walk now? The connector stages its
+  calls while, and only while, this is true
+  (docs/spec-agent-demo-walks.md § 2)."
+  [eng principal]
+  (let [pid (str (:id principal))]
+    (and (contains? (inv/resources eng) kind)
+         (boolean (seq (recording-walks eng pid pid))))))
+
 ;; ── the export (waymark-walk/1) ─────────────────────────────────────
 
 (def export-format "waymark-walk/1")

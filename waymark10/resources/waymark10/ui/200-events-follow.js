@@ -678,6 +678,11 @@ demoBoot().catch(() => { /* engine not started, or restarting */ });
 const REPLAY_SPEEDS = [1, 2, 4];
 /* a long silence in the recording is cut to this many ms, before speed */
 const REPLAY_MAX_GAP = 3000;
+/* the beats of one connector call are recorded milliseconds apart
+   (docs/spec-agent-demo-walks.md §2): two frames closer than
+   REPLAY_BURST_MS are played REPLAY_BURST_GAP apart, before speed. No
+   browser makes such a burst, since a form's reports are debounced. */
+const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
 function parseWalk(text) {
   let docs;
   try {
@@ -825,8 +830,9 @@ function replaySchedule() {
   clearTimeout(r.timer);
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
   const prev = r.at ? (r.frames[r.at - 1].t || 0) : 0;
+  const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);
   const gap = Math.min(REPLAY_MAX_GAP,
-                       Math.max(0, (r.frames[r.at].t || 0) - prev));
+                       r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);
   r.timer = setTimeout(replayStep, gap / r.speed);
 }
 function replayStep() {

@@ -629,3 +629,120 @@
     (testing "a second pass writes nothing"
       (is (= 0 (seats/backfill-health! eng)))
       (is (= ["idle" ["rewalk"]] (health third-walk))))))
+
+;; ── seat health 2: the seat's own rollup (ticket 64a835b4) ──────────
+
+(def ^:private ten-outcomes
+  "Ten sittings, OLDEST first: six submitted, two cut short, one refused
+  out and one that never sat."
+  ["submitted" "submitted" "cut_short" "submitted" "never_sat"
+   "submitted" "submitted" "refused_out" "submitted" "cut_short"])
+
+(deftest a-seats-health-is-counted-over-its-sittings
+  (let [at (java.time.Instant/parse "2026-10-01T12:00:00Z")
+        sat (fn [hours-ago outcome]
+              (let [started (.minusSeconds at (* 3600 (long hours-ago)))]
+                {:outcome outcome
+                 :cost_usd 0.5M
+                 :flags (if (= "refused_out" outcome)
+                          ["refusals_high" "refused:conflict"
+                           "refused_by:not-parked"]
+                          [])
+                 :started_at started
+                 :ended_at (.plusSeconds started 60)}))
+        ;; newest first, as the rollup is handed them
+        ten (vec (map-indexed #(sat (inc %1) %2) (reverse ten-outcomes)))
+        health (seats/seat-health ten 3 at)]
+    (testing "six submits of ten is a rate of 0.6, and each outcome is counted"
+      (is (= 10 (:sittings health)))
+      (is (= {:submitted 6 :stalled 0 :never_sat 1 :refused_out 1
+              :cut_short 2 :idle 0}
+             (:outcomes health)))
+      (is (== 0.6 (:submit_rate health))))
+
+    (testing "the cost is the sum, and it is divided by the submits and the merges"
+      (is (== 5 (:cost_usd health)))
+      (is (== 0.833333M (:cost_per_submit health)))
+      (is (= 3 (:merged_prs health)))
+      (is (== 1.666667M (:cost_per_merge health))))
+
+    (testing "a count for each flag, and a refusal's type is no key"
+      (is (= {:refusals_high 1 :refused 1
+              (keyword "refused_by:not-parked") 1}
+             (:flags health))))
+
+    (testing "the newest sitting and the newest submit are named"
+      (is (= "cut_short" (:last_outcome health)))
+      (is (= (str (:ended_at (second ten))) (:last_submit_at health)))
+      (is (= (str at) (:computed_at health))))
+
+    (testing "a seat with no judged sitting divides by nothing"
+      (let [none (seats/seat-health [] 0 at)]
+        (is (= 0 (:sittings none)))
+        (is (nil? (:submit_rate none)))
+        (is (nil? (:cost_per_submit none)))
+        (is (nil? (:cost_per_merge none)))
+        (is (nil? (:last_outcome none)))))))
+
+(deftest a-close-rolls-the-seats-health-and-the-window-slides
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        now (java.time.Instant/now)
+        born! (fn [minutes-ago outcome]
+                (let [started (.minusSeconds now (* 60 (long minutes-ago)))]
+                  (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (inv/insert-quiet!
+                       eng tx :sitting
+                       {:seat seat-id
+                        :model (str (:id model))
+                        :member (seats/sitter-id seat)
+                        :mode seats/default-mode
+                        :started_at started
+                        :ended_at (.plusSeconds started 60)
+                        :input_tokens 0 :output_tokens 0
+                        :cache_read_tokens 0
+                        :cache_write_tokens 0
+                        :turns 12 :transitions 0 :refusals 0
+                        :served {:waymark_sit {:calls 1 :bytes 4000}}
+                        :closed_by "door"
+                        :cost_usd 0.5M
+                        :outcome outcome
+                        :flags []}
+                       {:principal seats/seats-actor
+                        :state :closed})))))
+        _ (doall (map-indexed #(born! (- 200 (* 10 (long %1))) %2) ten-outcomes))
+        health #(:health (:data (row-of eng :seat seat-id)))
+        rolled (seats/roll-health! eng seat-id)]
+    (testing "ten sittings, six of them submitted, are a rate of 0.6"
+      (is (= 10 (:sittings rolled)))
+      (is (== 0.6 (bigdec (:submit_rate rolled))))
+      (is (= [6 0 1 1 2 0]
+             (mapv #(get-in rolled [:outcomes (keyword %)]) seats/outcomes)))
+      (is (== 5 (bigdec (:cost_usd rolled))))
+      (is (= 0 (:merged_prs rolled)) "this engine serves no change kind")
+      (is (= "cut_short" (:last_outcome rolled))))
+
+    (testing "the seat row carries what was counted"
+      (is (= 10 (:sittings (health))))
+      (is (== 0.6 (bigdec (:submit_rate (health))))))
+
+    (testing "the eleventh close slides the window: the oldest submit leaves it"
+      (let [sid (initialize! h)]
+        (sit! h sid)
+        (is (= 200 (:status (report! h counts))))
+        (let [slid (health)]
+          (is (= 10 (:sittings slid)))
+          (is (= 5 (get-in slid [:outcomes :submitted])))
+          (is (= 3 (get-in slid [:outcomes :cut_short])))
+          (is (== 0.5 (bigdec (:submit_rate slid))))
+          (is (= "cut_short" (:last_outcome slid))))))
+
+    (testing "one read of the seat collection answers the seat's health"
+      (let [resp (h {:request-method :get :uri "/api/seats"
+                     :headers (bearer {:sub "colton" :name "Colton Kopsa"})})
+            item (first (get-in (json resp) [:data :items]))]
+        (is (= 200 (:status resp)))
+        (is (= 10 (get-in item [:fields :health :sittings])))))))
