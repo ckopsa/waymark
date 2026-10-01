@@ -129,7 +129,7 @@ work.
 | `rows_per_firing` | int, default 20 | the most rows one firing moves to a leaf. The walk's cap. |
 | `stale` | list of scope entries | written by the sweep. A person never writes it. |
 | `halt` | map, optional | `{reason, since, detail}`, written by the router at a wall and cleared when it lifts. R-7.7. |
-| `fire_keys` | list, secret, optional | one entry for each unspent key of a firing: the hash of the key, and the moment it stops answering. No door writes it. The engine never answers it. R-12.37. |
+| `fire_keys` | list, secret, optional | one entry for each unspent key of a firing: the hash of the key, and the moment it stops answering. The first sit removes the entry and keeps the hash on the sitting it opened, so the same session can sit again in that sitting. No door writes it. The engine never answers it. R-12.37. |
 | `schedule` | schedule ref | the means by which a sitting is created for this seat. Engine-written. R-12.0. |
 | `merged_into` | seat ref | the seat this one merged into |
 | `wake_on` | list of entries `{kind, actions, filter, settle_seconds}`, optional | the transitions that fire the seat, each entry in the shape of a scope entry. A walk seat with no `wake_on` behaves as one computed entry: the walk's kind, with the action `create`. `settle_seconds`, a whole number from 1 to 604800, optional, makes an entry fire on the trailing edge. R-12.22. |
@@ -398,7 +398,7 @@ seat's own sitter writes here."
 | `price_cache_read_per_mtok` | decimal | dollars per million cache-read tokens |
 | `price_cache_write_per_mtok` | decimal | dollars per million cache-write tokens |
 | `notes` | string | free prose |
-| `sitter_key` | string, secret, optional | the chair key a firing sends to `waymark_sit`. Two doors write it. The engine never answers it. R-12.34. |
+| `sitter_key` | string, secret, optional | the chair key a session sends to `waymark_sit` when it has no key of a firing (R-12.37). Two doors write it. The engine never answers it. R-12.34. |
 | `fire_url` | string, optional | the fire endpoint of this model's Routine. A person writes it. R-12.34. |
 | `fire_token` | string, secret, optional | the token a fire carries. A person writes it. The engine never answers it. R-12.34. |
 
@@ -1641,7 +1641,9 @@ Key: {the key of this firing}
 
 One `waymark_sit` spends the key. The call must carry the key and the
 seat, as R-12.36 says. The engine takes the hash off the seat row at
-that sit. A second sit with the same key is refused. The refusal is
+that sit. A second sit with the same key is refused, with the one
+exception this rule gives below: the same harness session sits again in
+the sitting that key opened, while that sitting is open. The refusal is
 the uniform sentence of R-12.14: no seat answers this key. An unknown
 key, an expired key and a spent key all read the same.
 
