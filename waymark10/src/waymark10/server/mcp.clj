@@ -1673,16 +1673,29 @@
   self the session could not GET makes none: the gate `presence-report`
   keeps for a browser on a private kind, kept for every kind here. It
   never throws: a walk that could not take a frame does not fail the
-  call it shows."
-  [{:keys [reg principal tap visible?]} self ui]
+  call it shows. `since`, {:from self}, is where the gaze was before
+  the call (`gaze-before`), for a call whose own read moves it."
+  ([st self ui] (beat! st self ui nil))
+  ([{:keys [reg principal tap visible?]} self ui since]
   (try
     (when (visible? self)
-      (presence/report! reg principal self ui tap))
+      (presence/report! reg principal self ui tap since))
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 mcp staging: a beat was not reported -"
                  (ex-message e)))))
-  nil)
+  nil))
+
+(defn- gaze-before
+  "Where the stage's principal is looking now, as {:from self}, read
+  before a call whose route marks the gaze itself: a grant-scoped GET
+  is its caller's gaze already (`presence/read!`), and that door has no
+  tap, so the beat after it would find the gaze on the row and the walk
+  would take no `move`. It never throws."
+  [{:keys [reg principal]}]
+  (try
+    {:from (presence/gaze reg (:id principal))}
+    (catch Exception _ nil)))
 
 (defn- typed-steps
   "The `fields` of each typing beat, in order: each adds one value, and
@@ -1698,7 +1711,8 @@
   "An invoke's beats before its write: the gaze moves to `self`, the
   form opens with no value, and each argument is typed in the order of
   the action's input schema (`presence/typed-keys`, which leaves a
-  secret one out). When the last beat already shows this form with
+  secret one out). A create's `self` is the collection, and its form is
+  the kind's create. When the last beat already shows this form with
   these values (a rehearsal typed them, or a refused call left them),
   nothing is typed again. Each typing beat names in `focus` the
   argument it adds (the last of them, when it adds several), so a
@@ -1727,6 +1741,28 @@
   typed, as it would on a person's screen."
   [st self]
   (beat! st self {:dialog nil}))
+
+(defn- lift-caption
+  "An invoke's `caption` and `caption_field` may also ride inside `input`
+  (docs/spec-agent-demo-walks.md § 3): a client holding a tool list from
+  before the two arguments shipped cannot send them beside it. → `args`
+  with each one moved out of `input`; the one beside `input` wins when
+  the call carries both. A key the door's own input declares is the
+  door's argument and stays where it is."
+  [rdef aname {:keys [input] :as args}]
+  (let [form (or (get-in rdef [:actions aname :input]) (:schema rdef))
+        declared (when (vector? form)
+                   (into #{} (comp (filter vector?) (map first) (filter keyword?))
+                         (rest form)))
+        lifted (when (map? input)
+                 (into [] (comp (filter #(#{"caption" "caption_field"} (name %)))
+                                (remove #(contains? declared (keyword (name %)))))
+                       (keys input)))]
+    (reduce (fn [a k]
+              (let [top (keyword (name k))]
+                (cond-> (update a :input dissoc k)
+                  (not (contains? a top)) (assoc top (get input k)))))
+            args lifted)))
 
 (defn- stage-caption!
   "A call's `caption` (docs/spec-agent-demo-walks.md § 3): one `caption`
@@ -1882,13 +1918,16 @@
           self (str "/api/" (:plural rdef) "/" id)
           ;; captioned (§ 3): the line is written before the call's beat
           refused (stage-caption! eng session rdef self nil args)
+          ;; staged (§ 2): the stage is set before the read, which moves
+          ;; a scoped caller's gaze with no frame (`gaze-before`)
+          st (when-not refused (stage eng session rdef))
+          since (some-> st gaze-before)
           resp (when-not refused
                  (call (request session :get self
                                 {:query (when depth (query-string {"depth" (str depth)}))})))]
-      ;; staged (§ 2): the gaze goes to the row that was read
-      (when (<= 200 (:status resp 500) 299)
-        (when-some [st (stage eng session rdef)]
-          (beat! st self nil)))
+      ;; the gaze goes to the row that was read
+      (when (and st (<= 200 (:status resp 500) 299))
+        (beat! st self nil since))
       (or refused
           (answer resp return #(when (row-doc? %) (row-summary %)))))))
 
@@ -2307,11 +2346,15 @@
   refusal (404 for a concealed door, 409 with the guard's own sentence
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
-  [eng call session {:keys [kind id ids items action input dry_run acknowledge
+  [eng call session {:keys [kind id ids items action dry_run acknowledge
                             acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))
+        ;; a caption inside `input` is the call's own (§ 3): it leaves
+        ;; `input` here, before the form is typed and the door judges it
+        args (lift-caption rdef aname args)
+        input (:input args)
         ;; captioned (§ 3): the line is written before the call's beats,
         ;; on the row's form, or on the collection for a create and a
         ;; bulk call. The two arguments go no further than here
@@ -2326,8 +2369,8 @@
 
       ;; `at`: the call is stored for its time, not made (R-7.2)
       (some? at)
-      (let [self (when (and id (not (or ids items)))
-                   (str "/api/" (:plural rdef) "/" id))
+      (let [self (when-not (or ids items)
+                   (str "/api/" (:plural rdef) (when id (str "/" id))))
             st (when self (stage eng session rdef))
             _ (when st (stage-dialog! eng st self aname input))
             res (schedule-call eng call session
@@ -2359,12 +2402,17 @@
         (bulk-rows call session rdef aname args))
 
       (nil? id)
-      (do
-        ;; staged (§ 2): the gaze goes to the collection. The form is not
-        ;; shown yet: presence's clean-ui keeps a dialog on a row self only
-        (when-some [st (stage eng session rdef)]
-          (beat! st (str "/api/" (:plural rdef)) nil))
-        (create-row call session rdef aname input dry_run acknowledge_warnings return))
+      (let [self (str "/api/" (:plural rdef))
+            st (stage eng session rdef)
+            ;; staged (§ 2): the form opens on the collection and is
+            ;; typed before the write, so a refusal leaves it open
+            _ (when st (stage-dialog! eng st self aname input))
+            res (create-row call session rdef aname input dry_run
+                            acknowledge_warnings return)]
+        ;; staged (§ 2): the create landed, so the form closes
+        (when (and st (not dry_run) (not (:isError res)))
+          (stage-close! st self))
+        res)
 
       :else
       (let [self (str "/api/" (:plural rdef) "/" id)
