@@ -1451,6 +1451,26 @@
     (is (nil? (get-in (the-change engine) [:data :conflicts]))
         "a bench that cannot name the paths costs the paths, never the move")))
 
+(deftest the-rigs-conflict-outlives-the-forges-weaker-word
+  ;; ticket bf8ba0a6: #706's merge was refused as not mergeable and the
+  ;; merge pass wrote `conflicted`, with no landing record and every
+  ;; check green. The next poll read `blocked` over it at the same head,
+  ;; so the failing pass never saw the conflict and the change sat
+  ;; submitted and parked
+  (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
+        id (str (:id (the-change engine)))
+        _ (is (= "blocked" (get-in (the-change engine) [:data :mergeable])))
+        _ (bench/mark-row! engine :change id {:mergeable "conflicted"} #{})
+        census (pass! r)
+        row (the-change engine)]
+    (is (= "conflicted" (get-in row [:data :mergeable]))
+        "the forge's `blocked` at the same head does not replace the conflict")
+    (is (= :failing (:state row))
+        "and the change goes to its seat in that one pass")
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+    (is (= the-conflicts (get-in row [:data :conflicts])))
+    (is (= 1 (:failing census)))))
+
 (deftest a-behind-change-is-not-failing
   (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
         census (pass! r)]
