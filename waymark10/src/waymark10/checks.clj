@@ -1735,7 +1735,7 @@
 
   `:guards` counts the guards that refuse IN WORDS: a hidden guard
   and an acknowledgable warning are not fences a caller can walk into
-  and read. `:dead-ends` are the unwaived ones — the warning list.
+  and read. `:dead-ends` are the unwaived ones — the error list.
 
   A waiver is STALE when it matches at least one guard site and every
   site it matches now carries :remedies or :open. That is R-2's
@@ -1829,6 +1829,16 @@
                 :when problem]
             (str "[remedies] guard " (:name guard) " on " (name kind) "."
                  (name door) ": remedy " problem)))))
+
+(defn remedy-error-count
+  "How many of the census's findings fail the gate: every unwaived
+  dead end, every stale waiver, and every remedy token that names no
+  door (`tokens`, remedy-token-problems' answer). A dead end counts
+  because the waiver list holds the old debt and only shrinks: a NEW
+  guard that refuses with no way out is answered with :remedies or
+  :open, never passed with a warning."
+  [c tokens]
+  (+ (count (:dead-ends c)) (count (:stale c)) (count tokens)))
 
 ;; ── the battery ─────────────────────────────────────────────────────
 

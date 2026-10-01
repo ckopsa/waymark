@@ -200,7 +200,8 @@
 
 (g/defguard the-target-is-an-engine-door
   {:vars [:problem]
-   :explain "A scheduled action names one door of this engine: {problem}"}
+   :explain "A scheduled action names one door of this engine: {problem}"
+   :open "The way out is in this same form: `target` is a kind and an action, with the row's id unless the action creates one, or it is one power tool. Each kind's doors are its published schema, one GET away."}
   [_row inp _ctx]
   (let [{:keys [kind action tool]} (:target inp)
         blank? #(str/blank? (str %))]
@@ -222,7 +223,8 @@
 
 (g/defguard the-input-fits
   {:vars [:bytes :limit]
-   :explain "The stored input is {bytes} bytes, and a scheduled action keeps at most {limit}. Schedule a smaller call."}
+   :explain "The stored input is {bytes} bytes, and a scheduled action keeps at most {limit}. Schedule a smaller call."
+   :open "The way out is in this same form: a smaller input. The limit is fixed in code, and no door raises it."}
   [_row inp _ctx]
   (let [n (alength (.getBytes ^String (pr-str (:input inp)) StandardCharsets/UTF_8))]
     (if (< (long input-cap-bytes) n)
@@ -232,7 +234,8 @@
 (g/defguard the-time-names-one-instant
   {:reads [:principal :storage]
    :vars [:problem]
-   :explain "A scheduled action runs at one instant: {problem}"}
+   :explain "A scheduled action runs at one instant: {problem}"
+   :open "The way out is in this same form: write run_at so it names one instant, as the sentence says. No door reads a time for you."}
   [row inp ctx]
   (if-some [problem (when (some? (:run_at inp))
                       (:problem (time-of row inp ctx)))]
@@ -242,7 +245,8 @@
 (g/defguard the-time-is-in-range
   {:reads [:now :principal :storage]
    :vars [:problem]
-   :explain "A scheduled action runs at least one minute and at most 366 days ahead: {problem}"}
+   :explain "A scheduled action runs at least one minute and at most 366 days ahead: {problem}"
+   :open "The way out is in this same form: a run_at between one minute and 366 days from now. The window is fixed in code, and no door widens it."}
   [row inp ctx]
   (let [^Instant at (when (some? (:run_at inp))
                       (:instant (time-of row inp ctx)))
@@ -262,7 +266,8 @@
 (g/defguard the-scheduler-has-room
   {:reads [:principal :storage]
    :vars [:limit]
-   :explain "One scheduler holds at most {limit} scheduled actions that have not run, and you hold that many. Cancel one, or wait for one to run."}
+   :explain "One scheduler holds at most {limit} scheduled actions that have not run, and you hold that many. Cancel one, or wait for one to run."
+   :open "Your own hand or time clears it: cancel one of your scheduled actions on its own row, or wait for one to run. The limit is fixed in code, and no door raises it."}
   [_row _inp ctx]
   (let [who (some-> (get-in ctx [:principal :id]) str not-empty)
         rows (:find ctx)
@@ -533,7 +538,8 @@
 (g/defguard the-door-would-take-it
   {:reads [:principal :grant :storage]
    :vars [:problem]
-   :explain "A scheduled action is checked against its door when it is scheduled: {problem}"}
+   :explain "A scheduled action is checked against its door when it is scheduled: {problem}"
+   :open "The refusal is the target door's own, rehearsed now: what clears it is what that door's sentence names, and no door of this kind does."}
   [_row inp ctx]
   (if-some [problem (when (and (:rehearse ctx) (map? (:target inp)))
                       (if-some [tool (tool-of (:target inp))]
@@ -557,7 +563,8 @@
 
 (g/defguard the-conditions-are-the-collections
   {:reads [:grant :storage]
-   :explain "A scheduled action's conditions are the target kind's collection filter, named with the `conditions` rule."}
+   :explain "A scheduled action's conditions are the target kind's collection filter, named with the `conditions` rule."
+   :open "The target kind's filterable fields and their ops are its collection grammar, one GET away; the way out is in this same form."}
   [_row inp ctx]
   (let [rule? (= "conditions" (:validity inp))
         params (condition-params (:conditions inp))

@@ -353,6 +353,7 @@
 
 (g/defguard the-persons-lever
   {:hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and an author that could pull this lever would be approving its own child."
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
@@ -370,6 +371,7 @@
 
 (g/defguard promotes-under-a-parked-child
   {:hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a promote the person has not seen could change work already under way."
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
@@ -393,6 +395,7 @@
 
 (g/defguard the-persons-judgment
   {:hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a judgment in force is the person's to replace."
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}

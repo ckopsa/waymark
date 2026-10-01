@@ -981,7 +981,8 @@
 (g/defguard an-anchorless-ask-names-its-grant
   {:reads [:principal :now :grant]
    :vars [:grants]
-   :explain "You hold several live grants ({grants}); pass grant_id to name the one this ask widens."}
+   :explain "You hold several live grants ({grants}); pass grant_id to name the one this ask widens."
+   :open "The way out is in this same form: pass grant_id, one of the grants the sentence lists. No door picks among several live grants for you."}
   [_row inp ctx]
   ;; an anchorless ask from a holder of live grants would MINT a
   ;; replacement, and the session would wear it and lose the sight it

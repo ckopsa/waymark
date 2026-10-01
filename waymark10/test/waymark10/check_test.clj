@@ -106,6 +106,16 @@
     (is (re-find #"approval_request \(enrolled\) ✓" out)
         "and core's own four-eyes scenario is judged where the author looks")))
 
+(deftest the-served-kinds-have-no-dead-end
+  ;; an unwaived dead end is a remedy error now, so the framework's own
+  ;; kinds answer every guard that speaks or carry its waiver. The
+  ;; sites are named, so a red run says which guard came back.
+  (let [tally (atom nil)
+        _ (with-out-str (reset! tally (check/report [probe])))]
+    (is (= []
+           (mapv (fn [{:keys [kind door guard]}] [kind door (:name guard)])
+                 (:dead-ends (:census @tally)))))))
+
 (deftest the-usability-battery-reaches-the-kinds-nobody-declared
   ;; The widening this asserts — a kind NOBODY DECLARED is batteried
   ;; and printed beside the app's own — used to be witnessed by

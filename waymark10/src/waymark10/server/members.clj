@@ -501,7 +501,8 @@
 ;; chat. The curtain's wall, the curtain's valve.
 (g/defguard notify-is-your-own-hand
   {:reads [:principal :member]
-   :explain "How a member is reached is that member's own to set; only the member themself (or a recovery-admin human, the household valve) may point their notices somewhere."}
+   :explain "How a member is reached is that member's own to set; only the member themself (or a recovery-admin human, the household valve) may point their notices somewhere."
+   :open "The wall is about who: the member sets how they are reached, and no field of this door makes anyone else that member."}
   [row _inp ctx]
   (own-hand row ctx))
 
@@ -524,7 +525,8 @@
 (g/defguard notify-names-a-notifier
   {:reads [:notifier]
    :vars [:notifier :notifiers]
-   :explain "{notifier} names no live notifier row; notify.notifier is a notifier's id. The notifiers: {notifiers}."}
+   :explain "{notifier} names no live notifier row; notify.notifier is a notifier's id. The notifiers: {notifiers}."
+   :open "The way out is in this same form: name one of the notifiers the sentence lists, by its id. They are the notifiers collection, one query away."}
   [_row inp ctx]
   (let [nid (get-in inp [:notify :notifier])
         read' (:read ctx)]
@@ -538,7 +540,8 @@
 
 (g/defguard notify-input-is-the-tools-own
   {:vars [:keys]
-   :explain "The input is the notifier tool's own arguments for this person, e.g. {\"chat_id\": \"42\"}, not a whole notify map; it carried {keys}."}
+   :explain "The input is the notifier tool's own arguments for this person, e.g. {\"chat_id\": \"42\"}, not a whole notify map; it carried {keys}."
+   :open "The way out is in this same form: notify.input carries only the notifier tool's own arguments, and notify.notifier beside it names the notifier."}
   [_row inp _ctx]
   (let [in (get-in inp [:notify :input])]
     (if-some [ks (seq (filter #(contains? in %) [:notifier :input]))]
@@ -549,7 +552,8 @@
 
 (g/defguard quiet-hours-are-clock-times
   {:vars [:times]
-   :explain "Quiet hours are local clock times, H:mm or HH:mm (22:00, 6:00); {times} is not."}
+   :explain "Quiet hours are local clock times, H:mm or HH:mm (22:00, 6:00); {times} is not."
+   :open "The way out is in this same form: write the quiet hours' from and to as H:mm or HH:mm. The schema can say they are strings and nothing more, so the door judges the grammar."}
   [_row inp _ctx]
   (let [q (get-in inp [:notify :quiet])]
     (if-some [bad (seq (remove #(re-matches clock-time (str %))
