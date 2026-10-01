@@ -17,6 +17,8 @@
             [waymark10.dev :as dev]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp-client :as client]
+            [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.members :as members]
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
@@ -122,6 +124,45 @@
     (is (= [[::eng "demo" {:wall-url "http://wall.test"}]]
            (booted #(seed-on-boot! ::eng "demo" "1" "http://wall.test"))))))
 
+;; ── the gate row's boot step ────────────────────────────────────────
+
+(def ^:private gate-row-on-boot! @#'main/gate-row-on-boot!)
+
+(defn- gate-rows-asked
+  "What `mcp-servers/ensure-gate-row!` was called with while `f` ran: a
+  vector of [engine opts] pairs, no row ever made."
+  [f]
+  (let [calls (atom [])]
+    (with-redefs [mcp-servers/ensure-gate-row! (fn [eng opts]
+                                                 (swap! calls conj [eng opts])
+                                                 nil)]
+      (f))
+    @calls))
+
+(deftest a-seeded-boot-makes-no-gate-row
+  (testing "whatever the gate url says"
+    (doseq [url [nil "" "http://gate.test/mcp/"]]
+      (is (= [] (gate-rows-asked #(gate-row-on-boot! ::eng url "demo")))
+          (pr-str url))))
+  (testing "on an engine with the kind: no row named gate afterwards"
+    (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})]
+      (is (nil? (gate-row-on-boot! eng "http://gate.test/mcp/" "demo")))
+      (is (not-any? #(= "gate" (get-in % [:data :name]))
+                    (dev/rows eng :mcp_server))))))
+
+(deftest an-unseeded-boot-makes-the-gate-row-at-the-url-named
+  (testing "with no url named, none"
+    (doseq [url [nil ""]
+            seed [nil ""]]
+      (is (= [] (gate-rows-asked #(gate-row-on-boot! ::eng url seed)))
+          (pr-str [url seed]))))
+  (testing "with a url"
+    (doseq [seed [nil ""]]
+      (is (= [[::eng {:url "http://gate.test/mcp/"}]]
+             (gate-rows-asked
+              #(gate-row-on-boot! ::eng "http://gate.test/mcp/" seed)))
+          (pr-str seed)))))
+
 ;; ── allowing the seeded held call (§ 4) ─────────────────────────────
 
 (defn- ada
@@ -143,16 +184,12 @@
 
 (def ^:private wall-sentence "The demo sends no mail.")
 
-(defn- wall!
-  "An in-process wall: every request answers 403 with a JSON-RPC error
-  that carries the wall's sentence. → {:url :hits :stop}."
-  []
+(defn- wall-answering!
+  "An in-process wall: every request answers 403 with `text` as its
+  body, under `content-type`. → {:url :hits :stop}."
+  [^String text content-type]
   (let [hits (atom 0)
-        ^bytes body (.getBytes ^String (wire/write-json
-                                        {:jsonrpc "2.0" :id nil
-                                         :error {:code -32000
-                                                 :message wall-sentence}})
-                               "UTF-8")
+        ^bytes body (.getBytes text "UTF-8")
         ^HttpServer server (HttpServer/create
                             (InetSocketAddress. "127.0.0.1" 0) 0)]
     (.createContext server "/"
@@ -163,7 +200,7 @@
                           (with-open [^InputStream in (.getRequestBody exchange)]
                             (.readAllBytes in))
                           (.add (.getResponseHeaders exchange)
-                                "Content-Type" "application/json")
+                                "Content-Type" (str content-type))
                           (.sendResponseHeaders exchange 403 (long (alength body)))
                           (with-open [^OutputStream out (.getResponseBody exchange)]
                             (.write out body))))))
@@ -171,6 +208,17 @@
     {:url (str "http://127.0.0.1:" (.getPort (.getAddress server)) "/mcp/")
      :hits hits
      :stop #(.stop server 0)}))
+
+(def ^:private wall-rpc-body
+  "The wall's sentence as a JSON-RPC error."
+  (wire/write-json {:jsonrpc "2.0" :id nil
+                    :error {:code -32000 :message wall-sentence}}))
+
+(defn- wall!
+  "An in-process wall: every request answers 403 with a JSON-RPC error
+  that carries the wall's sentence. → {:url :hits :stop}."
+  []
+  (wall-answering! wall-rpc-body "application/json"))
 
 (deftest allowing-the-seeded-held-call-with-no-wall-fails-with-the-no-server-sentence
   (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})
@@ -200,3 +248,61 @@
         (is (nil? (get-in row [:data :answer])))
         (is (< before @hits) "the allow reached the wall"))
       (finally (stop)))))
+
+;; ── the wall's sentence, from each kind of body ─────────────────────
+
+(defn- refused-by
+  "What the http client throws at the wall that answers `text`."
+  [text content-type]
+  (let [{:keys [url stop]} (wall-answering! text content-type)]
+    (try
+      ((client/http-client url) "tools/list" {})
+      nil
+      (catch Exception e e)
+      (finally (stop)))))
+
+(deftest the-http-client-reads-the-walls-sentence-from-each-kind-of-body
+  (testing "a JSON-RPC error gives its message"
+    (let [e (refused-by wall-rpc-body "application/json")]
+      (is (= 502 (:status (ex-data e))))
+      (is (= {:sentence wall-sentence :context "initialize answered 403"}
+             (client/said e)))
+      (is (str/includes? (ex-message e)
+                         (str "initialize answered 403 " wall-sentence)))))
+  (testing "a plain-text body gives its text, trimmed"
+    (let [e (refused-by (str "  " wall-sentence "\n") "text/plain")]
+      (is (= 502 (:status (ex-data e))))
+      (is (= {:sentence wall-sentence :context "initialize answered 403"}
+             (client/said e)))))
+  (testing "a long text body gives its first 500 characters"
+    (let [e (refused-by (apply str (repeat 600 "x")) "text/plain")]
+      (is (= (apply str (repeat 500 "x")) (:sentence (client/said e))))))
+  (testing "an empty body gives no sentence"
+    (let [e (refused-by "" "text/plain")]
+      (is (= 502 (:status (ex-data e))))
+      (is (nil? (client/said e)))
+      (is (str/includes? (ex-message e) "initialize answered 403.")))))
+
+(defn- reason-behind
+  "The seeded held call's reason after Ada allows it behind the wall
+  that answers `text`."
+  [text content-type]
+  (let [{:keys [url stop]} (wall-answering! text content-type)]
+    (try
+      (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})
+            _ (seed/load! eng (seed/read-seed "demo") {:wall-url url})
+            row (allow-as-ada! eng)]
+        (is (= :failed (state-of row)))
+        (str (get-in row [:data :reason])))
+      (finally (stop)))))
+
+(deftest the-seeded-held-calls-reason-starts-with-the-walls-sentence
+  (let [expected (str wall-sentence
+                      " [server mail is dark: initialize answered 403]")]
+    (testing "behind a wall that answers a JSON-RPC error"
+      (is (= expected (reason-behind wall-rpc-body "application/json"))))
+    (testing "behind a wall that answers plain text"
+      (is (= expected (reason-behind wall-sentence "text/plain")))))
+  (testing "behind a wall that answers nothing, the engine's own words stand"
+    (is (str/includes? (reason-behind "" "text/plain")
+                       "initialize answered 403"))))
