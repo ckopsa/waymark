@@ -357,6 +357,7 @@
     {:from #{:running} :to :stopped
      :input [:map
              [:reason {:optional true
+                       :examples ["I need to find the paperwork first."]
                        :x-display {:widget "prose"
                                    :label "Why"
                                    :help "One sentence the other side reads on the row."}}
