@@ -42,6 +42,7 @@
                 :summary {:type "string"}
                 :data {:type "object"}
                 :parts {:type "object"}
+                :refs {:type "object"}
                 :actions {:type "object"}
                 :unavailable {:type "object"}
                 :links {:type "object"}

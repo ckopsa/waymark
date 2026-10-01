@@ -1069,6 +1069,33 @@
                                      (visibility-of req))
                   instant))
 
+(defn- ref-summary-hook
+  "The ctx-opt :ref-summary (ticket 6ef1473c): one target row's
+  {:href :summary} under THIS request's visibility — nil when its
+  grant does not admit the row, or no such row stands. It is the
+  answer the client's own depth=summary GET of that row would get,
+  without the GET: the same `:row?` check-row! asks, the same
+  projected summary. One instance per request, so a target two fields
+  name is read once."
+  [eng req]
+  (let [vis (visibility-of req)
+        st (:storage eng)
+        seen (atom {})]
+    (fn [kind id]
+      (let [k [kind id]]
+        (if-some [e (find @seen k)]
+          (val e)
+          (let [trdef (get (inv/resources eng) kind)
+                raw (when (and trdef
+                               (or (nil? vis) ((:row? vis) kind id)))
+                      (store/with-tx st #(store/load-row st % kind id {})))
+                v (when raw
+                    {:href (str "/api/" (:plural trdef) "/" id)
+                     :summary (render/target-summary
+                               trdef (inv/decode-row trdef raw) vis)})]
+            (swap! seen assoc k v)
+            v))))))
+
 (defn- get-one-live
   "The live row read: the envelope, as it has always been."
   [eng rdef plural id req]
@@ -1094,7 +1121,14 @@
         opts (render-opts eng req)
         env (if (= :summary depth)
               (render/envelope-summary rdef row opts)
-              (splice-embeds eng rdef (render/envelope rdef row opts) opts
+              ;; the full row alone carries its refs' labels: a
+              ;; summary has no data for them to label
+              (splice-embeds eng rdef
+                             (render/envelope
+                              rdef row
+                              (assoc opts :ref-summary
+                                     (ref-summary-hook eng req)))
+                             opts
                              (embed-overrides req)))]
     (mark-read! eng req (str "/api/" plural "/" id))
     (json-response 200 env media-type

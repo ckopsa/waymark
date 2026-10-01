@@ -825,6 +825,40 @@
          (summary/state-label (:state row)))
     (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))))
 
+(defn target-summary
+  "One row's summary line as THIS visibility may read it — the
+  envelope's own :summary without the probe, for the reader that only
+  wants the label of a row another row names (ticket 6ef1473c). The
+  same honesty holds: a template over a redacted or secret field
+  answers the generic line, over a hashed one its token."
+  [rdef row visibility]
+  (let [secret (not-empty (schema/secret-fields (:schema rdef)))
+        redacted (not-empty (into (set (redacted-fields rdef visibility))
+                                  secret))
+        hashed (not-empty (reduce disj (set (hashed-fields rdef visibility))
+                                  (or secret #{})))]
+    (project-summary rdef (hash-view rdef row visibility hashed) redacted)))
+
+(defn- ref-labels
+  "The envelope's `refs` block: for each plain `:kind` ref field this
+  reader holds a value in, the target's {:href :summary} as the
+  ctx-opts :ref-summary hook answers it. The hook answers nil for a
+  row the reader's grant does not admit, and that field is then ABSENT
+  — its id stays bare, exactly as a failed read would leave it. A
+  listed ref and a hashed one (a token, not an id) are left alone; no
+  hook, no block."
+  [rdef enc-data hashed ref-summary]
+  (when ref-summary
+    (into {}
+          (keep (fn [{:keys [field kind listed]}]
+                  (let [v (get enc-data field)]
+                    (when (and (not listed)
+                               (or (string? v) (uuid? v))
+                               (not (contains? hashed field)))
+                      (when-some [entry (ref-summary kind (str v))]
+                        [field entry])))))
+          (schema/ref-fields (:schema rdef)))))
+
 (defn- project-display
   "Top-level :display, resolved per row (the recorded demand, landed:
   authored in three mealplan10 kinds, consumed nowhere until now).
@@ -894,7 +928,10 @@
   never narration) — :resources (batch A), the engine's kind map for
   link target plurals — and optionally :read/:find (ns docstring),
   the probe-reads hooks the probe ctx carries verbatim (:sum rides
-  beside them)."
+  beside them). :ref-summary (ticket 6ef1473c) is NOT one of those: it
+  is `(fn [kind id])` → {:href :summary} or nil, scoped to the
+  reader's grant, and when present the envelope carries a `refs` block
+  of {field {href, summary}} for its plain `:kind` refs (ref-labels)."
   [rdef row {:keys [principal now services visibility resources]
              :as ctx-opts}]
   (let [ctx (t/ctx {:principal (or principal t/anonymous)
@@ -1036,7 +1073,10 @@
                   field?)
         ;; parts render over the SURVIVING actions — a concealed placed
         ;; action never re-renders per item
-        parts (parts-of rdef hrow ctx by-name actions enc-data pfield? arg?)]
+        parts (parts-of rdef hrow ctx by-name actions enc-data pfield? arg?)
+        ;; the ref labels read over enc-data — what LEFT the building —
+        ;; so a redacted ref field names no target here either
+        refs (ref-labels rdef enc-data hashed (:ref-summary ctx-opts))]
     (p/wire-value
      (cond-> {:waymark "10"
               :kind (name (:kind rdef))
@@ -1054,6 +1094,7 @@
                       (:updated-at row) (assoc :updated-at (str (:updated-at row)))
                       (:law-revision row) (assoc :law-revision (:law-revision row)))}
        (seq parts) (assoc :parts parts)
+       (seq refs) (assoc :refs refs)
        (:display rdef) (assoc :display (project-display rdef hrow redacted))))))
 
 (defn envelope-stub
@@ -1086,7 +1127,8 @@
               (:law-revision row) (assoc :law-revision (:law-revision row)))})))
 
 (defn envelope-summary
-  "Depth summary: the full envelope minus data AND parts — state,
+  "Depth summary: the full envelope minus data, parts AND refs (a ref
+  label names a data field, so it leaves with data) — state,
   summary, fields (the bounded grid-column projection — envelope
   only ever dissocs \"data\"/\"parts\" here, so fields rides through
   unchanged), the COMPLETE actions/unavailable partition, links and
@@ -1096,4 +1138,4 @@
   [rdef row ctx-opts]
   (if (= :none (:rows ctx-opts))
     (envelope-stub rdef row ctx-opts)
-    (dissoc (envelope rdef row ctx-opts) "data" "parts")))
+    (dissoc (envelope rdef row ctx-opts) "data" "parts" "refs")))
