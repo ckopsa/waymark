@@ -1707,7 +1707,9 @@
   item has committed and its after-write ran: the router's seam for
   what a single invoke does after its own commit (a self walk's
   recording, walks/record-own!). A rehearsal, a deferral and a replay
-  of the whole call run none."
+  of the whole call run none. In a partial bulk a throw from the
+  after-write or from `:on-item` is logged and changes nothing in the
+  report: the row's transaction committed, so the row succeeded."
   [engine kind action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
            dry-run grant on-item]
@@ -1804,6 +1806,26 @@
                                                      ;; recorded once below
                                                      :idempotency-key idempotency-key
                                                      :record-key? false)))
+                    ;; the partial loop's post-commit pass: the item's
+                    ;; transaction has committed, so a throw here is
+                    ;; logged on its own and never reported as the
+                    ;; row's failure. Each half is caught apart, so a
+                    ;; broken after-write does not cost the row its
+                    ;; :on-item
+                    committed! (fn [id res]
+                                 (try
+                                   (after-write! engine kind action-name res)
+                                   (catch Exception e
+                                     (binding [*out* *err*]
+                                       (println "waymark10 bulk item after-write error:"
+                                                (name kind) id "-" (ex-message e)))))
+                                 (when on-item
+                                   (try
+                                     (on-item res)
+                                     (catch Exception e
+                                       (binding [*out* *err*]
+                                         (println "waymark10 bulk item on-item error:"
+                                                  (name kind) id "-" (ex-message e)))))))
                     data
                     (if (= "atomic" mode)
                       ;; all-or-nothing: one transaction, any refusal
@@ -1846,8 +1868,7 @@
                                      (try
                                        (let [res (store/with-tx (:storage engine)
                                                    #(run-item % it))]
-                                         (after-write! engine kind action-name res)
-                                         (when on-item (on-item res))
+                                         (committed! id res)
                                          (update rep :succeeded inc))
                                        (catch Exception e
                                          (if (refusal? e)
