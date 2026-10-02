@@ -1295,13 +1295,14 @@
               (grants/check-args! (visibility-of req) rdef (keyword action)
                                   (dissoc body :ids :on_error)))
           opts (invoke-opts req)
-          ;; a principal recording their own walk has each row this call
-          ;; moved put in it, under this request's sight, as the single
-          ;; door does (count-committed!, walks/record-own!)
+          ;; each row this call moved gets the single door's post-commit
+          ;; pass (count-committed!): the sitting counts the transition,
+          ;; a person's reversal counts its correction, and a principal
+          ;; recording their own walk has the row put in it, under this
+          ;; request's sight
           result (inv/bulk! eng (:kind rdef) (keyword action) body
                             (assoc opts :on-item
-                                   #(walks/record-own! eng (principal-of req)
-                                                       (visibility-of req) %)))]
+                                   #(count-committed! eng req (:kind rdef) %)))]
       (cond
         (:deferred result)
         ;; the phase-7 punt closes (phase 9b): an over-threshold call
@@ -1364,7 +1365,11 @@
           _ (doseq [inp (:inputs body)]
               (grants/check-args! (visibility-of req) rdef (keyword action) inp))
           opts (invoke-opts req)
-          result (inv/batch! eng (:kind rdef) id (keyword action) body opts)]
+          ;; each input this call committed gets the single door's
+          ;; post-commit pass, as the bulk door's rows do
+          result (inv/batch! eng (:kind rdef) id (keyword action) body
+                             (assoc opts :on-item
+                                    #(count-committed! eng req (:kind rdef) %)))]
       ;; the batch door's rehearsal (§23): index-keyed verdicts, and —
       ;; full mode, all-ok only — the considering card names the row,
       ;; exactly as the single door's

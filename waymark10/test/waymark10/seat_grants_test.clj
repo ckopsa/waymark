@@ -96,6 +96,56 @@
                              :one-way "Sealing is for good."}
                     :display {:label "Seal"}}}})
 
+;; a bulk door that moves SOME rows: the committed side of a partial
+;; bulk needs rows the guard lets through beside one it refuses
+(def ^:private not-locked
+  (g/expr {:name :not-locked
+           :when '(not (data :locked))
+           :explain "A locked crate does not ship."}))
+
+(r/defresource crate
+  {:kind :seat_crate
+   :plural "seat_crates"
+   :states [:open :shipped]
+   :initial :open
+   :terminal #{:shipped}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name [:string {:min 1 :max 80}]]
+            [:locked {:optional true} [:maybe :boolean]]]
+   :actions {:ship {:from #{:open} :to :shipped
+                    :bulk {:max-items 5}
+                    :guards [not-locked]
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "Shipping is for good."}
+                    :display {:label "Ship"}}}})
+
+;; and a batch door: N inputs on one row, each its own transition
+(r/defhandler note-handler [row inp _ctx]
+  (update-in row [:data :notes] (fnil conj []) (:text inp)))
+
+(r/defresource logbook
+  {:kind :seat_logbook
+   :plural "seat_logbooks"
+   :states [:open :closed]
+   :initial :open
+   :terminal #{:closed}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name [:string {:min 1 :max 80}]]
+            [:notes {:optional true} [:maybe [:vector [:string {:max 200}]]]]]
+   :actions {:note {:from #{:open} :to :open
+                    :batch {:max-items 3}
+                    :input [:map [:text [:string {:min 1 :max 200}]]]
+                    :record true
+                    :safety {:idempotent false :reversible true :confirm false}
+                    :handler note-handler
+                    :display {:label "Note"}}
+             :close {:from #{:open} :to :closed
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "Closed books stay closed."}
+                     :display {:label "Close"}}}})
+
 ;; a kind with a way BACK: every kind above ends after one transition,
 ;; and a second person's transition on one row needs a row that can
 ;; take two (R-11.3: the second reads a person before it)
@@ -123,7 +173,7 @@
 
 (defn- world []
   (let [clock (atom t0)
-        eng (dev/scratch! [pantry ledger vault bulk-vault shelf] {:now-fn (fn [] @clock)})]
+        eng (dev/scratch! [pantry ledger vault bulk-vault crate logbook shelf] {:now-fn (fn [] @clock)})]
     {:clock clock :eng eng :h (dev/handler eng)}))
 
 (defn- req
@@ -675,6 +725,58 @@
     (is (< (:status again) 300) (pr-str (json again)))
     (is (= stamped (last-refusal))
         "a later bulk with no 409 leaves the stamp unchanged")))
+
+;; the committed side of the same two doors: each item a bulk or a
+;; batch commits is a transition the sitting counts, as the single
+;; door's is
+(deftest a-bulk-and-a-batch-count-each-committed-item-on-the-sitting
+  (let [{:keys [h]} (world)
+        model (add-model! h "fan-count-model")
+        seat (open-seat! h "clerk-fan-count"
+                         {:scope [{:kind "seat_crate"
+                                   :actions ["create" "ship"]}
+                                  {:kind "seat_logbook"
+                                   :actions ["create" "note"]}]})
+        gid (sit! h (sitter "ari-fan") "clerk-fan-count" {})
+        as (sitter "ari-fan" {:grant gid})
+        made (req h :post "/api/sittings"
+                  {:headers as :body {:seat seat :model model
+                                      :grant gid}})
+        sid (id-of made)
+        counts (fn []
+                 (let [d (:data (json (req h :get (str "/api/sittings/" sid)
+                                           {:headers human})))]
+                   [(:transitions d) (:refusals d)]))
+        make! (fn [uri body]
+                (let [row (req h :post uri {:headers as :body body})]
+                  (is (= 201 (:status row)) (pr-str (json row)))
+                  (id-of row)))]
+    (is (= 201 (:status made)) (pr-str (json made)))
+
+    (testing "a bulk over three rows, one refused, counts the two it moved"
+      (let [a (make! "/api/seat_crates" {:name "apples"})
+            b (make! "/api/seat_crates" {:name "bolts" :locked true})
+            c (make! "/api/seat_crates" {:name "corks"})
+            [moved refused] (counts)
+            bulk (req h :post "/api/seat_crates/-/ship"
+                      {:headers as :body {:ids [a b c]}})]
+        (is (= 3 moved) "the three births")
+        (is (< (:status bulk) 300) (pr-str (json bulk)))
+        (is (= [(+ 2 moved) (inc refused)] (counts))
+            "two committed items count two transitions; the refused one a refusal")
+        (is (= "open" (:state (json (req h :get (str "/api/seat_crates/" b)
+                                         {:headers as}))))
+            "the refused row stays untouched")))
+
+    (testing "a batch of two writes counts two"
+      (let [book (make! "/api/seat_logbooks" {:name "log"})
+            [moved refused] (counts)
+            batch (req h :post (str "/api/seat_logbooks/" book "/-/note/batch")
+                       {:headers (assoc as "idempotency-key" "fan-batch-1")
+                        :body {:inputs [{:text "one"} {:text "two"}]}})]
+        (is (< (:status batch) 300) (pr-str (json batch)))
+        (is (= [(+ 2 moved) refused] (counts))
+            "each input is its own transition")))))
 
 (deftest a-closed-sitting-shows-the-rows-a-person-reversed
   (let [{:keys [h]} (world)

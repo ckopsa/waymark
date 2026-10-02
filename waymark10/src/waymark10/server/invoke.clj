@@ -1945,10 +1945,14 @@
   ways: 9's batch dry-run executed under a doomed transaction —
   handlers ran, then rollback — so verdict i saw input i-1's effects;
   10's iron rule is that a rehearsal never fires a handler, so each
-  input is judged independently."
+  input is judged independently.
+
+  `:on-item`, when given, is called with each input's result once the
+  batch has committed and its after-write ran, as `bulk!` calls it for
+  each row. A rehearsal and a replay of the whole call run none."
   [engine kind id action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
-           dry-run grant]
+           dry-run grant on-item]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -2041,7 +2045,8 @@
                                :index @at}))
                       (throw e))))]
             (doseq [res results]
-              (after-write! engine kind action-name res))
+              (after-write! engine kind action-name res)
+              (when on-item (on-item res)))
             (let [doc (report-doc action-name
                                   {:succeeded (count inputs)
                                    :refused 0 :failed 0 :refusals []}
