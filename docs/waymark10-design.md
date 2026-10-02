@@ -3474,8 +3474,16 @@ its endings changes which doors open and mints a revision saying so
 **The dangling-ref wall.** Every input entry whose properties carry
 `:kind` resolves at the door, on the create model and on every action's
 input; a list resolves each item and the sentence names the position. The
-kind writes nothing. Two shapes are out of reach and named as such: a ref
-nested inside a part, and a pointer that is a KIND-AND-ID PAIR rather
+kind writes nothing. A part's own door is inside the wall: its ref rides
+the door's input beside the scope key, at the top level, so an invented
+`meal_id` refuses both at the plan's `parts.days` item door
+(`assign_meal`, `conformance-test/dangling-ref-truth`) and at the
+household's `plan_day.assign_meal`, where a themed night answers in the
+day's own acceptance sentence and a rotating Sunday, which binds no set,
+meets the wall (`mealplan10.plan-day-machine-test`). Two shapes are out
+of reach and named as such: a ref nested inside a part that a door takes
+WHOLE (`schema/ref-fields` reads an input model's top-level entries
+only), and a pointer that is a KIND-AND-ID PAIR rather
 than a typed ref (`insight`'s `offer_kind`/`offer_id`, a journal's
 `evidence` addresses). Those stay their kind's own checkers —
 `insight/unresolved-addresses` is the one of them, shared with
