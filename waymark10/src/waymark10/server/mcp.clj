@@ -4293,15 +4293,37 @@
   sentence a seat can act on."
   2048)
 
+(def ^:private finding-remedy
+  "The words a finding of the rig's closes with when it names a tool to
+  read more with: `read more with bench__log {job: \"gate\"}`. The one
+  group is the tool's name, as the power door spells it."
+  #"(?s)[\s;,:]*\bread more with (\w+)(?:\s*\{[^{}]*\})?\.?\s*\z")
+
+(defn- message-the-seat-can-follow
+  "A finding's message, without its closing remedy when that remedy
+  names a tool the seat's grant does not hold (ticket 9b16e766). The
+  rig writes the remedy for whoever holds its log read; a seat that
+  does not met `No power` when it followed it. `held` is the set of
+  tool names in the sit's `bench.tools`, so a seat that is granted the
+  tool reads the remedy again with no change here."
+  [message held]
+  (when-some [said (some-> message str)]
+    (let [[remedy tool] (re-find finding-remedy said)]
+      (if (and remedy (not (contains? held tool)))
+        (subs said 0 (- (count said) (count remedy)))
+        said))))
+
 (defn- feedback-said
   "One finding of the rig's, as the sit carries it: the source, the
   severity, the message, and the locations when the rig named any.
   THE ENGINE ADDS NOTHING AND JUDGES NOTHING — a finding is the rig's
-  reading of what the submit caused, and the order is the rig's too."
-  [finding]
+  reading of what the submit caused, and the order is the rig's too.
+  The one thing it takes away is a closing remedy that names a tool
+  outside `held` (`message-the-seat-can-follow`)."
+  [finding held]
   (cond-> {"source" (some-> (:source finding) str)
            "severity" (some-> (:severity finding) str)
-           "message" (some-> (:message finding) str)}
+           "message" (message-the-seat-can-follow (:message finding) held)}
     (seq (:locations finding)) (assoc "locations" (:locations finding))))
 
 (defn- interrupted-finding?
@@ -4358,21 +4380,23 @@
   parts of the forge it could not reach. A refusal, a dark Gate and a
   rig that faults each mean nil, and the sit then answers no
   `feedback` at all — a seat that cannot see the checks is not a sit
-  that refuses."
-  [gate-rpc repo branch]
+  that refuses. `tools` is the sit's `bench.tools`: a finding names no
+  tool that map does not hold."
+  [gate-rpc repo branch tools]
   (try
     (when-some [got (bench-payload
                      (gate-rpc "tools/call"
                                {:name (gate/bench-tool :feedback)
                                 :arguments {:repo repo :branch branch
                                             :log_bytes feedback-log-bytes}}))]
-      (let [findings (take feedback-findings-ceiling (:findings got))]
+      (let [findings (take feedback-findings-ceiling (:findings got))
+            held (set (vals tools))]
         (cond-> {"pull_request"
                  (when-some [pr (:pull_request got)]
                    {"number" (:number pr)
                     "state" (some-> (:state pr) str)
                     "url" (some-> (:url pr) str)})
-                 "findings" (mapv feedback-said findings)
+                 "findings" (mapv #(feedback-said % held) findings)
                  "unavailable" (mapv str (:unavailable got))}
           ;; dead CI gets the one instruction that answers it
           (some interrupted-finding? findings)
@@ -4543,7 +4567,8 @@
                                                  str not-empty)
                                          (some? (get-in change [:data :number])))))
                        (feedback-of gate-rpc (str (or (:repo made) repo))
-                                    (str (or (:branch made) branch))))
+                                    (str (or (:branch made) branch))
+                                    (bench-tools-of eng seat)))
                      change)
           ;; the path the policy names, answered only when the file
           ;; is really there (R-6); a worktree that was never made
