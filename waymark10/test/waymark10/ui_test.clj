@@ -331,6 +331,37 @@
     (is (str/includes? body "(f.type === \"invitation\" || (f.type === \"caption\" && f.field))"))
     (is (str/includes? body "if (replay) replayCaption();"))))
 
+(deftest ui-replay-marks-the-submit-before-the-close
+  ;; the moment of a write: the frame that closes a form after its write
+  ;; waits 900 ms while the guided dialog's submit button is lit as an
+  ;; invited field is; a form closed with no transition is not marked
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        mark (str/index-of body "if (replayMarkWrite(r)) {")
+        close (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (is (str/includes? body "const REPLAY_WRITE_MS = 900;"))
+    (is (str/includes? body "dlg.guidedWrite = () => {"))
+    (is (str/includes? body "const lit = el(\"button\", {class: write.className + \" invited\","))
+    (is (str/includes? body "!replayWrote(r, g.getAttribute(\"data-guided\"))) return false;"))
+    (is (str/includes? body "g.guidedWrite().setAttribute(\"data-replay-write\", \"\");"))
+    (is (str/includes? body "r.timer = setTimeout(replayStep, REPLAY_WRITE_MS / r.speed);"))
+    (is (str/includes? body ".dlgfoot button.invited { animation: none; }"))
+    (is (and mark close (< mark close))
+        "the submit is marked before the frame that closes the form is applied")))
+
+(deftest ui-replay-outlines-the-row-or-list-the-gaze-moves-to
+  ;; the moment of a look: a move to a row, or a `collection` ui, marks
+  ;; the root element for 1600 ms, and the screen's main panel is
+  ;; outlined while it does; film mode hides neither mark
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_GAZE_MS = 1600;"))
+    (is (str/includes? body "if (f.self) { applyFollowMove(f.self); replayGaze(\"row\", f.self); }"))
+    (is (str/includes? body "replayGaze(\"list\", collectionHrefOf(c));"))
+    (is (str/includes? body "root.setAttribute(\"data-replay-gaze\", what);"))
+    (is (str/includes? body "html[data-replay-gaze] .panel[data-replay-screen],"))
+    (is (str/includes? body "html[data-replay-gaze] [data-replay-doc] > .panel:first-of-type {"))
+    (is (not (re-find #"html\[data-film\][^{]*(data-replay-gaze|data-guided-write|\.dlgfoot)[^{]*\{[^}]*display: none" body))
+        "film mode hides no part of either mark")))
+
 (deftest ui-replay-lights-the-field-a-staged-call-types
   ;; docs/spec-agent-demo-walks.md §2: a typing beat names its argument
   ;; in `focus`, and replay lights that field alone, in the invitation's

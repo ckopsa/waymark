@@ -897,6 +897,13 @@ const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
    character, at least REPLAY_READ_MIN and at most REPLAY_READ_MAX,
    before speed, and on top of the gap the long-silence cut allows. */
 const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;
+/* the moment of a write: the frame that closes a form after its write
+   waits this long, before speed, while the form's submit button is lit */
+const REPLAY_WRITE_MS = 900;
+/* the moment of a look: the screen the gaze arrived at keeps its
+   outline this long, before speed */
+const REPLAY_GAZE_MS = 1600;
+let replayGazeTimer = null;
 /* a write and the screen it lands on are held for the eye: the frame
    after a `transition` waits at least REPLAY_WRITE_HOLD, and the frame
    after a `move` to another row at least REPLAY_MOVE_HOLD, before
@@ -926,6 +933,7 @@ function startReplay(text) {
              cast: walk.header.cast || {}, frames: walk.frames,
              at: 0, speed: 1, playing: false, timer: null, who: null, back,
              caption: null,       // the caption frame on screen
+             gaze: null,          // the address last outlined
              rows: new Map(),     // self → {kind, state, summary, log}
              docs: new Map(),     // self, the document recorded for it so far
              known: new Set(),    // every row self the recording names
@@ -1035,9 +1043,12 @@ function applyReplayFrame(f) {
   const actor = replayActor(f);
   replay.who = actor;
   if (f.type === "move") {
-    if (f.self) applyFollowMove(f.self);
+    if (f.self) { applyFollowMove(f.self); replayGaze("row", f.self); }
   } else if (f.type === "ui") {
     applyUiFrame({self: f.self, ui: f.ui || {}, principal: actor});
+    const c = (f.ui || {}).collection;
+    if (c && c.self && !(f.ui || {}).dialog)
+      replayGaze("list", collectionHrefOf(c));
   } else if (f.type === "transition" && f.self) {
     const row = replay.rows.get(f.self) || {log: []};
     row.kind = f.kind;
@@ -1134,9 +1145,58 @@ function replayCaption() {
     g.guidedMark(c.field ? [c.field] : [], c.text)
       .setAttribute("data-caption-note", "");
 }
+/* a look: the gaze arrived at a row (a `move`) or a list (a
+   `collection` ui). The root element carries the mark for
+   REPLAY_GAZE_MS, so a screen drawn after the move is outlined as well
+   (030-screens.css). A look at the address last outlined is no
+   arrival, and under an open dialog the screen did not move. */
+function replayGaze(what, target) {
+  const r = replay;
+  if (!r || r.gaze === target || $("dialog[open]")) return;
+  r.gaze = target;
+  const root = document.documentElement;
+  clearTimeout(replayGazeTimer);
+  root.setAttribute("data-replay-gaze", what);
+  replayGazeTimer = setTimeout(() => root.removeAttribute("data-replay-gaze"),
+                               REPLAY_GAZE_MS / r.speed);
+}
+/* whether the form `key` names wrote before the frame at the playhead
+   closes it: a transition of the same actor's since the form opened,
+   or in the same burst as the close. A form closed with none was
+   cancelled. */
+function replayWrote(r, key) {
+  const who = r.frames[r.at].who, t = r.frames[r.at].t || 0;
+  for (let i = r.at + 1; i < r.frames.length &&
+                         (r.frames[i].t || 0) - t < REPLAY_BURST_MS; i++)
+    if (r.frames[i].type === "transition" && r.frames[i].who === who) return true;
+  for (let i = r.at - 1; i >= 0; i--) {
+    const f = r.frames[i];
+    if (f.who !== who) continue;
+    if (f.type === "transition") return true;
+    const d = f.type === "ui" && (f.ui || {}).dialog;
+    if (f.type === "ui" && (!d || d.self + " " + d.action !== key)) return false;
+  }
+  return false;
+}
+/* a write: when the frame at the playhead closes the open form after
+   its write, the form's submit button is lit first, one time, and true
+   is answered so the close waits. An invitation's dialog has no submit. */
+function replayMarkWrite(r) {
+  const f = r.frames[r.at];
+  const g = $("dialog[open][data-guided]:not([data-replay-invite])");
+  if (!g || !g.guidedWrite || f.type !== "ui" || (f.ui || {}).dialog ||
+      g.querySelector("[data-replay-write]") ||
+      !replayWrote(r, g.getAttribute("data-guided"))) return false;
+  g.guidedWrite().setAttribute("data-replay-write", "");
+  return true;
+}
 function replayStep() {
   const r = replay;
   if (!r || !r.playing || r.at >= r.frames.length) return;
+  if (replayMarkWrite(r)) {
+    r.timer = setTimeout(replayStep, REPLAY_WRITE_MS / r.speed);
+    return;
+  }
   applyReplayFrame(r.frames[r.at++]);
   if (replay === r) replaySchedule();
 }
@@ -1147,6 +1207,7 @@ function playReplay() {
     r.at = 0;
     r.who = null;
     r.caption = null;
+    r.gaze = null;
     r.rows.clear();
     r.docs.clear();
     closeGuided();
@@ -1183,6 +1244,8 @@ function stopReplay(quiet) {
   guidedLastFields = {};
   guidedDismissed = null;
   guidedSeq = -1;
+  clearTimeout(replayGazeTimer);
+  document.documentElement.removeAttribute("data-replay-gaze");
   replayCaption();
   replayChip();
   if (quiet) return;
