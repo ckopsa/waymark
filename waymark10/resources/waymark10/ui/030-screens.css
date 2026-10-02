@@ -543,3 +543,10 @@
   .slot-spark { display: block; margin-top: auto; }
   .slot-spark-line { fill: none; stroke: var(--verdigris); stroke-width: 1.5;
                      stroke-linejoin: round; stroke-linecap: round; }
+  /* replay's pointer fills the form (200-events-follow.js): the field it
+     clicked wears the ring a focused field does, since a guided form's
+     fields are disabled and take no focus; and a step with no click
+     behind it is a notice in the caption band */
+  [data-replay-click] { outline: 2px solid Highlight;
+                        outline: -webkit-focus-ring-color auto 1px; }
+  #replaycaption[data-replay-notice] { font-style: italic; }
