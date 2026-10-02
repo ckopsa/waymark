@@ -6082,9 +6082,9 @@
               :else {:claimed? true :taken taken})))))))
 
 (defn stamp-walked-nothing!
-  "Stamp the sitting whose sit handed it NO rows — an empty queue, a
-  queue whose every row another open sitting or a stuck change holds, a
-  seat at a wall — so seat health counts a wake that had nothing to do
+  "Stamp the sitting whose sit was let walk and handed it NO rows — an
+  empty queue, a queue whose every row another open sitting or a stuck
+  change holds — so seat health counts a wake that had nothing to do
   rather than reading an absent `walked_rows`, which a sitting the
   claim never wrote to carries too. A re-sit that IS handed a row takes
   the stamp back off. A MAINTENANCE write, `claim-rows!`'s spelling:
