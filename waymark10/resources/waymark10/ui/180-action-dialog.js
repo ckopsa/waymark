@@ -618,6 +618,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     /* a note beside the fields it names, as an invitation's: a replayed
        caption's anchor (docs/spec-agent-demo-walks.md §3) */
     dlg.guidedMark = (names, text) => markInvited(form, names, text);
+    /* the field a staged call is typing, lit alone */
+    dlg.guidedLight = name => markTyped(form, name);
     dlg.guidedSet = fields => {
       for (const [k, v] of Object.entries(fields || {})) {
         const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
@@ -689,6 +691,23 @@ function markInvited(form, names, text) {
     if (node) node.focus({preventScroll: true});
   });
   return note;
+}
+/* the field a staged call is typing (docs/spec-agent-demo-walks.md §2):
+   lit as an invited field is, and only that one, with no note. The
+   field typed before it goes dark, unless a note still points at it. */
+function markTyped(form, name) {
+  for (const s of form.querySelectorAll("[data-typed]")) {
+    s.removeAttribute("data-typed");
+    const next = s.nextElementSibling;
+    if (!next || !next.hasAttribute("data-invite-note"))
+      s.classList.remove("invited");
+  }
+  const node = name ? form.querySelector(`[name="${CSS.escape(name)}"]`) : null;
+  const spot = node && (node.closest("label") || node.parentElement);
+  if (!spot) return;
+  spot.classList.add("invited");
+  spot.setAttribute("data-typed", "");
+  spot.scrollIntoView({behavior: "smooth", block: "center"});
 }
 
 /* ── the bulk report: N inputs → N verdicts, honestly partial ──────── */

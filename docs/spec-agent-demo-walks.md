@@ -178,6 +178,19 @@ so the viewer reads the line and then sees the act. With no recording
 self walk the argument is accepted and does nothing, so an agent's
 instructions need not branch.
 
+**A client may hold an old tool list.** The engine's `tools/list`
+carries `caption` on the three tools and `caption_field` on
+`waymark_invoke`. A Claude Code session read on 2026-10-01 had neither,
+before and after its connector was reconnected: the client keeps the
+tool list it read first, the tools are `additionalProperties: false`,
+and so it could not send the arguments. For that reason `caption` and
+`caption_field` also ride inside an invoke's `input`. The connector
+moves them out before the form is typed and before the door validates
+its input, so they do not reach the door. The argument beside `input`
+wins when a call carries both. A key the door's own input declares is
+the door's argument and is not moved. A get and a query have no `input`,
+so a session with an old list captions its invokes only.
+
 **The anchor is the step's own `self`.** A query anchors the caption to
 the screen, a get to the row, an invoke to the form. One more argument,
 `caption_field`, names one argument of the invoked action; the caption

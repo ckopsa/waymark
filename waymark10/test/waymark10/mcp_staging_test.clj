@@ -21,6 +21,7 @@
             [waymark10.server.presence :as presence]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
@@ -38,8 +39,8 @@
   row)
 
 (def ^:private errand
-  "A row with three doors: two plain arguments, one secret argument,
-  and a guard that refuses."
+  "A row with four doors: two plain arguments, one secret argument, an
+  argument of its own named `caption`, and a guard that refuses."
   (r/resource
    {:kind :errand
     :plural "errands"
@@ -66,6 +67,10 @@
                        [:maybe [:string {:max 12}]]]]
               :handler assign-handler
               :safety {:idempotent true :reversible true :confirm false}}
+     :label {:from #{:open} :to :open
+             :input [:map [:caption [:string {:max 80}]]]
+             :handler assign-handler
+             :safety {:idempotent true :reversible true :confirm false}}
      :complete {:from #{:open} :to :done
                 :guards [ready-gate]
                 :safety {:idempotent true :reversible false :confirm false
@@ -161,6 +166,72 @@
           (is (not (tool h "waymark_get" {:kind "errand" :id "no-such-row"})))
           (is (= [[:move (path a)]] (beats eng w))))))))
 
+(deftest a-get-of-the-walk-itself-makes-no-frame
+  (with-stage
+    (fn [eng h _reg]
+      (let [w (self-walk! h)]
+        (is (tool h "waymark_get" {:kind "walk" :id w}))
+        (is (= [] (beats eng w)))))))
+
+;; A grant-scoped GET is its caller's gaze already (`presence/read!`),
+;; and that door has no tap: the get's own beat still writes the move.
+
+(def ^:private mayor
+  {"x-waymark-principal" "mayor" "x-waymark-actor-type" "agent"})
+
+(defn- under-a-grant
+  "`mayor`'s headers under a grant colton gave over every errand."
+  [eng]
+  (let [gid (get-in (inv/create! eng :grant
+                                 {:audience "mayor"
+                                  :scope [{:kind "errand" :actions []}]}
+                                 {:principal (t/principal {:id "colton"})})
+                    [:row :id])]
+    (inv/invoke! eng :grant gid :accept nil
+                 {:principal (t/principal {:id "mayor" :type :agent})})
+    (assoc mayor "x-waymark-grant" (str gid))))
+
+(defn- post-as [h headers uri body]
+  (h {:request-method :post :uri uri :headers headers
+      :body (wire/write-json body)}))
+
+(defn- tool-as
+  "`tool`, with the caller's own headers."
+  [h headers tool-name args]
+  (let [resp (post-as h headers "/api/-/mcp"
+                      {:jsonrpc "2.0" :id 1 :method "tools/call"
+                       :params {:name tool-name :arguments args}})]
+    (is (= 200 (:status resp)) (:body resp))
+    (not (:isError (:result (json resp))))))
+
+(deftest a-scoped-get-writes-its-move-and-its-doc
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            b (errand! h {:title "Laundry"})
+            scoped (under-a-grant eng)
+            ;; an agent with no grant is served no walks, so the walk
+            ;; is made at the engine's own door
+            w (str (get-in (inv/create! eng :walk
+                                        {:followed "mayor" :title "The mayor's walk"
+                                         :docs true}
+                                        {:principal (t/principal {:id "mayor" :type :agent})})
+                           [:row :id]))
+            shown (fn []
+                    (mapv (fn [{:keys [type body]}] [(keyword type) (:self body)])
+                          (frames eng w)))]
+        (is (tool-as h scoped "waymark_get" {:kind "errand" :id a}))
+        (is (= [[:move (path a)] [:doc (path a)]] (shown))
+            "the read marked the gaze first, and the move is still written")
+        (testing "a second row: a second move, and its screen"
+          (is (tool-as h scoped "waymark_get" {:kind "errand" :id b}))
+          (is (= [[:move (path a)] [:doc (path a)]
+                  [:move (path b)] [:doc (path b)]]
+                 (shown))))
+        (testing "the same row again: the gaze did not change"
+          (is (tool-as h scoped "waymark_get" {:kind "errand" :id b}))
+          (is (= 4 (count (frames eng w)))))))))
+
 (deftest a-query-reports-its-collection
   (with-stage
     (fn [eng h _reg]
@@ -194,6 +265,19 @@
                 [:transition "rename"]
                 [:ui nil {}]]
                (beats eng w)))))))
+
+(deftest each-typing-beat-names-its-argument-in-focus
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            w (self-walk! h)]
+        (is (tool h "waymark_invoke" {:kind "errand" :id a :action "rename"
+                                      :input {:room "Kitchen" :title "Towels"}}))
+        (is (= [nil "title" "room" nil]
+               (->> (frames eng w)
+                    (filter #(= "ui" (:type %)))
+                    (mapv #(get-in % [:body :ui :focus]))))
+            "the opening beat and the closing beat type nothing")))))
 
 (deftest a-dry-run-leaves-the-dialog-open-and-the-invoke-does-not-retype
   (with-stage
@@ -239,6 +323,32 @@
         (is (not (str/includes?
                   (pr-str (filter #(= "ui" (:type %)) (frames eng w)))
                   "4321")))))))
+
+(deftest a-create-types-its-form-on-the-collection
+  (with-stage
+    (fn [eng h _reg]
+      (let [w (self-walk! h)
+            call {:kind "errand" :action "create"
+                  ;; the arguments arrive room first; the schema says title first
+                  :input {:room "Kitchen" :title "Towels"}}
+            typed [[:move "/api/errands"]
+                   [:ui "create" {}]
+                   [:ui "create" {:title "Towels"}]
+                   [:ui "create" {:title "Towels" :room "Kitchen"}]]]
+        (is (tool h "waymark_invoke" (assoc call :dry_run true)))
+        (is (= typed (beats eng w))
+            "the rehearsal types the form and leaves it open")
+        (is (= #{"/api/errands"}
+               (into #{} (keep #(get-in % [:body :ui :dialog :self]))
+                     (frames eng w)))
+            "the form is on the collection")
+        (is (tool h "waymark_invoke" call))
+        (is (= (conj typed [:transition "create"] [:ui nil {}]) (beats eng w))
+            "the create writes and closes, and types nothing again")
+        (testing "an action the kind does not create with opens no form"
+          (is (not (tool h "waymark_invoke" {:kind "errand" :action "rename"
+                                             :input {:title "Mop"}})))
+          (is (= 6 (count (frames eng w)))))))))
 
 ;; ── 3. when nothing is staged ───────────────────────────────────────
 
@@ -313,3 +423,39 @@
                         (filter #(= "caption" (:type %)))
                         (mapv (juxt #(get-in % [:body :text])
                                     #(get-in % [:body :self]))))))))))))
+
+(deftest a-caption-inside-input-is-the-calls-own
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            line "The agent renames the errand."
+            w (self-walk! h)
+            captions (fn [] (->> (frames eng w)
+                                 (filter #(= "caption" (:type %)))
+                                 (mapv #(get-in % [:body :text]))))]
+        (testing "it writes the caption frame and does not reach the door"
+          (is (tool h "waymark_invoke" {:kind "errand" :id a :action "rename"
+                                        :input {:title "Towels" :caption line
+                                                :caption_field "title"}}))
+          (is (= [["caption"]
+                  [:move (path a)]
+                  [:ui "rename" {}]
+                  [:ui "rename" {:title "Towels"}]
+                  [:transition "rename"]
+                  [:ui nil {}]]
+                 (beats eng w)))
+          (is (= {:self (path a) :action "rename" :field "title" :text line}
+                 (select-keys (:body (first (frames eng w)))
+                              [:self :action :field :text]))))
+        (testing "the argument beside input wins"
+          (is (tool h "waymark_invoke" {:kind "errand" :id a :action "rename"
+                                        :input {:title "Sheets" :caption "Inside."}
+                                        :caption "Beside."}))
+          (is (= [line "Beside."] (captions))))
+        (testing "a door's own `caption` argument stays the door's"
+          (is (tool h "waymark_invoke" {:kind "errand" :id a :action "label"
+                                        :input {:caption "Linen"}}))
+          (is (= [line "Beside."] (captions)))
+          (is (= [:ui "label" {:caption "Linen"}]
+                 (last (filter #(= [:ui "label"] (vec (take 2 %)))
+                               (beats eng w))))))))))

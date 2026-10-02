@@ -52,7 +52,7 @@
   .dlgfoot button.invited { animation: none; }
   html[data-replay-gaze] .panel[data-replay-screen],
   html[data-replay-gaze] [data-replay-doc] > .panel:first-of-type {
-    outline: 2px solid #7a5cff; outline-offset: 2px; }
+    outline: 2px solid var(--verdigris); outline-offset: 2px; }
 
   /* ── film mode (docs/spec-agent-demo-walks.md §8b): the page played
      for a camera. The chrome a film must not show is gone, a title
