@@ -2007,7 +2007,9 @@
 
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
-(def ^:private person-policy {:auto_merge false})
+;; a required check is named, because a repository that names none is
+;; asked nothing (ticket 60962bcf): the rig would refuse the merge
+(def ^:private person-policy {:auto_merge false :required_checks ["gate"]})
 
 (def ^:private approver
   (t/principal {:id "colton" :display "Colton Kopsa" :roles #{"approver"}}))
@@ -2108,6 +2110,40 @@
       (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 501))))
       (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 600))))
       (is (= 2 (count (bench/merge-asks eng)))))))
+
+;; ── a repository the rig will not merge (ticket 60962bcf) ──────────────
+
+(deftest a-repository-with-no-required-checks-raises-no-merge-ask
+  (let [{:keys [eng] :as w} (clean-world {:auto_merge false})
+        waiting (atom {})]
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61)))
+        "the wait has passed, and the rig would refuse the merge")
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 600))))
+    (is (empty? (bench/merge-asks eng))
+        "no held call is filed for a tap that could merge nothing")
+    (testing "the change says a person merges it on GitHub"
+      (bench/merge-green! eng (atom {}))
+      (is (= "person" (get-in (change-row w) [:data :line_why]))))))
+
+(deftest a-merge-the-rig-refuses-after-the-allow-lands-failed
+  (let [{:keys [eng state]} (clean-world person-policy)
+        waiting (atom {})
+        reason "the rig never merges a change nothing has tested"]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (answer! state "bench__merge" {:refused "no_required_checks" :reason reason})
+    (let [ask (first (bench/merge-asks eng))
+          out (inv/invoke! eng :held_call (str (:id ask)) :allow {}
+                           {:principal approver})]
+      (held/after-allow! eng (get (inv/resources eng) :held_call)
+                         :allow out))
+    (let [ask (first (bench/merge-asks eng))]
+      (is (= 1 (count (calls-of state "bench__merge"))))
+      (is (= :failed (:state ask))
+          "an answer that says isError is not a merge, so the row is not done")
+      (is (str/includes? (str (get-in ask [:data :reason])) reason)
+          "the person reads the rig's own reason"))))
 
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)

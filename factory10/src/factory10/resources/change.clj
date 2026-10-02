@@ -1294,8 +1294,9 @@
                            "conflicted" "It conflicts with the base branch"
                            "draft" "It is a draft, and a draft is not brought forward"
                            "parked" "The bench refused this head for good"
-                           "held" "Its ticket merges after tickets that are not done yet"}}}
-     [:maybe [:enum "front" "behind" "red" "conflicted" "draft" "parked" "held"]]]
+                           "held" "Its ticket merges after tickets that are not done yet"
+                           "person" "A person merges it on GitHub: the house does not merge this repository, and nobody is asked here"}}}
+     [:maybe [:enum "front" "behind" "red" "conflicted" "draft" "parked" "held" "person"]]]
     [:line_reason {:optional true
                    :examples ["GitHub says it cannot merge"]
                    :x-display

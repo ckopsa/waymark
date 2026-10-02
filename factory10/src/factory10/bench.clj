@@ -499,6 +499,28 @@
                 (house-merges? policy)
                 (seq (required-checks-of policy)))))
 
+(defn person-merges-on-github?
+  "Is this a repository nobody here can merge (ticket 60962bcf)? The
+  house pass does not merge it, and its policy names no required check,
+  so the rig would refuse a merge ask's call (`no_required_checks`: it
+  never merges a change nothing has tested). Its person merges it on
+  GitHub, and no merge ask is raised."
+  [policy]
+  (boolean (and policy
+                (not (house-pass-merges? policy))
+                (empty? (required-checks-of policy)))))
+
+(defn person-marks
+  "The mark of every change a person merges on GitHub
+  (`person-merges-on-github?`): change id → {:line_why \"person\"}."
+  [changes by-repo]
+  (into {}
+        (keep (fn [c]
+                (when (person-merges-on-github?
+                       (get by-repo (str (get-in c [:data :repository]))))
+                  [(str (:id c)) {:line_why "person"}])))
+        changes))
+
 (defn merge-args
   "What the rig's `merge` is told: the pull request, the head it may
   merge and nothing else, and the policy's checks and method."
@@ -1152,7 +1174,7 @@
 
 (def line-whys
   "Every word `line_why` may carry."
-  ["front" "behind" "red" "conflicted" "draft" "parked" "held"])
+  ["front" "behind" "red" "conflicted" "draft" "parked" "held" "person"])
 
 (def ^:private reason-chars 500)
 
@@ -1746,6 +1768,9 @@
                                                          by-repo @seen)
                                          standing))
                            :changes merge
+                           ;; a change nobody here can merge says so
+                           ;; (ticket 60962bcf)
+                           (person-marks changes by-repo)
                            (into {}
                                  (map (fn [c]
                                         [(str (:id c))
@@ -1892,8 +1917,12 @@
   Once it has waited the policy's `merge_wait_seconds`, it raises one
   merge ask unless `asked-already?`. A change whose ticket still waits
   on another to merge (`merge-holds`) is not timed and not asked; its
-  wait starts once nothing holds it. `waiting` is an atom of change id
-  → {:head :since}. Throws nothing. → the number of asks raised."
+  wait starts once nothing holds it. A repository whose policy names no
+  required check is asked nothing (`person-merges-on-github?`): the rig
+  would refuse the allowed call, so the tap would merge nothing, and the
+  merge pass writes `line_why: person` on the change instead. `waiting`
+  is an atom of change id → {:head :since}. Throws nothing. → the number
+  of asks raised."
   [eng waiting ^Instant now]
   (let [by-repo (policies-by-repo eng)
         asks (merge-asks eng)
@@ -1910,6 +1939,7 @@
                   policy (get by-repo (str (get-in change [:data :repository])))]
             :when (and number head policy
                        (not (house-pass-merges? policy))
+                       (not (person-merges-on-github? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))
                        (not (true? (get-in change [:data :draft])))
                        (not (get holds (born-ticket change))))]

@@ -956,7 +956,9 @@
   the arguments the row carries, which is what `invoke-for` would
   have sent at call time. A server that answers lands `done` with the
   answer cut to `answer-cap-bytes`; a failure of any kind lands
-  `failed` with its sentence. Nothing here throws: the person's tap
+  `failed` with its sentence, and so does an answer that says
+  `isError`: the tool refused, so the call did not do what the person
+  allowed. Nothing here throws: the person's tap
   already committed, and a wire failure is a fact about the call, not
   about the tap."
   [eng row]
@@ -965,9 +967,23 @@
       (forward-door! eng row)
       (forward-tool! eng row))))
 
+(defn- error-words
+  "What a tool that answered `isError` said: its first text part, or the
+  whole answer when it carries none."
+  [payload]
+  (or (some (fn [part]
+              (when (= "text" (str (:type part)))
+                (some-> (:text part) str not-empty)))
+            (:content payload))
+      (wire/write-json payload)))
+
 (defn- forward-tool!
   "The tool call's forward, as it always was: `mcp-servers/call!` on
   the tool the row names, with the arguments the row carries.
+
+  AN ANSWER THAT SAYS `isError` IS A FAILURE. The server answered, and
+  what it answered is that it did not do the thing: the row lands
+  `failed` with the server's own words, never `done`.
 
   A failure the server put a sentence on records that sentence FIRST
   and the engine's context after it, in brackets, so the cut at the
@@ -976,11 +992,15 @@
   (let [tool (str (get-in row [:data :tool]))
         args (or (get-in row [:data :forward]) {})]
     (try
-      (let [payload (servers/call! eng tool args)
-            {:keys [text dropped]} (capped (wire/write-json payload)
-                                           answer-cap-bytes)]
-        (finish! eng (:id row) :land {:answer text :dropped dropped})
-        :done)
+      (let [payload (servers/call! eng tool args)]
+        (if (true? (:isError payload))
+          (let [{:keys [text]} (capped (error-words payload) 240)]
+            (finish! eng (:id row) :fail {:reason text})
+            :failed)
+          (let [{:keys [text dropped]} (capped (wire/write-json payload)
+                                               answer-cap-bytes)]
+            (finish! eng (:id row) :land {:answer text :dropped dropped})
+            :done)))
       (catch Exception e
         (let [{:keys [sentence context]} (mcp-client/said e)
               {:keys [text]} (capped (if sentence
