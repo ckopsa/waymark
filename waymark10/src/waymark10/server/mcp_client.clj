@@ -38,7 +38,8 @@
   `with-timeout` bounds any client that has no timeout of its own
   (the in-process fake the tests register): the call runs on a
   future, and the caller gets `unreachable` when the future has not
-  answered in time (R-12)."
+  answered in time (R-12). `*call-timeout-ms*` stretches that bound
+  for the calls made inside its binding, on every client at once."
   (:require [clojure.string :as str]
             [waymark10.server.problems :as p]
             [waymark10.wire :as wire])
@@ -57,6 +58,19 @@
 (def protocol-version "2025-06-18")
 
 (def client-info {:name "waymark10" :version "10"})
+
+(def ^:dynamic *call-timeout-ms*
+  "The bound for the calls made inside its binding, in place of the
+  client's own `timeout-ms`; nil keeps the client's. A caller that
+  knows its one call is slow (the sit's bench prepare) binds it, and
+  every other caller keeps the bound the row's client was built with."
+  nil)
+
+(defn- timeout-of
+  "The bound of this call: `*call-timeout-ms*` when it is bound, else
+  the client's own."
+  [timeout-ms]
+  (long (or *call-timeout-ms* timeout-ms)))
 
 ;; ── the refusal ─────────────────────────────────────────────────────
 
@@ -187,7 +201,7 @@
          raw! (fn [msg]
                 (try (post-message! http url (:session @state)
                                     (when headers-fn (headers-fn))
-                                    timeout-ms msg)
+                                    (timeout-of timeout-ms) msg)
                      (catch Exception e
                        (fail! :wire (ex-message e)))))
          handshake! (fn []
@@ -331,13 +345,14 @@
                      prom (promise)]
                  (swap! state assoc-in [:pending id] prom)
                  (send! {:jsonrpc "2.0" :id id :method method :params params})
-                 (let [answer (deref prom (long timeout-ms) ::timeout)]
+                 (let [bound (timeout-of timeout-ms)
+                       answer (deref prom bound ::timeout)]
                    (cond
                      (identical? ::timeout answer)
                      (do (swap! state update :pending dissoc id)
                          (died! (:proc @state) "a call timed out")
                          (throw (unreachable (str method " did not answer in "
-                                                  timeout-ms " ms; the process"
+                                                  bound " ms; the process"
                                                   " was stopped."))))
 
                      (:failed answer)
@@ -402,14 +417,15 @@
         inner-dead? (::dead? (meta client))]
     (with-meta
       (fn rpc [method params]
-        (let [f (future (try {:ok (client method params)}
+        (let [bound (timeout-of timeout-ms)
+              f (future (try {:ok (client method params)}
                              (catch Throwable t {:threw t})))
-              out (deref f (long timeout-ms) ::timeout)]
+              out (deref f bound ::timeout)]
           (cond
             (identical? ::timeout out)
             (do (reset! timed-out true)
                 (throw (unreachable (str method " did not answer in "
-                                         timeout-ms " ms."))))
+                                         bound " ms."))))
 
             (contains? out :threw)
             (do (reset! timed-out false)
