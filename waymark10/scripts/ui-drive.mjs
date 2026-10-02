@@ -2029,6 +2029,46 @@ async function guidedStory() {
                  !document.querySelector("dialog[open]")`, "the form to close after the mark", 15000);
   ok("the marked form closes", true);
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a dialog beat on a row that is not on screen");
+  /* the walk's page is drawn again before the file plays: the stew's
+     page, still on screen, has links the first gesture would take */
+  await A.until(`!replay && !document.querySelector("dialog[open]") &&
+                 !!document.querySelector("[data-replay-walk]") &&
+                 !document.querySelector(${JSON.stringify(`#view a[href="#${meals[1]}"]`)})`,
+                "the replay to stop on the walk's page");
+  const farFile = [
+    {format: "waymark-walk/1", title: "An agent opens a form elsewhere",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "ui", who: "a1", self: meals[1], ui: {dialog: stagedDialog, fields: {}}},
+    {t: 1000, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: stagedDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 3000, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every hash the replay goes to, and whether an element was pressed
+     since the hash before it */
+  await A.js(`{ window.__replayHops = []; let pressed = false;
+    new MutationObserver(ms => {
+      if (ms.some(m => m.target.hasAttribute("data-replay-press"))) pressed = true;
+    }).observe(document.body, {subtree: true, attributes: true,
+                               attributeFilter: ["data-replay-press"]});
+    window.addEventListener("hashchange", () => {
+      if (replay) window.__replayHops.push((pressed ? "press " : "jump ") + hereHref());
+      pressed = false;
+    }); true }`);
+  await A.js(`startReplay(${JSON.stringify(farFile)})`);
+  await A.until(`!!replay && replay.at >= 1`, "the dialog beat, after its walk", 20000);
+  console.log("  the path: " + await A.js(`window.__replayHops.join(", ")`));
+  await A.until(`!!document.querySelector("dialog[open][data-guided]") && (pauseReplay(), true)`,
+                "the form on the row walked to");
+  ok("a replayed dialog beat on a row that is not on screen goes there by the list, and no hash changes without a press",
+     await A.js(`{ const h = window.__replayHops;
+       hereHref() === ${JSON.stringify(meals[1])} && h.length >= 2 &&
+       h[0] === "press /api/meals" && h.every(x => x.startsWith("press ")) }`));
+  await A.js(`playReplay(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !document.querySelector("dialog[open]")`, "the form to close", 15000);
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
   A.close();
   await chrome.close();
 }

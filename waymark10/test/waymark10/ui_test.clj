@@ -393,6 +393,31 @@
     (is (and hop act (< hop act))
         "the hop is made before the frame is applied, and in its place")))
 
+(deftest ui-replay-walks-to-the-row-of-a-dialog-a-write-or-an-invitation
+  ;; no jumps for the three other frames either: a dialog beat with no
+  ;; action button on screen, a write of the recorder's and an invitation,
+  ;; on a row that is not the screen shown, make the gesture of a move to
+  ;; that row first (navigation entry, list, the row's link); the row is
+  ;; drawn as a screen of its own, and the frame is applied after it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        walk (str/index-of body "if (r.gesture && r.gesture.walk) { replayArrive(r); return; }")
+        act (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (testing "a dialog beat whose door has no button on screen"
+      (is (str/includes? body "const to = ui.dialog ? !replayGestureTarget(f) && (list ? collectionHrefOf(c) : f.self)")))
+    (testing "a write of the recorder's, and not a step with no click behind it"
+      (is (str/includes? body ": f.type === \"transition\" ? !replayNotice(r, f) && f.self")))
+    (testing "an invitation"
+      (is (str/includes? body ": f.type === \"invitation\" && f.action ? row(f.self) : null;")))
+    (testing "the screen shown is no walk, nor is one under an open dialog, and one walk is made for a frame"
+      (is (str/includes? body "if (!f || r.walked === r.at || r.door || $(\"dialog[open]\")) return null;"))
+      (is (str/includes? body "return to && row(to) !== hereHref() ? {type: \"move\", who: f.who, self: to, list} : null;")))
+    (testing "the gesture is a move's, so it goes by the kind's list as a move does"
+      (is (str/includes? body "const walk = replayWalkOf(r, r.frames[r.at]);\n  const f = walk || r.frames[r.at];")))
+    (testing "the walk draws the row, outlined, and waits the screen floor for the frame's own gesture"
+      (is (str/includes? body "applyFollowMove(walk.self);\n  replayGaze(walk.list ? \"list\" : \"row\", walk.self);")))
+    (is (and walk act (< walk act))
+        "the walk is made before the frame is applied, and in its place")))
+
 (deftest ui-replay-points-at-the-field-a-typing-beat-types
   ;; the pointer fills the form: a typing beat's gesture goes to the
   ;; field it types into, and the click there, before the frame shows the
