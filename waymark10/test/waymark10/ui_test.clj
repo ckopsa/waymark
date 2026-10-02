@@ -362,6 +362,41 @@
     (is (not (re-find #"html\[data-film\][^{]*(data-replay-gaze|data-guided-write|\.dlgfoot)[^{]*\{[^}]*display: none" body))
         "film mode hides no part of either mark")))
 
+(deftest ui-replay-points-at-the-link-or-button-before-the-act
+  ;; the gesture before an act: a pointer glides for 600 ms to the link a
+  ;; move would follow, or to the action button a dialog beat would
+  ;; press, and that element is lit for 300 ms in the invitation's lit
+  ;; style; the frame is applied after it. With no link on screen there
+  ;; is no gesture and the move still happens. Film mode draws the pointer
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        wait (str/index-of body "const wait = replayGestureWait(r);")
+        act (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (is (str/includes? body "const REPLAY_GLIDE_MS = 600, REPLAY_PRESS_MS = 300;"))
+    (testing "a move goes to the row's link on the page, then to the navigation bar"
+      (is (str/includes? body "return link(\"#view\", h => row(h) === to) || nav(to) ||"))
+      (is (str/includes? body "nav(to.replace(/\\/[^/]+$/, \"\")) || null;")))
+    (testing "a dialog beat goes to that row's action button for the door"
+      (is (str/includes? body ".filter(b => seen(b) && b.dataset.action === d.action);"))
+      (is (str/includes? body "return doors.find(b => rowOf(b) === d.self) ||")))
+    (testing "a query beat goes to the filter control or the navigation entry"
+      (is (str/includes? body "link(\"#view\", h => h === target) || nav(row(c.self)) || null;")))
+    (testing "the target is lit after the glide, and the frame waits for the press"
+      (is (str/includes? body "lit.classList.add(\"invited\");"))
+      (is (str/includes? body "lit.setAttribute(\"data-replay-press\", \"\");"))
+      (is (str/includes? body "}, REPLAY_GLIDE_MS / r.speed);"))
+      (is (and wait act (< wait act))
+          "the gesture is waited for before the frame is applied"))
+    (testing "with no link on screen there is no gesture, and the frame is applied"
+      (is (str/includes? body "if (!to) return;"))
+      (is (str/includes? body "return r.gesture ? r.gesture.until - performance.now() : 0;")))
+    (testing "the gesture is made inside the gap before its frame"
+      (is (str/includes? body "Math.max(0, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);")))
+    (testing "the pointer is drawn over the page, in film mode as well"
+      (is (str/includes? body "document.body.append(p = el(\"div\", {id: \"replaypointer\", \"aria-hidden\": \"true\"}));"))
+      (is (str/includes? body "#replaypointer { position: fixed; left: 0; top: 0; z-index: 35;"))
+      (is (str/includes? body "[data-replay-press].invited { animation: none; }"))
+      (is (not (re-find #"html\[data-film\][^{]*(#replaypointer|data-replay-press)[^{]*\{[^}]*display: none" body))))))
+
 (deftest ui-replay-lights-the-field-a-staged-call-types
   ;; docs/spec-agent-demo-walks.md §2: a typing beat names its argument
   ;; in `focus`, and replay lights that field alone, in the invitation's

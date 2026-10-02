@@ -54,6 +54,22 @@
   html[data-replay-gaze] [data-replay-doc] > .panel:first-of-type {
     outline: 2px solid var(--verdigris); outline-offset: 2px; }
 
+  /* ── a replayed gesture: the pointer that goes to the link or the
+     button before the screen changes, an arrow in ink with a paper
+     edge; and the element it presses, lit as an invited field is,
+     without the wash. Film mode draws both ─────────────────────────── */
+  #replaypointer { position: fixed; left: 0; top: 0; z-index: 35;
+                   width: 20px; height: 28px; pointer-events: none;
+                   background: var(--paper);
+                   clip-path: polygon(0 0, 0 75%, 23% 58%, 42% 95%, 58% 89%, 39% 53%, 72% 53%);
+                   transition: transform 600ms ease-in-out; }
+  #replaypointer::before { content: ""; position: absolute; inset: 0;
+                   background: var(--ink); clip-path: inherit;
+                   transform: scale(.76); transform-origin: 16% 40%; }
+  @media (prefers-reduced-motion: reduce) {
+    #replaypointer { transition-property: none; } }
+  [data-replay-press].invited { animation: none; }
+
   /* ── film mode (docs/spec-agent-demo-walks.md §8b): the page played
      for a camera. The chrome a film must not show is gone, a title
      card covers the screen, and a caption is a band across the bottom:
