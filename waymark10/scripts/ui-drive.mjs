@@ -1937,7 +1937,7 @@ async function guidedStory() {
   const invite = `document.querySelector("dialog[open][data-replay-invite]")`;
   /* the frame after the invitation is ada's screen elsewhere, 3 s
      before the answer: the replay is paused there for the checks */
-  await A.until(`!!${invite} && replay.at === 3`, "the invitation's dialog, and the frame after it");
+  await A.until(`!!${invite} && replay.at === 3`, "the invitation's dialog, and the frame after it", 15000);
   await A.js(`pauseReplay(); true`);
   ok("the replay opens the invited door's dialog on the invited row, read-only, and a later frame leaves both",
      await A.js(`{ const inputs = [...${invite}.querySelectorAll("input, select, textarea")];
@@ -1981,19 +1981,46 @@ async function guidedStory() {
   ].map(l => JSON.stringify(l)).join("\n");
   /* at half speed the press lasts 600 ms, which the 150 ms poll cannot miss */
   await A.js(`startReplay(${JSON.stringify(stagedFile)}) && (setReplaySpeed(0.5), true)`);
+  /* no jump: the stew's link is not on the walk's page, so the pointer
+     takes the path a person would. The replay is paused at each press
+     for its check, and makes that gesture again when it plays on. */
+  const navPress = `document.querySelector("#kinds a[data-replay-press]")`;
+  await A.until(`!!${navPress} && (pauseReplay(), true)`, "the pressed navigation entry", 15000);
+  ok("a replayed move to a row that is not on screen presses its kind's navigation entry first",
+     await A.js(`${navPress}.getAttribute("href").split("?")[0] === "#/api/meals" &&
+       replay.at === 0 && hereHref() !== ${JSON.stringify(meals[1])}`));
+  await A.js(`playReplay(); true`);
+  const rowPress = `document.querySelector(${JSON.stringify(
+    `#view a[href="#${meals[1]}"][data-replay-press]`)})`;
+  await A.until(`!!${rowPress} && (pauseReplay(), true)`, "the pressed row link in the list", 15000);
+  ok("the list is drawn, and the row's link is pressed there before the move is made",
+     await A.js(`hereHref() === "/api/meals" && replay.at === 0`));
+  await A.js(`playReplay(); true`);
   const pressed = `document.querySelectorAll("#view button[data-replay-press]")`;
   /* the dialog waits for the gesture: the replay is paused there for the check */
-  await A.until(`${pressed}.length === 1 && (pauseReplay(), true)`, "the lit action button");
+  await A.until(`${pressed}.length === 1 && (pauseReplay(), true)`, "the lit action button", 15000);
   ok("a replayed staged call lights one action button, under the pointer, before its dialog opens",
      await A.js(`{ const b = ${pressed};
        b.length === 1 && b[0].dataset.action === "update_recipe" &&
        b[0].classList.contains("invited") && replay.at === 1 &&
        !!document.querySelector("#replaypointer") && !document.querySelector("dialog[open]") }`));
+  await A.js(`playReplay(); true`);
+  /* the pointer fills the form: still at half speed, the value waits
+     for the click, and the replay is paused there for the check */
+  const clicked = `document.querySelector("dialog[open][data-guided] [data-replay-click]")`;
+  await A.until(`!!${clicked} && (pauseReplay(), true)`, "the clicked field", 15000);
+  ok("the pointer goes into the form and clicks the field before its value shows",
+     await A.js(`{ const t = document.querySelector("dialog[open][data-guided] [name=recipe]");
+       const c = ${clicked};
+       (c === t || c.contains(t)) && t.value === "" && t.disabled && replay.at === 2 &&
+       !!document.querySelector("dialog[open][data-guided] #replaypointer") }`));
   await A.js(`setReplaySpeed(1); playReplay(); true`);
   const written = `document.querySelectorAll("dialog[open][data-guided] .dlgfoot [data-replay-write]")`;
-  /* the close waits for the mark: the replay is paused there for the check */
-  await A.until(`${written}.length === 1 && (pauseReplay(), true)`, "the marked submit");
-  ok("a replayed staged call marks one submit, lit, before the frame that closes its form",
+  /* the close waits for the press: the replay is paused on its way, and
+     the pointer still arrives and presses, for the check */
+  await A.until(`${written}.length === 1 && (pauseReplay(), true)`, "the submit under the pointer", 15000);
+  await A.until(`${written}[0].hasAttribute("data-replay-press")`, "the pressed submit");
+  ok("a replayed staged call presses one submit, lit under the pointer, before the frame that closes its form",
      await A.js(`{ const b = ${written};
        b.length === 1 && b[0].classList.contains("invited") && replay.at === 4 &&
        document.querySelector("dialog[open][data-guided] [name=recipe]")?.value === "Brown the roux." }`));

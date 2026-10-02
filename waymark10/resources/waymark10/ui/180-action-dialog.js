@@ -620,6 +620,24 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     dlg.guidedMark = (names, text) => markInvited(form, names, text);
     /* the field a staged call is typing, lit alone */
     dlg.guidedLight = name => markTyped(form, name);
+    /* a replayed typing beat's field, for the pointer to go to
+       (200-events-follow.js): the field, or its label when the field
+       itself is not drawn */
+    dlg.guidedField = name => {
+      const node = name ? form.querySelector(`[name="${CSS.escape(name)}"]`) : null;
+      if (!node) return null;
+      return node.getClientRects().length ? node
+        : node.closest("label") || node.parentElement;
+    };
+    /* the pointer's click on it: that field alone wears the ring a
+       focused field does (030-screens.css), since a disabled field
+       takes no focus */
+    dlg.guidedClick = name => {
+      for (const n of form.querySelectorAll("[data-replay-click]"))
+        n.removeAttribute("data-replay-click");
+      const spot = dlg.guidedField(name);
+      if (spot) spot.setAttribute("data-replay-click", "");
+    };
     dlg.guidedSet = fields => {
       for (const [k, v] of Object.entries(fields || {})) {
         const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
