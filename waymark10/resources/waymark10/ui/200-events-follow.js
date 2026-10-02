@@ -910,6 +910,13 @@ let replayGazeTimer = null;
    speed. A hold is a floor under the gap and no addition to it, so
    REPLAY_MAX_GAP is still the most a recorded silence plays. */
 const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;
+/* a viewer follows about one change of the screen a second: the frame
+   after one that changed the screen (a move to another row, a dialog
+   opening or closing, a transition) waits at least REPLAY_SCREEN_MIN,
+   and the frame after a typing beat at least REPLAY_TYPE_MIN, before
+   speed. Both are floors under the gap, as the holds are. A frame that
+   changes nothing on screen waits nothing (replayStill). */
+const REPLAY_SCREEN_MIN = 1200, REPLAY_TYPE_MIN = 600;
 function parseWalk(text) {
   let docs;
   try {
@@ -934,6 +941,7 @@ function startReplay(text) {
              at: 0, speed: 1, playing: false, timer: null, who: null, back,
              caption: null,       // the caption frame on screen
              gaze: null,          // the address last outlined
+             beat: null,          // the `ui` beat last played (replayBeat)
              rows: new Map(),     // self → {kind, state, summary, log}
              docs: new Map(),     // self, the document recorded for it so far
              known: new Set(),    // every row self the recording names
@@ -1034,17 +1042,24 @@ function applyReplayFrame(f) {
   if (f.type === "doc") {
     const self = String(f.self || "").split("?")[0];
     if (self && f.doc) {
+      /* a document equal to the one held is on screen already */
+      const same = JSON.stringify(replay.docs.get(self)) === JSON.stringify(f.doc);
       replay.docs.set(self, f.doc);
-      if (self === String(hereHref() || "").split("?")[0]) render();
+      if (!same && self === String(hereHref() || "").split("?")[0]) render();
     }
     replayChip();
     return;
   }
   const actor = replayActor(f);
   replay.who = actor;
+  /* a `ui` beat equal to the act before it is on screen already: it is
+     not drawn again */
+  const beat = f.type === "ui" ? replayBeat(f) : null;
+  const again = !!beat && beat === replay.beat;
+  replay.beat = beat;
   if (f.type === "move") {
     if (f.self) { applyFollowMove(f.self); replayGaze("row", f.self); }
-  } else if (f.type === "ui") {
+  } else if (f.type === "ui" && !again) {
     applyUiFrame({self: f.self, ui: f.ui || {}, principal: actor});
     const c = (f.ui || {}).collection;
     if (c && c.self && !(f.ui || {}).dialog)
@@ -1088,20 +1103,76 @@ function replayGap(r) {
   const prev = r.at ? (r.frames[r.at - 1].t || 0) : 0;
   const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);
   const read = replayReadingTime(r.at ? r.frames[r.at - 1] : null);
+  /* a frame that changes nothing on screen folds into the one before it */
+  if (!read && replayStill(r.frames, r.at)) return 0;
   const gap = read + Math.min(REPLAY_MAX_GAP,
                        r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);
   return gap;
 }
-/* the least the frame at `at` waits for the act before it to be seen.
-   A `doc` frame is a screen and nobody's act: it is never held back,
-   and the act before it is the one that counts. A `move` is to another
-   row when the act before it was on a different one. */
-function replayHoldTime(frames, at) {
-  if (!frames[at] || frames[at].type === "doc") return 0;
+/* a `ui` beat as one string: who reported it, where, and what. Two
+   beats with one string draw one screen. */
+function replayBeat(f) {
+  return JSON.stringify([f.who || "", f.self || "", f.ui || {}]);
+}
+/* whether the frame at `at` changes nothing a viewer sees, and so
+   plays with no wait: a `doc` in the burst of the frame before it is
+   that frame's own screen, a `doc` equal to the last one recorded for
+   its screen draws nothing new, and neither does a `ui` beat equal to
+   the act before it. */
+function replayStill(frames, at) {
+  const f = frames[at];
+  if (!f || !at) return false;
+  if (f.type === "doc") {
+    if ((f.t || 0) - (frames[at - 1].t || 0) < REPLAY_BURST_MS) return true;
+    for (let i = at - 1; i >= 0; i--)
+      if (frames[i].type === "doc" && frames[i].self === f.self)
+        return JSON.stringify(frames[i].doc) === JSON.stringify(f.doc);
+    return false;
+  }
+  if (f.type !== "ui") return false;
   let i = at - 1;
   while (i >= 0 && frames[i].type === "doc") i--;
+  return !!frames[i] && frames[i].type === "ui" &&
+    replayBeat(frames[i]) === replayBeat(f);
+}
+/* whether the `ui` beat at `i` typed into the dialog the `ui` beat
+   before it had open. Any other `ui` beat opened a dialog, closed one
+   or showed another screen. */
+function replayTyped(frames, i) {
+  const key = f => {
+    const d = (f.ui || {}).dialog;
+    return d ? d.self + " " + d.action : "";
+  };
+  const k = key(frames[i]);
+  for (let j = i - 1; k && j >= 0; j--)
+    if (frames[j].type === "ui") return key(frames[j]) === k;
+  return false;
+}
+/* the least the frame at `at` waits for the last change of the screen
+   before it to be seen. A `doc` frame is a screen and nobody's act: it
+   is never held back, and neither is any frame that changes nothing
+   (replayStill); the frame before them is the one that counts. After a
+   typing beat the floor is REPLAY_TYPE_MIN; after any other `ui` beat,
+   an invitation, a transition or a move to another row it is
+   REPLAY_SCREEN_MIN, or the act's own hold when that is longer. */
+function replayHoldTime(frames, at) {
+  if (!frames[at] || frames[at].type === "doc" || replayStill(frames, at))
+    return 0;
+  let i = at - 1;
+  while (i >= 0 && (frames[i].type === "doc" || replayStill(frames, i))) i--;
   const f = frames[i];
   if (!f) return 0;
+  if (f.type === "ui")
+    return replayTyped(frames, i) ? REPLAY_TYPE_MIN : REPLAY_SCREEN_MIN;
+  if (f.type === "invitation") return REPLAY_SCREEN_MIN;
+  const hold = replayActHold(frames, i);
+  return hold && Math.max(hold, REPLAY_SCREEN_MIN);
+}
+/* the hold of the act at `i`: a write, or a move to another row. A
+   `move` is to another row when the act before it was on a different
+   one. */
+function replayActHold(frames, i) {
+  const f = frames[i];
   if (f.type === "transition") return REPLAY_WRITE_HOLD;
   if (f.type !== "move" || !f.self) return 0;
   const row = s => String(s).split("?")[0];
@@ -1208,6 +1279,7 @@ function playReplay() {
     r.who = null;
     r.caption = null;
     r.gaze = null;
+    r.beat = null;
     r.rows.clear();
     r.docs.clear();
     closeGuided();
