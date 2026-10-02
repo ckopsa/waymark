@@ -39,8 +39,9 @@
   row)
 
 (def ^:private errand
-  "A row with four doors: two plain arguments, one secret argument, an
-  argument of its own named `caption`, and a guard that refuses."
+  "A row with five doors: two plain arguments, one secret argument, a
+  ref argument and a list of them, an argument of its own named
+  `caption`, and a guard that refuses."
   (r/resource
    {:kind :errand
     :plural "errands"
@@ -67,6 +68,13 @@
                        [:maybe [:string {:max 12}]]]]
               :handler assign-handler
               :safety {:idempotent true :reversible true :confirm false}}
+     :hand {:from #{:open} :to :open
+            :input [:map
+                    [:crew_id {:kind :crew} :waymark/ref]
+                    [:helpers {:optional true :kind :crew} [:vector :waymark/ref]]
+                    [:note {:optional true} [:maybe [:string {:max 80}]]]]
+            :handler assign-handler
+            :safety {:idempotent true :reversible true :confirm false}}
      :label {:from #{:open} :to :open
              :input [:map [:caption [:string {:max 80}]]]
              :handler assign-handler
@@ -75,6 +83,21 @@
                 :guards [ready-gate]
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "Done is done."}}}}))
+
+(def ^:private crew
+  "The kind an errand's ref arguments name."
+  (r/resource
+   {:kind :crew
+    :plural "crews"
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.name}"
+    :schema [:map [:name [:string {:min 1 :max 80}]]]
+    :actions
+    {:retire {:from #{:open} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "Gone is gone."}}}}))
 
 ;; ── the door ────────────────────────────────────────────────────────
 
@@ -87,7 +110,7 @@
   (let [clock (atom (Instant/now))
         eng (engine/engine
              {:storage (memory/storage)
-              :resources [errand]
+              :resources [errand crew]
               :now-fn (fn [] (swap! clock (fn [^Instant i] (.plusMillis i 1))))})
         reg (presence/start! eng {:hb-ms 600000})]
     (swap! (:runtime eng) assoc :presence reg)
@@ -110,6 +133,11 @@
 
 (defn- errand! [h data]
   (let [resp (post h "/api/errands" (merge {:title "Dishes"} data))]
+    (is (= 201 (:status resp)) (:body resp))
+    (last (str/split (:self (json resp)) #"/"))))
+
+(defn- crew! [h crew-name]
+  (let [resp (post h "/api/crews" {:name crew-name})]
     (is (= 201 (:status resp)) (:body resp))
     (last (str/split (:self (json resp)) #"/"))))
 
@@ -180,11 +208,12 @@
   {"x-waymark-principal" "mayor" "x-waymark-actor-type" "agent"})
 
 (defn- under-a-grant
-  "`mayor`'s headers under a grant colton gave over every errand."
-  [eng]
+  "`mayor`'s headers under a grant colton gave over every errand, and
+  over these of its actions."
+  [eng & [actions]]
   (let [gid (get-in (inv/create! eng :grant
                                  {:audience "mayor"
-                                  :scope [{:kind "errand" :actions []}]}
+                                  :scope [{:kind "errand" :actions (vec actions)}]}
                                  {:principal (t/principal {:id "colton"})})
                     [:row :id])]
     (inv/invoke! eng :grant gid :accept nil
@@ -278,6 +307,43 @@
                     (filter #(= "ui" (:type %)))
                     (mapv #(get-in % [:body :ui :focus]))))
             "the opening beat and the closing beat type nothing")))))
+
+(deftest a-ref-argument-is-typed-with-its-rows-summary-line
+  ;; ticket 097e60da: a replay fetches no collection, so the beat itself
+  ;; says what a live picker would show for the id
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            ada (crew! h "Ada")
+            grace (crew! h "Grace")
+            w (self-walk! h)
+            both {:crew_id "Ada" :helpers ["Grace" "Ada"]}]
+        (is (tool h "waymark_invoke" {:kind "errand" :id a :action "hand"
+                                      :input {:note "soon" :helpers [grace ada]
+                                              :crew_id ada}}))
+        (is (= [nil {:crew_id "Ada"} both both nil]
+               (->> (frames eng w)
+                    (filter #(= "ui" (:type %)))
+                    (mapv #(get-in % [:body :ui :labels]))))
+            "each typing beat labels the refs it shows; a plain argument has none")))))
+
+(deftest a-ref-the-recorder-may-not-see-has-no-label
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            ada (crew! h "Ada")
+            ;; errands and their `hand`, and no crew
+            scoped (under-a-grant eng ["hand"])
+            w (str (get-in (inv/create! eng :walk
+                                        {:followed "mayor" :title "The mayor's walk"}
+                                        {:principal (t/principal {:id "mayor" :type :agent})})
+                           [:row :id]))
+            _ (tool-as h scoped "waymark_invoke" {:kind "errand" :id a :action "hand"
+                                                  :input {:crew_id ada}})
+            typed (filter #(= ada (get-in % [:body :ui :fields :crew_id]))
+                          (frames eng w))]
+        (is (seq typed) "the argument is typed all the same")
+        (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))
 
 (deftest a-dry-run-leaves-the-dialog-open-and-the-invoke-does-not-retype
   (with-stage

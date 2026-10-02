@@ -555,6 +555,30 @@
     (is (str/includes? body "spot.classList.add(\"invited\");"))
     (is (str/includes? body "spot.setAttribute(\"data-typed\", \"\");"))))
 
+(deftest ui-replay-names-a-ref-fields-row-and-not-its-id
+  ;; ticket 097e60da: a replay fetches no collection, so a ref picker has
+  ;; no entry of its own. A typing beat seats it with one, [id, label]:
+  ;; the beat's own `labels`, else the summary of the walk's last `doc`
+  ;; for that row, else the id
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        said "if (typeof said === \"string\" && said) return said;"
+        held "for (const [self, doc] of replay.docs)"]
+    (testing "the beat's labels are kept beside its fields"
+      (is (str/includes? body "guidedLastLabels = ui.labels || {};"))
+      (is (str/includes? body "const said = Array.isArray(own) ? own[i] : i === undefined ? own : null;"))
+      (is (str/includes? body said)))
+    (testing "with no label, a doc the walk already holds names the row"
+      (is (str/includes? body held))
+      (is (str/includes? body "doc && typeof doc.summary === \"string\" && doc.summary)"))
+      (is (< (str/index-of body said) (str/index-of body held))
+          "the beat's own label is read first"))
+    (testing "a replay alone seats the picker: a live follow's is fetched"
+      (is (str/includes? body "g.guidedSet(guidedLastFields, replay ? guidedLabel : null);"))
+      (is (not (str/includes? body "g.guidedSet(guidedLastFields);"))))
+    (testing "the one entry is the row by its label, and the id when none is known"
+      (is (str/includes? body "if (!seat) node.append(seat = el(\"option\", {value: v}, named[0] || v));"))
+      (is (str/includes? body "else if (named[0] && seat.textContent === v) seat.textContent = named[0];")))))
+
 (defn- well-known [h]
   (-> (h {:request-method :get :uri "/api/.well-known/waymark"
           :headers {"x-waymark-principal" "reader"}})

@@ -290,6 +290,7 @@ let guidedSeq = -1;          // the last seq applied; an older one drops
 let guidedFocus = null;      // their focused row's self
 let guidedTyping = null;     // the field their staged call is typing
 let guidedLastFields = {};   // their form, as last reported
+let guidedLastLabels = {};   // its ref fields' rows, as the beat names them
 let guidedOpening = null;    // the dialog key being fetched right now
 let guidedDismissed = null;  // the dialog key this person closed by hand
 function markGuidedFocus(row, on) {
@@ -304,6 +305,22 @@ function closeGuided() {
   const g = $("dialog[open][data-guided]");
   if (g) { g.dataset.guidedAuto = "1"; g.close(); }
 }
+/* a ref field's row as a form names it: the label the beat itself
+   carries (a staged call's, read under the recorder's own grant; a list
+   of refs has one for each id), else, in a replay, the summary line of
+   the walk's last `doc` for that row. null when neither is known, and
+   the id stays. */
+function guidedLabel(name, id, i) {
+  const own = guidedLastLabels[name];
+  const said = Array.isArray(own) ? own[i] : i === undefined ? own : null;
+  if (typeof said === "string" && said) return said;
+  if (replay && typeof id === "string" && id)
+    for (const [self, doc] of replay.docs)
+      if (self.split("/").length === 4 && self.endsWith("/" + id) &&
+          doc && typeof doc.summary === "string" && doc.summary)
+        return doc.summary;
+  return null;
+}
 async function openGuidedDialog(d, name, key) {
   guidedOpening = key;
   /* a replay reads nothing: its dialog is built from the frames */
@@ -316,7 +333,7 @@ async function openGuidedDialog(d, name, key) {
   await actionDialog({name: d.action, entry, doc: res.body,
     guided: {name, key, onDismiss: () => { guidedDismissed = key; }}});
   const g = $("dialog[open][data-guided]");
-  if (g && g.guidedSet) g.guidedSet(guidedLastFields);
+  if (g && g.guidedSet) g.guidedSet(guidedLastFields, replay ? guidedLabel : null);
   if (g && g.guidedLight && !replay) g.guidedLight(guidedTyping);
   /* a replayed caption about this form is drawn in it */
   if (replay) replayCaption();
@@ -338,6 +355,7 @@ function applyGuidedUi(f) {
 function applyUiFrame(f) {
   const ui = f.ui, d = ui.dialog, c = ui.collection;
   guidedLastFields = ui.fields || {};
+  guidedLastLabels = ui.labels || {};
   /* `focus` is their focused row, or, on a typing beat of a staged call
      (docs/spec-agent-demo-walks.md §2), the name of the field the beat
      adds: that field alone is lit in the dialog */
@@ -358,7 +376,7 @@ function applyUiFrame(f) {
     const key = d ? d.self + " " + d.action : null;
     if (!d) { guidedDismissed = null; closeGuided(); }
     else if (g && g.getAttribute("data-guided") === key) {
-      g.guidedSet(guidedLastFields);
+      g.guidedSet(guidedLastFields, replay ? guidedLabel : null);
       /* a replay's pointer clicks the field instead (replayGesture) */
       if (!replay) g.guidedLight(guidedTyping);
     }
@@ -992,6 +1010,7 @@ function startReplay(text) {
   apiHeld = walk.frames.some(f => f.type === "doc");
   guidedFocus = null;
   guidedLastFields = {};
+  guidedLastLabels = {};
   guidedDismissed = null;
   render();
   playReplay();
@@ -1583,6 +1602,7 @@ function stopReplay(quiet) {
   apiHeld = false;
   guidedFocus = null;
   guidedLastFields = {};
+  guidedLastLabels = {};
   guidedDismissed = null;
   guidedSeq = -1;
   clearTimeout(replayGazeTimer);
