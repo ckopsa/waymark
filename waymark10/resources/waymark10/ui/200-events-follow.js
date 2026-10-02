@@ -910,6 +910,12 @@ let replayGazeTimer = null;
    speed. A hold is a floor under the gap and no addition to it, so
    REPLAY_MAX_GAP is still the most a recorded silence plays. */
 const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;
+/* the gesture before an act: a pointer glides to the link or the button
+   a person would press for REPLAY_GLIDE_MS, and that element is lit for
+   REPLAY_PRESS_MS, before speed; then the frame is applied. The gesture
+   is made inside the gap before its frame when the gap has room, so it
+   is a floor under the gap as a hold is. */
+const REPLAY_GLIDE_MS = 600, REPLAY_PRESS_MS = 300;
 /* a viewer follows about one change of the screen a second: the frame
    after one that changed the screen (a move to another row, a dialog
    opening or closing, a transition) waits at least REPLAY_SCREEN_MIN,
@@ -1061,6 +1067,9 @@ function applyReplayFrame(f) {
     if (f.self) { applyFollowMove(f.self); replayGaze("row", f.self); }
   } else if (f.type === "ui" && !again) {
     applyUiFrame({self: f.self, ui: f.ui || {}, principal: actor});
+    /* whether the recording has a form open: its dialog is drawn a
+       moment after this, and no gesture is made under it */
+    replay.door = !!(f.ui || {}).dialog;
     const c = (f.ui || {}).collection;
     if (c && c.self && !(f.ui || {}).dialog)
       replayGaze("list", collectionHrefOf(c));
@@ -1091,10 +1100,14 @@ function applyReplayFrame(f) {
 function replaySchedule() {
   const r = replay;
   clearTimeout(r.timer);
+  replayGestureRest(r);
   if (film && r.at >= r.frames.length) filmEnd();
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
   const gap = Math.max(replayGap(r), replayHoldTime(r.frames, r.at));
   r.timer = setTimeout(replayStep, gap / r.speed);
+  /* the gesture starts inside the gap, so that it ends as the gap does */
+  r.lead = setTimeout(() => replayGesture(r),
+    Math.max(0, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
 }
 /* the wait before the frame at `r.at`, as it was recorded: a burst is
    spread, a long silence is cut, and a caption is given its reading
@@ -1261,11 +1274,115 @@ function replayMarkWrite(r) {
   g.guidedWrite().setAttribute("data-replay-write", "");
   return true;
 }
+/* the element a person would press, on the screen now shown, to cause
+   the frame `f`: for a move, the link to that row on the page (a
+   collection row, a ref link, a breadcrumb), or the navigation bar's
+   entry for it or for its kind; for a dialog, the action button of that
+   door on that row; for a query, the filter control of the list shown,
+   or the link or the navigation entry of another. Null when the screen
+   has none, or when the frame changes no screen: the frame is then
+   applied with no gesture. */
+function replayGestureTarget(f) {
+  if (!f || !replay || replay.door || $("dialog[open]")) return null;
+  const row = s => String(s || "").split("?")[0];
+  const seen = e => e.getClientRects().length > 0;
+  const link = (box, hit) =>
+    [...document.querySelectorAll(box + " a[href^=\"#/\"]")]
+      .find(a => seen(a) && hit(a.getAttribute("href").slice(1)));
+  const nav = path => link("#kinds", h => row(h) === path);
+  const ui = (f.type === "ui" && f.ui) || {}, d = ui.dialog, c = ui.collection;
+  const here = hereHref();
+  if (f.type === "move" && f.self) {
+    const to = row(f.self);
+    if (to === here) return null;
+    return link("#view", h => row(h) === to) || nav(to) ||
+      nav(to.replace(/\/[^/]+$/, "")) || null;
+  }
+  if (d) {
+    if (d.self + " " + d.action === guidedDismissed) return null;
+    const doors = [...document.querySelectorAll("#view button[data-action]")]
+      .filter(b => seen(b) && b.dataset.action === d.action);
+    const rowOf = b => (b.closest("tr[data-self]") || {dataset: {}}).dataset.self;
+    return doors.find(b => rowOf(b) === d.self) ||
+      (d.self === here && doors.find(b => !rowOf(b))) || null;
+  }
+  if (c && c.self) {
+    const target = collectionHrefOf(c);
+    const shown = collectionHrefOf(
+      collectionShareOf(location.hash.slice(1)) || {self: ""});
+    if (target === shown) return null;
+    return (row(c.self) === here &&
+            ($("#view .filterwrap > button") || $("#view .filterbar"))) ||
+      link("#view", h => h === target) || nav(row(c.self)) || null;
+  }
+  return null;
+}
+/* the replay pointer: a small arrow drawn over the page (030-screens.css),
+   in film mode as well. It glides from where it last stood, and from
+   the middle of the screen the first time. */
+function replayPointerTo(target, speed) {
+  target.scrollIntoView({block: "nearest", inline: "nearest"});
+  let p = $("#replaypointer");
+  if (!p) {
+    document.body.append(p = el("div", {id: "replaypointer", "aria-hidden": "true"}));
+    p.style.transform = `translate(${innerWidth / 2}px, ${innerHeight / 2}px)`;
+    p.getBoundingClientRect();           // the glide starts from here
+  }
+  const b = target.getBoundingClientRect();
+  p.style.transitionDuration = REPLAY_GLIDE_MS / speed + "ms";
+  p.style.transform = `translate(${Math.round(b.left + Math.min(b.width / 2, 28))}px, `
+    + `${Math.round(b.top + b.height / 2)}px)`;
+}
+/* the gesture for the frame at the playhead, begun one time: the
+   pointer glides to its target, and the target is then lit in the
+   invitation's lit style until the frame is applied. With no target
+   there is no gesture. */
+function replayGesture(r) {
+  if (replay !== r || !r.playing || r.gesture) return;
+  const to = replayGestureTarget(r.frames[r.at]);
+  if (!to) return;
+  r.gesture = {at: r.at, until: performance.now()
+                 + (REPLAY_GLIDE_MS + REPLAY_PRESS_MS) / r.speed};
+  replayPointerTo(to, r.speed);
+  r.lead = setTimeout(() => {
+    /* a screen drawn again during the glide has a new element for the
+       same act */
+    const lit = to.isConnected ? to : replayGestureTarget(r.frames[r.at]);
+    if (replay !== r || !lit) return;
+    if (lit !== to) replayPointerTo(lit, r.speed);
+    lit.classList.add("invited");
+    lit.setAttribute("data-replay-press", "");
+  }, REPLAY_GLIDE_MS / r.speed);
+}
+/* how long the frame at the playhead still waits for its gesture. A
+   screen drawn too late for the gap has its gesture begun here. */
+function replayGestureWait(r) {
+  if (!r.gesture) replayGesture(r);
+  return r.gesture ? r.gesture.until - performance.now() : 0;
+}
+/* the gesture is over: nothing is lit, and the pointer stays where it
+   is, or goes with the replay when `gone` */
+function replayGestureRest(r, gone) {
+  clearTimeout(r.lead);
+  r.gesture = null;
+  for (const e of document.querySelectorAll("[data-replay-press]")) {
+    e.classList.remove("invited");
+    e.removeAttribute("data-replay-press");
+  }
+  const p = $("#replaypointer");
+  if (p && gone) p.remove();
+}
 function replayStep() {
   const r = replay;
   if (!r || !r.playing || r.at >= r.frames.length) return;
   if (replayMarkWrite(r)) {
     r.timer = setTimeout(replayStep, REPLAY_WRITE_MS / r.speed);
+    return;
+  }
+  /* the gesture comes before the act: the frame waits for it */
+  const wait = replayGestureWait(r);
+  if (wait > 0) {
+    r.timer = setTimeout(replayStep, wait);
     return;
   }
   applyReplayFrame(r.frames[r.at++]);
@@ -1279,6 +1396,7 @@ function playReplay() {
     r.who = null;
     r.caption = null;
     r.gaze = null;
+    r.door = false;
     r.beat = null;
     r.rows.clear();
     r.docs.clear();
@@ -1309,6 +1427,7 @@ function stopReplay(quiet) {
   const r = replay;
   if (!r) return;
   clearTimeout(r.timer);
+  replayGestureRest(r, true);
   closeGuided();
   replay = null;
   apiHeld = false;
@@ -1387,6 +1506,13 @@ function renderReplay(view, href) {
       el("div", {class: "ev-body"},
         `${pretty(ev.action || "")} · ${pretty(ev.kind || "")}: `
         + `${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to || "")}`)));
+  /* the doors the recording opens on this row, as the buttons its
+     pointer presses; in a hand they do nothing */
+  const doors = [...r.fields.keys()].filter(k => k.startsWith(self + " "))
+    .map(k => k.slice(self.length + 1));
+  if (doors.length)
+    panel.append(el("div", {"data-replay-doors": ""}, doors.map(a =>
+      el("button", {type: "button", "data-action": a}, pretty(a)))));
   const under = [...r.known].filter(s => s.startsWith(self + "/")).sort();
   if (under.length)
     panel.append(el("table", {}, el("tbody", {}, under.map(s => {

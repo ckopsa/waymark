@@ -1979,7 +1979,17 @@ async function guidedStory() {
      at: new Date().toISOString(), summary: `Guided stew ${tag}`},
     {t: 40, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
   ].map(l => JSON.stringify(l)).join("\n");
-  await A.js(`startReplay(${JSON.stringify(stagedFile)})`);
+  /* at half speed the press lasts 600 ms, which the 150 ms poll cannot miss */
+  await A.js(`startReplay(${JSON.stringify(stagedFile)}) && (setReplaySpeed(0.5), true)`);
+  const pressed = `document.querySelectorAll("#view button[data-replay-press]")`;
+  /* the dialog waits for the gesture: the replay is paused there for the check */
+  await A.until(`${pressed}.length === 1 && (pauseReplay(), true)`, "the lit action button");
+  ok("a replayed staged call lights one action button, under the pointer, before its dialog opens",
+     await A.js(`{ const b = ${pressed};
+       b.length === 1 && b[0].dataset.action === "update_recipe" &&
+       b[0].classList.contains("invited") && replay.at === 1 &&
+       !!document.querySelector("#replaypointer") && !document.querySelector("dialog[open]") }`));
+  await A.js(`setReplaySpeed(1); playReplay(); true`);
   const written = `document.querySelectorAll("dialog[open][data-guided] .dlgfoot [data-replay-write]")`;
   /* the close waits for the mark: the replay is paused there for the check */
   await A.until(`${written}.length === 1 && (pauseReplay(), true)`, "the marked submit");
