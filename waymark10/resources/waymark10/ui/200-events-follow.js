@@ -290,6 +290,7 @@ let guidedSeq = -1;          // the last seq applied; an older one drops
 let guidedFocus = null;      // their focused row's self
 let guidedTyping = null;     // the field their staged call is typing
 let guidedLastFields = {};   // their form, as last reported
+let guidedLastLabels = {};   // its ref fields' rows, as the beat names them
 let guidedOpening = null;    // the dialog key being fetched right now
 let guidedDismissed = null;  // the dialog key this person closed by hand
 function markGuidedFocus(row, on) {
@@ -304,6 +305,22 @@ function closeGuided() {
   const g = $("dialog[open][data-guided]");
   if (g) { g.dataset.guidedAuto = "1"; g.close(); }
 }
+/* a ref field's row as a form names it: the label the beat itself
+   carries (a staged call's, read under the recorder's own grant; a list
+   of refs has one for each id), else, in a replay, the summary line of
+   the walk's last `doc` for that row. null when neither is known, and
+   the id stays. */
+function guidedLabel(name, id, i) {
+  const own = guidedLastLabels[name];
+  const said = Array.isArray(own) ? own[i] : i === undefined ? own : null;
+  if (typeof said === "string" && said) return said;
+  if (replay && typeof id === "string" && id)
+    for (const [self, doc] of replay.docs)
+      if (self.split("/").length === 4 && self.endsWith("/" + id) &&
+          doc && typeof doc.summary === "string" && doc.summary)
+        return doc.summary;
+  return null;
+}
 async function openGuidedDialog(d, name, key) {
   guidedOpening = key;
   /* a replay reads nothing: its dialog is built from the frames */
@@ -316,8 +333,8 @@ async function openGuidedDialog(d, name, key) {
   await actionDialog({name: d.action, entry, doc: res.body,
     guided: {name, key, onDismiss: () => { guidedDismissed = key; }}});
   const g = $("dialog[open][data-guided]");
-  if (g && g.guidedSet) g.guidedSet(guidedLastFields);
-  if (g && g.guidedLight) g.guidedLight(guidedTyping);
+  if (g && g.guidedSet) g.guidedSet(guidedLastFields, replay ? guidedLabel : null);
+  if (g && g.guidedLight && !replay) g.guidedLight(guidedTyping);
   /* a replayed caption about this form is drawn in it */
   if (replay) replayCaption();
 }
@@ -338,6 +355,7 @@ function applyGuidedUi(f) {
 function applyUiFrame(f) {
   const ui = f.ui, d = ui.dialog, c = ui.collection;
   guidedLastFields = ui.fields || {};
+  guidedLastLabels = ui.labels || {};
   /* `focus` is their focused row, or, on a typing beat of a staged call
      (docs/spec-agent-demo-walks.md §2), the name of the field the beat
      adds: that field alone is lit in the dialog */
@@ -358,8 +376,9 @@ function applyUiFrame(f) {
     const key = d ? d.self + " " + d.action : null;
     if (!d) { guidedDismissed = null; closeGuided(); }
     else if (g && g.getAttribute("data-guided") === key) {
-      g.guidedSet(guidedLastFields);
-      g.guidedLight(guidedTyping);
+      g.guidedSet(guidedLastFields, replay ? guidedLabel : null);
+      /* a replay's pointer clicks the field instead (replayGesture) */
+      if (!replay) g.guidedLight(guidedTyping);
     }
     else if (key !== guidedDismissed && key !== guidedOpening) {
       closeGuided();
@@ -897,12 +916,41 @@ const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
    character, at least REPLAY_READ_MIN and at most REPLAY_READ_MAX,
    before speed, and on top of the gap the long-silence cut allows. */
 const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;
-/* a write and the screen it lands on are held for the eye: the frame
-   after a `transition` waits at least REPLAY_WRITE_HOLD, and the frame
-   after a `move` to another row at least REPLAY_MOVE_HOLD, before
-   speed. A hold is a floor under the gap and no addition to it, so
-   REPLAY_MAX_GAP is still the most a recorded silence plays. */
+let replayGazeTimer = null;
+/* a write and the screen it lands on are held for the eye: the screen
+   is still at least REPLAY_WRITE_HOLD after a `transition`, and at
+   least REPLAY_MOVE_HOLD after a `move` to another row, before speed.
+   A hold is stillness, as the floors below are: a floor under the gap
+   and no addition to it, so REPLAY_MAX_GAP is still the most a
+   recorded silence plays. */
 const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;
+/* the gesture before an act: a pointer glides to the link or the button
+   a person would press for REPLAY_GLIDE_MS, and that element is lit for
+   REPLAY_PRESS_MS, before speed; then the frame is applied. The gesture
+   starts only after the screen it leaves has been still for its floor
+   (below), and the frame waits for both. The pointer is the only way
+   the screen changes: a move whose link is not on screen goes by the
+   navigation bar and the kind's list (replayHop), a dialog beat, a
+   write or an invitation on a row that is not on screen goes to that
+   row the same way first (replayWalkOf), a typing beat's field
+   and a write's submit button are pressed in the form, and only a step
+   with no click behind it (replayNotice) is applied with no gesture. */
+const REPLAY_GLIDE_MS = 600, REPLAY_PRESS_MS = 300;
+/* the floors are stillness: the pointer leaves a screen only after it
+   has been still a while. The gesture toward the next act starts no
+   sooner than REPLAY_STILL_SCREEN after a new screen (a move to another
+   row, a hop's list, a walk's row, a dialog opening or closing), no
+   sooner than REPLAY_STILL_TYPED after a typed value shows, and no
+   sooner than REPLAY_WRITE_HOLD after a transition lands, before speed.
+   The gesture's glide and press come after the stillness and not
+   inside it, so the frame waits the larger of its recorded gap and
+   stillness + glide + press. A frame that changes nothing on screen
+   waits nothing (replayStill). */
+const REPLAY_STILL_SCREEN = 1000, REPLAY_STILL_TYPED = 800;
+/* the moment of a look: the screen the gaze arrived at keeps its
+   outline this long, before speed. It is the screen's stillness, so the
+   outline is off when the pointer leaves. */
+const REPLAY_GAZE_MS = REPLAY_STILL_SCREEN;
 function parseWalk(text) {
   let docs;
   try {
@@ -926,11 +974,21 @@ function startReplay(text) {
              cast: walk.header.cast || {}, frames: walk.frames,
              at: 0, speed: 1, playing: false, timer: null, who: null, back,
              caption: null,       // the caption frame on screen
+             gaze: null,          // the address last outlined
+             beat: null,          // the `ui` beat last played (replayBeat)
+             recorder: null,      // the cast alias whose hand the pointer is
+             notice: null,        // the line of a step with no click behind it
+             hopped: null,        // the frame a hop to its kind's list was made for
+             walked: null,        // the frame a walk to its row was made for
+             held: null,          // the frames waiting behind an open form
              rows: new Map(),     // self → {kind, state, summary, log}
              docs: new Map(),     // self, the document recorded for it so far
              known: new Set(),    // every row self the recording names
              fields: new Map()};  // dialog key → its field names
   for (const f of walk.frames) {
+    /* the recorder is the one whose screen the walk follows: the first
+       to move or to report a `ui` beat */
+    if (!r.recorder && (f.type === "move" || f.type === "ui")) r.recorder = f.who || null;
     const ui = (f.type === "ui" && f.ui) || {};
     /* an invitation names a dialog as well: its row's door, with the
        invited fields and the suggested ones; and so does a caption
@@ -959,6 +1017,7 @@ function startReplay(text) {
   apiHeld = walk.frames.some(f => f.type === "doc");
   guidedFocus = null;
   guidedLastFields = {};
+  guidedLastLabels = {};
   guidedDismissed = null;
   render();
   playReplay();
@@ -997,7 +1056,9 @@ function replayDialogDoc(d) {
    marked, every invited field lit, the note beside the first, a
    walkthrough's "Step 2 of 4" line above the form — read-only, with
    only Cancel in the footer. It holds the screen as an invited
-   person's own dialog does, until the transition that answers it. */
+   person's own dialog does, until the transition that answers it. A
+   row that is not on screen was walked to before this (replayWalkOf):
+   the hash is set here only for one with no link to press. */
 async function openReplayInvitation(f, actor) {
   const r = replay;
   const d = {self: String(f.self).split("?")[0], action: f.action};
@@ -1019,25 +1080,78 @@ async function openReplayInvitation(f, actor) {
   g.setAttribute("data-replay-invite", "");
   g.guidedSet(f.suggest || {});
 }
-function applyReplayFrame(f) {
+/* the form is gone: the frames that waited behind it (replay.held) are
+   drawn on the screen it was over, in the order they were recorded,
+   and that screen wears the arrival outline when a write is among
+   them. A form the recording leaves open at its end (`open`) stays, as
+   it always did, and what waited is drawn under it. → the line of a
+   step with no click among them (replayNotice), or null. */
+function replayLand(r, open) {
+  const held = r.held || [];
+  r.held = null;
+  if (!held.length) return null;
+  if (!open) closeGuided();
+  let wrote = null, note = null;
+  for (const f of held) {
+    applyReplayFrame(f, true);
+    if (f.type !== "transition") continue;
+    wrote = f.self || wrote;
+    note = r.notice || note;
+  }
+  if (wrote) {
+    r.gaze = null;
+    replayGaze("row", wrote);
+  }
+  return note;
+}
+function applyReplayFrame(f, landed) {
+  /* no screen changes behind an open form: a `transition` or a `doc`
+     recorded while the form is open waits (replay.held), so the
+     submit's press and the close play first. The frame that ends the
+     form draws what waited, and so does the next frame that is not the
+     form's own when the recording never closes it; a caption ends no
+     form. `landed` is a frame that waited, drawn now. */
+  const form = f.type === "ui" && !!(f.ui || {}).dialog;
+  if (!landed && replay.held && (f.type === "transition" || f.type === "doc")) {
+    replay.held.push(f);
+    replayChip();
+    return;
+  }
+  const note = landed || replayKeepsForm(f) ? null : replayLand(replay);
+  if (form && !replay.held) replay.held = [];
   /* a `doc` frame is a screen and nobody's act: it is kept for
      renderReplay, and its screen is drawn again when it is the one
      showing */
   if (f.type === "doc") {
     const self = String(f.self || "").split("?")[0];
     if (self && f.doc) {
+      /* a document equal to the one held is on screen already */
+      const same = JSON.stringify(replay.docs.get(self)) === JSON.stringify(f.doc);
       replay.docs.set(self, f.doc);
-      if (self === String(hereHref() || "").split("?")[0]) render();
+      if (!same && self === String(hereHref() || "").split("?")[0]) render();
     }
     replayChip();
     return;
   }
   const actor = replayActor(f);
   replay.who = actor;
+  /* a `ui` beat equal to the act before it is on screen already: it is
+     not drawn again */
+  const beat = f.type === "ui" ? replayBeat(f) : null;
+  const again = !!beat && beat === replay.beat;
+  replay.beat = beat;
+  replay.notice = replayNotice(replay, f);
+  if (note && !replay.notice) replay.notice = note;
   if (f.type === "move") {
-    if (f.self) applyFollowMove(f.self);
-  } else if (f.type === "ui") {
+    if (f.self) { applyFollowMove(f.self); replayGaze("row", f.self); }
+  } else if (f.type === "ui" && !again) {
     applyUiFrame({self: f.self, ui: f.ui || {}, principal: actor});
+    /* whether the recording has a form open: its dialog is drawn a
+       moment after this, and no gesture is made under it */
+    replay.door = !!(f.ui || {}).dialog;
+    const c = (f.ui || {}).collection;
+    if (c && c.self && !(f.ui || {}).dialog)
+      replayGaze("list", collectionHrefOf(c));
   } else if (f.type === "transition" && f.self) {
     const row = replay.rows.get(f.self) || {log: []};
     row.kind = f.kind;
@@ -1050,9 +1164,15 @@ function applyReplayFrame(f) {
     if (inv && inv.getAttribute("data-guided") === f.self + " " + f.action)
       closeGuided();
     /* as the firehose steers: go where they wrote, unless a dialog is
-       open; a row already on screen is drawn again from the frame */
+       open; a row already on screen is drawn again from the frame, and
+       one that was not was walked to before this (replayWalkOf), so
+       the hash is set here only for a row with no link to press. A
+       step with no click behind it moves no screen: its notice says it */
     if (f.self === hereHref()) render();
-    else if (!$("dialog[open]")) location.hash = "#" + f.self;
+    /* a write that waited behind a form is drawn on the screen the form
+       was over, and goes nowhere */
+    else if (landed) { /* the screen stays */ }
+    else if (!$("dialog[open]") && !replay.notice) location.hash = "#" + f.self;
   } else if (f.type === "invitation" && f.self && f.action) {
     openReplayInvitation(f, actor);
   } else if (f.type === "caption") {
@@ -1065,10 +1185,25 @@ function applyReplayFrame(f) {
 function replaySchedule() {
   const r = replay;
   clearTimeout(r.timer);
+  replayGestureRest(r);
+  /* a form the recording never closes, and no frame after it: what
+     waited behind it is drawn when the last frame has played */
+  if (r.at >= r.frames.length && r.held) {
+    r.notice = replayLand(r, true) || r.notice;
+    replayCaption();
+  }
   if (film && r.at >= r.frames.length) filmEnd();
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
-  const gap = Math.max(replayGap(r), replayHoldTime(r.frames, r.at));
+  /* the screen is still for its floor first and the gesture comes after
+     it: the frame waits for both when its recorded gap is shorter */
+  const still = replayHoldTime(r.frames, r.at);
+  const gap = Math.max(replayGap(r),
+    still && still + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);
   r.timer = setTimeout(replayStep, gap / r.speed);
+  /* the gesture ends as the wait does, and never starts inside the
+     stillness */
+  r.lead = setTimeout(() => replayGesture(r),
+    Math.max(still, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
 }
 /* the wait before the frame at `r.at`, as it was recorded: a burst is
    spread, a long silence is cut, and a caption is given its reading
@@ -1077,20 +1212,116 @@ function replayGap(r) {
   const prev = r.at ? (r.frames[r.at - 1].t || 0) : 0;
   const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);
   const read = replayReadingTime(r.at ? r.frames[r.at - 1] : null);
+  /* a frame that changes nothing on screen folds into the one before it */
+  if (!read && replayStill(r.frames, r.at)) return 0;
   const gap = read + Math.min(REPLAY_MAX_GAP,
                        r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);
   return gap;
 }
-/* the least the frame at `at` waits for the act before it to be seen.
-   A `doc` frame is a screen and nobody's act: it is never held back,
-   and the act before it is the one that counts. A `move` is to another
-   row when the act before it was on a different one. */
-function replayHoldTime(frames, at) {
-  if (!frames[at] || frames[at].type === "doc") return 0;
+/* a `ui` beat as one string: who reported it, where, and what. Two
+   beats with one string draw one screen. */
+function replayBeat(f) {
+  return JSON.stringify([f.who || "", f.self || "", f.ui || {}]);
+}
+/* whether the frame `f` ends no form: the form's own beats, a caption,
+   and the frames that wait behind the form. */
+function replayKeepsForm(f) {
+  return f.type === "transition" || f.type === "doc" || f.type === "caption" ||
+    (f.type === "ui" && !!(f.ui || {}).dialog);
+}
+/* whether the frame at `at` waits behind an open form, as
+   applyReplayFrame holds it: a `transition` or a `doc` recorded after
+   a `ui` beat with a dialog, with nothing between them but captions
+   and other frames that wait. */
+function replayHeld(frames, at) {
+  const f = frames[at];
+  if (!f || (f.type !== "transition" && f.type !== "doc")) return false;
+  for (let i = at - 1; i >= 0; i--) {
+    const t = frames[i].type;
+    if (t === "ui") return !!(frames[i].ui || {}).dialog;
+    if (t !== "transition" && t !== "doc" && t !== "caption") return false;
+  }
+  return false;
+}
+/* whether the frame at `i` draws a write that waited behind a form: it
+   ends the form (applyReplayFrame), and the last transition before it
+   waits behind that form. */
+function replayLands(frames, i) {
+  if (replayKeepsForm(frames[i])) return false;
+  for (let j = i - 1; j >= 0; j--) {
+    if (frames[j].type === "transition") return replayHeld(frames, j);
+    if (!replayKeepsForm(frames[j])) return false;
+  }
+  return false;
+}
+/* whether the frame at `at` changes nothing a viewer sees, and so
+   plays with no wait: a `doc` in the burst of the frame before it is
+   that frame's own screen, a `doc` equal to the last one recorded for
+   its screen draws nothing new, and neither does a `ui` beat equal to
+   the act before it. */
+function replayStill(frames, at) {
+  const f = frames[at];
+  if (!f || !at) return false;
+  /* a frame that waits behind a form is drawn when the form is gone;
+     with no frame after it to end the form, it is drawn in its own
+     time, at the end */
+  if (replayHeld(frames, at) &&
+      frames.some((g, k) => k > at && !replayKeepsForm(g))) return true;
+  if (f.type === "doc") {
+    if ((f.t || 0) - (frames[at - 1].t || 0) < REPLAY_BURST_MS) return true;
+    for (let i = at - 1; i >= 0; i--)
+      if (frames[i].type === "doc" && frames[i].self === f.self)
+        return JSON.stringify(frames[i].doc) === JSON.stringify(f.doc);
+    return false;
+  }
+  if (f.type !== "ui") return false;
   let i = at - 1;
   while (i >= 0 && frames[i].type === "doc") i--;
+  return !!frames[i] && frames[i].type === "ui" &&
+    replayBeat(frames[i]) === replayBeat(f);
+}
+/* whether the `ui` beat at `i` typed into the dialog the `ui` beat
+   before it had open. Any other `ui` beat opened a dialog, closed one
+   or showed another screen. */
+function replayTyped(frames, i) {
+  const key = f => {
+    const d = (f.ui || {}).dialog;
+    return d ? d.self + " " + d.action : "";
+  };
+  const k = key(frames[i]);
+  for (let j = i - 1; k && j >= 0; j--)
+    if (frames[j].type === "ui") return key(frames[j]) === k;
+  return false;
+}
+/* how long the screen is still before the gesture toward the frame at
+   `at` may start: the stillness owed to the last change of the screen
+   before it. A `doc` frame is a screen and nobody's act: it
+   is never held back, and neither is any frame that changes nothing
+   (replayStill); the frame before them is the one that counts. After a
+   typing beat the floor is REPLAY_STILL_TYPED; after any other `ui` beat,
+   an invitation, a transition or a move to another row it is
+   REPLAY_STILL_SCREEN, or the act's own hold when that is longer. */
+function replayHoldTime(frames, at) {
+  if (!frames[at] || frames[at].type === "doc" || replayStill(frames, at))
+    return 0;
+  let i = at - 1;
+  while (i >= 0 && (frames[i].type === "doc" || replayStill(frames, i))) i--;
   const f = frames[i];
   if (!f) return 0;
+  /* the frame that ends a form shows the write that waited behind it:
+     the write's own hold is owed from there */
+  if (replayLands(frames, i)) return REPLAY_WRITE_HOLD;
+  if (f.type === "ui")
+    return replayTyped(frames, i) ? REPLAY_STILL_TYPED : REPLAY_STILL_SCREEN;
+  if (f.type === "invitation") return REPLAY_STILL_SCREEN;
+  const hold = replayActHold(frames, i);
+  return hold && Math.max(hold, REPLAY_STILL_SCREEN);
+}
+/* the hold of the act at `i`: a write, or a move to another row. A
+   `move` is to another row when the act before it was on a different
+   one. */
+function replayActHold(frames, i) {
+  const f = frames[i];
   if (f.type === "transition") return REPLAY_WRITE_HOLD;
   if (f.type !== "move" || !f.self) return 0;
   const row = s => String(s).split("?")[0];
@@ -1113,12 +1344,20 @@ function replayReadingTime(f) {
    beside its field, with the field lit, when the caption names one. */
 function replayCaption() {
   const c = replay && replay.caption;
+  /* a step with no click behind it (replayNotice) says so in the band,
+     in the caption's place, until the next frame is applied */
+  const n = replay && replay.notice;
   let band = $("#replaycaption");
-  if (!band && c)
+  if (!band && (c || n))
     document.body.append(band = el("div", {id: "replaycaption", role: "status"}));
   if (band) {
     band.textContent = c ? c.text : "";
     band.style.display = c && !filmBeside(c) ? "block" : "none";
+    if (n) {
+      band.textContent = n;
+      band.style.display = "block";
+    }
+    band.toggleAttribute("data-replay-notice", !!n);
   }
   const g = $("dialog[open][data-guided]:not([data-replay-invite])");
   if (!g || !g.guidedMark) return;
@@ -1134,9 +1373,288 @@ function replayCaption() {
     g.guidedMark(c.field ? [c.field] : [], c.text)
       .setAttribute("data-caption-note", "");
 }
+/* a look: the gaze arrived at a row (a `move`) or a list (a
+   `collection` ui). The root element carries the mark for
+   REPLAY_GAZE_MS, so a screen drawn after the move is outlined as well
+   (030-screens.css). A look at the address last outlined is no
+   arrival, and under an open dialog the screen did not move. */
+function replayGaze(what, target) {
+  const r = replay;
+  if (!r || r.gaze === target || $("dialog[open]")) return;
+  r.gaze = target;
+  const root = document.documentElement;
+  clearTimeout(replayGazeTimer);
+  root.setAttribute("data-replay-gaze", what);
+  replayGazeTimer = setTimeout(() => root.removeAttribute("data-replay-gaze"),
+                               REPLAY_GAZE_MS / r.speed);
+}
+/* whether the form `key` names wrote before the frame at the playhead
+   closes it: a transition of the same actor's since the form opened,
+   or in the same burst as the close. A form closed with none was
+   cancelled. */
+function replayWrote(r, key) {
+  const who = r.frames[r.at].who, t = r.frames[r.at].t || 0;
+  for (let i = r.at + 1; i < r.frames.length &&
+                         (r.frames[i].t || 0) - t < REPLAY_BURST_MS; i++)
+    if (r.frames[i].type === "transition" && r.frames[i].who === who) return true;
+  for (let i = r.at - 1; i >= 0; i--) {
+    const f = r.frames[i];
+    if (f.who !== who) continue;
+    if (f.type === "transition") return true;
+    const d = f.type === "ui" && (f.ui || {}).dialog;
+    if (f.type === "ui" && (!d || d.self + " " + d.action !== key)) return false;
+  }
+  return false;
+}
+/* a step with no click behind it: a transition by a principal other
+   than the recorder (a scheduled action firing, a seat, another
+   person), a `clock_shift`, and an invitation the recorder did not
+   write. It makes no gesture and moves no pointer and no screen; only
+   an invitation's row is walked to before it (replayWalkOf). → the
+   line the caption band shows for it, or null for a step the pointer
+   makes. */
+function replayNotice(r, f) {
+  const other = !!r.recorder && !!f.who && f.who !== r.recorder;
+  const actor = replayActor(f);
+  if (f.type === "transition") {
+    const what = f.summary || `${pretty(f.action || "")} · ${pretty(f.kind || "")}`;
+    if (f.kind === "clock_shift") return "Later: " + what;
+    if (other)
+      return (actor.type === "system" ? "Scheduled" : actor.display) + ": " + what;
+  }
+  if (f.type === "invitation" && other)
+    return "Invited: " + (f.note || pretty(f.action || ""));
+  return null;
+}
+/* the field the typing beat `f` types into: the one its `focus` names
+   (a staged call, docs/spec-agent-demo-walks.md §2), or the first whose
+   value differs from the beat before it (a person's form). Null when
+   the beat types nothing. */
+function replayTypingOf(f) {
+  const ui = (f.type === "ui" && f.ui) || {};
+  if (!ui.dialog) return null;
+  if (typeof ui.focus === "string" && !ui.focus.startsWith("/")) return ui.focus;
+  const now = ui.fields || {};
+  return Object.keys(now).find(k =>
+    JSON.stringify(now[k]) !== JSON.stringify(guidedLastFields[k])) || null;
+}
+/* the element a person would press, on the screen now shown, to cause
+   the frame `f`: for a move, the link to that row on the page (a
+   collection row, a ref link, a breadcrumb), or the navigation bar's
+   entry for it or for its kind; for a dialog, the action button of that
+   door on that row; for a query, the filter control of the list shown,
+   or the link or the navigation entry of another; in an open form, the
+   field a typing beat types into, or the submit button for the beat
+   that closes the form after its write. A move whose row has no link
+   on the page goes to the navigation entry of its kind, unless that
+   list is the screen shown: replayHop draws the list, and the row's
+   link is pressed there. Null when the screen
+   has none, or when the frame changes no screen: the frame is then
+   applied with no gesture. */
+function replayGestureTarget(f) {
+  if (!f || !replay) return null;
+  const row = s => String(s || "").split("?")[0];
+  const seen = e => e.getClientRects().length > 0;
+  const ui = (f.type === "ui" && f.ui) || {}, d = ui.dialog, c = ui.collection;
+  /* the pointer fills the form; an invitation's dialog has no submit */
+  const g = $("dialog[open][data-guided]:not([data-replay-invite])");
+  if (g && g.guidedField && f.type === "ui") {
+    const key = g.getAttribute("data-guided");
+    if (d) return d.self + " " + d.action === key
+      ? g.guidedField(replayTypingOf(f)) : null;
+    if (!replayWrote(replay, key)) return null;
+    /* the button that writes, drawn unlit until the pointer presses it */
+    let write = g.querySelector("[data-replay-write]");
+    if (!write) {
+      write = g.guidedWrite();
+      write.classList.remove("invited");
+      write.setAttribute("data-replay-write", "");
+    }
+    return write;
+  }
+  if (replay.door || $("dialog[open]")) return null;
+  const link = (box, hit) =>
+    [...document.querySelectorAll(box + " a[href^=\"#/\"]")]
+      .find(a => seen(a) && hit(a.getAttribute("href").slice(1)));
+  const nav = path => link("#kinds", h => row(h) === path);
+  const here = hereHref();
+  if (f.type === "move" && f.self) {
+    const to = row(f.self), list = to.replace(/\/[^/]+$/, "");
+    if (to === here) return null;
+    return link("#view", h => row(h) === to) || nav(to) ||
+      (list !== row(here) && nav(list)) || null;
+  }
+  if (d) {
+    if (d.self + " " + d.action === guidedDismissed) return null;
+    const doors = [...document.querySelectorAll("#view button[data-action]")]
+      .filter(b => seen(b) && b.dataset.action === d.action);
+    const rowOf = b => (b.closest("tr[data-self]") || {dataset: {}}).dataset.self;
+    return doors.find(b => rowOf(b) === d.self) ||
+      (d.self === here && doors.find(b => !rowOf(b))) || null;
+  }
+  if (c && c.self) {
+    const target = collectionHrefOf(c);
+    const shown = collectionHrefOf(
+      collectionShareOf(location.hash.slice(1)) || {self: ""});
+    if (target === shown) return null;
+    return (row(c.self) === here &&
+            ($("#view .filterwrap > button") || $("#view .filterbar"))) ||
+      link("#view", h => h === target) || nav(row(c.self)) || null;
+  }
+  return null;
+}
+/* the replay pointer: a small arrow drawn over the page (030-screens.css),
+   in film mode as well. It glides from where it last stood, and from
+   the middle of the screen the first time. */
+function replayPointerTo(target, speed) {
+  target.scrollIntoView({block: "nearest", inline: "nearest"});
+  /* a modal dialog is drawn over the whole page, so the pointer for a
+     form is drawn inside its dialog */
+  const host = target.closest("dialog[open]") || document.body;
+  let p = $("#replaypointer");
+  if (!p) {
+    document.body.append(p = el("div", {id: "replaypointer", "aria-hidden": "true"}));
+    /* one drawn again, after its dialog was closed under it, starts
+       where the last one stood */
+    const [x, y] = replayPointerAt || [innerWidth / 2, innerHeight / 2];
+    p.style.transform = `translate(${x}px, ${y}px)`;
+  }
+  if (p.parentElement !== host) host.append(p);
+  p.getBoundingClientRect();             // the glide starts from here
+  const b = target.getBoundingClientRect();
+  replayPointerAt = [Math.round(b.left + Math.min(b.width / 2, 28)),
+                     Math.round(b.top + b.height / 2)];
+  p.style.transitionDuration = REPLAY_GLIDE_MS / speed + "ms";
+  p.style.transform = `translate(${replayPointerAt[0]}px, ${replayPointerAt[1]}px)`;
+}
+/* where the pointer last stood, or null before its first gesture */
+let replayPointerAt = null;
+/* the gesture for the frame at the playhead, begun one time: the
+   pointer glides to its target, and the target is then lit in the
+   invitation's lit style until the frame is applied. A form's field is
+   clicked and not lit: it wears the ring a focused field does. With no
+   target there is no gesture. */
+function replayGesture(r) {
+  if (replay !== r || !r.playing || r.gesture) return;
+  /* a frame on a row that is not on screen makes the gesture of a move
+     to that row first */
+  const walk = replayWalkOf(r, r.frames[r.at]);
+  const f = walk || r.frames[r.at];
+  /* a beat equal to the one before it is on screen already: no click */
+  const to = replayStill(r.frames, r.at) ? null : replayGestureTarget(f);
+  if (!to) return;
+  r.gesture = {at: r.at, until: performance.now()
+                 + (REPLAY_GLIDE_MS + REPLAY_PRESS_MS) / r.speed,
+               walk,
+               field: to.closest("dialog[data-guided]") ? replayTypingOf(f) : null,
+               hop: r.hopped === r.at ? null : replayHopOf(f, to)};
+  replayPointerTo(to, r.speed);
+  r.lead = setTimeout(() => {
+    /* a screen drawn again during the glide has a new element for the
+       same act */
+    const lit = to.isConnected ? to : replayGestureTarget(f);
+    if (replay !== r || !lit) return;
+    if (lit !== to) replayPointerTo(lit, r.speed);
+    const form = lit.closest("dialog[data-guided]");
+    if (form && r.gesture && r.gesture.field) { form.guidedClick(r.gesture.field); return; }
+    lit.classList.add("invited");
+    lit.setAttribute("data-replay-press", "");
+  }, REPLAY_GLIDE_MS / r.speed);
+}
+/* how long the frame at the playhead still waits for its gesture. A
+   screen drawn too late for the gap has its gesture begun here. */
+function replayGestureWait(r) {
+  if (!r.gesture) replayGesture(r);
+  return r.gesture ? r.gesture.until - performance.now() : 0;
+}
+/* the gesture is over: nothing is lit, and the pointer stays where it
+   is, or goes with the replay when `gone` */
+function replayGestureRest(r, gone) {
+  clearTimeout(r.lead);
+  r.gesture = null;
+  for (const e of document.querySelectorAll("[data-replay-press]")) {
+    e.classList.remove("invited");
+    e.removeAttribute("data-replay-press");
+  }
+  const p = $("#replaypointer");
+  if (gone) replayPointerAt = null;
+  if (p && gone) p.remove();
+  /* a form closed under the pointer: it stays where it was, on the page */
+  else if (p && p.parentElement !== document.body && !p.closest("dialog[open]"))
+    document.body.append(p);
+}
+/* the move a frame waits for: a dialog beat on another screen with no
+   action button for its door here, a write of the recorder's on a row
+   that is not shown, and an invitation's row. The pointer makes it as
+   it makes a recorded move (replayGestureTarget, replayHop), and the
+   frame is applied on the row it leads to. Null for every other frame,
+   for the screen shown, under an open dialog, and after the one walk a
+   frame makes. A row with no link to press has no walk: its frame is
+   applied as a move with no link is. */
+function replayWalkOf(r, f) {
+  if (!f || r.walked === r.at || r.door || $("dialog[open]")) return null;
+  const row = s => String(s || "").split("?")[0];
+  const ui = (f.type === "ui" && f.ui) || {}, c = ui.collection;
+  const list = !!ui.dialog && !!c && !!c.self;
+  const to = ui.dialog ? !replayGestureTarget(f) && (list ? collectionHrefOf(c) : f.self)
+    : f.type === "transition" ? !replayNotice(r, f) && f.self
+    : f.type === "invitation" && f.action ? row(f.self) : null;
+  return to && row(to) !== hereHref() ? {type: "move", who: f.who, self: to, list} : null;
+}
+/* the list a move passes through: when its gesture presses the
+   navigation entry of its kind, and not of the row itself, that entry's
+   address. Null for every other gesture. */
+function replayHopOf(f, to) {
+  if (f.type !== "move" || !to.closest("#kinds")) return null;
+  const list = to.getAttribute("href").slice(1);
+  return list.split("?")[0] === String(f.self).split("?")[0] ? null : list;
+}
+/* a hop: the navigation entry was pressed, so its list is drawn, a
+   screen of its own with the arrival outline and the screen floor, and
+   the frame waits there for its next gesture, the row's link in that
+   list. One hop is made for a frame: a list that does not show the row
+   leaves the move to be applied with the outline alone. */
+function replayHop(r) {
+  const list = r.gesture.hop;
+  r.hopped = r.at;
+  replayGestureRest(r);
+  location.hash = "#" + list;
+  replayGaze("list", list);
+  replayLinger(r);
+}
+/* a walk: the link to the frame's row was pressed, so that row is
+   drawn, a screen of its own as a hop's list is, and the frame waits
+   there for its own gesture: the door's button, for a dialog beat. One
+   walk is made for a frame. */
+function replayArrive(r) {
+  const walk = r.gesture.walk;
+  r.walked = r.at;
+  replayGestureRest(r);
+  applyFollowMove(walk.self);
+  replayGaze(walk.list ? "list" : "row", walk.self);
+  replayLinger(r);
+}
+/* a screen the pointer drew on its way to a frame (a hop's list, a
+   walk's row) is still for the screen floor; then the frame's next
+   gesture is made, and the frame waits for both */
+function replayLinger(r) {
+  const wait = REPLAY_STILL_SCREEN + REPLAY_GLIDE_MS + REPLAY_PRESS_MS;
+  r.timer = setTimeout(replayStep, wait / r.speed);
+  r.lead = setTimeout(() => replayGesture(r), REPLAY_STILL_SCREEN / r.speed);
+}
 function replayStep() {
   const r = replay;
   if (!r || !r.playing || r.at >= r.frames.length) return;
+  /* the gesture comes before the act: the frame waits for it */
+  const wait = replayGestureWait(r);
+  if (wait > 0) {
+    r.timer = setTimeout(replayStep, wait);
+    return;
+  }
+  /* no jump: the pressed navigation entry draws its list first */
+  if (r.gesture && r.gesture.hop) { replayHop(r); return; }
+  /* nor for a frame on another row: the pressed link draws its row first */
+  if (r.gesture && r.gesture.walk) { replayArrive(r); return; }
   applyReplayFrame(r.frames[r.at++]);
   if (replay === r) replaySchedule();
 }
@@ -1147,6 +1665,13 @@ function playReplay() {
     r.at = 0;
     r.who = null;
     r.caption = null;
+    r.gaze = null;
+    r.door = false;
+    r.beat = null;
+    r.notice = null;
+    r.hopped = null;
+    r.walked = null;
+    r.held = null;
     r.rows.clear();
     r.docs.clear();
     closeGuided();
@@ -1176,13 +1701,17 @@ function stopReplay(quiet) {
   const r = replay;
   if (!r) return;
   clearTimeout(r.timer);
+  replayGestureRest(r, true);
   closeGuided();
   replay = null;
   apiHeld = false;
   guidedFocus = null;
   guidedLastFields = {};
+  guidedLastLabels = {};
   guidedDismissed = null;
   guidedSeq = -1;
+  clearTimeout(replayGazeTimer);
+  document.documentElement.removeAttribute("data-replay-gaze");
   replayCaption();
   replayChip();
   if (quiet) return;
@@ -1252,6 +1781,13 @@ function renderReplay(view, href) {
       el("div", {class: "ev-body"},
         `${pretty(ev.action || "")} · ${pretty(ev.kind || "")}: `
         + `${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to || "")}`)));
+  /* the doors the recording opens on this row, as the buttons its
+     pointer presses; in a hand they do nothing */
+  const doors = [...r.fields.keys()].filter(k => k.startsWith(self + " "))
+    .map(k => k.slice(self.length + 1));
+  if (doors.length)
+    panel.append(el("div", {"data-replay-doors": ""}, doors.map(a =>
+      el("button", {type: "button", "data-action": a}, pretty(a)))));
   const under = [...r.known].filter(s => s.startsWith(self + "/")).sort();
   if (under.length)
     panel.append(el("table", {}, el("tbody", {}, under.map(s => {

@@ -548,12 +548,45 @@
                                         (word (:completed_at check)))
     (clamp (:html_url check) 500) (assoc :url (clamp (:html_url check) 500))))
 
+(def ^:private red-step-end
+  "What the runner writes under a step whose process ended red."
+  "##[error]Process completed with exit code")
+
+(defn- unfolded
+  "The lines without what a `##[group]` folds: a step's script and its
+  env dump. The group's own line stays, so the step is still named. A
+  group that never closes is kept whole: a step may die inside one."
+  [lines]
+  (let [[out held] (reduce (fn [[out held] line]
+                             (cond
+                               (str/includes? line "##[endgroup]") [out nil]
+                               (str/includes? line "##[group]")
+                               [(conj (into out held) line) []]
+                               held [out (conj held line)]
+                               :else [(conj out line) nil]))
+                           [[] nil] lines)]
+    (into out held)))
+
+(defn- red-step-lines
+  "The lines of a job log up to the end of its first red step (ticket
+  3a9d6c62). What the runner writes after that line is the later steps,
+  the post-job cleanup and the service containers' logs, and the tail
+  of the whole job was all of that and none of the failure. A log with
+  no such line is kept whole."
+  [lines]
+  (if-some [end (first (keep-indexed
+                        #(when (str/includes? %2 red-step-end) %1)
+                        lines))]
+    (unfolded (subvec lines 0 (inc (long end))))
+    lines))
+
 (defn tail
   "The end of a log, as the ci_run kind takes it: the last
   `log-excerpt-lines` lines, cut to `log-excerpt-chars` from the END.
-  A failure says what it was at the end, so the end is what is kept."
+  A failure says what it was at the end, so the end is what is kept,
+  and the end is the red step's, not the job's (`red-step-lines`)."
   [text]
-  (let [lines (vec (str/split-lines (str text)))
+  (let [lines (red-step-lines (vec (str/split-lines (str text))))
         kept (if (> (count lines) ci/log-excerpt-lines)
                (subvec lines (- (count lines) ci/log-excerpt-lines))
                lines)

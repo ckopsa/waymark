@@ -160,6 +160,79 @@ such a burst, since the form's own reports are debounced at 150 ms. A
 450 ms apart, which is harmless. The staging does not sleep: holding a
 tool call to make a pause would bill the agent for it.
 
+**The pointer leaves a screen only after it has been still.** An
+agent's recorded gaps are milliseconds, so replay's floors set the
+pace, and each floor is stillness: the time from the last change of the
+screen to the start of the gesture toward the next act (the next
+paragraph). A new screen (a move to another row, a hop's list, a walk's
+row, a dialog opening or closing) is still for `REPLAY_STILL_SCREEN`
+(1000 ms), a typed value for `REPLAY_STILL_TYPED` (800 ms), and a
+landed transition for `REPLAY_WRITE_HOLD` (1500 ms). The gesture's
+900 ms come after the stillness and not inside it, so a frame waits the
+larger of its recorded gap and stillness + glide + press
+(`replaySchedule`, `replayLinger`), and speed divides all of it. The
+arrival outline lasts `REPLAY_GAZE_MS`, which is `REPLAY_STILL_SCREEN`:
+it is off when the pointer leaves. A frame that changes nothing on
+screen waits nothing.
+
+**Replay makes each beat with a pointer.** A small arrow is drawn over
+the page (`replayPointerTo`). Before a frame is applied, the pointer
+glides for `REPLAY_GLIDE_MS` (600 ms) to the element a person would
+press to cause that frame (`replayGestureTarget`), and the press takes
+`REPLAY_PRESS_MS` (300 ms). The gesture is made after the
+screen's stillness, and the frame waits for both. The pointer is the
+only way the screen changes:
+
+- **A move** presses the link to that row on the page: a collection
+  row, a ref link or a breadcrumb. With no such link it presses the
+  navigation entry of the row, or of the row's kind. There is no jump
+  to a row that is not on screen: the navigation entry draws the kind's
+  list first, as a screen of its own, and the row's link is pressed in
+  that list (`replayHop`). One hop is made for a frame. When the list
+  does not show the row either, the move is applied with the arrival
+  outline alone.
+- **A dialog beat, a write of the recorder's or an invitation on a row
+  that is not on screen** goes to that row first, the same way
+  (`replayWalkOf`), and the frame is applied on the row it leads to.
+- **A beat that opens a form** presses the action button of that door
+  on that row.
+- **A typing beat** clicks its field. The field is the one the beat's
+  `focus` names, or the first whose value differs from the beat before
+  it. The clicked field is not lit: it alone wears a focus ring
+  (`[data-replay-click]` in `ui/030-screens.css`), because a replayed
+  form's fields are disabled and take no focus. That ring is the
+  browser's own and not the outline the app's `:focus-visible` rule
+  draws; ticket d4040832 is to make them the same. The lit field of a
+  typing beat is now live follow's alone.
+- **A ref field** names its row as a live form does. A staged typing
+  beat on a `:kind` ref argument carries `labels: {<field>: <the row's
+  summary line>}`, read under the recorder's own grant: a list of refs
+  has one label for each id, and a row the recorder may not see has
+  none. An export keeps a label only for a row its reader may see.
+  Replay fetches no collection, so it seats the picker with that one
+  row: the beat's own label, else the summary of the walk's last `doc`
+  for the row, else the id.
+- **The submit** is pressed for the beat that closes the form after its
+  write. The button that writes is drawn unlit until the pointer
+  presses it. A form that closed with no write was cancelled, and
+  nothing is pressed.
+- **A collection beat** presses the filter control of the list shown,
+  or the link or the navigation entry of another list.
+
+A pressed link or button wears the invitation's lit style for the
+press, until its frame is applied. A beat equal to the one before it is
+on screen already and gets no click.
+
+**A step with no click behind it is a notice** (`replayNotice`). The
+recorder did not press anything for a transition by another principal
+(a scheduled action firing, a seat, another person), for a
+`clock_shift`, or for an invitation the recorder did not write. Such a
+frame makes no gesture and moves no pointer. The caption band shows one
+line for it, in italics, in the caption's place, until the next frame
+is applied: "Scheduled: …" or the actor's display name, "Later: …", or
+"Invited: …" with the invitation's note. Only an invitation's row is
+walked to before it.
+
 ## 3. Captions anywhere
 
 *Story: one line per step, even with no form open.*
@@ -196,7 +269,9 @@ the screen, a get to the row, an invoke to the form. One more argument,
 `caption_field`, names one argument of the invoked action; the caption
 is then drawn beside that field, with the field lit, by the code that
 draws an invitation's note. It is refused when the action has no such
-argument or the argument is secret, by the invitation's own rule.
+argument or the argument is secret, by the invitation's own rule. In
+replay that is the one lit field of a form: a typing beat's field is
+clicked by the pointer and wears a focus ring (section 2).
 
 ```json
 {"t": 5210, "type": "caption", "who": "a1",
@@ -427,6 +502,12 @@ replay.
   screen: at most two lines, large type, the product's own tokens. A
   caption with a field is drawn beside the lit field instead, as an
   invitation's note is. An **invitation** looks as it does in replay.
+- **The pointer is filmed.** It is drawn in film mode as it is in
+  replay (section 2): it glides to each link, button and field, a
+  clicked field wears the focus ring, the submit is pressed, and a row
+  that is not on screen is reached by the navigation entry and the
+  kind's list. A step with no click behind it shows its notice in the
+  caption band.
 - The page says where it is in `data-film` on the root element:
   `ready`, `playing`, then `ended`. The camera reads that and nothing
   else.

@@ -45,6 +45,31 @@
                    font-family: var(--serif); font-size: 16px;
                    pointer-events: none; }
 
+  /* ── a replayed write and a replayed look: the submit button lit as an
+     invited field is, without the wash that would take a button's own
+     colour; and the main panel of the screen the gaze arrived at,
+     outlined as a focused row is ─────────────────────────────────── */
+  .dlgfoot button.invited { animation: none; }
+  html[data-replay-gaze] .panel[data-replay-screen],
+  html[data-replay-gaze] [data-replay-doc] > .panel:first-of-type {
+    outline: 2px solid var(--verdigris); outline-offset: 2px; }
+
+  /* ── a replayed gesture: the pointer that goes to the link or the
+     button before the screen changes, an arrow in ink with a paper
+     edge; and the element it presses, lit as an invited field is,
+     without the wash. Film mode draws both ─────────────────────────── */
+  #replaypointer { position: fixed; left: 0; top: 0; z-index: 35;
+                   width: 20px; height: 28px; pointer-events: none;
+                   background: var(--paper);
+                   clip-path: polygon(0 0, 0 75%, 23% 58%, 42% 95%, 58% 89%, 39% 53%, 72% 53%);
+                   transition: transform 600ms ease-in-out; }
+  #replaypointer::before { content: ""; position: absolute; inset: 0;
+                   background: var(--ink); clip-path: inherit;
+                   transform: scale(.76); transform-origin: 16% 40%; }
+  @media (prefers-reduced-motion: reduce) {
+    #replaypointer { transition-property: none; } }
+  [data-replay-press].invited { animation: none; }
+
   /* ── film mode (docs/spec-agent-demo-walks.md §8b): the page played
      for a camera. The chrome a film must not show is gone, a title
      card covers the screen, and a caption is a band across the bottom:
@@ -518,3 +543,10 @@
   .slot-spark { display: block; margin-top: auto; }
   .slot-spark-line { fill: none; stroke: var(--verdigris); stroke-width: 1.5;
                      stroke-linejoin: round; stroke-linecap: round; }
+  /* replay's pointer fills the form (200-events-follow.js): the field it
+     clicked wears the ring a focused field does, since a guided form's
+     fields are disabled and take no focus; and a step with no click
+     behind it is a notice in the caption band */
+  [data-replay-click] { outline: 2px solid Highlight;
+                        outline: -webkit-focus-ring-color auto 1px; }
+  #replaycaption[data-replay-notice] { font-style: italic; }

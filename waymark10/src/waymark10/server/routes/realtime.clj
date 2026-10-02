@@ -118,10 +118,12 @@
 (defn- reportable-ui
   "A ui part's own row selves pass the beat's gate: a dialog on a
   private row the reporter cannot see drops with its fields, and such
-  a focus drops."
+  a focus drops. `labels` drop always: they are the engine's own reading
+  of a ref's row, written by a staged call alone."
   [eng req ui]
   (let [ok? #(reportable-self? eng req presence/normalize-self %)]
     (cond-> ui
+      (map? ui) (dissoc :labels)
       (and (map? ui) (map? (:dialog ui)) (not (ok? (get-in ui [:dialog :self]))))
       (assoc :dialog nil :fields nil)
       (and (map? ui) (some? (:focus ui)) (not (ok? (:focus ui))))

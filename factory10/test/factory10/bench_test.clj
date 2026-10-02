@@ -926,6 +926,44 @@
     (is (str/includes? note "Do not stall the ticket")
         "and not by stalling a ticket the code did not fail")))
 
+(deftest a-finding-names-no-tool-the-seat-does-not-hold
+  ;; ticket 9b16e766: the rig closes a pipeline finding with `read more
+  ;; with bench__log {job: …}`, and a seat whose grant holds no such
+  ;; power met `No power` when it followed it
+  (let [st (state)
+        _ (answer! st "bench__feedback"
+                   (assoc (get-in @st [:answers "bench__feedback"])
+                          :findings
+                          [{:source "pipeline" :severity "error"
+                            :message (str "test10 (shard 4): exit 134; read "
+                                          "more with bench__log "
+                                          "{job: \"test10 (shard 4)\"}")}
+                           {:source "pipeline" :severity "error"
+                            :message (str "gate: FAIL in a-test; read more "
+                                          "with bench__read {path: \"a.clj\"}")}]))
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        _ (a-change! eng {})
+        _ (open-seat! eng {:scope [{:kind "change"
+                                    :actions ["submit" "discard" "stall"]}
+                                   {:kind "bench.read" :actions []
+                                    :filter {:repo a-repository}}]})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        said (mapv :message (get-in answer [:feedback :findings]))]
+    (is (= "bench__read" (get-in answer [:bench :tools :bench.read]))
+        "the seat holds the bench's read and no log read")
+    (is (= "test10 (shard 4): exit 134" (first said))
+        "a remedy naming a tool the grant does not hold is not carried")
+    (is (= "gate: FAIL in a-test; read more with bench__read {path: \"a.clj\"}"
+           (second said))
+        "and a remedy naming a tool the seat holds rides as the rig said it")))
+
 (deftest feedback-names-a-merge-trains-red-first
   ;; ticket 238f45b3: the change's own branch is green, so the rig's
   ;; feedback says nothing; the train's red rides on the change row
@@ -1969,7 +2007,9 @@
 
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
-(def ^:private person-policy {:auto_merge false})
+;; a required check is named, because a repository that names none is
+;; asked nothing (ticket 60962bcf): the rig would refuse the merge
+(def ^:private person-policy {:auto_merge false :required_checks ["gate"]})
 
 (def ^:private approver
   (t/principal {:id "colton" :display "Colton Kopsa" :roles #{"approver"}}))
@@ -2070,6 +2110,40 @@
       (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 501))))
       (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 600))))
       (is (= 2 (count (bench/merge-asks eng)))))))
+
+;; ── a repository the rig will not merge (ticket 60962bcf) ──────────────
+
+(deftest a-repository-with-no-required-checks-raises-no-merge-ask
+  (let [{:keys [eng] :as w} (clean-world {:auto_merge false})
+        waiting (atom {})]
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61)))
+        "the wait has passed, and the rig would refuse the merge")
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 600))))
+    (is (empty? (bench/merge-asks eng))
+        "no held call is filed for a tap that could merge nothing")
+    (testing "the change says a person merges it on GitHub"
+      (bench/merge-green! eng (atom {}))
+      (is (= "person" (get-in (change-row w) [:data :line_why]))))))
+
+(deftest a-merge-the-rig-refuses-after-the-allow-lands-failed
+  (let [{:keys [eng state]} (clean-world person-policy)
+        waiting (atom {})
+        reason "the rig never merges a change nothing has tested"]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (answer! state "bench__merge" {:refused "no_required_checks" :reason reason})
+    (let [ask (first (bench/merge-asks eng))
+          out (inv/invoke! eng :held_call (str (:id ask)) :allow {}
+                           {:principal approver})]
+      (held/after-allow! eng (get (inv/resources eng) :held_call)
+                         :allow out))
+    (let [ask (first (bench/merge-asks eng))]
+      (is (= 1 (count (calls-of state "bench__merge"))))
+      (is (= :failed (:state ask))
+          "an answer that says isError is not a merge, so the row is not done")
+      (is (str/includes? (str (get-in ask [:data :reason])) reason)
+          "the person reads the rig's own reason"))))
 
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)

@@ -1018,7 +1018,7 @@ async function accessStory() {
   await sleep(1500);   /* the row page's own reads settle first */
   await evaljs(watchFetch);
   await evaljs(`document.querySelector("[data-replay-walk]").click(); true`);
-  await waitFor(`${replayState} === "ended"`, "the replay to reach its last frame");
+  await waitFor(`${replayState} === "ended"`, "the replay to reach its last frame", 15000);
   const first = await replayed();
   ok("the screen navigates to the recorded row, drawn from the recording",
      first.here === uiFrame.self && first.screen);
@@ -1937,7 +1937,7 @@ async function guidedStory() {
   const invite = `document.querySelector("dialog[open][data-replay-invite]")`;
   /* the frame after the invitation is ada's screen elsewhere, 3 s
      before the answer: the replay is paused there for the checks */
-  await A.until(`!!${invite} && replay.at === 3`, "the invitation's dialog, and the frame after it");
+  await A.until(`!!${invite} && replay.at === 3`, "the invitation's dialog, and the frame after it", 15000);
   await A.js(`pauseReplay(); true`);
   ok("the replay opens the invited door's dialog on the invited row, read-only, and a later frame leaves both",
      await A.js(`{ const inputs = [...${invite}.querySelectorAll("input, select, textarea")];
@@ -1962,6 +1962,141 @@ async function guidedStory() {
      await A.js(`!document.querySelector("dialog[open]")`));
   ok("replaying the file made no write",
      (await A.js(`window.__replayWrites.join(", ")`)) === "");
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a staged call's write");
+  await A.until(`!replay && !document.querySelector("dialog[open]")`, "the replay to stop");
+  const stagedDialog = {self: meals[1], action: "update_recipe"};
+  const stagedFile = [
+    {format: "waymark-walk/1", title: "An agent writes a recipe",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+    {t: 10, type: "ui", who: "a1", self: meals[1], ui: {dialog: stagedDialog, fields: {}}},
+    {t: 20, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: stagedDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 30, type: "transition", who: "a1", kind: "meal", self: meals[1],
+     action: "update_recipe", from: "on_list", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided stew ${tag}`},
+    {t: 40, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every glide the pointer starts from here on: how long the screen it
+     leaves had been still, and the stillness it owed at that speed. A
+     hop's list and a walk's row owe the screen floor. */
+  await A.js(`{ window.__replayGlides = []; let changed = 0, drawn = false;
+    const apply0 = applyReplayFrame, hop0 = replayHop, arrive0 = replayArrive,
+          to0 = replayPointerTo;
+    window.applyReplayFrame = f => {
+      const i = replay ? replay.frames.indexOf(f) : -1;
+      const out = apply0(f);
+      if (replay && f.type !== "doc" && !replayStill(replay.frames, i)) {
+        changed = performance.now(); drawn = false;
+      }
+      return out;
+    };
+    window.replayHop = r => { changed = performance.now(); drawn = true; return hop0(r); };
+    window.replayArrive = r => { changed = performance.now(); drawn = true; return arrive0(r); };
+    window.replayPointerTo = (to, speed) => {
+      if (replay && changed) window.__replayGlides.push({at: replay.at,
+        still: Math.round(performance.now() - changed),
+        floor: (drawn ? REPLAY_STILL_SCREEN
+                      : replayHoldTime(replay.frames, replay.at)) / replay.speed});
+      return to0(to, speed);
+    };
+    true }`);
+  /* at half speed the press lasts 600 ms, which the 150 ms poll cannot miss */
+  await A.js(`startReplay(${JSON.stringify(stagedFile)}) && (setReplaySpeed(0.5), true)`);
+  /* no jump: the stew's link is not on the walk's page, so the pointer
+     takes the path a person would. The replay is paused at each press
+     for its check, and makes that gesture again when it plays on. */
+  const navPress = `document.querySelector("#kinds a[data-replay-press]")`;
+  await A.until(`!!${navPress} && (pauseReplay(), true)`, "the pressed navigation entry", 15000);
+  ok("a replayed move to a row that is not on screen presses its kind's navigation entry first",
+     await A.js(`${navPress}.getAttribute("href").split("?")[0] === "#/api/meals" &&
+       replay.at === 0 && hereHref() !== ${JSON.stringify(meals[1])}`));
+  await A.js(`playReplay(); true`);
+  const rowPress = `document.querySelector(${JSON.stringify(
+    `#view a[href="#${meals[1]}"][data-replay-press]`)})`;
+  await A.until(`!!${rowPress} && (pauseReplay(), true)`, "the pressed row link in the list", 15000);
+  ok("the list is drawn, and the row's link is pressed there before the move is made",
+     await A.js(`hereHref() === "/api/meals" && replay.at === 0`));
+  await A.js(`playReplay(); true`);
+  const pressed = `document.querySelectorAll("#view button[data-replay-press]")`;
+  /* the dialog waits for the gesture: the replay is paused there for the check */
+  await A.until(`${pressed}.length === 1 && (pauseReplay(), true)`, "the lit action button", 15000);
+  ok("a replayed staged call lights one action button, under the pointer, before its dialog opens",
+     await A.js(`{ const b = ${pressed};
+       b.length === 1 && b[0].dataset.action === "update_recipe" &&
+       b[0].classList.contains("invited") && replay.at === 1 &&
+       !!document.querySelector("#replaypointer") && !document.querySelector("dialog[open]") }`));
+  await A.js(`playReplay(); true`);
+  /* the pointer fills the form: still at half speed, the value waits
+     for the click, and the replay is paused there for the check */
+  const clicked = `document.querySelector("dialog[open][data-guided] [data-replay-click]")`;
+  await A.until(`!!${clicked} && (pauseReplay(), true)`, "the clicked field", 15000);
+  ok("the pointer goes into the form and clicks the field before its value shows",
+     await A.js(`{ const t = document.querySelector("dialog[open][data-guided] [name=recipe]");
+       const c = ${clicked};
+       (c === t || c.contains(t)) && t.value === "" && t.disabled && replay.at === 2 &&
+       !!document.querySelector("dialog[open][data-guided] #replaypointer") }`));
+  await A.js(`setReplaySpeed(1); playReplay(); true`);
+  const written = `document.querySelectorAll("dialog[open][data-guided] .dlgfoot [data-replay-write]")`;
+  /* the close waits for the press: the replay is paused on its way, and
+     the pointer still arrives and presses, for the check */
+  await A.until(`${written}.length === 1 && (pauseReplay(), true)`, "the submit under the pointer", 15000);
+  await A.until(`${written}[0].hasAttribute("data-replay-press")`, "the pressed submit");
+  ok("a replayed staged call presses one submit, lit under the pointer, before the frame that closes its form",
+     await A.js(`{ const b = ${written};
+       b.length === 1 && b[0].classList.contains("invited") && replay.at === 4 &&
+       document.querySelector("dialog[open][data-guided] [name=recipe]")?.value === "Brown the roux." }`));
+  await A.js(`playReplay(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !document.querySelector("dialog[open]")`, "the form to close after the mark", 15000);
+  ok("the marked form closes", true);
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a dialog beat on a row that is not on screen");
+  /* the walk's page is drawn again before the file plays: the stew's
+     page, still on screen, has links the first gesture would take */
+  await A.until(`!replay && !document.querySelector("dialog[open]") &&
+                 !!document.querySelector("[data-replay-walk]") &&
+                 !document.querySelector(${JSON.stringify(`#view a[href="#${meals[1]}"]`)})`,
+                "the replay to stop on the walk's page");
+  const farFile = [
+    {format: "waymark-walk/1", title: "An agent opens a form elsewhere",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "ui", who: "a1", self: meals[1], ui: {dialog: stagedDialog, fields: {}}},
+    {t: 1000, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: stagedDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 3000, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every hash the replay goes to, and whether an element was pressed
+     since the hash before it */
+  await A.js(`{ window.__replayHops = []; let pressed = false;
+    new MutationObserver(ms => {
+      if (ms.some(m => m.target.hasAttribute("data-replay-press"))) pressed = true;
+    }).observe(document.body, {subtree: true, attributes: true,
+                               attributeFilter: ["data-replay-press"]});
+    window.addEventListener("hashchange", () => {
+      if (replay) window.__replayHops.push((pressed ? "press " : "jump ") + hereHref());
+      pressed = false;
+    }); true }`);
+  await A.js(`startReplay(${JSON.stringify(farFile)})`);
+  await A.until(`!!replay && replay.at >= 1`, "the dialog beat, after its walk", 20000);
+  console.log("  the path: " + await A.js(`window.__replayHops.join(", ")`));
+  await A.until(`!!document.querySelector("dialog[open][data-guided]") && (pauseReplay(), true)`,
+                "the form on the row walked to");
+  ok("a replayed dialog beat on a row that is not on screen goes there by the list, and no hash changes without a press",
+     await A.js(`{ const h = window.__replayHops;
+       hereHref() === ${JSON.stringify(meals[1])} && h.length >= 2 &&
+       h[0] === "press /api/meals" && h.every(x => x.startsWith("press ")) }`));
+  await A.js(`playReplay(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !document.querySelector("dialog[open]")`, "the form to close", 15000);
+  const glides = JSON.parse(await A.js(`JSON.stringify(window.__replayGlides)`));
+  console.log("  the glides (ms still / ms owed): " +
+              glides.map(g => g.still + "/" + g.floor).join(", "));
+  ok("the pointer never starts a glide before the screen it leaves has been still for its floor",
+     glides.some(g => g.floor > 0) && glides.every(g => g.still >= g.floor - 20));
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
   A.close();
   await chrome.close();

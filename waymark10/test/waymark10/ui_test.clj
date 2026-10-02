@@ -123,6 +123,42 @@
   (check-page "/api/-/ui")
   (check-page "/api/-/ui-lite"))
 
+(defn- twice-declared
+  "The top-level function names `body` declares more than once. The
+  ui/ files are joined into one script, so a second `function name(`
+  is legal JavaScript and silently wins; top-level is column 0, the
+  way every file under ui/ writes it."
+  [body]
+  (->> (re-seq #"(?m)^(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(" body)
+       (map second)
+       frequencies
+       (keep (fn [[fname n]] (when (< 1 n) fname)))
+       sort))
+
+(deftest ui-declares-no-top-level-function-twice
+  ;; ticket 837f840c: a new replayWalk(r) beside the existing async
+  ;; replayWalk(self) stalled the replay while every pinned string held
+  (testing "the check sees a second declaration, async or not"
+    (is (= ["replayWalk"]
+           (twice-declared (str "<script>\n"
+                                "async function replayWalk(self) {\n"
+                                "  function step(i) {}\n"
+                                "}\n"
+                                "function once() {}\n"
+                                "function replayWalk(r) {\n"
+                                "  function step(i) {}\n"
+                                "}\n"
+                                "</script>")))
+        "nested functions are not top-level; one name twice is named"))
+  (testing "the served page"
+    (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+          twice (twice-declared body)]
+      (is (seq (re-seq #"(?m)^(?:async\s+)?function\s" body))
+          "the page still writes its top-level functions at column 0")
+      (is (empty? twice)
+          (str "declared twice at the top level, the later one wins: "
+               (str/join ", " twice))))))
+
 (deftest ui-port-keeps-the-ten-wire
   ;; the ported waymark9 client speaks wire 10, not 9: the grant scope
   ;; selector, the relay/2 draft socket, and the named SSE classes are
@@ -307,8 +343,8 @@
     (is (str/includes? body "const gap = read + Math.min(REPLAY_MAX_GAP,"))))
 
 (deftest ui-replay-holds-on-a-write
-  ;; the frame after a `transition` waits at least 1500 ms, and the frame
-  ;; after a `move` to another row at least 800 ms. The hold is a floor
+  ;; the screen is still at least 1500 ms after a `transition`, and at
+  ;; least 800 ms after a `move` to another row. The hold is a floor
   ;; under the gap and no addition to it, so a recorded 60-second silence
   ;; still plays in REPLAY_MAX_GAP; film mode schedules by the same code
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
@@ -316,8 +352,59 @@
     (is (str/includes? body "const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;"))
     (is (str/includes? body "if (f.type === \"transition\") return REPLAY_WRITE_HOLD;"))
     (is (str/includes? body "return row(frames[j].self) === row(f.self) ? 0 : REPLAY_MOVE_HOLD;"))
-    (is (str/includes? body "const gap = Math.max(replayGap(r), replayHoldTime(r.frames, r.at));"))
+    (is (str/includes? body "const still = replayHoldTime(r.frames, r.at);"))
+    (is (str/includes? body "const gap = Math.max(replayGap(r),\n    still && still + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);"))
     (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
+
+(deftest ui-replay-keeps-a-floor-under-every-visible-change
+  ;; walk 082fefa5's shape (move, doc, ui open, ui typed, transition,
+  ;; doc) is recorded milliseconds apart. After a move to another
+  ;; row, a dialog opening or closing, or a transition the screen is
+  ;; still at least 1000 ms, and after a typing beat at least 800 ms,
+  ;; before speed and before the gesture. A doc of the screen already shown, or a ui beat equal
+  ;; to the one before it, waits nothing and is not drawn again
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_STILL_SCREEN = 1000, REPLAY_STILL_TYPED = 800;"))
+    (testing "the floors are under the gap the schedule plays, which speed divides"
+      (is (str/includes? body "return replayTyped(frames, i) ? REPLAY_STILL_TYPED : REPLAY_STILL_SCREEN;"))
+      (is (str/includes? body "if (f.type === \"invitation\") return REPLAY_STILL_SCREEN;"))
+      (is (str/includes? body "return hold && Math.max(hold, REPLAY_STILL_SCREEN);"))
+      (is (str/includes? body "const still = replayHoldTime(r.frames, r.at);")))
+    (testing "a frame that changes nothing visible adds no wait"
+      (is (str/includes? body "if (!read && replayStill(r.frames, r.at)) return 0;"))
+      (is (str/includes? body "if ((f.t || 0) - (frames[at - 1].t || 0) < REPLAY_BURST_MS) return true;"))
+      (is (str/includes? body "return JSON.stringify(frames[i].doc) === JSON.stringify(f.doc);"))
+      (is (str/includes? body "replayBeat(frames[i]) === replayBeat(f);")))
+    (testing "the floor is counted from the last frame that changed the screen"
+      (is (str/includes? body "while (i >= 0 && (frames[i].type === \"doc\" || replayStill(frames, i))) i--;")))
+    (testing "a frame that changes nothing is not drawn again"
+      (is (str/includes? body "if (!same && self === String(hereHref() || \"\").split(\"?\")[0]) render();"))
+      (is (str/includes? body "} else if (f.type === \"ui\" && !again) {")))))
+
+(deftest ui-replay-leaves-a-screen-only-after-it-has-been-still
+  ;; the floors are stillness: for a dialog with one typed field and a
+  ;; submit, the form is still at least 1000 ms after it opens before the
+  ;; pointer moves, the typed value at least 800 ms before the pointer
+  ;; heads to the submit, and a hop's list at least 1000 ms. The
+  ;; gesture's 900 ms come after the stillness and not inside it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        [_ screen typed] (re-find #"const REPLAY_STILL_SCREEN = (\d+), REPLAY_STILL_TYPED = (\d+);" body)]
+    (is (and screen (>= (Long/parseLong screen) 1000)) "a new screen is still at least 1000 ms")
+    (is (and typed (>= (Long/parseLong typed) 800)) "a typed value is still at least 800 ms")
+    (is (not (re-find #"REPLAY_SCREEN_MIN|REPLAY_TYPE_MIN" body))
+        "no floor is measured from the screen's change to the next frame")
+    (testing "an opened form owes the screen floor, and a typed value the typed one"
+      (is (str/includes? body "return replayTyped(frames, i) ? REPLAY_STILL_TYPED : REPLAY_STILL_SCREEN;")))
+    (testing "the frame waits the stillness and then the gesture, when its recorded gap is shorter"
+      (is (str/includes? body "const gap = Math.max(replayGap(r),\n    still && still + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);")))
+    (testing "the gesture never starts inside the stillness"
+      (is (str/includes? body "Math.max(still, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);")))
+    (testing "a hop's list and a walk's row are still for the screen floor before the next gesture"
+      (is (str/includes? body "replayGaze(\"list\", list);\n  replayLinger(r);"))
+      (is (str/includes? body "replayGaze(walk.list ? \"list\" : \"row\", walk.self);\n  replayLinger(r);"))
+      (is (str/includes? body "r.lead = setTimeout(() => replayGesture(r), REPLAY_STILL_SCREEN / r.speed);")))
+    (testing "the arrival outline lasts as long as the stillness, so it is off when the pointer leaves"
+      (is (str/includes? body "const REPLAY_GAZE_MS = REPLAY_STILL_SCREEN;")))))
 
 (deftest ui-replay-anchors-a-caption-to-its-field
   ;; docs/spec-agent-demo-walks.md §3: a caption that names a field is
@@ -330,6 +417,191 @@
     (is (str/includes? body ".setAttribute(\"data-caption-note\", \"\");"))
     (is (str/includes? body "(f.type === \"invitation\" || (f.type === \"caption\" && f.field))"))
     (is (str/includes? body "if (replay) replayCaption();"))))
+
+(deftest ui-replay-presses-the-submit-before-the-close
+  ;; the moment of a write: for the frame that closes a form after its
+  ;; write, the pointer goes to the guided dialog's submit button, drawn
+  ;; unlit, and presses it before the frame is applied; a form closed
+  ;; with no transition has no press, and no separate light is made
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        mark (str/index-of body "const wait = replayGestureWait(r);")
+        close (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (is (not (str/includes? body "replayMarkWrite")))
+    (is (str/includes? body "dlg.guidedWrite = () => {"))
+    (is (str/includes? body "const lit = el(\"button\", {class: write.className + \" invited\","))
+    (is (str/includes? body "if (!replayWrote(replay, key)) return null;"))
+    (is (str/includes? body "let write = g.querySelector(\"[data-replay-write]\");"))
+    (is (str/includes? body "write = g.guidedWrite();\n      write.classList.remove(\"invited\");"))
+    (is (str/includes? body ".dlgfoot button.invited { animation: none; }"))
+    (is (and mark close (< mark close))
+        "the submit is pressed before the frame that closes the form is applied")))
+
+(deftest ui-replay-changes-no-screen-behind-an-open-form
+  ;; walk 082fefa5's write (dialog open, typing, transition, doc, close):
+  ;; the transition and the doc recorded while the form is open wait, with
+  ;; no time of their own, so the submit is pressed and the form closes
+  ;; first. The frame that closes the form draws them on the screen the
+  ;; form was over, outlined, and that screen is still for the write's
+  ;; hold. A form the recording never closes has them drawn by the next
+  ;; frame that is not its own, or when the last frame has played
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        hold (str/index-of body "replay.held.push(f);")
+        land (str/index-of body "const note = landed || replayKeepsForm(f) ? null : replayLand(replay);")
+        close (str/index-of body "applyUiFrame({self: f.self, ui: f.ui || {}, principal: actor});")]
+    (testing "a transition or a doc behind an open form is held, not drawn"
+      (is (str/includes? body "const form = f.type === \"ui\" && !!(f.ui || {}).dialog;"))
+      (is (str/includes? body "if (!landed && replay.held && (f.type === \"transition\" || f.type === \"doc\")) {"))
+      (is (str/includes? body "if (form && !replay.held) replay.held = [];")))
+    (testing "a held frame waits nothing, and the floor before the close is the typed value's"
+      (is (str/includes? body "if (t === \"ui\") return !!(frames[i].ui || {}).dialog;"))
+      (is (str/includes? body "if (replayHeld(frames, at) &&\n      frames.some((g, k) => k > at && !replayKeepsForm(g))) return true;")))
+    (testing "the frame that ends the form draws what waited, in order, on the screen shown"
+      (is (str/includes? body "for (const f of held) {\n    applyReplayFrame(f, true);"))
+      (is (str/includes? body "else if (landed) { /* the screen stays */ }"))
+      (is (and hold land close (< hold land close))
+          "the held frames are drawn by the frame that closes the form, not before it"))
+    (testing "the screen wears the arrival outline and is still for the write's hold"
+      (is (str/includes? body "r.gaze = null;\n    replayGaze(\"row\", wrote);"))
+      (is (str/includes? body "if (frames[j].type === \"transition\") return replayHeld(frames, j);"))
+      (is (str/includes? body "if (replayLands(frames, i)) return REPLAY_WRITE_HOLD;")))
+    (testing "a form never closed loses nothing: the next frame that is not its own draws what waited"
+      (is (str/includes? body "return f.type === \"transition\" || f.type === \"doc\" || f.type === \"caption\" ||\n    (f.type === \"ui\" && !!(f.ui || {}).dialog);"))
+      (is (str/includes? body "if (t !== \"transition\" && t !== \"doc\" && t !== \"caption\") return false;")))
+    (testing "with no frame left, the end draws it under the form the recording left open"
+      (is (str/includes? body "if (!open) closeGuided();"))
+      (is (str/includes? body "if (r.at >= r.frames.length && r.held) {\n    r.notice = replayLand(r, true) || r.notice;"))
+      (is (str/includes? body "r.walked = null;\n    r.held = null;")))))
+
+(deftest ui-replay-walks-to-a-row-that-is-not-on-screen
+  ;; no jumps: a move whose link is not on screen presses the navigation
+  ;; entry of its kind, that list is drawn as a screen of its own, still
+  ;; for 1000 ms with the arrival outline, and the row's link is pressed
+  ;; there; until then the frame is not applied, so no hash goes to the
+  ;; row. A list already shown is no hop, and one hop is made for a frame
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        hop (str/index-of body "if (r.gesture && r.gesture.hop) { replayHop(r); return; }")
+        act (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (is (str/includes? body "if (f.type !== \"move\" || !to.closest(\"#kinds\")) return null;"))
+    (is (str/includes? body "return list.split(\"?\")[0] === String(f.self).split(\"?\")[0] ? null : list;"))
+    (is (str/includes? body "hop: r.hopped === r.at ? null : replayHopOf(f, to)};"))
+    (testing "the hop draws the list, outlined, and waits the screen floor for the next gesture"
+      (is (str/includes? body "location.hash = \"#\" + list;\n  replayGaze(\"list\", list);"))
+      (is (str/includes? body "const wait = REPLAY_STILL_SCREEN + REPLAY_GLIDE_MS + REPLAY_PRESS_MS;"))
+      (is (str/includes? body "r.timer = setTimeout(replayStep, wait / r.speed);"))
+      (is (str/includes? body "r.lead = setTimeout(() => replayGesture(r), REPLAY_STILL_SCREEN / r.speed);")))
+    (is (and hop act (< hop act))
+        "the hop is made before the frame is applied, and in its place")))
+
+(deftest ui-replay-walks-to-the-row-of-a-dialog-a-write-or-an-invitation
+  ;; no jumps for the three other frames either: a dialog beat with no
+  ;; action button on screen, a write of the recorder's and an invitation,
+  ;; on a row that is not the screen shown, make the gesture of a move to
+  ;; that row first (navigation entry, list, the row's link); the row is
+  ;; drawn as a screen of its own, and the frame is applied after it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        walk (str/index-of body "if (r.gesture && r.gesture.walk) { replayArrive(r); return; }")
+        act (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (testing "a dialog beat whose door has no button on screen"
+      (is (str/includes? body "const to = ui.dialog ? !replayGestureTarget(f) && (list ? collectionHrefOf(c) : f.self)")))
+    (testing "a write of the recorder's, and not a step with no click behind it"
+      (is (str/includes? body ": f.type === \"transition\" ? !replayNotice(r, f) && f.self")))
+    (testing "an invitation"
+      (is (str/includes? body ": f.type === \"invitation\" && f.action ? row(f.self) : null;")))
+    (testing "the screen shown is no walk, nor is one under an open dialog, and one walk is made for a frame"
+      (is (str/includes? body "if (!f || r.walked === r.at || r.door || $(\"dialog[open]\")) return null;"))
+      (is (str/includes? body "return to && row(to) !== hereHref() ? {type: \"move\", who: f.who, self: to, list} : null;")))
+    (testing "the gesture is a move's, so it goes by the kind's list as a move does"
+      (is (str/includes? body "const walk = replayWalkOf(r, r.frames[r.at]);\n  const f = walk || r.frames[r.at];")))
+    (testing "the walk draws the row, outlined, and waits the screen floor for the frame's own gesture"
+      (is (str/includes? body "applyFollowMove(walk.self);\n  replayGaze(walk.list ? \"list\" : \"row\", walk.self);")))
+    (is (and walk act (< walk act))
+        "the walk is made before the frame is applied, and in its place")))
+
+(deftest ui-replay-points-at-the-field-a-typing-beat-types
+  ;; the pointer fills the form: a typing beat's gesture goes to the
+  ;; field it types into, and the click there, before the frame shows the
+  ;; value, gives that field the ring a focused field wears. Replay makes
+  ;; no separate lit-field cue. The pointer is drawn inside the dialog
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "? g.guidedField(replayTypingOf(f)) : null;"))
+    (is (str/includes? body "if (typeof ui.focus === \"string\" && !ui.focus.startsWith(\"/\")) return ui.focus;"))
+    (is (str/includes? body "if (form && r.gesture && r.gesture.field) { form.guidedClick(r.gesture.field); return; }"))
+    (is (str/includes? body "if (spot) spot.setAttribute(\"data-replay-click\", \"\");"))
+    (is (str/includes? body "[data-replay-click] { outline: 2px solid Highlight;"))
+    (testing "the lit-field cue is a live follow's alone"
+      (is (str/includes? body "if (!replay) g.guidedLight(guidedTyping);"))
+      (is (str/includes? body "if (g && g.guidedLight && !replay) g.guidedLight(guidedTyping);")))
+    (testing "the pointer is drawn inside the form's dialog, and stays on the page when it closes"
+      (is (str/includes? body "const host = target.closest(\"dialog[open]\") || document.body;"))
+      (is (str/includes? body "if (p.parentElement !== host) host.append(p);"))
+      (is (str/includes? body "else if (p && p.parentElement !== document.body && !p.closest(\"dialog[open]\"))")))))
+
+(deftest ui-replay-shows-a-notice-for-a-step-with-no-click
+  ;; a transition by a principal other than the recorder, a clock_shift
+  ;; and an invitation the recorder did not write have no click behind
+  ;; them: the pointer and the screen stay where they were, and the
+  ;; caption band says the step
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "if (!r.recorder && (f.type === \"move\" || f.type === \"ui\")) r.recorder = f.who || null;"))
+    (is (str/includes? body "const other = !!r.recorder && !!f.who && f.who !== r.recorder;"))
+    (is (str/includes? body "if (f.kind === \"clock_shift\") return \"Later: \" + what;"))
+    (is (str/includes? body "return (actor.type === \"system\" ? \"Scheduled\" : actor.display) + \": \" + what;"))
+    (is (str/includes? body "return \"Invited: \" + (f.note || pretty(f.action || \"\"));"))
+    (is (str/includes? body "replay.notice = replayNotice(replay, f);"))
+    (testing "it moves no screen and makes no gesture"
+      (is (str/includes? body "else if (!$(\"dialog[open]\") && !replay.notice) location.hash = \"#\" + f.self;")))
+    (testing "the band shows it"
+      (is (str/includes? body "band.toggleAttribute(\"data-replay-notice\", !!n);"))
+      (is (str/includes? body "#replaycaption[data-replay-notice] { font-style: italic; }")))))
+
+(deftest ui-replay-outlines-the-row-or-list-the-gaze-moves-to
+  ;; the moment of a look: a move to a row, or a `collection` ui, marks
+  ;; the root element for the screen's stillness, 1000 ms, and the main panel is
+  ;; outlined while it does; film mode hides neither mark
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_GAZE_MS = REPLAY_STILL_SCREEN;"))
+    (is (str/includes? body "if (f.self) { applyFollowMove(f.self); replayGaze(\"row\", f.self); }"))
+    (is (str/includes? body "replayGaze(\"list\", collectionHrefOf(c));"))
+    (is (str/includes? body "root.setAttribute(\"data-replay-gaze\", what);"))
+    (is (str/includes? body "html[data-replay-gaze] .panel[data-replay-screen],"))
+    (is (str/includes? body "html[data-replay-gaze] [data-replay-doc] > .panel:first-of-type {"))
+    (is (not (re-find #"html\[data-film\][^{]*(data-replay-gaze|data-guided-write|\.dlgfoot)[^{]*\{[^}]*display: none" body))
+        "film mode hides no part of either mark")))
+
+(deftest ui-replay-points-at-the-link-or-button-before-the-act
+  ;; the gesture before an act: a pointer glides for 600 ms to the link a
+  ;; move would follow, or to the action button a dialog beat would
+  ;; press, and that element is lit for 300 ms in the invitation's lit
+  ;; style; the frame is applied after it. With no link on screen there
+  ;; is no gesture and the move still happens. Film mode draws the pointer
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        wait (str/index-of body "const wait = replayGestureWait(r);")
+        act (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (is (str/includes? body "const REPLAY_GLIDE_MS = 600, REPLAY_PRESS_MS = 300;"))
+    (testing "a move goes to the row's link on the page, then to the navigation bar"
+      (is (str/includes? body "return link(\"#view\", h => row(h) === to) || nav(to) ||"))
+      (is (str/includes? body "(list !== row(here) && nav(list)) || null;")))
+    (testing "a dialog beat goes to that row's action button for the door"
+      (is (str/includes? body ".filter(b => seen(b) && b.dataset.action === d.action);"))
+      (is (str/includes? body "return doors.find(b => rowOf(b) === d.self) ||")))
+    (testing "a query beat goes to the filter control or the navigation entry"
+      (is (str/includes? body "link(\"#view\", h => h === target) || nav(row(c.self)) || null;")))
+    (testing "the target is lit after the glide, and the frame waits for the press"
+      (is (str/includes? body "lit.classList.add(\"invited\");"))
+      (is (str/includes? body "lit.setAttribute(\"data-replay-press\", \"\");"))
+      (is (str/includes? body "}, REPLAY_GLIDE_MS / r.speed);"))
+      (is (and wait act (< wait act))
+          "the gesture is waited for before the frame is applied"))
+    (testing "with no link on screen there is no gesture, and the frame is applied"
+      (is (str/includes? body "if (!to) return;"))
+      (is (str/includes? body "return r.gesture ? r.gesture.until - performance.now() : 0;")))
+    (testing "the gesture ends as the wait before its frame does, after the stillness"
+      (is (str/includes? body "Math.max(still, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);")))
+    (testing "the pointer is drawn over the page, in film mode as well"
+      (is (str/includes? body "document.body.append(p = el(\"div\", {id: \"replaypointer\", \"aria-hidden\": \"true\"}));"))
+      (is (str/includes? body "#replaypointer { position: fixed; left: 0; top: 0; z-index: 35;"))
+      (is (str/includes? body "[data-replay-press].invited { animation: none; }"))
+      (is (not (re-find #"html\[data-film\][^{]*(#replaypointer|data-replay-press)[^{]*\{[^}]*display: none" body))))))
 
 (deftest ui-replay-lights-the-field-a-staged-call-types
   ;; docs/spec-agent-demo-walks.md §2: a typing beat names its argument
@@ -345,6 +617,30 @@
     (is (str/includes? body "for (const s of form.querySelectorAll(\"[data-typed]\")) {"))
     (is (str/includes? body "spot.classList.add(\"invited\");"))
     (is (str/includes? body "spot.setAttribute(\"data-typed\", \"\");"))))
+
+(deftest ui-replay-names-a-ref-fields-row-and-not-its-id
+  ;; ticket 097e60da: a replay fetches no collection, so a ref picker has
+  ;; no entry of its own. A typing beat seats it with one, [id, label]:
+  ;; the beat's own `labels`, else the summary of the walk's last `doc`
+  ;; for that row, else the id
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        said "if (typeof said === \"string\" && said) return said;"
+        held "for (const [self, doc] of replay.docs)"]
+    (testing "the beat's labels are kept beside its fields"
+      (is (str/includes? body "guidedLastLabels = ui.labels || {};"))
+      (is (str/includes? body "const said = Array.isArray(own) ? own[i] : i === undefined ? own : null;"))
+      (is (str/includes? body said)))
+    (testing "with no label, a doc the walk already holds names the row"
+      (is (str/includes? body held))
+      (is (str/includes? body "doc && typeof doc.summary === \"string\" && doc.summary)"))
+      (is (< (str/index-of body said) (str/index-of body held))
+          "the beat's own label is read first"))
+    (testing "a replay alone seats the picker: a live follow's is fetched"
+      (is (str/includes? body "g.guidedSet(guidedLastFields, replay ? guidedLabel : null);"))
+      (is (not (str/includes? body "g.guidedSet(guidedLastFields);"))))
+    (testing "the one entry is the row by its label, and the id when none is known"
+      (is (str/includes? body "if (!seat) node.append(seat = el(\"option\", {value: v}, named[0] || v));"))
+      (is (str/includes? body "else if (named[0] && seat.textContent === v) seat.textContent = named[0];")))))
 
 (defn- well-known [h]
   (-> (h {:request-method :get :uri "/api/.well-known/waymark"

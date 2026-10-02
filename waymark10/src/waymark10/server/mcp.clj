@@ -1648,7 +1648,7 @@
   12)
 
 (defn- stage
-  "What a staged beat needs, {:reg :principal :tap :visible?}, or nil
+  "What a staged beat needs, {:reg :principal :tap :visible? :summary-of}, or nil
   when this call makes no beat: the engine's presence registry is not
   running, the session is anonymous, the kind is the recording's own
   (`walks/record-own!`'s rule), or the principal is recording no self
@@ -1666,7 +1666,10 @@
           {:reg reg
            :principal principal
            :tap (:presence rec)
-           :visible? (presence/self-visible? eng (:visibility session))})))
+           :visible? (presence/self-visible? eng (:visibility session))
+           ;; a ref's row by its summary line, as the session may read it
+           :summary-of (let [read (walks/ref-summaries eng (:visibility session))]
+                         (fn [k id] (:summary (read k id))))})))
     (catch Exception _ nil)))
 
 (defn- beat!
@@ -1717,24 +1720,35 @@
   these values (a rehearsal typed them, or a refused call left them),
   nothing is typed again. Each typing beat names in `focus` the
   argument it adds (the last of them, when it adds several), so a
-  replay lights that field. An action the kind does not declare opens
-  no form, and only the gaze moves."
+  replay lights that field. A typing beat also carries `labels`: the
+  summary line of the row each ref argument it shows names, as the
+  session may read it (`presence/ref-labels`), so a replay names the
+  row and not its id. A row the session may not see has no label. An
+  action the kind does not declare opens no form, and only the gaze
+  moves."
   [eng st self aname input]
   (let [dialog {:self self :action (name aname)}
         ks (presence/typed-keys eng self (name aname) input)
         given (into {} (map (fn [[k v]] [(keyword (name k)) v])) input)
+        labels (when ks
+                 (try (presence/ref-labels eng self (name aname)
+                                           (select-keys given ks) (:summary-of st))
+                      (catch Exception _ nil)))
+        typed (fn [fields]
+                (let [named (not-empty (select-keys labels (keys fields)))]
+                  (cond-> {:dialog dialog :fields fields}
+                    named (assoc :labels named))))
         shown? (and ks
                     (try (presence/shows? (:reg st) (:id (:principal st))
-                                          {:dialog dialog
-                                           :fields (select-keys given ks)
-                                           :focus (some-> (last ks) name)})
+                                          (assoc (typed (select-keys given ks))
+                                                 :focus (some-> (last ks) name)))
                          (catch Exception _ false)))]
     (if (or (nil? ks) shown?)
       (beat! st self nil)
       (do (beat! st self {:dialog dialog :fields {}})
           (doseq [fields (typed-steps given ks)]
-            (beat! st self {:dialog dialog :fields fields
-                            :focus (name (nth ks (dec (count fields))))}))))))
+            (beat! st self (assoc (typed fields)
+                                  :focus (name (nth ks (dec (count fields)))))))))))
 
 (defn- stage-close!
   "The beat after a write that landed: the form closes. A refused call
@@ -4294,15 +4308,37 @@
   sentence a seat can act on."
   2048)
 
+(def ^:private finding-remedy
+  "The words a finding of the rig's closes with when it names a tool to
+  read more with: `read more with bench__log {job: \"gate\"}`. The one
+  group is the tool's name, as the power door spells it."
+  #"(?s)[\s;,:]*\bread more with (\w+)(?:\s*\{[^{}]*\})?\.?\s*\z")
+
+(defn- message-the-seat-can-follow
+  "A finding's message, without its closing remedy when that remedy
+  names a tool the seat's grant does not hold (ticket 9b16e766). The
+  rig writes the remedy for whoever holds its log read; a seat that
+  does not met `No power` when it followed it. `held` is the set of
+  tool names in the sit's `bench.tools`, so a seat that is granted the
+  tool reads the remedy again with no change here."
+  [message held]
+  (when-some [said (some-> message str)]
+    (let [[remedy tool] (re-find finding-remedy said)]
+      (if (and remedy (not (contains? held tool)))
+        (subs said 0 (- (count said) (count remedy)))
+        said))))
+
 (defn- feedback-said
   "One finding of the rig's, as the sit carries it: the source, the
   severity, the message, and the locations when the rig named any.
   THE ENGINE ADDS NOTHING AND JUDGES NOTHING — a finding is the rig's
-  reading of what the submit caused, and the order is the rig's too."
-  [finding]
+  reading of what the submit caused, and the order is the rig's too.
+  The one thing it takes away is a closing remedy that names a tool
+  outside `held` (`message-the-seat-can-follow`)."
+  [finding held]
   (cond-> {"source" (some-> (:source finding) str)
            "severity" (some-> (:severity finding) str)
-           "message" (some-> (:message finding) str)}
+           "message" (message-the-seat-can-follow (:message finding) held)}
     (seq (:locations finding)) (assoc "locations" (:locations finding))))
 
 (defn- interrupted-finding?
@@ -4359,21 +4395,23 @@
   parts of the forge it could not reach. A refusal, a dark Gate and a
   rig that faults each mean nil, and the sit then answers no
   `feedback` at all — a seat that cannot see the checks is not a sit
-  that refuses."
-  [gate-rpc repo branch]
+  that refuses. `tools` is the sit's `bench.tools`: a finding names no
+  tool that map does not hold."
+  [gate-rpc repo branch tools]
   (try
     (when-some [got (bench-payload
                      (gate-rpc "tools/call"
                                {:name (gate/bench-tool :feedback)
                                 :arguments {:repo repo :branch branch
                                             :log_bytes feedback-log-bytes}}))]
-      (let [findings (take feedback-findings-ceiling (:findings got))]
+      (let [findings (take feedback-findings-ceiling (:findings got))
+            held (set (vals tools))]
         (cond-> {"pull_request"
                  (when-some [pr (:pull_request got)]
                    {"number" (:number pr)
                     "state" (some-> (:state pr) str)
                     "url" (some-> (:url pr) str)})
-                 "findings" (mapv feedback-said findings)
+                 "findings" (mapv #(feedback-said % held) findings)
                  "unavailable" (mapv str (:unavailable got))}
           ;; dead CI gets the one instruction that answers it
           (some interrupted-finding? findings)
@@ -4569,7 +4607,8 @@
                                                  str not-empty)
                                          (some? (get-in change [:data :number])))))
                        (feedback-of gate-rpc (str (or (:repo made) repo))
-                                    (str (or (:branch made) branch))))
+                                    (str (or (:branch made) branch))
+                                    (bench-tools-of eng seat)))
                      change)
           ;; the path the policy names, answered only when the file
           ;; is really there (R-6); a worktree that was never made
@@ -4807,10 +4846,12 @@
             (when-not halted
               (claimed-walk! eng call sitter-sees seat sitting named-row))
             ;; … and a sitting the walk handed nothing is stamped as
-            ;; such — no rows free, an empty queue, or a seat at a wall
-            ;; — so seat health counts an idle wake without reading an
-            ;; absent `walked_rows`. The rows this sitting already
-            ;; holds count: a re-sit of a sitting that walked is not it.
+            ;; such — no rows free, or an empty queue — so seat health
+            ;; counts an idle wake without reading an absent
+            ;; `walked_rows`. A seat at a wall was not let walk: it is
+            ;; stamped `halted` and not `walked_nothing`. The rows this
+            ;; sitting already holds count: a re-sit of a sitting that
+            ;; walked is not it.
             _ (when sitting
                 (seats/stamp-walked-nothing!
                  eng (:id sitting)

@@ -1710,6 +1710,11 @@
   (boolean (some #(str/starts-with? (str %) (str sha))
                  (get-in ticket-row [:data :red_heads]))))
 
+(def ^:private detail-reserve
+  "The characters of a red-main ticket's body kept for what is not log:
+  the checks and their addresses, the red steps, and what to do."
+  4000)
+
 (defn- red-main-detail
   "The body a code seat reads: what is red, where, the log, and what to
   do about it. `failed` are the checks on the head that are not
@@ -1717,10 +1722,15 @@
   (`quick=failure`) — and their logs come first, because the cause is
   in them (ticket 9a14577e). Each log names the steps of its job that
   went red, so the step is named even when the tail is cut before it
-  (ticket c0d7ce64)."
+  (ticket c0d7ce64). The logs share what the body's ceiling leaves, and
+  each keeps its END: the ceiling cut the body from the end, and so cut
+  the failing lines of every log but the first (ticket 3a9d6c62)."
   [source repo base head red-from red-checks failed]
-  (let [tails (for [c (concat (take base-log-tails failed)
-                              (take base-log-tails red-checks))]
+  (let [logged (concat (take base-log-tails failed)
+                       (take base-log-tails red-checks))
+        share (quot (- (long ticket/detail-chars) (long detail-reserve))
+                    (max 1 (count logged)))
+        tails (for [c logged]
                 (let [{:keys [excerpt note]}
                       (try (forge-log-tail source (assoc c :repository repo))
                            (catch Exception e {:note (ex-message e)}))
@@ -1735,7 +1745,8 @@
                               "\n\n"))
                        (if (str/blank? (str excerpt))
                          (str "No log tail: " (or note "the forge gave none") ".")
-                         (str "```\n" excerpt "\n```")))))]
+                         (str "```\n" (tail-of (str excerpt) share)
+                              "\n```")))))]
     (cut (str "## What is red\n\n"
               "The head of `" base "` in " repo " is `" head "`, and these "
               "checks on it finished red:\n\n"

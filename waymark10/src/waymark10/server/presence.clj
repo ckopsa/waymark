@@ -517,6 +517,71 @@
                         (and (vector? s) (secret-props? (second s))))]
           k)))
 
+(defn- ref-kinds
+  "The plain `:kind` ref arguments of these :map schemas → {key kind}:
+  an entry a picker is drawn for, one row or a list of them."
+  [& forms]
+  (into {}
+        (for [form forms
+              :when form
+              [k e] (try (schema/entry-map form) (catch Exception _ nil))
+              :let [kind (:kind (:properties e))]
+              :when (or (keyword? kind) (string? kind))]
+          [(keyword (name k)) (keyword (name kind))])))
+
+(defn ref-labels
+  "The `labels` of a staged dialog's `fields`: for each plain `:kind` ref
+  argument of `self`'s `action`, the target row's summary line as
+  `summary-of`, (fn [kind id]) → string or nil, reads it. A list of refs
+  has one label for each id, nil where there is none. An argument whose
+  rows have no label is left out; nil when no argument has one. It is
+  how a replayed form names a ref's row as a live picker does
+  (docs/spec-agent-demo-walks.md § 2)."
+  [eng self action fields summary-of]
+  (let [[_ _ door] (when action
+                     (dialog-door eng (normalize-self self) action))
+        kinds (when door (ref-kinds (:input door)))
+        label (fn [kind id]
+                (when (or (string? id) (uuid? id))
+                  (try (let [s (summary-of kind (str id))]
+                         (when (string? s) (not-empty s)))
+                       (catch Exception _ nil))))]
+    (not-empty
+     (into {}
+           (keep (fn [[k v]]
+                   (when-some [kind (get kinds (keyword (name k)))]
+                     (let [l (if (sequential? v)
+                               (mapv #(label kind %) v)
+                               (label kind v))]
+                       (when (if (vector? l) (some some? l) (some? l))
+                         [(keyword (name k)) l])))))
+           fields))))
+
+(defn- seen-labels
+  "A ui part's `labels` as a reader whose :row? is `row?` may have them:
+  a label crosses with its field, and only for a row that reader may
+  see. A list's label that does not cross is nil in its place."
+  [eng dialog fields labels row?]
+  (let [kinds (some-> (dialog-door eng (:self dialog) (:action dialog))
+                      (nth 2) :input ref-kinds)
+        value (into {} (map (fn [[k v]] [(name k) v])) fields)
+        may (fn [kind id label]
+              (when (and (string? label) (some? id) (row? kind (str id)))
+                label))]
+    (not-empty
+     (into {}
+           (keep (fn [[f l]]
+                   (when-some [kind (get kinds (keyword (name f)))]
+                     (when (contains? value (name f))
+                       (let [v (get value (name f))
+                             l' (if (and (sequential? l) (sequential? v)
+                                         (= (count l) (count v)))
+                                  (mapv #(may kind %1 %2) v l)
+                                  (when-not (sequential? v) (may kind v l)))]
+                         (when (if (vector? l') (some some? l') (some? l'))
+                           [f l']))))))
+           labels))))
+
 (defn- draft-fields
   "The shared live draft's values for this dialog; nil when the action
   keeps none, or none is open yet. Where one exists it IS the form,
@@ -557,8 +622,16 @@
           (recur (assoc-in ui [:fields k] {:elided true}))
           (throw (too-large)))))))
 
+(defn- label-ui
+  "The fitted part with its `labels`, where it is still under the cap
+  with them: a label never refuses a beat."
+  [ui labels]
+  (let [labeled (cond-> ui labels (assoc :labels labels))]
+    (if (<= (long (json-bytes labeled)) (long ui-max-bytes)) labeled ui)))
+
 (defn- clean-ui
-  "A reported ui part as the registry may store it: the four parts and
+  "A reported ui part as the registry may store it: the four parts, a
+  staged call's `labels` for the fields it shows (`ref-labels`), and
   nothing else, selves normalized, a dialog naming no action of its
   row's kind (or, on a collection self, no create action of the kind)
   dropped with its fields, fields read from the shared live
@@ -573,7 +646,7 @@
             :presence
             {:ui ["must be an object {dialog, fields, collection, focus}"]})))
   (let [eng (:eng reg)
-        {:keys [dialog fields collection focus]} ui
+        {:keys [dialog fields labels collection focus]} ui
         dself (normalize-self (when (map? dialog) (:self dialog)))
         a (when (map? dialog) (:action dialog))
         action (when (or (string? a) (keyword? a)) (not-empty (name a)))
@@ -589,17 +662,28 @@
                           (when (map? fields) fields))))
         typing (when (and (string? focus)
                           (some #(= focus (name (key %))) shown))
-                 focus)]
-    (fit-ui
-     {:dialog (when door {:self dself :action action})
-      :fields shown
-      :collection (when (valid-self? cself)
-                    (cond-> {:self cself}
-                      (map? (:filter collection)) (assoc :filter (:filter collection))
-                      (string? (:sort collection)) (assoc :sort (:sort collection))
-                      (integer? (:page collection)) (assoc :page (:page collection))))
-      :focus (cond (valid-self? fself) fself
-                   typing typing)})))
+                 focus)
+        named (when (and door (map? labels))
+                (not-empty
+                 (into {}
+                       (filter (fn [[k v]]
+                                 (and (some #(= (name k) (name (key %))) shown)
+                                      (or (string? v)
+                                          (and (sequential? v)
+                                               (every? #(or (nil? %) (string? %)) v))))))
+                       labels)))]
+    (label-ui
+     (fit-ui
+      {:dialog (when door {:self dself :action action})
+       :fields shown
+       :collection (when (valid-self? cself)
+                     (cond-> {:self cself}
+                       (map? (:filter collection)) (assoc :filter (:filter collection))
+                       (string? (:sort collection)) (assoc :sort (:sort collection))
+                       (integer? (:page collection)) (assoc :page (:page collection))))
+       :focus (cond (valid-self? fself) fself
+                    typing typing)})
+     named)))
 
 (defn typed-keys
   "The keys of `input` a dialog on `self`'s `action` may show, in the
@@ -925,7 +1009,8 @@
   and is REMOVED otherwise, never blanked; collection.self follows the
   whole-kind rule, its filter keeps the keys :field? admits and a sort
   on a refused field is dropped; focus needs :row?, and one that names
-  a typed argument crosses with its field. A frame whose
+  a typed argument crosses with its field; a label crosses with its
+  field as well, and only for a row :row? admits. A frame whose
   every part was redacted crosses as a plain move — it never says
   that something was hidden. nil vis (an unscoped follower) sees the
   frame whole."
@@ -936,7 +1021,7 @@
           arg? (or (:arg? vis) (constantly true))
           field? (or (:field? vis) (constantly true))]
       (fn [frame]
-        (let [{:keys [dialog fields collection focus]} (:ui frame)
+        (let [{:keys [dialog fields labels collection focus]} (:ui frame)
               [rdef id] (or (row-of eng (:self dialog))
                             (when-some [r (collection-of eng (:self dialog))]
                               [r nil]))
@@ -969,12 +1054,15 @@
               focus' (when (string? focus)
                        (if (str/starts-with? focus "/")
                          (when (visible? focus) focus)
-                         (when (some #(= focus (name (key %))) fields') focus)))]
+                         (when (some #(= focus (name (key %))) fields') focus)))
+              labels' (when (and dialog' (map? labels))
+                        (seen-labels eng dialog' fields' labels (:row? vis)))]
           (if (and (some some? [dialog collection focus])
                    (every? nil? [dialog' collection' focus']))
             (frame-of "move" frame)
-            (assoc frame :ui {:dialog dialog' :fields fields'
-                              :collection collection' :focus focus'})))))))
+            (assoc frame :ui (cond-> {:dialog dialog' :fields fields'
+                                      :collection collection' :focus focus'}
+                               labels' (assoc :labels labels')))))))))
 
 ;; ── lifecycle ───────────────────────────────────────────────────────
 

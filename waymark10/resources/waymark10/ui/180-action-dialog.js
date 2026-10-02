@@ -599,8 +599,20 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     dlg.setAttribute("data-guided", guided.key);
     for (const n of form.querySelectorAll("input, select, textarea, button"))
       n.disabled = true;
+    /* the button that writes is the footer's last */
+    const foot = dlg.querySelector(".dlgfoot"), write = foot.lastElementChild;
     for (const b of dlg.querySelectorAll(".dlgfoot button"))
       if (b.textContent !== "Cancel") b.remove();
+    /* the moment of their write: that button drawn again, lit as an
+       invited field is, with nothing behind it to press. A replayed
+       write shows it before its form closes (200-events-follow.js). */
+    dlg.guidedWrite = () => {
+      const lit = el("button", {class: write.className + " invited",
+                               type: "button", "data-guided-write": ""},
+        write.textContent);
+      foot.append(lit);
+      return lit;
+    };
     form.prepend(el("p", {class: "guided-note", "data-guided-note": ""},
       guided.note || `${guided.name} is filling this in`));
     /* a note beside the fields it names, as an invitation's: a replayed
@@ -608,11 +620,43 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     dlg.guidedMark = (names, text) => markInvited(form, names, text);
     /* the field a staged call is typing, lit alone */
     dlg.guidedLight = name => markTyped(form, name);
-    dlg.guidedSet = fields => {
+    /* a replayed typing beat's field, for the pointer to go to
+       (200-events-follow.js): the field, or its label when the field
+       itself is not drawn */
+    dlg.guidedField = name => {
+      const node = name ? form.querySelector(`[name="${CSS.escape(name)}"]`) : null;
+      if (!node) return null;
+      return node.getClientRects().length ? node
+        : node.closest("label") || node.parentElement;
+    };
+    /* the pointer's click on it: that field alone wears the ring a
+       focused field does (030-screens.css), since a disabled field
+       takes no focus */
+    dlg.guidedClick = name => {
+      for (const n of form.querySelectorAll("[data-replay-click]"))
+        n.removeAttribute("data-replay-click");
+      const spot = dlg.guidedField(name);
+      if (spot) spot.setAttribute("data-replay-click", "");
+    };
+    /* a replay hands `labelOf` (200-events-follow.js, guidedLabel): a
+       ref field then reads as a live picker names its row. A replay
+       fetches no collection, so a select is seated with that one entry,
+       [id, label], and with the id alone when no label is known. */
+    dlg.guidedSet = (fields, labelOf) => {
       for (const [k, v] of Object.entries(fields || {})) {
         const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
         if (!node) continue;
+        const named = labelOf ? (Array.isArray(v) ? v : [v])
+          .map((id, i) => labelOf(k, id, Array.isArray(v) ? i : undefined)) : [];
         if (node.type === "checkbox") node.checked = !!v;
+        else if (labelOf && node.tagName === "SELECT" && typeof v === "string" && v) {
+          let seat = [...node.options].find(o => o.value === v);
+          if (!seat) node.append(seat = el("option", {value: v}, named[0] || v));
+          else if (named[0] && seat.textContent === v) seat.textContent = named[0];
+          node.value = v;
+        }
+        else if (named.some(Boolean))
+          node.value = named.map((l, i) => l || String(Array.isArray(v) ? v[i] : v)).join(", ");
         else node.value = v == null ? ""
           : typeof v === "object" ? (v.elided ? "…" : JSON.stringify(v))
           : String(v);
