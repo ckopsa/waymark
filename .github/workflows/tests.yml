@@ -482,21 +482,37 @@ jobs:
       # Each step answers to its own flag from the path table, so a
       # localfire PR does not pay for calendar10 and a waymark10 PR does
       # not run localfire. Every flag is true off a pull_request.
+      # Each JVM starts through scripts/jvm-retry.sh, as the shard jobs'
+      # do: a JVM abort (exit 134 or 139) with no test failure reported
+      # is retried one time, and the step's `retried` output says so.
       - name: check-queue — declaration gate, no database
+        id: check-queue
         if: needs.changes.outputs.workqueue10 == 'true'
-        run: cd workqueue10 && clojure -Sdeps "$CLJ_SDEPS" -M:check
+        run: >-
+          bash scripts/jvm-retry.sh "quick check-queue" workqueue10 "$RUNNER_TEMP/check-queue.txt"
+          clojure -Sdeps "$CLJ_SDEPS" -M:check
       - name: calendar10 — pure translation, no database or network
+        id: calendar10
         if: needs.changes.outputs.calendar10 == 'true'
-        run: cd calendar10 && clojure -Sdeps "$CLJ_SDEPS" -M:test
+        run: >-
+          bash scripts/jvm-retry.sh "quick calendar10" calendar10 "$RUNNER_TEMP/calendar10.txt"
+          clojure -Sdeps "$CLJ_SDEPS" -M:test
       # localfire belongs here rather than in a job of its own: its
       # suite needs no database and no network past the loopback, so it
       # costs seconds beside the two above instead of minutes and a
       # postgres service container (docs/spec-local-fire.md R-9.1).
       - name: localfire — the fire wire, loopback only, no database
+        id: localfire
         if: needs.changes.outputs.localfire == 'true'
-        run: cd localfire && clojure -Sdeps "$CLJ_SDEPS" -M:test
+        run: >-
+          bash scripts/jvm-retry.sh "quick localfire" localfire "$RUNNER_TEMP/localfire.txt"
+          clojure -Sdeps "$CLJ_SDEPS" -M:test
+      # Also after a retry that passed: the first attempt's hs_err is
+      # still on disk, and a green job is no reason to lose it.
       - name: JVM crash report
-        if: failure()
+        if: >-
+          failure() || steps.check-queue.outputs.retried == 'true' ||
+          steps.calendar10.outputs.retried == 'true' || steps.localfire.outputs.retried == 'true'
         uses: ./.github/actions/jvm-crash-report
         with:
           name: quick
@@ -526,12 +542,23 @@ jobs:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
       # -Sdeps "$CLJ_SDEPS" before -M, as everywhere in this file:
       # this job's own Maven repository, from setup-clojure.
+      # Through scripts/jvm-retry.sh, as in `quick`: a JVM abort with no
+      # test failure reported is retried one time.
       - name: check-factory — declaration gate, no database
-        run: cd factory10 && clojure -Sdeps "$CLJ_SDEPS" -M:check
+        id: check-factory
+        run: >-
+          bash scripts/jvm-retry.sh "test-factory check-factory" factory10 "$RUNNER_TEMP/check-factory.txt"
+          clojure -Sdeps "$CLJ_SDEPS" -M:check
       - name: factory10 — the change family, no database or network
-        run: cd factory10 && clojure -Sdeps "$CLJ_SDEPS" -M:test
+        id: factory10
+        run: >-
+          bash scripts/jvm-retry.sh "test-factory factory10" factory10 "$RUNNER_TEMP/factory10.txt"
+          clojure -Sdeps "$CLJ_SDEPS" -M:test
+      # Also after a retry that passed, as in `quick`.
       - name: JVM crash report
-        if: failure()
+        if: >-
+          failure() || steps.check-factory.outputs.retried == 'true' ||
+          steps.factory10.outputs.retried == 'true'
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test-factory
@@ -813,29 +840,11 @@ jobs:
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
           # -Sdeps before -M: this job's own Maven repository, from
           # setup-clojure. See the quick job above.
-          run_shard() {
-            (cd waymark10 && clojure -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt)
-          }
-          rc=0
-          run_shard || rc=$?
-          # One more try when the JVM itself died — the shell's 134
-          # (SIGABRT, what an hs_err crash ends in) or 139 (SIGSEGV) —
-          # and the tests never spoke. Kaocha exits with its failure
-          # count, so 134 alone could be 134 failing tests: a summary
-          # line or a FAIL/ERROR report in the output is a verdict, and
-          # it stands. Unanchored, because kaocha colours those lines.
-          # Safe to repeat on the same database: every namespace opens
-          # by dropping its own tables. PR #768 lost its gate to one
-          # compiler-thread crash in shard 4 with no assertion failed.
-          if { [ "$rc" = 134 ] || [ "$rc" = 139 ]; } \
-             && ! grep -Eq '[0-9]+ tests, [0-9]+ assertions|(FAIL|ERROR) in ' shard-output.txt; then
-            echo "::warning::test10 shard ${{ matrix.shard.id }}: the JVM aborted (exit $rc) and no test failure was reported — retrying the shard one time"
-            echo "retried=true" >> "$GITHUB_OUTPUT"
-            rc=0
-            run_shard || rc=$?
-            echo "shard ${{ matrix.shard.id }}: the retry after the JVM abort exited $rc"
-          fi
-          exit "$rc"
+          # Through jvm-retry.sh, as every suite's JVM step is: one more
+          # try when the JVM itself died (exit 134 or 139) and the tests
+          # never spoke. The script says when, and why it is safe.
+          bash scripts/jvm-retry.sh "test10 shard ${{ matrix.shard.id }}" waymark10 shard-output.txt \
+            clojure -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}"
       # A JVM that died says so in hs_err_pid*.log next to the suite;
       # the banner in the log above is eight lines of it. Keep the rest.
       # Also after a retry that passed: the first attempt's hs_err is
@@ -959,6 +968,7 @@ jobs:
         run: .github/scripts/create-test-databases.sh
 
       - name: Run shard
+        id: run-shard
         env:
           # test-queue points at waymark10_test too — the Makefile's own
           # choice, not a copy-paste slip.
@@ -999,9 +1009,13 @@ jobs:
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
           # -Sdeps before -M: this job's own Maven repository, from
           # setup-clojure. See the quick job above.
-          cd workqueue10 && clojure -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+          # Through jvm-retry.sh, as in test10's Run shard: a JVM abort
+          # with no test failure reported is retried one time.
+          bash scripts/jvm-retry.sh "test-queue shard ${{ matrix.shard.id }}" workqueue10 shard-output.txt \
+            clojure -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}"
+      # Also after a retry that passed, as in test10.
       - name: JVM crash report
-        if: failure()
+        if: failure() || steps.run-shard.outputs.retried == 'true'
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test-queue-${{ matrix.shard.id }}
