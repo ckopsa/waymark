@@ -436,6 +436,42 @@
     (is (and mark close (< mark close))
         "the submit is pressed before the frame that closes the form is applied")))
 
+(deftest ui-replay-changes-no-screen-behind-an-open-form
+  ;; walk 082fefa5's write (dialog open, typing, transition, doc, close):
+  ;; the transition and the doc recorded while the form is open wait, with
+  ;; no time of their own, so the submit is pressed and the form closes
+  ;; first. The frame that closes the form draws them on the screen the
+  ;; form was over, outlined, and that screen is still for the write's
+  ;; hold. A form the recording never closes has them drawn by the next
+  ;; frame that is not its own, or when the last frame has played
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        hold (str/index-of body "replay.held.push(f);")
+        land (str/index-of body "const note = landed || replayKeepsForm(f) ? null : replayLand(replay);")
+        close (str/index-of body "applyUiFrame({self: f.self, ui: f.ui || {}, principal: actor});")]
+    (testing "a transition or a doc behind an open form is held, not drawn"
+      (is (str/includes? body "const form = f.type === \"ui\" && !!(f.ui || {}).dialog;"))
+      (is (str/includes? body "if (!landed && replay.held && (f.type === \"transition\" || f.type === \"doc\")) {"))
+      (is (str/includes? body "if (form && !replay.held) replay.held = [];")))
+    (testing "a held frame waits nothing, and the floor before the close is the typed value's"
+      (is (str/includes? body "if (t === \"ui\") return !!(frames[i].ui || {}).dialog;"))
+      (is (str/includes? body "if (replayHeld(frames, at) &&\n      frames.some((g, k) => k > at && !replayKeepsForm(g))) return true;")))
+    (testing "the frame that ends the form draws what waited, in order, on the screen shown"
+      (is (str/includes? body "for (const f of held) {\n    applyReplayFrame(f, true);"))
+      (is (str/includes? body "else if (landed) { /* the screen stays */ }"))
+      (is (and hold land close (< hold land close))
+          "the held frames are drawn by the frame that closes the form, not before it"))
+    (testing "the screen wears the arrival outline and is still for the write's hold"
+      (is (str/includes? body "r.gaze = null;\n    replayGaze(\"row\", wrote);"))
+      (is (str/includes? body "if (frames[j].type === \"transition\") return replayHeld(frames, j);"))
+      (is (str/includes? body "if (replayLands(frames, i)) return REPLAY_WRITE_HOLD;")))
+    (testing "a form never closed loses nothing: the next frame that is not its own draws what waited"
+      (is (str/includes? body "return f.type === \"transition\" || f.type === \"doc\" || f.type === \"caption\" ||\n    (f.type === \"ui\" && !!(f.ui || {}).dialog);"))
+      (is (str/includes? body "if (t !== \"transition\" && t !== \"doc\" && t !== \"caption\") return false;")))
+    (testing "with no frame left, the end draws it under the form the recording left open"
+      (is (str/includes? body "if (!open) closeGuided();"))
+      (is (str/includes? body "if (r.at >= r.frames.length && r.held) {\n    r.notice = replayLand(r, true) || r.notice;"))
+      (is (str/includes? body "r.walked = null;\n    r.held = null;")))))
+
 (deftest ui-replay-walks-to-a-row-that-is-not-on-screen
   ;; no jumps: a move whose link is not on screen presses the navigation
   ;; entry of its kind, that list is drawn as a screen of its own, still

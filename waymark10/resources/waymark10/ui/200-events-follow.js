@@ -980,6 +980,7 @@ function startReplay(text) {
              notice: null,        // the line of a step with no click behind it
              hopped: null,        // the frame a hop to its kind's list was made for
              walked: null,        // the frame a walk to its row was made for
+             held: null,          // the frames waiting behind an open form
              rows: new Map(),     // self → {kind, state, summary, log}
              docs: new Map(),     // self, the document recorded for it so far
              known: new Set(),    // every row self the recording names
@@ -1079,7 +1080,45 @@ async function openReplayInvitation(f, actor) {
   g.setAttribute("data-replay-invite", "");
   g.guidedSet(f.suggest || {});
 }
-function applyReplayFrame(f) {
+/* the form is gone: the frames that waited behind it (replay.held) are
+   drawn on the screen it was over, in the order they were recorded,
+   and that screen wears the arrival outline when a write is among
+   them. A form the recording leaves open at its end (`open`) stays, as
+   it always did, and what waited is drawn under it. → the line of a
+   step with no click among them (replayNotice), or null. */
+function replayLand(r, open) {
+  const held = r.held || [];
+  r.held = null;
+  if (!held.length) return null;
+  if (!open) closeGuided();
+  let wrote = null, note = null;
+  for (const f of held) {
+    applyReplayFrame(f, true);
+    if (f.type !== "transition") continue;
+    wrote = f.self || wrote;
+    note = r.notice || note;
+  }
+  if (wrote) {
+    r.gaze = null;
+    replayGaze("row", wrote);
+  }
+  return note;
+}
+function applyReplayFrame(f, landed) {
+  /* no screen changes behind an open form: a `transition` or a `doc`
+     recorded while the form is open waits (replay.held), so the
+     submit's press and the close play first. The frame that ends the
+     form draws what waited, and so does the next frame that is not the
+     form's own when the recording never closes it; a caption ends no
+     form. `landed` is a frame that waited, drawn now. */
+  const form = f.type === "ui" && !!(f.ui || {}).dialog;
+  if (!landed && replay.held && (f.type === "transition" || f.type === "doc")) {
+    replay.held.push(f);
+    replayChip();
+    return;
+  }
+  const note = landed || replayKeepsForm(f) ? null : replayLand(replay);
+  if (form && !replay.held) replay.held = [];
   /* a `doc` frame is a screen and nobody's act: it is kept for
      renderReplay, and its screen is drawn again when it is the one
      showing */
@@ -1102,6 +1141,7 @@ function applyReplayFrame(f) {
   const again = !!beat && beat === replay.beat;
   replay.beat = beat;
   replay.notice = replayNotice(replay, f);
+  if (note && !replay.notice) replay.notice = note;
   if (f.type === "move") {
     if (f.self) { applyFollowMove(f.self); replayGaze("row", f.self); }
   } else if (f.type === "ui" && !again) {
@@ -1129,6 +1169,9 @@ function applyReplayFrame(f) {
        the hash is set here only for a row with no link to press. A
        step with no click behind it moves no screen: its notice says it */
     if (f.self === hereHref()) render();
+    /* a write that waited behind a form is drawn on the screen the form
+       was over, and goes nowhere */
+    else if (landed) { /* the screen stays */ }
     else if (!$("dialog[open]") && !replay.notice) location.hash = "#" + f.self;
   } else if (f.type === "invitation" && f.self && f.action) {
     openReplayInvitation(f, actor);
@@ -1143,6 +1186,12 @@ function replaySchedule() {
   const r = replay;
   clearTimeout(r.timer);
   replayGestureRest(r);
+  /* a form the recording never closes, and no frame after it: what
+     waited behind it is drawn when the last frame has played */
+  if (r.at >= r.frames.length && r.held) {
+    r.notice = replayLand(r, true) || r.notice;
+    replayCaption();
+  }
   if (film && r.at >= r.frames.length) filmEnd();
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
   /* the screen is still for its floor first and the gesture comes after
@@ -1174,6 +1223,37 @@ function replayGap(r) {
 function replayBeat(f) {
   return JSON.stringify([f.who || "", f.self || "", f.ui || {}]);
 }
+/* whether the frame `f` ends no form: the form's own beats, a caption,
+   and the frames that wait behind the form. */
+function replayKeepsForm(f) {
+  return f.type === "transition" || f.type === "doc" || f.type === "caption" ||
+    (f.type === "ui" && !!(f.ui || {}).dialog);
+}
+/* whether the frame at `at` waits behind an open form, as
+   applyReplayFrame holds it: a `transition` or a `doc` recorded after
+   a `ui` beat with a dialog, with nothing between them but captions
+   and other frames that wait. */
+function replayHeld(frames, at) {
+  const f = frames[at];
+  if (!f || (f.type !== "transition" && f.type !== "doc")) return false;
+  for (let i = at - 1; i >= 0; i--) {
+    const t = frames[i].type;
+    if (t === "ui") return !!(frames[i].ui || {}).dialog;
+    if (t !== "transition" && t !== "doc" && t !== "caption") return false;
+  }
+  return false;
+}
+/* whether the frame at `i` draws a write that waited behind a form: it
+   ends the form (applyReplayFrame), and the last transition before it
+   waits behind that form. */
+function replayLands(frames, i) {
+  if (replayKeepsForm(frames[i])) return false;
+  for (let j = i - 1; j >= 0; j--) {
+    if (frames[j].type === "transition") return replayHeld(frames, j);
+    if (!replayKeepsForm(frames[j])) return false;
+  }
+  return false;
+}
 /* whether the frame at `at` changes nothing a viewer sees, and so
    plays with no wait: a `doc` in the burst of the frame before it is
    that frame's own screen, a `doc` equal to the last one recorded for
@@ -1182,6 +1262,11 @@ function replayBeat(f) {
 function replayStill(frames, at) {
   const f = frames[at];
   if (!f || !at) return false;
+  /* a frame that waits behind a form is drawn when the form is gone;
+     with no frame after it to end the form, it is drawn in its own
+     time, at the end */
+  if (replayHeld(frames, at) &&
+      frames.some((g, k) => k > at && !replayKeepsForm(g))) return true;
   if (f.type === "doc") {
     if ((f.t || 0) - (frames[at - 1].t || 0) < REPLAY_BURST_MS) return true;
     for (let i = at - 1; i >= 0; i--)
@@ -1223,6 +1308,9 @@ function replayHoldTime(frames, at) {
   while (i >= 0 && (frames[i].type === "doc" || replayStill(frames, i))) i--;
   const f = frames[i];
   if (!f) return 0;
+  /* the frame that ends a form shows the write that waited behind it:
+     the write's own hold is owed from there */
+  if (replayLands(frames, i)) return REPLAY_WRITE_HOLD;
   if (f.type === "ui")
     return replayTyped(frames, i) ? REPLAY_STILL_TYPED : REPLAY_STILL_SCREEN;
   if (f.type === "invitation") return REPLAY_STILL_SCREEN;
@@ -1583,6 +1671,7 @@ function playReplay() {
     r.notice = null;
     r.hopped = null;
     r.walked = null;
+    r.held = null;
     r.rows.clear();
     r.docs.clear();
     closeGuided();
