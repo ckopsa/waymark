@@ -914,7 +914,9 @@ const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;
    is made inside the gap before its frame when the gap has room, so it
    is a floor under the gap as a hold is. The pointer is the only way
    the screen changes: a move whose link is not on screen goes by the
-   navigation bar and the kind's list (replayHop), a typing beat's field
+   navigation bar and the kind's list (replayHop), a dialog beat, a
+   write or an invitation on a row that is not on screen goes to that
+   row the same way first (replayWalkOf), a typing beat's field
    and a write's submit button are pressed in the form, and only a step
    with no click behind it (replayNotice) is applied with no gesture. */
 const REPLAY_GLIDE_MS = 600, REPLAY_PRESS_MS = 300;
@@ -953,6 +955,7 @@ function startReplay(text) {
              recorder: null,      // the cast alias whose hand the pointer is
              notice: null,        // the line of a step with no click behind it
              hopped: null,        // the frame a hop to its kind's list was made for
+             walked: null,        // the frame a walk to its row was made for
              rows: new Map(),     // self → {kind, state, summary, log}
              docs: new Map(),     // self, the document recorded for it so far
              known: new Set(),    // every row self the recording names
@@ -1027,7 +1030,9 @@ function replayDialogDoc(d) {
    marked, every invited field lit, the note beside the first, a
    walkthrough's "Step 2 of 4" line above the form — read-only, with
    only Cancel in the footer. It holds the screen as an invited
-   person's own dialog does, until the transition that answers it. */
+   person's own dialog does, until the transition that answers it. A
+   row that is not on screen was walked to before this (replayWalkOf):
+   the hash is set here only for one with no link to press. */
 async function openReplayInvitation(f, actor) {
   const r = replay;
   const d = {self: String(f.self).split("?")[0], action: f.action};
@@ -1094,7 +1099,9 @@ function applyReplayFrame(f) {
     if (inv && inv.getAttribute("data-guided") === f.self + " " + f.action)
       closeGuided();
     /* as the firehose steers: go where they wrote, unless a dialog is
-       open; a row already on screen is drawn again from the frame. A
+       open; a row already on screen is drawn again from the frame, and
+       one that was not was walked to before this (replayWalkOf), so
+       the hash is set here only for a row with no link to press. A
        step with no click behind it moves no screen: its notice says it */
     if (f.self === hereHref()) render();
     else if (!$("dialog[open]") && !replay.notice) location.hash = "#" + f.self;
@@ -1283,7 +1290,8 @@ function replayWrote(r, key) {
 /* a step with no click behind it: a transition by a principal other
    than the recorder (a scheduled action firing, a seat, another
    person), a `clock_shift`, and an invitation the recorder did not
-   write. It makes no gesture and moves no pointer and no screen. → the
+   write. It makes no gesture and moves no pointer and no screen; only
+   an invitation's row is walked to before it (replayWalkOf). → the
    line the caption band shows for it, or null for a step the pointer
    makes. */
 function replayNotice(r, f) {
@@ -1409,19 +1417,23 @@ let replayPointerAt = null;
    target there is no gesture. */
 function replayGesture(r) {
   if (replay !== r || !r.playing || r.gesture) return;
-  const f = r.frames[r.at];
+  /* a frame on a row that is not on screen makes the gesture of a move
+     to that row first */
+  const walk = replayWalkOf(r, r.frames[r.at]);
+  const f = walk || r.frames[r.at];
   /* a beat equal to the one before it is on screen already: no click */
   const to = replayStill(r.frames, r.at) ? null : replayGestureTarget(f);
   if (!to) return;
   r.gesture = {at: r.at, until: performance.now()
                  + (REPLAY_GLIDE_MS + REPLAY_PRESS_MS) / r.speed,
+               walk,
                field: to.closest("dialog[data-guided]") ? replayTypingOf(f) : null,
                hop: r.hopped === r.at ? null : replayHopOf(f, to)};
   replayPointerTo(to, r.speed);
   r.lead = setTimeout(() => {
     /* a screen drawn again during the glide has a new element for the
        same act */
-    const lit = to.isConnected ? to : replayGestureTarget(r.frames[r.at]);
+    const lit = to.isConnected ? to : replayGestureTarget(f);
     if (replay !== r || !lit) return;
     if (lit !== to) replayPointerTo(lit, r.speed);
     const form = lit.closest("dialog[data-guided]");
@@ -1452,6 +1464,24 @@ function replayGestureRest(r, gone) {
   else if (p && p.parentElement !== document.body && !p.closest("dialog[open]"))
     document.body.append(p);
 }
+/* the move a frame waits for: a dialog beat on another screen with no
+   action button for its door here, a write of the recorder's on a row
+   that is not shown, and an invitation's row. The pointer makes it as
+   it makes a recorded move (replayGestureTarget, replayHop), and the
+   frame is applied on the row it leads to. Null for every other frame,
+   for the screen shown, under an open dialog, and after the one walk a
+   frame makes. A row with no link to press has no walk: its frame is
+   applied as a move with no link is. */
+function replayWalkOf(r, f) {
+  if (!f || r.walked === r.at || r.door || $("dialog[open]")) return null;
+  const row = s => String(s || "").split("?")[0];
+  const ui = (f.type === "ui" && f.ui) || {}, c = ui.collection;
+  const list = !!ui.dialog && !!c && !!c.self;
+  const to = ui.dialog ? !replayGestureTarget(f) && (list ? collectionHrefOf(c) : f.self)
+    : f.type === "transition" ? !replayNotice(r, f) && f.self
+    : f.type === "invitation" && f.action ? row(f.self) : null;
+  return to && row(to) !== hereHref() ? {type: "move", who: f.who, self: to, list} : null;
+}
 /* the list a move passes through: when its gesture presses the
    navigation entry of its kind, and not of the row itself, that entry's
    address. Null for every other gesture. */
@@ -1475,6 +1505,20 @@ function replayHop(r) {
   r.lead = setTimeout(() => replayGesture(r),
     Math.max(0, REPLAY_SCREEN_MIN - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
 }
+/* a walk: the link to the frame's row was pressed, so that row is
+   drawn, a screen of its own as a hop's list is, and the frame waits
+   there for its own gesture: the door's button, for a dialog beat. One
+   walk is made for a frame. */
+function replayArrive(r) {
+  const walk = r.gesture.walk;
+  r.walked = r.at;
+  replayGestureRest(r);
+  applyFollowMove(walk.self);
+  replayGaze(walk.list ? "list" : "row", walk.self);
+  r.timer = setTimeout(replayStep, REPLAY_SCREEN_MIN / r.speed);
+  r.lead = setTimeout(() => replayGesture(r),
+    Math.max(0, REPLAY_SCREEN_MIN - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
+}
 function replayStep() {
   const r = replay;
   if (!r || !r.playing || r.at >= r.frames.length) return;
@@ -1486,6 +1530,8 @@ function replayStep() {
   }
   /* no jump: the pressed navigation entry draws its list first */
   if (r.gesture && r.gesture.hop) { replayHop(r); return; }
+  /* nor for a frame on another row: the pressed link draws its row first */
+  if (r.gesture && r.gesture.walk) { replayArrive(r); return; }
   applyReplayFrame(r.frames[r.at++]);
   if (replay === r) replaySchedule();
 }
@@ -1501,6 +1547,7 @@ function playReplay() {
     r.beat = null;
     r.notice = null;
     r.hopped = null;
+    r.walked = null;
     r.rows.clear();
     r.docs.clear();
     closeGuided();
