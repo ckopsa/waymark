@@ -445,9 +445,10 @@
                      [self nil])
       nil)))
 
-(defn- ref-summaries
+(defn ref-summaries
   "render's :ref-summary hook under `sight`: a referenced row's
-  {:href :summary} as the recorder may read it, nil when it may not."
+  {:href :summary} as the recorder may read it, nil when it may not.
+  The connector's staging labels a typed ref argument with it."
   [eng sight]
   (let [st (:storage eng)]
     (fn [k id]

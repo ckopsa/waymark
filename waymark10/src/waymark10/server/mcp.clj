@@ -1647,7 +1647,7 @@
   12)
 
 (defn- stage
-  "What a staged beat needs, {:reg :principal :tap :visible?}, or nil
+  "What a staged beat needs, {:reg :principal :tap :visible? :summary-of}, or nil
   when this call makes no beat: the engine's presence registry is not
   running, the session is anonymous, the kind is the recording's own
   (`walks/record-own!`'s rule), or the principal is recording no self
@@ -1665,7 +1665,10 @@
           {:reg reg
            :principal principal
            :tap (:presence rec)
-           :visible? (presence/self-visible? eng (:visibility session))})))
+           :visible? (presence/self-visible? eng (:visibility session))
+           ;; a ref's row by its summary line, as the session may read it
+           :summary-of (let [read (walks/ref-summaries eng (:visibility session))]
+                         (fn [k id] (:summary (read k id))))})))
     (catch Exception _ nil)))
 
 (defn- beat!
@@ -1716,24 +1719,35 @@
   these values (a rehearsal typed them, or a refused call left them),
   nothing is typed again. Each typing beat names in `focus` the
   argument it adds (the last of them, when it adds several), so a
-  replay lights that field. An action the kind does not declare opens
-  no form, and only the gaze moves."
+  replay lights that field. A typing beat also carries `labels`: the
+  summary line of the row each ref argument it shows names, as the
+  session may read it (`presence/ref-labels`), so a replay names the
+  row and not its id. A row the session may not see has no label. An
+  action the kind does not declare opens no form, and only the gaze
+  moves."
   [eng st self aname input]
   (let [dialog {:self self :action (name aname)}
         ks (presence/typed-keys eng self (name aname) input)
         given (into {} (map (fn [[k v]] [(keyword (name k)) v])) input)
+        labels (when ks
+                 (try (presence/ref-labels eng self (name aname)
+                                           (select-keys given ks) (:summary-of st))
+                      (catch Exception _ nil)))
+        typed (fn [fields]
+                (let [named (not-empty (select-keys labels (keys fields)))]
+                  (cond-> {:dialog dialog :fields fields}
+                    named (assoc :labels named))))
         shown? (and ks
                     (try (presence/shows? (:reg st) (:id (:principal st))
-                                          {:dialog dialog
-                                           :fields (select-keys given ks)
-                                           :focus (some-> (last ks) name)})
+                                          (assoc (typed (select-keys given ks))
+                                                 :focus (some-> (last ks) name)))
                          (catch Exception _ false)))]
     (if (or (nil? ks) shown?)
       (beat! st self nil)
       (do (beat! st self {:dialog dialog :fields {}})
           (doseq [fields (typed-steps given ks)]
-            (beat! st self {:dialog dialog :fields fields
-                            :focus (name (nth ks (dec (count fields))))}))))))
+            (beat! st self (assoc (typed fields)
+                                  :focus (name (nth ks (dec (count fields)))))))))))
 
 (defn- stage-close!
   "The beat after a write that landed: the form closes. A refused call
