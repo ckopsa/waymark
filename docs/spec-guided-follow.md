@@ -353,6 +353,20 @@ from the file, on a timer. It makes no network writes, and a
 same file is the marketing artifact: it shows how the work is done,
 with only the rows its exporter could see.
 
+**In replay a pointer makes each step.** Live follow applies a frame as
+it arrives: the screen navigates, and the field being typed is lit.
+Replay puts a gesture before each frame instead. A pointer glides to
+the link, the action button, the field or the submit button a person
+would press, presses it, and the frame is then applied. A typing beat's
+field is clicked and wears a focus ring; it is not lit. The submit
+button is pressed for the beat that closes a form after its write. A
+move to a row that is not on screen presses the navigation entry of its
+kind and then the row's link in that list, so no screen appears without
+a press. A step the recorder did not click (another principal's
+transition, a `clock_shift`, an invitation written by someone else)
+makes no gesture: the caption band shows a notice for it.
+`docs/spec-agent-demo-walks.md` section 2 has the rules and the times.
+
 **Marketing walks are recorded on a demo engine.** Redaction bounds a
 recording by what its recorder could see, and that is still real data:
 real tickets, repositories and people. A walk meant for the public is
