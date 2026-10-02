@@ -1018,7 +1018,7 @@ async function accessStory() {
   await sleep(1500);   /* the row page's own reads settle first */
   await evaljs(watchFetch);
   await evaljs(`document.querySelector("[data-replay-walk]").click(); true`);
-  await waitFor(`${replayState} === "ended"`, "the replay to reach its last frame");
+  await waitFor(`${replayState} === "ended"`, "the replay to reach its last frame", 15000);
   const first = await replayed();
   ok("the screen navigates to the recorded row, drawn from the recording",
      first.here === uiFrame.self && first.screen);
@@ -1979,6 +1979,30 @@ async function guidedStory() {
      at: new Date().toISOString(), summary: `Guided stew ${tag}`},
     {t: 40, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
   ].map(l => JSON.stringify(l)).join("\n");
+  /* every glide the pointer starts from here on: how long the screen it
+     leaves had been still, and the stillness it owed at that speed. A
+     hop's list and a walk's row owe the screen floor. */
+  await A.js(`{ window.__replayGlides = []; let changed = 0, drawn = false;
+    const apply0 = applyReplayFrame, hop0 = replayHop, arrive0 = replayArrive,
+          to0 = replayPointerTo;
+    window.applyReplayFrame = f => {
+      const i = replay ? replay.frames.indexOf(f) : -1;
+      const out = apply0(f);
+      if (replay && f.type !== "doc" && !replayStill(replay.frames, i)) {
+        changed = performance.now(); drawn = false;
+      }
+      return out;
+    };
+    window.replayHop = r => { changed = performance.now(); drawn = true; return hop0(r); };
+    window.replayArrive = r => { changed = performance.now(); drawn = true; return arrive0(r); };
+    window.replayPointerTo = (to, speed) => {
+      if (replay && changed) window.__replayGlides.push({at: replay.at,
+        still: Math.round(performance.now() - changed),
+        floor: (drawn ? REPLAY_STILL_SCREEN
+                      : replayHoldTime(replay.frames, replay.at)) / replay.speed});
+      return to0(to, speed);
+    };
+    true }`);
   /* at half speed the press lasts 600 ms, which the 150 ms poll cannot miss */
   await A.js(`startReplay(${JSON.stringify(stagedFile)}) && (setReplaySpeed(0.5), true)`);
   /* no jump: the stew's link is not on the walk's page, so the pointer
@@ -2068,6 +2092,11 @@ async function guidedStory() {
   await A.js(`playReplay(); true`);
   await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
                  !document.querySelector("dialog[open]")`, "the form to close", 15000);
+  const glides = JSON.parse(await A.js(`JSON.stringify(window.__replayGlides)`));
+  console.log("  the glides (ms still / ms owed): " +
+              glides.map(g => g.still + "/" + g.floor).join(", "));
+  ok("the pointer never starts a glide before the screen it leaves has been still for its floor",
+     glides.some(g => g.floor > 0) && glides.every(g => g.still >= g.floor - 20));
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
   A.close();
   await chrome.close();
