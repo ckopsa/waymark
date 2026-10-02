@@ -319,6 +319,31 @@
     (is (str/includes? body "const gap = Math.max(replayGap(r), replayHoldTime(r.frames, r.at));"))
     (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
 
+(deftest ui-replay-keeps-a-floor-under-every-visible-change
+  ;; walk 082fefa5's shape (move, doc, ui open, ui typed, transition,
+  ;; doc) is recorded milliseconds apart. The frame after a move to
+  ;; another row, a dialog opening or closing, or a transition waits at
+  ;; least 1200 ms, and the frame after a typing beat at least 600 ms,
+  ;; before speed. A doc of the screen already shown, or a ui beat equal
+  ;; to the one before it, waits nothing and is not drawn again
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_SCREEN_MIN = 1200, REPLAY_TYPE_MIN = 600;"))
+    (testing "the floors are under the gap the schedule plays, which speed divides"
+      (is (str/includes? body "return replayTyped(frames, i) ? REPLAY_TYPE_MIN : REPLAY_SCREEN_MIN;"))
+      (is (str/includes? body "if (f.type === \"invitation\") return REPLAY_SCREEN_MIN;"))
+      (is (str/includes? body "return hold && Math.max(hold, REPLAY_SCREEN_MIN);"))
+      (is (str/includes? body "const gap = Math.max(replayGap(r), replayHoldTime(r.frames, r.at));")))
+    (testing "a frame that changes nothing visible adds no wait"
+      (is (str/includes? body "if (!read && replayStill(r.frames, r.at)) return 0;"))
+      (is (str/includes? body "if ((f.t || 0) - (frames[at - 1].t || 0) < REPLAY_BURST_MS) return true;"))
+      (is (str/includes? body "return JSON.stringify(frames[i].doc) === JSON.stringify(f.doc);"))
+      (is (str/includes? body "replayBeat(frames[i]) === replayBeat(f);")))
+    (testing "the floor is counted from the last frame that changed the screen"
+      (is (str/includes? body "while (i >= 0 && (frames[i].type === \"doc\" || replayStill(frames, i))) i--;")))
+    (testing "a frame that changes nothing is not drawn again"
+      (is (str/includes? body "if (!same && self === String(hereHref() || \"\").split(\"?\")[0]) render();"))
+      (is (str/includes? body "} else if (f.type === \"ui\" && !again) {")))))
+
 (deftest ui-replay-anchors-a-caption-to-its-field
   ;; docs/spec-agent-demo-walks.md §3: a caption that names a field is
   ;; drawn beside it, with the field lit, by the code that draws an
