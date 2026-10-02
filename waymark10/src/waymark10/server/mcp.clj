@@ -145,6 +145,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
+            [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-sessions :as sessions]
             [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
@@ -4419,6 +4420,39 @@
        "answer. Do not try to read or edit files; work from the rows, "
        "and say what you could not do."))
 
+(def ^:private bench-prepare-timeout-ms
+  "How long the sit waits on the rig's `prepare`, in place of the 30 s
+  every other bench call gets. The rig serialises git work per
+  repository, so a fetch, a first worktree or another seat's git call
+  on the same repository can hold a prepare well past 30 s while the
+  rig is up (ticket 57fda9cb)."
+  120000)
+
+(defn- prepare-answer
+  "The rig's answer to `prepare`, or nil when it did not answer. A call
+  that ran out the whole `timeout-ms` is tried ONCE more, because the
+  rig was busy and not down: the first try's git work is often done by
+  the second. A call that failed sooner (a refused connection answers
+  at once) is not tried again."
+  ([gate-rpc arguments]
+   (prepare-answer gate-rpc arguments bench-prepare-timeout-ms))
+  ([gate-rpc arguments timeout-ms]
+   (let [once (fn []
+                (let [t0 (System/nanoTime)]
+                  (try
+                    {:answer (binding [mcp-client/*call-timeout-ms* timeout-ms]
+                               (gate-rpc "tools/call"
+                                         {:name (gate/bench-tool :prepare)
+                                          :arguments arguments}))}
+                    (catch Exception e
+                      (binding [*out* *err*]
+                        (println "waymark10 bench prepare failed -"
+                                 (ex-message e)))
+                      {:timed-out (>= (quot (- (System/nanoTime) t0) 1000000)
+                                      (long timeout-ms))}))))
+         first-try (once)]
+     (:answer (if (:timed-out first-try) (once) first-try)))))
+
 (defn- bench-refused-note
   "What the sit says when the rig REFUSED the prepare (bead
   waymark-fp62.6.3.11). A refusal is an answer, and its reason is the
@@ -4511,16 +4545,8 @@
           ;; the prepare's whole answer is kept, because a REFUSAL is
           ;; an answer: the sit says its reason rather than the
           ;; sentence for a bench that was silent (waymark-fp62.6.3.11)
-          answer (try
-                   (gate-rpc "tools/call"
-                             {:name (gate/bench-tool :prepare)
-                              :arguments {:repo repo :branch branch
-                                          :base base}})
-                   (catch Exception e
-                     (binding [*out* *err*]
-                       (println "waymark10 bench prepare failed -"
-                                (ex-message e)))
-                     nil))
+          answer (prepare-answer gate-rpc
+                                 {:repo repo :branch branch :base base})
           made (bench-payload answer)
           refusal (bench-refusal answer)
           means (submit-means policy)
