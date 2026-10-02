@@ -123,6 +123,42 @@
   (check-page "/api/-/ui")
   (check-page "/api/-/ui-lite"))
 
+(defn- twice-declared
+  "The top-level function names `body` declares more than once. The
+  ui/ files are joined into one script, so a second `function name(`
+  is legal JavaScript and silently wins; top-level is column 0, the
+  way every file under ui/ writes it."
+  [body]
+  (->> (re-seq #"(?m)^(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(" body)
+       (map second)
+       frequencies
+       (keep (fn [[fname n]] (when (< 1 n) fname)))
+       sort))
+
+(deftest ui-declares-no-top-level-function-twice
+  ;; ticket 837f840c: a new replayWalk(r) beside the existing async
+  ;; replayWalk(self) stalled the replay while every pinned string held
+  (testing "the check sees a second declaration, async or not"
+    (is (= ["replayWalk"]
+           (twice-declared (str "<script>\n"
+                                "async function replayWalk(self) {\n"
+                                "  function step(i) {}\n"
+                                "}\n"
+                                "function once() {}\n"
+                                "function replayWalk(r) {\n"
+                                "  function step(i) {}\n"
+                                "}\n"
+                                "</script>")))
+        "nested functions are not top-level; one name twice is named"))
+  (testing "the served page"
+    (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+          twice (twice-declared body)]
+      (is (seq (re-seq #"(?m)^(?:async\s+)?function\s" body))
+          "the page still writes its top-level functions at column 0")
+      (is (empty? twice)
+          (str "declared twice at the top level, the later one wins: "
+               (str/join ", " twice))))))
+
 (deftest ui-port-keeps-the-ten-wire
   ;; the ported waymark9 client speaks wire 10, not 9: the grant scope
   ;; selector, the relay/2 draft socket, and the named SSE classes are
