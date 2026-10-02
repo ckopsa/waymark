@@ -4820,10 +4820,12 @@
             (when-not halted
               (claimed-walk! eng call sitter-sees seat sitting named-row))
             ;; … and a sitting the walk handed nothing is stamped as
-            ;; such — no rows free, an empty queue, or a seat at a wall
-            ;; — so seat health counts an idle wake without reading an
-            ;; absent `walked_rows`. The rows this sitting already
-            ;; holds count: a re-sit of a sitting that walked is not it.
+            ;; such — no rows free, or an empty queue — so seat health
+            ;; counts an idle wake without reading an absent
+            ;; `walked_rows`. A seat at a wall was not let walk: it is
+            ;; stamped `halted` and not `walked_nothing`. The rows this
+            ;; sitting already holds count: a re-sit of a sitting that
+            ;; walked is not it.
             _ (when sitting
                 (seats/stamp-walked-nothing!
                  eng (:id sitting)

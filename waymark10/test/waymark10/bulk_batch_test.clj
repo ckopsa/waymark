@@ -210,6 +210,28 @@
         (is (= 2 (count refusals)))
         (is (every? #(= #{:self :reason} (set (keys %))) refusals))))))
 
+(deftest bulk-counts-a-committed-row-whose-post-commit-pass-throws
+  ;; :on-item runs after the item's transaction committed, so a throw
+  ;; from it is no failure of the row: the report says succeeded, and
+  ;; the rows after it still run
+  (let [[a b] (chores! [true true])
+        calls (atom 0)
+        result (inv/bulk! *eng* :chore :complete {:ids [a b]}
+                          {:principal (t/principal {:id "colton"
+                                                    :display "Colton"})
+                           :on-item (fn [_res]
+                                      (when (= 1 (swap! calls inc))
+                                        (throw (ex-info "the post-commit pass broke" {}))))})
+        doc (wire/read-json (wire/write-json (:report result)))]
+    (is (= {:succeeded 2 :refused 0 :failed 0}
+           (select-keys (:data doc) [:succeeded :refused :failed])))
+    (is (empty? (get-in doc [:data :refusals])))
+    (testing ":on-item was called for both rows"
+      (is (= 2 @calls)))
+    (testing "the row whose :on-item threw is in its new state"
+      (is (= "done" (:state (get-row (str "/api/chores/" a)))))
+      (is (= "done" (:state (get-row (str "/api/chores/" b))))))))
+
 ;; ── 2. the atomic twin rolls all back ───────────────────────────────
 
 (deftest bulk-atomic-rolls-back
