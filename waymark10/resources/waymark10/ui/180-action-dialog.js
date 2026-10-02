@@ -638,11 +638,25 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       const spot = dlg.guidedField(name);
       if (spot) spot.setAttribute("data-replay-click", "");
     };
-    dlg.guidedSet = fields => {
+    /* a replay hands `labelOf` (200-events-follow.js, guidedLabel): a
+       ref field then reads as a live picker names its row. A replay
+       fetches no collection, so a select is seated with that one entry,
+       [id, label], and with the id alone when no label is known. */
+    dlg.guidedSet = (fields, labelOf) => {
       for (const [k, v] of Object.entries(fields || {})) {
         const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
         if (!node) continue;
+        const named = labelOf ? (Array.isArray(v) ? v : [v])
+          .map((id, i) => labelOf(k, id, Array.isArray(v) ? i : undefined)) : [];
         if (node.type === "checkbox") node.checked = !!v;
+        else if (labelOf && node.tagName === "SELECT" && typeof v === "string" && v) {
+          let seat = [...node.options].find(o => o.value === v);
+          if (!seat) node.append(seat = el("option", {value: v}, named[0] || v));
+          else if (named[0] && seat.textContent === v) seat.textContent = named[0];
+          node.value = v;
+        }
+        else if (named.some(Boolean))
+          node.value = named.map((l, i) => l || String(Array.isArray(v) ? v[i] : v)).join(", ");
         else node.value = v == null ? ""
           : typeof v === "object" ? (v.elided ? "…" : JSON.stringify(v))
           : String(v);

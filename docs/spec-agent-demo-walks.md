@@ -189,6 +189,14 @@ addition to it. The pointer is the only way the screen changes:
   browser's own and not the outline the app's `:focus-visible` rule
   draws; ticket d4040832 is to make them the same. The lit field of a
   typing beat is now live follow's alone.
+- **A ref field** names its row as a live form does. A staged typing
+  beat on a `:kind` ref argument carries `labels: {<field>: <the row's
+  summary line>}`, read under the recorder's own grant: a list of refs
+  has one label for each id, and a row the recorder may not see has
+  none. An export keeps a label only for a row its reader may see.
+  Replay fetches no collection, so it seats the picker with that one
+  row: the beat's own label, else the summary of the walk's last `doc`
+  for the row, else the id.
 - **The submit** is pressed for the beat that closes the form after its
   write. The button that writes is drawn unlit until the pointer
   presses it. A form that closed with no write was cancelled, and
