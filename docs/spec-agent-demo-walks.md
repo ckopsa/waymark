@@ -160,13 +160,28 @@ such a burst, since the form's own reports are debounced at 150 ms. A
 450 ms apart, which is harmless. The staging does not sleep: holding a
 tool call to make a pause would bill the agent for it.
 
+**The pointer leaves a screen only after it has been still.** An
+agent's recorded gaps are milliseconds, so replay's floors set the
+pace, and each floor is stillness: the time from the last change of the
+screen to the start of the gesture toward the next act (the next
+paragraph). A new screen (a move to another row, a hop's list, a walk's
+row, a dialog opening or closing) is still for `REPLAY_STILL_SCREEN`
+(1000 ms), a typed value for `REPLAY_STILL_TYPED` (800 ms), and a
+landed transition for `REPLAY_WRITE_HOLD` (1500 ms). The gesture's
+900 ms come after the stillness and not inside it, so a frame waits the
+larger of its recorded gap and stillness + glide + press
+(`replaySchedule`, `replayLinger`), and speed divides all of it. The
+arrival outline lasts `REPLAY_GAZE_MS`, which is `REPLAY_STILL_SCREEN`:
+it is off when the pointer leaves. A frame that changes nothing on
+screen waits nothing.
+
 **Replay makes each beat with a pointer.** A small arrow is drawn over
 the page (`replayPointerTo`). Before a frame is applied, the pointer
 glides for `REPLAY_GLIDE_MS` (600 ms) to the element a person would
 press to cause that frame (`replayGestureTarget`), and the press takes
-`REPLAY_PRESS_MS` (300 ms). The gesture is made inside the gap before
-its frame when the gap has room, so it is a floor under the gap and no
-addition to it. The pointer is the only way the screen changes:
+`REPLAY_PRESS_MS` (300 ms). The gesture is made after the
+screen's stillness, and the frame waits for both. The pointer is the
+only way the screen changes:
 
 - **A move** presses the link to that row on the page: a collection
   row, a ref link or a breadcrumb. With no such link it presses the

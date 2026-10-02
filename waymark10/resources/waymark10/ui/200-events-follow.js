@@ -916,21 +916,19 @@ const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
    character, at least REPLAY_READ_MIN and at most REPLAY_READ_MAX,
    before speed, and on top of the gap the long-silence cut allows. */
 const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;
-/* the moment of a look: the screen the gaze arrived at keeps its
-   outline this long, before speed */
-const REPLAY_GAZE_MS = 1600;
 let replayGazeTimer = null;
-/* a write and the screen it lands on are held for the eye: the frame
-   after a `transition` waits at least REPLAY_WRITE_HOLD, and the frame
-   after a `move` to another row at least REPLAY_MOVE_HOLD, before
-   speed. A hold is a floor under the gap and no addition to it, so
-   REPLAY_MAX_GAP is still the most a recorded silence plays. */
+/* a write and the screen it lands on are held for the eye: the screen
+   is still at least REPLAY_WRITE_HOLD after a `transition`, and at
+   least REPLAY_MOVE_HOLD after a `move` to another row, before speed.
+   A hold is stillness, as the floors below are: a floor under the gap
+   and no addition to it, so REPLAY_MAX_GAP is still the most a
+   recorded silence plays. */
 const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;
 /* the gesture before an act: a pointer glides to the link or the button
    a person would press for REPLAY_GLIDE_MS, and that element is lit for
    REPLAY_PRESS_MS, before speed; then the frame is applied. The gesture
-   is made inside the gap before its frame when the gap has room, so it
-   is a floor under the gap as a hold is. The pointer is the only way
+   starts only after the screen it leaves has been still for its floor
+   (below), and the frame waits for both. The pointer is the only way
    the screen changes: a move whose link is not on screen goes by the
    navigation bar and the kind's list (replayHop), a dialog beat, a
    write or an invitation on a row that is not on screen goes to that
@@ -938,13 +936,21 @@ const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;
    and a write's submit button are pressed in the form, and only a step
    with no click behind it (replayNotice) is applied with no gesture. */
 const REPLAY_GLIDE_MS = 600, REPLAY_PRESS_MS = 300;
-/* a viewer follows about one change of the screen a second: the frame
-   after one that changed the screen (a move to another row, a dialog
-   opening or closing, a transition) waits at least REPLAY_SCREEN_MIN,
-   and the frame after a typing beat at least REPLAY_TYPE_MIN, before
-   speed. Both are floors under the gap, as the holds are. A frame that
-   changes nothing on screen waits nothing (replayStill). */
-const REPLAY_SCREEN_MIN = 1200, REPLAY_TYPE_MIN = 600;
+/* the floors are stillness: the pointer leaves a screen only after it
+   has been still a while. The gesture toward the next act starts no
+   sooner than REPLAY_STILL_SCREEN after a new screen (a move to another
+   row, a hop's list, a walk's row, a dialog opening or closing), no
+   sooner than REPLAY_STILL_TYPED after a typed value shows, and no
+   sooner than REPLAY_WRITE_HOLD after a transition lands, before speed.
+   The gesture's glide and press come after the stillness and not
+   inside it, so the frame waits the larger of its recorded gap and
+   stillness + glide + press. A frame that changes nothing on screen
+   waits nothing (replayStill). */
+const REPLAY_STILL_SCREEN = 1000, REPLAY_STILL_TYPED = 800;
+/* the moment of a look: the screen the gaze arrived at keeps its
+   outline this long, before speed. It is the screen's stillness, so the
+   outline is off when the pointer leaves. */
+const REPLAY_GAZE_MS = REPLAY_STILL_SCREEN;
 function parseWalk(text) {
   let docs;
   try {
@@ -1139,11 +1145,16 @@ function replaySchedule() {
   replayGestureRest(r);
   if (film && r.at >= r.frames.length) filmEnd();
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
-  const gap = Math.max(replayGap(r), replayHoldTime(r.frames, r.at));
+  /* the screen is still for its floor first and the gesture comes after
+     it: the frame waits for both when its recorded gap is shorter */
+  const still = replayHoldTime(r.frames, r.at);
+  const gap = Math.max(replayGap(r),
+    still && still + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);
   r.timer = setTimeout(replayStep, gap / r.speed);
-  /* the gesture starts inside the gap, so that it ends as the gap does */
+  /* the gesture ends as the wait does, and never starts inside the
+     stillness */
   r.lead = setTimeout(() => replayGesture(r),
-    Math.max(0, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
+    Math.max(still, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
 }
 /* the wait before the frame at `r.at`, as it was recorded: a burst is
    spread, a long silence is cut, and a caption is given its reading
@@ -1197,13 +1208,14 @@ function replayTyped(frames, i) {
     if (frames[j].type === "ui") return key(frames[j]) === k;
   return false;
 }
-/* the least the frame at `at` waits for the last change of the screen
-   before it to be seen. A `doc` frame is a screen and nobody's act: it
+/* how long the screen is still before the gesture toward the frame at
+   `at` may start: the stillness owed to the last change of the screen
+   before it. A `doc` frame is a screen and nobody's act: it
    is never held back, and neither is any frame that changes nothing
    (replayStill); the frame before them is the one that counts. After a
-   typing beat the floor is REPLAY_TYPE_MIN; after any other `ui` beat,
+   typing beat the floor is REPLAY_STILL_TYPED; after any other `ui` beat,
    an invitation, a transition or a move to another row it is
-   REPLAY_SCREEN_MIN, or the act's own hold when that is longer. */
+   REPLAY_STILL_SCREEN, or the act's own hold when that is longer. */
 function replayHoldTime(frames, at) {
   if (!frames[at] || frames[at].type === "doc" || replayStill(frames, at))
     return 0;
@@ -1212,10 +1224,10 @@ function replayHoldTime(frames, at) {
   const f = frames[i];
   if (!f) return 0;
   if (f.type === "ui")
-    return replayTyped(frames, i) ? REPLAY_TYPE_MIN : REPLAY_SCREEN_MIN;
-  if (f.type === "invitation") return REPLAY_SCREEN_MIN;
+    return replayTyped(frames, i) ? REPLAY_STILL_TYPED : REPLAY_STILL_SCREEN;
+  if (f.type === "invitation") return REPLAY_STILL_SCREEN;
   const hold = replayActHold(frames, i);
-  return hold && Math.max(hold, REPLAY_SCREEN_MIN);
+  return hold && Math.max(hold, REPLAY_STILL_SCREEN);
 }
 /* the hold of the act at `i`: a write, or a move to another row. A
    `move` is to another row when the act before it was on a different
@@ -1520,9 +1532,7 @@ function replayHop(r) {
   replayGestureRest(r);
   location.hash = "#" + list;
   replayGaze("list", list);
-  r.timer = setTimeout(replayStep, REPLAY_SCREEN_MIN / r.speed);
-  r.lead = setTimeout(() => replayGesture(r),
-    Math.max(0, REPLAY_SCREEN_MIN - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
+  replayLinger(r);
 }
 /* a walk: the link to the frame's row was pressed, so that row is
    drawn, a screen of its own as a hop's list is, and the frame waits
@@ -1534,9 +1544,15 @@ function replayArrive(r) {
   replayGestureRest(r);
   applyFollowMove(walk.self);
   replayGaze(walk.list ? "list" : "row", walk.self);
-  r.timer = setTimeout(replayStep, REPLAY_SCREEN_MIN / r.speed);
-  r.lead = setTimeout(() => replayGesture(r),
-    Math.max(0, REPLAY_SCREEN_MIN - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
+  replayLinger(r);
+}
+/* a screen the pointer drew on its way to a frame (a hop's list, a
+   walk's row) is still for the screen floor; then the frame's next
+   gesture is made, and the frame waits for both */
+function replayLinger(r) {
+  const wait = REPLAY_STILL_SCREEN + REPLAY_GLIDE_MS + REPLAY_PRESS_MS;
+  r.timer = setTimeout(replayStep, wait / r.speed);
+  r.lead = setTimeout(() => replayGesture(r), REPLAY_STILL_SCREEN / r.speed);
 }
 function replayStep() {
   const r = replay;
