@@ -764,6 +764,7 @@ jobs:
         run: .github/scripts/create-test-databases.sh
 
       - name: Run shard
+        id: run-shard
         env:
           # The Makefile's test10 DSN, with the host and port the service
           # actually got (see "Locate the postgres service").
@@ -812,11 +813,35 @@ jobs:
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
           # -Sdeps before -M: this job's own Maven repository, from
           # setup-clojure. See the quick job above.
-          cd waymark10 && clojure -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+          run_shard() {
+            (cd waymark10 && clojure -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt)
+          }
+          rc=0
+          run_shard || rc=$?
+          # One more try when the JVM itself died — the shell's 134
+          # (SIGABRT, what an hs_err crash ends in) or 139 (SIGSEGV) —
+          # and the tests never spoke. Kaocha exits with its failure
+          # count, so 134 alone could be 134 failing tests: a summary
+          # line or a FAIL/ERROR report in the output is a verdict, and
+          # it stands. Unanchored, because kaocha colours those lines.
+          # Safe to repeat on the same database: every namespace opens
+          # by dropping its own tables. PR #768 lost its gate to one
+          # compiler-thread crash in shard 4 with no assertion failed.
+          if { [ "$rc" = 134 ] || [ "$rc" = 139 ]; } \
+             && ! grep -Eq '[0-9]+ tests, [0-9]+ assertions|(FAIL|ERROR) in ' shard-output.txt; then
+            echo "::warning::test10 shard ${{ matrix.shard.id }}: the JVM aborted (exit $rc) and no test failure was reported — retrying the shard one time"
+            echo "retried=true" >> "$GITHUB_OUTPUT"
+            rc=0
+            run_shard || rc=$?
+            echo "shard ${{ matrix.shard.id }}: the retry after the JVM abort exited $rc"
+          fi
+          exit "$rc"
       # A JVM that died says so in hs_err_pid*.log next to the suite;
       # the banner in the log above is eight lines of it. Keep the rest.
+      # Also after a retry that passed: the first attempt's hs_err is
+      # still on disk, and a green job is no reason to lose it.
       - name: JVM crash report
-        if: failure()
+        if: failure() || steps.run-shard.outputs.retried == 'true'
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test10-${{ matrix.shard.id }}
