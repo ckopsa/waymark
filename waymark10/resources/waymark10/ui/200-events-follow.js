@@ -906,11 +906,16 @@ demoBoot().catch(() => { /* engine not started, or restarting */ });
 const REPLAY_SPEEDS = [1, 2, 4];
 /* a long silence in the recording is cut to this many ms, before speed */
 const REPLAY_MAX_GAP = 3000;
+/* the one floor: after any change of the screen, the next change waits
+   at least this long, before speed, counted from the moment the first
+   is drawn (replayDrawn, replayStillLeft). A longer hold stays longer. */
+const REPLAY_MIN_STILL = 1000;
 /* the beats of one connector call are recorded milliseconds apart
    (docs/spec-agent-demo-walks.md §2): two frames closer than
-   REPLAY_BURST_MS are played REPLAY_BURST_GAP apart, before speed. No
-   browser makes such a burst, since a form's reports are debounced. */
-const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
+   REPLAY_BURST_MS are played REPLAY_BURST_GAP apart, before speed, and
+   that is the floor. No browser makes such a burst, since a form's
+   reports are debounced. */
+const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = REPLAY_MIN_STILL;
 /* the frame after a caption waits for the caption to be read
    (docs/spec-agent-demo-walks.md §3): REPLAY_READ_MS for each
    character, at least REPLAY_READ_MIN and at most REPLAY_READ_MAX,
@@ -918,12 +923,11 @@ const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;
 const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;
 let replayGazeTimer = null;
 /* a write and the screen it lands on are held for the eye: the screen
-   is still at least REPLAY_WRITE_HOLD after a `transition`, and at
-   least REPLAY_MOVE_HOLD after a `move` to another row, before speed.
-   A hold is stillness, as the floors below are: a floor under the gap
+   is still at least REPLAY_WRITE_HOLD after a `transition`, before
+   speed. A hold is stillness, as the floor is: a floor under the gap
    and no addition to it, so REPLAY_MAX_GAP is still the most a
    recorded silence plays. */
-const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;
+const REPLAY_WRITE_HOLD = 1500;
 /* the gesture before an act: a pointer glides to the link or the button
    a person would press for REPLAY_GLIDE_MS, and that element is lit for
    REPLAY_PRESS_MS, before speed; then the frame is applied. The gesture
@@ -936,21 +940,22 @@ const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;
    and a write's submit button are pressed in the form, and only a step
    with no click behind it (replayNotice) is applied with no gesture. */
 const REPLAY_GLIDE_MS = 600, REPLAY_PRESS_MS = 300;
-/* the floors are stillness: the pointer leaves a screen only after it
+/* the floor is stillness: the pointer leaves a screen only after it
    has been still a while. The gesture toward the next act starts no
-   sooner than REPLAY_STILL_SCREEN after a new screen (a move to another
-   row, a hop's list, a walk's row, a dialog opening or closing), no
-   sooner than REPLAY_STILL_TYPED after a typed value shows, and no
+   sooner than REPLAY_MIN_STILL after any change of the screen (a move,
+   a hop's list, a walk's row, a dialog opening or closing, a typed
+   value, a caption, a `doc` that draws the screen again), and no
    sooner than REPLAY_WRITE_HOLD after a transition lands, before speed.
+   The stillness is counted from the moment the change is drawn, and
+   not from the frame that asked for it (replayStillLeft).
    The gesture's glide and press come after the stillness and not
    inside it, so the frame waits the larger of its recorded gap and
    stillness + glide + press. A frame that changes nothing on screen
-   waits nothing (replayStill). */
-const REPLAY_STILL_SCREEN = 1000, REPLAY_STILL_TYPED = 800;
+   waits nothing (replayShows). */
 /* the moment of a look: the screen the gaze arrived at keeps its
    outline this long, before speed. It is the screen's stillness, so the
    outline is off when the pointer leaves. */
-const REPLAY_GAZE_MS = REPLAY_STILL_SCREEN;
+const REPLAY_GAZE_MS = REPLAY_MIN_STILL;
 function parseWalk(text) {
   let docs;
   try {
@@ -981,6 +986,10 @@ function startReplay(text) {
              hopped: null,        // the frame a hop to its kind's list was made for
              walked: null,        // the frame a walk to its row was made for
              held: null,          // the frames waiting behind an open form
+             drawn: 0,            // when the screen's last change was drawn
+             drawing: 0,          // the draws that are not done
+             asked: 0,            // when the first of those began
+             still: 0,            // the stillness the frame at the playhead waits for
              rows: new Map(),     // self → {kind, state, summary, log}
              docs: new Map(),     // self, the document recorded for it so far
              known: new Set(),    // every row self the recording names
@@ -1195,15 +1204,19 @@ function replaySchedule() {
   if (film && r.at >= r.frames.length) filmEnd();
   if (r.at >= r.frames.length) { r.playing = false; replayChip(); return; }
   /* the screen is still for its floor first and the gesture comes after
-     it: the frame waits for both when its recorded gap is shorter */
+     it: the frame waits for both when its recorded gap is shorter. The
+     stillness is counted from the moment the screen was drawn, so what
+     the screen has had of it is not waited for again */
   const still = replayHoldTime(r.frames, r.at);
+  r.still = still;
+  const left = Math.max(0, still - (performance.now() - r.drawn) * r.speed);
   const gap = Math.max(replayGap(r),
-    still && still + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);
+    still && left + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);
   r.timer = setTimeout(replayStep, gap / r.speed);
   /* the gesture ends as the wait does, and never starts inside the
      stillness */
   r.lead = setTimeout(() => replayGesture(r),
-    Math.max(still, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
+    Math.max(left, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);
 }
 /* the wait before the frame at `r.at`, as it was recorded: a burst is
    spread, a long silence is cut, and a caption is given its reading
@@ -1280,55 +1293,54 @@ function replayStill(frames, at) {
   return !!frames[i] && frames[i].type === "ui" &&
     replayBeat(frames[i]) === replayBeat(f);
 }
-/* whether the `ui` beat at `i` typed into the dialog the `ui` beat
-   before it had open. Any other `ui` beat opened a dialog, closed one
-   or showed another screen. */
-function replayTyped(frames, i) {
-  const key = f => {
-    const d = (f.ui || {}).dialog;
-    return d ? d.self + " " + d.action : "";
-  };
-  const k = key(frames[i]);
-  for (let j = i - 1; k && j >= 0; j--)
-    if (frames[j].type === "ui") return key(frames[j]) === k;
-  return false;
+/* whether the frame at `at` changes what a viewer sees. Every frame
+   does, unless it changes nothing (replayStill); a `doc` does only when
+   it is for the row or the list on screen, which is then drawn again.
+   One for another address is kept and draws nothing. */
+function replayShows(frames, at) {
+  const f = frames[at];
+  if (!f || replayStill(frames, at)) return false;
+  if (f.type !== "doc") return true;
+  const row = s => String(s || "").split("?")[0];
+  return !!f.doc && !!row(f.self) && row(f.self) === row(hereHref());
 }
 /* how long the screen is still before the gesture toward the frame at
    `at` may start: the stillness owed to the last change of the screen
-   before it. A `doc` frame is a screen and nobody's act: it
-   is never held back, and neither is any frame that changes nothing
-   (replayStill); the frame before them is the one that counts. After a
-   typing beat the floor is REPLAY_STILL_TYPED; after any other `ui` beat,
-   an invitation, a transition or a move to another row it is
-   REPLAY_STILL_SCREEN, or the act's own hold when that is longer. */
+   before it. There is one rule: after any frame that changes the
+   screen (replayShows), the next one that does waits at least
+   REPLAY_MIN_STILL, and REPLAY_WRITE_HOLD after a transition. A frame
+   that changes nothing is never held back and owes nothing; the frame
+   before it is the one that counts. */
 function replayHoldTime(frames, at) {
-  if (!frames[at] || frames[at].type === "doc" || replayStill(frames, at))
-    return 0;
+  if (!replayShows(frames, at)) return 0;
   let i = at - 1;
-  while (i >= 0 && (frames[i].type === "doc" || replayStill(frames, i))) i--;
+  while (i >= 0 && !replayShows(frames, i)) i--;
   const f = frames[i];
   if (!f) return 0;
   /* the frame that ends a form shows the write that waited behind it:
      the write's own hold is owed from there */
   if (replayLands(frames, i)) return REPLAY_WRITE_HOLD;
-  if (f.type === "ui")
-    return replayTyped(frames, i) ? REPLAY_STILL_TYPED : REPLAY_STILL_SCREEN;
-  if (f.type === "invitation") return REPLAY_STILL_SCREEN;
-  const hold = replayActHold(frames, i);
-  return hold && Math.max(hold, REPLAY_STILL_SCREEN);
-}
-/* the hold of the act at `i`: a write, or a move to another row. A
-   `move` is to another row when the act before it was on a different
-   one. */
-function replayActHold(frames, i) {
-  const f = frames[i];
   if (f.type === "transition") return REPLAY_WRITE_HOLD;
-  if (f.type !== "move" || !f.self) return 0;
-  const row = s => String(s).split("?")[0];
-  for (let j = i - 1; j >= 0; j--)
-    if (frames[j].type !== "doc" && frames[j].self)
-      return row(frames[j].self) === row(f.self) ? 0 : REPLAY_MOVE_HOLD;
-  return REPLAY_MOVE_HOLD;
+  return REPLAY_MIN_STILL;
+}
+/* a screen of the replay is being drawn (render): the stillness it is
+   owed is counted from the moment the draw is done, and not from the
+   frame that asked for it. */
+function replayDrawn(r, draw) {
+  if (!r.drawing++) r.asked = performance.now();
+  const done = () => { r.drawing--; r.drawn = performance.now(); };
+  return Promise.resolve(draw).then(done, done);
+}
+/* how long the screen is yet to be left alone before the gesture toward
+   the frame at the playhead, in ms after speed: what is left of its
+   stillness (r.still), counted from the moment the last change was
+   drawn. A draw that is not done has not begun it, and is waited for
+   no longer than a long silence. */
+function replayStillLeft(r) {
+  const now = performance.now();
+  if (!r.still) return 0;
+  if (r.drawing && now - r.asked < REPLAY_MAX_GAP) return REPLAY_BURST_MS;
+  return r.drawn + r.still / r.speed - now;
 }
 /* how long the frame after `f` waits for `f` to be read: nothing,
    unless `f` is a caption with a line in it */
@@ -1536,6 +1548,14 @@ let replayPointerAt = null;
    target there is no gesture. */
 function replayGesture(r) {
   if (replay !== r || !r.playing || r.gesture) return;
+  /* never inside the stillness: a screen drawn late is still for its
+     floor from its draw, and the gesture waits for the rest of it */
+  const left = replayStillLeft(r);
+  if (left > 0) {
+    clearTimeout(r.lead);
+    r.lead = setTimeout(() => replayGesture(r), left);
+    return;
+  }
   /* a frame on a row that is not on screen makes the gesture of a move
      to that row first */
   const walk = replayWalkOf(r, r.frames[r.at]);
@@ -1636,15 +1656,25 @@ function replayArrive(r) {
 }
 /* a screen the pointer drew on its way to a frame (a hop's list, a
    walk's row) is still for the screen floor; then the frame's next
-   gesture is made, and the frame waits for both */
+   gesture is made, and the frame waits for both. The floor is counted
+   from the draw the hash just set asks for (replayStillLeft) */
 function replayLinger(r) {
-  const wait = REPLAY_STILL_SCREEN + REPLAY_GLIDE_MS + REPLAY_PRESS_MS;
+  r.drawn = performance.now();
+  r.still = REPLAY_MIN_STILL;
+  const wait = REPLAY_MIN_STILL + REPLAY_GLIDE_MS + REPLAY_PRESS_MS;
   r.timer = setTimeout(replayStep, wait / r.speed);
-  r.lead = setTimeout(() => replayGesture(r), REPLAY_STILL_SCREEN / r.speed);
+  r.lead = setTimeout(() => replayGesture(r), REPLAY_MIN_STILL / r.speed);
 }
 function replayStep() {
   const r = replay;
   if (!r || !r.playing || r.at >= r.frames.length) return;
+  /* a screen drawn late is still for its floor from its draw: the
+     gesture has not begun, and the frame waits for the rest of it */
+  const left = r.gesture ? 0 : replayStillLeft(r);
+  if (left > 0) {
+    r.timer = setTimeout(replayStep, left);
+    return;
+  }
   /* the gesture comes before the act: the frame waits for it */
   const wait = replayGestureWait(r);
   if (wait > 0) {
@@ -1655,7 +1685,11 @@ function replayStep() {
   if (r.gesture && r.gesture.hop) { replayHop(r); return; }
   /* nor for a frame on another row: the pressed link draws its row first */
   if (r.gesture && r.gesture.walk) { replayArrive(r); return; }
+  const shows = replayShows(r.frames, r.at);
   applyReplayFrame(r.frames[r.at++]);
+  /* the stillness a change is owed is counted from here, or from the
+     end of its draw when that is later (replayDrawn) */
+  if (shows) r.drawn = performance.now();
   if (replay === r) replaySchedule();
 }
 function playReplay() {
@@ -1810,9 +1844,12 @@ function renderReplayDoc(view, doc) {
                             "data-replay-doc": "", inert: ""});
   view.append(screen);
   const hints = dataHintsCache[String(doc.kind).replace(/_collection$/, "")] || {};
+  /* a row's draw is done when its promise is: render() waits for it */
+  let drawn = null;
   if (String(doc.kind).endsWith("_collection")) renderCollection(screen, doc, hints);
-  else renderResource(screen, doc, hints).catch(() => {});
+  else drawn = renderResource(screen, doc, hints).catch(() => {});
   paintGuidedFocus();
+  return drawn;
 }
 /* ── film mode (docs/spec-agent-demo-walks.md §8b): a sealed walk played
    for a camera, at /#/api/walks/<id>?film=1. The root element's

@@ -143,7 +143,8 @@ async function render() {
      collection is drawn from the recording, never from a read */
   if (replay && href && /^\/api\//.test(href)) {
     clearLiveTimers(); view.textContent = ""; lawStamp(null);
-    return renderReplay(view, href);
+    /* the replay counts this screen's stillness from the end of its draw */
+    return replayDrawn(replay, renderReplay(view, href));
   }
   renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
   /* home is the dashboard (the feed document that once stood here
