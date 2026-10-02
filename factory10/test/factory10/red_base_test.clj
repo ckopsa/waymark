@@ -200,6 +200,41 @@
         "the log tail follows the check's heading directly")
     (is (str/includes? detail "FAIL in (calendar10-clash)"))))
 
+(deftest a-red-main-ticket-carries-the-red-steps-own-lines
+  ;; ticket 3a9d6c62: the tail of the whole job was the steps after the
+  ;; red one, and the body's ceiling cut what was left of the failure
+  (let [{:keys [state engine] :as w} (world)
+        wide (apply str (repeat 100 "x"))
+        step (str/join "\n" (map #(str "compiling namespace " % " " wide)
+                                 (range 400)))
+        after (str "##[group]Run crash report\nenv: LATER_DUMP\n##[endgroup]\n"
+                   (str/join "\n" (map #(str "post-job line " %) (range 400))))
+        ended "\n##[error]Process completed with exit code 1.\n"]
+    (gh/seed-branch! state repo "main" head-1)
+    (gh/seed-check! state repo head-1 (a-check 701 head-1 "failure"))
+    (gh/seed-log! state "701"
+                  (str step "\n##[group]Run clojure -M:test\nenv: STEP_DUMP\n"
+                       "##[endgroup]\nFAIL in (the-merge-clash)" ended after))
+    (gh/seed-check! state repo head-1
+                    (assoc (a-check 702 head-1 "failure") :name "quick"))
+    (gh/seed-log! state "702"
+                  (str step "\nFAIL in (calendar10-clash)" ended after))
+    (pass! w)
+    (is (= 1 (:base-opened (pass! w))))
+    (let [detail (str (get-in (first (tickets engine)) [:data :detail]))]
+      (is (str/includes? detail "FAIL in (calendar10-clash)")
+          "the first log ends at its failing lines")
+      (is (str/includes? detail "FAIL in (the-merge-clash)")
+          "and the ceiling leaves the second log its failing lines too")
+      (is (str/includes? detail "Run clojure -M:test")
+          "the red step's own command is named")
+      (is (not (str/includes? detail "STEP_DUMP")) "its env dump is not")
+      (is (not (str/includes? detail "crash report"))
+          "a step after the red one is left out")
+      (is (not (str/includes? detail "post-job line")))
+      (is (str/includes? detail "## What to do")
+          "the body is whole under its ceiling"))))
+
 (deftest a-red-after-green-names-the-head-that-turned-it
   (let [{:keys [engine] :as w} (world)]
     (head-at! w head-1 701 "success")
