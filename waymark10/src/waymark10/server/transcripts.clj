@@ -70,6 +70,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.seats :as seats]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -657,7 +658,7 @@
 (defn- secrets-of
   "What the engine's second pass looks for in this transcript's lines
   (R-7.4): the hashes of the keys that answer now, and the standing
-  keys held raw."
+  keys and every secret row's value held raw."
   [eng transcript-raw]
   (let [seat (load-raw eng :seat (get-in transcript-raw [:data :seat]))
         chair (when-some [c (some-> seat seats/chair-of)]
@@ -671,7 +672,7 @@
                    (concat [(get-in transcript-raw [:data :key_hash])
                             (get-in sitting [:data :inbox_key_hash])]
                            (map :hash (get-in seat [:data :fire_keys]))))
-     :raw (into #{}
+     :raw (into (secrets/values eng)
                 (keep #(some-> (get-in % [:data :sitter_key]) str not-empty))
                 [seat chair])}))
 

@@ -103,6 +103,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.problems :as p]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -721,9 +722,15 @@
                       (throw (client/saying (dark-problem row)
                                             (dark-words row refusal)))))
                 row)
-          seam (seam-of eng)]
+          seam (seam-of eng)
+          ;; a secret ref becomes its value here and nowhere earlier,
+          ;; so every stored copy of the call keeps the id
+          schema (some #(when (= bare (:name %)) (:input_schema %))
+                       (get-in row [:data :tools]))
+          {:keys [args values]} (secrets/resolve-refs! eng schema args)]
       (try
-        (wire! seam row "tools/call" {:name bare :arguments (or args {})})
+        (secrets/scrub (wire! seam row "tools/call" {:name bare :arguments args})
+                       values)
         (catch Exception e
           (when (and (p/problem? e) (fatal? seam row))
             (darken! eng row (ex-message e)))
