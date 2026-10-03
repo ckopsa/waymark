@@ -982,7 +982,10 @@
             (->> (store/query-rows (:storage eng) tx :subscription
                                    {:state :active} {:limit 500})
                  (filter (fn [row]
-                           (when-some [held (some-> (get-in row [:data :secret])
+                           ;; a typed key is held in `signing_key`, and
+                           ;; `secret` then reads only the mark `set`
+                           (when-some [held (some-> (or (get-in row [:data :signing_key])
+                                                        (get-in row [:data :secret]))
                                                     str not-empty)]
                              (MessageDigest/isEqual
                               wanted

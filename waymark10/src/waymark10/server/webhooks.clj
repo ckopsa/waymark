@@ -25,6 +25,13 @@
   subscription stays active, and `failure_reason` says what it waits
   for. Nothing goes out unsigned and nothing is marked failed.
 
+  A LITERAL KEY IS NEVER SHOWN. At create, a `secret` that is not the
+  id of a secret row moves to `signing_key`, a :secret field that no
+  projection carries, and `secret` keeps only the mark `set`. So get,
+  query, history and the event frames show that a key is there and
+  never the key; the deliverer still signs with it. A row from before
+  this, with its literal still in `secret`, signs as it did.
+
   Failure discipline, deliberately NOT waymark9's: subscriptions.py
   skipped a refusing event after its attempts and advanced the cursor
   (liveness over completeness); v10 marks the SUBSCRIPTION failed —
@@ -110,6 +117,30 @@
            (= (:owner row) (get-in ctx [:principal :id])))
     (t/allow) (t/deny)))
 
+(def ^:private row-id-form
+  #"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+
+(def literal-mark
+  "What `secret` reads as when a literal key was typed. The key itself
+  is in `signing_key`."
+  "set")
+
+(defn- conceal-literal
+  "At create: a `secret` that is not the id of a secret row is a
+  literal key. It moves to `signing_key` and `secret` keeps the mark.
+  A caller's own `signing_key` is dropped: the field is the engine's."
+  [row ctx]
+  (let [s (get-in row [:data :secret])
+        ref? (and (string? s)
+                  (re-matches row-id-form s)
+                  (if-some [rd (:read ctx)]
+                    (some? (rd :secret s))
+                    true))
+        row (update row :data dissoc :signing_key)]
+    (if (or (not (string? s)) (str/blank? s) ref?)
+      row
+      (update row :data assoc :secret literal-mark :signing_key s))))
+
 (defresource subscription
   {:kind :subscription
    :plural "subscriptions"
@@ -139,7 +170,16 @@
                       :x-display
                       {:raw true
                        :label "Signing secret"
-                       :help "The shared key each delivery is HMAC-signed with, so the receiver can prove the POST came from here. Give the id of a secret row, bare, and the engine signs with the value that row holds and never shows it; the deliveries wait while the row holds no value. Leave it blank and the deliveries go unsigned."}}
+                       :help "The shared key each delivery is HMAC-signed with, so the receiver can prove the POST came from here. Give the id of a secret row, bare, and the engine signs with the value that row holds and never shows it; the deliveries wait while the row holds no value. A key typed here signs too, and is shown afterwards only as set. Leave it blank and the deliveries go unsigned."}}
+             [:maybe [:string {:min 8 :max 120}]]]
+            ;; a literal key typed into `secret`, moved here at create:
+            ;; never rendered, never filterable
+            [:signing_key {:optional true
+                           :secret true
+                           :x-display
+                           {:hidden true
+                            :label "The literal key"
+                            :spelled-by-hand "Moved here by the engine from a key typed into the signing secret; never shown."}}
              [:maybe [:string {:min 8 :max 120}]]]
             ;; what an exhausted delivery does (batch F): "fail" (the
             ;; default — mark the subscription failed, park the cursor)
@@ -157,6 +197,7 @@
                                :help "Written by the deliverer when it gives up — the last error it saw. Not yours to fill in."}}
              [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
+   :on-create conceal-literal
    :actions
    {:pause {:from #{:active} :to :paused
             :safety {:idempotent true :reversible true :confirm false}
@@ -231,20 +272,21 @@
       (< (.statusCode resp) 400))
     (catch Exception _ false)))
 
-(def ^:private row-id-form
-  #"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
-
 (defn- signing-key
   "The key one delivery is signed with: nil for an unsigned
-  subscription, the literal `secret`, or, when `secret` is the id of a
+  subscription, the literal key in `signing_key` (or, on a row from
+  before that field, in `secret`), or, when `secret` is the id of a
   secret row, the value that row holds now. → ::waiting when the row
   holds no value yet."
   [eng sub]
-  (let [s (get-in sub [:data :secret])]
-    (if-some [held (when (and (string? s) (re-matches row-id-form s))
-                     (secrets/value-of eng s))]
-      (or (:value held) ::waiting)
-      s)))
+  (let [s (get-in sub [:data :secret])
+        k (get-in sub [:data :signing_key])]
+    (if (some? k)
+      k
+      (if-some [held (when (and (string? s) (re-matches row-id-form s))
+                       (secrets/value-of eng s))]
+        (or (:value held) ::waiting)
+        s))))
 
 (def ^:private waiting-note "Waiting: the secret ")
 
