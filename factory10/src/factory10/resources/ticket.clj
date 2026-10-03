@@ -741,6 +741,13 @@
   ;; row so the last child's ending can end it (ticket 499bcd72).
   (assoc-in row [:data :merged_change] (:merged_change inp)))
 
+(defhandler note-the-shelving [row inp _ctx]
+  ;; the stall's sentence, kept where whoever grooms next reads it
+  ;; (ticket b6c8ea04); a shelve with none leaves the last one standing
+  (if-some [why (some-> (:shelved_because inp) str not-empty)]
+    (assoc-in row [:data :shelved_because] why)
+    row))
+
 (defhandler note-a-red-head [row inp _ctx]
   ;; One more red head of the base this ticket was opened for, kept to
   ;; the last fifty.
@@ -966,6 +973,13 @@
                      :label "Merged before its children"
                      :help "The pull request that merged while a child of this ticket was still open. The ticket ends when its last child does. Empty for every other ticket."}}
     [:maybe [:string {:max 400}]]]
+   ;; ticket b6c8ea04: written by its change's stall, through `shelve`
+   [:shelved_because {:optional true
+                      :x-display
+                      {:widget "prose"
+                       :label "Why its change was stalled"
+                       :help "The sentence the seat gave when it stalled the change built for this ticket and sent it back to draft. Read it before grooming again: a groom that does not answer it sends the seat back to the same wall."}}
+    [:maybe [:string {:max 480}]]]
    ;; ticket b0ec4d47: written by the birth when a fired seat filed the
    ;; ticket, beside the 4 the birth stamped over what it asked
    [:asked_priority {:optional true
@@ -1343,6 +1357,14 @@
     :shelve
     {:from #{:open :in_review} :to :draft
      :guards [only-its-change-moves-it]
+     :handler note-the-shelving
+     :input [:map
+             [:shelved_because {:optional true
+                                :x-display {:hidden true
+                                            :label "Why its change was stalled"}}
+              [:maybe [:string {:max 480}]]]]
+     ;; the engine writes the stall's sentence, with no version in hand
+     :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and puts its change back to work in the same move; a change with a pull request goes back under review at the next sit."}
      :display {:label "Stalled" :order 17

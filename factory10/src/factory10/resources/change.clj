@@ -304,18 +304,19 @@
   is left where it is, and a door that refuses is said in the log —
   the change's own move stands. A rehearsal carries no pen, and moves
   nothing."
-  [row ctx from action]
+  ([row ctx from action] (move-the-ticket! row ctx from action nil))
+  ([row ctx from action input]
   (let [[entry id walk-row] (born-of row ctx)]
     (when (and walk-row
                (= :ticket (:kind entry))
                (contains? from (some-> (:state walk-row) name keyword))
                (:invoke ctx))
       (try
-        ((:invoke ctx) :ticket id action nil)
+        ((:invoke ctx) :ticket id action input)
         (catch Exception e
           (binding [*out* *err*]
             (println "factory10 change: the ticket" id "did not" (name action)
-                     "-" (ex-message e))))))))
+                     "-" (ex-message e)))))))))
 
 (defhandler write-what-superseded-it [row inp _ctx]
   ;; The pull request that merged in this one's place rides on the row,
@@ -341,14 +342,29 @@
   (move-the-ticket! row ctx #{:in_review} :return)
   row)
 
-(defhandler shelve-the-ticket [row _inp ctx]
+(defhandler shelve-the-ticket [row inp ctx]
   ;; A STALL IS A SEAT SAYING IT CANNOT BUILD THE TICKET AS WRITTEN, so
   ;; the ticket goes back to draft and not to the queue (ticket
   ;; 6bdaf6fe): a ticket left open beside a stuck change was handed to
   ;; the seat every wake, and every wake could only say it was stuck. A
   ;; person, or mayor, reads the stall and grooms it again.
-  (move-the-ticket! row ctx #{:open :in_review} :shelve)
-  row)
+  ;;
+  ;; THE SENTENCE RIDES ON BOTH ROWS (ticket b6c8ea04): a transition's
+  ;; stored inputs are not served, so a stall's reason kept only in the
+  ;; log was a blind stall to whoever grooms next.
+  (let [why (some-> (:why inp) str not-empty)]
+    (move-the-ticket! row ctx #{:open :in_review} :shelve
+                      (if why {:shelved_because why} {}))
+    (update row :data assoc
+            :stall_reason why
+            :stalled_at (:now ctx)
+            :stalled_by (some-> (:id (:principal ctx)) str not-empty))))
+
+(defn- unstalled
+  "A change back out of `stuck` no longer says why it stopped: the
+  sentence was for the person who put it back, and the log keeps it."
+  [row]
+  (update row :data assoc :stall_reason nil :stalled_at nil :stalled_by nil))
 
 ;; ── the bench: the four doors that reach the worktree ───────────────
 ;;
@@ -606,20 +622,20 @@
   ;; the round ceiling left in review goes back to the queue with it,
   ;; which is how a person releases a stuck change (ticket 2e869934).
   (move-the-ticket! row ctx #{:in_review} :return)
-  (assoc-in row [:data :rounds] 0))
+  (-> row unstalled (assoc-in [:data :rounds] 0)))
 
 (defhandler rework-the-change [row _inp _ctx]
   ;; `unstick`'s count, walked by the TICKET (ticket 9ace68fb): a groom,
   ;; an unblock or a resume is a person's reading of the ask, so the
   ;; rounds start again. The ticket is already on its way to `open`,
   ;; so nothing here moves it.
-  (assoc-in row [:data :rounds] 0))
+  (-> row unstalled (assoc-in [:data :rounds] 0)))
 
 (defn- back-under-review
   "A stuck change put back under review: the rounds start from zero,
   and the forge computes the red names again for the head it reads next."
   [row]
-  (update row :data assoc
+  (update (unstalled row) :data assoc
           :rounds 0
           :failing_checks nil
           :conflicts nil
@@ -1274,6 +1290,26 @@
                       :label "A pull request nobody adopted"
                       :help "The bench's landing opened a pull request for this change, and the house's row never took its number, so neither the house's merge nor a merge ask sees it. Cleared when the row adopts the pull request."}}
      [:maybe [:string {:max 500}]]]
+    ;; the stall's own sentence (ticket b6c8ea04): written by `stall`,
+    ;; cleared by every door that takes the change out of `stuck`
+    [:stall_reason {:optional true
+                    :examples ["The same test fails on the base commit, so this change is not the cause and I cannot fix it here."]
+                    :x-display
+                    {:widget "prose"
+                     :label "Why it was stalled"
+                     :help "The sentence the stall door was given: what the seat tried, and what stopped it. Empty unless the change is stuck by a stall."}}
+     [:maybe [:string {:max 480}]]]
+    [:stalled_at {:optional true
+                  :x-display
+                  {:label "When it was stalled"
+                   :help "The moment the stall door moved this change to stuck. Empty unless the change is stuck by a stall."}}
+     [:maybe :waymark/instant]]
+    [:stalled_by {:optional true
+                  :x-ref {:principal true}
+                  :x-display
+                  {:label "Who stalled it"
+                   :help "The principal, usually a seat, that walked the stall door. Empty unless the change is stuck by a stall."}}
+     [:maybe [:string {:max 200}]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     ;; the house's merge line (ticket b85aded5): the merge pass writes
