@@ -871,14 +871,22 @@
   the template over hidden values. A ref field the template reads is
   named, not printed as an id (name-summary-refs)."
   [rdef row redacted hashed ref-summary]
-  (if (and (seq redacted)
+  (let [named #(assoc (name-summary-refs rdef row hashed ref-summary)
+                      :kind (:kind rdef))]
+    (cond
+      (and (seq redacted)
            (some #(contains? redacted (keyword (second %)))
                  (re-seq summary-data-token (str (:summary rdef)))))
-    (str (summary/state-label (:kind rdef)) " · "
-         (summary/state-label (:state row)))
-    (summary/render (:summary rdef)
-                    (assoc (name-summary-refs rdef row hashed ref-summary)
-                           :kind (:kind rdef)))))
+      (str (summary/state-label (:kind rdef)) " · "
+           (summary/state-label (:state row)))
+
+      ;; a :summary-fn reads fields its template does not name, so under
+      ;; ANY redaction the template answers and the composer does not
+      (seq redacted)
+      (summary/render (:summary rdef) (named))
+
+      :else
+      (summary/line rdef (named)))))
 
 (defn target-summary
   "One row's summary line as THIS visibility may read it — the

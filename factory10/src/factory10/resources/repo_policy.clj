@@ -54,7 +54,10 @@
             [factory10.bench :as bench]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
-            [waymark10.types :as t]))
+            [waymark10.holds :as holds]
+            [waymark10.types :as t])
+  (:import (java.time Duration Instant ZoneOffset)
+           (java.time.format DateTimeFormatter)))
 
 (set! *warn-on-reflection* true)
 
@@ -151,6 +154,28 @@
     (if (some? which)
       (t/deny {:vars {:which (str which)}})
       (t/allow))))
+
+(defguardfn only-a-person-widens-the-hosted-workflows
+  {:reads [:principal :within]
+   :hold true
+   :vars [:added]
+   :explain "Adding {added} to the hosted workflows is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. The list is an exception to the house's rule that CI runs on its own runners, and a longer list is a wider exception."
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A restate that removes entries, or leaves the list as it stands, is not held."}
+  ;; ticket 407323ef: a delegate is the person's hand for the policy's
+  ;; numbers, but an entry ADDED here lets one more workflow run on a
+  ;; GitHub-hosted runner, and that is the person's own yes. The input
+  ;; is judged against the stored list, so a removal and an unchanged
+  ;; list pass. ci_run's `only-a-person-reclassifies` one kind over:
+  ;; every hand but an agent's passes, and the one agent call this
+  ;; admits is the engine's replay of the held call its person allowed.
+  [row inp ctx]
+  (let [stored (set (map str (get-in row [:data :hosted_workflows])))
+        added (remove stored (map str (get inp :hosted_workflows)))]
+    (cond
+      (not= :agent (:type (:principal ctx))) (t/allow)
+      (empty? added) (t/allow)
+      (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
+      :else (t/deny {:vars {:added (str/join ", " added)}}))))
 
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
@@ -854,6 +879,84 @@
       [:pr_run {:optional true} [:maybe :boolean]]
       [:started_at :waymark/instant]]]]])
 
+;; ── the summary line: where the merge line stands ───────────────────
+;; A list panel shows a row's summary line and nothing else (ticket
+;; b5a9b790), so the line says what the row already holds: what needs a
+;; person first (a red base, a held deploy), then the front of the
+;; merge line, then the count behind it.
+
+(def ^:private summary-budget
+  "The longest summary line, in characters. A part that does not fit is
+  left out whole, and so is every part after it."
+  100)
+
+(defn- instant-of
+  "A stored instant as an Instant, whether the row came decoded or as
+  its wire string. nil for what cannot be read."
+  ^Instant [v]
+  (cond
+    (nil? v) nil
+    (instance? Instant v) v
+    (instance? java.util.Date v) (.toInstant ^java.util.Date v)
+    :else (try (Instant/parse (str v)) (catch Exception _ nil))))
+
+(def ^:private ^DateTimeFormatter since-format
+  (.withZone (DateTimeFormatter/ofPattern "MM-dd HH:mm'Z'") ZoneOffset/UTC))
+
+(defn- waited
+  "How long since `since`, in the one unit a panel row has room for."
+  [^Instant since ^Instant now]
+  (let [m (max 0 (.toMinutes (Duration/between since now)))]
+    (cond
+      (< m 60) (str m "m")
+      (< m (* 48 60)) (str (quot m 60) "h")
+      :else (str (quot m (* 24 60)) "d"))))
+
+(defn summary-line
+  "The policy's summary line, composed from the row's data: the
+  repository, then a red base and a held or red deploy, then the front
+  pull request and what it waits on, then how many stand behind it,
+  then the deploy or base state when nothing above said it, then
+  `manual merge` when the house does not merge here. Pure: `now` is
+  the caller's clock."
+  [data state now]
+  (let [{:keys [repository base_state base_checked_at deploy_state
+                deploy_waits_on deploy_waiting_since line_front_pr
+                line_front_waiting line_waiting auto_merge]} data
+        red-base? (= "red" base_state)
+        since (instant-of deploy_waiting_since)
+        deploy (cond
+                 since (str "deploy waiting " (waited since now))
+                 (seq deploy_waits_on) "deploy waiting"
+                 (= "red" deploy_state) "deploy red")
+        parts [(when (= "retired" (some-> state name)) "retired")
+               (when red-base?
+                 (if-some [at (instant-of base_checked_at)]
+                   (str "base red since " (.format since-format at))
+                   "base red"))
+               deploy
+               (if line_front_pr
+                 (str "#" line_front_pr " front"
+                      (when line_front_waiting
+                        (str ", waiting on " line_front_waiting)))
+                 "line empty")
+               (when line_front_pr (str (or line_waiting 0) " behind"))
+               (cond
+                 deploy nil
+                 (= "green" deploy_state) "deploy green"
+                 (and base_state (not red-base?)) (str "base " base_state))
+               (when (false? auto_merge) "manual merge")]]
+    (reduce (fn [line part]
+              (let [longer (str line " · " part)]
+                (if (<= (count longer) summary-budget)
+                  longer
+                  (reduced line))))
+            (str repository)
+            (remove nil? parts))))
+
+(defn- summary-of-row [row]
+  (summary-line (:data row) (:state row) (Instant/now)))
+
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
 (defresource repo-policy
@@ -868,7 +971,10 @@
    ;; tap, because a repository the house stops working is a
    ;; repository it may work again.
    :terminal #{}
+   ;; the template is the fallback, and what a redacted read answers;
+   ;; the line a reader sees is the composed one (waymark10.summary/line)
    :summary "{data.repository} · {state}"
+   :summary-fn summary-of-row
    :label-template "{data.repository}"
    :display {:title "{data.repository}"}
    :filterable {:state #{:eq :in} :repository #{:eq}}
@@ -897,7 +1003,10 @@
      :guards [a-person-or-their-delegate-states-the-policy
               the-house-merges-only-what-a-check-tested
               the-test-selection-pattern-compiles
-              the-hosted-workflows-are-workflow-paths]
+              the-hosted-workflows-are-workflow-paths
+              ;; last, so a call that is held is one the walls above
+              ;; would let the person's Allow run
+              only-a-person-widens-the-hosted-workflows]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes

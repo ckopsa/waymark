@@ -1377,6 +1377,55 @@
       (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
           "a seat's sitter could otherwise raise its own ceiling"))))
 
+(deftest the-hosted-workflows-wall-is-a-registered-hold
+  (is (holds/hold? :only-a-person-widens-the-hosted-workflows)
+      "the guard's `:hold true` registered it when the module loaded"))
+
+(deftest a-delegates-added-hosted-workflow-waits-for-the-person
+  ;; ticket 407323ef. In the suite and not beside the kind's scenarios
+  ;; for the reason above: a check-tier agent never acts-for, so the
+  ;; first wall would answer before this one.
+  (let [st (state)
+        eng (fresh-engine st)
+        tofu ".github/workflows/tofu.yml"
+        ansible ".github/workflows/ansible.yml"
+        drift ".github/workflows/drift.yml"
+        row (a-policy! eng {:hosted_workflows [tofu ansible]})
+        delegate (assoc (t/principal {:id "claude-for-colton" :type :agent
+                                      :display "Claude for Colton"})
+                        :acts-for "colton")
+        restated (fn [who hosted]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (assoc (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         :hosted_workflows hosted)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))
+        hosted-now #(get-in (policy-row eng (:id row)) [:data :hosted_workflows])]
+    (testing "an agent's added entry is the hold's refusal, and the row stands"
+      (let [e (try (restated delegate [tofu ansible drift])
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (some? e) "the door did not open")
+        (is (= :only-a-person-widens-the-hosted-workflows
+               (some-> (:guard (ex-data e)) name keyword))
+            (pr-str (ex-data e)))
+        (is (= [tofu ansible] (hosted-now)))))
+    (testing "an agent's restate that leaves the list as it stands is not held"
+      (restated delegate [ansible tofu])
+      (is (= [ansible tofu] (hosted-now))))
+    (testing "an agent's removal narrows the exception and is not held"
+      (restated delegate [tofu])
+      (is (= [tofu] (hosted-now))))
+    (testing "the person's own added entry runs directly"
+      (restated person [tofu drift])
+      (is (= [tofu drift] (hosted-now))))))
+
 (deftest a-policy-states-its-merge-strategy-and-never-its-train
   ;; the merge train, slice a (ticket 394d0602): data only
   (let [st (state)
