@@ -71,7 +71,8 @@
 ;; ── the kind ────────────────────────────────────────────────────────
 
 (def ^:private charter-field
-  [:charter {:x-display
+  [:charter {:examples ["The family's house: its reminders, its lights and its music."]
+             :x-display
              {:widget "prose"
               :label "Charter"
               :help "What this domain is for, in a few sentences its mayor and its seats can work from."}}
@@ -151,7 +152,10 @@
     {:from #{:active} :to :retired
      :guards [no-seat-names-the-domain]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "A retired domain does not come back, and its name stays taken."}
+              :one-way "A retired domain does not come back, and its name stays taken."
+              ;; the cost is not the row's: the name is spent, and the
+              ;; record of what its seats did was written under it
+              :final "What this domain's seats did stays recorded under its name, so the name is not given to another and the domain does not open again."}
      :display {:label "Retire" :style :danger :order 9
                :description "End a domain no seat names any more"}}}})
 

@@ -122,6 +122,8 @@
     ;; in, the price list its model is on, the record of one wake,
     ;; and the means by which a wake is scheduled
     (is (= ["approval_request" "attachment" "definition"
+            ;; epic aff24e84, piece 1: the domain a seat names
+            "domain"
             "grant" "held_call" "invitation" "job" "judgment" "mcp_server" "meal"
             "member" "model" "notice_rule" "notifier"
             "plan" "role" "runner_link" "runner_provider" "schedule"
