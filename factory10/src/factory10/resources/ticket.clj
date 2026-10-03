@@ -55,6 +55,13 @@
   keeps a parent from completing over an open child. The tree is the
   `parent` ref, and the `children` link walks it back down.
 
+  AN EPIC NAMES ITS SHOWCASE (ticket cbf84f80). `showcase` is the
+  scene that makes a person want the work: a film for what a person
+  sees, a before/after text for work that makes the agent better. A
+  ticket whose title starts `[epic]` is not groomed without one
+  (`an-epic-names-its-showcase`), and a child shows its parent's scene
+  read-only in `parent_scene`, so plumbing shows which scene it serves.
+
   THE ENDINGS ASK FOR A SENTENCE. `complete` and `drop` take
   `close_reason`: what was done, or why it was let go. The record the
   next reader has is that sentence, so the door will not open on an
@@ -660,6 +667,37 @@
       (t/deny)
       (t/allow))))
 
+;; AN EPIC NAMES ITS SHOWCASE (ticket cbf84f80). The guard reads the
+;; row and nothing else, so groom's scenarios stay check-tier: the epic
+;; it knows is the one whose title says `[epic]`. A parent that is an
+;; epic by its children alone is not judged here; reading the children
+;; would declare `:reads [:ticket]` and take this door out of that tier.
+
+(defn- epic? [row]
+  (-> (get-in row [:data :title]) str str/triml str/lower-case
+      (str/starts-with? "[epic]")))
+
+(defn- scene-of [row]
+  (let [showcase (get-in row [:data :showcase])]
+    (some-> (or (:scene showcase) (get showcase "scene")) str not-empty)))
+
+(defguardfn an-epic-names-its-showcase
+  {:reads []
+   :remedies [:ticket/restate]
+   :explain "This ticket is an epic, and an epic is judged by its showcase. Restate it with a showcase: the scene, filmed or told, that makes a person want this."}
+  [row _inp _ctx]
+  (if (and (epic? row) (nil? (scene-of row)))
+    (t/deny)
+    (t/allow)))
+
+(defn- parent-scene
+  "The `parent_scene` computed field: the scene of the ticket this one
+  is a piece of, or nil when it has no parent or the parent names none."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [parent (some-> (get-in row [:data :parent]) str not-empty)]
+      (some-> (read' :ticket parent) scene-of))))
+
 (defguardfn a-person-or-their-delegate-queues-a-draft
   {:reads [:principal]
    :open "No door here changes this verdict. A block that says then: open grooms the draft when its blockers end, and grooming is a person's reading of an ask. A seat blocks the draft without then, and a person grooms it."
@@ -848,6 +886,31 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
+(def ^:private a-draft-epic
+  (assoc a-draft-ticket :title "[epic] Every epic names its scene"))
+
+(defscenario an-epic-is-not-groomed-without-its-showcase
+  "An epic is judged and ranked by the scene that makes a person want
+   it. Without one even the person's groom is refused, and the refusal
+   names the door that states it."
+  {:kind    :ticket
+   :attempt :groom
+   :row     {:state :draft :data a-draft-epic}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :an-epic-names-its-showcase
+             :because "Restate it with a showcase"}})
+
+(defscenario an-epic-with-its-showcase-is-groomed
+  "And with the scene stated the door opens."
+  {:kind    :ticket
+   :attempt :groom
+   :row     {:state :draft
+             :data (assoc a-draft-epic :showcase
+                          {:format "film"
+                           :scene "You open a proposal and cannot tell why anyone wants it. Then the scene plays, and you can."})}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 (defscenario a-finished-ticket-is-not-put-back-by-a-side-door
   "The machine refuses it with no guard behind the refusal: a done
    ticket has no unblock door, and the only way to move it is a
@@ -896,9 +959,13 @@
   {"draft" "Back to draft, to be groomed"
    "open" "Into the queue, as groomed"})
 
+(def ^:private showcase-format-choices
+  {"film" "A short film of what a person sees"
+   "text" "A before/after conversation, for work that makes the agent better"})
+
 (def ^:private stated-fields
   "What a person or a seat STATES about a ticket: the create door and
-  the restate door collect the same five, because a restatement is
+  the restate door collect the same six, because a restatement is
   the whole statement again."
   [[:title {:examples ["The code seat walks ticket rows instead of task rows"]
             :x-display
@@ -913,6 +980,21 @@
               :label "The how, and what done looks like"
               :help "Everything the builder needs and nothing they can read off the repository: the design, the acceptance, the files it touches, the traps. A seat reads this before it reads a line of code."}}
     [:maybe [:string {:max 20000}]]]
+   ;; ticket cbf84f80: the scene an epic is judged and ranked by
+   [:showcase {:optional true
+               :x-display
+               {:label "Showcase"
+                :help "The scene that makes a person want this, the way a product keynote shows it: the friction you know, then the moment it disappears. film for what a person sees, text for a before/after conversation when the work makes the agent better."}}
+    [:maybe [:map
+             [:format {:x-display
+                       {:label "Film or text"
+                        :choices showcase-format-choices}}
+              (into [:enum] (sort (keys showcase-format-choices)))]
+             [:scene {:x-display
+                      {:widget "prose"
+                       :label "The scene"
+                       :help "The friction a person knows, then the moment it disappears. It is at most 1200 characters."}}
+              [:string {:min 1 :max 1200}]]]]]
    [:type {:default "task"
            :x-display
            {:label "What kind of ask"
@@ -1150,6 +1232,16 @@
    ;; a fired seat's follow-up lands at 4 and a groomer raises it; a
    ;; person or an interactive seat is born at what it named
    :on-create land-a-fired-seats-ticket-at-four
+   ;; ticket cbf84f80: a child shows the scene its parent names
+   :computed {:parent_scene
+              {:schema [:maybe :string]
+               :x-display
+               {:widget "prose"
+                :label "Part of the scene"
+                :help "The showcase of the ticket this one is a piece of, read from the parent each time. It says which scene this work serves. Empty when there is no parent or the parent names no showcase."}
+               ;; it reads the parent: with no :read it is absent
+               :reads? true
+               :fn parent-scene}}
    :actions
    {:restate
     {:from #{:draft} :to :draft
@@ -1157,7 +1249,7 @@
      :guards [the-merge-order-makes-no-cycle]
      :handler restate-the-ticket
      :record true
-     :edit {:prefill [:title :detail :type :repo :merge_after]}
+     :edit {:prefill [:title :detail :showcase :type :repo :merge_after]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :order 2
                :description "Say what needs doing again, whole"}}
@@ -1174,7 +1266,7 @@
      :guards [the-merge-order-makes-no-cycle]
      :handler restate-the-ticket
      :record true
-     :edit {:prefill [:title :detail :type :repo :merge_after]}
+     :edit {:prefill [:title :detail :showcase :type :repo :merge_after]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :order 26
                :description "Say what needs doing again, whole — it stays blocked"}}
@@ -1185,7 +1277,7 @@
     ;; before it changes.
     :groom
     {:from #{:draft} :to :open
-     :guards [a-person-or-their-delegate-grooms]
+     :guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase]
      :handler groom-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Groom" :style :primary :order 1
@@ -1575,6 +1667,8 @@
     "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket
+               an-epic-is-not-groomed-without-its-showcase
+               an-epic-with-its-showcase-is-groomed
                a-seat-does-not-reopen-a-ticket
                the-person-reopens-a-ticket
                a-finished-ticket-is-not-put-back-by-a-side-door
