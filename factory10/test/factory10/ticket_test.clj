@@ -21,8 +21,11 @@
             [factory10.resources.ticket :as tk :refer [ticket]]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.dashboard :as dash]
             [waymark10.schema :as sch]
-            [waymark10.server.render :as render])
+            [waymark10.server.collections :as collections]
+            [waymark10.server.render :as render]
+            [waymark10.server.store.memory :as memory])
   (:import (java.time Instant)))
 
 (def ^:private now (Instant/parse "2026-09-26T14:00:00Z"))
@@ -125,6 +128,42 @@
       (is (contains? (into #{} (map first)
                            (rest (get-in ticket [:actions :restate :input])))
                      :showcase)))))
+
+;; ── the tickets that name a scene (ticket cfcfcdd7) ─────────────────
+
+(deftest showcase-set-filters-to-the-tickets-with-a-showcase
+  (let [rows [(at :open {:title "[epic] Every epic names its scene"
+                         :showcase a-showcase} "E")
+              (at :done {:showcase a-showcase} "D")
+              (at :open {:parent "E"} "C")
+              (at :draft {:showcase nil} "N")]
+        ids (fn [params]
+              (let [{:keys [conds]} (collections/parse-query ticket params)]
+                (into #{}
+                      (comp (filter (fn [row]
+                                      (every? #(@#'memory/cond-matches? row %)
+                                              conds)))
+                            (map :id))
+                      rows)))]
+    (testing "true answers exactly the tickets with a showcase"
+      (is (= #{"E" "D"} (ids {"showcase_set" "true" "state" ""}))))
+    (testing "false answers the others, a child of an epic among them"
+      (is (= #{"C" "N"} (ids {"showcase_set" "false" "state" ""}))))
+    (testing "it composes with the states a panel of epics shows"
+      (is (= #{"E"} (ids {"showcase_set" "true"
+                         "state" "draft,open,blocked"}))))))
+
+(deftest a-dashboard-slot-lists-the-tickets-with-a-showcase
+  (let [problems (fn [where]
+                   (dash/slot-problems (fn [_kind] ticket) (fn [_kind _id] nil)
+                                       {:target "ticket" :where where}))]
+    (is (= [] (problems "showcase_set=true&state=draft,open,blocked")))
+    (testing "a presence filter is true or false"
+      (is (re-find #"is not true or false"
+                   (str (first (problems "showcase_set=maybe"))))))
+    (testing "a field with no presence filter is still refused"
+      (is (re-find #"not an :eq/:in-filterable field"
+                   (str (first (problems "detail_set=true"))))))))
 
 (deftest a-child-envelope-shows-its-parents-scene
   (let [parent (at :open {:title "[epic] Every epic names its scene"
