@@ -177,6 +177,42 @@
       (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
       :else (t/deny {:vars {:added (str/join ", " added)}}))))
 
+(defguardfn only-a-person-loosens-the-merge-gate
+  {:reads [:principal :within]
+   :hold true
+   :vars [:what]
+   :explain "A restate that {what} is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. Auto-merge and the required checks are what stands between a green change and the base branch, and a policy with fewer of them merges more."
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A restate that turns auto_merge off, adds a required check, or leaves both as they stand, is not held."}
+  ;; ticket 68643356: the hosted-workflows hold's two siblings. A
+  ;; delegate's restate widens the policy when it moves auto_merge from
+  ;; a stored false to true, or when it leaves out a required check the
+  ;; stored row names; both are judged against the stored row, so the
+  ;; narrowing direction passes. The replay of the call the person
+  ;; allowed is the one agent call this admits, and one Allow answers
+  ;; this hold and the one above, because both ask about the same call.
+  ;;
+  ;; THE CREATE DOOR IS NOT HELD, here or for hosted_workflows: a create
+  ;; widens nothing, because `repository` is unique and so there is no
+  ;; stored policy to compare with, and the delegate's grant for the
+  ;; create door is the person's yes to the first statement.
+  [row inp ctx]
+  (let [turned-on? (and (false? (get-in row [:data :auto_merge]))
+                        (not (false? (get inp :auto_merge true))))
+        kept (set (map str (get inp :required_checks [])))
+        dropped (->> (get-in row [:data :required_checks])
+                     (map str)
+                     (remove str/blank?)
+                     (remove kept))
+        what (cond-> []
+               turned-on? (conj "turns auto_merge on")
+               (seq dropped) (conj (str "drops " (str/join ", " dropped)
+                                        " from the required checks")))]
+    (cond
+      (not= :agent (:type (:principal ctx))) (t/allow)
+      (empty? what) (t/allow)
+      (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
+      :else (t/deny {:vars {:what (str/join " and " what)}}))))
+
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
    :hide true
@@ -1006,7 +1042,8 @@
               the-hosted-workflows-are-workflow-paths
               ;; last, so a call that is held is one the walls above
               ;; would let the person's Allow run
-              only-a-person-widens-the-hosted-workflows]
+              only-a-person-widens-the-hosted-workflows
+              only-a-person-loosens-the-merge-gate]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes
