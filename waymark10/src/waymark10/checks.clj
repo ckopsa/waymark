@@ -933,11 +933,52 @@
        "name, say), waive it with {:not-a-ref \"why\"} in its "
        "properties."))
 
+(def ^:private summary-data-path #"\{data\.([A-Za-z0-9_.]+)\}")
+
+(defn- summary-entry
+  "The schema entry a summary's data path names, nil when it names
+  none: each segment one :map down."
+  [form [k & more]]
+  (when (and (vector? form) (= :map (first form)))
+    (when-some [e (get (schema/entry-map form) k)]
+      (if more (recur (:schema e) more) e))))
+
+(defn summary-id-hits
+  "The data fields one kind's summary template prints as a bare id, a
+  string each (`summary field <k> (<reading>)`), empty when it prints
+  none (ticket 2f35a7b5). The renderer names the row a top-level
+  `:kind`, `{:principal true}` or `{:kind-from f}` ref mentions
+  (waymark10.server.render/name-summary-refs), so those pass; what it
+  cannot name is a finding: a list of refs, an `{:address true}` ref,
+  and a ref inside a nested map. The same waiver holds: a
+  `{:not-a-ref \"why\"}` with a reason."
+  [r]
+  (let [listed (into #{}
+                     (comp (filter :listed) (map :field))
+                     (schema/ref-fields (:schema r)))]
+    (for [[_ path] (re-seq summary-data-path (str (:summary r)))
+          :let [ks (mapv keyword (str/split path #"\."))
+                {:keys [properties]} (summary-entry (:schema r) ks)
+                nested? (some? (next ks))
+                reading (cond
+                          (and nested? (or (:kind properties)
+                                           (:x-ref properties)))
+                          "a ref inside a nested map"
+                          (and (not nested?) (contains? listed (first ks)))
+                          "a list of refs"
+                          (get-in properties [:x-ref :address])
+                          "an address")
+                why (:not-a-ref properties)]
+          :when (and reading
+                     (not (and (string? why) (not (str/blank? why)))))]
+      (str "summary field " (peek ks) " (" reading
+           ", which the summary prints as a bare id)"))))
+
 (defn check-unref'd-ids
-  "One kind through unref'd-id-hits: refuses naming every hit, then the
-  remedy."
+  "One kind through unref'd-id-hits and summary-id-hits: refuses naming
+  every hit, then the remedy."
   [r kinds]
-  (let [hits (unref'd-id-hits r kinds)]
+  (let [hits (concat (unref'd-id-hits r kinds) (summary-id-hits r))]
     (when (seq hits)
       (err r :unref'd-ids
            (str (str/join "; " hits) ": " unref'd-ids-remedy)))))
