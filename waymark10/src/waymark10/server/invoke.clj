@@ -647,7 +647,7 @@
   (update row :data #(schema/encode (:schema rdef) %)))
 
 (defn- summary-of [rdef row]
-  (summary/render (:summary rdef) (assoc row :kind (:kind rdef))))
+  (summary/line rdef (assoc row :kind (:kind rdef))))
 
 ;; ── ref labels (phase 8, design §4) ─────────────────────────────────
 

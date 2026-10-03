@@ -54,7 +54,9 @@
             [factory10.bench :as bench]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time Duration Instant ZoneOffset)
+           (java.time.format DateTimeFormatter)))
 
 (set! *warn-on-reflection* true)
 
@@ -803,6 +805,84 @@
       [:pr_run {:optional true} [:maybe :boolean]]
       [:started_at :waymark/instant]]]]])
 
+;; ── the summary line: where the merge line stands ───────────────────
+;; A list panel shows a row's summary line and nothing else (ticket
+;; b5a9b790), so the line says what the row already holds: what needs a
+;; person first (a red base, a held deploy), then the front of the
+;; merge line, then the count behind it.
+
+(def ^:private summary-budget
+  "The longest summary line, in characters. A part that does not fit is
+  left out whole, and so is every part after it."
+  100)
+
+(defn- instant-of
+  "A stored instant as an Instant, whether the row came decoded or as
+  its wire string. nil for what cannot be read."
+  ^Instant [v]
+  (cond
+    (nil? v) nil
+    (instance? Instant v) v
+    (instance? java.util.Date v) (.toInstant ^java.util.Date v)
+    :else (try (Instant/parse (str v)) (catch Exception _ nil))))
+
+(def ^:private ^DateTimeFormatter since-format
+  (.withZone (DateTimeFormatter/ofPattern "MM-dd HH:mm'Z'") ZoneOffset/UTC))
+
+(defn- waited
+  "How long since `since`, in the one unit a panel row has room for."
+  [^Instant since ^Instant now]
+  (let [m (max 0 (.toMinutes (Duration/between since now)))]
+    (cond
+      (< m 60) (str m "m")
+      (< m (* 48 60)) (str (quot m 60) "h")
+      :else (str (quot m (* 24 60)) "d"))))
+
+(defn summary-line
+  "The policy's summary line, composed from the row's data: the
+  repository, then a red base and a held or red deploy, then the front
+  pull request and what it waits on, then how many stand behind it,
+  then the deploy or base state when nothing above said it, then
+  `manual merge` when the house does not merge here. Pure: `now` is
+  the caller's clock."
+  [data state now]
+  (let [{:keys [repository base_state base_checked_at deploy_state
+                deploy_waits_on deploy_waiting_since line_front_pr
+                line_front_waiting line_waiting auto_merge]} data
+        red-base? (= "red" base_state)
+        since (instant-of deploy_waiting_since)
+        deploy (cond
+                 since (str "deploy waiting " (waited since now))
+                 (seq deploy_waits_on) "deploy waiting"
+                 (= "red" deploy_state) "deploy red")
+        parts [(when (= "retired" (some-> state name)) "retired")
+               (when red-base?
+                 (if-some [at (instant-of base_checked_at)]
+                   (str "base red since " (.format since-format at))
+                   "base red"))
+               deploy
+               (if line_front_pr
+                 (str "#" line_front_pr " front"
+                      (when line_front_waiting
+                        (str ", waiting on " line_front_waiting)))
+                 "line empty")
+               (when line_front_pr (str (or line_waiting 0) " behind"))
+               (cond
+                 deploy nil
+                 (= "green" deploy_state) "deploy green"
+                 (and base_state (not red-base?)) (str "base " base_state))
+               (when (false? auto_merge) "manual merge")]]
+    (reduce (fn [line part]
+              (let [longer (str line " · " part)]
+                (if (<= (count longer) summary-budget)
+                  longer
+                  (reduced line))))
+            (str repository)
+            (remove nil? parts))))
+
+(defn- summary-of-row [row]
+  (summary-line (:data row) (:state row) (Instant/now)))
+
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
 (defresource repo-policy
@@ -817,7 +897,10 @@
    ;; tap, because a repository the house stops working is a
    ;; repository it may work again.
    :terminal #{}
+   ;; the template is the fallback, and what a redacted read answers;
+   ;; the line a reader sees is the composed one (waymark10.summary/line)
    :summary "{data.repository} · {state}"
+   :summary-fn summary-of-row
    :label-template "{data.repository}"
    :display {:title "{data.repository}"}
    :filterable {:state #{:eq :in} :repository #{:eq}}

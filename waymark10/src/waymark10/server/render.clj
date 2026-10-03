@@ -818,12 +818,20 @@
   reads a redacted field renders as the honest generic line, never as
   the template over hidden values."
   [rdef row redacted]
-  (if (and (seq redacted)
-           (some #(contains? redacted (keyword (second %)))
-                 (re-seq summary-data-token (str (:summary rdef)))))
+  (cond
+    (and (seq redacted)
+         (some #(contains? redacted (keyword (second %)))
+               (re-seq summary-data-token (str (:summary rdef)))))
     (str (summary/state-label (:kind rdef)) " · "
          (summary/state-label (:state row)))
-    (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))))
+
+    ;; a :summary-fn reads fields its template does not name, so under
+    ;; ANY redaction the template answers and the composer does not
+    (seq redacted)
+    (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))
+
+    :else
+    (summary/line rdef (assoc row :kind (:kind rdef)))))
 
 (defn target-summary
   "One row's summary line as THIS visibility may read it — the
