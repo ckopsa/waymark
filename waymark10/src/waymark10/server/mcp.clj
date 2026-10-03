@@ -4821,8 +4821,9 @@
                         (seats/issue-inbox-key! eng seat sitting))
             ;; g'''' · the outside feed's token, for a seat that declares
             ;; a `feed_url`: a fresh token at each sit, alive while the
-            ;; sitting is open and 35 minutes at most
-            ;; (seats/issue-feed-token!)
+            ;; sitting is open and 35 minutes at most. A re-sit stops
+            ;; no earlier token: the one a stream is using answers
+            ;; until its own end (seats/issue-feed-token!)
             feed (when sitting
                    (seats/issue-feed-token! eng seat sitting))
             ;; h · the bind, BEFORE the walk is read: the session is

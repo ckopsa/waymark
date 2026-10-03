@@ -672,6 +672,7 @@
                    (concat [(get-in transcript-raw [:data :key_hash])
                             (get-in sitting [:data :inbox_key_hash])
                             (get-in sitting [:data :feed_token_hash])]
+                           (map :hash (get-in sitting [:data :feed_tokens_earlier]))
                            (map :hash (get-in seat [:data :fire_keys]))))
      :raw (into (secrets/values eng)
                 (keep #(some-> (get-in % [:data :sitter_key]) str not-empty))
