@@ -1395,6 +1395,10 @@
     (cond-> (-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
                         row restatable)
                 (update :data dissoc :stale))
+      ;; `domain` is not among `restatable` (epic aff24e84, piece 1): a
+      ;; restate that leaves it out keeps the stored value, so no
+      ;; caller written before the field has to name it
+      (contains? inp :domain) (assoc-in [:data :domain] (:domain inp))
       lift? (update :data dissoc :halt))))
 
 (defhandler close-breaker [row _inp _ctx]
@@ -2353,6 +2357,25 @@
 (def ^:private ignore-budget-help
   "Turn it on and a sitting of this seat has no token ceiling: the harness gets no cap, and the sitting_budget_reached wall never stands. The week's dollar budget still does.")
 
+(def default-domain
+  "The name of the domain a seat with no `domain` reads as being in."
+  "factory")
+
+(defn domain-name-of
+  "The name of the domain this seat is in: its stored domain's, read
+  through `read'`, or `default-domain` when the row names none. A
+  derived default, and nothing is stored."
+  [read' row]
+  (if-some [id (some-> (get-in row [:data :domain]) str not-empty)]
+    (some-> (read' :domain id) (get-in [:data :name]) str)
+    default-domain))
+
+(defn- in-domain-field
+  "The seat's :computed `in_domain`: `domain-name-of` over the read the
+  render ctx lends."
+  [row ctx]
+  (domain-name-of (:read ctx) row))
+
 (defresource seat
   {:kind :seat
    :plural "seats"
@@ -2362,6 +2385,15 @@
    :nav :system
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
+   :computed {:in_domain
+              {:schema :string
+               :x-display
+               {:label "In domain"
+                :help "The name of the domain this seat is in, worked out at read time: the domain it names, or factory when it names none."}
+               ;; it reads the domain row: with no :read it is absent,
+               ;; never a false name
+               :reads? true
+               :fn in-domain-field}}
    ;; No :x-options on :name, and roles.clj's reason verbatim: the list
    ;; the engine could publish here is the list of names already TAKEN,
    ;; and a chip row of it would offer exactly the tokens the guard is
@@ -2498,6 +2530,15 @@
                        {:label "Rows per firing"
                         :help "The most rows one wake moves to a leaf. The walk's cap, and the lever you pull before you pull the model: fewer rows is a shorter sitting at the same judgment."}}
      [:int {:min 1 :max 200}]]
+    ;; THE DOMAIN THIS SEAT IS IN (epic aff24e84, piece 1). NO DEFAULT
+    ;; IS WRITTEN: a seat with nothing here reads as being in
+    ;; `factory`, worked out at read time by `domain-name-of`.
+    [:domain {:optional true
+              :kind :domain
+              :x-display
+              {:label "Its domain"
+               :help "The domain this seat works in. Leave it empty and the seat counts as being in factory."}}
+     [:maybe :waymark/ref]]
     ;; ── the third way a sitting begins (R-12.22) ────────────────────
     ;; The cadence is the first and a person's fire is the second.
     ;; This is the third: the transitions this seat asked to be woken
@@ -2837,6 +2878,12 @@
                        {:label "Rows per firing"
                         :help "The most rows one wake moves to a leaf — the lever you pull before you pull the model."}}
      [:int {:min 1 :max 200}]]
+    [:domain {:optional true
+              :kind :domain
+              :x-display
+              {:label "Its domain"
+               :help "The domain this seat works in. Leave it empty and the seat counts as being in factory."}}
+     [:maybe :waymark/ref]]
     [:wake_on {:optional true
                :examples [wake-on-example]
                :x-display
@@ -2897,7 +2944,8 @@
    ;; a closed map, and a body that carries the field is refused as
    ;; an unknown key. That omission is the fence.
    :filterable {:state #{:eq :in}
-                :name #{:eq}}
+                :name #{:eq}
+                :domain #{:eq}}
    :sortable {:fields [:name] :default "name"}
    :links [{:rel "merged_into" :kind :seat
             :href "/api/seats/{data.merged_into}"
@@ -3034,6 +3082,12 @@
                                 {:label "Rows per firing"
                                  :help "The most rows one wake moves to a leaf."}}
               [:int {:min 1 :max 200}]]
+             [:domain {:optional true
+                       :kind :domain
+                       :x-display
+                       {:label "Its domain"
+                        :help "The domain this seat works in. Leave it out and the seat stays in the domain it is in; clear it and the seat counts as being in factory."}}
+              [:maybe :waymark/ref]]
              [:wake_on {:optional true
                         :examples [wake-on-example]
                         :x-display
@@ -3114,7 +3168,8 @@
                       :judgment :rows_per_firing :wake_on
                       :fire_interval_seconds :max_open_sittings
                       :release_grace_seconds :health_window
-                      :health_alerts :health_breaker :delegates]
+                      :health_alerts :health_breaker :delegates
+                      :domain]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter

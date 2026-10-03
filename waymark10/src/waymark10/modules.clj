@@ -147,6 +147,7 @@
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
             [waymark10.server.intents :as intents]
+            [waymark10.server.domains :as domains]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.judgments :as judgments]
             [waymark10.server.maintainer :as maintainer]
@@ -242,6 +243,10 @@
              ;; behind every link of one provider, and its cap
              {:kind :runner_provider :enroll :always
               :kinds (fn [_] [runner-links/runner-provider])}
+             ;; the domain (epic aff24e84, piece 1): the seat — core's
+             ;; own — carries a typed ref to it, so it is core's too
+             {:kind :domain :enroll :always
+              :kinds (fn [_] [domains/domain])}
              ;; the MCP server as a row (docs/spec-mcp-servers.md,
              ;; waymark-fp62.10): the external powers a grant names
              ;; reach the engine through a row's client, and a grant
