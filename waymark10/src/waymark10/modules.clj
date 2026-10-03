@@ -156,6 +156,7 @@
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invitations :as invitations]
@@ -248,6 +249,11 @@
              ;; dotted scope entry is core's too, beside the seat.
              {:kind :mcp_server :enroll :always
               :kinds (fn [_] [mcp-servers/mcp-server])}
+             ;; the secret (ticket 8cd850fa): a power call names one by
+             ;; reference and the server row's call! puts its value in,
+             ;; so it is core's beside the server row
+             {:kind :secret :enroll :always
+              :kinds (fn [_] [secrets/secret])}
              ;; the held call (docs/spec-mcp-servers.md R-14,
              ;; waymark-fp62.10.2): a powers entry that says
              ;; `approval person` does not forward its call, it mints
