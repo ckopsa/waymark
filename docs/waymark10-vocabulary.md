@@ -368,7 +368,12 @@ degrading alone: a slot stranded by a redeploy wears the collection's own
 refusal with a retry and the door to revise or remove it, never a broken
 page. `retire`/`restore` and `remove`/`restore` are `:undo` pairs;
 `clone` deep-copies the active slots through the same create gate, so a
-stale slot cannot propagate.
+stale slot cannot propagate. A dashboard says how wide its grid is with
+the optional `columns` (an int 1..6, taken by `create` and `revise`): the
+page draws that many equal tracks (`repeat(n, minmax(0, 1fr))`) and still
+collapses to one on a narrow screen. Absent or null, the grid is the
+default responsive one, so a dashboard written before the field renders
+unchanged.
 
 `:retain` is what the transition log carries forward past the write —
 `{:judgment bool? :data bool?}`, per kind, **default off**, and closed to

@@ -233,6 +233,13 @@ async function renderDashboard(view, doc) {
           : ".")));
   else {
     const grid = el("div", {class: "slot-grid"});
+    /* the author's own width (data.columns, 1..6): that many equal
+       tracks. Absent, the stylesheet's responsive default stands */
+    const cols = Number(data.columns);
+    if (Number.isInteger(cols) && cols >= 1 && cols <= 6) {
+      grid.classList.add("slot-grid-cols");
+      grid.style.setProperty("--slot-cols", String(cols));
+    }
     view.append(grid);
     for (const s of slots) {
       const p = el("div", {class: "slot-panel"},

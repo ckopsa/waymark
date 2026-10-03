@@ -504,6 +504,12 @@
   /* ── the dashboard screen (waymark-ggw): the user-composed grid ─── */
   .slot-grid { display: grid; gap: 12px; margin: 12px 0 16px;
                grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  /* a dashboard that names its columns: that many equal tracks, and
+     one on a narrow screen, as the default grid collapses */
+  .slot-grid.slot-grid-cols {
+    grid-template-columns: repeat(var(--slot-cols), minmax(0, 1fr)); }
+  @media (max-width: 640px) {
+    .slot-grid.slot-grid-cols { grid-template-columns: 1fr; } }
   .slot-panel { background: var(--panel); border: 1px solid var(--line);
                 border-radius: var(--radius); padding: 12px 14px;
                 min-height: 120px; display: flex; flex-direction: column;

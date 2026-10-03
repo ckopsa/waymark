@@ -101,6 +101,20 @@
     (is (str/includes? page ".slot-grid"))
     (is (str/includes? page "html[data-ui=\"mobile\"] .slot-grid"))))
 
+(deftest a-dashboard-with-columns-draws-that-many-tracks
+  ;; a dashboard's :columns (1..6) reaches the grid as --slot-cols, and
+  ;; the stylesheet turns it into that many equal tracks: columns 2 is
+  ;; repeat(2, minmax(0, 1fr)). No columns, no class: the default grid
+  (let [page (sut/assemble)]
+    (is (str/includes? page "const cols = Number(data.columns);"))
+    (is (str/includes? page "grid.classList.add(\"slot-grid-cols\");"))
+    (is (str/includes? page "grid.style.setProperty(\"--slot-cols\", String(cols));"))
+    (is (str/includes? page "grid-template-columns: repeat(var(--slot-cols), minmax(0, 1fr));"))
+    (is (str/includes? page ".slot-grid.slot-grid-cols { grid-template-columns: 1fr; }")
+        "a narrow screen still collapses to one column")
+    (is (str/includes? page "grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));")
+        "the default grid is unchanged")))
+
 (deftest a-measured-panel-rides-the-page
   ;; dashboard measures 3/3: a slot with a :measure forks to
   ;; fillMeasurePanel (its /-/measure read: value, previous, one SVG

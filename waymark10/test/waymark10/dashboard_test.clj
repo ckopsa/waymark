@@ -301,6 +301,45 @@
         (is (= 200 (:status (req :post (str "/api/dashboards/" copy-id
                                             "/-/retire")))))))))
 
+(deftest a-dashboard-says-its-columns
+  (let [made (req :post "/api/dashboards" {:label "Factory"})
+        did (id-of made)
+        href (str "/api/dashboards/" did)
+        columns #(get-in (json (req :get href)) [:data :columns])
+        ;; revise is an edit door: it asks for the version it was read at
+        revise (fn [v body]
+                 (req :post (str href "/-/revise") body *h*
+                      {"if-match" (str "W/\"dashboard-" did "-v" v "\"")}))]
+    (is (= 201 (:status made)) (:body made))
+    (is (nil? (columns)) "no columns: the default grid")
+
+    (testing "a patch sets just the columns"
+      (let [resp (revise 1 {:patch true :columns 2})]
+        (is (= 200 (:status resp)) (:body resp))
+        (is (= 2 (columns)))
+        (is (= "Factory" (get-in (json (req :get href)) [:data :label])))))
+
+    (testing "the range is 1..6"
+      (doseq [n [0 7]]
+        (let [resp (revise 2 {:patch true :columns n})]
+          (is (<= 400 (:status resp) 499) (:body resp))
+          (is (not= 412 (:status resp)) "the range refused it, not the fence")))
+      (is (= 2 (columns)) "a refused write leaves the stored value")
+      (is (<= 400 (:status (req :post "/api/dashboards"
+                                {:label "Too wide" :columns 9}))
+              499)))
+
+    (testing "create takes it, and a wholesale revise without it clears it"
+      (let [wide (req :post "/api/dashboards" {:label "One wide" :columns 1})
+            wid (id-of wide)]
+        (is (= 201 (:status wide)) (:body wide))
+        (is (= 1 (get-in (json wide) [:data :columns])))
+        (is (= 200 (:status (req :post (str "/api/dashboards/" wid "/-/retire"))))))
+      (is (= 200 (:status (revise 2 {:label "Factory"}))))
+      (is (nil? (columns))))
+    ;; tidy for the neighbors
+    (is (= 200 (:status (req :post (str href "/-/retire")))))))
+
 (deftest the-write-gate-refuses-what-composition-forbids
   (let [did (id-of (req :post "/api/dashboards" {:label "Refusals"}))
         refuse (fn [body]
