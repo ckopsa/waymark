@@ -2160,6 +2160,14 @@
                      :x-display
                      {:label "Quiet time before it wakes, in seconds"
                       :help "How long the matches must stop before this entry wakes the seat. A match does not fire the seat; it moves the wake forward by this many seconds, and the seat wakes when nothing has matched for that long. The fire names no row, so the session walks the queue. Use it for a conversation, where the first message is not the whole of it. Omit it and the first match wakes the seat at once."}}
+    [:int {:min 1 :max 604800}]]
+   ;; the settle's cap (ticket 8f482592): matches that arrive faster
+   ;; than the settle must not hold the wake back for ever
+   [:max_wait_seconds {:optional true
+                       :examples [2700]
+                       :x-display
+                       {:label "Longest wait after the first match, in seconds"
+                        :help "The longest a settling entry holds the wake after the FIRST match it heard. Matches that keep arriving move the wake forward only up to this point, so a busy collection cannot keep the seat from waking. Omit it and the wake waits at most three times the quiet time. It means nothing on an entry with no quiet time."}}
     [:int {:min 1 :max 604800}]]])
 
 (defn- wake-entry-one-size?
@@ -4243,6 +4251,24 @@
                              {:label "The feed token's end"
                               :spelled-by-hand "Written by the sit: the instant after which the feed token the last sit answered is refused, when the sitting has not closed before it."}}
      [:maybe [:string {:max 40}]]]
+    ;; THE TOKENS BEFORE THE NEWEST. A re-sit and a renewal at the key
+    ;; check door each mint a token and stop none (`with-feed-token`),
+    ;; so the token a stream is using answers until its own end. Their
+    ;; hashes and ends are kept here, newest first.
+    [:feed_tokens_earlier {:optional true :secret true
+                           :x-display {:hidden true
+                                       :label "The earlier feed tokens' hashes"
+                                       :spelled-by-hand "The SHA-256 and the end of each feed token minted before the newest that has not reached its end. The sit and the key check door write it; the engine never shows a token."}}
+     [:maybe [:vector
+              [:map
+               [:hash {:x-display
+                       {:label "The hash of one token"
+                        :help "The SHA-256 of a feed token minted before the newest one."}}
+                [:string {:min 1 :max 128}]]
+               [:expires_at {:x-display
+                             {:label "When it stops answering"
+                              :help "The instant after which this token is refused, when the sitting has not closed before it."}}
+                [:string {:max 40}]]]]]]
     ;; THE ROWS THIS SITTING WAS HANDED. The sit writes the ids of its
     ;; walk here, and a second sitting of the same seat opened while
     ;; this one is open walks past them to the next rows. The claim
@@ -5813,8 +5839,60 @@
 
 (def feed-token-seconds
   "How long a feed token answers while its sitting stays open: 35
-  minutes. A sitting that runs longer sits again for a fresh one."
+  minutes. A sitting that runs longer is answered the next one by the
+  key check door (`renew-feed-token!`), or sits again for a fresh one."
   2100)
+
+(def feed-tokens-max
+  "How many feed tokens of one sitting answer at one time. A sit past
+  it drops the oldest; the key check door past it renews nothing."
+  12)
+
+(defn- live-feed-tokens
+  "The feed tokens this sitting's data holds that have not reached
+  their end, as `{:hash :expires_at}`, newest first."
+  [data ^Instant now]
+  (->> (cons {:hash (:feed_token_hash data)
+              :expires_at (:feed_token_expires_at data)}
+             (:feed_tokens_earlier data))
+       (filter (fn [{:keys [hash expires_at]}]
+                 (and (some-> hash str not-empty)
+                      (when-some [^Instant until (->instant expires_at)]
+                        (.isBefore now until)))))
+       (mapv #(select-keys % [:hash :expires_at]))))
+
+(defn- feed-token-held
+  "The live feed token of this sitting's data whose hash is `wanted`,
+  compared in constant time, or nil."
+  [data ^bytes wanted now]
+  (->> (live-feed-tokens data now)
+       (filter (fn [{:keys [hash]}]
+                 (MessageDigest/isEqual
+                  wanted
+                  (.getBytes (str hash) StandardCharsets/UTF_8))))
+       first))
+
+(defn- with-feed-token
+  "This sitting's data with `token` as its newest feed token. The
+  tokens before it that have not ended are kept beside it, so a token
+  in use answers until its own end: the newest `feed-tokens-max` in
+  all."
+  [data token expires now]
+  (assoc data
+         :feed_token_hash (key-hash token)
+         :feed_token_expires_at expires
+         :feed_tokens_earlier (vec (take (dec (long feed-tokens-max))
+                                         (live-feed-tokens data now)))))
+
+(defn- feed-sitting-by-token
+  "The OPEN sitting that holds a live feed token of this hash, raw, or
+  nil."
+  [eng tx ^bytes wanted now]
+  (->> (store/query-rows (:storage eng) tx :sitting
+                         {:state :open}
+                         {:limit inbox-sitting-page})
+       (filter #(feed-token-held (:data %) wanted now))
+       first))
 
 (defn issue-feed-token!
   "Mint a fresh feed token for this sitting, keep its hash and its end
@@ -5822,12 +5900,14 @@
   when the seat declares no https `feed_url` or the sitting is no
   longer open.
 
-  `issue-inbox-key!`'s shape and its reason: EACH SIT MINTS A NEW TOKEN
-  AND THE OLD ONE STOPS ANSWERING, the row keeps the hash alone, and
-  the write is a maintenance write, so the record of a credential is
-  not in the log. The token dies with the sitting, because
-  `feed-seat-by-token` reads open sittings only, and at `expires_at`
-  when the sitting outlives it.
+  EACH SIT MINTS A NEW TOKEN AND STOPS NONE. A sit that reuses an open
+  sitting leaves the tokens before it answering until their own ends
+  (`with-feed-token`), so a stream that is using one is not cut. The
+  row keeps the hashes alone, so a sit cannot answer an earlier token
+  again. The write is a maintenance write, `issue-inbox-key!`'s way,
+  so the record of a credential is not in the log. Every token dies
+  with the sitting, because `feed-seat-by-token` reads open sittings
+  only, and at its `expires_at` when the sitting outlives it.
 
   IT IS NOT A KEY. Only the key check door reads `feed_token_hash`, so
   the token sits in no seat, closes no sitting and pulls no inbox."
@@ -5837,17 +5917,15 @@
                (str/starts-with? url "https://")
                (get (inv/resources eng) :sitting))
       (let [token (mint-key)
-            expires (str (.plusSeconds ^Instant ((:now-fn eng))
-                                       (long feed-token-seconds)))]
+            ^Instant now ((:now-fn eng))
+            expires (str (.plusSeconds now (long feed-token-seconds)))]
         (store/with-tx (:storage eng)
           (fn [tx]
             (when-some [row (store/load-row (:storage eng) tx :sitting
                                             (str (:id sitting-row)) {:for-update true})]
               (when (= :open (:state row))
                 (store/update-data! (:storage eng) tx :sitting (str (:id row))
-                                    (assoc (:data row)
-                                           :feed_token_hash (key-hash token)
-                                           :feed_token_expires_at expires)
+                                    (with-feed-token (:data row) token expires now)
                                     (:next-flip-at row))
                 {:url url
                  :token token
@@ -5858,8 +5936,9 @@
 
 (defn feed-seat-by-token
   "The ACTIVE seat whose open sitting was answered this feed token, raw,
-  or nil for a bad token, a token a later sit replaced, a token past
-  its end, or a sitting that has ended.
+  or nil for a bad token, a token past its end, or a sitting that has
+  ended. A token a later sit or a renewal followed answers until its
+  own end (`live-feed-tokens`).
 
   THE TOKEN IS FOUND BY READING THE OPEN SITTINGS, for
   `inbox-sitting-by-key`'s reason: `feed_token_hash` is :secret, and a
@@ -5872,22 +5951,53 @@
             ^Instant now ((:now-fn eng))]
         (store/with-tx (:storage eng)
           (fn [tx]
-            (when-some [sitting (->> (store/query-rows (:storage eng) tx :sitting
-                                                       {:state :open}
-                                                       {:limit inbox-sitting-page})
-                                     (filter (fn [r]
-                                               (when-some [held (some-> (get-in r [:data :feed_token_hash])
-                                                                        str not-empty)]
-                                                 (MessageDigest/isEqual
-                                                  wanted
-                                                  (.getBytes ^String held StandardCharsets/UTF_8)))))
-                                     first)]
-              (when-some [^Instant until (->instant (get-in sitting [:data :feed_token_expires_at]))]
-                (when (.isBefore now until)
-                  (when-some [seat (some->> (get-in sitting [:data :seat]) str not-empty
-                                            (#(store/load-row (:storage eng) tx :seat % {})))]
-                    (when (= :active (:state seat))
-                      seat)))))))))))
+            (when-some [sitting (feed-sitting-by-token eng tx wanted now)]
+              (when-some [seat (some->> (get-in sitting [:data :seat]) str not-empty
+                                        (#(store/load-row (:storage eng) tx :seat % {})))]
+                (when (= :active (:state seat))
+                  seat)))))))))
+
+(defn renew-feed-token!
+  "The next feed token for the open sitting that holds `token`, as
+  `{:token :expires_at}`, when `token` is live and has less than half
+  its life left. → nil for every other token, for a seat that is not
+  active, and for a sitting that already holds `feed-tokens-max` live
+  tokens.
+
+  THE OLD TOKEN IS NOT STOPPED. It answers until its own end, so the
+  stream that holds it has no gap between the two (`with-feed-token`).
+  The write is `issue-feed-token!`'s maintenance write. An ask that
+  repeats past the half mints again, because the row keeps hashes and
+  cannot answer the same next token twice; `feed-tokens-max` bounds it."
+  [eng token]
+  (when-some [wanted (key-hash token)]
+    (when (and (get (inv/resources eng) :sitting)
+               (get (inv/resources eng) :seat))
+      (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)
+            ^Instant now ((:now-fn eng))
+            half (quot (long feed-token-seconds) 2)]
+        (store/with-tx (:storage eng)
+          (fn [tx]
+            (when-some [found (feed-sitting-by-token eng tx wanted now)]
+              (when-some [row (store/load-row (:storage eng) tx :sitting
+                                              (str (:id found)) {:for-update true})]
+                (let [^Instant until (some-> (feed-token-held (:data row) wanted now)
+                                             :expires_at
+                                             ->instant)
+                      seat (some->> (get-in row [:data :seat]) str not-empty
+                                    (#(store/load-row (:storage eng) tx :seat % {})))]
+                  (when (and (= :open (:state row))
+                             until
+                             (.isBefore until (.plusSeconds now half))
+                             (= :active (:state seat))
+                             (< (count (live-feed-tokens (:data row) now))
+                                (long feed-tokens-max)))
+                    (let [next-token (mint-key)
+                          expires (str (.plusSeconds now (long feed-token-seconds)))]
+                      (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                                          (with-feed-token (:data row) next-token expires now)
+                                          (:next-flip-at row))
+                      {:token next-token :expires_at expires})))))))))))
 
 (def ^:private release-grace-default
   "The grace, in seconds, a seat that names no `release_grace_seconds`

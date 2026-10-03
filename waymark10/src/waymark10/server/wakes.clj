@@ -102,7 +102,11 @@
   the TRAILING edge. A match writes `wake_pending` and `wake_due_at`
   (the match's own instant plus the settle) on the schedule row and
   fires NOTHING, not even the first one. A later match moves
-  `wake_due_at` forward. `release!` then holds the wake until that
+  `wake_due_at` forward, but never past the FIRST match's instant
+  (`wake_first_at`) plus the entry's `max_wait_seconds`, which is
+  three settles unless the entry says: matches that never stop must
+  not hold the wake forever (ticket 8f482592). The seat's cadence is
+  the backstop beside that cap (`backstop-due?`). `release!` then holds the wake until that
   moment has passed, beside the walls it already keeps, and the tick
   is what asks: the settle is a duration, so the answer comes within
   one tick of the moment it ends. The release fires with no text, as
@@ -399,6 +403,15 @@
   [e]
   (some-> (:settle_seconds e) long))
 
+(defn- max-wait-of
+  "The longest a settled entry's wake may wait after the FIRST match
+  it heard, in seconds, or nil for an entry that does not settle
+  (ticket 8f482592). The entry's own `max_wait_seconds`, or three
+  settles when it names none."
+  [e]
+  (when-some [settle (settle-of e)]
+    (long (or (:max_wait_seconds e) (* 3 settle)))))
+
 (declare entry-count)
 
 (defn- wake-for
@@ -439,22 +452,24 @@
                 (when (and (not (count-entry? e))
                            (moved-under? eng (:kind t) (:resource-id t)
                                          (:filter e)))
-                  {:text (wake-text t) :settle (settle-of e)}))
+                  {:text (wake-text t) :settle (settle-of e)
+                   :max-wait (max-wait-of e)}))
               matched)
         (some (fn [e]
                 (when (count-entry? e)
                   (when-some [n (entry-count eng @seat-row e)]
                     (let [n (long n)
-                          settle (settle-of e)]
+                          settle (settle-of e)
+                          max-wait (max-wait-of e)]
                       (if-some [at-least (:at_least e)]
                         (when (>= n (long at-least))
                           {:text (count-text (:kind e) n :at_least
                                              (long at-least))
-                           :settle settle})
+                           :settle settle :max-wait max-wait})
                         (let [at-most (long (:at_most e))]
                           (when (<= n at-most)
                             {:text (count-text (:kind e) n :at_most at-most)
-                             :settle settle})))))))
+                             :settle settle :max-wait max-wait})))))))
               matched))))
 
 ;; ── the damper ──────────────────────────────────────────────────────
@@ -549,6 +564,16 @@
                             (:data row) (:next-flip-at row))))
     row))
 
+(defn- first-heard
+  "The instant of the FIRST match the waiting settled wake heard, or
+  nil when no settled wake waits (ticket 8f482592). Read only beside a
+  pending flag and a due moment, so a mark some other clear left
+  behind is not taken for this wake's."
+  ^Instant [schedule-row]
+  (let [data (:data schedule-row)]
+    (when (and (true? (:wake_pending data)) (:wake_due_at data))
+      (instant-of (:wake_first_at data)))))
+
 (defn- due-at
   "The moment a settled wake is due, as the row should hold it after
   this match: the match's own instant plus the entry's quiet time, or
@@ -558,11 +583,24 @@
   to wait for the matches to stop, so a second entry with a shorter
   quiet time must not pull the wake in front of the first entry's.
   With one entry, which is the ordinary seat, the two readings are
-  the same moment."
-  ^Instant [schedule-row ^Instant at settle-seconds]
-  (let [asked (.plusSeconds at (long settle-seconds))
-        held (instant-of (get-in schedule-row [:data :wake_due_at]))]
-    (if (and held (.isAfter ^Instant held asked)) held asked)))
+  the same moment.
+
+  `max-wait`, when given, is the cap on what this match may ASK for
+  (ticket 8f482592): the first match's instant (`first-heard`, or
+  this match when it is the first) plus that many seconds. Matches
+  that arrive faster than the settle would otherwise move the moment
+  forward for ever, and the seat would never sit. A moment the row
+  already holds past the cap stays, for the forward-only reason."
+  (^Instant [schedule-row ^Instant at settle-seconds]
+   (due-at schedule-row at settle-seconds nil))
+  (^Instant [schedule-row ^Instant at settle-seconds max-wait]
+   (let [asked (.plusSeconds at (long settle-seconds))
+         cap (when max-wait
+               (.plusSeconds ^Instant (or (first-heard schedule-row) at)
+                             (long max-wait)))
+         asked (if (and cap (.isAfter asked ^Instant cap)) cap asked)
+         held (instant-of (get-in schedule-row [:data :wake_due_at]))]
+     (if (and held (.isAfter ^Instant held asked)) held asked))))
 
 (defn- mark-settling!
   "A match on an entry that SETTLES: the seat is not woken now, and
@@ -593,6 +631,28 @@
   (if-some [due (instant-of (get-in schedule-row [:data :wake_due_at]))]
     (not (.isBefore at ^Instant due))
     true))
+
+(defn- backstop-due?
+  "Is the seat's cadence owed while a settled wake waits (ticket
+  8f482592)? `sweep-cadence!` leaves a row whose wake is already
+  pending alone, so a settle that keeps being moved would hold the
+  cadence back too. With a settled wake waiting, a whole cadence
+  since the last fire releases it whatever `wake_due_at` says. A seat
+  that never fired counts from the first match it heard. A seat with
+  no cadence, and a wake that no settled entry left, have no
+  backstop."
+  [seat-row schedule-row ^Instant at]
+  (let [cadence (get-in seat-row [:data :cadence_seconds])
+        heard (first-heard schedule-row)]
+    (boolean
+     (and heard
+          (number? cadence)
+          (pos? (long cadence))
+          (if (some #(instant-of (get-in schedule-row [:data %]))
+                    [:last_fired_at :wake_fired_at])
+            (not (fired-recently? schedule-row (long cadence) at))
+            (not (.isBefore at (.plusSeconds ^Instant heard
+                                             (long cadence)))))))))
 
 (defn- throttled?
   "Is the provider's throttle still on? The row's `retry_after` is the
@@ -875,7 +935,7 @@
   drain's replay, and it is silence on every path, the damped one
   included (waymark-fp62.21).
   → true when a fire went out."
-  [eng seat t ^Instant at {:keys [text settle]}]
+  [eng seat t ^Instant at {:keys [text settle max-wait]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
     (when (and (schedules/fires-out? eng row)
                (not (heard? row t)))
@@ -887,8 +947,13 @@
                                eng (raw-row eng :seat (:id seat)) text at)))]
        (cond
         settle
-        (mark-settling! eng (update row :data schedules/keep-textless)
-                        (due-at row at settle))
+        ;; the first match of this wake is kept beside the due moment,
+        ;; so later matches cannot move it past the cap (8f482592)
+        (mark-settling! eng (update row :data
+                                    #(assoc (schedules/keep-textless %)
+                                            :wake_first_at
+                                            (str (or (first-heard row) at))))
+                        (due-at row at settle max-wait))
 
         ;; a broken Routine fires nothing: the wake waits for the link
         ;; that mends it (waymark ticket bb19404d)
@@ -1110,7 +1175,8 @@
                  (and slot? (free-slot? eng seat-row at)))
              (schedules/fires-out? eng schedule-row)
              (not (schedules/held? eng schedule-row seat-row))
-             (settled? schedule-row at)
+             (or (settled? schedule-row at)
+                 (backstop-due? seat-row schedule-row at))
              (not (throttled? schedule-row at))
              (if (< 1 (max-open-of seat-row))
                (not (damped? eng seat-row schedule-row at))

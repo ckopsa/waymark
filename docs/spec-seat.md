@@ -656,6 +656,7 @@ loop script.
 | `wake_pending` | boolean, optional | a match waits for the damper to lift (R-12.22). Engine-written. |
 | `wake_fired_at` | instant, optional | when the engine last fired the seat for a matching transition (R-12.22). Engine-written. |
 | `wake_due_at` | instant, optional | when a waiting wake may go out, for an entry that settles (R-12.22). Engine-written. |
+| `wake_first_at` | instant, optional | when the first match of the waiting settled wake came; `wake_due_at` is never asked past it plus the entry's `max_wait_seconds` (R-12.22). Engine-written. |
 | `last_halted_wake` | instant, optional | when a matching transition last found the seat's week of fuel spent; that wake waits as `wake_pending` until the window rolls. Engine-written. |
 
 States: `pending` (no copy yet), `live`, `paused`, `broken` (the
@@ -1460,6 +1461,18 @@ level is a level that held for that long. A seat's computed default
 entry carries no settle. An entry with no `settle_seconds` fires on
 the match, as it always did. The engine must refuse a
 `settle_seconds` below 1, at `create` and at `restate`.
+
+A settle has a cap. The first match of a waiting settled wake writes
+`wake_first_at`, and a later match must not move `wake_due_at` past
+`wake_first_at` plus the entry's `max_wait_seconds`, a whole number
+from 1 to 604800, optional, which is three times `settle_seconds`
+when the entry names none. So matches that arrive faster than the
+settle batch into one fire and cannot hold the seat back for ever.
+The seat's `cadence_seconds` is the backstop: while a settled wake
+waits, the engine fires the seat when a whole cadence has passed
+since its last fire, or since `wake_first_at` for a seat that never
+fired, whatever `wake_due_at` says. The fire clears `wake_first_at`
+with the other two marks.
 
 A conversation is what the settle is for. The house mirrors a family
 chat as one row, and each reply moves that row. The first reply is
@@ -3490,7 +3503,9 @@ active seat's `sitter_key` is exactly that key; `seat` is that seat's
 `name`. Nothing else of the seat row is answered, and the key is never
 echoed.
 
-**R-16.2** The door opens no sitting, mints no grant and writes no row.
+**R-16.2** The door opens no sitting, mints no grant and writes no row,
+except the renewal of R-16.8, which writes the sitting's feed token
+outside the log.
 
 **R-16.3** A key that matches nothing, a key the seat revoked and the
 key of a parked seat answer the same body, `{"live": false, "seat":
@@ -3517,11 +3532,14 @@ inbox. It is not the seat's `inbox`, which the engine holds itself, and
 the sit's `inbox` answer is unchanged by it. When the seat has a
 `feed_url`, `waymark_sit` answers a top-level `feed`:
 `{"url", "token", "expires_at", "note"}`. A sit that reuses an open
-sitting answers a fresh token, and the earlier one stops.
+sitting answers a fresh token, and the earlier ones answer until their
+own ends, so a stream that is using one is not cut. The sitting keeps
+hashes alone, so a sit cannot answer an earlier token again.
 
 - `token` is 128 random bits. The sitting keeps its SHA-256 alone
-  (`feed_token_hash`), written outside the log, and the transcript door
-  redacts the token from an uploaded line.
+  (`feed_token_hash`, and `feed_tokens_earlier` for the tokens before
+  the newest), written outside the log, and the transcript door redacts
+  each token from an uploaded line.
 - `expires_at` is 35 minutes after the sit. The token also stops when
   its sitting leaves `open`, by the close door, the sweep or an
   abandon, whichever is first.
@@ -3534,6 +3552,14 @@ sitting answers a fresh token, and the earlier one stops.
 
 The session sends `Authorization: Bearer <token>` to `feed_url` and to
 no other address.
+
+**R-16.8** A feed token renews itself through this door. When the door
+judges a feed token that is live and has less than half its life left,
+the answer also carries `next_token` and `next_expires_at`, 35 minutes
+after the ask. The token that was asked about is not stopped: it
+answers until its own end, so there is no gap. A sitting holds at most
+12 live tokens; past that the door renews nothing and a sit drops the
+oldest. A closed sitting ends every token it minted.
 
 A service checks `Authorization: Bearer <seat key>` from its own caller
 this way:
