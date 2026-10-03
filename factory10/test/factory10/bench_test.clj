@@ -1426,6 +1426,56 @@
       (restated person [tofu drift])
       (is (= [tofu drift] (hosted-now))))))
 
+(deftest the-merge-gate-wall-is-a-registered-hold
+  (is (holds/hold? :only-a-person-loosens-the-merge-gate)
+      "the guard's `:hold true` registered it when the module loaded"))
+
+(deftest a-delegates-loosened-merge-gate-waits-for-the-person
+  ;; ticket 68643356. In the suite for the reason above.
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:auto_merge false :required_checks ["gate" "lint"]})
+        delegate (assoc (t/principal {:id "claude-for-colton" :type :agent
+                                      :display "Claude for Colton"})
+                        :acts-for "colton")
+        restated (fn [who changed]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (merge (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :required_checks
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         changed)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))
+        held-by (fn [changed]
+                  (try (restated delegate changed)
+                       nil
+                       (catch clojure.lang.ExceptionInfo e
+                         (some-> (:guard (ex-data e)) name keyword))))
+        gate-now #(select-keys (:data (policy-row eng (:id row)))
+                               [:auto_merge :required_checks])]
+    (testing "an agent's auto_merge turned on is the hold's refusal, and the row stands"
+      (is (= :only-a-person-loosens-the-merge-gate (held-by {:auto_merge true})))
+      (is (= {:auto_merge false :required_checks ["gate" "lint"]} (gate-now))))
+    (testing "an agent's dropped required check is the hold's refusal, and the row stands"
+      (is (= :only-a-person-loosens-the-merge-gate
+             (held-by {:required_checks ["gate"]})))
+      (is (= {:auto_merge false :required_checks ["gate" "lint"]} (gate-now))))
+    (testing "an agent's added required check narrows the gate and is not held"
+      (restated delegate {:required_checks ["lint" "gate" "deploy"]})
+      (is (= {:auto_merge false :required_checks ["lint" "gate" "deploy"]}
+             (gate-now))))
+    (testing "the person's own loosening runs directly"
+      (restated person {:auto_merge true :required_checks ["gate"]})
+      (is (= {:auto_merge true :required_checks ["gate"]} (gate-now))))
+    (testing "an agent's auto_merge turned off narrows the gate and is not held"
+      (restated delegate {:auto_merge false})
+      (is (= {:auto_merge false :required_checks ["gate"]} (gate-now))))))
+
 (deftest a-policy-states-its-merge-strategy-and-never-its-train
   ;; the merge train, slice a (ticket 394d0602): data only
   (let [st (state)
