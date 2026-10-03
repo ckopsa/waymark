@@ -90,6 +90,9 @@
            ;; provider, a fire URL and a held token, which no
            ;; application's vocabulary names either
            :runner_link :runner_provider
+           ;; …and the domain (epic aff24e84, piece 1), which the seat
+           ;; carries a typed ref to
+           :domain
            ;; …and the invitation (docs/spec-guided-follow.md § 3),
            ;; the held call's sibling hand-off, which a grant names
            :invitation
@@ -133,6 +136,7 @@
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
+             :domain
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
              :walkthrough :secret}
            (enrolled-kinds [] [:jobs]))))
