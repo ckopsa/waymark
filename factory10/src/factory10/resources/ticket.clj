@@ -1297,6 +1297,9 @@
                 :type #{:eq :in}
                 :priority #{:eq :range}
                 :parent #{:eq :set}
+                ;; ticket cfcfcdd7: showcase_set=true is the tickets that name a
+                ;; scene, which a dashboard slot lists as the epics
+                :showcase #{:set}
                 :found_in #{:eq}
                 :repo #{:eq :in}
                 :bead_id #{:eq :set}}

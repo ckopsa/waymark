@@ -1120,18 +1120,31 @@
 
 (def ^:private view-kinds #{:deck :feed})
 
+(defn- presence-field
+  "The field a `<field>_set` where key asks about, when that field
+  declares the `:set` op — the presence filter the collection door
+  spells field_set=true|false. nil for any other key."
+  [r f]
+  (let [n (name f)]
+    (when (str/ends-with? n "_set")
+      (let [base (keyword (subs n 0 (- (count n) 4)))]
+        (when (:set (set (get (:filterable r) base)))
+          base)))))
+
 (defn where-field?
   "May a view's (or a saved_view's) `:where` name this field? `:state`
   always; an `:eq`/`:in`-filterable field, because a view's where is an
   ordinary filter the caller could have typed; an array field, whose
-  containment filter is implicit in its shape."
+  containment filter is implicit in its shape; and `<field>_set` for a
+  `:set`-filterable field, the presence filter the same door accepts."
   [r f]
   (boolean
    (or (= :state f)
        (let [ops (set (get (:filterable r) f))]
          (or (:eq ops) (:in ops)))
        (let [s (schema/field-schema (:schema r) f)]
-         (and (vector? s) (= :vector (first s)))))))
+         (and (vector? s) (= :vector (first s))))
+       (presence-field r f))))
 
 (defn where-fields
   "Every field name a `:where` may put on the left of an `=`, sorted —
@@ -1147,6 +1160,9 @@
               (map name))
         (sort (concat [:state]
                       (keys (:filterable r))
+                      (for [[f ops] (:filterable r)
+                            :when (:set (set ops))]
+                        (keyword (str (name f) "_set")))
                       (schema/entry-keys (:schema r))))))
 
 (defn view-where-problems
@@ -1170,6 +1186,14 @@
                [(str ":where names " f ", which is not an "
                      ":eq/:in-filterable field — a view's where is an ordinary "
                      "filter the caller could have typed")]
+
+               ;; a presence filter reads no value of the field's own
+               (and (presence-field r f)
+                    (nil? (schema/field-schema (:schema r) f)))
+               (when-not (contains? #{"true" "false"} (str/trim (str v)))
+                 [(str ":where " (name f) "=" (pr-str v)
+                       " is not true or false — a presence filter asks "
+                       "whether the field is set")])
 
                :else
                (into []
