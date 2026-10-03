@@ -465,7 +465,8 @@
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
                :merge_wait_seconds :rounds_per_change :merge_strategy
                :train_size :formatter :deny
-               :test :check :orientation :enrolled_at :note :source_note
+               :test :check :hosted_workflows
+               :orientation :enrolled_at :note :source_note
                :forge_cursor
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket

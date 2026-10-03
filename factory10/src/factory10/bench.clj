@@ -327,11 +327,14 @@
   (ticket efa54182): only when the row states one, so the rig keeps
   its own Clojure default otherwise. `check` rides the same way
   (ticket 856e825c): the command the bench's check runs after its lint,
-  sent only when the row states one."
+  sent only when the row states one. `hosted_workflows` rides the same
+  way (ticket 0de73a7a): the workflow files a person allowed on
+  GitHub-hosted runners, sent only when the row names at least one."
   [row]
   (let [test-block (get-in row [:data :test])
         check-block (get-in row [:data :check])
-        pattern (:select_pattern test-block)]
+        pattern (:select_pattern test-block)
+        hosted (seq (get-in row [:data :hosted_workflows]))]
     (cond-> {:repo (str (get-in row [:data :repository]))
              :clone_url (clone-url-of row)
              :default_branch (base-of row)
@@ -340,7 +343,8 @@
       (some? test-block) (assoc :test (cond-> (select-keys test-block [:workflow :input])
                                         (not (str/blank? (str pattern)))
                                         (assoc :select_pattern (str pattern))))
-      (some? check-block) (assoc :check (select-keys check-block [:command :timeout])))))
+      (some? check-block) (assoc :check (select-keys check-block [:command :timeout]))
+      hosted (assoc :hosted_workflows (vec hosted)))))
 
 (defn enrolled
   "The row after the engine offered this repository to the rig (R-2).
