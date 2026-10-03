@@ -400,6 +400,8 @@
     :headers (merge {"Content-Type" ctype} extra-headers)
     :body (wire/write-json body)}))
 
+(declare ref-summary-hook)
+
 (defn- render-opts
   "The one ctx-opts map every render call shares: identity, clock,
   services, visibility, and the kind map link targets resolve
@@ -415,6 +417,10 @@
            :services (:services eng)
            :visibility (visibility-of req)
            :resources (inv/resources eng)
+           ;; what names the rows a summary line mentions (ticket
+           ;; 2f35a7b5): one instance a request, so a page reads each
+           ;; mentioned row once
+           :summary-refs (ref-summary-hook eng req)
            ;; the links assembled modules lend core kinds
            ;; (seams/Linking), gathered once at boot
            :link-doors (:link-doors eng)}
