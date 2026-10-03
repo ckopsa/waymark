@@ -759,10 +759,10 @@
         _ (subscribe! eng)
         first-token (get-in (sit! h) [:feed :token])
         second-token (get-in (sit! h) [:feed :token])]
-    (testing "a re-sit mints a different token, and the old one stops"
+    (testing "a re-sit mints a different token, and the one in use still answers"
       (is (string? first-token))
       (is (not= first-token second-token))
-      (is (= {:live false :seat nil} (verify! h first-token))))
+      (is (= {:live true :seat "scribe-one"} (verify! h first-token))))
     (testing "the live token answers the seat's name, as its key does"
       (is (= {:live true :seat "scribe-one"} (verify! h second-token)))
       (is (= {:live true :seat "scribe-one"} (verify! h a-key))))
@@ -792,6 +792,65 @@
     (is (= {:live true :seat "scribe-one"} (verify! h token)))
     (is (= 200 (:status (close! h))))
     (is (= {:live false :seat nil} (verify! h token)))))
+
+(deftest a-feed-token-past-half-its-life-is-answered-the-next-one
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:feed_url a-feed})
+        _ (subscribe! eng)
+        sat (sit! h)
+        token (get-in sat [:feed :token])]
+    (testing "with more than half its life left it is answered no next one"
+      (later! at 1000)
+      (is (= {:live true :seat "scribe-one"} (verify! h token)))
+      (is (= {:live true :seat "scribe-one"} (verify! h a-key))))
+    (later! at 100)
+    (let [answer (verify! h token)
+          next-token (:next_token answer)]
+      (testing "past the half the answer carries the next token and its end"
+        (is (true? (:live answer)))
+        (is (= "scribe-one" (:seat answer)))
+        (is (re-matches #"[A-Za-z0-9_-]{22}" (str next-token)))
+        (is (not= token next-token))
+        (is (= "2026-09-27T09:53:20Z" (:next_expires_at answer))
+            "35 minutes after the ask")
+        (is (not (str/includes? (wire/write-json (:data (row-of eng :sitting (:sitting sat))))
+                                (str next-token)))
+            "the sitting keeps the hash, never the token"))
+      (testing "the seat's key renews nothing"
+        (is (= {:live true :seat "scribe-one"} (verify! h a-key))))
+      (testing "both answer until the old one's end, so there is no gap"
+        (later! at 900)
+        (is (true? (:live (verify! h token))))
+        (is (= {:live true :seat "scribe-one"} (verify! h next-token))))
+      (testing "the old one stops at its own end, and the next one goes on"
+        (later! at 101)
+        (is (= {:live false :seat nil} (verify! h token)))
+        (is (= {:live true :seat "scribe-one"} (verify! h next-token))))
+      (testing "a closed sitting ends every token it minted"
+        (is (= 200 (:status (close! h))))
+        (is (= {:live false :seat nil} (verify! h next-token)))))))
+
+(deftest a-same-session-re-sit-leaves-a-streaming-token-valid
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:feed_url a-feed})
+        _ (subscribe! eng)
+        streaming (get-in (sit! h) [:feed :token])
+        _ (later! at 60)
+        resat (get-in (sit! h) [:feed :token])]
+    (is (not= streaming resat))
+    (testing "the token in use answers after the re-sit, beside the new one"
+      (is (= {:live true :seat "scribe-one"} (verify! h streaming)))
+      (is (= {:live true :seat "scribe-one"} (verify! h resat))))
+    (testing "each stops at its own end"
+      (later! at 2041)
+      (is (= {:live false :seat nil} (verify! h streaming)))
+      (is (true? (:live (verify! h resat))))
+      (later! at 60)
+      (is (= {:live false :seat nil} (verify! h resat))))))
 
 (deftest the-key-check-answers-the-inbox-through-the-gate
   ;; production's shape, end to end: the engine requires auth, the
