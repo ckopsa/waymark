@@ -736,6 +736,17 @@
             (darken! eng row (ex-message e)))
           (throw e))))))
 
+(defn check-secret-refs!
+  "Refuses when an `x-secret-ref` argument of this call names no secret
+  row. `call!` would refuse the same at the forward; this is the same
+  judgment made early, before a call is held for a person's tap."
+  [eng tool args]
+  (when-some [{:keys [row bare]} (resolve-tool eng tool)]
+    (secrets/check-refs! eng
+                         (some #(when (= bare (:name %)) (:input_schema %))
+                               (get-in row [:data :tools]))
+                         args)))
+
 (defn engine-of
   "The engine behind a dispatcher, a delay, an engine-ref or the
   engine itself; nil when there is none yet."

@@ -233,3 +233,30 @@
                                               {:raw (secrets/values eng)})]
         (is (pos? (long n)))
         (is (not (str/includes? line the-value)))))))
+
+(deftest a-ref-that-names-no-secret-is-refused-before-the-call-is-held
+  (let [{:keys [eng log]} (world)
+        id (a-secret! eng)
+        session (wear eng [{:kind "vault.login" :actions []}])
+        answer (pr-str (mcp/message eng (mcp/door eng) (gate/rpc-of eng) session
+                                    {:jsonrpc "2.0" :id 1 :method "tools/call"
+                                     :params {:name "waymark_power"
+                                              :arguments
+                                              {:tool "vault__login"
+                                               :arguments {:token (str "secret:" id)
+                                                           :host "tail.example"
+                                                           :why "The tofu run needs it."}}}}))]
+    (testing "the refusal names the reference and the form a ref takes"
+      (is (str/includes? answer (str "secret:" id)))
+      (is (str/includes? answer "id of a secret row")))
+    (testing "no held call was made and nothing went out"
+      (is (empty? (store/with-tx (:storage eng)
+                    (fn [tx] (store/query-rows (:storage eng) tx :held_call
+                                               {} {:limit 10})))))
+      (is (empty? (calls log))))))
+
+(deftest the-published-schema-names-the-form-a-ref-takes
+  (let [{:keys [eng]} (world)
+        session (wear eng [{:kind "vault.login" :actions []}])
+        out (text-of (tool! eng session "waymark_powers" {}))]
+    (is (str/includes? out "id of a secret row"))))

@@ -56,6 +56,7 @@
             [waymark10.server.mcp-client :as client]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.problems :as p]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]))
 
 (set! *warn-on-reflection* true)
@@ -474,7 +475,8 @@
   `why`, and a `why` added when the entry demands one the schema does
   not already name."
   [schema why?]
-  (let [schema (or schema {:type "object" :properties {}})
+  (let [schema (secrets/describe-refs
+                (or schema {:type "object" :properties {}}))
         schema (if-some [why (get-in schema [:properties :__why])]
                  (-> schema
                      (update :properties #(-> % (dissoc :__why) (assoc :why why)))
@@ -1007,16 +1009,20 @@
 
          (and (= :person approval) (not approved)
               (some-> (:caller opts) str not-empty))
-         (:answer (held/hold!
-                   eng
-                   {:server (:id row)
-                    :tool tname
-                    :entry entry
-                    :input (or args {})
-                    :forward (forward-args row (with-allow args (:allow verdict)))
-                    :why (why-of args)
-                    :caller (:caller opts)
-                    :sitting (:sitting opts)}))
+         (do
+           ;; a ref that names no secret refuses here, before a held_call
+           ;; row exists and a person's tap is spent on it
+           (servers/check-secret-refs! eng tname args)
+           (:answer (held/hold!
+                     eng
+                     {:server (:id row)
+                      :tool tname
+                      :entry entry
+                      :input (or args {})
+                      :forward (forward-args row (with-allow args (:allow verdict)))
+                      :why (why-of args)
+                      :caller (:caller opts)
+                      :sitting (:sitting opts)})))
 
          (and (= :person approval) (not approved))
          (refuse-anonymous tname)
