@@ -131,6 +131,27 @@
       (t/deny {:vars {:which which}})
       (t/allow))))
 
+(def ^:private hosted-workflow-path
+  "What one entry of `hosted_workflows` looks like: a workflow file,
+  as a path from the repository root."
+  #"\.github/workflows/[\w.-]+\.ya?ml")
+
+(defguardfn the-hosted-workflows-are-workflow-paths
+  {:reads []
+   :vars [:which]
+   :open "No other door changes this verdict. Restate the policy with each hosted workflow as a path from the repository root, such as .github/workflows/tofu.yml, or leave the list empty for no exception."
+   :explain "The bench's rig lets a workflow run on a GitHub-hosted runner only when this list names its file. The entry {which} is not a workflow file under .github/workflows, so the rig would match nothing by it."}
+  ;; ticket 0de73a7a: the list is an exception to the house's rule that
+  ;; CI runs on its own runners, so an entry that names no workflow file
+  ;; is refused here, where a person reads why, and is not carried to a
+  ;; rig that would match nothing by it.
+  [_row inp _ctx]
+  (let [which (first (remove #(re-matches hosted-workflow-path (str %))
+                             (get inp :hosted_workflows)))]
+    (if (some? which)
+      (t/deny {:vars {:which (str which)}})
+      (t/allow))))
+
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
    :hide true
@@ -366,6 +387,26 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
+(defscenario a-hosted-workflow-is-a-workflow-path
+  "The exception names workflow files. An entry that is no path under
+   .github/workflows is refused, even from the person."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :hosted_workflows ["tofu.yml"])
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-hosted-workflows-are-workflow-paths}})
+
+(defscenario the-person-names-the-hosted-workflows
+  "…and a list of workflow paths is the person's to state."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :hosted_workflows [".github/workflows/tofu.yml"
+                                               ".github/workflows/ansible.yml"])
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 ;; ── the fields, spelled once and read by two doors ──────────────────
 
 (def ^:private formatter-choices
@@ -586,6 +627,16 @@
                 :x-display {:label "Timeout in seconds"
                             :help "How long the command may run, from 10 to 1800 seconds. Leave it empty for the rig's default."}}
       [:int {:min 10 :max 1800}]]]]
+   ;; the house-runners exception (ticket 0de73a7a). OPTIONAL: a row
+   ;; without it, or with an empty list, grants none, and enroll then
+   ;; sends no `hosted_workflows`.
+   [:hosted_workflows {:optional true
+                       :examples [[".github/workflows/tofu.yml"]]
+                       :x-display
+                       {:raw true
+                        :label "Workflows allowed on GitHub-hosted runners"
+                        :help "Workflow files that may run on GitHub-hosted runners, as paths from the repository root, one for each row. The house runs CI on its own runners. Name a workflow here only when it must not go down with them, such as one that deploys or repairs those runners. Empty means no exception."}}
+    [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
@@ -834,7 +885,8 @@
    :create-schema (into [:map] policy-fields)
    :create-guards [a-person-or-their-delegate-states-the-policy
                    the-house-merges-only-what-a-check-tested
-                   the-test-selection-pattern-compiles]
+                   the-test-selection-pattern-compiles
+                   the-hosted-workflows-are-workflow-paths]
    ;; …and the rig is told at the birth (R-2): a create cannot walk a
    ;; door on a row that does not exist yet
    :on-create enrol-at-birth
@@ -844,7 +896,8 @@
      :input (into [:map] policy-fields)
      :guards [a-person-or-their-delegate-states-the-policy
               the-house-merges-only-what-a-check-tested
-              the-test-selection-pattern-compiles]
+              the-test-selection-pattern-compiles
+              the-hosted-workflows-are-workflow-paths]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes
