@@ -8,10 +8,14 @@
 # always an override, so `make image-queue` keeps pushing to the home
 # registry from a laptop exactly as before.
 #
-# WHY arm64 NATIVELY: the cluster's only node is ARM64, which locally
-# means cross-building under qemu binfmt — the one-time-per-boot install
-# the Makefile warns about. Public repos get free arm64 runners, so the
-# runner IS the target architecture and qemu never enters it.
+# WHY EACH ARCHITECTURE NATIVELY: the cluster has an ARM64 node
+# (orangepi5plus) and an amd64 one (big-colt), and a clone or a render
+# must be placeable on either. Cross-building means a JVM under qemu
+# binfmt — the one-time-per-boot install the Makefile warns about.
+# Public repos get free runners of both architectures, so each `arch`
+# leg's runner IS its target and qemu never enters it. Each leg pushes
+# a plain manifest under `<short sha>-<arch>`; `build` joins the two
+# into ONE index under the bare `<short sha>`, the tag everything reads.
 #
 # THE TAG IS THE BARE SHORT SHA, computed by the same command the
 # Makefile's IMAGE_TAG runs, so the image CI pushes and the var CI
@@ -86,8 +90,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04-arm
+  # One leg per architecture, each on a runner of that architecture.
+  # No fail-fast: when one leg is red, the other's log still says
+  # whether the break is the image or the architecture.
+  arch:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - arch: amd64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -124,16 +139,17 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/workqueue10
+          # The leg's own tag. The bare short sha and `latest` belong
+          # to the index, which `build` writes.
           tags: |
-            type=raw,value=${{ steps.tag.outputs.sha }}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.tag.outputs.sha }}-${{ matrix.arch }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.workqueue10
-          platforms: linux/arm64
+          platforms: linux/${{ matrix.arch }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -142,11 +158,58 @@ jobs:
           # deps.edn copies so a source-only change reuses it. mode=max
           # keeps the intermediate layers, which is the whole point —
           # without it that layer is the only thing NOT cached.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # One scope per architecture: with a shared scope each leg
+          # would overwrite the other's layers and neither would hit.
+          cache-from: type=gha,scope=workqueue10-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=workqueue10-${{ matrix.arch }}
           # A single-platform image wants a plain manifest, not the
           # index buildx otherwise wraps it in to carry attestations.
+          # The only index is the one `build` writes, naming both.
           provenance: false
+
+  # Joins the two legs into one index under the bare short sha — the tag
+  # the migration, the roll and the clone door read — so a node of either
+  # architecture pulls its own image by the same name. It keeps the name
+  # `build` because every job below needs it and reads its tag.
+  build:
+    needs: arch
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ needs.arch.outputs.tag }}
+
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      # Skipped on pull_request for the legs' reason: nothing was pushed,
+      # so there is nothing to join. The job still answers success.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Join the architectures into one index
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/workqueue10
+          TAG: ${{ needs.arch.outputs.tag }}
+          LATEST: ${{ github.ref_name == github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          tags=(-t "$IMAGE:$TAG")
+          if [ "$LATEST" = "true" ]; then tags+=(-t "$IMAGE:latest"); fi
+          docker buildx imagetools create "${tags[@]}" \
+            "$IMAGE:$TAG-arm64" "$IMAGE:$TAG-amd64"
+          # The index must name both, or a node of the missing
+          # architecture fails its pull at placement, long after this.
+          docker buildx imagetools inspect "$IMAGE:$TAG" | tee index.txt
+          grep -q 'linux/arm64' index.txt
+          grep -q 'linux/amd64' index.txt
 
   # Ask the cluster what this image's schema needs. Read-only: the job is
   # dispatched without apply=1, so migrate! prints and exits.
