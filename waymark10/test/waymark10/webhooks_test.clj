@@ -23,7 +23,7 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["wh_gizmos" "subscriptions" "jobs" "definitions"
+  ["wh_gizmos" "subscriptions" "secrets" "jobs" "definitions"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"])
 
 (defn- fresh! []
@@ -244,3 +244,75 @@
           (finally
             (engine/stop! eng server)
             (engine/stop! (:server rcv))))))))
+
+;; ── 5. the secret by reference: a secret row's id, never its value ──
+
+(deftest a-secret-row-signs-by-reference
+  (fresh!)
+  (with-eng {:webhook-attempts 2 :webhook-backoff-ms 5}
+    (fn [eng]
+      (let [rcv (receiver!)
+            sub-row (fn [id]
+                      (store/with-tx (:storage eng)
+                        (fn [tx] (store/load-row (:storage eng) tx
+                                                 :subscription id {}))))
+            spin! (fn [n]
+                    (let [{g :row} (inv/create! eng :wh_gizmo {:name n}
+                                                {:principal elena})]
+                      (inv/invoke! eng :wh_gizmo (:id g) :spin nil
+                                   {:principal elena})))
+            replace! (fn [id value]
+                       (let [row (store/with-tx (:storage eng)
+                                   (fn [tx] (store/load-row (:storage eng) tx
+                                                            :secret id {})))]
+                         (inv/invoke! eng :secret id :replace {:value value}
+                                      {:principal elena
+                                       :if-match (inv/etag :secret id (:version row))})))
+            signed-with? (fn [k hits]
+                           (every? #(= (webhooks/sign k (:body %))
+                                       (get-in % [:headers "x-waymark-signature"]))
+                                   hits))]
+        (try
+          (let [{sec :row} (inv/create! eng :secret {:name "WH_TEST_SECRET"}
+                                        {:principal elena})
+                ref (str (:id sec))
+                {sub :row} (inv/create! eng :subscription
+                                        {:url (:url rcv)
+                                         :kinds ["wh_gizmo"]
+                                         :secret ref}
+                                        {:principal elena})]
+            (spin! "one")
+            (webhooks/drain! eng)
+            (testing "an unset row holds deliveries: not failed, not unsigned"
+              (is (empty? @(:hits rcv)))
+              (is (= :active (sub-state eng (:id sub))))
+              (is (str/includes?
+                   (str (get-in (sub-row (:id sub)) [:data :failure_reason]))
+                   "holds no value yet")))
+            (testing "the wait is said one time"
+              (webhooks/drain! eng)
+              (is (empty? @(:hits rcv)))
+              (is (= 1 (count (filter #(= "await_secret" (name (:action %)))
+                                      (store/with-tx (:storage eng)
+                                        (fn [tx]
+                                          (store/transitions
+                                           (:storage eng) tx
+                                           {:kind :subscription
+                                            :resource-id (:id sub)}
+                                           {:limit 50}))))))))
+            (replace! ref "whsec-row-value-1")
+            (webhooks/drain! eng)
+            (testing "a reference signs with the row's value, and nothing was lost"
+              (is (= ["create" "spin"]
+                     (mapv #(:action (wire/read-json (:body %))) @(:hits rcv))))
+              (is (signed-with? "whsec-row-value-1" @(:hits rcv)))
+              (is (nil? (get-in (sub-row (:id sub)) [:data :failure_reason]))))
+            (replace! ref "whsec-row-value-2")
+            (spin! "two")
+            (webhooks/drain! eng)
+            (testing "a rotated row signs with the new value"
+              (is (= 4 (count @(:hits rcv))))
+              (is (signed-with? "whsec-row-value-2" (drop 2 @(:hits rcv)))))
+            (testing "the subscription keeps the reference, never the value"
+              (is (= ref (get-in (sub-row (:id sub)) [:data :secret])))))
+          (finally (engine/stop! (:server rcv))))))))
