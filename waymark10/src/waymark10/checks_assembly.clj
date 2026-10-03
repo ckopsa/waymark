@@ -731,7 +731,8 @@
         hits (into []
                    (mapcat (fn [[kind r]]
                              (map #(str (name kind) " [unref'd-ids] " %)
-                                  (checks/unref'd-id-hits r kinds))))
+                                  (concat (checks/unref'd-id-hits r kinds)
+                                          (checks/summary-id-hits r)))))
                    (sort-by key (:kinds reg)))]
     (when (seq hits)
       (throw (t/definition-error
