@@ -1519,6 +1519,30 @@
     (is (= check (:check (sent 1)))
         "the restate carries the check step to the rig's enrollment")))
 
+(deftest a-policy-restated-with-hosted-workflows-enrolls-with-them
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))
+        hosted [".github/workflows/tofu.yml" ".github/workflows/ansible.yml"]]
+    (is (not (contains? (sent 0) :hosted_workflows))
+        "a policy with no exception sends none")
+    (let [current (policy-row eng (:id row))]
+      (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                   (assoc (select-keys (:data current)
+                                       [:repository :branch_pattern :base
+                                        :max_lines :opens_pr :auto_merge
+                                        :rounds_per_change :formatter
+                                        :deny :orientation])
+                          :hosted_workflows hosted)
+                   {:principal person
+                    :if-match (inv/etag :repo_policy (:id row)
+                                        (:version current))}))
+    (is (= hosted (:hosted_workflows (:data (policy-row eng (:id row)))))
+        "the row carries the list the person stated")
+    (is (= hosted (:hosted_workflows (sent 1)))
+        "the restate carries the list to the rig's enrollment")))
+
 (deftest a-patch-restate-leaves-the-groom-floor-as-it-stood
   (let [st (state)
         eng (fresh-engine st)
