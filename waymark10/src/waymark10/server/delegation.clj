@@ -310,6 +310,22 @@
 (defn- hold [invariant detail]
   (t/deny {:vars {:invariant invariant :detail detail}}))
 
+;; ── a domain's mayor, in its own domain ─────────────────────────────
+
+(defonce ^:private own-domain-rule (atom nil))
+
+(defn mayors-own-domain!
+  "Seats names the one restate a domain's mayor makes with no tap (epic
+  aff24e84, piece 2): `f` takes the row, the input, the ctx and the
+  author seat, and answers true for it. Seats requires this namespace,
+  so the rule is handed over here and not required."
+  [f]
+  (reset! own-domain-rule f))
+
+(defn- mayors-own-domain? [row inp ctx author]
+  (when-some [f @own-domain-rule]
+    (boolean (f row inp ctx author))))
+
 ;; ── the guards ──────────────────────────────────────────────────────
 
 (g/defguard authors-within-the-ceiling
@@ -339,6 +355,11 @@
       (hold inv-self (str (seat-name row) " is a seat whose grant "
                           (seat-name author) " holds, so its scope, charter,"
                           " budgets and ceiling are the person's"))
+
+      ;; a domain's mayor changes the budget of a seat in its own domain
+      ;; with no tap: the money is judged by the domain's headroom
+      ;; (seats/budget-fits-the-domain), which stood before this guard
+      (mayors-own-domain? row inp ctx author) (t/allow)
 
       (or (not= (str (:id author)) (nonblank (get-in row [:data :authored_by])))
           (nil? (nonblank (get-in row [:data :approved_by]))))

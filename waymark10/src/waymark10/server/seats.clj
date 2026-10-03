@@ -2376,6 +2376,124 @@
   [row ctx]
   (domain-name-of (:read ctx) row))
 
+;; ── a domain's budget (epic aff24e84, piece 2) ──────────────────────
+
+(defn dollars
+  "A week's budget as a BigDecimal; none reads as zero."
+  ^java.math.BigDecimal [v]
+  (if (decimal? v) v (bigdec (or v 0))))
+
+(defn money-text
+  "A budget as a sentence spells it: 11, not 11.00."
+  [v]
+  (.toPlainString (.stripTrailingZeros (dollars v))))
+
+(defn domain-row-of
+  "The domain row a seat's `domain` value names, read through the ctx's
+  hooks: that row, or the one named `default-domain` when the value is
+  empty. nil when the hook is absent or no such row is stored."
+  [ctx domain]
+  (if-some [id (some-> domain str not-empty)]
+    (when-some [read' (:read ctx)] (read' :domain id))
+    (when-some [find' (:find ctx)]
+      (first (find' :domain {:name default-domain} {:limit 1})))))
+
+(defn domain-seats
+  "The ACTIVE seats in this domain: the ones that name it, and for
+  `default-domain` the ones that name none. A parked, merged or retired
+  seat is not among them."
+  [find' domain-row]
+  (let [id (str (:id domain-row))
+        default? (= default-domain (str (get-in domain-row [:data :name])))]
+    (filter (fn [s]
+              (if-some [d (some-> (get-in s [:data :domain]) str not-empty)]
+                (= d id)
+                default?))
+            (find' :seat (cond-> {:state "active"}
+                           (not default?) (assoc :domain id))
+                   {:limit 10000}))))
+
+(defn- budgets-of [seat-rows]
+  (transduce (map (fn [s] (dollars (get-in s [:data :budget_usd_per_week]))))
+             + 0M seat-rows))
+
+(defn domain-allocated
+  "The total of the budgets of this domain's active seats."
+  [find' domain-row]
+  (budgets-of (domain-seats find' domain-row)))
+
+(g/defguard budget-fits-the-domain
+  {:reads [:seat :domain]
+   :vars [:domain :total :ceiling :headroom]
+   :remedies [:domain/restate]
+   :explain "The active seats of {domain} would come to {total} dollars a week together, and the domain's budget is {ceiling}; its headroom today is {headroom}. Ask for no more than the headroom, or restate the domain's budget, which is held for its owner's tap."}
+  [row inp ctx]
+  ;; seat create and restate. A seat that is not active does not count,
+  ;; so its restate is not judged; an engine with no domain row for the
+  ;; seat has no ceiling to judge by.
+  (let [find' (:find ctx)
+        domain (when find'
+                 (domain-row-of ctx (if (contains? inp :domain)
+                                      (:domain inp)
+                                      (get-in row [:data :domain]))))]
+    (if (or (nil? domain)
+            (and (:id row) (not= "active" (name (:state row)))))
+      (t/allow)
+      (let [ceiling (dollars (get-in domain [:data :budget_usd_per_week]))
+            active (domain-seats find' domain)
+            today (budgets-of active)
+            others (budgets-of (remove (fn [s] (= (str (:id s)) (str (:id row))))
+                                       active))
+            total (+ others (dollars (:budget_usd_per_week inp)))]
+        ;; a domain already over its budget is not made worse, and a
+        ;; restate that does not raise its total is not refused for it
+        (if (and (pos? (compare total ceiling))
+                 (pos? (compare total today)))
+          (t/deny {:vars {:domain (str (get-in domain [:data :name]))
+                          :total (money-text total)
+                          :ceiling (money-text ceiling)
+                          :headroom (money-text (- ceiling today))}})
+          (t/allow))))))
+
+(g/defguard moved-by-a-domain
+  {:reads [:within]
+   :hide true
+   :explain "A seat's budget is set here by a domain's move_budget and by nothing else: POST move_budget on the domain, and both seats are written in the same transaction."}
+  [_row _inp ctx]
+  ;; `folded-by-a-merge`'s :within read: nil at the wire, and inside
+  ;; the domain's move it names that write
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :domain kind) (= :move_budget action))
+      (t/allow)
+      (t/deny))))
+
+(defhandler set-seat-budget [row inp _ctx]
+  ;; the restate's own rule for the halt line: a new budget lifts a
+  ;; `budget_reached` line in the same transaction
+  (cond-> (assoc-in row [:data :budget_usd_per_week] (:budget_usd_per_week inp))
+    (lifts-the-line? row inp) (update :data dissoc :halt)))
+
+(defn- same-field? [row inp f]
+  (or (= (get inp f) (get-in row [:data f]))
+      (not (field-moved? row inp f))))
+
+(defn- mayor-moves-only-the-budget?
+  "Is this restate the one a domain's mayor makes with no tap: `author`
+  is the mayor of the domain the seat is in, and the body states every
+  field as the row holds it except the week's budget."
+  [row inp ctx author]
+  (and (some? (:id row))
+       (every? #(same-field? row inp %)
+               (remove #{:budget_usd_per_week} restatable))
+       (or (not (contains? inp :domain))
+           (= (str (:domain inp)) (str (get-in row [:data :domain]))))
+       (= (str (:id author))
+          (some-> (domain-row-of ctx (get-in row [:data :domain]))
+                  (get-in [:data :mayor])
+                  str))))
+
+(delegation/mayors-own-domain! #'mayor-moves-only-the-budget?)
+
 (defresource seat
   {:kind :seat
    :plural "seats"
@@ -2980,6 +3098,7 @@
                    wake-on-any-of-needs-in
                    inbox-names-real-kinds
                    inbox-names-real-actions
+                   budget-fits-the-domain
                    ;; LAST, so a hold is a call every other wall passed
                    delegation/authors-within-the-ceiling]
    :on-create seat-born
@@ -3192,6 +3311,7 @@
               inbox-names-real-kinds
               inbox-names-real-actions
               step-carries-a-note
+              budget-fits-the-domain
               delegation/authors-within-the-ceiling]
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
@@ -3438,6 +3558,23 @@
      :safety {:idempotent true :reversible false :confirm false}
      :handler absorb-fold
      :display {:label "Absorb" :order 13}}
+
+    ;; ── the domain move's landing (epic aff24e84, piece 2) ──────────
+    ;; A domain's `move_budget` writes both seats through this door, in
+    ;; its own transaction, so each seat's history says its budget moved.
+    :set_budget
+    {:from #{:active} :to :active
+     :input [:map
+             [:budget_usd_per_week {:x-display {:label "Fuel for seven days, in dollars"}}
+              [:decimal {:min 0 :max 100000}]]]
+     :record true
+     ;; :edit-shape — the value is worked out from the move's amount,
+     ;; and there is no form to prefill.
+     :waives #{:edit-shape}
+     :guards [moved-by-a-domain]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler set-seat-budget
+     :display {:label "Set the budget" :order 29}}
 
     ;; ── the supersede's landing (ticket 86514746) ───────────────────
     ;; A judgment's `supersede` re-points every seat that says it to the
