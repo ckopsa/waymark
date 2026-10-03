@@ -89,10 +89,22 @@ runs:
           ${{ runner.temp }}/clojure-deps/gitlibs
         # Every deps.edn in the tree: waymark10 is a :local/root of both
         # others, so a change to any of them can move the resolved set.
-        key: cljdeps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/deps.edn') }}
+        #
+        # ONE KEY PER JOB, NOT ONE FOR ALL. actions/cache never
+        # overwrites a key, so with a shared key the first job to save
+        # after a deps change decided the tree for every job: a job that
+        # never resolves workqueue10's :test alias saved it, and every
+        # test-queue shard then fetched kaocha, expound and tools.cli on
+        # every run, nine at once, until Maven Central answered 429
+        # (waymark#791). github.job is the same for every shard of a
+        # matrix, and they resolve the same set. The job name ends in
+        # `--` so that `test` is no prefix of `test-queue`.
+        key: cljdeps-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}--${{ hashFiles('**/deps.edn') }}
         # A partial hit still saves most of the download; tools.deps
-        # fetches only what the new deps.edn adds.
+        # fetches only what the new deps.edn adds. This job's last tree
+        # first, then any job's.
         restore-keys: |
+          cljdeps-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}--
           cljdeps-${{ runner.os }}-${{ runner.arch }}-
 
     # The JDK, pinned to the same major the production image runs
