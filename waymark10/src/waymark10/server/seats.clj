@@ -1355,7 +1355,7 @@
   [:charter :instructions :mode :scope :substitute_drop :held_for
    :substitute_for
    :standing_ttl_seconds :cadence_seconds :sitting_idle_seconds
-   :keep_transcripts :transcript_days :inbox
+   :keep_transcripts :transcript_days :inbox :feed_url
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
@@ -2051,6 +2051,19 @@
                                 :help "Which transitions the engine holds for this seat's sittings: each kind by name, and the actions on it that count. An empty list counts every action of that kind."}}
              [:map-of :keyword [:vector [:string {:min 1 :max 64}]]]]]]])
 
+(def feed-url-field
+  "THE SEAT'S OUTSIDE FEED. An inbox outside the engine streams this
+  seat's subscription deliveries, and admits a caller by asking the key
+  check door (docs/spec-seat.md § 16). The sit answers a short-lived
+  token for it (`issue-feed-token!`), so a session never sends the seat
+  key to that address. Absent is no feed. It is not `inbox`, which the
+  engine holds itself."
+  [:feed_url {:optional true
+              :examples ["https://inbox.kopsa.info/feed/mayor"]
+              :x-display {:label "External feed"
+                          :help "An outside inbox that streams this seat's subscription deliveries; the sit answer hands out a short-lived token for it."}}
+   [:maybe [:string {:min 9 :max 500}]]])
+
 (def ^:private idle-help
   "R-12.25's safety net under the wait, said where a person sets it."
   "How long an interactive sitting may go untallied before the engine closes it. The Stop hook tallies after every turn, so this is the gap that says somebody shut the laptop — the sweep then closes the sitting with the last tally's counts rather than leaving it open forever. It means nothing to a fired seat.")
@@ -2437,6 +2450,7 @@
     keep-transcripts-field
     transcript-days-field
     inbox-field
+    feed-url-field
     [:budget_usd_per_week {:examples [5M]
                            :x-display
                            {:label "Fuel for seven days, in dollars"
@@ -2781,6 +2795,7 @@
     keep-transcripts-field
     transcript-days-field
     inbox-field
+    feed-url-field
     [:budget_usd_per_week {:examples [5M]
                            :x-display
                            {:label "Fuel for seven days, in dollars"
@@ -2977,6 +2992,7 @@
              keep-transcripts-field
              transcript-days-field
              inbox-field
+             feed-url-field
              [:budget_usd_per_week {:examples [5M]
                                     :x-display
                                     {:label "Fuel for seven days, in dollars"
@@ -3084,7 +3100,7 @@
                       :held_for
                       :substitute_for :standing_ttl_seconds :cadence_seconds
                       :sitting_idle_seconds
-                      :keep_transcripts :transcript_days :inbox
+                      :keep_transcripts :transcript_days :inbox :feed_url
                       :budget_usd_per_week :sitting_budget_tokens
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
@@ -4157,6 +4173,21 @@
                                   :label "The inbox key's hash"
                                   :spelled-by-hand "The SHA-256 of the inbox key the last sit answered. The sit writes it; it answers only while the sitting is open; the engine never shows a key."}}
      [:maybe [:string {:max 64}]]]
+    ;; THE FEED'S TOKEN. A seat that declares a `feed_url` is answered
+    ;; a fresh token at each sit (`issue-feed-token!`). Its hash and its
+    ;; end are kept here, on the sitting, so the token answers only
+    ;; while the sitting is open and that end has not come
+    ;; (`feed-seat-by-token`).
+    [:feed_token_hash {:optional true :secret true
+                       :x-display {:hidden true
+                                   :label "The feed token's hash"
+                                   :spelled-by-hand "The SHA-256 of the feed token the last sit answered. The sit writes it; it answers only while the sitting is open; the engine never shows a token."}}
+     [:maybe [:string {:max 64}]]]
+    [:feed_token_expires_at {:optional true
+                             :x-display
+                             {:label "The feed token's end"
+                              :spelled-by-hand "Written by the sit: the instant after which the feed token the last sit answered is refused, when the sitting has not closed before it."}}
+     [:maybe [:string {:max 40}]]]
     ;; THE ROWS THIS SITTING WAS HANDED. The sit writes the ids of its
     ;; walk here, and a second sitting of the same seat opened while
     ;; this one is open walks past them to the next rows. The claim
@@ -5724,6 +5755,84 @@
                           wanted
                           (.getBytes ^String held StandardCharsets/UTF_8)))))
              first)))))
+
+(def feed-token-seconds
+  "How long a feed token answers while its sitting stays open: 35
+  minutes. A sitting that runs longer sits again for a fresh one."
+  2100)
+
+(defn issue-feed-token!
+  "Mint a fresh feed token for this sitting, keep its hash and its end
+  on the sitting, and answer `{:url :token :expires_at :note}`. → nil
+  when the seat declares no https `feed_url` or the sitting is no
+  longer open.
+
+  `issue-inbox-key!`'s shape and its reason: EACH SIT MINTS A NEW TOKEN
+  AND THE OLD ONE STOPS ANSWERING, the row keeps the hash alone, and
+  the write is a maintenance write, so the record of a credential is
+  not in the log. The token dies with the sitting, because
+  `feed-seat-by-token` reads open sittings only, and at `expires_at`
+  when the sitting outlives it.
+
+  IT IS NOT A KEY. Only the key check door reads `feed_token_hash`, so
+  the token sits in no seat, closes no sitting and pulls no inbox."
+  [eng seat-row sitting-row]
+  (when-some [url (some-> seat-row (get-in [:data :feed_url]) str not-empty)]
+    (when (and sitting-row
+               (str/starts-with? url "https://")
+               (get (inv/resources eng) :sitting))
+      (let [token (mint-key)
+            expires (str (.plusSeconds ^Instant ((:now-fn eng))
+                                       (long feed-token-seconds)))]
+        (store/with-tx (:storage eng)
+          (fn [tx]
+            (when-some [row (store/load-row (:storage eng) tx :sitting
+                                            (str (:id sitting-row)) {:for-update true})]
+              (when (= :open (:state row))
+                (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                                    (assoc (:data row)
+                                           :feed_token_hash (key-hash token)
+                                           :feed_token_expires_at expires)
+                                    (:next-flip-at row))
+                {:url url
+                 :token token
+                 :expires_at expires
+                 :note (str "A read-only feed token for " url ", valid until "
+                            expires " or the close of this sitting, safe to "
+                            "send as `Authorization: Bearer` to that URL only.")}))))))))
+
+(defn feed-seat-by-token
+  "The ACTIVE seat whose open sitting was answered this feed token, raw,
+  or nil for a bad token, a token a later sit replaced, a token past
+  its end, or a sitting that has ended.
+
+  THE TOKEN IS FOUND BY READING THE OPEN SITTINGS, for
+  `inbox-sitting-by-key`'s reason: `feed_token_hash` is :secret, and a
+  :secret field may never be :filterable."
+  [eng token]
+  (when-some [wanted (key-hash token)]
+    (when (and (get (inv/resources eng) :sitting)
+               (get (inv/resources eng) :seat))
+      (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)
+            ^Instant now ((:now-fn eng))]
+        (store/with-tx (:storage eng)
+          (fn [tx]
+            (when-some [sitting (->> (store/query-rows (:storage eng) tx :sitting
+                                                       {:state :open}
+                                                       {:limit inbox-sitting-page})
+                                     (filter (fn [r]
+                                               (when-some [held (some-> (get-in r [:data :feed_token_hash])
+                                                                        str not-empty)]
+                                                 (MessageDigest/isEqual
+                                                  wanted
+                                                  (.getBytes ^String held StandardCharsets/UTF_8)))))
+                                     first)]
+              (when-some [^Instant until (->instant (get-in sitting [:data :feed_token_expires_at]))]
+                (when (.isBefore now until)
+                  (when-some [seat (some->> (get-in sitting [:data :seat]) str not-empty
+                                            (#(store/load-row (:storage eng) tx :seat % {})))]
+                    (when (= :active (:state seat))
+                      seat)))))))))))
 
 (def ^:private release-grace-default
   "The grace, in seconds, a seat that names no `release_grace_seconds`

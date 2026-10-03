@@ -4819,6 +4819,12 @@
             ;; sitting is open (seats/issue-inbox-key!)
             inbox-key (when sitting
                         (seats/issue-inbox-key! eng seat sitting))
+            ;; g'''' · the outside feed's token, for a seat that declares
+            ;; a `feed_url`: a fresh token at each sit, alive while the
+            ;; sitting is open and 35 minutes at most
+            ;; (seats/issue-feed-token!)
+            feed (when sitting
+                   (seats/issue-feed-token! eng seat sitting))
             ;; h · the bind, BEFORE the walk is read: the session is
             ;; the seat's from this moment, whatever the queue answers
             _ (bind-session! eng sid {:seat seat-id :sitter sitter
@@ -4939,6 +4945,12 @@
                                (:origin session)
                                ""))
                     "key" inbox-key})
+            feed
+            (assoc "feed"
+                   {"url" (:url feed)
+                    "token" (:token feed)
+                    "expires_at" (:expires_at feed)
+                    "note" (:note feed)})
             halted (assoc "halted" halted)
             walk (assoc "walk" walk)
             said (assoc "change" said)

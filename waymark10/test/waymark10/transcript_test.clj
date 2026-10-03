@@ -702,6 +702,112 @@
       (is (= 200 (:status (close! h))))
       (is (nil? (seats/inbox-sitting-by-key eng second-key))))))
 
+;; ── the outside feed, and the sit's token for it (spec-seat.md R-16.7) ─
+
+(def ^:private a-feed "https://inbox.test/feed/scribe-one")
+
+(def ^:private a-secret "feed-signing-secret-01")
+
+(defn- subscribe!
+  "The outside inbox's subscription, with the secret it proves itself by."
+  [eng]
+  (:row (inv/create! eng :subscription
+                     {:url "https://inbox.test/events" :secret a-secret}
+                     {:principal person})))
+
+(defn- verify!
+  "The outside inbox's ask at the key check door; → the parsed answer."
+  [h key]
+  (json (h {:request-method :post :uri "/api/-/seats/verify"
+            :headers {"waymark-subscription-secret" a-secret}
+            :body (wire/write-json {:key key})})))
+
+(deftest the-sit-answers-a-feed-only-for-a-seat-with-a-feed-url
+  (testing "a seat with a feed and an inbox"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng) {:inbox an-inbox :feed_url a-feed})
+          sat (sit! h)
+          token (get-in sat [:feed :token])]
+      (is (= a-feed (get-in sat [:feed :url])))
+      (is (re-matches #"[A-Za-z0-9_-]{22}" (str token)))
+      (is (= "2026-09-27T09:35:00Z" (get-in sat [:feed :expires_at]))
+          "35 minutes after the sit")
+      (is (str/includes? (str (get-in sat [:feed :note])) a-feed))
+      (is (not (str/includes? (wire/write-json (:data (row-of eng :sitting (:sitting sat))))
+                              (str token)))
+          "the sitting keeps the hash, never the token")
+      (testing "and the inbox answer is what it was"
+        (is (= "https://work.test/api/-/sittings/inbox" (get-in sat [:inbox :url])))
+        (is (re-matches #"[A-Za-z0-9_-]{22}" (str (get-in sat [:inbox :key]))))
+        (is (not= token (get-in sat [:inbox :key]))))))
+  (testing "a seat with none answers none"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng) {:inbox an-inbox})
+          sat (sit! h)]
+      (is (nil? (:feed sat)))
+      (is (string? (get-in sat [:inbox :key]))))))
+
+(deftest the-key-check-door-admits-a-feed-token-and-no-other-door-does
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:inbox an-inbox :feed_url a-feed})
+        _ (subscribe! eng)
+        first-token (get-in (sit! h) [:feed :token])
+        second-token (get-in (sit! h) [:feed :token])]
+    (testing "a re-sit mints a different token, and the old one stops"
+      (is (string? first-token))
+      (is (not= first-token second-token))
+      (is (= {:live false :seat nil} (verify! h first-token))))
+    (testing "the live token answers the seat's name, as its key does"
+      (is (= {:live true :seat "scribe-one"} (verify! h second-token)))
+      (is (= {:live true :seat "scribe-one"} (verify! h a-key))))
+    (testing "every other door refuses it"
+      (is (nil? (seats/seat-by-key eng second-token)))
+      (is (nil? (seats/inbox-sitting-by-key eng second-token)))
+      (is (not= 200 (:status (h {:request-method :post
+                                 :uri "/api/-/sittings/close"
+                                 :headers {"waymark-seat-key" second-token}
+                                 :body (wire/write-json
+                                        {:input_tokens 1 :output_tokens 1
+                                         :cache_read_tokens 0
+                                         :cache_write_tokens 0
+                                         :turns 1})}))))
+      (is (= {:live true :seat "scribe-one"} (verify! h second-token))
+          "and the refused close ended nothing"))
+    (testing "it stops at its end, with the sitting still open"
+      (later! at 2101)
+      (is (= {:live false :seat nil} (verify! h second-token))))))
+
+(deftest the-feed-token-dies-when-the-sitting-ends
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:feed_url a-feed})
+        _ (subscribe! eng)
+        token (get-in (sit! h) [:feed :token])]
+    (is (= {:live true :seat "scribe-one"} (verify! h token)))
+    (is (= 200 (:status (close! h))))
+    (is (= {:live false :seat nil} (verify! h token)))))
+
+(deftest the-engine-redacts-the-sittings-feed-token
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:feed_url a-feed})
+        sat (sit! h)
+        key (get-in sat [:transcript :key])
+        token (str (get-in sat [:feed :token]))
+        leaky (line {:type "assistant"
+                     :message {:role "assistant"
+                               :content (str "feed " token " here")}})
+        r (upload! h key (body-of [leaky]))
+        tr (first (rows-of eng :transcript {:sitting (:sitting sat)}))
+        entry (first (rows-of eng :transcript_entry {:transcript (str (:id tr))}))]
+    (is (= 200 (:status r)))
+    (is (not (str/includes? (get-in entry [:data :raw]) token)))
+    (is (= 1 (get-in tr [:data :engine_redactions])))))
+
 ;; ── the inbox door (spec-seat.md R-12.38) ───────────────────────────
 
 (def ^:private a-tail
