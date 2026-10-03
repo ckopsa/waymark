@@ -81,6 +81,8 @@
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.math RoundingMode)
+           (java.nio.charset StandardCharsets)
+           (java.security MessageDigest)
            (java.time Instant)
            (java.time.temporal ChronoUnit)))
 
@@ -928,13 +930,128 @@
                        "Waymark-Inbox-After" (str cursor)}
              :body (apply str (map #(str (wire/write-json (inbox-line %)) "\n") hits))}))))))
 
+;; ── the key check door (docs/spec-seat.md § 16) ─────────────────────
+
+(def ^:private verify-path
+  "A question about a seat's key, asked by a service. It is under the
+  seats' own word and not the sittings': it opens no sitting."
+  "/api/-/seats/verify")
+
+(def ^:private service-secret-header
+  "`Waymark-Subscription-Secret`, read lowercased as ring hands it
+  over. A header and not a bearer, for `seat-key-header`'s reason."
+  "waymark-subscription-secret")
+
+(def ^:private no-service
+  "The one sentence every refused caller is answered with: no header,
+  a secret no subscription holds and a subscription that is paused,
+  failed or revoked look alike."
+  "No active subscription answers this secret.")
+
+(def verify-per-minute
+  "How many keys one subscription may ask about in one clock minute. A
+  feed checks a key once per connection, so this is far above an
+  honest caller and far below what walking 128 bits would take."
+  120)
+
+(def ^:private verify-key-max
+  "The longest key the door reads. A seat key is 22 characters."
+  200)
+
+(defonce ^:private
+  ^{:doc "Subscription id → [clock minute, asks in it]. One entry per
+  caller, written over each minute, so it is bounded by the
+  subscriptions. It is this process's count: two engines each allow
+  the limit."}
+  verify-counts
+  (atom {}))
+
+(defn- service-of
+  "The ACTIVE subscription whose signing secret is exactly the one this
+  request presents, or nil. `seats/seat-by-key`'s read and its reason:
+  every active subscription is read and compared in constant time, and
+  a request with no header never reaches storage. A subscription that
+  declares no secret matches nothing."
+  [eng req]
+  (when-some [secret (some-> (get-in req [:headers service-secret-header])
+                             str not-empty)]
+    (when (get (inv/resources eng) :subscription)
+      (let [wanted (.getBytes (str secret) StandardCharsets/UTF_8)]
+        (store/with-tx (:storage eng)
+          (fn [tx]
+            (->> (store/query-rows (:storage eng) tx :subscription
+                                   {:state :active} {:limit 500})
+                 (filter (fn [row]
+                           (when-some [held (some-> (get-in row [:data :secret])
+                                                    str not-empty)]
+                             (MessageDigest/isEqual
+                              wanted
+                              (.getBytes (str held) StandardCharsets/UTF_8)))))
+                 first)))))))
+
+(defn- verify-asks
+  "This caller's asks in the clock minute `minute`, this one counted."
+  [sub minute]
+  (let [id (str (:id sub))
+        counts (swap! verify-counts update id
+                      (fn [[m n]]
+                        (if (= m minute) [m (inc (long n))] [minute 1])))]
+    (long (second (get counts id)))))
+
+(defn- seat-verify
+  "POST /api/-/seats/verify — is this seat key live, and which seat
+  does it name (docs/spec-seat.md § 16).
+
+  THE CALLER IS A SERVICE, AND IT PROVES ITSELF FIRST. The secret of
+  an active subscription rides `Waymark-Subscription-Secret`; without
+  one the door answers 401 and reads no seat, so it is not a key
+  oracle for the public. Each subscription has `verify-per-minute`
+  asks a minute and is answered 429 past them.
+
+  THE ANSWER IS TWO FIELDS. `live` and the seat's `name`, and nothing
+  else of the row. A key that matches nothing, a key the seat revoked
+  and a parked seat's key all answer `{live: false, seat: null}` off
+  the same read: `seats/seat-by-key` compares every active seat in
+  constant time whichever it is.
+
+  IT OPENS NOTHING. No sitting is born, no grant is minted and no row
+  is written: the door is two reads."
+  [eng]
+  (fn [req]
+    (let [sub (or (service-of eng req)
+                  (throw (p/problem :unauthorized 401 "Unauthorized"
+                                    {:detail no-service})))
+          epoch (.getEpochSecond (now-of eng))]
+      (if (> (long (verify-asks sub (quot epoch 60)))
+             (long verify-per-minute))
+        (router/json-response
+         429
+         {:detail (str "This subscription asked about more than "
+                       verify-per-minute " keys in one minute.")}
+         "application/json"
+         {"Retry-After" (str (- 60 (mod epoch 60)))})
+        (let [body (try (router/read-body req)
+                        (catch Exception _
+                          (invalid! :body "must be JSON; it did not parse.")))
+              key (when (map? body) (:key body))
+              _ (when-not (and (string? key)
+                               (<= 1 (count key) (long verify-key-max)))
+                  (invalid! :key (str "is required: the seat key to check, a "
+                                      "string of at most " verify-key-max
+                                      " characters.")))
+              seat (seats/seat-by-key eng key)]
+          (router/json-response
+           200 {:live (some? seat)
+                :seat (some-> seat (get-in [:data :name]))}))))))
+
 (defn routes [eng]
   {:module :seats
    :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
             [close-path {:post (sitting-close eng)}]
             [tally-path {:post (sitting-tally eng)}]
             [transcript-path {:post (sitting-transcript eng)}]
-            [inbox-path {:get (sitting-inbox eng)}]]})
+            [inbox-path {:get (sitting-inbox eng)}]
+            [verify-path {:post (seat-verify eng)}]]})
 
 ;; ── what discover shows a sitter (R-7.4, R-12.3) ────────────────────
 
