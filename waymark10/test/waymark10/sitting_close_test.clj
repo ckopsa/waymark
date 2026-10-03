@@ -34,6 +34,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -1096,3 +1097,81 @@
       (close-as! eng seat model minutes-ago "idle" {:walked_nothing true}))
     (is (nil? (get-in (row-of eng :seat seat-id) [:data :health :breach])))
     (is (empty? (tickets eng)))))
+
+;; ── the key check door (docs/spec-seat.md § 16) ─────────────────────
+
+(def ^:private verify-uri "/api/-/seats/verify")
+
+(def ^:private a-secret "inbox-signing-secret-01")
+
+(defn- subscribe!
+  "The calling service's subscription, with the secret it proves
+  itself by."
+  [eng]
+  (:row (inv/create! eng :subscription
+                     {:url "https://inbox.test/events" :secret a-secret}
+                     {:principal person})))
+
+(defn- verify!
+  "The service's POST: its own secret in the header, the seat key it
+  was handed in the body."
+  ([h key] (verify! h {"waymark-subscription-secret" a-secret} key))
+  ([h headers key]
+   (h {:request-method :post :uri verify-uri :headers headers
+       :body (wire/write-json {:key key})})))
+
+(deftest a-service-asks-whether-a-seat-key-is-live-and-nothing-opens
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat]} (open-seat! eng)
+        _ (subscribe! eng)
+        resp (verify! h a-key)]
+    (testing "a live key answers the seat's name and nothing else"
+      (is (= 200 (:status resp)))
+      (is (= {:live true :seat "meal-clerk"} (json resp))))
+    (testing "and the ask opened no sitting"
+      (is (empty? (open-sittings eng seat))))))
+
+(deftest an-unknown-key-and-a-revoked-key-answer-alike
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat]} (open-seat! eng)
+        _ (subscribe! eng)
+        unknown (verify! h "c2l0dGluZy1jbG9zZS1ub2JvZHk")]
+    (is (= 200 (:status unknown)))
+    (is (= {:live false :seat nil} (json unknown)))
+    (inv/invoke! eng :seat (:id seat) :revoke_key nil {:principal person})
+    (let [revoked (verify! h a-key)]
+      (is (= 200 (:status revoked)))
+      (is (= (:body unknown) (:body revoked))
+          "uniform: a revoked key reads as a key nobody ever held"))))
+
+(deftest the-key-check-answers-only-a-service-it-knows
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        sub (subscribe! eng)]
+    (testing "no secret, and a secret no subscription holds"
+      (doseq [headers [{} {"waymark-subscription-secret" "not-the-secret-01"}]]
+        (let [resp (verify! h headers a-key)]
+          (is (= 401 (:status resp)))
+          (is (= "No active subscription answers this secret."
+                 (:detail (json resp)))))))
+    (testing "a key is required"
+      (is (= 422 (:status (verify! h "")))))
+    (testing "a paused subscription is not a caller"
+      (inv/invoke! eng :subscription (:id sub) :pause nil {:principal person})
+      (is (= 401 (:status (verify! h a-key)))))))
+
+(deftest the-key-check-is-rate-limited-per-caller
+  (let [;; one clock minute, whatever the wall clock does
+        eng (assoc (fresh-engine)
+                   :now-fn (constantly (java.time.Instant/parse
+                                        "2026-10-03T12:00:30Z")))
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        _ (subscribe! eng)]
+    (with-redefs [seat-routes/verify-per-minute 2]
+      (let [answers (mapv (fn [_] (verify! h a-key)) (range 3))]
+        (is (= [200 200 429] (mapv :status answers)))
+        (is (= "30" (get-in (peek answers) [:headers "Retry-After"])))))))

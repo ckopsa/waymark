@@ -256,6 +256,9 @@
                ;; …and the fourth, a seat's inbox (spec-seat.md
                ;; R-12.38): its own key, one sitting's events
                "/api/-/sittings/inbox"
+               ;; …and the question a service asks about a seat's key:
+               ;; under the seats' own word, since it opens no sitting
+               "/api/-/seats/verify"
                ;; the dashboard slot's measure (dashboard measures
                ;; 1/3): one slot's number over its time window
                "/api/dashboard_slots/:id/-/measure"
@@ -309,6 +312,8 @@
                  "/api/-/sittings/transcript"
                  ;; and the inbox door (R-12.38)
                  "/api/-/sittings/inbox"
+                 ;; and the seat key's verify door, static beside them
+                 "/api/-/seats/verify"
                  ;; and the slot's measure: /api/{plural}/{id}/-/{action}
                  ;; would read it as an action named "measure"
                  "/api/dashboard_slots/:id/-/measure"

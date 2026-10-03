@@ -3473,3 +3473,50 @@ branch is refused `not_train`. None force-pushes a base. The house
 calls them as it calls `merge` and `update_branch`, and a missing
 power leaves the train standing for the next pass. The fake rig in
 `factory10/test/factory10/bench_test.clj` serves the same answers.
+
+## 16. The key check door
+
+A service outside the engine admits a caller by a seat's key and holds
+no copy of it. It asks the engine on each connection, so `revoke_key`
+and `offer_key` on the seat cut that service's callers too. Before this
+door every route that read a seat key acted on a sitting (close, tally)
+or opened one (`waymark_sit`).
+
+**R-16.1** `POST /api/-/seats/verify` with the JSON body
+`{"key": "<seat key>"}` answers 200 and exactly
+`{"live": true|false, "seat": "<name>"|null}`. `live` is true when an
+active seat's `sitter_key` is exactly that key; `seat` is that seat's
+`name`. Nothing else of the seat row is answered, and the key is never
+echoed.
+
+**R-16.2** The door opens no sitting, mints no grant and writes no row.
+
+**R-16.3** A key that matches nothing, a key the seat revoked and the
+key of a parked seat answer the same body, `{"live": false, "seat":
+null}`, off the same constant-time read of every active seat
+(`seats/seat-by-key`). A one-time fire key is not a seat key and
+answers the same.
+
+**R-16.4** The caller proves itself as a service: the header
+`Waymark-Subscription-Secret` carries the signing secret of an active
+`subscription`. No header, a secret no subscription holds and a
+subscription that is paused, failed or revoked answer 401 with one
+sentence, before any seat is read. A subscription with no secret is not
+a caller.
+
+**R-16.5** Each subscription may ask about 120 keys in one clock
+minute. Past that the door answers 429 with `Retry-After`, in seconds.
+The count is kept by each engine process.
+
+**R-16.6** A revoke is read on the next ask: the door reads the seat
+rows each time and caches nothing.
+
+A service checks `Authorization: Bearer <seat key>` from its own caller
+this way:
+
+```bash
+curl -s https://work.kopsa.info/api/-/seats/verify \
+  -H "Waymark-Subscription-Secret: $SUBSCRIPTION_SECRET" \
+  -H 'Content-Type: application/json' \
+  -d "{\"key\": \"$SEAT_KEY\"}"
+```
