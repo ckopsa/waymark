@@ -341,6 +341,10 @@
         allowed #{:id :state :data :kind :version}]
     (when (empty? roots)
       (err r :summary-template "summary template reads no field"))
+    (when (and (contains? r :summary-line) (not (fn? (:summary-line r))))
+      (err r :summary-template
+           (str ":summary-line is (fn [row ctx]) → the line, or nil for "
+                "the template; the :summary template stays beside it")))
     (when-some [unknown (seq (sort (remove allowed roots)))]
       (err r :summary-template
            (str "summary template references unknown roots " (vec unknown)

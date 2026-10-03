@@ -817,13 +817,37 @@
   "The honesty trap, closed (ns docstring): a summary template that
   reads a redacted field renders as the honest generic line, never as
   the template over hidden values."
-  [rdef row redacted]
-  (if (and (seq redacted)
-           (some #(contains? redacted (keyword (second %)))
-                 (re-seq summary-data-token (str (:summary rdef)))))
-    (str (summary/state-label (:kind rdef)) " · "
-         (summary/state-label (:state row)))
-    (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))))
+  ([rdef row redacted]
+   (if (and (seq redacted)
+            (some #(contains? redacted (keyword (second %)))
+                  (re-seq summary-data-token (str (:summary rdef)))))
+     (str (summary/state-label (:kind rdef)) " · "
+          (summary/state-label (:state row)))
+     (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))))
+  ;; THE LINE A TEMPLATE CANNOT SAY (ticket ea061a48). A kind's
+  ;; :summary-line is `(fn [row ctx])` → the line, or nil for the
+  ;; template. It is asked only where a render lends its ctx-opts — the
+  ;; envelope — and reads the clock (:now) and other rows (:read), which
+  ;; the template grammar has neither of. It is handed the row WITHOUT
+  ;; its redacted fields, so it can say nothing the projection hides; a
+  ;; blank answer or a throw falls back to the template, and a read
+  ;; never fails because of it.
+  ([rdef row redacted ctx-opts]
+   (or (when-some [line (:summary-line rdef)]
+         (try
+           (some-> (line (cond-> row
+                           (seq redacted)
+                           (update :data #(apply dissoc % redacted)))
+                         {:now (:now ctx-opts)
+                          :read (or (:read ctx-opts)
+                                    (:read (:evidence-reads ctx-opts)))})
+                   str not-empty)
+           (catch Exception e
+             (binding [*out* *err*]
+               (println (str "waymark10 summary line [" (name (:kind rdef))
+                             "] failed on " (:id row) ": " (ex-message e))))
+             nil)))
+       (project-summary rdef row redacted))))
 
 (defn target-summary
   "One row's summary line as THIS visibility may read it — the
@@ -1082,7 +1106,7 @@
               :kind (name (:kind rdef))
               :self self
               :state (name state)
-              :summary (project-summary rdef hrow redacted)
+              :summary (project-summary rdef hrow redacted ctx-opts)
               :data enc-data
               :fields fields
               :actions actions

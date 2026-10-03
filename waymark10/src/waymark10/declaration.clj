@@ -113,6 +113,11 @@
    :owns :links :related
    ;; advertisement
    :display :label-template :summary :deviations
+   ;; the summary line a template cannot say (ticket ea061a48): `(fn
+   ;; [row ctx])` → the line, or nil for the :summary template. The
+   ;; envelope asks it with the render's clock (:now) and :read; never
+   ;; stored, never in the fingerprint — :computed's precedent
+   :summary-line
    ;; hooks & engine weaves
    :on-create :mirror
    ;; what the log carries forward past the write (spec-decision-record,
