@@ -1017,6 +1017,11 @@
   the same read: `seats/seat-by-key` compares every active seat in
   constant time whichever it is.
 
+  A FEED TOKEN ANSWERS AS THE SEAT'S KEY DOES (R-16.7). The token a sit
+  answered for the seat's `feed_url` is live while its sitting is open
+  and its end has not come (`seats/feed-seat-by-token`); after that it
+  answers the same `{live: false, seat: null}`. No other door reads it.
+
   IT OPENS NOTHING. No sitting is born, no grant is minted and no row
   is written: the door is two reads."
   [eng]
@@ -1042,7 +1047,8 @@
                   (invalid! :key (str "is required: the seat key to check, a "
                                       "string of at most " verify-key-max
                                       " characters.")))
-              seat (seats/seat-by-key eng key)]
+              seat (or (seats/seat-by-key eng key)
+                       (seats/feed-seat-by-token eng key))]
           (router/json-response
            200 {:live (some? seat)
                 :seat (some-> seat (get-in [:data :name]))}))))))

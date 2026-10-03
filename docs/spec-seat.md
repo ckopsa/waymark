@@ -123,6 +123,7 @@ work.
 | `cadence_seconds` | int | how often the schedule fires the seat. The fixed wake cost. |
 | `mode` | enum `fired`, `interactive`, default `fired` | who opens a sitting here. A schedule, a person or a wake fires a fired seat. A person sits in an interactive seat, and nothing fires it. R-10.8. |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
+| `feed_url` | string, optional, an https URL | an outside inbox that streams this seat's subscription deliveries. The sit answers a short-lived token for it. R-16.7. |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
 | `sitting_idle_seconds` | int, 60 to 86400, default 3600 | how long an open interactive sitting can wait with no new tally, or an open fired sitting with no call, before the sweep ends it. R-7.6. |
 | `walk` | kind name, optional | the queue this seat walks, one row at a time, in the order of its default sort. R-12.9. |
@@ -3510,6 +3511,29 @@ The count is kept by each engine process.
 
 **R-16.6** A revoke is read on the next ask: the door reads the seat
 rows each time and caches nothing.
+
+**R-16.7** A seat may state `feed_url`, the https address of an outside
+inbox. It is not the seat's `inbox`, which the engine holds itself, and
+the sit's `inbox` answer is unchanged by it. When the seat has a
+`feed_url`, `waymark_sit` answers a top-level `feed`:
+`{"url", "token", "expires_at", "note"}`. A sit that reuses an open
+sitting answers a fresh token, and the earlier one stops.
+
+- `token` is 128 random bits. The sitting keeps its SHA-256 alone
+  (`feed_token_hash`), written outside the log, and the transcript door
+  redacts the token from an uploaded line.
+- `expires_at` is 35 minutes after the sit. The token also stops when
+  its sitting leaves `open`, by the close door, the sweep or an
+  abandon, whichever is first.
+- This door answers `{"live": true, "seat": "<name>"}` for a token that
+  has not stopped, as it does for the seat's key, under the same limit
+  (R-16.5). A stopped token answers `{"live": false, "seat": null}`,
+  and the outside inbox turns that into its own 401.
+- No other door reads the token: it sits in no seat, closes no sitting,
+  pulls no inbox and is no bearer for the API or the connector.
+
+The session sends `Authorization: Bearer <token>` to `feed_url` and to
+no other address.
 
 A service checks `Authorization: Bearer <seat key>` from its own caller
 this way:
