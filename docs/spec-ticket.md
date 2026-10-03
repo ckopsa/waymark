@@ -92,7 +92,7 @@ seat builds and changing it is ungrooming it. `reopen` lands in
 |---|---|---|
 | `title` | string, 1 to 200 | what needs doing, in one line. The pull request's title when a seat builds it. |
 | `detail` | string, up to 20000, optional | the how, and what done looks like. A seat reads it before it reads code. |
-| `showcase` | map `{format, scene}`, optional | the scene that makes a person want this. `format` is `film` (what a person sees) or `text` (a before/after conversation, for work that makes the agent better); `scene` is markdown, 1 to 1200. |
+| `showcase` | map `{format, scene, evidence}`, optional | the scene that makes a person want this. `format` is `film` (what a person sees) or `text` (a before/after conversation, for work that makes the agent better); `scene` is markdown, 1 to 1200. `evidence` is an optional map `{film_url, scene_ref, note}`: the https link where the film plays, or the row (`kind:id`) whose text is the told scene. |
 | `parent_scene` | string, computed, read-only | the `scene` of the parent's showcase, read at render. Empty with no parent, or a parent that names none. |
 | `type` | enum `bug`, `feature`, `task`, `chore`; default `task` | what kind of ask |
 | `priority` | int 0 to 4, default 2 | the queue's order. 0 first. |
@@ -124,6 +124,11 @@ starts `[epic]` and that has no `showcase`, with the remedy `restate`;
 it reads the row alone, so its scenarios are check-tier too. Every
 other ticket grooms without a showcase. `restate` takes `showcase`
 with the other stated fields.
+`an-epic-shows-its-evidence` refuses the `complete` of an epic whose
+showcase carries no evidence of its format, with the remedy `restate`:
+a film needs `evidence.film_url`, an https link, and a text needs
+`evidence.scene_ref`, a `kind:id` that names a row that exists. Every
+other ticket completes without it, and `drop` asks an epic for none.
 
 **R-4.1** `restate` (draft → draft) takes the four stated fields
 again, whole, and prefills them. A groomed ticket is not restated: it
