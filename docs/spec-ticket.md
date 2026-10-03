@@ -92,6 +92,8 @@ seat builds and changing it is ungrooming it. `reopen` lands in
 |---|---|---|
 | `title` | string, 1 to 200 | what needs doing, in one line. The pull request's title when a seat builds it. |
 | `detail` | string, up to 20000, optional | the how, and what done looks like. A seat reads it before it reads code. |
+| `showcase` | map `{format, scene}`, optional | the scene that makes a person want this. `format` is `film` (what a person sees) or `text` (a before/after conversation, for work that makes the agent better); `scene` is markdown, 1 to 1200. |
+| `parent_scene` | string, computed, read-only | the `scene` of the parent's showcase, read at render. Empty with no parent, or a parent that names none. |
 | `type` | enum `bug`, `feature`, `task`, `chore`; default `task` | what kind of ask |
 | `priority` | int 0 to 4, default 2 | the queue's order. 0 first. |
 | `repo` | string, optional | the repository, as GitHub spells it. The seat's bench filter names the same one. |
@@ -102,7 +104,7 @@ seat builds and changing it is ungrooming it. `reopen` lands in
 | `defer_until` | date, optional | the day a deferred ticket returns. Written by `defer` and `resume`. |
 | `close_reason` | string, up to 480, optional | how it ended. Written by `complete`, `drop` and `reopen`. |
 
-**R-3.3** The birth door must take `title`, `detail`, `type`,
+**R-3.3** The birth door must take `title`, `detail`, `showcase`, `type`,
 `priority`, `repo`, `parent`, `found_in` and `bead_id`, and nothing
 else. A ticket is born a draft.
 
@@ -117,6 +119,11 @@ and name `draft`, `blocked` and `deferred` in neither.
 **R-4.0** `groom` (draft → open) and `ungroom` (open → draft) take no
 input. `a-person-or-their-delegate-grooms` refuses a model alone and
 is not grantable; its scenarios are check-tier.
+`an-epic-names-its-showcase` refuses the groom of a ticket whose title
+starts `[epic]` and that has no `showcase`, with the remedy `restate`;
+it reads the row alone, so its scenarios are check-tier too. Every
+other ticket grooms without a showcase. `restate` takes `showcase`
+with the other stated fields.
 
 **R-4.1** `restate` (draft → draft) takes the four stated fields
 again, whole, and prefills them. A groomed ticket is not restated: it

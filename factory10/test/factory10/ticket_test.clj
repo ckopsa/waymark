@@ -99,6 +99,49 @@
   (testing "and the engine's own hand grooms too"
     (is (= :available (:status (refusal (at :draft) (ctx the-engine) :groom))))))
 
+;; ── an epic names its showcase (ticket cbf84f80) ────────────────────
+
+(def ^:private a-showcase
+  {:format "film"
+   :scene "You open a proposal and cannot tell why anyone wants it. Then the scene plays, and you can."})
+
+(deftest an-epic-is-groomed-with-its-showcase-and-not-without
+  (let [epic (at :draft {:title "[epic] Every epic names its scene"})]
+    (testing "an epic without a showcase refuses groom, and says the way"
+      (let [shut (refusal epic (ctx the-person) :groom)]
+        (is (= :unavailable (:status shut)))
+        (is (= :an-epic-names-its-showcase (:name (:denier shut))))
+        (is (re-find #"Restate it with a showcase" (str (:reason shut))))))
+    (testing "with one it grooms"
+      (is (= :available
+             (:status (refusal (assoc-in epic [:data :showcase] a-showcase)
+                               (ctx the-person) :groom)))))
+    (testing "a plain ticket grooms without one"
+      (is (= :available
+             (:status (refusal (at :draft) (ctx the-person) :groom)))))
+    (testing "the field is on the birth and on the restate"
+      (is (contains? (into #{} (map first) (rest (:create-schema ticket)))
+                     :showcase))
+      (is (contains? (into #{} (map first)
+                           (rest (get-in ticket [:actions :restate :input])))
+                     :showcase)))))
+
+(deftest a-child-envelope-shows-its-parents-scene
+  (let [parent (at :open {:title "[epic] Every epic names its scene"
+                          :showcase a-showcase} "P")
+        child (at :draft {:parent "P"} "C")
+        rows {"P" parent "C" child}
+        env (fn [row]
+              (render/envelope ticket row
+                               {:principal the-person :now now
+                                :read (fn [_kind id] (get rows (str id)))}))]
+    (is (= (:scene a-showcase) (get-in (env child) ["data" "parent_scene"]))
+        "plumbing shows which scene it serves")
+    (is (nil? (get-in (env parent) ["data" "parent_scene"]))
+        "a ticket with no parent is part of no scene")
+    (is (= "{data.title} · {state}" (:summary ticket))
+        "and the summary line is unchanged")))
+
 (deftest an-open-ticket-is-the-queue-and-offers-every-working-door
   (testing "a seat at an open ticket meets the doors that end or park it"
     (is (= #{:prioritize :block :defer :complete :drop :merge_after :reparent}
