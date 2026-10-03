@@ -321,9 +321,9 @@
 (deftest ui-replay-paces-a-burst
   ;; docs/spec-agent-demo-walks.md §2: the beats of one connector call
   ;; are recorded milliseconds apart, and replay plays two frames less
-  ;; than 50 ms apart 450 ms apart, under the long-silence cut
+  ;; than 50 ms apart the one floor (1000 ms) apart, under the long-silence cut
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
-    (is (str/includes? body "const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = 450;"))
+    (is (str/includes? body "const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = REPLAY_MIN_STILL;"))
     (is (str/includes? body "const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);"))
     (is (str/includes? body "r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);"))
     (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
@@ -343,32 +343,35 @@
     (is (str/includes? body "const gap = read + Math.min(REPLAY_MAX_GAP,"))))
 
 (deftest ui-replay-holds-on-a-write
-  ;; the screen is still at least 1500 ms after a `transition`, and at
-  ;; least 800 ms after a `move` to another row. The hold is a floor
+  ;; the screen is still at least 1500 ms after a `transition`; a `move`
+  ;; has no hold of its own, only the one floor. The hold is a floor
   ;; under the gap and no addition to it, so a recorded 60-second silence
   ;; still plays in REPLAY_MAX_GAP; film mode schedules by the same code
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
     (is (str/includes? body "const REPLAY_MAX_GAP = 3000;"))
-    (is (str/includes? body "const REPLAY_WRITE_HOLD = 1500, REPLAY_MOVE_HOLD = 800;"))
+    (is (str/includes? body "const REPLAY_WRITE_HOLD = 1500;"))
     (is (str/includes? body "if (f.type === \"transition\") return REPLAY_WRITE_HOLD;"))
-    (is (str/includes? body "return row(frames[j].self) === row(f.self) ? 0 : REPLAY_MOVE_HOLD;"))
+    (is (not (re-find #"REPLAY_MOVE_HOLD|replayActHold" body))
+        "a move has no hold of its own: the one floor is under it")
     (is (str/includes? body "const still = replayHoldTime(r.frames, r.at);"))
-    (is (str/includes? body "const gap = Math.max(replayGap(r),\n    still && still + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);"))
+    (is (str/includes? body "const gap = Math.max(replayGap(r),\n    still && left + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);"))
     (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
 
 (deftest ui-replay-keeps-a-floor-under-every-visible-change
   ;; walk 082fefa5's shape (move, doc, ui open, ui typed, transition,
-  ;; doc) is recorded milliseconds apart. After a move to another
-  ;; row, a dialog opening or closing, or a transition the screen is
-  ;; still at least 1000 ms, and after a typing beat at least 800 ms,
+  ;; doc) is recorded milliseconds apart. After any change of the
+  ;; screen (a move, a dialog opening or closing, a typing beat, a
+  ;; caption, a doc that draws the screen again) the screen is still at
+  ;; least 1000 ms, counted from the moment the change is drawn,
   ;; before speed and before the gesture. A doc of the screen already shown, or a ui beat equal
   ;; to the one before it, waits nothing and is not drawn again
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
-    (is (str/includes? body "const REPLAY_STILL_SCREEN = 1000, REPLAY_STILL_TYPED = 800;"))
-    (testing "the floors are under the gap the schedule plays, which speed divides"
-      (is (str/includes? body "return replayTyped(frames, i) ? REPLAY_STILL_TYPED : REPLAY_STILL_SCREEN;"))
-      (is (str/includes? body "if (f.type === \"invitation\") return REPLAY_STILL_SCREEN;"))
-      (is (str/includes? body "return hold && Math.max(hold, REPLAY_STILL_SCREEN);"))
+    (is (str/includes? body "const REPLAY_MIN_STILL = 1000;"))
+    (testing "the one floor is under the gap the schedule plays, which speed divides"
+      (is (str/includes? body "if (!replayShows(frames, at)) return 0;"))
+      (is (str/includes? body "if (f.type === \"transition\") return REPLAY_WRITE_HOLD;\n  return REPLAY_MIN_STILL;"))
+      (is (not (re-find #"REPLAY_STILL_SCREEN|REPLAY_STILL_TYPED|replayTyped" body))
+          "no kind of change has a shorter floor of its own")
       (is (str/includes? body "const still = replayHoldTime(r.frames, r.at);")))
     (testing "a frame that changes nothing visible adds no wait"
       (is (str/includes? body "if (!read && replayStill(r.frames, r.at)) return 0;"))
@@ -376,7 +379,13 @@
       (is (str/includes? body "return JSON.stringify(frames[i].doc) === JSON.stringify(f.doc);"))
       (is (str/includes? body "replayBeat(frames[i]) === replayBeat(f);")))
     (testing "the floor is counted from the last frame that changed the screen"
-      (is (str/includes? body "while (i >= 0 && (frames[i].type === \"doc\" || replayStill(frames, i))) i--;")))
+      (is (str/includes? body "while (i >= 0 && !replayShows(frames, i)) i--;")))
+    (testing "a doc that draws the screen again is a change, and one for another address is not"
+      (is (str/includes? body "return !!f.doc && !!row(f.self) && row(f.self) === row(hereHref());")))
+    (testing "the floor is counted from the moment the change is drawn"
+      (is (str/includes? body "return replayDrawn(replay, renderReplay(view, href));"))
+      (is (str/includes? body "const left = Math.max(0, still - (performance.now() - r.drawn) * r.speed);"))
+      (is (str/includes? body "return r.drawn + r.still / r.speed - now;")))
     (testing "a frame that changes nothing is not drawn again"
       (is (str/includes? body "if (!same && self === String(hereHref() || \"\").split(\"?\")[0]) render();"))
       (is (str/includes? body "} else if (f.type === \"ui\" && !again) {")))))
@@ -384,27 +393,26 @@
 (deftest ui-replay-leaves-a-screen-only-after-it-has-been-still
   ;; the floors are stillness: for a dialog with one typed field and a
   ;; submit, the form is still at least 1000 ms after it opens before the
-  ;; pointer moves, the typed value at least 800 ms before the pointer
+  ;; pointer moves, the typed value at least 1000 ms before the pointer
   ;; heads to the submit, and a hop's list at least 1000 ms. The
   ;; gesture's 900 ms come after the stillness and not inside it
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
-        [_ screen typed] (re-find #"const REPLAY_STILL_SCREEN = (\d+), REPLAY_STILL_TYPED = (\d+);" body)]
-    (is (and screen (>= (Long/parseLong screen) 1000)) "a new screen is still at least 1000 ms")
-    (is (and typed (>= (Long/parseLong typed) 800)) "a typed value is still at least 800 ms")
+        [_ floor] (re-find #"const REPLAY_MIN_STILL = (\d+);" body)]
+    (is (and floor (>= (Long/parseLong floor) 1000)) "every change of the screen is still at least 1000 ms")
     (is (not (re-find #"REPLAY_SCREEN_MIN|REPLAY_TYPE_MIN" body))
         "no floor is measured from the screen's change to the next frame")
-    (testing "an opened form owes the screen floor, and a typed value the typed one"
-      (is (str/includes? body "return replayTyped(frames, i) ? REPLAY_STILL_TYPED : REPLAY_STILL_SCREEN;")))
+    (testing "an opened form and a typed value owe the one floor"
+      (is (str/includes? body "return REPLAY_MIN_STILL;")))
     (testing "the frame waits the stillness and then the gesture, when its recorded gap is shorter"
-      (is (str/includes? body "const gap = Math.max(replayGap(r),\n    still && still + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);")))
+      (is (str/includes? body "const gap = Math.max(replayGap(r),\n    still && left + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);")))
     (testing "the gesture never starts inside the stillness"
-      (is (str/includes? body "Math.max(still, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);")))
+      (is (str/includes? body "Math.max(left, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);")))
     (testing "a hop's list and a walk's row are still for the screen floor before the next gesture"
       (is (str/includes? body "replayGaze(\"list\", list);\n  replayLinger(r);"))
       (is (str/includes? body "replayGaze(walk.list ? \"list\" : \"row\", walk.self);\n  replayLinger(r);"))
-      (is (str/includes? body "r.lead = setTimeout(() => replayGesture(r), REPLAY_STILL_SCREEN / r.speed);")))
+      (is (str/includes? body "r.lead = setTimeout(() => replayGesture(r), REPLAY_MIN_STILL / r.speed);")))
     (testing "the arrival outline lasts as long as the stillness, so it is off when the pointer leaves"
-      (is (str/includes? body "const REPLAY_GAZE_MS = REPLAY_STILL_SCREEN;")))))
+      (is (str/includes? body "const REPLAY_GAZE_MS = REPLAY_MIN_STILL;")))))
 
 (deftest ui-replay-anchors-a-caption-to-its-field
   ;; docs/spec-agent-demo-walks.md §3: a caption that names a field is
@@ -486,9 +494,9 @@
     (is (str/includes? body "hop: r.hopped === r.at ? null : replayHopOf(f, to)};"))
     (testing "the hop draws the list, outlined, and waits the screen floor for the next gesture"
       (is (str/includes? body "location.hash = \"#\" + list;\n  replayGaze(\"list\", list);"))
-      (is (str/includes? body "const wait = REPLAY_STILL_SCREEN + REPLAY_GLIDE_MS + REPLAY_PRESS_MS;"))
+      (is (str/includes? body "const wait = REPLAY_MIN_STILL + REPLAY_GLIDE_MS + REPLAY_PRESS_MS;"))
       (is (str/includes? body "r.timer = setTimeout(replayStep, wait / r.speed);"))
-      (is (str/includes? body "r.lead = setTimeout(() => replayGesture(r), REPLAY_STILL_SCREEN / r.speed);")))
+      (is (str/includes? body "r.lead = setTimeout(() => replayGesture(r), REPLAY_MIN_STILL / r.speed);")))
     (is (and hop act (< hop act))
         "the hop is made before the frame is applied, and in its place")))
 
@@ -559,7 +567,7 @@
   ;; the root element for the screen's stillness, 1000 ms, and the main panel is
   ;; outlined while it does; film mode hides neither mark
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
-    (is (str/includes? body "const REPLAY_GAZE_MS = REPLAY_STILL_SCREEN;"))
+    (is (str/includes? body "const REPLAY_GAZE_MS = REPLAY_MIN_STILL;"))
     (is (str/includes? body "if (f.self) { applyFollowMove(f.self); replayGaze(\"row\", f.self); }"))
     (is (str/includes? body "replayGaze(\"list\", collectionHrefOf(c));"))
     (is (str/includes? body "root.setAttribute(\"data-replay-gaze\", what);"))
@@ -596,7 +604,7 @@
       (is (str/includes? body "if (!to) return;"))
       (is (str/includes? body "return r.gesture ? r.gesture.until - performance.now() : 0;")))
     (testing "the gesture ends as the wait before its frame does, after the stillness"
-      (is (str/includes? body "Math.max(still, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);")))
+      (is (str/includes? body "Math.max(left, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);")))
     (testing "the pointer is drawn over the page, in film mode as well"
       (is (str/includes? body "document.body.append(p = el(\"div\", {id: \"replaypointer\", \"aria-hidden\": \"true\"}));"))
       (is (str/includes? body "#replaypointer { position: fixed; left: 0; top: 0; z-index: 35;"))
@@ -723,7 +731,7 @@
     (is (str/includes? body "if (doc && doc.kind) return renderReplayDoc(view, doc);"))
     (is (str/includes? body "\"data-replay-doc\": \"\", inert: \"\"});"))
     (is (str/includes? body "if (String(doc.kind).endsWith(\"_collection\")) renderCollection(screen, doc, hints);"))
-    (is (str/includes? body "else renderResource(screen, doc, hints).catch(() => {});"))
+    (is (str/includes? body "else drawn = renderResource(screen, doc, hints).catch(() => {});"))
     (testing "a dialog is drawn from the document's input schema"
       (is (str/includes? body "if (held && (held.actions || {})[d.action]) return {ok: true, body: held};")))
     (testing "it makes no read and no write"

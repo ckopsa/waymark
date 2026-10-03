@@ -35,12 +35,18 @@
 #
 # ── MOVING THIS TO YOUR OWN HARDWARE ──────────────────────────────────
 #
-# runs-on reads the CI_RUNNER repository variable. Set it to a
-# self-hosted label and every job moves to your cluster with no edit
-# here. Before you do: a self-hosted runner on a PUBLIC repository will
-# execute a stranger's pull request on your LAN. Turn on Settings →
-# Actions → "Require approval for all external contributors" first, and
-# consider leaving fork PRs on GitHub-hosted runners.
+# Every push and every pull request runs on GitHub-hosted runners, so
+# the required `gate` check never waits on the house. It used to follow
+# the CI_RUNNER repository variable: on 2026-10-03 the cluster's
+# github-runner job died, every suite job queued for a runner that was
+# not there, and `gate` — which needs them all — never started on any
+# PR. The cluster is now opt-in, per dispatch: run this workflow by
+# hand with runner=cluster and the suite jobs go to the label in
+# CI_RUNNER (hosted still, when that variable is unset). A dispatch is
+# not a required check, so a dead cluster costs that one run and
+# nothing else. A self-hosted runner on a PUBLIC repository must never
+# take pull requests anyway: it would execute a stranger's code on
+# your LAN.
 
 name: tests
 
@@ -70,13 +76,14 @@ on:
     inputs:
       runner:
         description: >-
-          Where to run. 'default' follows the CI_RUNNER repository
-          variable; 'github' pins this dispatch to GitHub-hosted
-          runners. Pinning is what makes an A/B measurable — the
-          self-hosted node carries other people's load, and a single
-          pair of runs cannot average that out.
+          Where to run. 'default' and 'github' are both GitHub-hosted
+          runners, as every push and pull request is; 'cluster' sends
+          this one dispatch to the self-hosted label in the CI_RUNNER
+          repository variable, for an A/B against the house. Only a
+          dispatch can ask for the cluster: the required check must
+          not depend on it.
         type: choice
-        options: [default, github]
+        options: [default, github, cluster]
         default: default
       profile:
         description: >-
@@ -188,10 +195,11 @@ env:
   # + ~20s job setup and container init + the slowest shard. Both
   # splits land near that, and 8+3 is kept for using eight fewer of the
   # 20 concurrent jobs. What matters is
-  # WHICH RUNNER: leaving CI_RUNNER unset is worth ~10x here, and the
-  # cluster earns its keep as a fallback for when GitHub stops
+  # WHICH RUNNER: GitHub-hosted is worth ~10x here, which is one reason
+  # pushes and pull requests no longer follow CI_RUNNER. The cluster is
+  # a dispatch's choice (runner=cluster), for when GitHub stops
   # scheduling (which it did, for the better part of an hour, on the
-  # day this was written) rather than as the fast path.
+  # day this was written), not the path a merge waits on.
   SHARDS_WAYMARK10: '8'
   SHARDS_WORKQUEUE10: '3'
 
@@ -468,7 +476,7 @@ jobs:
       needs.changes.outputs.code == 'true' && needs.changes.outputs.quick == 'true' &&
       (needs.changes.outputs.workqueue10 == 'true' || needs.changes.outputs.calendar10 == 'true' ||
        needs.changes.outputs.localfire == 'true')
-    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
+    runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-clojure
@@ -534,7 +542,7 @@ jobs:
     if: >-
       needs.changes.outputs.code == 'true' && needs.changes.outputs.factory == 'true' &&
       needs.changes.outputs.factory10 == 'true'
-    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
+    runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-clojure
@@ -569,7 +577,7 @@ jobs:
   discover:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
+    runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     outputs:
       waymark10: ${{ steps.split.outputs.waymark10 }}
       workqueue10: ${{ steps.split.outputs.workqueue10 }}
@@ -701,7 +709,7 @@ jobs:
     if: >-
       needs.changes.outputs.code == 'true' && needs.discover.outputs.waymark10 != '[]' &&
       needs.changes.outputs.waymark10 == 'true'
-    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
+    runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       # One shard failing must not hide the others: the point of a
       # split suite is seeing every failure in one round.
@@ -880,7 +888,7 @@ jobs:
     if: >-
       needs.changes.outputs.code == 'true' && needs.discover.outputs.workqueue10 != '[]' &&
       needs.changes.outputs.workqueue10 == 'true'
-    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
+    runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1094,9 +1102,10 @@ jobs:
   # verdict, and a skipped suite on a code diff is a FAILURE here, not a
   # pass.
   #
-  # ubuntu-latest deliberately, not the CI_RUNNER expression: the gate
-  # does no work, and the one check a merge waits on must not queue
-  # behind the cluster's load.
+  # ubuntu-latest always, never the cluster expression, even on a
+  # runner=cluster dispatch: the gate does no work, and the one check a
+  # merge waits on must not queue behind the cluster's load. Every job
+  # it needs is GitHub-hosted too on a push and on a pull request.
   # ── THE ACCESS UI DRIVE ──────────────────────────────────────────────
   #
   # waymark10.access-dev boots the access and seat kinds and seeds one
@@ -1390,7 +1399,7 @@ jobs:
   timings:
     needs: [test10, test-queue]
     if: ${{ inputs.profile && always() }}
-    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
+    runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

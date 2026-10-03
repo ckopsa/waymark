@@ -1998,7 +1998,7 @@ async function guidedStory() {
     window.replayPointerTo = (to, speed) => {
       if (replay && changed) window.__replayGlides.push({at: replay.at,
         still: Math.round(performance.now() - changed),
-        floor: (drawn ? REPLAY_STILL_SCREEN
+        floor: (drawn ? REPLAY_MIN_STILL
                       : replayHoldTime(replay.frames, replay.at)) / replay.speed});
       return to0(to, speed);
     };
@@ -2097,6 +2097,108 @@ async function guidedStory() {
               glides.map(g => g.still + "/" + g.floor).join(", "));
   ok("the pointer never starts a glide before the screen it leaves has been still for its floor",
      glides.some(g => g.floor > 0) && glides.every(g => g.still >= g.floor - 20));
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: one second between the changes of the screen");
+  const onWalk = `!replay && !document.querySelector("dialog[open]") &&
+                  !!document.querySelector("[data-replay-walk]") &&
+                  !document.querySelector(${JSON.stringify(`#view a[href="#${meals[1]}"]`)})`;
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  /* a typed field, a caption in the form, a write behind the form, a
+     caption, two moves back onto the row shown, a `doc` that draws that
+     row again and a `doc` for a row that is not on screen. Frames 1, 5
+     and 11 change nothing a viewer sees. */
+  const stillFile = [
+    {format: "waymark-walk/1", title: "An agent takes its time",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+    {t: 10, type: "doc", self: meals[1], doc: {note: "as it was"}},
+    {t: 20, type: "ui", who: "a1", self: meals[1], ui: {dialog: stagedDialog, fields: {}}},
+    {t: 30, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: stagedDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 40, type: "caption", who: "a1", text: "The recipe is typed."},
+    {t: 50, type: "transition", who: "a1", kind: "meal", self: meals[1],
+     action: "update_recipe", from: "on_list", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided stew ${tag}`},
+    {t: 60, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+    {t: 70, type: "caption", who: "a1", text: "The recipe is written."},
+    {t: 80, type: "move", who: "a1", self: meals[1]},
+    {t: 90, type: "move", who: "a1", self: meals[1]},
+    {t: 600, type: "doc", self: meals[1], doc: {note: "as it is now"}},
+    {t: 1100, type: "doc", self: meals[0], doc: {note: "another row"}},
+    {t: 1110, type: "caption", who: "a1", text: "Done."},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every change of the screen: when its frame was applied (`from`) and
+     when its last draw was done (`to`) */
+  await A.js(`{ window.__replayDraws = [];
+    const apply1 = applyReplayFrame, hop1 = replayHop, drawn1 = replayDrawn;
+    const mark = what => {
+      const t = Math.round(performance.now());
+      window.__replayDraws.push({what, from: t, to: t});
+    };
+    window.applyReplayFrame = (f, landed) => {
+      const i = replay && !landed ? replay.frames.indexOf(f) : -1;
+      const shows = i >= 0 && replayShows(replay.frames, i);
+      const out = apply1(f, landed);
+      if (shows) mark(i + " " + f.type);
+      return out;
+    };
+    window.replayHop = r => { const out = hop1(r); mark("hop"); return out; };
+    window.replayDrawn = (r, draw) => drawn1(r, draw).then(() => {
+      const m = window.__replayDraws[window.__replayDraws.length - 1];
+      if (m) m.to = Math.round(performance.now());
+    });
+    true }`);
+  await A.js(`startReplay(${JSON.stringify(stillFile)})`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !document.querySelector("dialog[open]")`, "the walk to end at 1x", 60000);
+  const draws = JSON.parse(await A.js(`JSON.stringify(window.__replayDraws)`));
+  console.log("  the changes (ms since the one before was drawn): " +
+              draws.map((d, i) => d.what + (i ? " +" + (d.from - draws[i - 1].to) : "")).join(", "));
+  ok("a burst's doc, a write behind its form and a doc for a row off screen change no screen",
+     draws.map(d => d.what).join(", ") ===
+       "hop, 0 move, 2 ui, 3 ui, 4 caption, 6 ui, 7 caption, 8 move, 9 move, 10 doc, 12 caption");
+  ok("at 1x no two changes of the screen are drawn less than 1000 ms apart",
+     draws.length > 1 && draws.every((d, i) => !i || d.from - draws[i - 1].to >= 1000 - 20));
+  const shown = draws.find(d => d.what === "10 doc"), last = draws.find(d => d.what === "12 caption");
+  ok("a doc for a row that is not on screen adds no wait",
+     await A.js(`replayHoldTime(replay.frames, 11) === 0 &&
+                 replayHoldTime(replay.frames, 10) === REPLAY_MIN_STILL`) &&
+     !!shown && !!last && last.from - shown.to < 1900 + 300);
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: the floor counts from the draw");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  const lateFile = [
+    {format: "waymark-walk/1", title: "A list drawn late",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* the hop's list is drawn 700 ms after its navigation entry is
+     pressed: when the hop was made, when its list was drawn, and when
+     the pointer next started a glide */
+  await A.js(`{ const late = window.__replayLate = {};
+    const render2 = renderReplay, hop2 = replayHop, drawn2 = replayDrawn, to2 = replayPointerTo;
+    window.renderReplay = (view, href) => href.split("?")[0] !== "/api/meals"
+      ? render2(view, href)
+      : new Promise(done => setTimeout(done, 700)).then(() => render2(view, href));
+    window.replayHop = r => { late.hop = performance.now(); return hop2(r); };
+    window.replayDrawn = (r, draw) => drawn2(r, draw).then(() => {
+      if (late.hop && !late.drawn && hereHref() === "/api/meals") late.drawn = performance.now();
+    });
+    window.replayPointerTo = (to, speed) => {
+      if (late.drawn && !late.glide) late.glide = performance.now();
+      return to2(to, speed);
+    };
+    true }`);
+  await A.js(`startReplay(${JSON.stringify(lateFile)})`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the move, after its list", 20000);
+  const late = JSON.parse(await A.js(`JSON.stringify(window.__replayLate)`));
+  console.log("  the list: drawn " + Math.round(late.drawn - late.hop) + " ms after the hop, left " +
+              Math.round(late.glide - late.drawn) + " ms after it was drawn");
+  ok("a list drawn late is still for its whole floor, counted from the moment it is drawn",
+     late.drawn - late.hop >= 650 && late.glide - late.drawn >= 1000 - 20);
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
   A.close();
   await chrome.close();
