@@ -977,3 +977,18 @@
 (deftest unrefd-ids-a-waiver-without-a-reason-is-refused
   (unrefd-refuses [:owner {:not-a-ref ""} [:string {:max 64}]])
   (unrefd-refuses [:owner {:not-a-ref true} [:string {:max 64}]]))
+
+(deftest unrefd-ids-a-summary-that-prints-a-bare-id
+  (let [over (fn [template & fields]
+               (checks/summary-id-hits
+                (load-quietly (-> base
+                                  (update :schema into fields)
+                                  (assoc :summary template)))))]
+    (is (= ["summary field :place (an address, which the summary prints as a bare id)"]
+           (over "{data.place} · {state}"
+                 [:place {:x-ref {:address true}} [:string {:max 64}]])))
+    (testing "a principal ref is one the renderer names"
+      (is (empty? (over "{data.caller} · {state}"
+                        [:caller {:x-ref {:principal true}} [:string {:max 64}]]))))
+    (testing "a field that holds no ref is not judged"
+      (is (empty? (checks/summary-id-hits (load-quietly base)))))))
