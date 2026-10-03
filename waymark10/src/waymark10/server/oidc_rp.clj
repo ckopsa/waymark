@@ -755,6 +755,16 @@
               (and post? (= (:uri req) "/api/-/sittings/close"))
               (handler req)
 
+              ;; the key check (spec-seat.md § 16): the caller is a
+              ;; service, not a member, and holds no bearer. The secret
+              ;; of an active subscription in its header is the whole
+              ;; credential, compared in constant time behind the door,
+              ;; which answers 401 itself and reads no seat without it.
+              ;; Behind the gate the door could never answer: the gate
+              ;; refused the inbox before its secret was read. POST only.
+              (and post? (= (:uri req) "/api/-/seats/verify"))
+              (handler req)
+
               ;; OAuth discovery (routes/mcp.clj, RFC 9728): the
               ;; document that tells an anonymous client where to stop
               ;; being anonymous. Closing it behind the gate would make
