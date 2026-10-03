@@ -122,9 +122,25 @@
   ;; The state it was blocked FROM is kept, so the last blocker's ending
   ;; returns a draft to `draft` and not to the queue. A restatement from
   ;; `blocked` keeps what the first block wrote.
-  (let [from (state-of row)]
+  ;;
+  ;; `then` says where a DRAFT goes instead (ticket cca6b000): `open`
+  ;; writes `blocked_from` as a groomed ticket's block does, so the last
+  ;; blocker's ending takes `unblock` and the seat wakes. A ticket that
+  ;; stood in the queue stays bound for it whatever `then` says; the way
+  ;; out of the queue is `ungroom`.
+  (let [from (state-of row)
+        was (get-in row [:data :blocked_from])
+        then (some-> (:then inp) name)
+        stood (cond
+                (= :open from) "open"
+                (= :draft from) (or then "draft")
+                (= "open" was) "open"
+                :else (or then was))]
+    ;; `then` is kept beside it, so a restatement that names only the
+    ;; blockers prefills what the first block said
     (cond-> (assoc-in row [:data :blocked_by] (vec (:blocked_by inp)))
-      (#{:draft :open} from) (assoc-in [:data :blocked_from] (name from)))))
+      stood (assoc-in [:data :blocked_from] stood)
+      stood (assoc-in [:data :then] stood))))
 
 (defhandler state-the-merge-order [row inp _ctx]
   ;; `block`'s rule, one field over: the list is REPLACED, and an empty
@@ -203,7 +219,8 @@
   ;; holds NOW, and an unblocked ticket is blocked by nothing.
   (-> row
       (assoc-in [:data :blocked_by] [])
-      (assoc-in [:data :blocked_from] nil)))
+      (assoc-in [:data :blocked_from] nil)
+      (assoc-in [:data :then] nil)))
 
 (defhandler unblock-the-ticket [row inp ctx]
   ;; `clear-the-blockers`, and the ticket is in the queue again
@@ -643,6 +660,24 @@
       (t/deny)
       (t/allow))))
 
+(defguardfn a-person-or-their-delegate-queues-a-draft
+  {:reads [:principal]
+   :open "No door here changes this verdict. A block that says then: open grooms the draft when its blockers end, and grooming is a person's reading of an ask. A seat blocks the draft without then, and a person grooms it."
+   :explain "A draft blocked with then: open reaches the queue when its blockers end, so it is blocked that way by a person, or by a delegate acting for one under a grant the person approved. A seat that could say it could fill its own queue with asks nobody read."}
+  [row inp ctx]
+  ;; `a-person-or-their-delegate-grooms`, on the one input that grooms:
+  ;; `then: open` on a ticket that did not stand in the queue. Every
+  ;; other block passes, the engine's restatement included.
+  (let [{:keys [type acts-for]} (:principal ctx)
+        queued? (or (= :open (state-of row))
+                    (= "open" (get-in row [:data :blocked_from])))]
+    (if (and (= "open" (some-> (:then inp) name))
+             (not queued?)
+             (= :agent type)
+             (str/blank? (str acts-for)))
+      (t/deny)
+      (t/allow))))
+
 (defguardfn only-a-person-reopens
   {:reads [:principal :within]
    :hold true
@@ -857,6 +892,10 @@
    "task" "One piece of work, on the way to something larger"
    "chore" "Upkeep — nothing a person would notice, and it needs doing"})
 
+(def ^:private then-choices
+  {"draft" "Back to draft, to be groomed"
+   "open" "Into the queue, as groomed"})
+
 (def ^:private stated-fields
   "What a person or a seat STATES about a ticket: the create door and
   the restate door collect the same five, because a restatement is
@@ -934,6 +973,13 @@
                    {:label "Blocked while"
                     :help "Where this ticket stood when it was blocked. When the last ticket it waits on ends it goes back there: a groomed ticket to the queue, a draft to draft."}}
     [:maybe [:enum "draft" "open"]]]
+   ;; ticket cca6b000: what the `block` door said, kept for its restate
+   [:then {:optional true
+           :x-display
+           {:label "When its blockers end"
+            :choices then-choices
+            :help "Where this ticket goes when the last ticket it waits on ends. Empty unless the ticket is blocked."}}
+    [:maybe (into [:enum] (sort (keys then-choices)))]]
    [:defer_until {:optional true
                   :examples ["2026-11-19"]
                   :x-display
@@ -1173,7 +1219,8 @@
     ;; the last blocker's ENDING returns the ticket where it was blocked
     ;; from (`blocked_from`), so a draft nobody groomed goes back to
     ;; `draft`. Two ways back to two states is why this door is one-way
-    ;; and not reversible.
+    ;; and not reversible. `then: open` on a draft is the groom said
+    ;; ahead of time (ticket cca6b000): the ending queues it.
     :block
     {:from #{:draft :open :blocked} :to :blocked
      :input [:map
@@ -1181,10 +1228,17 @@
                            :x-display
                            {:label "Waits on"
                             :help "Every ticket that must end before this one is worked. State the whole set: this replaces the list, it does not add to it."}}
-              [:vector {:min 1 :max 50} :waymark/ref]]]
-     :guards [the-blockers-are-open-and-not-itself]
+              [:vector {:min 1 :max 50} :waymark/ref]]
+             [:then {:optional true
+                     :x-display
+                     {:label "When they end"
+                      :choices then-choices
+                      :help "Where a draft goes when the last ticket it waits on ends: open puts it in the queue, as groomed; draft, or nothing, returns it to draft. A ticket blocked from the queue goes back to the queue either way."}}
+              [:maybe (into [:enum] (sort (keys then-choices)))]]]
+     :guards [the-blockers-are-open-and-not-itself
+              a-person-or-their-delegate-queues-a-draft]
      :handler state-the-blockers
-     :edit {:prefill [:blocked_by]}
+     :edit {:prefill [:blocked_by :then]}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This ticket leaves the queue until the tickets it waits on end. When the last of them ends it goes back where it stood — the queue, or draft for a draft — and a person's unblock lands it in the queue sooner."}
      :display {:label "Blocked by" :order 4
