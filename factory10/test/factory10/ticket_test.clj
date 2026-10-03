@@ -142,6 +142,43 @@
     (is (= "{data.title} · {state}" (:summary ticket))
         "and the summary line is unchanged")))
 
+;; ── an epic ends on its evidence (ticket 056ac769) ──────────────────
+
+(deftest an-epic-completes-with-its-evidence-and-not-without
+  (let [epic (fn [showcase]
+               (at :open {:title "[epic] Every epic names its scene"
+                          :showcase showcase} "E"))
+        told {:kind :journal :id "J" :state :written
+              :data {:text "Before, the seat asked twice. After, it asked once."}}
+        c (ctx the-person {"J" told})
+        text-scene (assoc a-showcase :format "text")
+        complete (fn [showcase] (refusal (epic showcase) c :complete))]
+    (testing "an epic without evidence refuses complete, and says what to attach"
+      (let [shut (complete a-showcase)]
+        (is (= :unavailable (:status shut)))
+        (is (= :an-epic-shows-its-evidence (:name (:denier shut))))
+        (is (re-find #"film_url" (str (:reason shut))))))
+    (testing "a film epic with its film link completes"
+      (is (= :available
+             (:status (complete (assoc a-showcase :evidence
+                                       {:film_url "https://films.example/inbox"}))))))
+    (testing "a film epic with only a scene_ref refuses"
+      (let [shut (complete (assoc a-showcase :evidence {:scene_ref "journal:J"}))]
+        (is (= :unavailable (:status shut)))
+        (is (= :an-epic-shows-its-evidence (:name (:denier shut))))))
+    (testing "a text epic completes on a scene_ref that names a row"
+      (is (= :available
+             (:status (complete (assoc text-scene :evidence
+                                       {:scene_ref "journal:J"}))))))
+    (testing "and refuses one that names no row"
+      (let [shut (complete (assoc text-scene :evidence {:scene_ref "journal:nope"}))]
+        (is (= :unavailable (:status shut)))
+        (is (re-find #"names no row" (str (:reason shut))))))
+    (testing "drop needs no evidence"
+      (is (= :available (:status (refusal (epic a-showcase) c :drop)))))
+    (testing "a plain ticket completes without a showcase"
+      (is (= :available (:status (refusal (at :open) c :complete)))))))
+
 (deftest an-open-ticket-is-the-queue-and-offers-every-working-door
   (testing "a seat at an open ticket meets the doors that end or park it"
     (is (= #{:prioritize :block :defer :complete :drop :merge_after :reparent}

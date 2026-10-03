@@ -62,6 +62,12 @@
   (`an-epic-names-its-showcase`), and a child shows its parent's scene
   read-only in `parent_scene`, so plumbing shows which scene it serves.
 
+  AN EPIC ENDS ON ITS EVIDENCE (ticket 056ac769). An epic is done when
+  its scene can be watched or read, not when its last pull request
+  merges. `showcase.evidence` holds a `film_url` or a `scene_ref`, and
+  `complete` refuses an epic whose evidence does not match its format
+  (`an-epic-shows-its-evidence`). `drop` asks for none.
+
   THE ENDINGS ASK FOR A SENTENCE. `complete` and `drop` take
   `close_reason`: what was done, or why it was let go. The record the
   next reader has is that sentence, so the door will not open on an
@@ -690,6 +696,62 @@
     (t/deny)
     (t/allow)))
 
+;; AN EPIC ENDS ON ITS EVIDENCE (ticket 056ac769). `complete` asks the
+;; showcase for the evidence its format names: a film's `film_url`, or a
+;; text's `scene_ref` to a row that exists. The ref is spelled `kind:id`,
+;; as change's `born_from` is, and it may name any kind, so the guard
+;; declares `:storage`. A ctx with no hook — the render probe — answers a
+;; stated ref with an ALLOW, as the walls above do. `drop` does not
+;; carry the guard: an epic let go shows nothing.
+
+(defn- showcase-part [m k]
+  (or (get m k) (get m (name k))))
+
+(defn- evidence-of [row k]
+  (some-> (get-in row [:data :showcase])
+          (showcase-part :evidence)
+          (showcase-part k)
+          str str/trim not-empty))
+
+(defn- told-scene
+  "The row a `scene_ref` names, or nil when it is not spelled `kind:id`
+  or no such row is there."
+  [scene-ref read']
+  (let [scene-ref (str scene-ref)
+        colon (str/index-of scene-ref ":")]
+    (when (and colon (pos? (long colon)))
+      (when-some [id (not-empty (subs scene-ref (inc (long colon))))]
+        (try
+          (read' (keyword (subs scene-ref 0 (long colon))) id)
+          (catch Exception _ nil))))))
+
+(defguardfn an-epic-shows-its-evidence
+  {:reads [:storage]
+   :vars [:missing]
+   :remedies [:ticket/restate]
+   :explain "This ticket is an epic, and an epic is done when its scene can be watched or read. {missing} Restate it with that in its showcase, and then this door opens."}
+  [row _inp ctx]
+  (let [fmt (some-> (get-in row [:data :showcase]) (showcase-part :format) name)
+        film (evidence-of row :film_url)
+        scene-ref (evidence-of row :scene_ref)
+        read' (:read ctx)
+        missing (cond
+                  (not (epic? row)) nil
+                  (= "film" fmt)
+                  (when-not (some-> film (str/starts-with? "https://"))
+                    "Its showcase is a film, so its evidence needs `film_url`: the https link where the film plays.")
+                  (= "text" fmt)
+                  (cond
+                    (nil? scene-ref)
+                    "Its showcase is a text, so its evidence needs `scene_ref`: the row whose text is the told scene, written kind:id."
+                    (and read' (nil? (told-scene scene-ref read')))
+                    "Its `scene_ref` names no row that exists: write it kind:id, for the journal or other row whose text is the told scene.")
+                  :else
+                  "It has no showcase yet: state the scene, and with it the evidence, a `film_url` for a film or a `scene_ref` for a text.")]
+    (if missing
+      (t/deny {:vars {:missing missing}})
+      (t/allow))))
+
 (defn- parent-scene
   "The `parent_scene` computed field: the scene of the ticket this one
   is a piece of, or nil when it has no parent or the parent names none."
@@ -994,7 +1056,28 @@
                       {:widget "prose"
                        :label "The scene"
                        :help "The friction a person knows, then the moment it disappears. It is at most 1200 characters."}}
-              [:string {:min 1 :max 1200}]]]]]
+              [:string {:min 1 :max 1200}]]
+             ;; ticket 056ac769: what `complete` asks an epic for
+             [:evidence {:optional true
+                         :x-display
+                         {:label "Evidence"
+                          :help "What shows the scene happened. An epic is not completed without it: a film needs the film's link, and a text needs the row that tells the scene."}}
+              [:maybe [:map
+                       [:film_url {:optional true
+                                   :x-display
+                                   {:label "The film"
+                                    :help "The https link where the film plays, such as a clone film's public address."}}
+                        [:maybe [:string {:max 500}]]]
+                       [:scene_ref {:optional true
+                                    :x-display
+                                    {:label "The told scene"
+                                     :help "The journal or other row whose text is the scene, told from real records. Write it kind:id."}}
+                        [:maybe [:string {:max 200}]]]
+                       [:note {:optional true
+                               :x-display
+                               {:label "A note"
+                                :help "One line about the evidence, when it needs one."}}
+                        [:maybe [:string {:max 480}]]]]]]]]]
    [:type {:default "task"
            :x-display
            {:label "What kind of ask"
@@ -1468,7 +1551,7 @@
     :complete
     {:from #{:draft :open} :to :done
      :input close-input
-     :guards [children-are-finished]
+     :guards [children-are-finished an-epic-shows-its-evidence]
      :handler close-the-ticket
      ;; the sentence is composed, so it is drafted (change's `stall`):
      ;; a mis-click must not discard what was typed
