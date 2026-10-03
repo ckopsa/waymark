@@ -714,6 +714,139 @@
                                   " demands it and a person reads it.")
                      :remedies ["Call again with arguments.why set to one sentence."]})))
 
+;; ── the shape of a call, judged before a person is asked ────────────
+;;
+;; The row mirrors each tool's input schema, and `affordances-for`
+;; already serves it. A call that schema does not admit is refused
+;; HERE, before a held_call row exists and before the wire: a person's
+;; tap is never spent on a call the server would refuse for its shape.
+;; The check is the plain part of JSON Schema — required, type, enum,
+;; `additionalProperties: false`, nested properties and items. What it
+;; does not read (anyOf, formats, bounds) it lets through, and the
+;; server still judges the call.
+
+(def ^:private why-names #{"why" "__why"})
+
+(defn- sget
+  "A schema key in either spelling: a row's stored schema is keyworded,
+  and one built by hand may not be."
+  [m k]
+  (when (map? m)
+    (if (contains? m k) (get m k) (get m (name k)))))
+
+(defn- props-of [schema]
+  (into {} (map (fn [[k v]] [(name k) v])) (sget schema :properties)))
+
+(defn- types-of [schema]
+  (let [t (sget schema :type)]
+    (cond (nil? t) nil
+          (sequential? t) (mapv str t)
+          :else [(str t)])))
+
+(defn- type-ok?
+  "A secret-row reference is a bare id, so it is a string where a
+  string is expected. A type this door does not know admits anything."
+  [t v]
+  (case (str t)
+    "string" (string? v)
+    "integer" (or (integer? v)
+                  (and (number? v) (== v (Math/rint (double v)))))
+    "number" (number? v)
+    "boolean" (boolean? v)
+    "array" (sequential? v)
+    "object" (map? v)
+    "null" (nil? v)
+    true))
+
+(defn- shape-errors
+  "[{:field :reason} …] for what `schema` does not admit of `v`. A nil
+  under an optional property counts as absent."
+  [schema v path]
+  (let [types (types-of schema)
+        enum (sget schema :enum)
+        at (if (str/blank? path) "arguments" path)
+        sub #(if (str/blank? path) % (str path "." %))]
+    (cond
+      (and types (not-any? #(type-ok? % v) types))
+      [{:field at :reason (str "takes " (str/join " or " types))}]
+
+      (and (sequential? enum) (not-any? #(= % v) enum))
+      [{:field at
+        :reason (str "takes one of " (str/join ", " (map pr-str enum)))}]
+
+      (map? v)
+      (let [props (props-of schema)
+            given (into {} (map (fn [[k x]] [(name k) x])) v)]
+        (vec
+         (concat
+          (for [r (map str (sget schema :required))
+                :when (nil? (get given r))]
+            {:field (sub r) :reason "is required"})
+          (when (false? (sget schema :additionalProperties))
+            (for [k (sort (keys given))
+                  :when (not (contains? props k))]
+              {:field (sub k) :reason "is not an argument of this tool"}))
+          (for [[k x] (sort-by key given)
+                :when (and (some? x) (contains? props k))
+                e (shape-errors (get props k) x (sub k))]
+            e))))
+
+      (sequential? v)
+      (let [items (sget schema :items)]
+        (vec (mapcat (fn [i x] (shape-errors items x (str at "[" i "]")))
+                     (range) v)))
+
+      :else [])))
+
+(defn- call-shape-errors
+  "`shape-errors` for one call's arguments, minus the why in either
+  spelling: the why is this door's, and `refuse-why` judges it."
+  [schema args]
+  (when (map? schema)
+    (->> (shape-errors schema
+                       (into {}
+                             (remove (fn [[k _]] (contains? why-names (name k))))
+                             (or args {}))
+                       "")
+         (remove #(contains? why-names (:field %)))
+         vec)))
+
+(defn- expected-shape
+  "The arguments a tool takes, in one line: required ones first, each
+  with its type."
+  [schema]
+  (let [required (set (map str (sget schema :required)))]
+    (->> (props-of schema)
+         (remove (fn [[k _]] (contains? why-names k)))
+         (sort-by (fn [[k _]] [(not (contains? required k)) k]))
+         (map (fn [[k prop]]
+                (str "`" k "` ("
+                     (str/join " or " (or (types-of prop) ["any"]))
+                     (when (contains? required k) ", required") ")")))
+         (str/join ", "))))
+
+(defn- refuse-shape
+  "The 422 for arguments the tool's own input schema does not admit:
+  each mismatch by field, and the shape the tool takes."
+  [tname schema why? errors]
+  (let [takes (expected-shape schema)]
+    (throw (p/problem :invalid-arguments 422
+                      "Arguments do not match the tool's input schema"
+                      {:detail (str tname " was not called: "
+                                    (str/join "; "
+                                              (map #(str "`" (:field %) "` "
+                                                         (:reason %))
+                                                   errors))
+                                    "."
+                                    (if (str/blank? takes)
+                                      " It takes no arguments."
+                                      (str " It takes " takes ".")))
+                       :errors (vec errors)
+                       :expected (present-schema schema why?)
+                       :remedies [(str "Call again with arguments that match"
+                                       " the tool's input schema;"
+                                       " waymark_powers serves it.")]}))))
+
 (defn- refuse-anonymous
   "The 403 for a call this door would HOLD and cannot: a held call
   names its caller, and the first wall on answering it is `not the
@@ -946,8 +1079,9 @@
   tool no entry names 404s (it does not exist through this door,
   whatever the server offers), an ungranted one 403s naming the ask, a
   call outside the grant's FILTER 403s naming the field and the value
-  (waymark-fp62.6.3.5), a missing why 422s, and NONE of them touches a
-  server. A granted call forwards through the row's client — with
+  (waymark-fp62.6.3.5), a missing why 422s, arguments the tool's
+  mirrored input schema does not admit 422 naming each field and the
+  shape the tool takes, and NONE of them touches a server. A granted call forwards through the row's client — with
   `allow` added when the filter narrowed paths and the call named
   none. It answers the payload VERBATIM.
 
@@ -974,6 +1108,12 @@
      (when (or (nil? hit) (nil? entry))
        (refuse-unknown eng asked))
      (let [gentry (grants/capability-entry vis token)
+           ;; the caller's own arguments against the tool's mirrored
+           ;; schema, read before this door adds anything to them
+           schema (some #(when (= (str (:bare hit)) (str (:name %)))
+                           (:input_schema %))
+                        (get-in row [:data :tools]))
+           shape (seq (call-shape-errors schema args))
            protected (protected-verdict vis tname gentry args)
            args (bench-protected tname args protected)
            verdict (when gentry (filter-verdict (:filters gentry) args))
@@ -1006,6 +1146,11 @@
 
          (and why (not (carries-why? args)))
          (refuse-why tname)
+
+         ;; held or not, a call the tool's schema does not admit stops
+         ;; here: no held_call row, no wire
+         shape
+         (refuse-shape tname schema why shape)
 
          (and (= :person approval) (not approved)
               (some-> (:caller opts) str not-empty))
