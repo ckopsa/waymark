@@ -78,6 +78,7 @@
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.math RoundingMode)
@@ -971,26 +972,31 @@
   request presents, or nil. `seats/seat-by-key`'s read and its reason:
   every active subscription is read and compared in constant time, and
   a request with no header never reaches storage. A subscription that
-  declares no secret matches nothing."
+  declares no secret matches nothing. The secret is the key the
+  deliverer signs with (`webhooks/signing-key`): for a subscription
+  whose `secret` is the id of a secret row, that is the row's value
+  now and never the id, and a row that holds no value matches nothing."
   [eng req]
   (when-some [secret (some-> (get-in req [:headers service-secret-header])
                              str not-empty)]
     (when (get (inv/resources eng) :subscription)
-      (let [wanted (.getBytes (str secret) StandardCharsets/UTF_8)]
-        (store/with-tx (:storage eng)
-          (fn [tx]
-            (->> (store/query-rows (:storage eng) tx :subscription
-                                   {:state :active} {:limit 500})
-                 (filter (fn [row]
-                           ;; a typed key is held in `signing_key`, and
-                           ;; `secret` then reads only the mark `set`
-                           (when-some [held (some-> (or (get-in row [:data :signing_key])
-                                                        (get-in row [:data :secret]))
-                                                    str not-empty)]
-                             (MessageDigest/isEqual
-                              wanted
-                              (.getBytes (str held) StandardCharsets/UTF_8)))))
-                 first)))))))
+      (let [wanted (.getBytes (str secret) StandardCharsets/UTF_8)
+            ;; the rows leave the transaction whole: a referenced
+            ;; secret is read by its own
+            active (store/with-tx (:storage eng)
+                     (fn [tx]
+                       (vec (store/query-rows (:storage eng) tx :subscription
+                                              {:state :active} {:limit 500}))))]
+        (->> active
+             (filter (fn [row]
+                       ;; a waiting reference answers a keyword, and an
+                       ;; unsigned subscription nil: neither is a key
+                       (let [held (webhooks/signing-key eng row)]
+                         (when (and (string? held) (seq held))
+                           (MessageDigest/isEqual
+                            wanted
+                            (.getBytes ^String held StandardCharsets/UTF_8))))))
+             first)))))
 
 (defn- verify-asks
   "This caller's asks in the clock minute `minute`, this one counted."

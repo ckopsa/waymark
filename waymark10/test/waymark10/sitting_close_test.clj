@@ -1163,6 +1163,39 @@
       (inv/invoke! eng :subscription (:id sub) :pause nil {:principal person})
       (is (= 401 (:status (verify! h a-key)))))))
 
+(deftest the-key-check-knows-a-service-by-the-secret-row-it-names
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        {sec :row} (inv/create! eng :secret {:name "INBOX_TEST_SECRET"}
+                                {:principal person})
+        ref (str (:id sec))
+        {sub :row} (inv/create! eng :subscription
+                                {:url "https://inbox.test/events" :secret ref}
+                                {:principal person})
+        value "inbox-row-value-01"
+        ask (fn [secret]
+              (verify! h {"waymark-subscription-secret" secret} a-key))]
+    (testing "a row that holds no value matches nothing"
+      (is (= 401 (:status (ask ref))))
+      (is (= 401 (:status (ask value)))))
+    (inv/invoke! eng :secret ref :replace {:value value}
+                 {:principal person
+                  :if-match (inv/etag :secret ref (:version sec))})
+    (testing "the row's value is the service's secret"
+      (let [resp (ask value)]
+        (is (= 200 (:status resp)))
+        (is (= {:live true :seat "meal-clerk"} (json resp)))))
+    (testing "the reference is not the secret"
+      (is (= 401 (:status (ask ref)))))
+    (testing "a literal subscription beside it answers as before"
+      (subscribe! eng)
+      (is (= 200 (:status (verify! h a-key))))
+      (is (= 200 (:status (ask value)))))
+    (testing "the subscription keeps the reference, never the value"
+      (is (= ref (get-in (row-of eng :subscription (str (:id sub)))
+                         [:data :secret]))))))
+
 (deftest the-key-check-is-rate-limited-per-caller
   (let [;; one clock minute, whatever the wall clock does
         eng (assoc (fresh-engine)

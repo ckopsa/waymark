@@ -272,12 +272,13 @@
       (< (.statusCode resp) 400))
     (catch Exception _ false)))
 
-(defn- signing-key
+(defn signing-key
   "The key one delivery is signed with: nil for an unsigned
   subscription, the literal key in `signing_key` (or, on a row from
   before that field, in `secret`), or, when `secret` is the id of a
   secret row, the value that row holds now. → ::waiting when the row
-  holds no value yet."
+  holds no value yet. The seat key check (`routes.seats/service-of`)
+  knows a calling service by this same key."
   [eng sub]
   (let [s (get-in sub [:data :secret])
         k (get-in sub [:data :signing_key])]
