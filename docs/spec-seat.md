@@ -3503,7 +3503,9 @@ active seat's `sitter_key` is exactly that key; `seat` is that seat's
 `name`. Nothing else of the seat row is answered, and the key is never
 echoed.
 
-**R-16.2** The door opens no sitting, mints no grant and writes no row.
+**R-16.2** The door opens no sitting, mints no grant and writes no row,
+except the renewal of R-16.8, which writes the sitting's feed token
+outside the log.
 
 **R-16.3** A key that matches nothing, a key the seat revoked and the
 key of a parked seat answer the same body, `{"live": false, "seat":
@@ -3530,11 +3532,14 @@ inbox. It is not the seat's `inbox`, which the engine holds itself, and
 the sit's `inbox` answer is unchanged by it. When the seat has a
 `feed_url`, `waymark_sit` answers a top-level `feed`:
 `{"url", "token", "expires_at", "note"}`. A sit that reuses an open
-sitting answers a fresh token, and the earlier one stops.
+sitting answers a fresh token, and the earlier ones answer until their
+own ends, so a stream that is using one is not cut. The sitting keeps
+hashes alone, so a sit cannot answer an earlier token again.
 
 - `token` is 128 random bits. The sitting keeps its SHA-256 alone
-  (`feed_token_hash`), written outside the log, and the transcript door
-  redacts the token from an uploaded line.
+  (`feed_token_hash`, and `feed_tokens_earlier` for the tokens before
+  the newest), written outside the log, and the transcript door redacts
+  each token from an uploaded line.
 - `expires_at` is 35 minutes after the sit. The token also stops when
   its sitting leaves `open`, by the close door, the sweep or an
   abandon, whichever is first.
@@ -3547,6 +3552,14 @@ sitting answers a fresh token, and the earlier one stops.
 
 The session sends `Authorization: Bearer <token>` to `feed_url` and to
 no other address.
+
+**R-16.8** A feed token renews itself through this door. When the door
+judges a feed token that is live and has less than half its life left,
+the answer also carries `next_token` and `next_expires_at`, 35 minutes
+after the ask. The token that was asked about is not stopped: it
+answers until its own end, so there is no gap. A sitting holds at most
+12 live tokens; past that the door renews nothing and a sit drops the
+oldest. A closed sitting ends every token it minted.
 
 A service checks `Authorization: Bearer <seat key>` from its own caller
 this way:

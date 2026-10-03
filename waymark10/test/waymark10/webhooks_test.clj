@@ -173,6 +173,69 @@
                               [:headers "x-waymark-signature"]))))
           (finally (engine/stop! (:server rcv))))))))
 
+;; ── 2b. skip_actors, and who made the move ──────────────────────────
+
+(deftest skip-actors-and-the-actor-name
+  (fresh!)
+  (with-eng {:webhook-attempts 2 :webhook-backoff-ms 5}
+    (fn [eng]
+      (let [rcv (receiver!)
+            payloads #(mapv (comp wire/read-json :body) @(:hits rcv))]
+        (try
+          ;; two rows stand in for two seats: an actor's address is
+          ;; `kind:id`, and its name is that row's own
+          (let [{mayor :row} (inv/create! eng :wh_gizmo {:name "mayor"}
+                                          {:principal elena})
+                {coder :row} (inv/create! eng :wh_gizmo {:name "coder"}
+                                          {:principal elena})
+                address #(str "wh_gizmo:" (:id %))
+                as #(t/principal {:id (address %)})
+                {sub :row} (inv/create! eng :subscription
+                                        {:url (:url rcv)
+                                         :kinds ["wh_gizmo"]
+                                         :skip_actors [(address mayor)]}
+                                        {:principal elena})]
+            (inv/create! eng :wh_gizmo {:name "own"} {:principal (as mayor)})
+            (inv/create! eng :wh_gizmo {:name "theirs"} {:principal (as coder)})
+            (webhooks/drain! eng)
+            (testing "a skipped actor's move is not delivered; another's is,
+                      and names who made it"
+              (is (= 1 (count @(:hits rcv))))
+              (let [payload (first (payloads))]
+                (is (= (address coder) (get-in payload [:actor :id])))
+                (is (= "coder" (:actor_name payload)))))
+            (testing "the skipped move is passed, not held: a second drain
+                      sends nothing"
+              (webhooks/drain! eng)
+              (is (= 1 (count @(:hits rcv)))))
+            (testing "an actor that names no row is named by its display"
+              (inv/create! eng :wh_gizmo {:name "hers"} {:principal elena})
+              (webhooks/drain! eng)
+              (is (= 2 (count @(:hits rcv))))
+              (is (= "Elena" (:actor_name (peek (payloads))))))
+            (testing "restated to an empty list, it delivers everyone's"
+              ;; restate is an edit door: it is fenced on the row's version
+              (inv/invoke! eng :subscription (:id sub) :restate
+                           {:skip_actors []}
+                           {:principal elena
+                            :if-match
+                            (inv/etag
+                             :subscription (:id sub)
+                             (:version
+                              (store/with-tx (:storage eng)
+                                (fn [tx]
+                                  (store/load-row (:storage eng) tx
+                                                  :subscription (:id sub) {})))))})
+              (inv/create! eng :wh_gizmo {:name "heard"}
+                           {:principal (as mayor)})
+              (webhooks/drain! eng)
+              (is (= 3 (count @(:hits rcv))))
+              (let [payload (peek (payloads))]
+                (is (= (address mayor) (get-in payload [:actor :id])))
+                (is (= "mayor" (:actor_name payload))))
+              (is (= :active (sub-state eng (:id sub))))))
+          (finally (engine/stop! (:server rcv))))))))
+
 ;; ── 3. failure: bounded retries, then the subscription fails ────────
 
 (deftest failure-parks-the-cursor
