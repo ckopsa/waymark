@@ -221,6 +221,46 @@
         (or (get input-schema :properties)
             (get input-schema "properties"))))
 
+(def ref-form
+  "What an `x-secret-ref` argument takes, in the words a caller reads."
+  "the id of a secret row (waymark_query kind secret), bare: no prefix, and not its name")
+
+(defn describe-refs
+  "`input-schema` with the accepted form said in the description of
+  each `x-secret-ref` property, so a caller reads it where it reads the
+  tool and does not guess."
+  [input-schema]
+  (let [pk (some #(when (contains? input-schema %) %) [:properties "properties"])
+        dk (if (string? pk) "description" :description)
+        form (str "Takes " ref-form ". The engine puts the secret's value in its place.")]
+    (reduce
+     (fn [schema field]
+       (let [k (some #(when (contains? (get schema pk) %) %)
+                     [(keyword field) field])]
+         (update-in schema [pk k dk]
+                    #(if (str/blank? (str %)) form (str % " " form)))))
+     input-schema
+     (sort (ref-fields input-schema)))))
+
+(defn- no-such-secret [field id]
+  (p/problem :not-found 404 "Not found"
+             {:detail (str "No secret " (pr-str id) ". The argument `" field
+                           "` takes " ref-form ".")}))
+
+(defn check-refs!
+  "Refuses when a ref argument of `args` names no secret row, saying
+  the form a ref takes. Reads only: it is what a call is judged by
+  BEFORE it is held, so a person's tap is never spent on a reference
+  that could not resolve. A row the owner has not filled yet passes;
+  the owner may fill it before the tap."
+  [eng input-schema args]
+  (doseq [field (sort (ref-fields input-schema))
+          :let [k (some #(when (contains? args %) %) [(keyword field) field])]
+          :when (some? k)
+          :let [id (str (get args k))]]
+    (when (nil? (row-of eng id))
+      (throw (no-such-secret field id)))))
+
 (defn resolve-refs!
   "→ {:args :values}: `args` with each ref argument's secret row id
   replaced by the value that row holds, and the set of values put in.
@@ -236,7 +276,7 @@
                row (row-of eng id)
                v (get-in row [:data :value])]
            (when (nil? row)
-             (throw (p/not-found "secret" id)))
+             (throw (no-such-secret field id)))
            (when (str/blank? (str v))
              (throw (p/problem :secret-empty 409 "Secret has no value"
                                {:detail (str "The secret " (pr-str id)
