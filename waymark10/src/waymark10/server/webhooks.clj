@@ -159,10 +159,63 @@
                   :help "The addresses of the principals whose own moves this endpoint does not want to hear — seat:… for a seat, as a delivery's actor spells it. Left blank it hears everyone's."}}
    [:maybe [:vector {:max 20} [:string {:min 1 :max 120}]]]])
 
-(defhandler restate-subscription [row inp _ctx]
-  (if (contains? inp :skip_actors)
-    (assoc-in row [:data :skip_actors] (:skip_actors inp))
-    row))
+(def ^:private url-field
+  [:url {:x-display
+         {:label "Where to POST"
+          :help "The endpoint that will receive each event as a JSON POST — https, and reachable from this engine, or nothing arrives."}}
+   [:string {:min 1 :max 250}]])
+
+(def ^:private kinds-field
+  [:kinds {:optional true
+           :examples [["task" "chore"]]
+           :x-display
+           {:label "Which kinds to hear about"
+            :help "The resource kinds whose transitions this endpoint wants — task, meal, chore. Left blank it hears about all of them."}}
+   [:maybe [:vector [:string {:min 1 :max 64}]]]])
+
+(def ^:private description-field
+  [:description {:optional true
+                 :x-display
+                 {:label "What this endpoint is for"
+                  :help "A line for whoever finds this subscription later — whose integration it feeds, and who to ask when it starts failing."}}
+   [:maybe [:string {:max 200}]]])
+
+(def ^:private secret-field
+  [:secret {:optional true
+            :x-display
+            {:raw true
+             :label "Signing secret"
+             :help "The shared key each delivery is HMAC-signed with, so the receiver can prove the POST came from here. Give the id of a secret row, bare, and the engine signs with the value that row holds and never shows it; the deliveries wait while the row holds no value. A key typed here signs too, and is shown afterwards only as set. Leave it blank and the deliveries go unsigned."}}
+   [:maybe [:string {:min 8 :max 120}]]])
+
+(def ^:private delivery-policy-field
+  [:delivery_policy {:optional true
+                     :x-display
+                     {:label "When an endpoint stops answering"
+                      :choices
+                      {"fail" "Stop and wait — the subscription goes failed and the cursor parks where it was, so nothing is lost when someone resumes it"
+                       "skip" "Keep going — log the miss, advance past it, stay active; the event is gone but the stream is not"}}}
+   [:maybe [:enum "fail" "skip"]]])
+
+(def ^:private stated-fields
+  "What restate may change. Each is optional there: an omitted field
+  keeps its value. A blank `secret` keeps the key that is set, since a
+  set key is never shown and so cannot be sent back."
+  [(update url-field 1 assoc :optional true)
+   kinds-field
+   skip-actors-field
+   description-field
+   (assoc-in secret-field [1 :x-display :help]
+             "A new key to sign with, from the next delivery on: the id of a secret row, bare, or a key typed here, which is shown afterwards only as set. Left blank, the signing stays as it is.")
+   delivery-policy-field])
+
+(defhandler restate-subscription [row inp ctx]
+  (let [row (update row :data merge
+                    (select-keys inp [:url :kinds :skip_actors :description
+                                      :delivery_policy]))]
+    (if (some? (:secret inp))
+      (conceal-literal (assoc-in row [:data :secret] (:secret inp)) ctx)
+      row)))
 
 (defresource subscription
   {:kind :subscription
@@ -173,29 +226,12 @@
    :nav :system
    :summary "{data.url} · {state}"
    :schema [:map
-            [:url {:x-display
-                   {:label "Where to POST"
-                    :help "The endpoint that will receive each event as a JSON POST — https, and reachable from this engine, or nothing arrives."}}
-             [:string {:min 1 :max 250}]]
-            [:kinds {:optional true
-                     :examples [["task" "chore"]]
-                     :x-display
-                     {:label "Which kinds to hear about"
-                      :help "The resource kinds whose transitions this endpoint wants — task, meal, chore. Left blank it hears about all of them."}}
-             [:maybe [:vector [:string {:min 1 :max 64}]]]]
+            url-field
+            kinds-field
             skip-actors-field
-            [:description {:optional true
-                           :x-display
-                           {:label "What this endpoint is for"
-                            :help "A line for whoever finds this subscription later — whose integration it feeds, and who to ask when it starts failing."}}
-             [:maybe [:string {:max 200}]]]
+            description-field
             ;; the HMAC key for X-Waymark-Signature; absent = unsigned
-            [:secret {:optional true
-                      :x-display
-                      {:raw true
-                       :label "Signing secret"
-                       :help "The shared key each delivery is HMAC-signed with, so the receiver can prove the POST came from here. Give the id of a secret row, bare, and the engine signs with the value that row holds and never shows it; the deliveries wait while the row holds no value. A key typed here signs too, and is shown afterwards only as set. Leave it blank and the deliveries go unsigned."}}
-             [:maybe [:string {:min 8 :max 120}]]]
+            secret-field
             ;; a literal key typed into `secret`, moved here at create:
             ;; never rendered, never filterable
             [:signing_key {:optional true
@@ -208,13 +244,7 @@
             ;; what an exhausted delivery does (batch F): "fail" (the
             ;; default — mark the subscription failed, park the cursor)
             ;; or "skip" (log to *err*, advance the cursor, stay active)
-            [:delivery_policy {:optional true
-                               :x-display
-                               {:label "When an endpoint stops answering"
-                                :choices
-                                {"fail" "Stop and wait — the subscription goes failed and the cursor parks where it was, so nothing is lost when someone resumes it"
-                                 "skip" "Keep going — log the miss, advance past it, stay active; the event is gone but the stream is not"}}}
-             [:maybe [:enum "fail" "skip"]]]
+            delivery-policy-field
             [:failure_reason {:optional true
                               :x-display
                               {:label "Why deliveries stopped"
@@ -229,16 +259,29 @@
     :resume {:from #{:paused :failed} :to :active
              :safety {:idempotent true :reversible true :confirm false}
              :display {:label "Resume" :order 1}}
-    ;; whose moves it leaves out can change while it runs; the cursor
-    ;; stays where it is. An omitted field keeps its value.
+    ;; where it sends, what it hears and how it signs can change while
+    ;; it runs; the cursor stays where it is, and the next delivery
+    ;; reads the new row. An omitted field keeps its value.
+    ;; NOT :record: this input can carry a literal signing key, and a
+    ;; recorded action persists its raw inputs into the log.
     :restate {:from #{:active} :to :active
-              :input [:map skip-actors-field]
-              :record true
-              :edit {:prefill [:skip_actors]}
+              :input (into [:map] stated-fields)
+              :edit {:prefill [:url :kinds :skip_actors :description
+                               :delivery_policy]}
               :handler restate-subscription
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Restate" :order 2
-                        :description "Change whose moves this endpoint leaves out; deliveries carry on from where they were"}}
+                        :description "Change where this endpoint is, what it hears or how it is signed; deliveries carry on from where they were"}}
+    ;; restate's door for a paused subscription: a self-loop, so the
+    ;; change does not resume it.
+    :restate_paused {:from #{:paused} :to :paused
+                     :input (into [:map] stated-fields)
+                     :edit {:prefill [:url :kinds :skip_actors :description
+                                      :delivery_policy]}
+                     :handler restate-subscription
+                     :safety {:idempotent true :reversible true :confirm false}
+                     :display {:label "Restate" :order 2
+                               :description "Change where this endpoint is, what it hears or how it is signed; it stays paused, and a resume carries on from where it was"}}
     :revoke {:from #{:active :paused :failed} :to :revoked
              :guards [owner-only]
              :safety {:idempotent true :reversible false :confirm true
