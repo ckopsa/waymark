@@ -236,6 +236,96 @@
               (is (= :active (sub-state eng (:id sub))))))
           (finally (engine/stop! (:server rcv))))))))
 
+;; ── 2c. restate: what it hears changes, the cursor does not ─────────
+
+(defn- restate!
+  "Invoke an edit door on a subscription, fenced on the version it has."
+  [eng id action input]
+  (let [row (store/with-tx (:storage eng)
+              (fn [tx] (store/load-row (:storage eng) tx :subscription id {})))]
+    (inv/invoke! eng :subscription id action input
+                 {:principal elena
+                  :if-match (inv/etag :subscription id (:version row))})))
+
+(defn- cursor-of [eng id]
+  (store/with-tx (:storage eng)
+    #(store/cursor-get (:storage eng) % (str "webhook:" id))))
+
+(deftest a-restate-keeps-the-cursor
+  (fresh!)
+  (with-eng {:webhook-attempts 2 :webhook-backoff-ms 5}
+    (fn [eng]
+      (let [rcv (receiver!)
+            moved (receiver!)
+            actors (fn [r] (mapv #(get-in (wire/read-json (:body %))
+                                          [:actor :id])
+                                 @(:hits r)))]
+        (try
+          (let [{mayor :row} (inv/create! eng :wh_gizmo {:name "mayor"}
+                                          {:principal elena})
+                {coder :row} (inv/create! eng :wh_gizmo {:name "coder"}
+                                          {:principal elena})
+                address #(str "wh_gizmo:" (:id %))
+                as #(t/principal {:id (address %)})
+                {sub :row} (inv/create! eng :subscription
+                                        {:url (:url rcv)
+                                         :kinds ["wh_gizmo"]}
+                                        {:principal elena})
+                stored #(store/with-tx (:storage eng)
+                          (fn [tx] (store/load-row (:storage eng) tx
+                                                   :subscription (:id sub) {})))]
+            (webhooks/drain! eng)
+            (is (= 0 (count @(:hits rcv))))
+            (inv/create! eng :wh_gizmo {:name "a"} {:principal (as mayor)})
+            (let [before (cursor-of eng (:id sub))]
+              (restate! eng (:id sub) :restate
+                        {:skip_actors [(address coder)]})
+              (testing "the restate leaves the cursor where it was"
+                (is (some? before))
+                (is (= before (cursor-of eng (:id sub)))))
+              (testing "an omitted field keeps its value"
+                (is (= ["wh_gizmo"] (get-in (stored) [:data :kinds])))
+                (is (= (:url rcv) (get-in (stored) [:data :url])))))
+            (inv/create! eng :wh_gizmo {:name "b"} {:principal (as coder)})
+            (inv/create! eng :wh_gizmo {:name "c"} {:principal (as mayor)})
+            (webhooks/drain! eng)
+            (testing "the move made before the restate is still delivered,
+                      and the next delivery honours the new list"
+              (is (= [(address mayor) (address mayor)] (actors rcv))))
+            (inv/invoke! eng :subscription (:id sub) :pause nil
+                         {:principal elena})
+            (inv/create! eng :wh_gizmo {:name "d"} {:principal (as mayor)})
+            (restate! eng (:id sub) :restate_paused
+                      {:url (:url moved)
+                       :secret "whsec-restated"
+                       :skip_actors nil})
+            (testing "a paused subscription is restated and stays paused"
+              (is (= :paused (sub-state eng (:id sub)))))
+            (testing "a literal key is held as at create: marked, not shown"
+              (is (= webhooks/literal-mark (get-in (stored) [:data :secret])))
+              (is (not (str/includes?
+                        (pr-str (store/with-tx (:storage eng)
+                                  (fn [tx]
+                                    (store/transitions
+                                     (:storage eng) tx
+                                     {:kind :subscription
+                                      :resource-id (:id sub)}
+                                     {:limit 50}))))
+                        "whsec-restated"))))
+            (inv/invoke! eng :subscription (:id sub) :resume nil
+                         {:principal elena})
+            (inv/create! eng :wh_gizmo {:name "e"} {:principal (as coder)})
+            (webhooks/drain! eng)
+            (testing "the new url and key take effect from the next delivery,
+                      which starts where the cursor was"
+              (is (= 2 (count @(:hits rcv))))
+              (is (= [(address mayor) (address coder)] (actors moved)))
+              (is (every? #(= (webhooks/sign "whsec-restated" (:body %))
+                              (get-in % [:headers "x-waymark-signature"]))
+                          @(:hits moved)))))
+          (finally (engine/stop! (:server rcv))
+                   (engine/stop! (:server moved))))))))
+
 ;; ── 3. failure: bounded retries, then the subscription fails ────────
 
 (deftest failure-parks-the-cursor
