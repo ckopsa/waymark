@@ -657,3 +657,96 @@
             refused (hand-to! h person seat mayor)]
         (is (= 409 (:status refused)) (pr-str (json refused)))
         (is (str/includes? (pr-str (json refused)) "Unpark it first"))))))
+
+;; ── a domain's budget · its seats fit inside it ─────────────────────
+
+(defn- domain!
+  "The person makes a domain with a week's budget of 10. → its id."
+  [h nm extra]
+  (let [made (req h :post "/api/domains"
+                  {:headers person
+                   :body (merge {:name nm
+                                 :charter "Keep the house running."
+                                 :budget_usd_per_week 10}
+                                extra)})]
+    (assert (= 201 (:status made)) (pr-str (json made)))
+    (id-of made)))
+
+(defn- domain-money [h domain field]
+  (money (get-in (get-row h "domains" domain person) [:data field])))
+
+(deftest a-domains-seats-fit-inside-its-budget
+  (let [{:keys [h]} (world)
+        house (domain! h "household" {})
+        _ (persons-seat! h "house-lights" {:domain house :budget_usd_per_week 6})]
+    (testing "past the ceiling: refused, and the sentence names the three numbers"
+      (let [refused (req h :post "/api/seats"
+                         {:headers person
+                          :body (body "house-music" {:domain house
+                                                     :budget_usd_per_week 5})})
+            said (pr-str (json refused))]
+        (is (= 409 (:status refused)) said)
+        (is (str/includes? said "come to 11 dollars"))
+        (is (str/includes? said "budget is 10"))
+        (is (str/includes? said "headroom today is 4"))))
+    (testing "at the ceiling: served, and the domain shows what is left"
+      (let [music (persons-seat! h "house-music" {:domain house
+                                                  :budget_usd_per_week 4})]
+        (is (== 10 (domain-money h house :allocated_usd_per_week)))
+        (is (== 0 (domain-money h house :headroom_usd_per_week)))
+        (testing "and a parked seat does not count"
+          (req h :post (str "/api/seats/" music "/-/park") {:headers person})
+          (is (== 6 (domain-money h house :allocated_usd_per_week)))
+          (is (== 4 (domain-money h house :headroom_usd_per_week))))))
+    (testing "the domain's budget does not come down under its seats' total"
+      (let [uri (str "/api/domains/" house)
+            refused (req h :post (str uri "/-/restate")
+                         {:headers (assoc person "if-match" (etag-of h uri person))
+                          :body {:budget_usd_per_week 5}})]
+        (is (= 409 (:status refused)) (pr-str (json refused)))
+        (is (== 4 (domain-money h house :headroom_usd_per_week)))))))
+
+(deftest a-domains-mayor-raises-a-seat-inside-the-headroom-with-no-tap
+  (let [{:keys [h eng]} (world)
+        {:keys [mayor as sitter]} (open-mayor! h)
+        house (domain! h "household" {:mayor mayor :budget_usd_per_week 20})
+        clerk (persons-seat! h "house-clerk" {:domain house})]
+    (testing "not its child and past its ceiling, yet served: the headroom is the mayor's to spend"
+      (let [done (restate-as! h as clerk {:domain house :budget_usd_per_week 9})]
+        (is (= 200 (:status done)) (pr-str (json done)))
+        (is (== 9 (budget-of h clerk)))
+        (is (= sitter (get-in (last (log-of eng :seat clerk)) [:actor :id]))
+            "and it is the mayor's own move in the seat's history")))
+    (testing "past the headroom: refused, not held"
+      (let [refused (restate-as! h as clerk {:domain house :budget_usd_per_week 21})
+            said (pr-str (json refused))]
+        (is (= 409 (:status refused)) said)
+        (is (str/includes? said "headroom today is 11"))
+        (is (== 9 (budget-of h clerk)))))
+    (testing "anything but the budget still waits for the person"
+      (let [asked (restate-as! h as clerk {:domain house
+                                           :budget_usd_per_week 9
+                                           :charter "Decide something else."})]
+        (is (= 202 (:status asked)) (pr-str (json asked)))))))
+
+(deftest a-move-takes-from-one-seat-and-gives-to-another
+  (let [{:keys [h eng]} (world)
+        house (domain! h "household" {})
+        lights (persons-seat! h "house-lights" {:domain house :budget_usd_per_week 6})
+        music (persons-seat! h "house-music" {:domain house :budget_usd_per_week 4})
+        move! (fn [from to amount]
+                (inv/invoke! eng :domain (str house) :move_budget
+                             {:from from :to to :amount amount}
+                             {:principal colton
+                              :idempotency-key (str "move:" (random-uuid))}))]
+    (move! lights music 3M)
+    (is (== 3 (budget-of h lights)))
+    (is (== 7 (budget-of h music)))
+    (is (== 10 (domain-money h house :allocated_usd_per_week))
+        "a domain with no headroom still moves: the total did not change")
+    (is (= :set_budget (:action (last (log-of eng :seat music))))
+        "and the move is in each seat's own history")
+    (testing "no more than the seat has"
+      (is (thrown? clojure.lang.ExceptionInfo (move! lights music 5M)))
+      (is (== 3 (budget-of h lights)))
+      (is (== 7 (budget-of h music))))))

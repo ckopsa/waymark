@@ -9,10 +9,20 @@
   seat still names the domain.
 
   `ensure-factory!` is the boot seed: the domain `factory`, made once.
-  No seat row is rewritten."
+  No seat row is rewritten.
+
+  THE BUDGET IS A CEILING OVER THE SEATS (piece 2). The budgets of a
+  domain's active seats total at or under the domain's own
+  (seats/budget-fits-the-domain on seat create and restate,
+  `budget-covers-the-seats` on the restate here). The row shows the
+  total and what is left as `allocated_usd_per_week` and
+  `headroom_usd_per_week`, worked out at read time. `move_budget` takes
+  an amount from one seat and gives it to another in one transaction;
+  a person or the sitter of the domain's mayor seat makes it."
   (:require [waymark10.guards :as g]
             [waymark10.holds :as holds]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -60,13 +70,123 @@
       :else (t/allow))
     (t/allow)))                         ; probe ctx — decline to guess
 
-;; ── the handler ─────────────────────────────────────────────────────
+(g/defguard budget-covers-the-seats
+  {:reads [:seat]
+   :vars [:total :ceiling]
+   :remedies [:seat/restate :seat/park]
+   :explain "This domain's active seats are given {total} dollars a week together, and a budget of {ceiling} is under that. Lower a seat's budget or park a seat first, or state a budget of {total} or more."}
+  [row inp ctx]
+  ;; restate. Only a budget that comes DOWN under the total is refused:
+  ;; a domain already under it may still be raised toward it.
+  (let [find' (:find ctx)
+        asked (:budget_usd_per_week inp)]
+    (if (or (nil? find') (nil? asked))
+      (t/allow)
+      (let [asked (seats/dollars asked)
+            total (seats/domain-allocated find' row)]
+        (if (and (neg? (compare asked total))
+                 (neg? (compare asked (seats/dollars
+                                       (get-in row [:data :budget_usd_per_week])))))
+          (t/deny {:vars {:total (seats/money-text total)
+                          :ceiling (seats/money-text asked)}})
+          (t/allow))))))
+
+(g/defguard the-mayors-or-a-persons-move
+  {:reads [:principal :now :grant :seat]
+   :open "No door changes who the caller is: ask this domain's mayor or a person to make the move."
+   :explain "A domain's budget is moved between its seats by a person, or by the sitter of the domain's own mayor seat. Ask this domain's mayor or a person to make the move."}
+  [row _inp ctx]
+  (let [{:keys [type acts-for]} (:principal ctx)
+        cited (delegation/cited-seats ctx)
+        mayor (some-> (get-in row [:data :mayor]) str not-empty)]
+    (cond
+      (and mayor (contains? cited mayor)) (t/allow)
+      ;; a sitter of any other seat
+      (seq cited) (t/deny)
+      ;; a person, a tool a person is signed in to, or the engine
+      (or (not= :agent type) (some? (not-empty (str acts-for)))) (t/allow)
+      :else (t/deny))))
+
+(g/defguard move-stays-inside-the-domain
+  {:reads [:seat :domain]
+   :vars [:detail]
+   :open "Name two different active seats of this domain, and an amount above zero that the first seat has."
+   :explain "This budget is not moved: {detail}."}
+  [row inp ctx]
+  (if-some [read' (:read ctx)]
+    (let [from (read' :seat (str (:from inp)))
+          to (read' :seat (str (:to inp)))
+          amount (seats/dollars (:amount inp))
+          here? (fn [s]
+                  (and s
+                       (= "active" (name (:state s)))
+                       (= (str (:id row))
+                          (some-> (seats/domain-row-of ctx (get-in s [:data :domain]))
+                                  :id
+                                  str))))
+          no (fn [detail] (t/deny {:vars {:detail detail}}))]
+      (cond
+        (not (pos? (compare amount 0M)))
+        (no "the amount is not above zero")
+
+        (= (str (:from inp)) (str (:to inp)))
+        (no "it takes from and gives to the same seat")
+
+        (not (here? from))
+        (no "the seat it takes from is not an active seat of this domain")
+
+        (not (here? to))
+        (no "the seat it gives to is not an active seat of this domain")
+
+        (neg? (compare (seats/dollars (get-in from [:data :budget_usd_per_week]))
+                       amount))
+        (no (str "the seat it takes from has "
+                 (seats/money-text (get-in from [:data :budget_usd_per_week]))
+                 " dollars a week, and the move asks for "
+                 (seats/money-text amount)))
+
+        :else (t/allow)))
+    (t/allow)))                         ; probe ctx — decline to guess
+
+;; ── the handlers ────────────────────────────────────────────────────
 
 (defhandler restate-domain
   [row inp _ctx]
   ;; a patch: a field the input leaves out keeps its stored value
   (update row :data merge
           (select-keys inp [:charter :mayor :budget_usd_per_week :owner])))
+
+(defhandler move-budget
+  [row inp ctx]
+  ;; both seats are written through their own `set_budget` door, inside
+  ;; this write's transaction: the total does not change, so a domain
+  ;; with no headroom still moves
+  (when-some [invoke (:invoke ctx)]
+    (let [amount (seats/dollars (:amount inp))
+          budget (fn [id]
+                   (seats/dollars (get-in ((:read ctx) :seat (str id))
+                                          [:data :budget_usd_per_week])))
+          from (- (budget (:from inp)) amount)
+          to (+ (budget (:to inp)) amount)]
+      (invoke :seat (str (:from inp)) :set_budget {:budget_usd_per_week from})
+      (invoke :seat (str (:to inp)) :set_budget {:budget_usd_per_week to})))
+  row)
+
+;; ── the derived fields ──────────────────────────────────────────────
+
+(defn- allocated-field
+  "The domain's :computed `allocated_usd_per_week`: the budgets of its
+  active seats, totalled over the find the render ctx lends."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (seats/domain-allocated find' row)))
+
+(defn- headroom-field
+  "The domain's :computed `headroom_usd_per_week`: its budget less what
+  its active seats are given."
+  [row ctx]
+  (when-some [allocated (allocated-field row ctx)]
+    (- (seats/dollars (get-in row [:data :budget_usd_per_week])) allocated)))
 
 ;; ── the kind ────────────────────────────────────────────────────────
 
@@ -113,6 +233,22 @@
    :nav :system
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
+   :computed {:allocated_usd_per_week
+              {:schema [:decimal {:min 0 :max 100000000}]
+               :x-display
+               {:label "Given to its seats, in dollars a week"
+                :help "The total of the budgets of this domain's active seats, worked out at read time. A parked or retired seat does not count."}
+               ;; it totals the seat rows: with no read lent it is
+               ;; absent, never a false zero
+               :reads? true
+               :fn allocated-field}
+              :headroom_usd_per_week
+              {:schema [:decimal {:min -100000000 :max 100000000}]
+               :x-display
+               {:label "Headroom, in dollars a week"
+                :help "The domain's budget less what its active seats are given: what its mayor may still hand out with no tap."}
+               :reads? true
+               :fn headroom-field}}
    :unique [[:name]]
    :schema
    [:map
@@ -140,13 +276,40 @@
              (optional budget-field)
              owner-field]
      :record true
-     :guards [domain-waits-for-the-tap]
+     ;; the hold LAST, so a held restate is one every other wall passed
+     :guards [budget-covers-the-seats domain-waits-for-the-tap]
      :edit {:prefill [:charter :mayor :budget_usd_per_week :owner] :fence true}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The domain holds what this restate says; the values before are not kept."}
      :handler restate-domain
      :display {:label "Restate the domain" :order 1
                :description "Change the charter, the mayor, the week's budget or the owner"}}
+
+    :move_budget
+    {:from #{:active} :to :active
+     :input [:map
+             [:from {:kind :seat
+                     :x-display
+                     {:label "Take from"
+                      :help "The active seat of this domain whose week's budget comes down by the amount."}}
+              :waymark/ref]
+             [:to {:kind :seat
+                   :x-display
+                   {:label "Give to"
+                    :help "The active seat of this domain whose week's budget goes up by the amount."}}
+              :waymark/ref]
+             [:amount {:examples [5M]
+                       :x-display
+                       {:label "Amount, in dollars a week"
+                        :help "How much moves. It is above zero and no more than the first seat has."}}
+              [:decimal {:min 0 :max 100000}]]]
+     :record true
+     :guards [the-mayors-or-a-persons-move move-stays-inside-the-domain]
+     ;; NOT idempotent: a second move moves the amount again
+     :safety {:idempotent false :reversible false :confirm false}
+     :handler move-budget
+     :display {:label "Move budget" :order 2
+               :description "Take an amount from one seat's week and give it to another, in one write"}}
 
     :retire
     {:from #{:active} :to :retired
