@@ -1116,6 +1116,23 @@
      :display {:label "Restate" :order 2
                :description "Say what needs doing again, whole"}}
 
+    ;; THE STATEMENT OF A BLOCKED TICKET (ticket 470abe2a). `restate`'s
+    ;; door for the one other state where no seat is building the
+    ;; statement. The way round was `unblock`, which lands in `open`
+    ;; and wakes a seat on work whose blockers have not ended. This is
+    ;; a self-loop: `blocked_by` and `blocked_from` are not stated
+    ;; fields, so the handler leaves them as they stand.
+    :restate_blocked
+    {:from #{:blocked} :to :blocked
+     :input (into [:map] stated-fields)
+     :guards [the-merge-order-makes-no-cycle]
+     :handler restate-the-ticket
+     :record true
+     :edit {:prefill [:title :detail :type :repo :merge_after]}
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Restate" :order 26
+               :description "Say what needs doing again, whole — it stays blocked"}}
+
     ;; GROOMING IS THE PERSON'S TAP. A draft becomes the queue's when
     ;; a person read it and stands behind it as written. The way back
     ;; is `ungroom`, so a statement that needs work leaves the queue
@@ -1497,10 +1514,10 @@
             :href "/api/tickets/{data.found_in}"
             :summary "The ticket whose work surfaced this one"}]
    :deviations
-   ["`restate` serves `draft` alone and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
+   ["`restate` is two doors, `restate` for `draft` and `restate_blocked` for `blocked`, and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`. A blocked ticket is restated where it stands: the way round was `unblock`, which lands in `open` and wakes a seat before the blockers end. A deferred ticket is restated when it returns; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
     "`complete`, `drop` and `block` are one-way, not reversible. Each leaves from more than one state and its reverse lands in one (`reopen` in `draft`, `unblock` in `open`), and checks/check-reversible asks a reversible door for a way back to each `:from`. The way back is real in every case, and the `:one-way` sentence names it."
     "`merge_after` is four doors, one self-loop for each state a change can wait in (`draft`, `open`, `in_review`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. `merge_after_in_review` is the one door a hand may take on a ticket under review, because it holds the merge and moves no state."
-    "`reparent` is three doors, one self-loop for each state a hand shapes the tree in (`draft`, `open`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. It is not a field of `restate`: that door serves `draft` alone, a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse there. A ticket under review or deferred is not re-parented; it is when it returns."
+    "`reparent` is three doors, one self-loop for each state a hand shapes the tree in (`draft`, `open`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. It is not a field of `restate`: a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse on that door. A ticket under review or deferred is not re-parented; it is when it returns."
     "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket
