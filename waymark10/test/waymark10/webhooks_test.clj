@@ -11,6 +11,7 @@
             [next.jdbc :as jdbc]
             [org.httpkit.server :as http]
             [waymark10.resource :as r]
+            [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -315,4 +316,46 @@
               (is (signed-with? "whsec-row-value-2" (drop 2 @(:hits rcv)))))
             (testing "the subscription keeps the reference, never the value"
               (is (= ref (get-in (sub-row (:id sub)) [:data :secret])))))
+          (finally (engine/stop! (:server rcv))))))))
+
+;; ── 6. a literal key: it signs, and no read shows it ────────────────
+
+(deftest a-literal-secret-is-never-shown
+  (fresh!)
+  (with-eng {:webhook-attempts 2 :webhook-backoff-ms 5}
+    (fn [eng]
+      (let [rcv (receiver!)
+            literal "whsec-literal-1"]
+        (try
+          (let [{sub :row} (inv/create! eng :subscription
+                                        {:url (:url rcv)
+                                         :kinds ["wh_gizmo"]
+                                         :secret literal
+                                         :signing_key "whsec-not-this"}
+                                        {:principal elena})
+                stored (store/with-tx (:storage eng)
+                         (fn [tx] (store/load-row (:storage eng) tx
+                                                  :subscription (:id sub) {})))
+                log (store/with-tx (:storage eng)
+                      (fn [tx]
+                        (store/transitions (:storage eng) tx
+                                           {:kind :subscription
+                                            :resource-id (:id sub)}
+                                           {:limit 50})))]
+            (testing "the field says a key is set, and holds no key"
+              (is (= webhooks/literal-mark (get-in stored [:data :secret]))))
+            (testing "the key is in a field no projection carries"
+              (is (contains? (schema/secret-fields
+                              (:schema webhooks/subscription))
+                             :signing_key)))
+            (testing "the create transition does not hold it"
+              (is (= ["create"] (mapv #(name (:action %)) log)))
+              (is (not (str/includes? (pr-str log) literal))))
+            (inv/create! eng :wh_gizmo {:name "one"} {:principal elena})
+            (webhooks/drain! eng)
+            (testing "the deliveries are signed with the literal"
+              (is (= 1 (count @(:hits rcv))))
+              (is (every? #(= (webhooks/sign literal (:body %))
+                              (get-in % [:headers "x-waymark-signature"]))
+                          @(:hits rcv)))))
           (finally (engine/stop! (:server rcv))))))))
