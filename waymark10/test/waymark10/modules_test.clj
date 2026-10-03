@@ -103,7 +103,10 @@
            ;; …and the walkthrough (docs/spec-walkthrough.md § 1): an
            ;; ordered run of invitation-shaped steps, core's beside
            ;; the invitation each step is judged as
-           :walkthrough}
+           :walkthrough
+           ;; …and the secret: a value the owner enters once, which a
+           ;; power call on core's own mcp_server names by reference
+           :secret}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -131,7 +134,7 @@
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
-             :walkthrough}
+             :walkthrough :secret}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"

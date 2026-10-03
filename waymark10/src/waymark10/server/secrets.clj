@@ -91,6 +91,7 @@
 
 (def ^:private note-field
   [:note {:optional true
+          :examples ["The Tailscale OAuth client secret the tofu workflow reads; it is under Settings, OAuth clients."]
           :x-display
           {:widget "prose"
            :label "What it opens"

@@ -46,7 +46,11 @@
    :a-private-value-is-a-persons-own
    "It decides whose value a row is, and is not a person's lever: the engine stamps the writer as the owner, so an agent's \"mine\" would be about somebody else's life."
    :a-person-corrects
-   "A correction overrules a seat's verdict, and the count of corrections is what a seat is measured by: an agent that could correct, even on a person's approval, would be writing its own measurement."})
+   "A correction overrules a seat's verdict, and the count of corrections is what a seat is measured by: an agent that could correct, even on a person's approval, would be writing its own measurement."
+   :a-person-enters-the-value
+   "A hold would carry the value in the held call's text, where the agent that wrote it and every reader of the hold see it: an agent makes the row without a value instead."
+   :the-owner-fills-the-value
+   "A secret's value is one no agent sees or writes, and a held replace would be an agent's own text of it waiting for a tap."})
 
 ;; ── the probe ─────────────────────────────────────────────────────────
 
