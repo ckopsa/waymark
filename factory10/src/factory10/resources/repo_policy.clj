@@ -54,6 +54,7 @@
             [factory10.bench :as bench]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
+            [waymark10.holds :as holds]
             [waymark10.types :as t])
   (:import (java.time Duration Instant ZoneOffset)
            (java.time.format DateTimeFormatter)))
@@ -153,6 +154,28 @@
     (if (some? which)
       (t/deny {:vars {:which (str which)}})
       (t/allow))))
+
+(defguardfn only-a-person-widens-the-hosted-workflows
+  {:reads [:principal :within]
+   :hold true
+   :vars [:added]
+   :explain "Adding {added} to the hosted workflows is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. The list is an exception to the house's rule that CI runs on its own runners, and a longer list is a wider exception."
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A restate that removes entries, or leaves the list as it stands, is not held."}
+  ;; ticket 407323ef: a delegate is the person's hand for the policy's
+  ;; numbers, but an entry ADDED here lets one more workflow run on a
+  ;; GitHub-hosted runner, and that is the person's own yes. The input
+  ;; is judged against the stored list, so a removal and an unchanged
+  ;; list pass. ci_run's `only-a-person-reclassifies` one kind over:
+  ;; every hand but an agent's passes, and the one agent call this
+  ;; admits is the engine's replay of the held call its person allowed.
+  [row inp ctx]
+  (let [stored (set (map str (get-in row [:data :hosted_workflows])))
+        added (remove stored (map str (get inp :hosted_workflows)))]
+    (cond
+      (not= :agent (:type (:principal ctx))) (t/allow)
+      (empty? added) (t/allow)
+      (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
+      :else (t/deny {:vars {:added (str/join ", " added)}}))))
 
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
@@ -980,7 +1003,10 @@
      :guards [a-person-or-their-delegate-states-the-policy
               the-house-merges-only-what-a-check-tested
               the-test-selection-pattern-compiles
-              the-hosted-workflows-are-workflow-paths]
+              the-hosted-workflows-are-workflow-paths
+              ;; last, so a call that is held is one the walls above
+              ;; would let the person's Allow run
+              only-a-person-widens-the-hosted-workflows]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes

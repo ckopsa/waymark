@@ -813,25 +813,80 @@
 
 (def ^:private summary-data-token #"\{data\.([A-Za-z0-9_]+)")
 
+(def ^:private uuid-shaped
+  #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+(defn- summary-ref-target
+  "[kind id] of the row one summary field's value names, nil when it
+  names none: a plain `:kind` ref, a `{:kind-from f}` ref whose sibling
+  f holds the kind, or a `{:principal true}` ref spelled `kind:id`."
+  [props data v]
+  (let [xr (:x-ref props)]
+    (cond
+      (:kind props) [(:kind props) v]
+      (:kind-from xr) (when-some [k (get data (:kind-from xr))]
+                        [(keyword (name k)) v])
+      (:principal xr) (let [[k id] (str/split v #":" 2)]
+                        (when (and id (not (str/blank? k)))
+                          [(keyword k) id])))))
+
+(defn- name-summary-refs
+  "The row with each ref field its summary template reads holding the
+  NAME of the row it mentions instead of its id (ticket 2f35a7b5): the
+  head of the target's own summary line, as the ctx-opts hook
+  (fn [kind id]) → {:summary …} answers it — one instance a request,
+  so a page of N rows naming one seat reads that seat once. A ref the
+  hook does not answer (deleted, outside the reader's grant) reads
+  `<kind> 1a2b3c4d`, never the whole uuid. A hashed field is a token,
+  not an id, and is left alone; no hook, no change."
+  [rdef row hashed ref-summary]
+  (if-not ref-summary
+    row
+    (let [entries (schema/entry-map (:schema rdef))
+          data (:data row)]
+      (reduce
+       (fn [row [_ f]]
+         (let [f (keyword f)
+               v (get data f)
+               v (if (uuid? v) (str v) v)
+               [kind id] (when (and (string? v)
+                                    (not (contains? (or hashed #{}) f)))
+                           (summary-ref-target
+                            (:properties (get entries f)) data v))]
+           (if-not kind
+             row
+             (let [line (:summary (ref-summary kind id))
+                   label (if (string? line)
+                           (first (str/split line #" · " 2))
+                           (when (re-matches uuid-shaped id)
+                             (str (name kind) " " (subs id 0 8))))]
+               (cond-> row
+                 (not (str/blank? label)) (assoc-in [:data f] label))))))
+       row
+       (re-seq summary-data-token (str (:summary rdef)))))))
+
 (defn- project-summary
   "The honesty trap, closed (ns docstring): a summary template that
   reads a redacted field renders as the honest generic line, never as
-  the template over hidden values."
-  [rdef row redacted]
-  (cond
-    (and (seq redacted)
-         (some #(contains? redacted (keyword (second %)))
-               (re-seq summary-data-token (str (:summary rdef)))))
-    (str (summary/state-label (:kind rdef)) " · "
-         (summary/state-label (:state row)))
+  the template over hidden values. A ref field the template reads is
+  named, not printed as an id (name-summary-refs)."
+  [rdef row redacted hashed ref-summary]
+  (let [named #(assoc (name-summary-refs rdef row hashed ref-summary)
+                      :kind (:kind rdef))]
+    (cond
+      (and (seq redacted)
+           (some #(contains? redacted (keyword (second %)))
+                 (re-seq summary-data-token (str (:summary rdef)))))
+      (str (summary/state-label (:kind rdef)) " · "
+           (summary/state-label (:state row)))
 
-    ;; a :summary-fn reads fields its template does not name, so under
-    ;; ANY redaction the template answers and the composer does not
-    (seq redacted)
-    (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))
+      ;; a :summary-fn reads fields its template does not name, so under
+      ;; ANY redaction the template answers and the composer does not
+      (seq redacted)
+      (summary/render (:summary rdef) (named))
 
-    :else
-    (summary/line rdef (assoc row :kind (:kind rdef)))))
+      :else
+      (summary/line rdef (named)))))
 
 (defn target-summary
   "One row's summary line as THIS visibility may read it — the
@@ -845,7 +900,10 @@
                                   secret))
         hashed (not-empty (reduce disj (set (hashed-fields rdef visibility))
                                   (or secret #{})))]
-    (project-summary rdef (hash-view rdef row visibility hashed) redacted)))
+    ;; a ref this row's own summary reads is not followed a second row
+    ;; deep: it reads `<kind> 1a2b3c4d`
+    (project-summary rdef (hash-view rdef row visibility hashed) redacted
+                     hashed (constantly nil))))
 
 (defn- ref-labels
   "The envelope's `refs` block: for each plain `:kind` ref field this
@@ -1090,7 +1148,9 @@
               :kind (name (:kind rdef))
               :self self
               :state (name state)
-              :summary (project-summary rdef hrow redacted)
+              :summary (project-summary rdef hrow redacted hashed
+                                        (or (:summary-refs ctx-opts)
+                                            (:ref-summary ctx-opts)))
               :data enc-data
               :fields fields
               :actions actions
@@ -1112,7 +1172,7 @@
   State, summary, links and meta stay — they cost nothing (and they
   project like the full envelope's: batch B's redaction holds at
   every depth)."
-  [rdef row {:keys [resources visibility link-doors]}]
+  [rdef row {:keys [resources visibility link-doors summary-refs]}]
   (let [secret (not-empty (schema/secret-fields (:schema rdef)))
         redacted (not-empty (into (set (redacted-fields rdef visibility))
                                   secret))
@@ -1125,7 +1185,7 @@
       :kind (name (:kind rdef))
       :self (str "/api/" (:plural rdef) "/" (:id row))
       :state (name (:state row))
-      :summary (project-summary rdef hrow redacted)
+      :summary (project-summary rdef hrow redacted hashed summary-refs)
       :actions nil
       :unavailable nil
       :links (render-links rdef public-row resources link-doors)
