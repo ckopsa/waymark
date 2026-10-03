@@ -1028,8 +1028,14 @@
   and its end has not come (`seats/feed-seat-by-token`); after that it
   answers the same `{live: false, seat: null}`. No other door reads it.
 
-  IT OPENS NOTHING. No sitting is born, no grant is minted and no row
-  is written: the door is two reads."
+  A FEED TOKEN PAST HALF ITS LIFE IS ANSWERED THE NEXT ONE (R-16.8).
+  The answer then also carries `next_token` and `next_expires_at`
+  (`seats/renew-feed-token!`), and the token that was asked about
+  answers until its own end, so the feed has no gap.
+
+  IT OPENS NOTHING. No sitting is born and no grant is minted. The
+  door is two reads, and the one write is that renewal, on the
+  sitting and outside the log."
   [eng]
   (fn [req]
     (let [sub (or (service-of eng req)
@@ -1054,10 +1060,14 @@
                                       "string of at most " verify-key-max
                                       " characters.")))
               seat (or (seats/seat-by-key eng key)
-                       (seats/feed-seat-by-token eng key))]
+                       (seats/feed-seat-by-token eng key))
+              ;; a seat key is no feed token, so it renews nothing
+              renewed (when seat (seats/renew-feed-token! eng key))]
           (router/json-response
-           200 {:live (some? seat)
-                :seat (some-> seat (get-in [:data :name]))}))))))
+           200 (cond-> {:live (some? seat)
+                        :seat (some-> seat (get-in [:data :name]))}
+                 renewed (assoc :next_token (:token renewed)
+                                :next_expires_at (:expires_at renewed)))))))))
 
 (defn routes [eng]
   {:module :seats
