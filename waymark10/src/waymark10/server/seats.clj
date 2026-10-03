@@ -2156,6 +2156,14 @@
                      :x-display
                      {:label "Quiet time before it wakes, in seconds"
                       :help "How long the matches must stop before this entry wakes the seat. A match does not fire the seat; it moves the wake forward by this many seconds, and the seat wakes when nothing has matched for that long. The fire names no row, so the session walks the queue. Use it for a conversation, where the first message is not the whole of it. Omit it and the first match wakes the seat at once."}}
+    [:int {:min 1 :max 604800}]]
+   ;; the settle's cap (ticket 8f482592): matches that arrive faster
+   ;; than the settle must not hold the wake back for ever
+   [:max_wait_seconds {:optional true
+                       :examples [2700]
+                       :x-display
+                       {:label "Longest wait after the first match, in seconds"
+                        :help "The longest a settling entry holds the wake after the FIRST match it heard. Matches that keep arriving move the wake forward only up to this point, so a busy collection cannot keep the seat from waking. Omit it and the wake waits at most three times the quiet time. It means nothing on an entry with no quiet time."}}
     [:int {:min 1 :max 604800}]]])
 
 (defn- wake-entry-one-size?

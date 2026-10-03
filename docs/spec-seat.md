@@ -656,6 +656,7 @@ loop script.
 | `wake_pending` | boolean, optional | a match waits for the damper to lift (R-12.22). Engine-written. |
 | `wake_fired_at` | instant, optional | when the engine last fired the seat for a matching transition (R-12.22). Engine-written. |
 | `wake_due_at` | instant, optional | when a waiting wake may go out, for an entry that settles (R-12.22). Engine-written. |
+| `wake_first_at` | instant, optional | when the first match of the waiting settled wake came; `wake_due_at` is never asked past it plus the entry's `max_wait_seconds` (R-12.22). Engine-written. |
 | `last_halted_wake` | instant, optional | when a matching transition last found the seat's week of fuel spent; that wake waits as `wake_pending` until the window rolls. Engine-written. |
 
 States: `pending` (no copy yet), `live`, `paused`, `broken` (the
@@ -1460,6 +1461,18 @@ level is a level that held for that long. A seat's computed default
 entry carries no settle. An entry with no `settle_seconds` fires on
 the match, as it always did. The engine must refuse a
 `settle_seconds` below 1, at `create` and at `restate`.
+
+A settle has a cap. The first match of a waiting settled wake writes
+`wake_first_at`, and a later match must not move `wake_due_at` past
+`wake_first_at` plus the entry's `max_wait_seconds`, a whole number
+from 1 to 604800, optional, which is three times `settle_seconds`
+when the entry names none. So matches that arrive faster than the
+settle batch into one fire and cannot hold the seat back for ever.
+The seat's `cadence_seconds` is the backstop: while a settled wake
+waits, the engine fires the seat when a whole cadence has passed
+since its last fire, or since `wake_first_at` for a seat that never
+fired, whatever `wake_due_at` says. The fire clears `wake_first_at`
+with the other two marks.
 
 A conversation is what the settle is for. The house mirrors a family
 chat as one row, and each reply moves that row. The first reply is

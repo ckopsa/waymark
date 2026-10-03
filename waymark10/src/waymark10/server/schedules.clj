@@ -594,7 +594,7 @@
       (cond-> (:last_runner inp)
         (assoc-in [:data :last_runner] (:last_runner inp)))
       (update :data dissoc :note :retry_after :wake_pending :wake_due_at
-              :wake_text :wake_texts :wake_textless)))
+              :wake_first_at :wake_text :wake_texts :wake_textless)))
 
 (defhandler hold-throttle
   [row inp _ctx]
@@ -780,6 +780,16 @@
                    :x-display
                    {:label "The wake is due"
                     :help "When the waiting wake may go out. The engine writes it when a transition matched a wake_on entry that settles, and a later match moves it forward. The wake goes out after this moment has passed. Engine-written."}}
+     [:maybe :waymark/instant]]
+    ;; The settle's cap (ticket 8f482592). Matches that never stop
+    ;; would move `wake_due_at` forward for ever, so the first match of
+    ;; a waiting settled wake is kept here, and the due moment is never
+    ;; asked past it plus the entry's `max_wait_seconds`. Cleared with
+    ;; the two marks above.
+    [:wake_first_at {:optional true
+                     :x-display
+                     {:label "The wake's first match"
+                      :help "When the first transition of the waiting wake matched a wake_on entry that settles. Later matches move the due moment forward, but not past this moment plus the entry's max_wait_seconds. Engine-written."}}
      [:maybe :waymark/instant]]
     ;; The words a deferred fire carries (ticket afb445d4). A fire whose
     ;; text names a row still in a closed sitting's release grace does
@@ -1940,8 +1950,8 @@
   waiting texts, and the waiting note `defer-fire!` wrote. A note the
   provider wrote stays."
   [data]
-  (cond-> (dissoc data :wake_pending :wake_due_at :wake_text :wake_texts
-                  :wake_textless)
+  (cond-> (dissoc data :wake_pending :wake_due_at :wake_first_at :wake_text
+                  :wake_texts :wake_textless)
     (waiting-note? (:note data)) (dissoc :note)))
 
 (defn- defer-fire!

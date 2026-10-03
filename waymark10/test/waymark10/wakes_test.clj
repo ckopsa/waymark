@@ -1695,6 +1695,78 @@
 
         (seat-do! seat :retire)))))
 
+;; A settle that every match restarts never ends on a busy engine
+;; (ticket 8f482592): matches every 300 seconds against a settle of
+;; 600 moved the due moment forward for ever, and the seat did not sit
+;; for days. The first match's instant is the cap's anchor, and the
+;; seat's cadence is the backstop for an entry whose cap is longer.
+
+(deftest a-settled-wake-is-not-held-back-for-ever-by-matches-that-never-stop
+  (let [wn :wake-settle-cap
+        fn' :wake-settle-cap-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [word! (fn [secs]
+                    (at secs)
+                    (task-do! (task! (str "a word at " secs)) :complete)
+                    (drain-wakes! wn))
+            capped (:seat (linked-seat! "cappedclerk"
+                                        {:fire_interval_seconds 120
+                                         :wake_on [{:kind "wake_task"
+                                                    :actions ["complete"]
+                                                    :settle_seconds 600}]}
+                                        fn'))
+            backed (:seat (linked-seat! "backedclerk"
+                                        {:fire_interval_seconds 120
+                                         :cadence_seconds 3600
+                                         :wake_on [{:kind "wake_task"
+                                                    :actions ["complete"]
+                                                    :settle_seconds 600
+                                                    :max_wait_seconds 86400}]}
+                                        fn'))]
+
+        (testing "matches every 300 seconds move the due moment forward
+                  only as far as three settles after the FIRST one"
+          (doseq [secs [0 300 600 900 1200 1500]]
+            (word! secs))
+          (is (empty? (seat-fires capped)))
+          (is (= (.plusSeconds t0 1800) (due-of capped))
+              "the match at 1500 asked for 2100, and the cap is 1800")
+          (is (= (.plusSeconds t0 2100) (due-of backed))
+              "an entry that names a longer max_wait_seconds is moved on"))
+
+        (testing "the wake goes out at the cap, and not before it"
+          (at 1799)
+          (wakes/sweep-pending! *eng*)
+          (is (empty? (seat-fires capped)))
+          (at 1800)
+          (wakes/sweep-pending! *eng*)
+          (is (= 1 (count (seat-fires capped))))
+          (is (nil? (due-of capped)))
+          (is (nil? (get-in (sched-of capped) [:data :wake_first_at]))
+              "the fire clears the first match with the other marks")
+          (is (empty? (seat-fires backed)))
+          (seat-do! capped :retire))
+
+        (testing "the cadence is the backstop: a whole cadence after the
+                  first match the wake goes out, whatever is due"
+          (doseq [secs [1800 2100 2400 2700 3000 3300]]
+            (word! secs))
+          (is (= (.plusSeconds t0 3900) (due-of backed)))
+          (at 3599)
+          (wakes/sweep-pending! *eng*)
+          (is (empty? (seat-fires backed)))
+          (at 3600)
+          (wakes/sweep-pending! *eng*)
+          (is (= 1 (count (seat-fires backed))))
+          (is (nil? (due-of backed))))
+
+        (seat-do! backed :retire)))))
+
 ;; ── 19 · the wake an ADVANCE DOOR opens (bead waymark-fp62.18.2) ────
 ;;
 ;; The last wake in this file, and the narrowest. Every change to a

@@ -476,6 +476,8 @@
              ;; consumer writes (R-12.22)
              :fire_url :fire_token :last_fired_at :last_run_url
              :wake_pending :wake_fired_at :wake_due_at :last_halted_wake
+             ;; the first match of a settling wake, for its cap (8f482592)
+             :wake_first_at
              ;; the wall the last sit found (ae64b57c)
              :halted
              ;; a throttle's own instant: the pending wake waits for it
