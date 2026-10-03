@@ -115,16 +115,46 @@
 
 (deftest a-blocked-ticket-is-out-of-the-queue-and-waits
   (let [row (at :blocked {:blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]})]
-    (is (= #{:block :unblock :merge_after_blocked :reparent_blocked}
+    (is (= #{:block :unblock :merge_after_blocked :reparent_blocked
+             :restate_blocked}
            (offers row (ctx the-person)))
-        "restate the blockers, clear them, state what it merges after or
-         what it is a piece of — nothing else, because a blocked ticket
-         is not worked and not ended")
+        "restate the blockers, clear them, state what it merges after,
+         what it is a piece of or what it asks — nothing else, because
+         a blocked ticket is not worked and not ended")
     (let [shut (refusal row (ctx the-person) :complete)]
       (is (= :unavailable (:status shut)))
       (is (nil? (:denier shut))
           "the MACHINE refuses it, with no guard behind the refusal: a
            blocked ticket is not finished, so it is unblocked first"))))
+
+(deftest a-blocked-ticket-is-restated-and-stays-blocked
+  ;; ticket 470abe2a: the way round was `unblock`, which lands in `open`
+  ;; and wakes a seat on a ticket whose blockers have not ended
+  (let [row (at :blocked {:blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]
+                          :blocked_from "draft"})
+        door (get (:actions ticket) :restate_blocked)
+        draft-door (get (:actions ticket) :restate)
+        said {:title "The code seat walks ticket rows"
+              :detail "Switch the walk from task to ticket, and say why."
+              :type "feature"
+              :repo "ckopsa/waymark"}
+        after ((:handler door) row said (ctx the-person))]
+    (testing "a self-loop: the statement moves, the state does not"
+      (is (= #{:blocked} (:from door)))
+      (is (= :blocked (:to door)))
+      (is (= #{:draft} (:from draft-door))
+          "the draft door is as it was; an open ticket is ungroomed first"))
+    (testing "it is the draft door, one state over"
+      (is (= (:input draft-door) (:input door)))
+      (is (= (:guards draft-door) (:guards door)))
+      (is (= (:edit draft-door) (:edit door)))
+      (is (true? (:record door))
+          "the transition keeps the old statement beside the new one"))
+    (testing "the new statement lands and the blockers stand"
+      (is (= (:detail said) (get-in after [:data :detail])))
+      (is (= ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"] (get-in after [:data :blocked_by])))
+      (is (= "draft" (get-in after [:data :blocked_from]))
+          "the last blocker's ending still returns it where it stood"))))
 
 (deftest a-ticket-in-review-offers-no-hand-a-door-that-moves-it
   (doseq [c [(ctx the-person) (ctx the-seat) (ctx the-engine)]]
