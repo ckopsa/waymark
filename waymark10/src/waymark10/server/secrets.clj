@@ -210,6 +210,15 @@
               (fn [tx] (store/query-rows st tx :secret {} {:limit 1000})))))
     #{}))
 
+(defn value-of
+  "→ nil when `id` names no secret row; otherwise {:value v}, where v is
+  nil while the owner has not filled the row. Reads only, with no
+  `used_at` stamp: the webhook deliverer asks at every delivery, and a
+  stamp is a transition the deliverer would then deliver."
+  [eng id]
+  (when-some [row (row-of eng id)]
+    {:value (some-> (get-in row [:data :value]) str not-empty)}))
+
 (defn ref-fields
   "The argument names a tool's input schema marks `x-secret-ref: true`."
   [input-schema]

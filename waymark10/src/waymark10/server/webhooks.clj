@@ -17,6 +17,14 @@
   Third parties verify with the shared secret and never learn the
   envelope format.
 
+  THE SECRET MAY BE A REFERENCE. `secret` takes a literal key, or the
+  bare id of a `secret` row (waymark10.server.secrets). The field keeps
+  the id and never the value; the deliverer reads the row's value at
+  each delivery, so a replaced value signs the next one. While the row
+  holds no value the deliveries WAIT: the cursor stays, the
+  subscription stays active, and `failure_reason` says what it waits
+  for. Nothing goes out unsigned and nothing is marked failed.
+
   Failure discipline, deliberately NOT waymark9's: subscriptions.py
   skipped a refusing event after its attempts and advanced the cursor
   (liveness over completeness); v10 marks the SUBSCRIPTION failed —
@@ -54,6 +62,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -130,7 +139,7 @@
                       :x-display
                       {:raw true
                        :label "Signing secret"
-                       :help "The shared key each delivery is HMAC-signed with, so the receiver can prove the POST came from here. Leave it blank and the deliveries go unsigned."}}
+                       :help "The shared key each delivery is HMAC-signed with, so the receiver can prove the POST came from here. Give the id of a secret row, bare, and the engine signs with the value that row holds and never shows it; the deliveries wait while the row holds no value. Leave it blank and the deliveries go unsigned."}}
              [:maybe [:string {:min 8 :max 120}]]]
             ;; what an exhausted delivery does (batch F): "fail" (the
             ;; default — mark the subscription failed, park the cursor)
@@ -170,7 +179,22 @@
                   :guards [deliverer-only]
                   :handler record-failure
                   :safety {:idempotent true :reversible true :confirm false}
-                  :display {:label "Mark failed" :order 9}}}})
+                  :display {:label "Mark failed" :order 9}}
+    ;; the deliverer's note that deliveries wait for a secret row's
+    ;; value, and its removal when the value is there
+    :await_secret {:from #{:active} :to :active
+                   :input [:map [:reason {:optional true
+                                          :x-display
+                                          {:label "What it waits for"
+                                           :help "The secret row whose value the deliverer needs before it can sign. Empty when the wait is over."}}
+                                 [:maybe [:string {:max 200}]]]]
+                   :record true
+                   :replay false
+                   :guards [deliverer-only]
+                   :handler record-failure
+                   :safety {:idempotent true :reversible false :confirm false
+                            :one-way "Bookkeeping the deliverer writes while it waits for a secret's value; it removes the note when the value is there."}
+                   :display {:label "Wait for the secret" :order 10}}}})
 
 ;; ── the signature ───────────────────────────────────────────────────
 
@@ -207,16 +231,62 @@
       (< (.statusCode resp) 400))
     (catch Exception _ false)))
 
+(def ^:private row-id-form
+  #"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+
+(defn- signing-key
+  "The key one delivery is signed with: nil for an unsigned
+  subscription, the literal `secret`, or, when `secret` is the id of a
+  secret row, the value that row holds now. → ::waiting when the row
+  holds no value yet."
+  [eng sub]
+  (let [s (get-in sub [:data :secret])]
+    (if-some [held (when (and (string? s) (re-matches row-id-form s))
+                     (secrets/value-of eng s))]
+      (or (:value held) ::waiting)
+      s)))
+
+(def ^:private waiting-note "Waiting: the secret ")
+
+(defn- waits? [sub]
+  (str/starts-with? (str (get-in sub [:data :failure_reason])) waiting-note))
+
+(defn- note-wait!
+  "Writes `reason` as the subscription's `failure_reason` through the
+  deliverer's own door. The subscription stays active."
+  [eng sub reason]
+  (try
+    (inv/invoke! eng :subscription (:id sub) :await_secret
+                 {:reason reason}
+                 {:principal deliverer-actor})
+    (catch Exception e
+      (warn! "could not note the wait on subscription " (:id sub) ": "
+             (ex-message e)))))
+
+(defn- hold!
+  "Says once, on the subscription, which secret row it waits for."
+  [eng sub]
+  (when-not (waits? sub)
+    (note-wait! eng sub
+                (str waiting-note (get-in sub [:data :secret])
+                     " holds no value yet. Deliveries start when its owner enters the value."))))
+
+(defn- settle-wait!
+  "Removes the waiting note when the secret row holds a value now."
+  [eng sub]
+  (when (and (waits? sub) (not= ::waiting (signing-key eng sub)))
+    (note-wait! eng sub nil)))
+
 (defn- deliver-with-retries!
   "Attempt one event's delivery up to attempts times with exponential
-  backoff; → true when the endpoint accepted it."
-  [client sub t-id body {:keys [attempts backoff-ms timeout-ms]}]
+  backoff; → true when the endpoint accepted it. `secret` is the
+  resolved signing key, or nil for an unsigned delivery."
+  [client sub secret t-id body {:keys [attempts backoff-ms timeout-ms]}]
   (let [url (get-in sub [:data :url])
         headers (cond-> {"Content-Type" "application/json"
                          "X-Waymark-Event-Id" (str t-id)}
-                  (get-in sub [:data :secret])
-                  (assoc "X-Waymark-Signature"
-                         (sign (get-in sub [:data :secret]) body)))]
+                  secret
+                  (assoc "X-Waymark-Signature" (sign secret body)))]
     (loop [n 0]
       (cond
         (post! client url headers body timeout-ms) true
@@ -270,10 +340,13 @@
   so a resume continues from exactly there; \"skip\" logs the loss to
   *err*, advances the cursor past the refusing event, and the
   subscription stays active — liveness over completeness, chosen per
-  subscription."
+  subscription. A delivery whose signing secret is a secret row with no
+  value yet is not attempted: the drain stops there, the cursor stays,
+  and the subscription says what it waits for."
   [eng client sub opts]
   (let [st (:storage eng)
         consumer (consumer-of sub)
+        _ (settle-wait! eng sub)
         skip? (= "skip" (get-in sub [:data :delivery_policy]))
         cursor (or (store/with-tx st #(store/cursor-get st % consumer))
                    (seed-cursor! eng sub))]
@@ -290,9 +363,14 @@
              (fn [_cursor t]
                (if (or (= :subscription (:kind t)) (not (wants? sub t)))
                  (advance! t)
-                 (let [body (wire-body eng t)]
+                 (let [body (wire-body eng t)
+                       secret (signing-key eng sub)]
                    (cond
-                     (deliver-with-retries! client sub (:id t) body opts)
+                     (= ::waiting secret)
+                     (do (hold! eng sub)
+                         (reduced ::failed))
+
+                     (deliver-with-retries! client sub secret (:id t) body opts)
                      (advance! t)
 
                      skip?
