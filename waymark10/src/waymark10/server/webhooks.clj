@@ -50,6 +50,13 @@
   (the subscription's creator, never another principal) and terminal —
   paused and failed still both resume; revoked does not.
 
+  WHO MADE THE MOVE. Each delivery names its actor: `actor` is the
+  principal as the log holds it (its `id` is the address, `seat:…`),
+  and `actor_name` is the name of the row that address names, or the
+  principal's own display. A subscription's `skip_actors` lists
+  addresses whose moves it does not want: such a transition is passed
+  over at the drain, the cursor advancing, and is never POSTed.
+
   Recorded deviations and scope, each a sentence:
   - One deliverer thread drains every subscription's cursor in turn —
     the v10 spelling of a worker per active subscription; delivery is
@@ -69,6 +76,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.render :as render]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -141,6 +149,21 @@
       row
       (update row :data assoc :secret literal-mark :signing_key s))))
 
+(def ^:private skip-actors-field
+  "The `skip_actors` field, one spelling for the row and for restate."
+  [:skip_actors {:optional true
+                 :examples [["seat:a7006f1e-175b-4b82-9d78-afc71af2d55b"]]
+                 :x-display
+                 {:raw true
+                  :label "Whose moves to leave out"
+                  :help "The addresses of the principals whose own moves this endpoint does not want to hear — seat:… for a seat, as a delivery's actor spells it. Left blank it hears everyone's."}}
+   [:maybe [:vector {:max 20} [:string {:min 1 :max 120}]]]])
+
+(defhandler restate-subscription [row inp _ctx]
+  (if (contains? inp :skip_actors)
+    (assoc-in row [:data :skip_actors] (:skip_actors inp))
+    row))
+
 (defresource subscription
   {:kind :subscription
    :plural "subscriptions"
@@ -160,6 +183,7 @@
                      {:label "Which kinds to hear about"
                       :help "The resource kinds whose transitions this endpoint wants — task, meal, chore. Left blank it hears about all of them."}}
              [:maybe [:vector [:string {:min 1 :max 64}]]]]
+            skip-actors-field
             [:description {:optional true
                            :x-display
                            {:label "What this endpoint is for"
@@ -205,6 +229,16 @@
     :resume {:from #{:paused :failed} :to :active
              :safety {:idempotent true :reversible true :confirm false}
              :display {:label "Resume" :order 1}}
+    ;; whose moves it leaves out can change while it runs; the cursor
+    ;; stays where it is. An omitted field keeps its value.
+    :restate {:from #{:active} :to :active
+              :input [:map skip-actors-field]
+              :record true
+              :edit {:prefill [:skip_actors]}
+              :handler restate-subscription
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Restate" :order 2
+                        :description "Change whose moves this endpoint leaves out; deliveries carry on from where they were"}}
     :revoke {:from #{:active :paused :failed} :to :revoked
              :guards [owner-only]
              :safety {:idempotent true :reversible false :confirm true
@@ -337,10 +371,23 @@
         :else (do (Thread/sleep (long (* backoff-ms (bit-shift-left 1 n))))
                   (recur (inc n)))))))
 
+(defn- actor-addresses
+  "The addresses a transition's actor answers to: its id as the log
+  holds it, and `type:id` when the id names no kind of its own."
+  [t]
+  (let [a (:actor t)
+        id (some-> (if (map? a) (:id a) a) str not-empty)
+        type (when (map? a) (some-> (:type a) name))]
+    (cond-> #{}
+      id (conj id)
+      (and id type (not (str/includes? id ":"))) (conj (str type ":" id)))))
+
 (defn- wants? [sub t]
-  (let [kinds (get-in sub [:data :kinds])]
-    (or (empty? kinds)
-        (boolean (some #(= (name (:kind t)) %) kinds)))))
+  (let [kinds (get-in sub [:data :kinds])
+        skip (set (get-in sub [:data :skip_actors]))]
+    (and (or (empty? kinds)
+             (boolean (some #(= (name (:kind t)) %) kinds)))
+         (not-any? skip (actor-addresses t)))))
 
 (defn- consumer-of [sub] (str "webhook:" (:id sub)))
 
@@ -369,11 +416,36 @@
       (warn! "could not mark subscription " (:id sub) " failed: "
              (ex-message e)))))
 
+(defn- actor-name
+  "What a person calls the actor of this transition: the head of the
+  summary line of the row its address names (`seat:<id>` is the seat's
+  name), as render names a summary's ref; else the principal's own
+  display. Nil when neither is there."
+  [eng t]
+  (let [a (:actor t)
+        a (if (map? a) a {:id a})
+        [k id] (some-> (:id a) str (str/split #":" 2))
+        rdef (when (and id (not (str/blank? k)))
+               (get (inv/resources eng) (keyword k)))
+        line (when (and rdef (re-matches row-id-form id))
+               (try
+                 (let [st (:storage eng)]
+                   (when-some [raw (store/with-tx st
+                                     #(store/load-row st % (:kind rdef) id {}))]
+                     (render/target-summary rdef (inv/decode-row rdef raw) nil)))
+                 (catch Exception _ nil)))]
+    (or (when (string? line)
+          (not-empty (first (str/split line #" · " 2))))
+        (some-> (:display a) str not-empty))))
+
 (defn- wire-body
-  "The delivery body: the SSE frame's data, verbatim — one shape for
-  the stream and the hook."
+  "The delivery body: the SSE frame's data — one shape for the stream
+  and the hook — and beside its `actor`, `actor_name` when the actor
+  has a name."
   ^String [eng t]
-  (wire/write-json (events/transition-payload eng t)))
+  (let [who (actor-name eng t)]
+    (wire/write-json (cond-> (events/transition-payload eng t)
+                       who (assoc :actor_name who)))))
 
 (defn- drain-subscription!
   "Deliver everything past one active subscription's cursor, advancing
