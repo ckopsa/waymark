@@ -24,10 +24,12 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.oidc-rp :as rp]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.io ByteArrayOutputStream)
@@ -790,6 +792,64 @@
     (is (= {:live true :seat "scribe-one"} (verify! h token)))
     (is (= 200 (:status (close! h))))
     (is (= {:live false :seat nil} (verify! h token)))))
+
+(deftest the-key-check-answers-the-inbox-through-the-gate
+  ;; production's shape, end to end: the engine requires auth, the
+  ;; subscription names a secret row by its bare id, the owner entered
+  ;; the row's value, and the inbox holds that value and no bearer
+  (let [at (clock)
+        eng (engine/engine {:storage (memory/storage)
+                            :resources [fx/meal]
+                            :now-fn (fn [] @at)
+                            :oidc {:issuer issuer :audience audience :jwks jwks
+                                   :app-url "https://app.test/"
+                                   :delegate-clients {"connector" "Claude"}
+                                   :rp {:client-id "transcript-test"
+                                        :client-secret "shh"
+                                        :app-url "https://app.test"
+                                        :session-secret "a-32-byte-session-secret-for-test!!"
+                                        :token-endpoint "https://idp.test/token"
+                                        :require-auth? true}}})
+        h ((rp/wrap-handler eng) (engine/handler eng))
+        _ (open-seat! eng (add-model! eng) {:feed_url a-feed})
+        {sec :row} (inv/create! eng :secret {:name "WAYMARK_INBOX_TEST_SECRET"}
+                                {:principal person})
+        ref (str (:id sec))
+        value "inbox-row-value-02"
+        _ (inv/invoke! eng :secret ref :replace {:value value}
+                       {:principal person
+                        :if-match (inv/etag :secret ref (:version sec))})
+        _ (inv/create! eng :subscription
+                       {:url "https://inbox.test/events" :secret ref}
+                       {:principal person})
+        token (get-in (sit! h) [:feed :token])
+        ask (fn [headers key]
+              (h {:request-method :post :uri "/api/-/seats/verify"
+                  :headers headers
+                  :body (wire/write-json {:key key})}))
+        inbox {"waymark-subscription-secret" value}]
+    (testing "the subscription keeps the reference, and the deliverer's
+              signing key for it is the row's value: the key the door
+              compares"
+      (let [[sub :as subs] (rows-of eng :subscription {:state :active})]
+        (is (= 1 (count subs)))
+        (is (= ref (get-in sub [:data :secret])))
+        (is (= value (webhooks/signing-key eng sub)))))
+    (testing "the inbox's secret opens the door with no bearer"
+      (let [resp (ask inbox a-key)]
+        (is (= 200 (:status resp)))
+        (is (= {:live true :seat "scribe-one"} (json resp)))))
+    (testing "and the feed token answers as the seat's key does"
+      (is (string? token))
+      (let [resp (ask inbox token)]
+        (is (= 200 (:status resp)))
+        (is (= {:live true :seat "scribe-one"} (json resp)))))
+    (testing "a caller with no secret is refused by the door, in its sentence"
+      (doseq [headers [{} {"waymark-subscription-secret" ref}]]
+        (let [resp (ask headers a-key)]
+          (is (= 401 (:status resp)))
+          (is (= "No active subscription answers this secret."
+                 (:detail (json resp)))))))))
 
 (deftest the-engine-redacts-the-sittings-feed-token
   (let [eng (fresh-engine)
