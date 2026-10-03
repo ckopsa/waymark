@@ -154,26 +154,36 @@ agent must not have drawn the curtain; the routine says so (child 6).
 
 **The beats of one call arrive within milliseconds.** The recording
 keeps their true times. Replay paces them: two frames less than 50 ms
-apart are played `REPLAY_BURST_GAP` (450 ms) apart. No browser makes
+apart are played `REPLAY_BURST_GAP` apart, which is the floor of the
+next paragraph (1000 ms). No browser makes
 such a burst, since the form's own reports are debounced at 150 ms. A
 `move` and a `ui` from one browser beat share a time and are now played
-450 ms apart, which is harmless. The staging does not sleep: holding a
+the floor apart, which is harmless. The staging does not sleep: holding a
 tool call to make a pause would bill the agent for it.
 
 **The pointer leaves a screen only after it has been still.** An
 agent's recorded gaps are milliseconds, so replay's floors set the
 pace, and each floor is stillness: the time from the last change of the
 screen to the start of the gesture toward the next act (the next
-paragraph). A new screen (a move to another row, a hop's list, a walk's
-row, a dialog opening or closing) is still for `REPLAY_STILL_SCREEN`
-(1000 ms), a typed value for `REPLAY_STILL_TYPED` (800 ms), and a
-landed transition for `REPLAY_WRITE_HOLD` (1500 ms). The gesture's
+paragraph). There is one floor: after any change of the screen, the
+next change waits at least `REPLAY_MIN_STILL` (1000 ms). A change is a
+move, a hop's list, a walk's row, a dialog opening or closing, a typed
+value, a caption, and a `doc` frame that draws the row or the list on
+screen again with other content. A landed transition is still for
+longer, `REPLAY_WRITE_HOLD` (1500 ms), and a caption's reading time
+and the long-silence cut stay as they are. The stillness is counted
+from the moment the change is drawn (`replayDrawn`, `replayStillLeft`)
+and not from the frame that asked for it, so a list drawn late is
+still for its whole floor. The guarantee is for 1×, which the film
+plays; 2× and 4× divide the floor as they divide every wait. The gesture's
 900 ms come after the stillness and not inside it, so a frame waits the
 larger of its recorded gap and stillness + glide + press
 (`replaySchedule`, `replayLinger`), and speed divides all of it. The
-arrival outline lasts `REPLAY_GAZE_MS`, which is `REPLAY_STILL_SCREEN`:
+arrival outline lasts `REPLAY_GAZE_MS`, which is `REPLAY_MIN_STILL`:
 it is off when the pointer leaves. A frame that changes nothing on
-screen waits nothing.
+screen waits nothing (`replayShows`): a `doc` for an address that is
+not on screen, one equal to the last recorded for its screen, and one
+in the burst of the frame before it.
 
 **Replay makes each beat with a pointer.** A small arrow is drawn over
 the page (`replayPointerTo`). Before a frame is applied, the pointer
