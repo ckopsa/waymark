@@ -870,23 +870,47 @@
   reads a redacted field renders as the honest generic line, never as
   the template over hidden values. A ref field the template reads is
   named, not printed as an id (name-summary-refs)."
-  [rdef row redacted hashed ref-summary]
-  (let [named #(assoc (name-summary-refs rdef row hashed ref-summary)
-                      :kind (:kind rdef))]
-    (cond
-      (and (seq redacted)
-           (some #(contains? redacted (keyword (second %)))
-                 (re-seq summary-data-token (str (:summary rdef)))))
-      (str (summary/state-label (:kind rdef)) " · "
-           (summary/state-label (:state row)))
+  ([rdef row redacted hashed ref-summary]
+   (let [named #(assoc (name-summary-refs rdef row hashed ref-summary)
+                       :kind (:kind rdef))]
+     (cond
+       (and (seq redacted)
+            (some #(contains? redacted (keyword (second %)))
+                  (re-seq summary-data-token (str (:summary rdef)))))
+       (str (summary/state-label (:kind rdef)) " · "
+            (summary/state-label (:state row)))
 
-      ;; a :summary-fn reads fields its template does not name, so under
-      ;; ANY redaction the template answers and the composer does not
-      (seq redacted)
-      (summary/render (:summary rdef) (named))
+       ;; a :summary-fn reads fields its template does not name, so under
+       ;; ANY redaction the template answers and the composer does not
+       (seq redacted)
+       (summary/render (:summary rdef) (named))
 
-      :else
-      (summary/line rdef (named)))))
+       :else
+       (summary/line rdef (named)))))
+  ;; THE LINE A TEMPLATE CANNOT SAY (ticket ea061a48). A kind's
+  ;; :summary-line is `(fn [row ctx])` → the line, or nil for the
+  ;; template. It is asked only where a render lends its ctx-opts — the
+  ;; envelope — and reads the clock (:now) and other rows (:read), which
+  ;; the template grammar has neither of. It is handed the row WITHOUT
+  ;; its redacted fields, so it can say nothing the projection hides; a
+  ;; blank answer or a throw falls back to the template, and a read
+  ;; never fails because of it.
+  ([rdef row redacted hashed ref-summary ctx-opts]
+   (or (when-some [line (:summary-line rdef)]
+         (try
+           (some-> (line (cond-> row
+                           (seq redacted)
+                           (update :data #(apply dissoc % redacted)))
+                         {:now (:now ctx-opts)
+                          :read (or (:read ctx-opts)
+                                    (:read (:evidence-reads ctx-opts)))})
+                   str not-empty)
+           (catch Exception e
+             (binding [*out* *err*]
+               (println (str "waymark10 summary line [" (name (:kind rdef))
+                             "] failed on " (:id row) ": " (ex-message e))))
+             nil)))
+       (project-summary rdef row redacted hashed ref-summary))))
 
 (defn target-summary
   "One row's summary line as THIS visibility may read it — the
@@ -1150,7 +1174,8 @@
               :state (name state)
               :summary (project-summary rdef hrow redacted hashed
                                         (or (:summary-refs ctx-opts)
-                                            (:ref-summary ctx-opts)))
+                                            (:ref-summary ctx-opts))
+                                        ctx-opts)
               :data enc-data
               :fields fields
               :actions actions

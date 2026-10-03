@@ -19,7 +19,7 @@
     :derived :computed :one-of :unique :part-scopes
     :filterable :sortable :faceted :worksheet :default-filters :views
     :owns :links :related
-    :display :label-template :summary :summary-fn :deviations
+    :display :label-template :summary :summary-fn :summary-line :deviations
     :on-create :mirror
     :retain
     :decision :process :own-surface :answered-at-a-door

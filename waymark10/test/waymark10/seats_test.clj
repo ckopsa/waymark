@@ -679,6 +679,88 @@
           "the counts froze at the close")
       (is (nil? (seats/open-sitting-for-grant *eng* (:id grant)))))))
 
+;; ── the sitting's summary line (ticket ea061a48) ────────────────────
+
+(deftest a-sittings-summary-line-names-its-seat-and-says-how-it-goes
+  (let [now (Instant/parse "2026-10-03T18:00:00Z")
+        ago #(.minusSeconds now (long %))
+        row (fn [data] {:state :open :data (merge {:seat "02eee915"} data)})]
+    (testing "a fired sitting: the seat's name, the mode, both ages, the refusals"
+      (is (= "rigs-code-seat · fired · started 11m ago · last call 1m ago · 2 refusals"
+             (seats/sitting-line
+              (row {:mode "fired" :started_at (ago 660) :last_call_at (ago 60)
+                    :refusals 2 :transitions 0})
+              {:name "rigs-code-seat"} now))))
+    (testing "an interactive one, days old, with its moves"
+      (is (= "mayor · interactive · started 2d ago · last call 4m ago · 84 refusals · 794 moves"
+             (seats/sitting-line
+              (row {:mode "interactive" :started_at (ago (* 2 86400))
+                    :last_call_at (ago 240) :refusals 84 :transitions 794})
+              {:name "mayor"} now))))
+    (testing "a last call older than half the seat's idle bar leads with idle"
+      (is (= "idle 14m · mayor · interactive · started 3h ago · 1 refusal"
+             (seats/sitting-line
+              (row {:mode "interactive" :started_at (ago (* 3 3600))
+                    :last_call_at (ago 840) :refusals 1 :transitions 0})
+              {:name "mayor" :sitting_idle_seconds 1200} now)))
+      (is (= "mayor · interactive · started 3h ago · last call 14m ago"
+             (seats/sitting-line
+              (row {:mode "interactive" :started_at (ago (* 3 3600))
+                    :last_call_at (ago 840)})
+              {:name "mayor"} now))
+          "under the default bar of one hour, 14 minutes is not idle"))
+    (testing "past the budget the moves leave whole, then the refusals"
+      (let [long-name (apply str (repeat 40 "n"))
+            line (fn [n]
+                   (seats/sitting-line
+                    (row {:mode "interactive" :started_at (ago 660)
+                          :last_call_at (ago 60) :refusals 123456
+                          :transitions 123456})
+                    {:name (subs long-name 0 n)} now))]
+        (is (str/ends-with? (line 10) " · 123456 refusals · 123456 moves"))
+        (is (str/ends-with? (line 25) " · 123456 refusals"))
+        (is (str/ends-with? (line 40) " · last call 1m ago"))
+        (is (every? #(<= (count (line %)) 100) [10 25 40]))))
+    (testing "no seat read: the id; no clock: absolute UTC times"
+      (is (= "02eee915 · fired · started 17:49Z · last call 17:59Z"
+             (seats/sitting-line
+              (row {:mode "fired" :started_at (ago 660) :last_call_at (ago 60)})
+              nil nil))))
+    (testing "an ended sitting says what it came to"
+      (is (= "mayor · fired · cut short · Closed"
+             (seats/sitting-line
+              {:state :closed :data {:seat "02eee915" :mode "fired"
+                                     :outcome "cut_short"}}
+              {:name "mayor"} now))))
+    (testing "a row whose seat this reader may not see has no line"
+      (is (nil? (seats/sitting-line {:state :open :data {:mode "fired"}}
+                                    nil now))))))
+
+(deftest the-envelope-of-an-open-sitting-carries-that-line
+  (let [model (add-model! "lined" "economy")
+        seat (open-seat! "liner")
+        grant (a-grant-for "clerk")
+        sitting (:row (inv/create! *eng* :sitting
+                                   {:seat (:id seat)
+                                    :model (:id model)
+                                    :grant (:id grant)}
+                                   {:principal clerk}))
+        row (row-of :sitting (:id sitting))
+        rdef (get (inv/resources *eng*) :sitting)
+        started (Instant/parse (str (get-in row [:data :started_at])))
+        summary (fn [opts] (get (render/envelope rdef row opts) "summary"))]
+    (is (= (str "liner · " (name (get-in row [:data :mode]))
+                " · started 11m ago · last call 11m ago")
+           (summary {:now (.plusSeconds started 660)
+                     :resources (inv/resources *eng*)
+                     :read (fn [kind id] (row-of kind id))}))
+        "the seat's name, read through the render's own :read")
+    (is (str/starts-with?
+         (summary {:now (.plusSeconds started 660)
+                   :resources (inv/resources *eng*)})
+         (str (:id seat) " · "))
+        "a render that lends no read names the seat by its id")))
+
 ;; ── R-7.7 · the halt the router writes, and its idempotence ─────────
 
 (deftest a-halt-is-written-once-and-cleared-once

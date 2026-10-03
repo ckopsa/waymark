@@ -3806,6 +3806,83 @@
                :help "The bytes this door removed because the caller asked for a smaller answer — text only, or a cap on the characters. Add it to the bytes above to see what the power itself answered. Absent when nothing was shaped."}}
     [:maybe [:int {:min 0}]]]])
 
+;; ── the sitting's summary line (ticket ea061a48) ────────────────────
+;; A collection shows a row's summary line and nothing else, so the
+;; line names the SEAT, not its id, and says how the sitting is going.
+;; It is composed at each render (`:summary-line`), so its times are
+;; relative to that render's clock.
+
+(def ^:private line-budget
+  "The most characters a sitting's summary line runs to. Past it the
+  least useful parts leave whole — the moves, then the refusals."
+  100)
+
+(defn- span
+  "A length of time in its largest whole unit: 45s, 11m, 3h, 2d."
+  [seconds]
+  (let [s (max 0 (long seconds))]
+    (cond (< s 60) (str s "s")
+          (< s 3600) (str (quot s 60) "m")
+          (< s 86400) (str (quot s 3600) "h")
+          :else (str (quot s 86400) "d"))))
+
+(defn- clock-utc
+  "An instant as its UTC time of day: 17:49Z."
+  [^java.time.Instant at]
+  (str (.format (java.time.format.DateTimeFormatter/ofPattern "HH:mm")
+                (.atOffset at java.time.ZoneOffset/UTC))
+       "Z"))
+
+(defn- counted [n word]
+  (let [n (long (or n 0))]
+    (when (pos? n) (str n " " word (when (not= 1 n) "s")))))
+
+(defn sitting-line
+  "A sitting's summary line, from its row, its seat's document (nil
+  when this render could not read it: the line then names the seat by
+  its id) and the render's clock (nil: the times are absolute UTC).
+
+    rigs-code-seat · fired · started 11m ago · last call 1m ago · 2 refusals
+
+  An open sitting whose last call is older than half its seat's
+  `sitting_idle_seconds` leads with `idle 14m`, in place of the last
+  call. A sitting that has ended says its outcome and its state. nil
+  when the row names no seat this reader may see."
+  [row seat now]
+  (let [data (:data row)
+        join #(clojure.string/join " · " (remove nil? %))
+        label #(some-> % name (clojure.string/replace "_" " ") not-empty)
+        mode (label (:mode data))]
+    (when-some [who (or (some-> (:name seat) str not-empty)
+                        (some-> (:seat data) str not-empty))]
+      (if-not (= "open" (some-> (:state row) name))
+        (join [who mode (label (:outcome data))
+               (some-> (label (:state row)) clojure.string/capitalize)])
+        (let [^java.time.Instant now (some-> now ->instant)
+              since (fn [at]
+                      (.getSeconds (java.time.Duration/between
+                                    ^java.time.Instant at now)))
+              at (fn [what v]
+                   (when-some [at (->instant v)]
+                     (if now
+                       (str what " " (span (since at)) " ago")
+                       (str what " " (clock-utc at)))))
+              quiet (when now (some-> (->instant (:last_call_at data)) since))
+              idle (when (and quiet
+                              (> (long quiet)
+                                 (quot (long (or (:sitting_idle_seconds seat)
+                                                 default-idle-seconds))
+                                       2)))
+                     (str "idle " (span quiet)))
+              head [idle who mode (at "started" (:started_at data))
+                    (when-not idle (at "last call" (:last_call_at data)))]
+              refusals (counted (:refusals data) "refusal")
+              moves (counted (:transitions data) "move")]
+          (or (some #(when (<= (count %) line-budget) %)
+                    [(join (conj head refusals moves))
+                     (join (conj head refusals))])
+              (join head)))))))
+
 (defresource sitting
   {:kind :sitting
    :plural "sittings"
@@ -3813,7 +3890,17 @@
    :initial :open
    :terminal #{:closed :abandoned}
    :nav :system
+   ;; the template is what a render with no clock and no reads says (a
+   ;; transition's log line, another row's ref label); the envelope asks
+   ;; `sitting-line`, which reads the seat for its name and its idle bar
    :summary "Sitting of {data.seat} · {state}"
+   :summary-line
+   (fn [row ctx]
+     (sitting-line row
+                   (when-some [read' (:read ctx)]
+                     (some->> (get-in row [:data :seat]) str not-empty
+                              (read' :seat) :data))
+                   (:now ctx)))
    ;; A SITTING IS ITS MEMBER'S (R-10.3): the session opens one before
    ;; it reads its queue and the harness's hook closes it when the
    ;; session ends, and neither of those moments is a good one to

@@ -113,6 +113,11 @@
    :owns :links :related
    ;; advertisement
    :display :label-template :summary :deviations
+   ;; the summary line a template cannot say (ticket ea061a48): `(fn
+   ;; [row ctx])` → the line, or nil for the :summary template. The
+   ;; envelope asks it with the render's clock (:now) and :read; never
+   ;; stored, never in the fingerprint — :computed's precedent
+   :summary-line
    ;; the summary line a template cannot say (waymark10.summary/line):
    ;; a pure (fn [row] line) beside :summary, which stays the fallback
    ;; and what a redacted read answers. Never in the fingerprint
