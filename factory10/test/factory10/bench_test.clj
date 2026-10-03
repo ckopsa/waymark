@@ -3487,6 +3487,39 @@
     (is (empty? (get-in (sit-again! w) [:walk :rows]))
         "a draft is in no seat's walk")))
 
+(deftest a-stall-s-reason-is-readable-on-the-change-and-the-ticket
+  ;; ticket b6c8ea04: the stall's sentence was kept only in the log
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        change #(first (changes-of (:eng w)))
+        row (change)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= a-stall-sentence (get-in row [:data :stall_reason])))
+    (is (some? (get-in row [:data :stalled_at])))
+    (is (not (str/blank? (str (get-in row [:data :stalled_by])))))
+    (is (= a-stall-sentence (get-in (ticket-row w) [:data :shelved_because]))
+        "the shelved ticket carries the same sentence")
+    (testing "the groom's answer names it"
+      (let [res (person-moves-ticket! w :groom)]
+        (is (= a-stall-sentence
+               (get-in (:row res) [:data :shelved_because])))))
+    (testing "the groom's rework clears it from the change"
+      (is (= "open" (name (:state (change)))))
+      (is (nil? (get-in (change) [:data :stall_reason]))))))
+
+(deftest an-unstick-clears-the-stall-s-reason
+  (let [w (ticket-world)
+        id (get-in (:answer w) [:change :id])
+        _ (seat-invokes! w "stall" {:why a-stall-sentence})]
+    (is (= a-stall-sentence
+           (get-in (first (changes-of (:eng w))) [:data :stall_reason])))
+    (inv/invoke! (:eng w) :change id :unstick {} {:principal person})
+    (let [row (first (changes-of (:eng w)))]
+      (is (= "open" (name (:state row))))
+      (is (nil? (get-in row [:data :stall_reason])))
+      (is (nil? (get-in row [:data :stalled_at])))
+      (is (nil? (get-in row [:data :stalled_by]))))))
+
 (deftest a-walk-with-only-a-stuck-change-ticket-answers-no-row
   (let [w (ticket-world)
         stalled (seat-invokes! w "stall" {:why a-stall-sentence})
