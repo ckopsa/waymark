@@ -300,6 +300,37 @@
             "one standing verdict per subject under one judgment — a
              correction is a `corrects`, not a second opinion")))))
 
+;; ── 1b · a verdict that names no judgment is the seat's judgment's ──
+
+(deftest a-verdict-with-no-judgment-is-written-under-the-seats
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        [sid _ _] (sit! h)
+        bare #(dissoc (verdict-input judgment (:id %) {}) :judgment)]
+
+    (testing "the seat names its judgment, so the body need not copy it"
+      (let [said (judge! h sid (bare knives))]
+        (is (false? (:isError said)) (text-of said))
+        (is (= (str (:id judgment))
+               (str (get-in (doc-of said) [:data :judgment])))
+            "the verdict is written under the seat's own judgment")
+        (let [[_ _ answer'] (sit! h)]
+          (is (= [(str (:id flour))] (mapv :id (get-in answer' [:walk :rows])))
+              "and it stands under it: the subject left the judgment's queue"))))
+
+    (testing "the walls judged the defaulted value: a second is refused"
+      (is (true? (:isError (judge! h sid (bare knives))))))
+
+    (testing "a caller with no seat judgment and no input is refused"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/create! eng :verdict (bare flour)
+                                {:principal person}))
+          "nobody's judgment is no judgment this house holds"))))
+
 ;; ── 2 · the consequence is the mirror's, never the seat's ───────────
 
 (deftest the-consequence-is-walked-on-the-subject-after-the-verdict
