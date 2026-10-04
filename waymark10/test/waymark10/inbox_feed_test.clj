@@ -51,9 +51,11 @@
 
 (defn- stub-door!
   "→ [server url seen]. Each request takes the next of `answers`; when
-  none is left the door answers 401. `seen` holds each request: its key
-  and its query."
-  [answers]
+  none is left the door answers 401. A request for `after=now` takes
+  no answer: while one is left it is an empty 200 that names `now`, the
+  door's newest event (0 unless given). `seen` holds each request: its
+  key and its query."
+  [answers & [now]]
   (let [left (atom (vec answers))
         seen (atom [])
         server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)]
@@ -61,15 +63,18 @@
                     (reify HttpHandler
                       (handle [_ ex]
                         (let [^HttpExchange ex ex
-                              [old _] (swap-vals! left #(vec (rest %)))
+                              query (.getQuery (.getRequestURI ex))
+                              now? (= "after=now" query)
+                              [old _] (if now? [@left nil] (swap-vals! left #(vec (rest %))))
                               {:keys [status after body sleep]}
-                              (or (first old)
+                              (or (when (seq old)
+                                    (if now? {:status 200 :after (or now 0)} (first old)))
                                   {:status 401
                                    :body "{\"detail\": \"No open sitting answers this inbox key.\"}"})
                               bytes (.getBytes ^String (or body "") "UTF-8")]
                           (swap! seen conj
                                  {:key (.getFirst (.getRequestHeaders ex) "Waymark-Inbox-Key")
-                                  :query (.getQuery (.getRequestURI ex))})
+                                  :query query})
                           (when sleep (Thread/sleep (long sleep)))
                           (when after
                             (.add (.getResponseHeaders ex) "Waymark-Inbox-After" (str after)))
@@ -122,7 +127,8 @@
                lines)
             "two answers make one line, and the name is there when the door gave it")
         (is (= 1 exit))
-        (is (= ["wait=25" "wait=25&after=2" "wait=25&after=3"] (mapv :query @seen))
+        (is (= ["after=now" "wait=25&after=0" "wait=25&after=2" "wait=25&after=3"]
+               (mapv :query @seen))
             "each request goes on from the door's own cursor")
         (is (= #{a-key} (set (map :key @seen)))))
       (finally (.stop server 0)))))
@@ -176,6 +182,18 @@
         (is (= 1 exit))
         (is (= 1 (count @seen)) "it does not ask again")
         (is (not (.exists cursor)) "a refusal moves no cursor"))
+      (finally (.stop server 0)))))
+
+(deftest no-cursor-begins-at-the-present
+  (let [cursor (cursor-file)
+        [server url seen] (stub-door! [(answer 41 (event 41 "ticket" "claim"))] 40)]
+    (try
+      (let [{:keys [lines]} (run-feed! url cursor "--batch" "1")]
+        (is (= ["1 event: ticket 00000041 claim open->done: row 41" lapsed] lines)
+            "nothing older than the start is printed")
+        (is (= ["after=now" "wait=25&after=40" "wait=25&after=41"] (mapv :query @seen))
+            "it asks for now one time, and tails from the door's newest event")
+        (is (= "41" (str/trim (slurp cursor)))))
       (finally (.stop server 0)))))
 
 (deftest the-cursor-survives-a-restart
