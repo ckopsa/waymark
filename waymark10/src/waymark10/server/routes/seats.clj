@@ -845,6 +845,15 @@
           newest (long (:id newest))
           :else 0)))
 
+(defn- log-newest
+  "Where a tail that asks for `after=now` begins: the log's newest
+  event, 0 when the log is empty."
+  [eng]
+  (let [st (:storage eng)
+        newest (store/with-tx st
+                 (fn [tx] (first (store/transitions st tx {} {:newest-first true :limit 1}))))]
+    (if newest (long (:id newest)) 0)))
+
 (defn- inbox-match
   "A predicate on a log row. The seat's `inbox.only` (stated, or the
   default of an interactive seat: `seats/inbox-of`) names its kind
@@ -920,7 +929,9 @@
 (defn- sitting-inbox
   "GET /api/-/sittings/inbox — the events a seat's inbox names, after
   `after` or from the sitting's start, as newline-delimited JSON
-  (docs/spec-seat.md R-12.38).
+  (docs/spec-seat.md R-12.38). `after=now` answers no event and names
+  the log's newest one, so a tail of a long-open sitting can begin at
+  the present.
 
   ANONYMOUS ON PURPOSE, the transcript door's reasoning: the key in the
   header is the whole credential, it answers for one open sitting, and
@@ -934,19 +945,25 @@
           seat (some->> (get-in sitting [:data :seat]) (seat-row eng))
           _ (when-not (and sitting seat)
               (throw (p/problem :unauthorized 401 "Unauthorized" {:detail no-inbox})))
-          after (whole-param req "after" 0 nil)
+          now? (= "now" (some-> (get (router/query-params req) "after") str str/trim))
+          after (when-not now? (whole-param req "after" 0 nil))
           wait (or (whole-param req "wait" 0 inbox-wait-max) 0)
           match? (inbox-match eng seat sitting)
           deadline (+ (System/nanoTime) (* (long wait) 1000000000))]
-      (loop [cursor (or after (sitting-start eng sitting))]
-        (let [[hits cursor] (inbox-scan eng match? cursor)]
-          (if (and (empty? hits) (< (System/nanoTime) (long deadline)))
-            (do (Thread/sleep (long inbox-tick-ms))
-                (recur cursor))
-            {:status 200
-             :headers {"Content-Type" "application/x-ndjson"
-                       "Waymark-Inbox-After" (str cursor)}
-             :body (apply str (map #(str (wire/write-json (inbox-line eng %)) "\n") hits))}))))))
+      (if now?
+        {:status 200
+         :headers {"Content-Type" "application/x-ndjson"
+                   "Waymark-Inbox-After" (str (log-newest eng))}
+         :body ""}
+        (loop [cursor (or after (sitting-start eng sitting))]
+          (let [[hits cursor] (inbox-scan eng match? cursor)]
+            (if (and (empty? hits) (< (System/nanoTime) (long deadline)))
+              (do (Thread/sleep (long inbox-tick-ms))
+                  (recur cursor))
+              {:status 200
+               :headers {"Content-Type" "application/x-ndjson"
+                         "Waymark-Inbox-After" (str cursor)}
+               :body (apply str (map #(str (wire/write-json (inbox-line eng %)) "\n") hits))})))))))
 
 ;; ── the key check door (docs/spec-seat.md § 16) ─────────────────────
 

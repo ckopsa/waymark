@@ -988,6 +988,27 @@
       (is (= 422 (:status (tail! h key {:after "soon"}))))
       (is (= 422 (:status (tail! h key {:wait 26})))))))
 
+(deftest after-now-begins-a-tail-at-the-present
+  (let [[eng h key] (tailing!)
+        soup (meal! eng "Soup")
+        _ (move! eng soup :accept)
+        resp (tail! h key {:after "now" :wait 25})
+        newest (some (fn [[k v]] (when (= "waymark-inbox-after" (str/lower-case (name k))) v))
+                     (:headers resp))]
+    (testing "an empty body at once, and the newest event's id"
+      (is (= 200 (:status resp)))
+      (is (= "" (str (:body resp))))
+      (is (re-matches #"\d+" (str newest)))
+      (is (<= (:event (first (lines-of (tail! h key)))) (parse-long (str newest)))
+          "the accepted meal is behind it"))
+    (testing "a tail from there reads only what lands later"
+      (is (empty? (lines-of (tail! h key {:after newest}))))
+      (let [stew (meal! eng "Stew")
+            _ (move! eng stew :accept)]
+        (is (= [(str (:id stew))] (mapv :id (lines-of (tail! h key {:after newest})))))))
+    (testing "no `after` still reads from the sitting's start"
+      (is (= (str (:id soup)) (:id (first (lines-of (tail! h key)))))))))
+
 (deftest the-inbox-door-waits-for-an-event
   (let [[eng h key] (tailing!)
         soup (meal! eng "Soup")

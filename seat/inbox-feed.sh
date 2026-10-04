@@ -20,6 +20,11 @@
 # last event that was PRINTED, and never an event that waits in a
 # batch: a feed killed with a batch in hand reads that batch again.
 #
+# NO CURSOR BEGINS AT NOW. A sitting can be open for days, so a feed
+# with no cursor asks the door for `after=now` one time and tails from
+# the event that answer names. A seat that wants the history writes the
+# event to read from (0 for the whole log) in the cursor file first.
+#
 # ANY STATUS BUT 200 ENDS IT, with one line that says the key lapsed.
 # A request that got no answer at all (a deploy, a dropped network) is
 # not a status: the feed waits five seconds and asks again.
@@ -120,6 +125,33 @@ trap 'rm -f "$HEAD" "$BODY"' EXIT
 ask='?'
 case "$URL" in *\?*) ask='&' ;; esac
 
+lapsed() {
+  echo "The inbox key lapsed (the door answered $1): sit again, with the same session, and start this feed with the inbox the sit answers."
+  exit 1
+}
+
+# The door's cursor, from the headers of its last answer.
+newest() {
+  tr -d '\r' <"$HEAD" | awk 'tolower($1) == "waymark-inbox-after:" { v = $2 } END { print v }'
+}
+
+# No cursor: begin at the present. A door that names no cursor is left
+# to begin where it likes.
+while [ -z "$after" ]; do
+  status=$(curl -sS -o "$BODY" -D "$HEAD" -w '%{http_code}' --max-time 15 \
+    -H "Waymark-Inbox-Key: $KEY" "$URL${ask}after=now" 2>/dev/null) || status=000
+  if [ "$status" = 000 ]; then
+    sleep 5
+    continue
+  fi
+  [ "$status" = 200 ] || lapsed "$status"
+  next=$(newest)
+  case "$next" in '' | *[!0-9]*) break ;; esac
+  after=$next
+  mark=$after
+  save
+done
+
 while :; do
   wait=25
   if [ ${#batch[@]} -gt 0 ]; then
@@ -139,8 +171,7 @@ while :; do
   fi
   if [ "$status" != 200 ]; then
     flush
-    echo "The inbox key lapsed (the door answered $status): sit again, with the same session, and start this feed with the inbox the sit answers."
-    exit 1
+    lapsed "$status"
   fi
 
   while IFS=$'\t' read -r flag event text; do
@@ -150,7 +181,7 @@ while :; do
     if [ "$flag" = '!' ] || [ ${#batch[@]} -ge "$BATCH" ]; then flush; fi
   done < <(python3 -c "$FORMAT" "$URGENT" <"$BODY")
 
-  next=$(tr -d '\r' <"$HEAD" | awk 'tolower($1) == "waymark-inbox-after:" { v = $2 } END { print v }')
+  next=$(newest)
   case "$next" in '' | *[!0-9]*) ;; *) after=$next ;; esac
   if [ ${#batch[@]} -eq 0 ]; then
     mark=$after

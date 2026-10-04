@@ -890,7 +890,10 @@ answering, so a stream is not cut; a new sitting gets a fresh key, and
 the close of a sitting ends every key of it.
 
 - The door reads the transition log after the event `after` names.
-  With no `after`, it reads from the sitting's start.
+  With no `after`, it reads from the sitting's start. With
+  `after=now` it answers at once, with no event, and
+  `Waymark-Inbox-After` names the log's newest event: a tail of a
+  long-open sitting begins at the present.
 - It keeps only the transitions whose kind the seat's `inbox.only`
   names, with an action that kind lists; an empty list is every
   action. It keeps only the kinds the sitting's grant can read. It

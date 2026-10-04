@@ -38,8 +38,13 @@ the client.
 The feed keeps the door's `Waymark-Inbox-After` in the file
 `.inbox-feed.after` beside the script, so a restart resumes where the
 last printed batch ended. `WAYMARK_INBOX_CURSOR` names another path;
-set it when two sittings on one machine share the script. Delete the
-file to read from the sitting's start again.
+set it when two sittings on one machine share the script.
+
+With no cursor file the feed begins at the present: it asks the door
+for `after=now` one time, and tails from the event that answer names.
+A sitting can be open for days, and its history is not replayed. To
+read history, write the event to read from in the file first (`0` is
+the whole log).
 
 ## When it ends
 
