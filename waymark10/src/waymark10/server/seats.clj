@@ -2036,13 +2036,14 @@
    [:int {:min 1 :max 3650}]])
 
 (def ^:private inbox-help
-  "What the engine holds for this seat's sittings to pull, said the way a subscriber's `only` is: a kind, and the actions on it that count, or an empty list for every action. Leave it empty for a seat with no inbox.")
+  "What the engine holds for this seat's sittings to pull, said the way a subscriber's `only` is: a kind, and the actions on it that count, or an empty list for every action. Leave it empty for a seat with no inbox; an interactive seat left empty hears its tickets, changes, held calls, approval requests, seats and sittings.")
 
 (def inbox-field
   "THE SEAT'S INBOX. A cloud session cannot run a local receiver, so
   the engine holds the inbox and the sitting pulls it; the sit answers
   the address and a key for it (`issue-inbox-key!`). Absent is no
-  inbox. Each kind and each action is judged by `inbox-names-real-kinds`
+  inbox for a fired seat, and `default-inbox` for an interactive one
+  (`inbox-of`). Each kind and each action is judged by `inbox-names-real-kinds`
   and `inbox-names-real-actions`.
 
   The field says where its tokens come from the way a `wake_on`
@@ -4456,8 +4457,8 @@
                  {:label "Listed the app tools"
                   :spelled-by-hand "Written by the sit: whether the session's tool listing carried the app tools at that moment. The client declared the extension, its bearer is a delegate of a client listed for the app tools, and the ticket's signing key is set."}}
      :boolean]
-    ;; THE INBOX'S KEY. A seat that declares an `inbox` is answered a
-    ;; fresh key at each sit (`issue-inbox-key!`), and its hash is kept
+    ;; THE INBOX'S KEY. A seat that has an inbox (`inbox-of`) is answered
+    ;; a fresh key at each sit (`issue-inbox-key!`), and its hash is kept
     ;; here, on the sitting, so the key answers only while the sitting
     ;; is open (`inbox-sitting-by-key`).
     [:inbox_key_hash {:optional true :secret true
@@ -4465,6 +4466,15 @@
                                   :label "The inbox key's hash"
                                   :spelled-by-hand "The SHA-256 of the inbox key the last sit answered. The sit writes it; it answers only while the sitting is open; the engine never shows a key."}}
      [:maybe [:string {:max 64}]]]
+    ;; THE KEYS BEFORE THE NEWEST. A sit that reuses this sitting for the
+    ;; same harness session mints a key and stops none, so the key a
+    ;; stream is using answers until the sitting closes. Their hashes
+    ;; are kept here, newest first.
+    [:inbox_keys_earlier {:optional true :secret true
+                          :x-display {:hidden true
+                                      :label "The earlier inbox keys' hashes"
+                                      :spelled-by-hand "The SHA-256 of each inbox key a sit of the same session answered before the newest. The sit writes it; they answer only while the sitting is open; the engine never shows a key."}}
+     [:maybe [:vector [:string {:min 1 :max 128}]]]]
     ;; THE FEED'S TOKEN. A seat that declares a `feed_url` is answered
     ;; a fresh token at each sit (`issue-feed-token!`). Its hash and its
     ;; end are kept here, on the sitting, so the token answers only
@@ -6023,30 +6033,76 @@
 
 ;; ── the inbox's key ─────────────────────────────────────────────────
 
+(def default-inbox
+  "What an INTERACTIVE seat that states no `inbox` hears (epic
+  3ad250ef): every move of the kinds a person at a seat works with. It
+  is derived where the inbox is judged and never stored, and the door
+  still narrows it to the kinds the seat's scope reads."
+  {:only {:ticket [] :change [] :held_call [] :approval_request []
+          :seat [] :sitting []}})
+
+(defn inbox-of
+  "The inbox this seat's sittings pull: the one it states, else
+  `default-inbox` for an interactive seat, else nil. A fired seat has
+  an inbox only when it states one."
+  [seat-row]
+  (or (get-in seat-row [:data :inbox])
+      (when (interactive-seat? seat-row) default-inbox)))
+
+(def inbox-keys-max
+  "How many inbox keys of one sitting answer at one time. A same-session
+  sit past it drops the oldest."
+  12)
+
+(defn- inbox-key-hashes
+  "The hashes of the inbox keys this sitting's data holds, newest
+  first."
+  [data]
+  (->> (cons (:inbox_key_hash data) (:inbox_keys_earlier data))
+       (keep #(some-> % str not-empty))
+       vec))
+
 (defn issue-inbox-key!
   "Mint a fresh inbox key for this sitting, keep its hash on the
-  sitting, and answer the key. → the key, or nil when the seat declares
-  no `inbox` or the sitting is no longer open.
+  sitting, and answer the key. → the key, or nil when the seat has no
+  inbox (`inbox-of`) or the sitting is no longer open.
 
-  `transcripts/issue-key!`'s shape and its reason: EACH SIT MINTS A NEW
-  KEY AND THE OLD ONE STOPS ANSWERING, the row keeps the hash alone,
-  and the write is a maintenance write, so the record of a credential
-  is not in the log. The key dies with the sitting, because
-  `inbox-sitting-by-key` reads open sittings only."
-  [eng seat-row sitting-row]
-  (when (and seat-row sitting-row
-             (some? (get-in seat-row [:data :inbox]))
-             (get (inv/resources eng) :sitting))
-    (let [key (mint-key)]
-      (store/with-tx (:storage eng)
-        (fn [tx]
-          (when-some [row (store/load-row (:storage eng) tx :sitting
-                                          (str (:id sitting-row)) {:for-update true})]
-            (when (= :open (:state row))
-              (store/update-data! (:storage eng) tx :sitting (str (:id row))
-                                  (assoc (:data row) :inbox_key_hash (key-hash key))
-                                  (:next-flip-at row))
-              key)))))))
+  `transcripts/issue-key!`'s shape and its reason: each sit mints a new
+  key, the row keeps the hash alone, and the write is a maintenance
+  write, so the record of a credential is not in the log. Every key
+  dies with the sitting, because `inbox-sitting-by-key` reads open
+  sittings only.
+
+  A SIT OF THE SAME HARNESS SESSION STOPS NO KEY, `with-feed-token`'s
+  way: when `harness-session` is the one stamped on the sitting, the
+  keys before this one are kept beside it (the newest `inbox-keys-max`
+  in all), so a stream that is using one is not cut. Any other sit of
+  the sitting replaces them: the old keys stop answering."
+  ([eng seat-row sitting-row] (issue-inbox-key! eng seat-row sitting-row nil))
+  ([eng seat-row sitting-row harness-session]
+   (when (and seat-row sitting-row
+              (some? (inbox-of seat-row))
+              (get (inv/resources eng) :sitting))
+     (let [key (mint-key)
+           harness (some-> harness-session str str/trim not-empty)]
+       (store/with-tx (:storage eng)
+         (fn [tx]
+           (when-some [row (store/load-row (:storage eng) tx :sitting
+                                           (str (:id sitting-row)) {:for-update true})]
+             (when (= :open (:state row))
+               (let [data (:data row)
+                     same? (and harness
+                                (= harness (some-> (:harness_session data) str not-empty)))]
+                 (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                                     (assoc data
+                                            :inbox_key_hash (key-hash key)
+                                            :inbox_keys_earlier
+                                            (if same?
+                                              (vec (take (dec (long inbox-keys-max))
+                                                         (inbox-key-hashes data)))
+                                              []))
+                                     (:next-flip-at row)))
+               key))))))))
 
 (defn inbox-url
   "The absolute address of the inbox door, from the origin the sit
@@ -6061,7 +6117,9 @@
 
 (defn inbox-sitting-by-key
   "The open sitting this inbox key belongs to, raw, or nil for a bad
-  key, a key a later sit replaced, or a sitting that has ended.
+  key, a key a later sit replaced, or a sitting that has ended. A key
+  a same-session sit kept (`issue-inbox-key!`) finds it as the newest
+  does.
 
   THE KEY IS FOUND BY READING THE OPEN SITTINGS, for
   `transcripts/transcript-by-key`'s reason: `inbox_key_hash` is
@@ -6075,11 +6133,11 @@
                  (store/query-rows (:storage eng) tx :sitting {:state :open}
                                    {:limit inbox-sitting-page})))
              (filter (fn [r]
-                       (when-some [held (some-> (get-in r [:data :inbox_key_hash])
-                                                str not-empty)]
-                         (MessageDigest/isEqual
-                          wanted
-                          (.getBytes ^String held StandardCharsets/UTF_8)))))
+                       (some (fn [held]
+                               (MessageDigest/isEqual
+                                wanted
+                                (.getBytes ^String held StandardCharsets/UTF_8)))
+                             (inbox-key-hashes (:data r)))))
              first)))))
 
 (def feed-token-seconds

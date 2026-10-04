@@ -846,25 +846,35 @@
           :else 0)))
 
 (defn- inbox-match
-  "A predicate on a log row. The seat's `inbox.only` names its kind
+  "A predicate on a log row. The seat's `inbox.only` (stated, or the
+  default of an interactive seat: `seats/inbox-of`) names its kind
   and its action (an empty list is every action), the seat's scope
   reads the whole kind, and it is neither a transcript nor this
   sitting's own row.
+
+  IT KEEPS TO THE SEAT'S DOMAIN AND LEAVES OUT THE SEAT'S OWN MOVES,
+  judged as a subscription judges them (`webhooks/in-domains?`,
+  `webhooks/by-actor?`): a row of a kind that keeps a domain's name
+  passes when it answers to the seat's domain, a kind that keeps none
+  passes, and a move whose actor is this seat (`seat:<seat id>`) is
+  left out, whatever sitting made it.
 
   THE SCOPE IS READ OFF THE SEAT, not off a visibility resolved for
   the sitting's grant: a seat's grant reads exactly its seat's scope
   (R-5.2), and the door holds no principal whose grant that is. An
   entry narrowed by ids or a filter reads only some rows of its kind,
   so it admits none of that kind's events here."
-  [seat sitting]
+  [eng seat sitting]
   (let [only (into {} (map (fn [[k acts]] [(name k) (set (map name acts))]))
-                   (get-in seat [:data :inbox :only]))
+                   (:only (seats/inbox-of seat)))
         readable (into #{}
                        (keep (fn [e]
                                (when (and (nil? (:ids e)) (nil? (:filter e)))
                                  (some-> (:kind e) name))))
                        (get-in seat [:data :scope]))
-        sitting-id (str (:id sitting))]
+        sitting-id (str (:id sitting))
+        own #{(str "seat:" (:id seat))}
+        domains (some-> (webhooks/seat-domain-name eng seat) hash-set)]
     (fn [t]
       (let [k (name (:kind t))
             acts (get only k)]
@@ -873,19 +883,26 @@
               (or (empty? acts) (contains? acts (name (:action t))))
               (contains? readable k)
               (not (contains? transcript-kinds k))
-              (not (and (= "sitting" k) (= sitting-id (str (:resource-id t)))))))))))
+              (not (and (= "sitting" k) (= sitting-id (str (:resource-id t)))))
+              (not (webhooks/by-actor? own t))
+              (or (nil? domains) (webhooks/in-domains? eng domains t))))))))
 
 (defn- inbox-line
-  "One event as the door answers it (R-12.38)."
-  [t]
-  {:kind (name (:kind t))
-   :id (str (:resource-id t))
-   :action (name (:action t))
-   :from (some-> (:from-state t) name)
-   :to (some-> (:to-state t) name)
-   :summary (:summary t)
-   :at (str (:at t))
-   :event (:id t)})
+  "One event as the door answers it (R-12.38). `actor` is the address
+  of who made the move, and `actor_name` what a person calls them, as
+  a subscription's delivery names them."
+  [eng t]
+  (let [who (webhooks/actor-name eng t)]
+    (cond-> {:kind (name (:kind t))
+             :id (str (:resource-id t))
+             :action (name (:action t))
+             :from (some-> (:from-state t) name)
+             :to (some-> (:to-state t) name)
+             :summary (:summary t)
+             :actor (webhooks/actor-address t)
+             :at (str (:at t))
+             :event (:id t)}
+      who (assoc :actor_name who))))
 
 (defn- inbox-scan
   "The matching events after `cursor`, read a page at a time until the
@@ -919,7 +936,7 @@
               (throw (p/problem :unauthorized 401 "Unauthorized" {:detail no-inbox})))
           after (whole-param req "after" 0 nil)
           wait (or (whole-param req "wait" 0 inbox-wait-max) 0)
-          match? (inbox-match seat sitting)
+          match? (inbox-match eng seat sitting)
           deadline (+ (System/nanoTime) (* (long wait) 1000000000))]
       (loop [cursor (or after (sitting-start eng sitting))]
         (let [[hits cursor] (inbox-scan eng match? cursor)]
@@ -929,7 +946,7 @@
             {:status 200
              :headers {"Content-Type" "application/x-ndjson"
                        "Waymark-Inbox-After" (str cursor)}
-             :body (apply str (map #(str (wire/write-json (inbox-line %)) "\n") hits))}))))))
+             :body (apply str (map #(str (wire/write-json (inbox-line eng %)) "\n") hits))}))))))
 
 ;; ── the key check door (docs/spec-seat.md § 16) ─────────────────────
 

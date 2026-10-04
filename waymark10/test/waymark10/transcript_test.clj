@@ -18,6 +18,7 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.fixtures :as fx]
             [waymark10.holds :as holds]
+            [waymark10.resource :as r]
             [waymark10.server.definitions :as defs]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.engine :as engine]
@@ -1012,3 +1013,173 @@
     (let [resp (tail! h key)]
       (is (= 401 (:status resp)))
       (is (str/includes? (str (:body resp)) "No open sitting answers this inbox key.")))))
+
+;; ── the door keeps to the seat's domain, and names who moved ────────
+
+;; tr_ask keeps a domain's NAME as a ticket does: absent counts as
+;; factory.
+(def ^:private tr-ask
+  (r/resource
+   {:kind :tr_ask
+    :plural "tr_asks"
+    :states [:draft :open]
+    :initial :draft
+    :terminal #{:open}
+    :summary "{data.name} · {state}"
+    :schema [:map
+             [:name [:string {:min 1 :max 40}]]
+             [:domain {:optional true
+                       :not-a-ref "A domain's name, not a row id."}
+              [:maybe [:string {:max 40}]]]]
+    :filterable {:state #{:eq :in} :domain #{:eq}}
+    :actions {:groom {:from #{:draft} :to :open
+                      :safety {:idempotent true :reversible false
+                               :confirm false
+                               :one-way "Groomed is history."}}}
+    :absent-as {:domain "factory"}}))
+
+(def ^:private hears-asks
+  "A seat that reads asks whole and hears each groom."
+  {:scope [{:kind "tr_ask" :actions ["groom"]}]
+   :inbox {:only {:tr_ask ["groom"]}}})
+
+(defn- asks-engine []
+  (let [at (clock)]
+    (engine/engine {:storage (memory/storage)
+                    :resources [fx/meal tr-ask]
+                    :now-fn (fn [] @at)
+                    :oidc {:issuer issuer :audience audience :jwks jwks
+                           :app-url "https://app.test/"
+                           :delegate-clients {"connector" "Claude"}}})))
+
+(defn- groomed!
+  "An ask born with `data` and groomed by `who`; → its id."
+  [eng data who]
+  (let [ask (:row (inv/create! eng :tr_ask data {:principal person}))]
+    (inv/invoke! eng :tr_ask (str (:id ask)) :groom {} {:principal who})
+    (str (:id ask))))
+
+(defn- as-seat [seat]
+  (t/principal {:id (str "seat:" (:id seat)) :type :agent :display "a seat"}))
+
+(deftest the-inbox-door-keeps-to-the-seats-domain
+  (testing "a household seat hears a household ask and not a factory one"
+    (let [eng (asks-engine)
+          h (engine/handler eng)
+          house (:row (inv/create! eng :domain
+                                   {:name "household"
+                                    :charter "Keep the house running."
+                                    :budget_usd_per_week 40M}
+                                   {:principal person}))
+          _ (open-seat! eng (add-model! eng) (assoc hears-asks :domain (:id house)))
+          key (get-in (sit! h) [:inbox :key])
+          ours (groomed! eng {:name "ours" :domain "household"} person)
+          _ (groomed! eng {:name "theirs" :domain "factory"} person)
+          _ (groomed! eng {:name "unstamped"} person)]
+      (is (= [ours] (mapv :id (lines-of (tail! h key)))))))
+  (testing "a seat with no domain is in factory, and hears an unstamped ask"
+    (let [eng (asks-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng) hears-asks)
+          key (get-in (sit! h) [:inbox :key])
+          _ (groomed! eng {:name "theirs" :domain "household"} person)
+          stamped (groomed! eng {:name "stamped" :domain "factory"} person)
+          unstamped (groomed! eng {:name "unstamped"} person)]
+      (is (= [stamped unstamped] (mapv :id (lines-of (tail! h key))))))))
+
+(deftest the-inbox-door-leaves-out-the-seats-own-moves-and-names-who-moved
+  (let [eng (asks-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        seat (open-seat! eng model hears-asks)
+        other (:row (inv/create! eng :seat
+                                 {:name "scribe-two"
+                                  :charter "Groom what the house asks for."
+                                  :scope (:scope hears-asks)
+                                  :held_for [(:id model)]
+                                  :standing_ttl_seconds 604800
+                                  :cadence_seconds 3600
+                                  :budget_usd_per_week 5M
+                                  :sitting_budget_tokens 60000}
+                                 {:principal person}))
+        key (get-in (sit! h) [:inbox :key])
+        _ (groomed! eng {:name "mine"} (as-seat seat))
+        theirs (groomed! eng {:name "theirs"} (as-seat other))
+        hers (groomed! eng {:name "hers"} person)
+        lines (lines-of (tail! h key))]
+    (testing "the seat's own groom is left out; another seat's and a person's are not"
+      (is (= [theirs hers] (mapv :id lines))))
+    (testing "each line names who moved"
+      (is (= (str "seat:" (:id other)) (:actor (first lines))))
+      (is (= "scribe-two" (:actor_name (first lines))))
+      (is (= "colton" (:actor (second lines))))
+      (is (= "Colton Kopsa" (:actor_name (second lines)))))))
+
+;; ── the default inbox, and the keys a re-sit keeps (epic 3ad250ef) ──
+
+(def ^:private reads-seats
+  "A scope that reads the `seat` kind whole: this engine serves no
+  `ticket`, so `seat` is the kind of the default inbox it can show."
+  [{:kind "meal" :actions ["accept"]}
+   {:kind "seat" :actions ["restate"]}])
+
+(defn- sit-as!
+  "Sit through a fresh connector session, as the harness session
+  `session`; → the sit's answer."
+  [h session]
+  (doc-of (tool h (with-session (initialize! h)) "waymark_sit"
+                {:key a-key :session session})))
+
+(deftest an-interactive-seat-has-an-inbox-by-default
+  (testing "an interactive seat with no inbox is answered a key, and its door serves the default kinds"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          seat (open-seat! eng (add-model! eng) {:mode "interactive" :scope reads-seats})
+          sat (sit! h)
+          key (get-in sat [:inbox :key])
+          soup (meal! eng "Soup")
+          _ (move! eng soup :accept)
+          resp (tail! h key {:after 0})
+          lines (lines-of resp)]
+      (is (nil? (get-in (row-of eng :seat (:id seat)) [:data :inbox]))
+          "the default is derived, nothing is stored")
+      (is (= "https://work.test/api/-/sittings/inbox" (get-in sat [:inbox :url])))
+      (is (re-matches #"[A-Za-z0-9_-]{22}" (str key)))
+      (is (= 200 (:status resp)))
+      (is (some #(and (= "seat" (:kind %)) (= (str (:id seat)) (:id %))) lines)
+          "the seat's own moves are in the default inbox")
+      (is (not-any? #(= "meal" (:kind %)) lines)
+          "a kind the default does not name is not served")))
+  (testing "a fired seat with no inbox is answered none"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng) {:scope reads-seats})
+          sat (sit! h)]
+      (is (= "fired" (:mode sat)))
+      (is (nil? (:inbox sat))))))
+
+(deftest a-same-session-re-sit-keeps-the-earlier-inbox-key
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:inbox an-inbox})
+        first-sat (sit-as! h "harness-1")
+        first-key (get-in first-sat [:inbox :key])
+        second-sat (sit-as! h "harness-1")
+        second-key (get-in second-sat [:inbox :key])]
+    (testing "the re-sit reuses the sitting and mints a different key"
+      (is (= (:sitting first-sat) (:sitting second-sat)))
+      (is (string? first-key))
+      (is (not= first-key second-key)))
+    (testing "both keys find the sitting"
+      (is (= (str (:sitting first-sat))
+             (str (:id (seats/inbox-sitting-by-key eng first-key)))))
+      (is (= (str (:sitting first-sat))
+             (str (:id (seats/inbox-sitting-by-key eng second-key))))))
+    (testing "the sitting keeps the hashes, never a key"
+      (let [data (wire/write-json (:data (row-of eng :sitting (:sitting second-sat))))]
+        (is (not (str/includes? data (str first-key))))
+        (is (not (str/includes? data (str second-key))))))
+    (testing "every key dies when the sitting ends"
+      (is (= 200 (:status (close! h))))
+      (is (nil? (seats/inbox-sitting-by-key eng first-key)))
+      (is (nil? (seats/inbox-sitting-by-key eng second-key))))))
