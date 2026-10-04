@@ -93,3 +93,40 @@
         (is (= head-3 (get-in p [:data :deployed_head])))
         (is (= "green" (str (get-in p [:data :deploy_state]))))
         (is (some? (get-in p [:data :deployed_at])))))))
+
+(defn- after-deploy-runs
+  "The policy after one deploy pass over `head-3`, which holds merge 31
+  that the policy waits on, when `deploy` ran on it as `runs` say: each
+  [id conclusion started completed], in the order the forge answers
+  them, newest first."
+  [runs]
+  (let [{:keys [state engine] :as w} (world)]
+    (gh/seed-pull! state repo {:number 31 :state "closed" :merged true
+                               :merge_commit_sha merge-1})
+    (gh/seed-ancestor! state repo head-3 merge-1)
+    (bench/mark-row! engine :repo_policy (str (:id (the-policy engine)))
+                     {:deploy_waits_on ["c-31 t-31 31"]} #{})
+    (gh/seed-branch! state repo "main" head-3)
+    (doseq [[id conclusion started completed] runs]
+      (gh/seed-check! state repo head-3
+                      {:id id :name "deploy" :status "completed"
+                       :conclusion conclusion :head_sha head-3
+                       :started_at started :completed_at completed}))
+    (deploy-pass! w)
+    (the-policy engine)))
+
+(deftest the-newest-deploy-run-on-the-head-speaks-for-it
+  (testing "a green re-apply after a red run records green and clears the waits"
+    (let [p (after-deploy-runs
+             [[713 "success" "2026-10-04T23:01:10Z" "2026-10-04T23:03:04Z"]
+              [712 "success" "2026-10-04T22:41:30Z" "2026-10-04T22:43:40Z"]
+              [711 "failure" "2026-10-04T22:20:05Z" "2026-10-04T22:22:46Z"]])]
+      (is (= "green" (str (get-in p [:data :deploy_state]))))
+      (is (= head-3 (get-in p [:data :deployed_head])))
+      (is (= [] (mapv :number (bench/deploy-waits p))))))
+  (testing "a red run after a green one records red and holds the waits"
+    (let [p (after-deploy-runs
+             [[722 "failure" "2026-10-04T23:01:10Z" "2026-10-04T23:03:04Z"]
+              [721 "success" "2026-10-04T22:41:30Z" "2026-10-04T22:43:40Z"]])]
+      (is (= "red" (str (get-in p [:data :deploy_state]))))
+      (is (= [31] (mapv :number (bench/deploy-waits p)))))))

@@ -1454,18 +1454,34 @@
 (def ^:private red-deploys
   #{"failure" "timed_out" "cancelled" "action_required" "startup_failure"})
 
+(defn- deploy-run-order
+  "Where one run of the deploy check stands among its runs on one head:
+  when it finished, or when it started while it has not, and its forge
+  id beside that, which grows with every run the forge starts. The
+  forge answers its runs newest first and a fake answers them as they
+  were seeded, so the place in the list says nothing."
+  [run]
+  (let [id (str (or (:check_id run) (:id run)))]
+    [(str (or (:finished_at run) (:started_at run)))
+     (if (re-matches #"\d{1,18}" id) (Long/parseLong id) -1)]))
+
 (defn note-deploy!
   "What the forge pass read of one policy's base says of its deploy.
   `base-read` is forge-base's {:head_sha :checks}; `covers?` is (fn
   [number sha]) → whether that pull request's merge is `sha` or an
   ancestor of it. The `deploy_check` green on the head records it as
   deployed and takes every merge it covers off the waits; red says so
-  and holds the line; one still running writes nothing. → true when it
+  and holds the line; one still running writes nothing. Of several runs
+  of the check on the head the newest speaks (`deploy-run-order`), so a
+  green re-apply answers for the red run before it. → true when it
   wrote."
   [eng policy base-read covers?]
   (let [check (deploy-check-of policy)
         head (some-> (:head_sha base-read) str not-empty)
-        run (last (filter #(= check (str (:check_name %))) (:checks base-read)))
+        run (->> (:checks base-read)
+                 (filter #(= check (str (:check_name %))))
+                 (sort-by deploy-run-order)
+                 last)
         conclusion (some-> (:conclusion run) str not-empty)
         id (str (:id policy))]
     (cond
