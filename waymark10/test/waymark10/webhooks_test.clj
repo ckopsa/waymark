@@ -25,7 +25,8 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["wh_gizmos" "wh_asks" "wh_seats" "subscriptions" "secrets" "jobs" "definitions"
+  ["wh_gizmos" "wh_asks" "wh_seats" "wh_changes" "seats" "domains" "models"
+   "sittings" "subscriptions" "secrets" "jobs" "definitions"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"])
 
 (defn- fresh! []
@@ -332,9 +333,11 @@
 ;; wh_ask keeps a domain's NAME as a ticket does: absent counts as
 ;; factory. wh_seat keeps a `domain` that is not a name and declares no
 ;; :absent-as, as a seat does.
-(defn- domain-kind [kind plural absent]
-  (r/resource
-   (cond-> {:kind kind
+(defn- domain-kind
+  ([kind plural absent] (domain-kind kind plural absent :spin))
+  ([kind plural absent action]
+   (r/resource
+    (cond-> {:kind kind
             :plural plural
             :states [:idle :spun]
             :initial :idle
@@ -344,16 +347,23 @@
                      [:name [:string {:min 1 :max 40}]]
                      [:domain {:optional true
                                :not-a-ref "A word the test writes, not a row id."}
+                      [:maybe [:string {:max 40}]]]
+                     [:requested_by {:optional true
+                                     :not-a-ref "A domain's name, not a row id."}
                       [:maybe [:string {:max 40}]]]]
             :filterable {:state #{:eq :in} :domain #{:eq}}
-            :actions {:spin {:from #{:idle} :to :spun
+            :actions {action {:from #{:idle} :to :spun
                              :safety {:idempotent true :reversible false
                                       :confirm false
                                       :one-way "Spun is history."}}}}
-     absent (assoc :absent-as absent))))
+     absent (assoc :absent-as absent)))))
 
 (def ^:private wh-ask (domain-kind :wh_ask "wh_asks" {:domain "factory"}))
 (def ^:private wh-seat (domain-kind :wh_seat "wh_seats" nil))
+;; a change as the filter knows one: it keeps a domain's name, and a
+;; seat stalls it.
+(def ^:private wh-change
+  (domain-kind :change "wh_changes" {:domain "factory"} :stall))
 
 (deftest a-subscription-keeps-to-its-domains
   (fresh!)
@@ -405,6 +415,65 @@
               (born! :wh_ask {:name "all"})
               (webhooks/drain! eng)
               (is (= 8 (count @(:hits rcv))))
+              (is (= :active (sub-state eng (:id sub))))))
+          (finally (engine/stop! (:server rcv))))))))
+
+;; ── 2e. domains: the asker's request, and a service seat's alerts ───
+
+(deftest a-subscription-hears-asks-into-its-domains-and-its-service-seats
+  (fresh!)
+  (with-eng {:webhook-attempts 2 :webhook-backoff-ms 5
+             :resources [gizmo wh-ask wh-change]}
+    (fn [eng]
+      (let [rcv (receiver!)
+            heard #(mapv (comp :summary wire/read-json :body) @(:hits rcv))
+            born! (fn [kind data]
+                    (:row (inv/create! eng kind data {:principal elena})))
+            ;; a seat that stores no domain is in factory
+            seat! (fn [name' extra]
+                    (born! :seat
+                           (merge {:name name'
+                                   :charter "Build what the house asks for."
+                                   :scope [{:kind "model" :actions ["retire"]}]
+                                   :standing_ttl_seconds 604800
+                                   :cadence_seconds 3600
+                                   :budget_usd_per_week 5M
+                                   :sitting_budget_tokens 60000}
+                                  extra)))
+            stall! (fn [seat name']
+                     (let [c (born! :change {:name name' :domain "household"})]
+                       (inv/invoke! eng :change (:id c) :stall nil
+                                    {:principal
+                                     (t/principal {:id (str "seat:" (:id seat))
+                                                   :type :agent
+                                                   :display (str name')})})))
+            infra (seat! "wh-infra" {:serves "any"})
+            worker (seat! "wh-worker" {})]
+        (try
+          (let [{sub :row} (inv/create! eng :subscription
+                                        {:url (:url rcv)
+                                         :domains ["factory"]}
+                                        {:principal elena})]
+            (testing "a household row that factory asked for is delivered,
+                      and one household asked for itself is not"
+              (born! :wh_ask {:name "asked" :domain "household"
+                              :requested_by "factory"})
+              (born! :wh_ask {:name "theirs" :domain "household"
+                              :requested_by "household"})
+              (webhooks/drain! eng)
+              (is (= ["asked · Idle"] (heard))))
+            (testing "without service_alerts, a service seat's stall on
+                      household work is not delivered"
+              (stall! infra "quiet")
+              (webhooks/drain! eng)
+              (is (= ["asked · Idle"] (heard))))
+            (testing "with service_alerts it is, and the stall of a seat
+                      that serves its own domain is not"
+              (restate! eng (:id sub) :restate {:service_alerts true})
+              (stall! infra "loud")
+              (stall! worker "own")
+              (webhooks/drain! eng)
+              (is (= ["asked · Idle" "loud · Spun"] (heard)))
               (is (= :active (sub-state eng (:id sub))))))
           (finally (engine/stop! (:server rcv))))))))
 
