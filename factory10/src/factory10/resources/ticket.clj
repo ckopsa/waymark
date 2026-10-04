@@ -1197,7 +1197,18 @@
                      :x-display
                      {:label "Priority the seat asked for"
                       :help "The priority a fired seat named when it filed this ticket. Its birth lands at 4 whatever it asked, so a groomer reads the seat's own judgment here and raises the ticket when it earns it. Empty for a ticket a person or an interactive seat filed."}}
-    [:maybe [:int {:min 0 :max 4}]]]])
+    [:maybe [:int {:min 0 :max 4}]]]
+   ;; the domain's NAME and not its id: the factory domain's id is
+   ;; minted at boot on each database, so no declaration can spell it,
+   ;; and `:absent-as` needs a value it can spell (ticket 20fab5f9)
+   [:domain {:optional true
+             :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
+             :examples ["factory"]
+             :x-display
+             {:raw true
+              :label "Domain that wants the work"
+              :help "The name of the domain this ask belongs to. The birth writes it: a ticket with a parent takes its parent's domain, and any other takes the domain of the seat that filed it. A ticket that stores none is in factory."}}
+    [:maybe [:string {:max 64}]]]])
 
 ;; ── a fired seat's ticket lands at the back (ticket b0ec4d47) ───────
 
@@ -1230,6 +1241,42 @@
         (assoc-in [:data :asked_priority] (get-in row [:data :priority]))
         (assoc-in [:data :priority] fired-seat-priority))
     row))
+
+;; ── a ticket carries the domain that wants the work (ticket 20fab5f9) ─
+
+(defn- seat-domain-name
+  "The name of the domain the filing seat STORES, or nil: the grant the
+  request wore cites a seat, and the seat names a domain row. A person,
+  a seat with no stored domain and a ctx with no `:read` hook answer
+  nil, and a ticket that stores nothing filters as factory."
+  [ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
+      (when-some [seat-id (some-> (read' :grant gid)
+                                  (get-in [:data :seat]) str not-empty)]
+        (when-some [domain-id (some-> (read' :seat seat-id)
+                                      (get-in [:data :domain]) str not-empty)]
+          (some-> (read' :domain domain-id)
+                  (get-in [:data :name]) str not-empty))))))
+
+(defn- take-the-domain
+  "The birth's other stamp: a ticket with a parent takes what its parent
+  stores, and any other takes the filing seat's domain. Nothing is
+  written when there is none to take."
+  [row ctx]
+  (let [parent (some-> (get-in row [:data :parent]) str not-empty)
+        domain (if parent
+                 (when-some [read' (:read ctx)]
+                   (some-> (read' :ticket parent)
+                           (get-in [:data :domain]) str not-empty))
+                 (seat-domain-name ctx))]
+    (cond-> row domain (assoc-in [:data :domain] domain))))
+
+(defn- stamp-the-birth
+  [row ctx]
+  (-> row
+      (land-a-fired-seats-ticket-at-four ctx)
+      (take-the-domain ctx)))
 
 (def ^:private close-input
   [:map
@@ -1302,7 +1349,10 @@
                 :showcase #{:set}
                 :found_in #{:eq}
                 :repo #{:eq :in}
+                :domain #{:eq :in}
                 :bead_id #{:eq :set}}
+   ;; a ticket born before domains stores none, and is factory's
+   :absent-as {:domain "factory"}
    ;; THE QUEUE IS THE COLLECTION UNDER ITS DEFAULT FILTER: a walker
    ;; opens /api/tickets and gets the work that is READY — groomed,
    ;; not blocked, not deferred — lowest priority number first.
@@ -1317,7 +1367,8 @@
                    the-parent-is-not-waited-on]
    ;; a fired seat's follow-up lands at 4 and a groomer raises it; a
    ;; person or an interactive seat is born at what it named
-   :on-create land-a-fired-seats-ticket-at-four
+   ;; and every birth takes its domain (ticket 20fab5f9)
+   :on-create stamp-the-birth
    ;; ticket cbf84f80: a child shows the scene its parent names
    :computed {:parent_scene
               {:schema [:maybe :string]

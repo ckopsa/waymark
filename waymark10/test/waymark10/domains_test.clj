@@ -118,6 +118,13 @@
         (is (zero? (compare 90M (get-in (row-of :domain id)
                                         [:data :budget_usd_per_week]))))))))
 
+;; tickets and changes name a domain by its name (ticket 20fab5f9)
+(deftest a-restate-never-renames-a-domain
+  (let [id (:id (make-domain! "rename-door"))]
+    (is (thrown? Exception
+                 (act! :domain id :restate {:name "renamed"} colton)))
+    (is (= "rename-door" (get-in (row-of :domain id) [:data :name])))))
+
 (deftest retire-is-refused-while-a-seat-names-the-domain
   (let [named (:id (make-domain! "retire-named"))
         free (:id (make-domain! "retire-free"))]
