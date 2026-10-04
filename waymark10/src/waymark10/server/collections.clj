@@ -81,6 +81,12 @@
     (:double :decimal) "numeric"
     "text"))
 
+(defn- absent-text
+  "The kind's :absent-as value for f as the wire spells it, or nil."
+  [rdef f]
+  (when-some [v (get (:absent-as rdef) f)]
+    (if (keyword? v) (name v) (str v))))
+
 ;; ── the filter grammar ──────────────────────────────────────────────
 
 (defn- grammar
@@ -95,7 +101,9 @@
                  (when-not (= :state f)
                    (let [{:keys [head array?]} (field-info rdef f)
                          fname (name f)
-                         e {:field f :head head :array? array?}]
+                         absent (absent-text rdef f)
+                         e (cond-> {:field f :head head :array? array?}
+                             (some? absent) (assoc :absent-as absent))]
                      (concat
                       (when (or (:eq ops) (:in ops) array?)
                         [[fname (assoc e :mode :eq
@@ -133,14 +141,22 @@
       {:target :data :field f :op :in-any :values values}
       :else
       (let [cast (cast-of (:head e))
-            base {:target :data :field f :cast cast}]
+            base {:target :data :field f :cast cast}
+            ;; :absent-as — a row that stores nothing filters as the
+            ;; declared value: the cond carries :absent? when an absent
+            ;; row belongs in the answer, and each store reads that mark
+            absent (:absent-as e)
+            named? (and (some? absent)
+                        (boolean (some #(= absent (str %)) values)))]
         (case (:mode e)
-          :eq (if multi?
-                (assoc base :op :in :values values)
-                (assoc base :op := :value v))
-          :ne (if multi?
-                (assoc base :op :not-in :values values)
-                (assoc base :op :not= :value v))
+          :eq (cond-> (if multi?
+                        (assoc base :op :in :values values)
+                        (assoc base :op := :value v))
+                named? (assoc :absent? true))
+          :ne (cond-> (if multi?
+                        (assoc base :op :not-in :values values)
+                        (assoc base :op :not= :value v))
+                (and (some? absent) (not named?)) (assoc :absent? true))
           :gte (assoc base :op :>= :value v)
           :lte (assoc base :op :<= :value v)
           :after (assoc base :op :> :value v
@@ -605,7 +621,8 @@
                            counts (store/with-tx st
                                     #(store/facet-counts st % (:kind rdef)
                                                          f (remove own? conds)
-                                                         array?))]
+                                                         array?
+                                                         (absent-text rdef f)))]
                        (when (seq counts) [f counts]))
                      (catch Exception e
                        (binding [*out* *err*]

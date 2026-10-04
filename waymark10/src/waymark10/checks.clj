@@ -1059,6 +1059,27 @@
                    (str "default filter " (name f) "=" (pr-str value) " "
                         problem)))))))))
 
+(defn- check-absent-as
+  "An :absent-as entry changes what an equality filter matches, so it
+  can only name a scalar field the declaration filters by :eq, and its
+  value must be one that field's own schema admits — the
+  :default-filters law, read for the value a row never stored."
+  [r]
+  (doseq [[f v] (sort-by key (:absent-as r))]
+    (let [ops (set (get (:filterable r) f))
+          s (schema/field-schema (:schema r) f)
+          array? (boolean (and (vector? s) (= :vector (first s))))]
+      (if (or (= :state f) array? (not (:eq ops)))
+        (err r :absent-as
+             (str "absent-as field " f " is not an :eq-filterable scalar "
+                  "field — the declaration says what " (name f) "=<value> "
+                  "matches, so the field must be filterable by :eq first"))
+        (when-some [problem (schema/filter-value-problem
+                             (schema/leaf-head s)
+                             (if (keyword? v) (name v) (str v)))]
+          (err r :absent-as
+               (str "absent-as " (name f) "=" (pr-str v) " " problem)))))))
+
 (defn- check-faceted [r]
   (doseq [f (:faceted r)
           :when (not= f :state)]
@@ -1960,6 +1981,7 @@
           check-place check-edit check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
+          check-absent-as
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
           check-defaults check-answered-at-a-door check-remedy-bindings])})
