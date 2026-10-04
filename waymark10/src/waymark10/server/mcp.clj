@@ -3689,6 +3689,18 @@
     (not-empty (into [] (comp (map str/trim) (remove str/blank?))
                      (str/split (str v) #",")))))
 
+(defn- choosing-entries
+  "The entries that may choose a repository, out of `entries`. An entry
+  narrowed to a `path` is an addition - one more file the seat may
+  touch - so it does not choose where its power has an entry with no
+  path (ticket d30c390f). A power whose every entry carries a path
+  still chooses by them."
+  [entries]
+  (let [path? #(some? (get-in % [:filter :path]))
+        general (into #{} (comp (remove path?) (map (comp str :kind))) entries)]
+    (filterv #(not (and (path? %) (contains? general (str (:kind %)))))
+             entries)))
+
 (defn- seat-repositories
   "The repository this seat works and the ones it may only read, read
   from its own scope (R-12.32) → {:repo r :reference [r …]}, or nil.
@@ -3705,7 +3717,8 @@
                          (get-in seat [:data :scope]))
         writes? #(contains? bench-write-tokens (str (:kind %)))
         reads (filterv (complement writes?) entries)
-        choosers (or (not-empty (filterv writes? entries)) reads)
+        choosers (choosing-entries
+                  (or (not-empty (filterv writes? entries)) reads))
         named (mapv #(some-> (get-in % [:filter :repo]) str str/trim) choosers)
         repo (when (and (seq named)
                         (every? #(not (str/blank? (str %))) named)
@@ -3865,13 +3878,19 @@
   (or (row-said row "repo") (row-said row "repository")))
 
 (defn- seat-reaches-repo?
-  "Does every bench entry of this seat name `repo`? An entry with no
-  repo filter names none, so a seat with one reaches nothing by a row."
+  "Does every bench power this seat holds have an entry that names
+  `repo`? The entries are grouped by `kind`, and one entry of each is
+  enough: an entry narrowed to a path in another repository is one more
+  file the seat may touch, and does not shut the bench (ticket
+  d30c390f). An entry with no repo filter names none, so a power held
+  only by such entries reaches nothing by a row."
   [seat repo]
   (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
                          (get-in seat [:data :scope]))]
     (boolean (and (seq entries)
-                  (every? #(some #{repo} (entry-repos %)) entries)))))
+                  (every? (fn [[_ held]]
+                            (some #(some #{repo} (entry-repos %)) held))
+                          (group-by (comp str :kind) entries))))))
 
 (defn- several-repositories?
   "Does every CHOOSING entry of the seat name the SAME two or more
@@ -3885,7 +3904,7 @@
   (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
                          (get-in seat [:data :scope]))
         writes (filterv #(contains? bench-write-tokens (str (:kind %))) entries)
-        choosers (or (not-empty writes) entries)
+        choosers (choosing-entries (or (not-empty writes) entries))
         sets (mapv (comp set entry-repos) choosers)]
     (boolean (and (seq choosers)
                   (apply = sets)
