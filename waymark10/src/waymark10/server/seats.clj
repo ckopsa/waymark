@@ -1399,6 +1399,8 @@
       ;; restate that leaves it out keeps the stored value, so no
       ;; caller written before the field has to name it
       (contains? inp :domain) (assoc-in [:data :domain] (:domain inp))
+      ;; `serves` is restated the same way (epic aff24e84, piece 5)
+      (contains? inp :serves) (assoc-in [:data :serves] (:serves inp))
       lift? (update :data dissoc :halt))))
 
 (defhandler close-breaker [row _inp _ctx]
@@ -2376,6 +2378,48 @@
   [row ctx]
   (domain-name-of (:read ctx) row))
 
+(defn spend-by-domain
+  "The dollars this seat's sittings of the last seven days cost, by the
+  domain each was worked for (epic aff24e84, piece 5): a map from the
+  domain's name to dollars. A sitting is charged to the domain that
+  asked for the row it walked, which is the row's `requested_by` when
+  it has one and otherwise its `domain`; a row that stores neither
+  counts as `default-domain`. A sitting that walked several rows is
+  shared evenly among them, and one that walked none is charged to the
+  seat's own domain."
+  [read' find' row ^java.time.Instant now]
+  (let [since (.minusSeconds now (* 7 86400))
+        walk (some-> (get-in row [:data :walk]) str not-empty keyword)
+        own (or (domain-name-of read' row) default-domain)
+        asked-by (fn [id]
+                   (let [d (:data (when walk (read' walk id)))]
+                     (or (some-> (:requested_by d) str not-empty)
+                         (some-> (:domain d) str not-empty)
+                         default-domain)))
+        recent? (fn [s]
+                  (when-some [at (get-in s [:data :started_at])]
+                    (not (.isBefore (if (instance? java.time.Instant at)
+                                      ^java.time.Instant at
+                                      (java.time.Instant/parse (str at)))
+                                    since))))]
+    (reduce (fn [acc s]
+              (let [cost (bigdec (or (get-in s [:data :cost_usd]) 0))
+                    rows (distinct (map str (get-in s [:data :walked_rows])))
+                    names (if (seq rows) (map asked-by rows) [own])
+                    share (with-precision 20 (/ cost (count names)))]
+                (reduce #(update %1 (keyword %2) (fnil + 0M) share) acc names)))
+            {}
+            (filter recent?
+                    (find' :sitting {:seat (str (:id row))} {:limit 10000})))))
+
+(defn- spend-by-domain-field
+  "The seat's :computed `spend_by_domain_7d`: `spend-by-domain` over the
+  read and the find the render ctx lends."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (spend-by-domain (:read ctx) find' row
+                     (or (:now ctx) (java.time.Instant/now)))))
+
 ;; ── a domain's budget (epic aff24e84, piece 2) ──────────────────────
 
 (defn dollars
@@ -2487,6 +2531,8 @@
                (remove #{:budget_usd_per_week} restatable))
        (or (not (contains? inp :domain))
            (= (str (:domain inp)) (str (get-in row [:data :domain]))))
+       (or (not (contains? inp :serves))
+           (= (:serves inp) (get-in row [:data :serves])))
        (= (str (:id author))
           (some-> (domain-row-of ctx (get-in row [:data :domain]))
                   (get-in [:data :mayor])
@@ -2511,7 +2557,16 @@
                ;; it reads the domain row: with no :read it is absent,
                ;; never a false name
                :reads? true
-               :fn in-domain-field}}
+               :fn in-domain-field}
+              :spend_by_domain_7d
+              {:schema [:map-of :keyword [:decimal {:min 0 :max 100000000}]]
+               :x-display
+               {:label "Spent in seven days, by domain, in dollars"
+                :help "What this seat's sittings of the last seven days cost, by the domain each was worked for, worked out at read time. A sitting is charged to the domain that asked for the row it walked, and to the row's own domain when no other domain asked."}
+               ;; it reads the sittings and the rows they walked: with
+               ;; no read lent it is absent, never an empty map
+               :reads? true
+               :fn spend-by-domain-field}}
    ;; No :x-options on :name, and roles.clj's reason verbatim: the list
    ;; the engine could publish here is the list of names already TAKEN,
    ;; and a chip row of it would offer exactly the tokens the guard is
@@ -2648,6 +2703,13 @@
                        {:label "Rows per firing"
                         :help "The most rows one wake moves to a leaf. The walk's cap, and the lever you pull before you pull the model: fewer rows is a shorter sitting at the same judgment."}}
      [:int {:min 1 :max 200}]]
+    ;; WHOM THIS SEAT WORKS FOR (epic aff24e84, piece 5). NO DEFAULT IS
+    ;; WRITTEN: a seat with nothing here serves its own domain.
+    [:serves {:optional true
+              :x-display
+              {:label "Whom it serves"
+               :help "own: this seat works for its own domain. any: it is a service, and the mayor of a domain that asked for a ticket in this seat's repository grooms and ranks that ticket. Leave it empty for own."}}
+     [:maybe [:enum "own" "any"]]]
     ;; THE DOMAIN THIS SEAT IS IN (epic aff24e84, piece 1). NO DEFAULT
     ;; IS WRITTEN: a seat with nothing here reads as being in
     ;; `factory`, worked out at read time by `domain-name-of`.
@@ -3002,6 +3064,11 @@
               {:label "Its domain"
                :help "The domain this seat works in. Leave it empty and the seat counts as being in factory."}}
      [:maybe :waymark/ref]]
+    [:serves {:optional true
+              :x-display
+              {:label "Whom it serves"
+               :help "own: this seat works for its own domain. any: it is a service, and the mayor of a domain that asked for a ticket in this seat's repository grooms and ranks that ticket. Leave it empty for own."}}
+     [:maybe [:enum "own" "any"]]]
     [:wake_on {:optional true
                :examples [wake-on-example]
                :x-display
@@ -3207,6 +3274,11 @@
                        {:label "Its domain"
                         :help "The domain this seat works in. Leave it out and the seat stays in the domain it is in; clear it and the seat counts as being in factory."}}
               [:maybe :waymark/ref]]
+             [:serves {:optional true
+                       :x-display
+                       {:label "Whom it serves"
+                        :help "own or any, stated again. Leave it out and the seat serves whom it serves today; clear it and the seat serves its own domain."}}
+              [:maybe [:enum "own" "any"]]]
              [:wake_on {:optional true
                         :examples [wake-on-example]
                         :x-display
@@ -3288,7 +3360,7 @@
                       :fire_interval_seconds :max_open_sittings
                       :release_grace_seconds :health_window
                       :health_alerts :health_breaker :delegates
-                      :domain]
+                      :domain :serves]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter

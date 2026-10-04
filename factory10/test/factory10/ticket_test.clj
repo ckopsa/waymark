@@ -25,6 +25,7 @@
             [waymark10.schema :as sch]
             [waymark10.server.collections :as collections]
             [waymark10.server.render :as render]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store.memory :as memory])
   (:import (java.time Instant)))
 
@@ -800,3 +801,75 @@
                                (assoc (ctx the-engine)
                                       :within {:kind :ticket :action :drop})
                                :turn_back)))))))
+
+;; ── a service serves every domain (ticket 92eb577f) ───────────────────
+
+(def ^:private infra-repo "ckopsa/home-infrastructure")
+
+(def ^:private a-service
+  (merge two-domains
+         (sat "factory-mayor" nil)
+         {"D-factory" {:kind :domain :id "D-factory"
+                       :data {:name "factory" :mayor "S-factory-mayor"}}
+          "S-infra-seat" {:kind :seat :id "S-infra-seat"
+                          :data {:name "infra-seat" :serves "any" :walk "ticket"
+                                 :scope [{:kind "bench.edit" :actions []
+                                          :filter {:repo infra-repo}}]}}
+          "S-code-seat" {:kind :seat :id "S-code-seat"
+                         :data {:name "code-seat" :walk "ticket"
+                                :scope [{:kind "bench.edit" :actions []
+                                         :filter {:repo "ckopsa/waymark"}}]}}}))
+
+(defn- served
+  "The delegate that sits in `seat`, over the fake store `a-service`."
+  [seat]
+  (assoc (ctx {:id seat :type :agent :roles #{} :acts-for "colton"} a-service)
+         :grant {:id (str "G-" seat)}))
+
+(def ^:private a-served-ask
+  {:domain "factory" :requested_by "household" :needed_by "ASK"
+   :repo infra-repo})
+
+(deftest the-requesting-mayor-grooms-and-ranks-a-services-ticket
+  (let [draft (at :draft a-served-ask "NEW")
+        queued (at :open a-served-ask "NEW")]
+    (testing "the household mayor grooms and ranks what it asked a service for"
+      (is (= :available (:status (refusal draft (served "house-mayor") :groom))))
+      (is (= :available
+             (:status (refusal queued (served "house-mayor") :prioritize)))))
+    (testing "and does not drop it: the decline is the receiving domain's"
+      (let [shut (refusal draft (served "house-mayor") :drop)]
+        (is (= :unavailable (:status shut)))
+        (is (= :only-the-receiving-mayor-declines (:name (:denier shut))))))
+    (testing "the receiving mayor still answers it, the drop included"
+      (doseq [[row action] [[draft :groom] [draft :drop] [queued :prioritize]]]
+        (is (= :available (:status (refusal row (served "factory-mayor") action)))
+            (name action))))
+    (testing "a hand of the asking domain that is not its mayor does not"
+      (is (= :unavailable
+             (:status (refusal draft (served "house-hand") :groom)))))
+    (testing "the same groom is refused on a ticket of a seat that serves its own domain"
+      (let [shut (refusal (at :draft (assoc a-served-ask :repo "ckopsa/waymark") "NEW")
+                          (served "house-mayor") :groom)]
+        (is (= :unavailable (:status shut)))
+        (is (= :the-receiving-mayor-answers-an-ask (:name (:denier shut))))))))
+
+(deftest a-services-spend-shows-by-the-domain-that-asked
+  (let [sitting (fn [id started cost walked]
+                  {id {:kind :sitting :id id :state :closed
+                       :data {:seat "S-infra-seat" :started_at started
+                              :cost_usd cost :walked_rows walked}}})
+        rows (merge a-service
+                    {"T-asked" (at :open a-served-ask "T-asked")
+                     "T-own" (at :open {:repo infra-repo} "T-own")}
+                    (sitting "SIT-1" "2026-09-25T10:00:00Z" 3M ["T-asked"])
+                    (sitting "SIT-2" "2026-09-24T10:00:00Z" 2M ["T-own"])
+                    (sitting "SIT-3" "2026-09-23T10:00:00Z" 1M [])
+                    (sitting "SIT-old" "2026-09-01T10:00:00Z" 50M ["T-asked"]))
+        {read' :read find' :find} (ctx the-person rows)
+        spend (seats/spend-by-domain read' find' (get rows "S-infra-seat") now)]
+    (is (= #{:household :factory} (set (keys spend))))
+    (is (== 3 (:household spend))
+        "a requested ticket's sitting is the requester's cost")
+    (is (== 3 (:factory spend))
+        "a ticket nobody asked for, and a sitting that walked nothing, are factory's")))

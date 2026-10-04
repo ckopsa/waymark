@@ -873,12 +873,45 @@
   (when-some [find' (:find ctx)]
     (first (find' :domain {:name domain} {:limit 1}))))
 
+(declare answer-an-ask)
+
 (defguardfn the-receiving-mayor-answers-an-ask
   {:reads [:principal]
    :vars [:domain :asker :mayor]
    :open "No door changes who the caller is: ask the mayor of the domain this ticket was asked of, or the owner, to answer it."
    :explain "{asker} asked {domain} for this ticket, so {domain} answers it: it is groomed, ranked and dropped by the owner or by the mayor of {domain}, which is {mayor}. A domain that could groom what it asks for would fill another domain's queue."}
   [row _inp ctx]
+  (answer-an-ask row ctx true))
+
+(defn- a-services-ticket?
+  "Is this ticket a service's (epic aff24e84, piece 5): in `domain`, the
+  domain of a seat that `serves` any, and in the repository the
+  `bench.edit` entry of that seat's scope filters by. A ctx with no
+  `:find` hook answers false."
+  [ctx row domain]
+  (let [repo (some-> (get-in row [:data :repo]) str not-empty)
+        find' (:find ctx)
+        read' (:read ctx)
+        in (fn [seat]
+             (if-some [id (some-> (get-in seat [:data :domain]) str not-empty)]
+               (some-> (when read' (read' :domain id))
+                       (get-in [:data :name]) str)
+               default-domain))
+        edits? (fn [e]
+                 (let [f (:filter e)]
+                   (and (= "bench.edit" (some-> (:kind e) name))
+                        (= repo (some-> (or (:repo f) (get f "repo")) str)))))]
+    (boolean
+     (and repo find'
+          (some #(and (= domain (in %))
+                      (some edits? (get-in % [:data :scope])))
+                (find' :seat {:serves "any"} {:limit 100}))))))
+
+(defn- answer-an-ask
+  "The verdict of `the-receiving-mayor-answers-an-ask`. With
+  `requester-too?` the mayor of the domain that asked is allowed as
+  well, on a service's ticket; without it only the receiving side is."
+  [row ctx requester-too?]
   ;; domains' `the-mayors-or-a-persons-move`, on a ticket one domain
   ;; asked of another. Every other ticket passes, and so does a ctx
   ;; with no hook, which declines to guess. It reads the domain and
@@ -901,11 +934,28 @@
             refuse #(t/deny {:vars {:domain domain :asker asker :mayor said}})]
         (cond
           (and mayor (contains? cited mayor)) (t/allow)
+          ;; a service works at its requester's priority: the mayor of
+          ;; the domain that asked grooms and ranks the ticket
+          (and requester-too?
+               (a-services-ticket? ctx row domain)
+               (some->> (domain-named ctx asker) :data :mayor str not-empty
+                        (contains? cited)))
+          (t/allow)
           ;; a sitter of any other seat
           (seq cited) (refuse)
           ;; a person, a tool a person is signed in to, or the engine
           (or (not= :agent type) (some? (not-empty (str acts-for)))) (t/allow)
           :else (refuse))))))
+
+(defguardfn only-the-receiving-mayor-declines
+  {:reads [:principal]
+   :vars [:domain :asker :mayor]
+   :open "No door changes who the caller is: ask the mayor of the domain this ticket was asked of, or the owner, to drop it."
+   :explain "{asker} asked {domain} for this ticket, and the decline is the answer of {domain}: it is dropped by the owner or by the mayor of {domain}, which is {mayor}. The domain that asked grooms and ranks a service's ticket, and it does not drop one."}
+  [row _inp ctx]
+  ;; `the-receiving-mayor-answers-an-ask` with no exception for the
+  ;; requester of a service's ticket (epic aff24e84, piece 5)
+  (answer-an-ask row ctx false))
 
 (defguardfn only-its-change-moves-it
   {:reads [:within]
@@ -1426,7 +1476,7 @@
                    :x-display
                    {:raw true
                     :label "Domain that asked"
-                    :help "The name of the domain whose mayor asked another domain for this work. Only the receiving domain's mayor, or the owner, grooms, ranks or drops such a ticket. Empty for a ticket filed in its own domain."}}
+                    :help "The name of the domain whose mayor asked another domain for this work. Only the receiving domain's mayor, or the owner, grooms, ranks or drops such a ticket, except that the asking domain's mayor grooms and ranks a ticket of a seat that serves any domain. Empty for a ticket filed in its own domain."}}
     [:maybe [:string {:max 64}]]]])
 
 ;; ── a fired seat's ticket lands at the back (ticket b0ec4d47) ───────
@@ -2020,7 +2070,8 @@
     {:from #{:draft :open} :to :dropped
      :input close-input
      ;; a drop of a ticket another domain asked for is the decline
-     :guards [children-are-finished the-receiving-mayor-answers-an-ask]
+     :guards [children-are-finished the-receiving-mayor-answers-an-ask
+              only-the-receiving-mayor-declines]
      :handler drop-the-ticket
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
@@ -2205,7 +2256,7 @@
     "`reparent` is three doors, one self-loop for each state a hand shapes the tree in (`draft`, `open`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. It is not a field of `restate`: a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse on that door. A ticket under review or deferred is not re-parented; it is when it returns."
     "`move_domain` is five doors, one self-loop for each state a ticket can wait in, for `restate`'s reason: a v10 action declares one `:to`. Three are a hand's (`draft`, `open`, `blocked`, the states a hand shapes the tree in, as `reparent`). `move_domain_in_review` and `move_domain_deferred` are hidden and open only inside the move of a ticket above, so a ticket under review or deferred goes with its parent, and is moved alone when it returns. An ended ticket takes no door and keeps the domain it ended in; the tickets under it are still walked."
     "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."
-    "`the-receiving-mayor-answers-an-ask`, on `groom`, `prioritize` and `drop`, declares `:reads [:principal]` and reads more: the receiving domain's row and the caller's grants, through the ctx hook, for a ticket one domain asked of another. With no hook it allows, which is the check tier's answer for every guard that reaches past its `:reads`. Declaring those kinds would take `groom`'s scenarios out of the check tier, and no declaration in this module names the seat kind. Its law is proved in factory10.ticket-test over a fake hook."]
+    "`the-receiving-mayor-answers-an-ask`, on `groom`, `prioritize` and `drop`, declares `:reads [:principal]` and reads more, and so does `only-the-receiving-mayor-declines` on `drop`: the receiving domain's row and the caller's grants, through the ctx hook, for a ticket one domain asked of another. With no hook it allows, which is the check tier's answer for every guard that reaches past its `:reads`. Declaring those kinds would take `groom`'s scenarios out of the check tier, and no declaration in this module names the seat kind. Its law is proved in factory10.ticket-test over a fake hook."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket
                an-epic-is-not-groomed-without-its-showcase
