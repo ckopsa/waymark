@@ -18,6 +18,7 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.fixtures :as fx]
             [waymark10.holds :as holds]
+            [waymark10.resource :as r]
             [waymark10.server.definitions :as defs]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.engine :as engine]
@@ -1012,6 +1013,107 @@
     (let [resp (tail! h key)]
       (is (= 401 (:status resp)))
       (is (str/includes? (str (:body resp)) "No open sitting answers this inbox key.")))))
+
+;; ── the door keeps to the seat's domain, and names who moved ────────
+
+;; tr_ask keeps a domain's NAME as a ticket does: absent counts as
+;; factory.
+(def ^:private tr-ask
+  (r/resource
+   {:kind :tr_ask
+    :plural "tr_asks"
+    :states [:draft :open]
+    :initial :draft
+    :terminal #{:open}
+    :summary "{data.name} · {state}"
+    :schema [:map
+             [:name [:string {:min 1 :max 40}]]
+             [:domain {:optional true
+                       :not-a-ref "A domain's name, not a row id."}
+              [:maybe [:string {:max 40}]]]]
+    :filterable {:state #{:eq :in} :domain #{:eq}}
+    :actions {:groom {:from #{:draft} :to :open
+                      :safety {:idempotent true :reversible false
+                               :confirm false
+                               :one-way "Groomed is history."}}}
+    :absent-as {:domain "factory"}}))
+
+(def ^:private hears-asks
+  "A seat that reads asks whole and hears each groom."
+  {:scope [{:kind "tr_ask" :actions ["groom"]}]
+   :inbox {:only {:tr_ask ["groom"]}}})
+
+(defn- asks-engine []
+  (let [at (clock)]
+    (engine/engine {:storage (memory/storage)
+                    :resources [fx/meal tr-ask]
+                    :now-fn (fn [] @at)
+                    :oidc {:issuer issuer :audience audience :jwks jwks
+                           :app-url "https://app.test/"
+                           :delegate-clients {"connector" "Claude"}}})))
+
+(defn- groomed!
+  "An ask born with `data` and groomed by `who`; → its id."
+  [eng data who]
+  (let [ask (:row (inv/create! eng :tr_ask data {:principal person}))]
+    (inv/invoke! eng :tr_ask (str (:id ask)) :groom {} {:principal who})
+    (str (:id ask))))
+
+(defn- as-seat [seat]
+  (t/principal {:id (str "seat:" (:id seat)) :type :agent :display "a seat"}))
+
+(deftest the-inbox-door-keeps-to-the-seats-domain
+  (testing "a household seat hears a household ask and not a factory one"
+    (let [eng (asks-engine)
+          h (engine/handler eng)
+          house (:row (inv/create! eng :domain
+                                   {:name "household"
+                                    :charter "Keep the house running."
+                                    :budget_usd_per_week 40M}
+                                   {:principal person}))
+          _ (open-seat! eng (add-model! eng) (assoc hears-asks :domain (:id house)))
+          key (get-in (sit! h) [:inbox :key])
+          ours (groomed! eng {:name "ours" :domain "household"} person)
+          _ (groomed! eng {:name "theirs" :domain "factory"} person)
+          _ (groomed! eng {:name "unstamped"} person)]
+      (is (= [ours] (mapv :id (lines-of (tail! h key)))))))
+  (testing "a seat with no domain is in factory, and hears an unstamped ask"
+    (let [eng (asks-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng) hears-asks)
+          key (get-in (sit! h) [:inbox :key])
+          _ (groomed! eng {:name "theirs" :domain "household"} person)
+          stamped (groomed! eng {:name "stamped" :domain "factory"} person)
+          unstamped (groomed! eng {:name "unstamped"} person)]
+      (is (= [stamped unstamped] (mapv :id (lines-of (tail! h key))))))))
+
+(deftest the-inbox-door-leaves-out-the-seats-own-moves-and-names-who-moved
+  (let [eng (asks-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        seat (open-seat! eng model hears-asks)
+        other (:row (inv/create! eng :seat
+                                 {:name "scribe-two"
+                                  :charter "Groom what the house asks for."
+                                  :scope (:scope hears-asks)
+                                  :held_for [(:id model)]
+                                  :standing_ttl_seconds 604800
+                                  :cadence_seconds 3600
+                                  :budget_usd_per_week 5M
+                                  :sitting_budget_tokens 60000}
+                                 {:principal person}))
+        key (get-in (sit! h) [:inbox :key])
+        _ (groomed! eng {:name "mine"} (as-seat seat))
+        theirs (groomed! eng {:name "theirs"} (as-seat other))
+        hers (groomed! eng {:name "hers"} person)
+        lines (lines-of (tail! h key))]
+    (testing "the seat's own groom is left out; another seat's and a person's are not"
+      (is (= [theirs hers] (mapv :id lines))))
+    (testing "each line names who moved"
+      (is (= (str "seat:" (:id other)) (:actor (first lines))))
+      (is (= "scribe-two" (:actor_name (first lines))))
+      (is (= "colton" (:actor (second lines))))
+      (is (= "Colton Kopsa" (:actor_name (second lines)))))))
 
 ;; ── the default inbox, and the keys a re-sit keeps (epic 3ad250ef) ──
 
