@@ -518,12 +518,19 @@
         :else (do (Thread/sleep (long (* backoff-ms (bit-shift-left 1 n))))
                   (recur (inc n)))))))
 
+(defn actor-address
+  "The address of a transition's actor as the log holds it (`seat:…`
+  for a seat), or nil when it holds none."
+  [t]
+  (let [a (:actor t)]
+    (some-> (if (map? a) (:id a) a) str not-empty)))
+
 (defn- actor-addresses
   "The addresses a transition's actor answers to: its id as the log
   holds it, and `type:id` when the id names no kind of its own."
   [t]
   (let [a (:actor t)
-        id (some-> (if (map? a) (:id a) a) str not-empty)
+        id (actor-address t)
         type (when (map? a) (some-> (:type a) name))]
     (cond-> #{}
       id (conj id)
@@ -552,6 +559,28 @@
                       (if (keyword? absent) (name absent) (str absent)))}
           asker (conj asker))))))
 
+(defn by-actor?
+  "Did an actor answering to one of `addresses` (a set) make this
+  transition? A subscription's `skip_actors` and a seat's inbox judge
+  an actor through this one reading."
+  [addresses t]
+  (boolean (some addresses (actor-addresses t))))
+
+(defn in-domains?
+  "Does the transition's row answer to one of `domains` (a set of
+  names)? A kind that keeps no domain name passes. A subscription's
+  `domains` and a seat's inbox judge a row through this one reading."
+  [eng domains t]
+  (if-some [ds (domains-of eng t)]
+    (boolean (some domains ds))
+    true))
+
+(defn seat-domain-name
+  "The name of the domain this seat row is in (`seats/domain-name-of`),
+  read from storage."
+  [eng seat]
+  (seats/domain-name-of #(stored-row eng %1 %2) seat))
+
 (def ^:private service-alerts
   "The transitions `service_alerts` lets through, kind to actions: a
   seat's `mark_halted`, which writes a halt and a budget wall alike,
@@ -579,8 +608,7 @@
   (boolean
    (when-some [seat (alerting-seat eng t)]
      (and (= "any" (some-> (get-in seat [:data :serves]) str))
-          (contains? domains
-                     (seats/domain-name-of #(stored-row eng %1 %2) seat))))))
+          (contains? domains (seat-domain-name eng seat))))))
 
 (defn- wants? [eng sub t]
   (let [kinds (get-in sub [:data :kinds])
@@ -588,11 +616,9 @@
         domains (set (get-in sub [:data :domains]))]
     (and (or (empty? kinds)
              (boolean (some #(= (name (:kind t)) %) kinds)))
-         (not-any? skip (actor-addresses t))
+         (not (by-actor? skip t))
          (or (empty? domains)
-             (if-some [ds (domains-of eng t)]
-               (boolean (some domains ds))
-               true)
+             (in-domains? eng domains t)
              (and (true? (get-in sub [:data :service_alerts]))
                   (service-alert? eng domains t))))))
 
@@ -646,7 +672,7 @@
           (warn! "could not note the deliveries on subscription " (:id sub)
                  ": " (ex-message e)))))))
 
-(defn- actor-name
+(defn actor-name
   "What a person calls the actor of this transition: the head of the
   summary line of the row its address names (`seat:<id>` is the seat's
   name), as render names a summary's ref; else the principal's own
