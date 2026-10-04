@@ -787,6 +787,45 @@
       (is (= 1 (count (calls w))))
       (is (not (contains? (last-arguments w) :allow_protected))))))
 
+;; ── the batch is a write power where the engine asks which power
+;;    writes (ticket d4b13a7f) ──────────────────────────────────────
+
+(deftest a-scope-that-names-edit-many-and-not-edit-still-writes-its-repository
+  (testing "the batch chooses the seat's repository, as the single edit does"
+    (let [repositories @#'mcp/seat-repositories
+          reads (fn [repos] {:kind "bench.read" :actions [] :filter {:repo repos}})]
+      (is (= {:repo a-repo :reference [another-repo]}
+             (repositories
+              {:data {:scope [{:kind "bench.edit_many" :actions []
+                               :filter {:repo a-repo}}
+                              (reads (str a-repo "," another-repo))]}}))
+          "the reading entry names two, and the writing one picks between them")
+      (is (nil? (repositories
+                 {:data {:scope [{:kind "bench.edit_many" :actions []}
+                                 (reads a-repo)]}}))
+          "a batch entry with no repo chooses none: it is asked to carry one")
+      (is (true? (@#'mcp/code-seat?
+                  {:data {:scope [{:kind "bench.edit_many" :actions []
+                                   :filter {:repo a-repo}}]}}))
+          "and a seat that holds only the batch builds")))
+
+  (testing "bench__prepare reads the batch as a write power on the repository"
+    (let [admits? @#'gate/bench-edit-admits-repo?
+          vis-of (fn [scope] (get-in (world scope) [:session :visibility]))
+          many (vis-of [{:kind "bench.edit_many" :actions []
+                         :filter {:repo a-repo}}])]
+      (is (true? (admits? many a-repo)))
+      (is (false? (admits? many another-repo))
+          "the filter still narrows it to its own repository")
+      (is (false? (admits? (vis-of [{:kind "bench.read" :actions []
+                                     :filter {:repo a-repo}}])
+                           a-repo))
+          "a seat that only reads holds no write power")
+      (is (true? (admits? (vis-of [{:kind "bench.edit" :actions []
+                                    :filter {:repo a-repo}}])
+                          a-repo))
+          "and the single edit stands as it did"))))
+
 ;; ── the sitting that holds the row writes its branch (ticket d7c854b3) ─
 
 (deftest a-bench-write-from-a-sitting-that-no-longer-holds-the-ticket-is-refused
