@@ -57,7 +57,8 @@
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.problems :as p]
             [waymark10.server.secrets :as secrets]
-            [waymark10.server.store :as store]))
+            [waymark10.server.store :as store]
+            [waymark10.wire :as wire]))
 
 (set! *warn-on-reflection* true)
 
@@ -847,6 +848,27 @@
                                        " the tool's input schema;"
                                        " waymark_powers serves it.")]}))))
 
+(def ^:private shape-words
+  "What a server's own refusal says when it is about the arguments."
+  #"(?i)argument|parameter|required|missing|unknown|unexpected|invalid|schema|must be")
+
+(defn- teach-shape
+  "A server's own `isError` answer about its arguments, with the tool's
+  mirrored input schema added as one last text part: an open schema
+  passes this door's check, and the server may still refuse the call.
+  It is one tool's schema, so one refusal teaches the call. Any other
+  answer passes as it came."
+  [tname schema why? res]
+  (if (and (map? res) (true? (:isError res)) (map? schema)
+           (some #(and (string? (:text %)) (re-find shape-words (:text %)))
+                 (:content res)))
+    (update res :content
+            #(conj (vec %)
+                   {:type "text"
+                    :text (str tname " takes these arguments: "
+                               (wire/write-json (present-schema schema why?)))}))
+    res))
+
 (defn- refuse-anonymous
   "The 403 for a call this door would HOLD and cannot: a held call
   names its caller, and the first wall on answering it is `not the
@@ -1083,7 +1105,9 @@
   mirrored input schema does not admit 422 naming each field and the
   shape the tool takes, and NONE of them touches a server. A granted call forwards through the row's client — with
   `allow` added when the filter narrowed paths and the call named
-  none. It answers the payload VERBATIM.
+  none. It answers the payload VERBATIM, but for one case: a server's
+  own `isError` about its arguments gains the tool's input schema as a
+  last text part (`teach-shape`).
 
   THE HOLD IS THE LAST GATE BEFORE THE FORWARD (waymark-fp62.10.2,
   R-14). An entry that says `approval person` does not forward at
@@ -1176,8 +1200,10 @@
          ;; the caller rides as headers the engine writes (`caller-headers`)
          (binding [servers/*caller* (when (or (:principal opts) (:caller opts))
                                       (select-keys opts [:principal :caller :sitting]))]
-           (servers/call! eng tname
-                          (forward-args row (with-allow args (:allow verdict))))))))))
+           (teach-shape
+            tname schema why
+            (servers/call! eng tname
+                           (forward-args row (with-allow args (:allow verdict)))))))))))
 
 ;; ── the engine's own hand (the write path) ──────────────────────────
 
