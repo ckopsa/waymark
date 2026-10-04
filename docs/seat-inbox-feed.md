@@ -48,16 +48,27 @@ the whole log).
 
 ## When it ends
 
-On any status but 200 the feed prints one line and exits 1:
+On a 401 or a 403 the feed prints one line and exits 1:
 
 ```
 The inbox key lapsed (the door answered 401): sit again, with the same session, and start this feed with the inbox the sit answers.
 ```
 
 Sit again with the same key, seat and session; the engine reuses the
-open sitting and answers a new inbox key. A request that gets no
-answer at all is not a status: the feed waits five seconds and asks
-again.
+open sitting and answers a new inbox key.
+
+Any other status but 200 (a 5xx, a 429), and a request that gets no
+answer at all, says nothing about the key: an engine deploy answers
+503 for a moment. The feed waits 5 seconds, then twice as long each
+time up to 60, and asks again with the same cursor. When it has waited
+longer than 2 minutes it prints one line, and keeps waiting:
+
+```
+The inbox door has been down for more than 120 seconds (it last answered 503): the key is not refused, so the feed keeps waiting and asks again with the same cursor.
+```
+
+`WAYMARK_INBOX_RETRY` is the first wait in seconds and
+`WAYMARK_INBOX_DOWN` the seconds before that line; the test sets both.
 
 The test is `waymark10/test/waymark10/inbox_feed_test.clj`: it runs
 the script against a stub door.

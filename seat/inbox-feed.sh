@@ -25,9 +25,14 @@
 # the event that answer names. A seat that wants the history writes the
 # event to read from (0 for the whole log) in the cursor file first.
 #
-# ANY STATUS BUT 200 ENDS IT, with one line that says the key lapsed.
-# A request that got no answer at all (a deploy, a dropped network) is
-# not a status: the feed waits five seconds and asks again.
+# ONLY A 401 OR A 403 ENDS IT, with one line that says the key lapsed.
+# Any other status but 200 (a 5xx, a 429), and a request that got no
+# answer at all (a deploy, a dropped network), says nothing about the
+# key: the feed waits 5 seconds, then twice as long each time up to 60,
+# and asks again with the same cursor. After 2 minutes of that it
+# prints one line that says the door is down, and keeps waiting.
+# WAYMARK_INBOX_RETRY is the first wait in seconds, and
+# WAYMARK_INBOX_DOWN the seconds before that line.
 
 set -u
 
@@ -130,6 +135,37 @@ lapsed() {
   exit 1
 }
 
+RETRY=${WAYMARK_INBOX_RETRY:-5}
+DOWN=${WAYMARK_INBOX_DOWN:-120}
+case "$RETRY" in '' | *[!0-9]* | 0) RETRY=5 ;; esac
+case "$DOWN" in '' | *[!0-9]*) DOWN=120 ;; esac
+
+# `pause` is the next wait. `since` is when the door first failed to
+# answer 200, and `told` is set when the line about it was printed.
+pause=$RETRY
+since=''
+told=''
+
+# The door did not answer 200, and did not refuse the key: wait.
+down() {
+  local what="it last answered $1"
+  [ "$1" != 000 ] || what='it gave no answer'
+  [ -n "$since" ] || since=$SECONDS
+  if [ -z "$told" ] && [ $((SECONDS - since)) -gt "$DOWN" ]; then
+    echo "The inbox door has been down for more than $DOWN seconds ($what): the key is not refused, so the feed keeps waiting and asks again with the same cursor."
+    told=1
+  fi
+  sleep "$pause"
+  pause=$((pause * 2))
+  [ "$pause" -le 60 ] || pause=60
+}
+
+up() {
+  pause=$RETRY
+  since=''
+  told=''
+}
+
 # The door's cursor, from the headers of its last answer.
 newest() {
   tr -d '\r' <"$HEAD" | awk 'tolower($1) == "waymark-inbox-after:" { v = $2 } END { print v }'
@@ -140,11 +176,14 @@ newest() {
 while [ -z "$after" ]; do
   status=$(curl -sS -o "$BODY" -D "$HEAD" -w '%{http_code}' --max-time 15 \
     -H "Waymark-Inbox-Key: $KEY" "$URL${ask}after=now" 2>/dev/null) || status=000
-  if [ "$status" = 000 ]; then
-    sleep 5
-    continue
-  fi
-  [ "$status" = 200 ] || lapsed "$status"
+  case "$status" in
+    200) up ;;
+    401 | 403) lapsed "$status" ;;
+    *)
+      down "$status"
+      continue
+      ;;
+  esac
   next=$(newest)
   case "$next" in '' | *[!0-9]*) break ;; esac
   after=$next
@@ -165,14 +204,17 @@ while :; do
 
   status=$(curl -sS -o "$BODY" -D "$HEAD" -w '%{http_code}' --max-time $((wait + 15)) \
     -H "Waymark-Inbox-Key: $KEY" "$URL${ask}wait=$wait${after:+&after=$after}" 2>/dev/null) || status=000
-  if [ "$status" = 000 ]; then
-    sleep 5
-    continue
-  fi
-  if [ "$status" != 200 ]; then
-    flush
-    lapsed "$status"
-  fi
+  case "$status" in
+    200) up ;;
+    401 | 403)
+      flush
+      lapsed "$status"
+      ;;
+    *)
+      down "$status"
+      continue
+      ;;
+  esac
 
   while IFS=$'\t' read -r flag event text; do
     if [ ${#batch[@]} -eq 0 ]; then first=$SECONDS; fi

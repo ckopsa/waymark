@@ -98,6 +98,8 @@
     (doseq [k ["http_proxy" "HTTP_PROXY" "https_proxy" "HTTPS_PROXY" "all_proxy" "ALL_PROXY"]]
       (.remove env k))
     (.put env "WAYMARK_INBOX_CURSOR" (str cursor))
+    (.put env "WAYMARK_INBOX_RETRY" "1")
+    (.put env "WAYMARK_INBOX_DOWN" "0")
     (let [p (.start pb)
           out (future (slurp (.getInputStream p)))
           err (future (slurp (.getErrorStream p)))
@@ -182,6 +184,29 @@
         (is (= 1 exit))
         (is (= 1 (count @seen)) "it does not ask again")
         (is (not (.exists cursor)) "a refusal moves no cursor"))
+      (finally (.stop server 0)))))
+
+(deftest a-503-is-waited-out-with-the-same-cursor
+  (let [cursor (cursor-file)
+        [server url seen] (stub-door! [(answer 1 (event 1 "ticket" "claim"))
+                                       {:status 503}
+                                       {:status 503 :body "{\"detail\": \"The engine is starting.\"}"}
+                                       (answer 2 (event 2 "ticket" "claim"))])]
+    (try
+      (let [{:keys [exit lines]} (run-feed! url cursor "--batch" "1")]
+        (is (= ["1 event: ticket 00000001 claim open->done: row 1"
+                (str "The inbox door has been down for more than 0 seconds (it last answered 503): "
+                     "the key is not refused, so the feed keeps waiting and asks again with the same cursor.")
+                "1 event: ticket 00000002 claim open->done: row 2"
+                lapsed]
+               lines)
+            "two 503s do not end the feed, and the line about them prints one time")
+        (is (= 1 exit) "the 401 at the end is what ends it")
+        (is (= ["after=now" "wait=25&after=0" "wait=25&after=1" "wait=25&after=1"
+                "wait=25&after=1" "wait=25&after=2"]
+               (mapv :query @seen))
+            "each ask after a 503 carries the cursor of the last 200")
+        (is (= "2" (str/trim (slurp cursor)))))
       (finally (.stop server 0)))))
 
 (deftest no-cursor-begins-at-the-present
