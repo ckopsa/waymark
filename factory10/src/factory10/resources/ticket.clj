@@ -87,6 +87,7 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
             [waymark10.types :as t]))
 
@@ -891,6 +892,110 @@
                (vec (take-last 50 (distinct (conj (vec heads)
                                                   (:red_head inp))))))))
 
+;; ── a ticket moves into another domain (ticket 66d080b0) ────────────
+
+(def ^:private move-doors
+  "The door that writes a ticket's domain, by the state the ticket stands
+  in: one self-loop for each, for `reparent`'s reason. An ended ticket
+  has none (`the-work-is-over` shuts every door on it), and keeps the
+  domain it ended in."
+  {:open :move_domain
+   :draft :move_domain_draft
+   :blocked :move_domain_blocked
+   :in_review :move_domain_in_review
+   :deferred :move_domain_deferred})
+
+(def ^:private change-doors
+  "The same for a change born from it, by the change's state."
+  {:open :take_domain
+   :submitted :take_domain_submitted
+   :failing :take_domain_failing
+   :stuck :take_domain_stuck})
+
+(defn- inside-a-move?
+  "Whether this write was opened inside a ticket's move into a domain."
+  [ctx]
+  (let [{:keys [kind action]} (:within ctx)]
+    (and (= :ticket kind)
+         (contains? (set (vals move-doors)) action))))
+
+(defn- move-the-tickets-under!
+  "Every child of `id` walks its own move, which walks its children in
+  turn. An ended child takes no door, so it is left as it is and the
+  tickets under it are walked from here."
+  [id domain ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)]
+    (doseq [child (find' :ticket {:parent id} {:limit 500})]
+      (if-some [door (move-doors (state-of child))]
+        ;; the hand's doors are fenced (their :edit implies it), so the
+        ;; version read here is named, as `release-the-waiters!` names it
+        (invoke' :ticket (str (:id child)) door {:domain domain}
+                 {:if-match (inv/etag :ticket (:id child) (:version child))})
+        (move-the-tickets-under! (str (:id child)) domain ctx)))))
+
+(defhandler move-the-domain [row inp ctx]
+  ;; The ticket, every ticket under it and each of their open changes,
+  ;; in the one transaction. NOT best-effort, as the endings' cascades
+  ;; are: a row that refuses refuses the whole move, so a tree is never
+  ;; left in two domains. A probe or a rehearsal carries no pen, and
+  ;; moves the one row.
+  (let [domain (:domain inp)
+        find' (:find ctx)
+        invoke' (:invoke ctx)]
+    (when (and find' invoke')
+      (doseq [change (changes-born-from row (map name (keys change-doors)) find')]
+        (invoke' :change (str (:id change)) (change-doors (state-of change))
+                 {:domain domain}))
+      (move-the-tickets-under! (str (:id row)) domain ctx))
+    (assoc-in row [:data :domain] domain)))
+
+(defguardfn the-domain-stands
+  {:judges [:domain]
+   :reads [:domain]
+   :vars [:which]
+   :open "The domains are read from their rows at the write; no form can recite them. Name a domain that is active."
+   :explain "A ticket moves into a domain that is here and not retired: {which}. Name an active domain."}
+  [_row inp ctx]
+  (let [named (some-> (:domain inp) str not-empty)
+        find' (:find ctx)]
+    (if (or (nil? named) (nil? find')
+            (seq (find' :domain {:name named :state "active"} {:limit 1})))
+      (t/allow)
+      (let [problem (str "no active domain is named " named)]
+        (t/deny {:vars {:which problem}
+                 :errors {:domain [problem]}})))))
+
+(defguardfn the-domains-mayor-or-a-person-moves-it
+  {:reads [:principal :now :grant :domain :within]
+   :open "No door changes who the caller is: ask the mayor of the domain this ticket is in, or a person, to make the move."
+   :explain "A ticket is moved out of a domain by the sitter of that domain's mayor seat, or by a person. Ask the mayor of the domain this ticket is in, or a person, to make the move."}
+  [row _inp ctx]
+  ;; domains' `the-mayors-or-a-persons-move`, read from the ticket: the
+  ;; domain is the one the row stores, or factory. A child's door opens
+  ;; inside its parent's move, whoever's hand made that one.
+  (let [{:keys [type acts-for]} (:principal ctx)
+        cited (delegation/cited-seats ctx)
+        named (or (some-> (get-in row [:data :domain]) str not-empty) "factory")
+        mayor (when-some [find' (:find ctx)]
+                (some-> (first (find' :domain {:name named} {:limit 1}))
+                        (get-in [:data :mayor]) str not-empty))]
+    (cond
+      (inside-a-move? ctx) (t/allow)
+      (and mayor (contains? cited mayor)) (t/allow)
+      ;; a sitter of any other seat
+      (seq cited) (t/deny)
+      ;; a person, a tool a person is signed in to, or the engine
+      (or (not= :agent type) (some? (not-empty (str acts-for)))) (t/allow)
+      :else (t/deny))))
+
+(defguardfn only-a-parents-move-carries-it
+  {:reads [:within]
+   :hide true
+   :explain "A ticket under review or deferred changes domain with the ticket above it, inside that ticket's move. A person and a model read it."}
+  [_row _inp ctx]
+  (if (inside-a-move? ctx) (t/allow) (t/deny)))
+
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
 ;; Check-tier: no :given rows, and the one guard on the attempted door
@@ -1207,7 +1312,7 @@
              :x-display
              {:raw true
               :label "Domain that wants the work"
-              :help "The name of the domain this ask belongs to. The birth writes it: a ticket with a parent takes its parent's domain, and any other takes the domain of the seat that filed it. A ticket that stores none is in factory."}}
+              :help "The name of the domain this ask belongs to. The birth writes it: a ticket with a parent takes its parent's domain, and any other takes the domain of the seat that filed it. A move into another domain changes it, here and on every ticket under this one. A ticket that stores none is in factory."}}
     [:maybe [:string {:max 64}]]]])
 
 ;; ── a fired seat's ticket lands at the back (ticket b0ec4d47) ───────
@@ -1319,6 +1424,34 @@
 
 (def ^:private reparent-description
   "Move this ask under another one, or out from under its parent")
+
+(def ^:private move-domain-input
+  [:map
+   [:domain {:not-a-ref "The name of a domain: a word, not a row id."
+             :examples ["household"]
+             :x-display
+             {:raw true
+              :label "Domain"
+              :help "The name of the active domain this ask moves into. Every ticket under this one, and each of their open changes, moves with it."}}
+    [:string {:min 1 :max 64}]]])
+
+(def ^:private carried-domain-input
+  [:map
+   [:domain {:not-a-ref "The name of a domain: a word, not a row id."
+             :x-display {:hidden true :raw true :label "The domain"}}
+    [:string {:min 1 :max 64}]]])
+
+(def ^:private move-domain-guards
+  [the-domain-stands the-domains-mayor-or-a-person-moves-it])
+
+(def ^:private move-domain-safety
+  {:idempotent true :reversible true :confirm false})
+
+(def ^:private move-domain-description
+  "Move this ask, and every ask under it, into another domain")
+
+(def ^:private carried-domain-description
+  "The ticket above it moved into another domain, and this one went with it")
 
 ;; ── :ticket — one ask of the factory ────────────────────────────────
 
@@ -1556,6 +1689,69 @@
      :safety reparent-safety
      :display {:label "Part of" :order 25
                :description reparent-description}}
+
+    ;; THE DOMAIN, AFTER BIRTH (ticket 66d080b0). The mayor of the domain
+    ;; the ticket is in, or a person, moves it into another, and every
+    ;; ticket under it and their open changes go with it in the one
+    ;; transaction. One door per state, for `reparent`'s reason, in the
+    ;; states a hand shapes the tree in. `:record` keeps the old domain
+    ;; beside the new one.
+    :move_domain
+    {:from #{:open} :to :open
+     :input move-domain-input
+     :guards move-domain-guards
+     :handler move-the-domain
+     :record true
+     :edit {:prefill [:domain]}
+     :safety move-domain-safety
+     :display {:label "Move to a domain" :order 26
+               :description move-domain-description}}
+
+    :move_domain_draft
+    {:from #{:draft} :to :draft
+     :input move-domain-input
+     :guards move-domain-guards
+     :handler move-the-domain
+     :record true
+     :edit {:prefill [:domain]}
+     :safety move-domain-safety
+     :display {:label "Move to a domain" :order 27
+               :description move-domain-description}}
+
+    :move_domain_blocked
+    {:from #{:blocked} :to :blocked
+     :input move-domain-input
+     :guards move-domain-guards
+     :handler move-the-domain
+     :record true
+     :edit {:prefill [:domain]}
+     :safety move-domain-safety
+     :display {:label "Move to a domain" :order 28
+               :description move-domain-description}}
+
+    ;; A ticket under review or deferred goes with the ticket above it,
+    ;; and by no hand: hidden, and open only inside that ticket's move.
+    :move_domain_in_review
+    {:from #{:in_review} :to :in_review
+     :input carried-domain-input
+     :guards [only-a-parents-move-carries-it]
+     :handler move-the-domain
+     ;; the engine writes it with no version in hand: an `:edit` would
+     ;; fence it
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its parent" :order 29
+               :description carried-domain-description}}
+
+    :move_domain_deferred
+    {:from #{:deferred} :to :deferred
+     :input carried-domain-input
+     :guards [only-a-parents-move-carries-it]
+     :handler move-the-domain
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its parent" :order 30
+               :description carried-domain-description}}
 
     :unblock
     {:from #{:blocked} :to :open
@@ -1801,6 +1997,7 @@
     "`complete`, `drop` and `block` are one-way, not reversible. Each leaves from more than one state and its reverse lands in one (`reopen` in `draft`, `unblock` in `open`), and checks/check-reversible asks a reversible door for a way back to each `:from`. The way back is real in every case, and the `:one-way` sentence names it."
     "`merge_after` is four doors, one self-loop for each state a change can wait in (`draft`, `open`, `in_review`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. `merge_after_in_review` is the one door a hand may take on a ticket under review, because it holds the merge and moves no state."
     "`reparent` is three doors, one self-loop for each state a hand shapes the tree in (`draft`, `open`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. It is not a field of `restate`: a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse on that door. A ticket under review or deferred is not re-parented; it is when it returns."
+    "`move_domain` is five doors, one self-loop for each state a ticket can wait in, for `restate`'s reason: a v10 action declares one `:to`. Three are a hand's (`draft`, `open`, `blocked`, the states a hand shapes the tree in, as `reparent`). `move_domain_in_review` and `move_domain_deferred` are hidden and open only inside the move of a ticket above, so a ticket under review or deferred goes with its parent, and is moved alone when it returns. An ended ticket takes no door and keeps the domain it ended in; the tickets under it are still walked."
     "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket
