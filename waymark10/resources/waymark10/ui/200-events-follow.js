@@ -321,12 +321,23 @@ function guidedLabel(name, id, i) {
         return doc.summary;
   return null;
 }
+/* how long the read of a guided dialog's row may take. A read that
+   fails, or is not answered in this time, gives the key back, so the
+   next frame or heartbeat for that dialog opens it again */
+const GUIDED_READ_MS = 4000;
 async function openGuidedDialog(d, name, key) {
   guidedOpening = key;
+  let res = null, mine = false;
   /* a replay reads nothing: its dialog is built from the frames */
-  const res = replay ? replayDialogDoc(d) : await api(d.self);
-  if (guidedOpening !== key) return;     // overtaken by a newer frame
-  guidedOpening = null;
+  try {
+    res = replay ? replayDialogDoc(d) : await Promise.race([api(d.self),
+      new Promise(done => setTimeout(done, GUIDED_READ_MS, null))]);
+  } catch (_e) { res = null; }
+  finally {
+    mine = guidedOpening === key;        // else overtaken by a newer frame
+    if (mine) guidedOpening = null;
+  }
+  if (!mine || !res) return;
   if (!res.ok || !(followUi || replay) || $("dialog[open]")) return;
   const entry = (res.body.actions || {})[d.action];
   if (!entry) return;                    // not a door this person sees
