@@ -25,7 +25,7 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["wh_gizmos" "subscriptions" "secrets" "jobs" "definitions"
+  ["wh_gizmos" "wh_asks" "wh_seats" "subscriptions" "secrets" "jobs" "definitions"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"])
 
 (defn- fresh! []
@@ -326,6 +326,87 @@
                           @(:hits moved)))))
           (finally (engine/stop! (:server rcv))
                    (engine/stop! (:server moved))))))))
+
+;; ── 2d. domains: a subscription keeps to the domains it names ───────
+
+;; wh_ask keeps a domain's NAME as a ticket does: absent counts as
+;; factory. wh_seat keeps a `domain` that is not a name and declares no
+;; :absent-as, as a seat does.
+(defn- domain-kind [kind plural absent]
+  (r/resource
+   (cond-> {:kind kind
+            :plural plural
+            :states [:idle :spun]
+            :initial :idle
+            :terminal #{:spun}
+            :summary "{data.name} · {state}"
+            :schema [:map
+                     [:name [:string {:min 1 :max 40}]]
+                     [:domain {:optional true
+                               :not-a-ref "A word the test writes, not a row id."}
+                      [:maybe [:string {:max 40}]]]]
+            :filterable {:state #{:eq :in} :domain #{:eq}}
+            :actions {:spin {:from #{:idle} :to :spun
+                             :safety {:idempotent true :reversible false
+                                      :confirm false
+                                      :one-way "Spun is history."}}}}
+     absent (assoc :absent-as absent))))
+
+(def ^:private wh-ask (domain-kind :wh_ask "wh_asks" {:domain "factory"}))
+(def ^:private wh-seat (domain-kind :wh_seat "wh_seats" nil))
+
+(deftest a-subscription-keeps-to-its-domains
+  (fresh!)
+  (with-eng {:webhook-attempts 2 :webhook-backoff-ms 5
+             :resources [gizmo wh-ask wh-seat]}
+    (fn [eng]
+      (let [rcv (receiver!)
+            heard #(mapv (comp :summary wire/read-json :body) @(:hits rcv))
+            born! (fn [kind data]
+                    (:row (inv/create! eng kind data {:principal elena})))]
+        (try
+          (let [{sub :row} (inv/create! eng :subscription
+                                        {:url (:url rcv)
+                                         :domains ["factory"]}
+                                        {:principal elena})]
+            (born! :wh_ask {:name "unstamped"})
+            (born! :wh_ask {:name "ours" :domain "factory"})
+            (born! :wh_ask {:name "theirs" :domain "household"})
+            (let [seat (born! :wh_seat {:name "seat" :domain "a-row-id"})]
+              (born! :wh_gizmo {:name "plain"})
+              (inv/invoke! eng :wh_seat (:id seat) :spin nil
+                           {:principal elena}))
+            (webhooks/drain! eng)
+            (testing "a row with no stored domain and one stamped factory are
+                      delivered, one stamped household is not, and a kind
+                      that keeps no domain name passes"
+              (is (= ["unstamped · Idle" "ours · Idle" "seat · Idle"
+                      "plain · Idle" "seat · Spun"]
+                     (heard))))
+            (testing "the skipped row is passed, not held"
+              (webhooks/drain! eng)
+              (is (= 5 (count @(:hits rcv)))))
+            (testing "it works alongside skip_actors"
+              (restate! eng (:id sub) :restate {:skip_actors ["elena"]})
+              (born! :wh_ask {:name "own" :domain "factory"})
+              (webhooks/drain! eng)
+              (is (= 5 (count @(:hits rcv)))))
+            (testing "restated to another domain, it hears that one"
+              (restate! eng (:id sub) :restate
+                        {:skip_actors nil :domains ["household"]})
+              (born! :wh_ask {:name "late"})
+              (born! :wh_ask {:name "home" :domain "household"})
+              (webhooks/drain! eng)
+              (is (= "home · Idle" (peek (heard))))
+              (is (= 6 (count @(:hits rcv)))))
+            (testing "restated to none, it hears every domain"
+              (restate! eng (:id sub) :restate {:domains nil})
+              (born! :wh_ask {:name "any" :domain "household"})
+              (born! :wh_ask {:name "all"})
+              (webhooks/drain! eng)
+              (is (= 8 (count @(:hits rcv))))
+              (is (= :active (sub-state eng (:id sub))))))
+          (finally (engine/stop! (:server rcv))))))))
 
 ;; ── 3. failure: bounded retries, then the subscription fails ────────
 
