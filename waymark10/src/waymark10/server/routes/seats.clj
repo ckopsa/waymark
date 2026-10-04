@@ -846,7 +846,8 @@
           :else 0)))
 
 (defn- inbox-match
-  "A predicate on a log row. The seat's `inbox.only` names its kind
+  "A predicate on a log row. The seat's `inbox.only` (stated, or the
+  default of an interactive seat: `seats/inbox-of`) names its kind
   and its action (an empty list is every action), the seat's scope
   reads the whole kind, and it is neither a transcript nor this
   sitting's own row.
@@ -858,7 +859,7 @@
   so it admits none of that kind's events here."
   [seat sitting]
   (let [only (into {} (map (fn [[k acts]] [(name k) (set (map name acts))]))
-                   (get-in seat [:data :inbox :only]))
+                   (:only (seats/inbox-of seat)))
         readable (into #{}
                        (keep (fn [e]
                                (when (and (nil? (:ids e)) (nil? (:filter e)))
