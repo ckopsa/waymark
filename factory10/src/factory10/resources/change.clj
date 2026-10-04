@@ -1591,7 +1591,7 @@
                     :x-display
                     {:widget "prose"
                      :label "Why it ends"
-                     :help "One sentence for the next reader: why this change is let go. It rides the log beside this move."}}
+                     :help "One sentence for the next reader: why this change is let go. It rides the log beside this move. It is at most 480 characters."}}
               [:string {:min 1 :max 480}]]]
      :edit {:draft {:shared true :live true}}
      :guards [no-pull-request-to-close
