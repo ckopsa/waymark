@@ -33,6 +33,10 @@
      the total, the ceiling and the headroom, and the remedy is the
      domain's restate, held for the person). Every other part of the
      ceiling judges that create as it judges any other.
+     ONE FIELD NO CEILING ADMITS: `serves: any`. It lets the mayor of
+     every asking domain groom and rank tickets in the seat's queue,
+     so whom a seat serves is the person's to say. An author's create
+     or restate that turns it on is held, in its own domain too.
   3. Every authored seat records `authored_by` (the author seat) and
      `owner` (the person the author acts for). The seat's on-create
      stamps both, or the person's `hand_to` writes them with the
@@ -324,6 +328,18 @@
 (defn- hold [invariant detail]
   (t/deny {:vars {:invariant invariant :detail detail}}))
 
+(defn- opens-the-queue
+  "Why this body is the person's to allow, as one sentence, or nil: it
+  states `serves: any` on a seat that does not serve any today. A body
+  that states `any` again on a seat a person already opened is no
+  change, and answers nil."
+  [row inp]
+  (when (and (= "any" (some-> (:serves inp) str))
+             (not= "any" (some-> (get-in row [:data :serves]) str)))
+    (str "serves any lets the mayor of every asking domain groom and rank"
+         " tickets in this seat's queue, and whom a seat serves is the"
+         " person's to say. No ceiling entry admits it")))
+
 ;; ── a domain's mayor, in its own domain ─────────────────────────────
 
 (defonce ^:private own-domain-rule (atom nil))
@@ -374,7 +390,8 @@
       ;; which stood before this guard; the seat is born parked all the
       ;; same
       (nil? (:id row))
-      (if-some [m (misfit author inp (mayor-of-the-named-domain? inp ctx author))]
+      (if-some [m (or (opens-the-queue row inp)
+                      (misfit author inp (mayor-of-the-named-domain? inp ctx author)))]
         (hold inv-ceiling m)
         (t/allow))
 
@@ -395,7 +412,7 @@
                               ", or its person has not approved it yet"))
 
       :else
-      (if-some [m (misfit author inp)]
+      (if-some [m (or (opens-the-queue row inp) (misfit author inp))]
         (hold inv-ceiling m)
         (t/allow)))))
 
