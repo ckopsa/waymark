@@ -87,6 +87,7 @@
                           HttpResponse HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
            (java.time Duration Instant)
+           (java.util.concurrent ExecutorService Executors ThreadFactory)
            (javax.crypto Mac)
            (javax.crypto.spec SecretKeySpec)))
 
@@ -95,6 +96,12 @@
 (defn- warn! [& parts]
   (binding [*out* *err*]
     (println (apply str "waymark10 webhooks: " parts))))
+
+(defn- said
+  "What a Throwable says for the log: its message, or its class when it
+  has none (a StackOverflowError has none)."
+  [^Throwable e]
+  (or (ex-message e) (.getName (class e))))
 
 (def deliverer-actor
   "The system actor that records delivery failure on a subscription."
@@ -385,7 +392,9 @@
       (.build)))
 
 (defn- post!
-  "One POST attempt; true on a 2xx/3xx answer."
+  "One POST attempt; true on a 2xx/3xx answer. An interrupt is not an
+  answer: it is thrown on, so a stopping deliverer does not count it as
+  a failed attempt."
   [^HttpClient client ^String url headers ^String body timeout-ms]
   (try
     (let [builder (-> (HttpRequest/newBuilder (URI. url))
@@ -398,6 +407,7 @@
                                     (.build ^HttpRequest$Builder builder)
                                     (HttpResponse$BodyHandlers/discarding))]
       (< (.statusCode resp) 400))
+    (catch InterruptedException e (throw e))
     (catch Exception _ false)))
 
 (defn signing-key
@@ -640,60 +650,147 @@
           (recur outcome))))
     (finally (note!)))))
 
+(defn- drain-opts [eng opts]
+  (merge {:attempts (:webhook-attempts eng 3)
+          :backoff-ms (:webhook-backoff-ms eng 250)
+          :timeout-ms (:webhook-timeout-ms eng 10000)}
+         opts))
+
+(defn- active-subscriptions [eng]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/query-rows (:storage eng) tx :subscription
+                               {:state :active} {:limit 500}))))
+
+(defn- drain-one!
+  "One subscription's drain, and nothing escapes it: a Throwable that
+  is not an Exception (StackOverflowError, AssertionError) is logged
+  the same way, so it ends neither the pass nor the thread that ran
+  it. An interrupt is a stop, not a failure: the flag is set again and
+  nothing is logged."
+  [eng client sub opts]
+  (try
+    (drain-subscription! eng client sub opts)
+    (catch InterruptedException _
+      (.interrupt (Thread/currentThread)))
+    (catch Throwable e
+      (warn! "drain of subscription " (:id sub) " failed: " (said e)))))
+
 (defn drain!
-  "One delivery pass: every active subscription drains past its
-  cursor. The deliverer thread calls this on every wake; tests call
-  it directly for determinism. opts {:attempts 3 :backoff-ms 250
-  :timeout-ms 10000} (engine opts :webhook-attempts /
-  :webhook-backoff-ms override)."
+  "One delivery pass, in the caller's thread: every active subscription
+  drains past its cursor, one after another. Tests call it for
+  determinism; the deliverer thread does not (see dispatch-drains!).
+  opts {:attempts 3 :backoff-ms 250 :timeout-ms 10000} (engine opts
+  :webhook-attempts / :webhook-backoff-ms / :webhook-timeout-ms
+  override)."
   ([eng] (drain! eng (http-client) {}))
   ([eng client opts]
-   (let [opts (merge {:attempts (:webhook-attempts eng 3)
-                      :backoff-ms (:webhook-backoff-ms eng 250)
-                      :timeout-ms (:webhook-timeout-ms eng 10000)}
-                     opts)
-         subs (store/with-tx (:storage eng)
-                (fn [tx] (store/query-rows (:storage eng) tx :subscription
-                                           {:state :active} {:limit 500})))]
-     (doseq [sub subs]
-       (try
-         (drain-subscription! eng client sub opts)
-         (catch Exception e
-           (warn! "drain of subscription " (:id sub) " failed: "
-                  (ex-message e))))))))
+   (let [opts (drain-opts eng opts)]
+     (doseq [sub (active-subscriptions eng)]
+       (drain-one! eng client sub opts)))))
+
+(defn- drain-while-asked!
+  "What one drain thread does for one subscription: drain it, and drain
+  it again while a wake came in the meantime — that wake found the
+  subscription in flight and could only leave the mark :again. The row
+  is read anew for each further pass, so a subscription that was
+  paused or failed meanwhile is left alone."
+  [eng client sub opts in-flight]
+  (let [st (:storage eng)
+        id (:id sub)]
+    (try
+      (loop [sub sub]
+        (drain-one! eng client sub opts)
+        (let [[was _] (swap-vals! in-flight
+                                  #(if (= :again (get % id))
+                                     (assoc % id :running)
+                                     (dissoc % id)))]
+          (when (= :again (get was id))
+            (let [fresh (when-not (.isInterrupted (Thread/currentThread))
+                          (store/with-tx st
+                            (fn [tx]
+                              (store/load-row st tx :subscription id {}))))]
+              (if (= :active (:state fresh))
+                (recur fresh)
+                (swap! in-flight dissoc id))))))
+      (catch Throwable e
+        (swap! in-flight dissoc id)
+        (warn! "drain of subscription " id " stopped: " (said e))))))
+
+(defn- dispatch-drains!
+  "One delivery pass that waits for nobody: each active subscription is
+  handed to the drain pool, so one whose endpoint times out costs the
+  others nothing. `in-flight` (an atom, subscription id → :running or
+  :again) keeps ONE drain per subscription — its cursor is unguarded —
+  and a subscription already in flight is marked :again instead."
+  [eng client ^ExecutorService pool in-flight opts]
+  (let [opts (drain-opts eng opts)]
+    (doseq [sub (active-subscriptions eng)
+            :let [id (:id sub)
+                  [was _] (swap-vals! in-flight
+                                      #(assoc % id (if (contains? % id)
+                                                     :again
+                                                     :running)))]
+            :when (not (contains? was id))]
+      (try
+        (.execute pool
+                  ^Runnable
+                  (fn [] (drain-while-asked! eng client sub opts in-flight)))
+        (catch Throwable e
+          (swap! in-flight dissoc id)
+          (throw e))))))
+
+(defn- drain-pool
+  "The threads that drain subscriptions for the deliverer: `n` daemons."
+  ^ExecutorService [n]
+  (Executors/newFixedThreadPool
+   (int n)
+   (reify ThreadFactory
+     (newThread [_ r]
+       (doto (Thread. ^Runnable r "waymark10-webhooks-drain")
+         (.setDaemon true))))))
 
 ;; ── the deliverer lifecycle (engine start!/stop!) ───────────────────
 
 (defn start-deliverer!
   "The delivery worker: subscribe to the running dispatcher as a wake
-  signal (take-event's timeout is the poll backstop) and drain on
-  every wake. Returns the running deliverer; stop-deliverer! ends it."
+  signal (take-event's timeout is the poll backstop) and hand every
+  active subscription to the drain pool on every wake. The thread only
+  dispatches, so no endpoint holds it; the pool has engine opt
+  :webhook-drainers threads (8). Any Throwable in the loop is logged
+  and the loop goes on: an Error must not end delivery in silence.
+  Returns the running deliverer; stop-deliverer! ends it."
   [eng dispatcher {:keys [poll-ms] :or {poll-ms 2000}}]
   (let [sub (events/subscribe dispatcher {})
         client (http-client)
         running (atom true)
+        pool (drain-pool (:webhook-drainers eng 8))
+        in-flight (atom {})
+        pass! #(dispatch-drains! eng client pool in-flight {})
         t (Thread.
            ^Runnable
            (fn []
              ;; drain once at startup: an outage replays, never drops
-             (try (drain! eng client {})
-                  (catch Exception e
-                    (warn! "startup drain failed: " (ex-message e))))
+             (try (pass!)
+                  (catch Throwable e
+                    (warn! "startup drain failed: " (said e))))
              (while @running
                (try
                  (let [evt (events/take-event sub poll-ms)]
                    (when-not (= ::events/closed evt)
-                     (drain! eng client {})))
+                     (pass!)))
                  (catch InterruptedException _ nil)
-                 (catch Exception e
+                 (catch Throwable e
                    (when @running
-                     (warn! "deliverer loop: " (ex-message e)))))))
+                     (warn! "deliverer loop: " (said e)))))))
            "waymark10-webhooks")]
     (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :running running :dispatcher dispatcher :sub sub}))
+    {:thread t :running running :dispatcher dispatcher :sub sub
+     :pool pool}))
 
-(defn stop-deliverer! [{:keys [running dispatcher sub ^Thread thread]}]
+(defn stop-deliverer!
+  [{:keys [running dispatcher sub ^Thread thread ^ExecutorService pool]}]
   (reset! running false)
   (events/unsubscribe dispatcher sub)
   (some-> thread .interrupt)
+  (some-> pool .shutdownNow)
   nil)

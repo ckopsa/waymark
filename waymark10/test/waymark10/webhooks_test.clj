@@ -13,6 +13,7 @@
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
+            [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -512,3 +513,90 @@
                               (get-in % [:headers "x-waymark-signature"]))
                           @(:hits rcv)))))
           (finally (engine/stop! (:server rcv))))))))
+
+;; ── 7. the deliverer: an Error does not end it, and a slow endpoint
+;;       does not hold the others ────────────────────────────────────
+
+(defn- with-deliverer
+  "Runs (f) beside a started deliverer whose only wake is a 20 ms poll:
+  there is no dispatcher, so the log alone carries the events."
+  [eng f]
+  (with-redefs [events/subscribe (fn [_ _] ::no-dispatcher)
+                events/unsubscribe (fn [_ _] nil)
+                events/take-event (fn [_ ms] (Thread/sleep (long ms)) nil)]
+    (let [deliverer (webhooks/start-deliverer! eng nil {:poll-ms 20})]
+      (try (f)
+           (finally (webhooks/stop-deliverer! deliverer))))))
+
+(deftest the-deliverer-outlives-an-error
+  (fresh!)
+  (with-eng {:webhook-attempts 2 :webhook-backoff-ms 5}
+    (fn [eng]
+      (let [rcv (receiver!)
+            active-subscriptions @#'webhooks/active-subscriptions
+            drain-subscription @#'webhooks/drain-subscription!
+            passes (atom 0)
+            drains (atom 0)]
+        (try
+          (inv/create! eng :subscription
+                       {:url (:url rcv) :kinds ["wh_gizmo"]}
+                       {:principal elena})
+          (inv/create! eng :wh_gizmo {:name "one"} {:principal elena})
+          ;; the startup pass and the first pass of the loop throw an
+          ;; Error; so does the first drain of the subscription
+          (with-redefs [webhooks/active-subscriptions
+                        (fn [e]
+                          (if (< 2 (swap! passes inc))
+                            (active-subscriptions e)
+                            (throw (StackOverflowError.))))
+                        webhooks/drain-subscription!
+                        (fn [& args]
+                          (if (< 1 (swap! drains inc))
+                            (apply drain-subscription args)
+                            (throw (AssertionError. "drain"))))]
+            (with-deliverer eng
+              (fn []
+                (testing "the deliverer still delivers after the Errors"
+                  (is (await-pred #(= 1 (count @(:hits rcv))) 5000))
+                  (is (< 2 @passes))
+                  (is (< 1 @drains))))))
+          (finally (engine/stop! (:server rcv))))))))
+
+(deftest a-slow-endpoint-does-not-hold-the-others
+  (fresh!)
+  ;; the slow endpoint costs 3 attempts x 2 s for each event
+  (with-eng {:webhook-attempts 3 :webhook-backoff-ms 5
+             :webhook-timeout-ms 2000}
+    (fn [eng]
+      (let [rcv (receiver!)
+            slow-hits (atom 0)
+            slow (http/run-server
+                  (fn [_]
+                    (swap! slow-hits inc)
+                    (Thread/sleep 2500)
+                    {:status 200 :headers {} :body ""})
+                  {:port 0 :legacy-return-value? false})]
+        (try
+          (inv/create! eng :subscription
+                       {:url (str "http://127.0.0.1:"
+                                  (http/server-port slow) "/hook")
+                        :kinds ["wh_gizmo"]
+                        :delivery_policy "skip"}
+                       {:principal elena})
+          (inv/create! eng :subscription
+                       {:url (:url rcv) :kinds ["wh_gizmo"]}
+                       {:principal elena})
+          (with-deliverer eng
+            (fn []
+              (inv/create! eng :wh_gizmo {:name "one"} {:principal elena})
+              (testing "the healthy subscription hears the first event"
+                (is (await-pred #(= 1 (count @(:hits rcv))) 1500)))
+              (testing "the slow endpoint is being tried"
+                (is (await-pred #(pos? @slow-hits) 1500)))
+              (inv/create! eng :wh_gizmo {:name "two"} {:principal elena})
+              (testing "the healthy subscription hears the second event
+                        while the slow one is still at the first"
+                (is (await-pred #(= 2 (count @(:hits rcv))) 1500))
+                (is (<= @slow-hits 3)))))
+          (finally (engine/stop! slow)
+                   (engine/stop! (:server rcv))))))))
