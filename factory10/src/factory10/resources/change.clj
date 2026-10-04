@@ -1067,14 +1067,21 @@
 (defn- take-the-tickets-domain
   "The birth's stamp (ticket 20fab5f9): a change built for a ticket takes
   the domain that ticket stores. A change the forge mints, and one
-  whose ticket stores none, is left with none and filters as factory."
+  whose ticket stores none, is left with none and filters as factory.
+
+  It takes the ticket's `requested_by` in the same way (ticket
+  a9b3d233), so the domain that asked for the work hears the change
+  move as it hears the ticket."
   [row ctx]
   (let [born (str (get-in row [:data :born_from]))
-        domain (when-some [read' (:read ctx)]
+        ticket (when-some [read' (:read ctx)]
                  (when-some [[_ id] (re-matches #"ticket:(.+)" born)]
-                   (some-> (read' :ticket id)
-                           (get-in [:data :domain]) str not-empty)))]
-    (cond-> row domain (assoc-in [:data :domain] domain))))
+                   (read' :ticket id)))
+        domain (some-> (get-in ticket [:data :domain]) str not-empty)
+        asker (some-> (get-in ticket [:data :requested_by]) str not-empty)]
+    (cond-> row
+      domain (assoc-in [:data :domain] domain)
+      asker (assoc-in [:data :requested_by] asker))))
 
 (defresource change
   {:kind :change
@@ -1408,6 +1415,16 @@
               {:raw true
                :label "Domain that wants the work"
                :help "The name of the domain of the ticket this change was built for, written when the change is born and again when that ticket is moved into another domain. A change that stores none is in factory."}}
+     [:maybe [:string {:max 64}]]]
+    ;; the asking domain's NAME, taken at birth from the ticket this
+    ;; change was built for (ticket a9b3d233), and written by nothing else
+    [:requested_by {:optional true
+                    :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
+                    :examples ["household"]
+                    :x-display
+                    {:raw true
+                     :label "Domain that asked"
+                     :help "The name of the domain whose mayor asked another domain for the ticket this change was built for, written when the change is born. Empty for a change whose ticket was filed in its own domain."}}
      [:maybe [:string {:max 64}]]]]
    ;; THE BIRTH DOOR IS THE MIRROR'S, AND IT IS HIDDEN. A person meets
    ;; no create form for this kind. The source mints the row with what
