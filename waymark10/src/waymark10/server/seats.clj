@@ -1991,6 +1991,12 @@
   {"fired" "Fired — a cadence, a wake or your own fire starts the run, and the run's own hook closes the sitting"
    "interactive" "Interactive — you sit here yourself, from your own machine, across as many turns as the work takes; nothing fires it"})
 
+(def ^:private serves-choices
+  "Whom a seat works for (epic aff24e84, piece 5), in the person's own
+  terms. Said once and shown at every door that takes the field."
+  {"own" "Own — this seat works for its own domain"
+   "any" "Any — it is a service: the mayor of the domain that asked for a ticket grooms and ranks it"})
+
 (def ^:private mode-help
   "The seat's OWN reading of R-10.8, and the reason the field is on the
   seat rather than on the principal."
@@ -2708,6 +2714,7 @@
     [:serves {:optional true
               :x-display
               {:label "Whom it serves"
+               :choices serves-choices
                :help "own: this seat works for its own domain. any: it is a service, and the mayor of a domain that asked for a ticket in this seat's repository grooms and ranks that ticket. Leave it empty for own."}}
      [:maybe [:enum "own" "any"]]]
     ;; THE DOMAIN THIS SEAT IS IN (epic aff24e84, piece 1). NO DEFAULT
@@ -3067,6 +3074,7 @@
     [:serves {:optional true
               :x-display
               {:label "Whom it serves"
+               :choices serves-choices
                :help "own: this seat works for its own domain. any: it is a service, and the mayor of a domain that asked for a ticket in this seat's repository grooms and ranks that ticket. Leave it empty for own."}}
      [:maybe [:enum "own" "any"]]]
     [:wake_on {:optional true
@@ -3277,6 +3285,7 @@
              [:serves {:optional true
                        :x-display
                        {:label "Whom it serves"
+                        :choices serves-choices
                         :help "own or any, stated again. Leave it out and the seat serves whom it serves today; clear it and the seat serves its own domain."}}
               [:maybe [:enum "own" "any"]]]
              [:wake_on {:optional true
