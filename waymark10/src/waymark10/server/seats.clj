@@ -3949,6 +3949,17 @@
                 str not-empty))
       default-mode))
 
+(defn- seat-domain-of
+  "The name of the domain the seat this sitting is opening in stores,
+  read at birth, or nil: the seat stores none, or this ctx cannot read.
+  Nothing is stamped then, and the kind's :absent-as filters the row as
+  `default-domain`."
+  [inp ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [id (some-> (read' :seat (str (:seat inp)))
+                           (get-in [:data :domain]) str not-empty)]
+      (some-> (read' :domain id) (get-in [:data :name]) str not-empty))))
+
 (def ^:private report-input
   "The report a session makes about itself: the five counts of R-10.5,
   the sentence, and the run that spent them.
@@ -4483,7 +4494,17 @@
              :x-display
              {:label "Health flags"
               :help flags-help}}
-     [:vector [:waymark/vocab {:open true}]]]]
+     [:vector [:waymark/vocab {:open true}]]]
+    ;; THE SEAT'S DOMAIN, BY NAME (epic aff24e84, piece 3): stamped at
+    ;; birth from the seat's stored domain. A seat that stores none
+    ;; stamps nothing, and :absent-as filters the row as factory. Not
+    ;; :maybe, so it promotes and filters.
+    [:domain {:optional true
+              :not-a-ref "The domain's NAME, as the seat's domain row spells it: never a row id."
+              :x-display
+              {:label "The seat's domain"
+               :help "The name of the domain the seat was in when this sitting opened. The engine stamps it at birth. A sitting with none filters as factory."}}
+     [:string {:min 1 :max 120}]]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -4543,8 +4564,13 @@
                       [:served {}]]
                ;; the delegate's own person, when there is one — the
                ;; identity gate's mark, never a claim in the request
-               (sitting-person ctx) (conj [:person (sitting-person ctx)]))))
+               (sitting-person ctx) (conj [:person (sitting-person ctx)])
+               ;; the seat's stored domain, by name; a seat that stores
+               ;; none stamps nothing
+               (seat-domain-of (:data row) ctx)
+               (conj [:domain (seat-domain-of (:data row) ctx)]))))
    :filterable {:state #{:eq :in}
+                :domain #{:eq}
                 :seat #{:eq}
                 :member #{:eq}
                 :model #{:eq}
@@ -4553,6 +4579,7 @@
                 :closed_by #{:eq :in}
                 :outcome #{:eq :in}
                 :started_at #{:after :before :range}}
+   :absent-as {:domain default-domain}
    :sortable {:fields [:started_at] :default "-started_at"}
    :links [{:rel "seat" :kind :seat
             :href "/api/seats/{data.seat}"

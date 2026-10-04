@@ -12,6 +12,7 @@
             [waymark10.holds :as holds]
             [waymark10.server.domains :as domains]
             [waymark10.server.engine :as engine]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -157,3 +158,41 @@
     (testing "a restate that clears it puts the seat back in factory"
       (act! :seat seat :restate (seat-restate-body {:domain nil}) colton)
       (is (= "factory" (seats/domain-name-of row-of (row-of :seat seat)))))))
+
+(defn- born
+  "What a kind's birth hook makes of `data` for `principal`, reading the
+  engine's rows."
+  [resource data principal]
+  ((:on-create resource)
+   {:data data}
+   (assoc (t/ctx {:principal principal :now (java.time.Instant/now)})
+          :read row-of)))
+
+(deftest a-sitting-carries-its-seats-domain
+  (let [household (:id (make-domain! "sitting-house"))
+        named (:id (open-seat! "sitting-named" {:domain (str household)}))
+        bare (:id (open-seat! "sitting-bare"))
+        sat (fn [seat]
+              (:data (born seats/sitting
+                           {:seat (str seat) :model "m" :grant "g"} clerk)))]
+    (is (= "sitting-house" (:domain (sat named)))
+        "the seat's stored domain, by name")
+    (is (not (contains? (sat bare) :domain))
+        "a seat with no stored domain stamps nothing")))
+
+(deftest an-approval-request-carries-its-requesters-seats-domain
+  (let [household (:id (make-domain! "ask-house"))
+        named (open-seat! "ask-named" {:domain (str household)})
+        bare (open-seat! "ask-bare")
+        sitter (fn [seat]
+                 (t/principal {:id (seats/sitter-id seat) :type :agent}))
+        asked (fn [principal]
+                (:data (born grants/approval-request
+                             {:task "read the pantry" :domain "claimed"}
+                             principal)))]
+    (is (= "ask-house" (:domain (asked (sitter named))))
+        "the requester's seat's stored domain, by name")
+    (is (not (contains? (asked (sitter bare)) :domain))
+        "a seat with no stored domain stamps nothing")
+    (is (not (contains? (asked clerk) :domain))
+        "a member with no seat gets nothing")))

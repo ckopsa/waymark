@@ -1044,11 +1044,29 @@
       (assoc-in row [:data :waits_on] m)
       (update row :data dissoc :waits_on))))
 
+(defn- stamp-domain
+  "The ask carries the name of the domain its requester's seat stores
+  (epic aff24e84, piece 3). The requester's seat is the one a sitter's
+  id names (`seat:<the seat>`). A member with no seat, and a seat that
+  stores no domain, stamp nothing, and :absent-as filters the row as
+  factory. Whatever the body said is dropped."
+  [row ctx]
+  (let [pid (str (get-in ctx [:principal :id]))
+        read' (:read ctx)
+        d (when (and read' (str/starts-with? pid "seat:"))
+            (some-> (read' :seat (subs pid 5))
+                    (get-in [:data :domain]) str not-empty))
+        nm (when d
+             (some-> (read' :domain d) (get-in [:data :name]) str not-empty))]
+    (if nm
+      (assoc-in row [:data :domain] nm)
+      (update row :data dissoc :domain))))
+
 (defn- born-ask
   "The ask's birth hook: anchor-the-lone-grant, then the person it
-  waits on."
+  waits on, then its requester's seat's domain."
   [row ctx]
-  (-> row (anchor-the-lone-grant ctx) (stamp-waits-on ctx)))
+  (-> row (anchor-the-lone-grant ctx) (stamp-waits-on ctx) (stamp-domain ctx)))
 
 (g/defguard requester-is-named
   {:reads [:principal]
@@ -1384,8 +1402,9 @@
               :name :someone-else-decides
               :explain "The requester cannot judge its own ask; another principal decides."}
     :stamps  {:decided-by :approved_by}
-    ;; born-ask stamps waits_on at birth, so the create model omits it
-    :engine-fields [:waits_on]
+    ;; born-ask stamps waits_on and domain at birth, so the create
+    ;; model omits them
+    :engine-fields [:waits_on :domain]
     ;; short-lived is the DEFAULT, not an opt-in: an ask naming no
     ;; expiry gets the engine's configured TTL (24h, the leash's own
     ;; cap — waymark-h6y: a shorter default killed the minted grant
@@ -1473,8 +1492,18 @@
             [:waits_on {:optional true :kind :member
                         :x-display {:label "Waits on"
                                     :help "The member who must approve this ask: the person the requesting seat or delegate acts for, or the requester themselves. The engine stamps it at birth."}}
-             [:maybe :waymark/ref]]]
-   :filterable {:grant_id #{:eq}}
+             [:maybe :waymark/ref]]
+            ;; THE REQUESTER'S SEAT'S DOMAIN, BY NAME (epic aff24e84,
+            ;; piece 3): stamped at birth by born-ask, never read from
+            ;; the body. An ask with none filters as factory.
+            [:domain {:optional true
+                      :not-a-ref "The domain's NAME, as the seat's domain row spells it: never a row id."
+                      :x-display {:label "The requester's domain"
+                                  :help "The name of the domain the requesting seat was in when it asked. The engine stamps it at birth. An ask with none filters as factory."}}
+             [:string {:min 1 :max 120}]]]
+   :filterable {:grant_id #{:eq}
+                :domain #{:eq}}
+   :absent-as {:domain "factory"}
    ;; the approval page opens on the decision queue: newest ask first,
    ;; and only the ones still waiting on a person — both projected by
    ;; the sugar (:default-filters {:state "offered"}, :sortable
