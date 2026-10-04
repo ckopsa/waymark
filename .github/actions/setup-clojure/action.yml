@@ -158,7 +158,9 @@ runs:
         # Pinned by version, not /latest/: a self-hosted runner and a
         # GitHub-hosted one must not end up on different toolchains.
         url="https://github.com/clojure/brew-install/releases/download/${CLI_VERSION}/linux-install.sh"
-        curl -fsSL -o /tmp/linux-install.sh "$url"
+        # Retried: one 500 from the release host failed the step before
+        # a single test ran (#811, and main at cc8bb636).
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/linux-install.sh "$url"
         sudo bash /tmp/linux-install.sh
         clojure --version
 
