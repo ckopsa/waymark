@@ -165,7 +165,7 @@ runs:
         # tarball the script fetches for itself, with the same host
         # behind it.
         for attempt in 1 2 3 4; do
-          if curl -fsSL --retry 4 --retry-delay 3 -o /tmp/linux-install.sh "$url" \
+          if curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/linux-install.sh "$url" \
              && sudo bash /tmp/linux-install.sh; then
             break
           fi
