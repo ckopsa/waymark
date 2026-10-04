@@ -306,7 +306,12 @@
     (is (str/includes? body "if (f.event === \"ui\") applyGuidedUi(f);"))
     (is (str/includes? body "is filling this in"))
     (is (str/includes? body "dialog[open]:not([data-guided])"))
-    (is (str/includes? body "data-guided-mark"))))
+    (is (str/includes? body "data-guided-mark"))
+    (testing "a guided dialog's read that fails or is not answered gives its key back"
+      (is (str/includes? body "await Promise.race([api(d.self),\n      new Promise(done => setTimeout(done, GUIDED_READ_MS, null))]);"))
+      (is (str/includes? body "} catch (_e) { res = null; }\n  finally {\n    mine = guidedOpening === key;"))
+      (is (str/includes? body "if (mine) guidedOpening = null;"))
+      (is (not (str/includes? body "const res = replay ? replayDialogDoc(d) : await api(d.self);"))))))
 
 (deftest ui-sharing-is-off-by-default
   ;; the reporting side's opt-in: a per-tab toggle, off until pressed,
