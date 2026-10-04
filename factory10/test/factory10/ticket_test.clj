@@ -572,6 +572,75 @@
       (is (= 2 (:priority data)))
       (is (nil? (:asked_priority data))))))
 
+;; ── a ticket and a change carry the domain (ticket 20fab5f9) ──────────
+
+(def ^:private the-house
+  {"G-house" {:kind :grant :id "G-house" :data {:seat "S-house"}}
+   "G-plain" {:kind :grant :id "G-plain" :data {:seat "S-plain"}}
+   "S-house" {:kind :seat :id "S-house"
+              :data {:name "house-seat" :domain "D-house"}}
+   "S-plain" {:kind :seat :id "S-plain" :data {:name "plain-seat"}}
+   "D-house" {:kind :domain :id "D-house" :data {:name "household"}}
+   "P-infra" (at :open {:domain "infra"} "P-infra")
+   "P-plain" (at :open {} "P-plain")})
+
+(defn- born-in
+  "The domain the birth hook stamps on a create with `extra`, by a hand
+  wearing `grant-id` (nil for none), over the fake store `the-house`."
+  [grant-id extra]
+  (get-in ((:on-create ticket)
+           (at :draft extra "NEW")
+           (cond-> (ctx the-seat the-house)
+             grant-id (assoc :grant {:id grant-id})))
+          [:data :domain]))
+
+(deftest a-ticket-is-born-in-a-domain
+  (testing "a ticket with a parent takes its parent's domain"
+    (is (= "infra" (born-in nil {:parent "P-infra"})))
+    (is (= "infra" (born-in "G-house" {:parent "P-infra"}))
+        "and not the filing seat's"))
+  (testing "a parent that stores none leaves its child with none"
+    (is (nil? (born-in "G-house" {:parent "P-plain"}))))
+  (testing "a ticket with no parent takes the filing seat's domain name"
+    (is (= "household" (born-in "G-house" {}))))
+  (testing "a seat that stores no domain, and a hand with no seat, stamp none"
+    (is (nil? (born-in "G-plain" {})))
+    (is (nil? (born-in nil {})))))
+
+(deftest a-change-takes-its-tickets-domain
+  (let [born (fn [data]
+               (get-in ((:on-create change)
+                        {:kind :change :id "CH" :state :open :data data}
+                        (ctx the-engine the-house))
+                       [:data :domain]))]
+    (is (= "infra" (born {:born_from "ticket:P-infra"})))
+    (testing "a ticket that stores none leaves the change with none"
+      (is (nil? (born {:born_from "ticket:P-plain"}))))
+    (testing "and so does a change the forge minted"
+      (is (nil? (born {:change_id "github:ckopsa/waymark#1"}))))))
+
+(deftest a-row-that-stores-no-domain-filters-as-factory
+  (doseq [[rdef kind] [[ticket :ticket] [change :change]]]
+    (let [rows [{:kind kind :id "OLD" :state :open :data {}}
+                {:kind kind :id "HOME" :state :open :data {:domain "household"}}]
+          ids (fn [params]
+                (let [{:keys [conds]} (collections/parse-query rdef params)]
+                  (into #{}
+                        (comp (filter (fn [row]
+                                        (every? #(@#'memory/cond-matches? row %)
+                                                conds)))
+                              (map :id))
+                        rows)))]
+      (testing (name kind)
+        (is (= #{"OLD"} (ids {"domain" "factory" "state" ""})))
+        (is (= #{"HOME"} (ids {"domain" "household" "state" ""})))))))
+
+(deftest a-dashboard-slot-filters-by-domain
+  (is (= [] (dash/slot-problems (fn [_kind] ticket) (fn [_kind _id] nil)
+                                {:target "ticket" :where "domain=factory"})))
+  (is (= [] (dash/slot-problems (fn [_kind] change) (fn [_kind _id] nil)
+                                {:target "change" :where "domain=factory"}))))
+
 ;; ── the shape the walker and the import both read ───────────────────
 
 (deftest the-declaration-says-what-the-walker-needs
