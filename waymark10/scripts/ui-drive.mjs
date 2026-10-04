@@ -1552,13 +1552,18 @@ async function openChrome() {
         throw new Error(`${label}: eval failed: ` + JSON.stringify(r.result.exceptionDetails));
       return r.result.result.value;
     };
-    const until = async (pred, what, ms = 8000) => {
+    /* `tell`, when given, is read on this tab at the timeout: what the
+       page held, so a red run names where it stopped */
+    const until = async (pred, what, ms = 8000, tell = null) => {
       const t0 = Date.now();
       while (Date.now() - t0 < ms) {
         if (await js(pred)) return true;
         await sleep(150);
       }
-      throw new Error(`${label}: timed out waiting for ${what}`);
+      const held = tell
+        ? " — " + await js(tell).catch(e => "its state could not be read: " + e.message)
+        : "";
+      throw new Error(`${label}: timed out waiting for ${what}${held}`);
     };
     return {call: c.call, js, until, close: c.close};
   };
@@ -1639,6 +1644,16 @@ async function guidedStory() {
   const arrived = (tab, recipe) => tab.until(
     `PRESENCE.get("ada")?.ui?.fields?.recipe === ${JSON.stringify(recipe)}`,
     `ada's frame (${recipe})`, 15000);
+  /* the follower's side when a guided dialog never opened: the three
+     ways openGuidedDialog and applyGuidedUi return with no retry of
+     their own (a seq not past guidedSeq, followUi off when the read
+     answers, another open dialog), and ada's last frame as bo holds it */
+  const guidedState = `JSON.stringify({guidedSeq, guidedOpening, guidedDismissed,
+    followUi, followId, here: hereHref(),
+    adaSeq: PRESENCE.get("ada")?.seq ?? null,
+    adaDialog: PRESENCE.get("ada")?.ui?.dialog ?? null,
+    dialogs: [...document.querySelectorAll("dialog[open]")]
+      .map(d => d.getAttribute("data-guided") ?? "not guided")})`;
   /* ada's dialog: update_recipe on the first on-list meal, from its
      row in the collection. A create dialog stands on the collection,
      and the registry keeps only a dialog on a row, so it never crosses */
@@ -1651,7 +1666,8 @@ async function guidedStory() {
     await A.js(`${recipeButton}.click(); true`);
     await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
     await B.until(`!!document.querySelector(${JSON.stringify(
-      `dialog[open][data-guided="${recipeKey}"]`)})`, "the guided dialog", 15000);
+      `dialog[open][data-guided="${recipeKey}"]`)})`, "the guided dialog", 15000,
+      guidedState);
   };
 
   console.log("· two tabs: ada shares, bo follows");
@@ -1825,7 +1841,7 @@ async function guidedStory() {
   await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
   await B.until(`!!document.querySelector(${JSON.stringify(
     `dialog[open][data-guided="${meals[1]} update_recipe"]`)})`,
-                "ada's dialog on bo's screen", 15000);
+                "ada's dialog on bo's screen", 15000, guidedState);
   ok("an agent step's ui frame shows on the subject's screen under the chip",
      await B.js(`{ const chip = document.querySelector("#walkchip");
        chip.style.display !== "none" && chip.textContent.includes("Step 1 of 2") &&
