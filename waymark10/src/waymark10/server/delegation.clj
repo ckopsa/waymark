@@ -25,6 +25,14 @@
      is NOT the author's own scope: a mayor gives bench.write on repo
      bench without holding it. A call past the ceiling is held, and
      the sentence names the ceiling entry that would have admitted it.
+     ONE CAP YIELDS TO THE DOMAIN (the owner's ruling, 2026-10-04):
+     when the author is the mayor of the domain the new seat names,
+     the domain's headroom replaces the ceiling's per-seat
+     `budget_usd_per_week` cap on the create. Past the headroom the
+     create is refused, not held (seats/budget-fits-the-domain names
+     the total, the ceiling and the headroom, and the remedy is the
+     domain's restate, held for the person). Every other part of the
+     ceiling judges that create as it judges any other.
   3. Every authored seat records `authored_by` (the author seat) and
      `owner` (the person the author acts for). The seat's on-create
      stamps both, or the person's `hand_to` writes them with the
@@ -34,7 +42,10 @@
      is the approval. After it, the author restates its own child
      within the ceiling with no new tap. Unpark, merge and retire are
      the person's: from the author they are held. Park is not fenced:
-     it only takes authority away, as it always could.
+     it only takes authority away, as it always could. A mayor's
+     create inside its own domain's headroom is born parked like any
+     other: the headroom answers what the domain can afford, and the
+     person's unpark answers what the seat may touch.
   5. A judgment is promoted by a delegating seat only when a seat it
      authored cites that judgment and is still parked, so a promotion
      never changes a live seat's work unseen. Anything else is held.
@@ -264,8 +275,10 @@
   "Why this seat body is past the author's ceiling, as one sentence,
   or nil when it fits. Invariant 2, in the order a person reads a
   seat: the ceiling itself, the scope, the money, the tokens, the
-  models."
-  [author inp]
+  models. `by-headroom?` true leaves the money to the domain's
+  headroom: the ceiling's per-seat cap is not read."
+  ([author inp] (misfit author inp false))
+  ([author inp by-headroom?]
   (let [ceil (get-in author [:data :delegates])
         budget (:budget_usd_per_week inp)
         tokens (:sitting_budget_tokens inp)]
@@ -273,7 +286,8 @@
           (str "the body writes a ceiling of its own, and a ceiling is the"
                " person's to write. No ceiling entry admits it"))
         (scope-misfit (:scope ceil) (:scope inp))
-        (when (over? budget (:budget_usd_per_week ceil))
+        (when (and (not by-headroom?)
+                   (over? budget (:budget_usd_per_week ceil)))
           (str "budget_usd_per_week " budget " is over the ceiling's "
                (:budget_usd_per_week ceil) ". A ceiling budget_usd_per_week of "
                budget " would have admitted it"))
@@ -286,7 +300,7 @@
                (:sitting_budget_tokens ceil) ". A ceiling sitting_budget_tokens of "
                tokens " would have admitted it"))
         (models-misfit "held_for" (:held_for inp) (:held_for ceil))
-        (models-misfit "substitute_for" (:substitute_for inp) (:held_for ceil)))))
+        (models-misfit "substitute_for" (:substitute_for inp) (:held_for ceil))))))
 
 ;; ── the sentences ───────────────────────────────────────────────────
 
@@ -326,12 +340,22 @@
   (when-some [f @own-domain-rule]
     (boolean (f row inp ctx author))))
 
+(defn- mayor-of-the-named-domain?
+  "Is `author` the mayor of the domain this create body names? A body
+  that names no domain answers false, and the ceiling judges its money."
+  [inp ctx author]
+  (boolean
+   (when-some [id (some-> (:domain inp) str nonblank)]
+     (when-some [read' (:read ctx)]
+       (= (str (:id author))
+          (some-> (read' :domain id) (get-in [:data :mayor]) str))))))
+
 ;; ── the guards ──────────────────────────────────────────────────────
 
 (g/defguard authors-within-the-ceiling
   {:hold true
    :judges [:scope]
-   :reads [:principal :now :grant :seat :held_call :within]
+   :reads [:principal :now :grant :seat :held_call :within :domain]
    :vars [:invariant :detail]
    :open "The ceiling is the delegates field of the author's own seat row, one GET away; it names kinds this form cannot enumerate."
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
@@ -345,9 +369,12 @@
       (nil? author) (t/allow)
       (approved-hold? ctx :seat (:id row)) (t/allow)
 
-      ;; the create door
+      ;; the create door. In the mayor's own domain the money was
+      ;; judged by the domain's headroom (seats/budget-fits-the-domain),
+      ;; which stood before this guard; the seat is born parked all the
+      ;; same
       (nil? (:id row))
-      (if-some [m (misfit author inp)]
+      (if-some [m (misfit author inp (mayor-of-the-named-domain? inp ctx author))]
         (hold inv-ceiling m)
         (t/allow))
 
