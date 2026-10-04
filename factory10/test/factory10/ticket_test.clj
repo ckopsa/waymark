@@ -693,3 +693,110 @@
         (is (str/includes? said "480"))
         (is (str/includes? said "512"))
         (is (nil? (sch/closed-errors form {:why (apply str (repeat 480 "x"))})))))))
+
+;; ── one domain asks another (ticket 775b6427) ─────────────────────────
+
+(defn- sat [seat domain]
+  {(str "G-" seat) {:kind :grant :id (str "G-" seat) :state :accepted
+                    :data {:seat (str "S-" seat) :audience seat}}
+   (str "S-" seat) {:kind :seat :id (str "S-" seat)
+                    :data {:name seat :domain domain}}})
+
+(def ^:private two-domains
+  (merge (sat "house-mayor" "D-house")
+         (sat "house-hand" "D-house")
+         (sat "infra-mayor" "D-infra")
+         {"D-house" {:kind :domain :id "D-house"
+                     :data {:name "household" :mayor "S-house-mayor"}}
+          "D-infra" {:kind :domain :id "D-infra"
+                     :data {:name "infra" :mayor "S-infra-mayor"}}
+          "ASK" (at :blocked {:domain "household" :blocked_by ["NEW"]
+                              :blocked_from "open"}
+                     "ASK")}))
+
+(defn- sitter
+  "The delegate that sits in `seat`, over the fake store `two-domains`."
+  [seat]
+  (assoc (ctx {:id seat :type :agent :roles #{} :acts-for "colton"} two-domains)
+         :grant {:id (str "G-" seat)}))
+
+(def ^:private an-ask
+  {:domain "infra" :requested_by "household" :needed_by "ASK"})
+
+(deftest a-mayor-drafts-into-another-domain
+  (testing "the draft carries who asked, what waits for it and the priority asked"
+    (let [{:keys [state data]} ((:on-create ticket)
+                                (at :draft {:domain "infra" :needed_by "ASK"} "NEW")
+                                (sitter "house-mayor"))]
+      (is (= :draft state))
+      (is (= "infra" (:domain data)))
+      (is (= "household" (:requested_by data)))
+      (is (= "ASK" (:needed_by data)))
+      (is (= 1 (:asked_priority data)))
+      (is (= 4 (:priority data)) "the receiving mayor sets the priority")))
+  (testing "a mayor naming its own domain asks nobody"
+    (let [{:keys [data]} ((:on-create ticket)
+                          (at :draft {:domain "household"} "NEW")
+                          (sitter "house-mayor"))]
+      (is (nil? (:requested_by data)))
+      (is (= 1 (:priority data)))))
+  (let [[_ _ known mayors] (:create-guards ticket)
+        allowed? (fn [guard seat inp]
+                   (= :allow (:verdict (first (g/evaluate guard nil inp (sitter seat))))))]
+    (testing "only a mayor names another domain"
+      (is (allowed? mayors "house-mayor" {:domain "infra"}))
+      (is (not (allowed? mayors "house-hand" {:domain "infra"})))
+      (is (allowed? mayors "house-hand" {:domain "household"}))
+      (is (allowed? mayors "house-hand" {})))
+    (testing "and the domain it names is one that exists"
+      (is (allowed? known "house-mayor" {:domain "infra"}))
+      (is (not (allowed? known "house-mayor" {:domain "nowhere"}))))))
+
+(deftest only-the-receiving-mayor-answers-an-ask
+  (let [draft (at :draft an-ask "NEW")
+        queued (at :open an-ask "NEW")
+        wall :the-receiving-mayor-answers-an-ask]
+    (testing "the mayor that asked does not groom, rank or drop it"
+      (doseq [[row action] [[draft :groom] [draft :drop] [queued :prioritize]]]
+        (let [shut (refusal row (sitter "house-mayor") action)]
+          (is (= :unavailable (:status shut)) (name action))
+          (is (= wall (:name (:denier shut))) (name action)))))
+    (testing "and the refusal names the receiving mayor"
+      (let [guard (last (:guards (get (:actions ticket) :groom)))
+            [v d] (g/evaluate guard draft nil (sitter "house-mayor"))]
+        (is (str/includes? (g/render-reason d v nil) "infra-mayor"))))
+    (testing "the receiving mayor does, and so does the owner"
+      (doseq [[row action] [[draft :groom] [draft :drop] [queued :prioritize]]
+              c [(sitter "infra-mayor") (ctx the-person two-domains)]]
+        (is (= :available (:status (refusal row c action))) (name action))))
+    (testing "a ticket nobody asked across domains is groomed as before"
+      (is (= :available
+             (:status (refusal (at :draft {:domain "household"} "NEW")
+                               (sitter "house-mayor") :groom)))))))
+
+(deftest a-decline-turns-the-asker-back
+  (let [calls (atom [])
+        c (assoc (ctx the-person two-domains)
+                 :invoke (fn [& args] (swap! calls conj (vec args)) nil))
+        _ ((:handler (get (:actions ticket) :drop))
+           (at :open an-ask "NEW") {:close_reason "Infra runs no music server."} c)
+        [kind id _ inp] (first (filter #(= :turn_back (nth % 2)) @calls))
+        door (get (:actions ticket) :turn_back)
+        asker (get two-domains "ASK")]
+    (testing "the drop walks the waiting ticket's turn_back with the reason"
+      (is (= [:ticket "ASK"] [kind id]))
+      (is (= "declined by infra: Infra runs no music server."
+             (:shelved_because inp))))
+    (testing "which lands in draft, waiting on nothing, with the reason kept"
+      (let [after ((:handler door) asker inp c)]
+        (is (= :draft (:to door)))
+        (is (= [] (get-in after [:data :blocked_by])))
+        (is (= (:shelved_because inp) (get-in after [:data :shelved_because])))))
+    (testing "and no hand takes that door"
+      (is (= :only-a-decline-turns-the-asker-back
+             (:name (:denier (refusal asker (ctx the-person) :turn_back)))))
+      (is (= :available
+             (:status (refusal asker
+                               (assoc (ctx the-engine)
+                                      :within {:kind :ticket :action :drop})
+                               :turn_back)))))))

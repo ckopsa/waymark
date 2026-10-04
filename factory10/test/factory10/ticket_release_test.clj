@@ -168,3 +168,21 @@
     (move! h waiter :block {:blocked_by [blocker]})
     (ended! h blocker :drop)
     (is (= "open" (:state (get-row h waiter))))))
+
+;; ticket 775b6427: a drop of the ticket another domain was asked for
+(deftest a-declined-ask-sends-the-waiting-ticket-to-draft
+  (let [{:keys [h eng]} (world)
+        asker (new-ticket! h "The kitchen says when to leave")
+        made (req h :post "/api/tickets"
+                  {:title "Run the music server" :type "task" :priority 2
+                   :repo "ckopsa/waymark" :needed_by asker})
+        asked (id-of made)]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (move! h asker :block {:blocked_by [asked] :then "open"})
+    (ended! h asked :drop)
+    (let [row (get-row h asker)]
+      (is (= "draft" (:state row)) "not the queue: its mayor plans again")
+      (is (= "declined by factory: Merged: github:ckopsa/waymark#41."
+             (get-in row [:data :shelved_because])))
+      (is (= [] (get-in row [:data :blocked_by]))))
+    (is (= :turn_back (:action (last-move eng asker))))))

@@ -412,6 +412,42 @@
               (println "factory10 ticket ending: the change" (:id change)
                        "was not closed -" (ex-message e)))))))))
 
+;; ── a drop is the decline (ticket 775b6427) ─────────────────────────
+
+(def ^:private default-domain
+  "The domain of a ticket, and of a seat, that stores none."
+  "factory")
+
+(defn- turn-the-asker-back!
+  "A ticket asked of another domain names the ticket that waits for it
+  in `needed_by`. When it is dropped, that ticket goes to `draft`
+  through `turn_back`, with the decline as its `shelved_because`, so
+  the mayor that asked plans again. It runs before
+  `release-the-waiters!`, which would put the asker in the queue.
+
+  BEST-EFFORT, as the release is. An asker under review, deferred or
+  ended is left where it stands."
+  [row inp ctx]
+  (let [read' (:read ctx)
+        invoke' (:invoke ctx)
+        asker (when read'
+                (some->> (get-in row [:data :needed_by]) str not-empty
+                         (read' :ticket)))]
+    (when (and invoke' asker
+               (contains? #{:draft :open :blocked} (state-of asker)))
+      (let [why (str "declined by "
+                     (or (some-> (get-in row [:data :domain]) str not-empty)
+                         default-domain)
+                     ": " (:close_reason inp))]
+        (try
+          (invoke' :ticket (:id asker) :turn_back
+                   {:shelved_because (subs why 0 (min 480 (count why)))}
+                   {:if-match (inv/etag :ticket (:id asker) (:version asker))})
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factory10 ticket drop: the ticket" (:id asker)
+                       "was not turned back -" (ex-message e)))))))))
+
 (defhandler close-the-ticket [row inp ctx]
   ;; One handler for every ending but the drop (`drop-the-ticket`). The
   ;; machine says which ending; the handler writes the sentence,
@@ -422,7 +458,9 @@
   (assoc-in row [:data :close_reason] (:close_reason inp)))
 
 (defhandler drop-the-ticket [row inp ctx]
-  ;; `close-the-ticket`, with its changes naming the drop
+  ;; `close-the-ticket`, with its changes naming the drop; the ticket
+  ;; that asked for this one is turned back first
+  (turn-the-asker-back! row inp ctx)
   (release-the-waiters! row ctx)
   (finish-the-parent! row ctx)
   (close-its-unmerged-changes! row :dropped inp ctx)
@@ -809,6 +847,65 @@
     (if (and (= :ticket kind) (contains? #{:complete :drop :land :mend :finish} action))
       (t/allow)
       (t/deny))))
+
+;; ── one domain asks another (ticket 775b6427) ───────────────────────
+
+(defguardfn only-a-decline-turns-the-asker-back
+  {:reads [:within]
+   :open "No door clears this one. A ticket is turned back when the ticket it asked another domain for is dropped, and the engine moves it then; a person who wants it out of the queue sends it back to draft."
+   :explain "A ticket is turned back to draft only when the ticket it asked another domain for is dropped: the drop moves it, in the same transaction, and no hand does."}
+  [_row _inp ctx]
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :ticket kind) (= :drop action))
+      (t/allow)
+      (t/deny))))
+
+(defhandler note-the-decline [row inp ctx]
+  ;; `clear-the-blockers`, and the decline is kept where the mayor that
+  ;; asked reads it before it plans again
+  (-> (clear-the-blockers row inp ctx)
+      (assoc-in [:data :shelved_because] (:shelved_because inp))))
+
+(defn- domain-named
+  "The domain row of this name, or nil. A ctx with no `:find` hook
+  answers nil."
+  [ctx domain]
+  (when-some [find' (:find ctx)]
+    (first (find' :domain {:name domain} {:limit 1}))))
+
+(defguardfn the-receiving-mayor-answers-an-ask
+  {:reads [:principal]
+   :vars [:domain :asker :mayor]
+   :open "No door changes who the caller is: ask the mayor of the domain this ticket was asked of, or the owner, to answer it."
+   :explain "{asker} asked {domain} for this ticket, so {domain} answers it: it is groomed, ranked and dropped by the owner or by the mayor of {domain}, which is {mayor}. A domain that could groom what it asks for would fill another domain's queue."}
+  [row _inp ctx]
+  ;; domains' `the-mayors-or-a-persons-move`, on a ticket one domain
+  ;; asked of another. Every other ticket passes, and so does a ctx
+  ;; with no hook, which declines to guess. It reads the domain and
+  ;; the caller's grants through that hook and declares neither, as
+  ;; `only-a-person-reopens` reads its held call: see :deviations.
+  (let [domain (or (some-> (get-in row [:data :domain]) str not-empty)
+                   default-domain)
+        asker (some-> (get-in row [:data :requested_by]) str not-empty)]
+    (if (or (nil? asker) (= asker domain) (nil? (:find ctx)))
+      (t/allow)
+      (let [{:keys [type acts-for]} (:principal ctx)
+            cited (delegation/cited-seats ctx)
+            mayor (some-> (domain-named ctx domain)
+                          (get-in [:data :mayor]) str not-empty)
+            said (or (when-some [read' (when mayor (:read ctx))]
+                       (some-> (read' :seat mayor)
+                               (get-in [:data :name]) str not-empty))
+                     mayor
+                     "no seat yet")
+            refuse #(t/deny {:vars {:domain domain :asker asker :mayor said}})]
+        (cond
+          (and mayor (contains? cited mayor)) (t/allow)
+          ;; a sitter of any other seat
+          (seq cited) (refuse)
+          ;; a person, a tool a person is signed in to, or the engine
+          (or (not= :agent type) (some? (not-empty (str acts-for)))) (t/allow)
+          :else (refuse))))))
 
 (defguardfn only-its-change-moves-it
   {:reads [:within]
@@ -1221,6 +1318,24 @@
                {:label "Found while working on"
                 :help "The ticket whose work surfaced this one, when there is one. It is how the record says where an ask came from."}}
     [:maybe :waymark/ref]]
+   ;; ticket 775b6427: the ticket in the asking domain that waits for
+   ;; this one, which a drop of this one turns back to draft
+   [:needed_by {:optional true :kind :ticket
+                :x-display
+                {:label "Needed by"
+                 :help "The ticket that waits for this one, when a mayor asks another domain for work. If this ticket is dropped, that one goes back to draft with the reason, so the mayor that asked plans again."}}
+    [:maybe :waymark/ref]]
+   ;; the domain's NAME and not its id: the factory domain's id is
+   ;; minted at boot on each database, so no declaration can spell it,
+   ;; and `:absent-as` needs a value it can spell (ticket 20fab5f9)
+   [:domain {:optional true
+             :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
+             :examples ["factory"]
+             :x-display
+             {:raw true
+              :label "Domain that does the work"
+              :help "The name of the domain this ask belongs to. Leave it empty and the birth writes it: a ticket with a parent takes its parent's domain, and any other takes the domain of the seat that filed it. A mayor names another domain to ask it for work. A move into another domain changes it, here and on every ticket under this one. A ticket that stores none is in factory."}}
+    [:maybe [:string {:max 64}]]]
    [:bead_id {:optional true
               :examples ["waymark-fp62.8"]
               :x-display
@@ -1301,18 +1416,17 @@
    [:asked_priority {:optional true
                      :x-display
                      {:label "Priority the seat asked for"
-                      :help "The priority a fired seat named when it filed this ticket. Its birth lands at 4 whatever it asked, so a groomer reads the seat's own judgment here and raises the ticket when it earns it. Empty for a ticket a person or an interactive seat filed."}}
+                      :help "The priority a fired seat named when it filed this ticket. Its birth lands at 4 whatever it asked, so a groomer reads the seat's own judgment here and raises the ticket when it earns it. A ticket a mayor asked of another domain keeps the mayor's suggestion here in the same way. Empty for any other ticket."}}
     [:maybe [:int {:min 0 :max 4}]]]
-   ;; the domain's NAME and not its id: the factory domain's id is
-   ;; minted at boot on each database, so no declaration can spell it,
-   ;; and `:absent-as` needs a value it can spell (ticket 20fab5f9)
-   [:domain {:optional true
-             :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
-             :examples ["factory"]
-             :x-display
-             {:raw true
-              :label "Domain that wants the work"
-              :help "The name of the domain this ask belongs to. The birth writes it: a ticket with a parent takes its parent's domain, and any other takes the domain of the seat that filed it. A move into another domain changes it, here and on every ticket under this one. A ticket that stores none is in factory."}}
+   ;; ticket 775b6427: written by the birth when a seat names a domain
+   ;; other than its own, and read by the groom, rank and drop doors
+   [:requested_by {:optional true
+                   :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
+                   :examples ["household"]
+                   :x-display
+                   {:raw true
+                    :label "Domain that asked"
+                    :help "The name of the domain whose mayor asked another domain for this work. Only the receiving domain's mayor, or the owner, grooms, ranks or drops such a ticket. Empty for a ticket filed in its own domain."}}
     [:maybe [:string {:max 64}]]]])
 
 ;; ── a fired seat's ticket lands at the back (ticket b0ec4d47) ───────
@@ -1364,18 +1478,87 @@
           (some-> (read' :domain domain-id)
                   (get-in [:data :name]) str not-empty))))))
 
+(defn- filing-seat
+  "The seat row the request's grant cites, or nil: a person, the engine
+  and a ctx with no `:read` hook file with no seat."
+  [ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
+      (when-some [seat-id (some-> (read' :grant gid)
+                                  (get-in [:data :seat]) str not-empty)]
+        (read' :seat seat-id)))))
+
+(defn- home-of
+  "The domain ROW a seat is in: the one it stores, or factory's for a
+  seat that stores none."
+  [seat ctx]
+  (if-some [domain-id (some-> (get-in seat [:data :domain]) str not-empty)]
+    ((:read ctx) :domain domain-id)
+    (domain-named ctx default-domain)))
+
+(defguardfn the-domain-is-one-we-have
+  {:judges [:domain]
+   :reads [:domain]
+   :vars [:domain]
+   :open "No door here makes a domain. Name one that exists, or leave the domain empty and the ticket takes the filing seat's."
+   :explain "No domain is named {domain}, and a ticket asked of a domain nobody runs is work no mayor will find. Name a domain that exists, or leave the domain empty."}
+  [_row inp ctx]
+  (let [stated (some-> (:domain inp) str not-empty)]
+    (if (or (nil? stated) (nil? (:find ctx)) (some? (domain-named ctx stated)))
+      (t/allow)
+      (t/deny {:vars {:domain stated}
+               :errors {:domain ["domain not found"]}}))))
+
+(defguardfn only-a-mayor-asks-another-domain
+  {:judges [:domain]
+   ;; it reads the filing seat's row as well, which no declaration in
+   ;; this module names (spec R-6)
+   :reads [:grant :domain]
+   :vars [:domain :own]
+   :open "No door changes who the caller is. Leave the domain empty to file the ticket in your own domain, or tell your domain's mayor what you need of the other one."
+   :explain "Domains ask each other for work through their mayors, and this seat is in {own} without being its mayor, so it does not file a ticket in {domain}. Leave the domain empty, or tell the mayor of {own} what you need of {domain}."}
+  [_row inp ctx]
+  ;; a person, the engine and a seat naming its own domain pass
+  (let [stated (some-> (:domain inp) str not-empty)
+        seat (when stated (filing-seat ctx))]
+    (if (or (nil? seat) (nil? (:find ctx)))
+      (t/allow)
+      (let [home (home-of seat ctx)
+            own (or (some-> home (get-in [:data :name]) str not-empty)
+                    default-domain)
+            mayor (some-> home (get-in [:data :mayor]) str not-empty)]
+        (if (or (= stated own) (= mayor (str (:id seat))))
+          (t/allow)
+          (t/deny {:vars {:domain stated :own own}}))))))
+
 (defn- take-the-domain
-  "The birth's other stamp: a ticket with a parent takes what its parent
-  stores, and any other takes the filing seat's domain. Nothing is
-  written when there is none to take."
+  "The birth's other stamp. A ticket that names a domain keeps it; one
+  with a parent takes what its parent stores, and any other takes the
+  filing seat's domain. Nothing is written when there is none to take.
+
+  A SEAT THAT NAMES ANOTHER DOMAIN IS ASKING IT (ticket 775b6427). The
+  ticket stores the asking domain in `requested_by`, and its priority
+  is the receiving mayor's to set: what was asked moves to
+  `asked_priority` and the ticket lands at `fired-seat-priority`."
   [row ctx]
-  (let [parent (some-> (get-in row [:data :parent]) str not-empty)
-        domain (if parent
-                 (when-some [read' (:read ctx)]
-                   (some-> (read' :ticket parent)
-                           (get-in [:data :domain]) str not-empty))
-                 (seat-domain-name ctx))]
-    (cond-> row domain (assoc-in [:data :domain] domain))))
+  (let [stated (some-> (get-in row [:data :domain]) str not-empty)
+        parent (some-> (get-in row [:data :parent]) str not-empty)
+        domain (cond
+                 stated stated
+                 parent (when-some [read' (:read ctx)]
+                          (some-> (read' :ticket parent)
+                                  (get-in [:data :domain]) str not-empty))
+                 :else (seat-domain-name ctx))
+        asker (when (and stated (filing-seat ctx))
+                (or (seat-domain-name ctx) default-domain))]
+    (cond-> row
+      domain (assoc-in [:data :domain] domain)
+      (and asker (not= asker stated))
+      (-> (assoc-in [:data :requested_by] asker)
+          (update :data #(if (some? (:asked_priority %))
+                           %
+                           (assoc % :asked_priority (:priority %)
+                                  :priority fired-seat-priority)))))))
 
 (defn- stamp-the-birth
   [row ctx]
@@ -1497,6 +1680,7 @@
    ;; and the doors below are how it becomes ready and stops being.
    :create-schema (into [:map] (concat stated-fields birth-fields))
    :create-guards [the-parent-is-open-at-birth the-merge-order-makes-no-cycle
+                   the-domain-is-one-we-have only-a-mayor-asks-another-domain
                    the-parent-is-not-waited-on]
    ;; a fired seat's follow-up lands at 4 and a groomer raises it; a
    ;; person or an interactive seat is born at what it named
@@ -1547,7 +1731,8 @@
     ;; before it changes.
     :groom
     {:from #{:draft} :to :open
-     :guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase]
+     :guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase
+              the-receiving-mayor-answers-an-ask]
      :handler groom-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Groom" :style :primary :order 1
@@ -1568,6 +1753,7 @@
                          {:label "Priority (0 first, 4 last)"
                           :help "The queue's own order: 0 is what the house wants next."}}
               [:int {:min 0 :max 4}]]]
+     :guards [the-receiving-mayor-answers-an-ask]
      :handler rank-the-ticket
      :record true
      :edit {:prefill [:priority]}
@@ -1772,6 +1958,25 @@
      :display {:label "Return to draft" :order 10
                :description "The last ticket it waited on ended — back to draft, to be groomed"}}
 
+    ;; THE DECLINE'S WAY BACK (ticket 775b6427). The drop of a ticket
+    ;; that names this one in `needed_by` walks it, and no hand does:
+    ;; the other domain said no, so the asker leaves the queue, or its
+    ;; wait, for draft with the reason. No new state.
+    :turn_back
+    {:from #{:draft :open :blocked} :to :draft
+     :guards [only-a-decline-turns-the-asker-back]
+     :handler note-the-decline
+     :input [:map
+             [:shelved_because {:x-display {:hidden true
+                                            :label "Why it was declined"}}
+              [:string {:min 1 :max 480}]]]
+     ;; the engine writes the decline's sentence, with no version in hand
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The domain this ticket asked for work dropped that work, so this ticket goes to draft with the reason and waits on nothing. A person's groom puts it back in the queue once its mayor has planned again."}
+     :display {:label "Declined" :order 18
+               :description "The domain it asked said no — back to draft, to be planned again"}}
+
     :defer
     {:from #{:open} :to :deferred
      :input [:map
@@ -1814,7 +2019,8 @@
     :drop
     {:from #{:draft :open} :to :dropped
      :input close-input
-     :guards [children-are-finished]
+     ;; a drop of a ticket another domain asked for is the decline
+     :guards [children-are-finished the-receiving-mayor-answers-an-ask]
      :handler drop-the-ticket
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
@@ -1998,7 +2204,8 @@
     "`merge_after` is four doors, one self-loop for each state a change can wait in (`draft`, `open`, `in_review`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. `merge_after_in_review` is the one door a hand may take on a ticket under review, because it holds the merge and moves no state."
     "`reparent` is three doors, one self-loop for each state a hand shapes the tree in (`draft`, `open`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. It is not a field of `restate`: a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse on that door. A ticket under review or deferred is not re-parented; it is when it returns."
     "`move_domain` is five doors, one self-loop for each state a ticket can wait in, for `restate`'s reason: a v10 action declares one `:to`. Three are a hand's (`draft`, `open`, `blocked`, the states a hand shapes the tree in, as `reparent`). `move_domain_in_review` and `move_domain_deferred` are hidden and open only inside the move of a ticket above, so a ticket under review or deferred goes with its parent, and is moved alone when it returns. An ended ticket takes no door and keeps the domain it ended in; the tickets under it are still walked."
-    "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."]
+    "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."
+    "`the-receiving-mayor-answers-an-ask`, on `groom`, `prioritize` and `drop`, declares `:reads [:principal]` and reads more: the receiving domain's row and the caller's grants, through the ctx hook, for a ticket one domain asked of another. With no hook it allows, which is the check tier's answer for every guard that reaches past its `:reads`. Declaring those kinds would take `groom`'s scenarios out of the check tier, and no declaration in this module names the seat kind. Its law is proved in factory10.ticket-test over a fake hook."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket
                an-epic-is-not-groomed-without-its-showcase
