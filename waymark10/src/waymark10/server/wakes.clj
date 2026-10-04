@@ -772,8 +772,9 @@
   "The most walk rows one count of the unclaimed rows reads."
   200)
 
-(defn- in-flight
-  "How many fires of this seat are runs that have not sat yet. A fire
+(defn- flying-fires
+  "The fires of this seat that are runs that have not sat yet, oldest
+  first, each as `{:at … :text …}`. A fire
   goes out before its run opens a sitting, so a burst of wakes that
   counted open sittings alone would read every slot free and fire past
   the ceiling. The fires of the last `in-flight-seconds` are paired,
@@ -791,8 +792,9 @@
                                             :resource-id (str seat-id)}
                                      {:limit in-flight-page :newest-first true})
                   (filter #(= "fire" (some-> (:action %) name)))
-                  (keep #(recent (:at %)))
-                  (sort))
+                  (keep #(when-some [i (recent (:at %))]
+                           {:at i :text (get-in % [:inputs :text])}))
+                  (sort-by :at))
              ;; the row's own birth, on the clock the log's `at` is
              ;; written by; a missed sitting is the sweep's record of a
              ;; fire older than the window, and took none of these
@@ -804,11 +806,34 @@
                   (sort))]))]
     (loop [fs fires ss starts]
       (cond
-        (empty? fs) 0
-        (empty? ss) (count fs)
+        (empty? fs) nil
+        (empty? ss) fs
         ;; a sitting born before the oldest fire left took none of them
-        (.isBefore ^Instant (first ss) ^Instant (first fs)) (recur fs (rest ss))
+        (.isBefore ^Instant (first ss) ^Instant (:at (first fs)))
+        (recur fs (rest ss))
         :else (recur (rest fs) (rest ss))))))
+
+(defn- in-flight
+  "How many fires of this seat are runs that have not sat yet
+  (`flying-fires`)."
+  [eng seat-id ^Instant at]
+  (count (flying-fires eng seat-id at)))
+
+(defn- spoken-for?
+  "Is the walk row this wake's `text` names already another run's? The
+  slots count rows and not WHICH row, so with a second row free a
+  second wake on one row read a free slot for a free row and fired a
+  run that sat, was told its row was held, and stopped (ticket
+  884fff20). The row is spoken for when a run still on its way to a
+  sit was fired with a text that names it (`flying-fires`), or an open
+  sitting of the seat holds it. A text that names no walk row is
+  spoken for by nobody."
+  [eng seat-row text ^Instant at]
+  (when-some [named (seats/fire-names eng seat-row text)]
+    (boolean
+     (or (some #(= named (seats/fire-names eng seat-row (:text %)))
+               (flying-fires eng (str (:id seat-row)) at))
+         (contains? (seats/open-walked-rows eng (:id seat-row)) named)))))
 
 (defn- walk-query
   "The kind the seat's sit walks and the filter it walks it under, as
@@ -973,6 +998,18 @@
         ;; the fuel wall: the wake waits, and says it was held
         (at-the-fuel-wall? eng (raw-row eng :seat (:id seat)) at)
         (hold-at-the-wall! eng row (raw-row eng :seat (:id seat)) at)
+
+        ;; the row the wake names is already a run's (ticket 884fff20):
+        ;; a seat of several slots is not held by `damped?` while another
+        ;; row is free, and its fire would start a run that sits and is
+        ;; told the row is held. The run that has the row answers for
+        ;; it, and its close fires again while a row is left free.
+        (and (< 1 (long (or (:max-open seat) 1)))
+             (some? text)
+             (spoken-for? eng (raw-row eng :seat (:id seat)) text at))
+        (do (warn! "seat " (:id seat) " was woken on " (:resource-id t)
+                   ", which a run of it already has — its wake fires nothing")
+            nil)
 
         ;; the row the wake names is withheld by name (ticket 80a8e60b):
         ;; a groom that leaves a ticket open beside its submitted change

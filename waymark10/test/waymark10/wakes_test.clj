@@ -3122,6 +3122,70 @@
       (is (= :schema-invalid (:waymark10/problem p)))
       (is (str/includes? (pr-str (:errors p)) "max_open_sittings")))))
 
+;; Two wakes that land back to back, with no sitting opened between
+;; them, are one run when they name one row. The slots count rows and
+;; not WHICH row: with a second row free, the second wake read a free
+;; slot for a free row and fired a run that sat, was told its row was
+;; held, and stopped (ticket 884fff20).
+
+(deftest two-wakes-back-to-back-fire-one-run-for-one-row
+  (let [wn :wake-twice
+        fn' :wake-twice-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        wide-seat (fn [nm batch]
+                    (:seat (linked-seat! nm
+                                         {:scope [{:kind "wake_item"
+                                                   :actions ["complete" "touch"]
+                                                   :filter {:batch batch}}]
+                                          :walk "wake_item"
+                                          :wake_on [{:kind "wake_item"
+                                                     :actions ["touch"]}]
+                                          :max_open_sittings 8}
+                                         fn')))]
+
+    (testing "one walkable row and two wakes yield exactly one release"
+      (let [batch "twice-one-row"
+            seat (wide-seat "twiceoneclerk" batch)
+            row (item! batch)]
+        (item-do! row :touch)
+        (item-do! row :touch)
+        (drain-wakes! wn)
+        (is (= 1 (count (seat-fires seat)))
+            "the first run is in flight and the one row is its own")
+        (seat-do! seat :retire)))
+
+    (testing "a second free row does not let the same row fire twice"
+      (let [batch "twice-two-rows"
+            seat (wide-seat "twicetwoclerk" batch)
+            [a b] (vec (repeatedly 2 #(item! batch)))]
+        (item-do! a :touch)
+        (item-do! a :touch)
+        (drain-wakes! wn)
+        (is (= 1 (count (seat-fires seat)))
+            "the run in flight already names that row")
+        (item-do! b :touch)
+        (drain-wakes! wn)
+        (is (= 2 (count (seat-fires seat)))
+            "the other row's own wake still fires: a free slot for a free row")
+        (seat-do! seat :retire)))
+
+    (testing "a wake that names a row an open sitting holds fires nothing"
+      (let [batch "twice-held-row"
+            seat (wide-seat "twiceheldclerk" batch)
+            [a b] (vec (repeatedly 2 #(item! batch)))
+            s (sitting! seat)]
+        (seats/claim-rows! *eng* s [(str a)])
+        (item-do! a :touch)
+        (drain-wakes! wn)
+        (is (empty? (seat-fires seat))
+            "its run would sit, be told the row is held, and stop")
+        (item-do! b :touch)
+        (drain-wakes! wn)
+        (is (= 1 (count (seat-fires seat))))
+        (close-sitting! s)
+        (seat-do! seat :retire)))))
+
 (deftest a-count-wake-counts-only-the-rows-no-open-sitting-holds
   (let [wn :wake-held-rows
         fn' :wake-held-rows-fires

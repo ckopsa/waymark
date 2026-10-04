@@ -6654,6 +6654,30 @@
       (when-not (contains? open named)
         (grace-lifts-at eng seat-row [named] now)))))
 
+(defn fire-names
+  "The walk row a fire's `text` names, as the sit reads it (`named-row`,
+  read back to its ticket by `named-walk-row`), or nil when it names
+  none."
+  [eng seat-row text]
+  (some->> (named-row eng seat-row text)
+           (named-walk-row eng (get-in seat-row [:data :walk]))))
+
+(defn open-walked-rows
+  "The walk row ids the OPEN sittings of this seat hold, as a set.
+  `claimed-rows` less the rows a closed sitting's grace holds: those
+  are `fire-deferred-until`'s to say."
+  [eng seat-id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (into #{}
+              (comp (mapcat #(get-in % [:data :walked_rows]))
+                    (keep #(some-> % str not-empty)))
+              (store/query-rows st tx :sitting
+                                {:seat (str seat-id) :state :open}
+                                {:limit open-sitting-page
+                                 :newest-first true}))))))
+
 (defn- ticket-ended?
   "Has the ticket `id` ended, `done` or `dropped`? False for a ticket
   the store does not hold."
