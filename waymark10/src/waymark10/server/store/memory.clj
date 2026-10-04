@@ -96,7 +96,7 @@
 
 (defn- cond-matches?
   "One cond against one stored row — the grammar's Postgres meaning."
-  [row {:keys [target field cast op value values]}]
+  [row {:keys [target field cast op value values absent?]}]
   (if (= :in-any op)
     (let [arr (get-in row [:data (keyword field)])]
       (boolean (and (sequential? arr)
@@ -108,8 +108,11 @@
       (if (= :set? op)
         ;; presence is the one op a SQL NULL answers instead of failing
         (= (boolean value) (some? text))
-        ;; SQL NULL: a nil left side fails every comparison
-        (when (some? text)
+        ;; SQL NULL: a nil left side fails every comparison — unless the
+        ;; cond carries :absent? (the kind's :absent-as), which says the
+        ;; absent row belongs in this answer
+        (if (nil? text)
+          (boolean absent?)
           (let [cast (if (contains? #{:state :id} target) "text" cast)
                 lval (coerce cast text)]
             (case op
@@ -457,7 +460,7 @@
                   (take (long (or limit 100))))
             (order-rows rows order-by desc then-by))))
 
-  (facet-counts [_ _tx kind field conds array?]
+  (facet-counts [_ _tx kind field conds array? absent-as]
     (let [rows (filter #(matches-all? % conds)
                        (vals (get-in @state [:tables kind])))
           vals* (if (= :state field)
@@ -466,7 +469,7 @@
                             (let [v (get-in row [:data field])]
                               (if array?
                                 (map json-text (when (sequential? v) v))
-                                [(json-text v)])))
+                                [(or (json-text v) absent-as)])))
                           rows))]
       (into (sorted-map) (frequencies (remove nil? vals*)))))
 

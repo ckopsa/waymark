@@ -177,10 +177,12 @@
     a sortable-timestamp over the engine column of that name, nil over
     created_at — then each :then-by key in order among the ties, and id
     tiebreak always, so pages never overlap.")
-  (facet-counts [st tx kind field conds array?]
+  (facet-counts [st tx kind field conds array? absent-as]
     "Observed value → count for one faceted field under the same conds
     the rows match — a real GROUP BY. array? true unrolls a JSON array
-    field (one row counts once per member).")
+    field (one row counts once per member). absent-as, when not nil, is
+    the value a scalar field's absent rows count under (the kind's
+    :absent-as); nil leaves them uncounted.")
   (load-draft [st tx kind id action audience]
     "→ {:values … :base-version … :updated-at …} or nil.")
   (save-draft! [st tx kind id action audience values base-version]

@@ -292,7 +292,7 @@
   fails both, SQL semantics), :set? (IS [NOT] NULL over the extracted
   text), and :contains (ILIKE over the text, the value's wildcards
   escaped)."
-  [{:keys [target field cast op value values]}]
+  [{:keys [target field cast op value values absent?]}]
   (if (= :in-any op)
     ;; the ?| operator (JDBC-escaped ??|), not jsonb_exists_any: the
     ;; planner matches INDEXES through operators only, so the function
@@ -320,19 +320,28 @@
                    "date" "waymark10_date(?)"
                    "timestamptz" "waymark10_ts(?)"
                    (str "(?)::" cast)))]
-      (case op
-        :in [(str lval " IN (" (str/join ", " (repeat (count values) rval)) ")")
-             (vec values)]
-        :not-in [(str lval " NOT IN ("
-                      (str/join ", " (repeat (count values) rval)) ")")
-                 (vec values)]
-        :set? [(str lval (if value " IS NOT NULL" " IS NULL")) []]
-        :contains [(str lval " ILIKE ? ESCAPE '\\'")
-                   [(str "%" (escape-like value) "%")]]
-        [(str lval " " (or (get cond-ops op)
-                           (throw (ex-info (str "unknown cond op " op) {:op op})))
-              " " rval)
-         [value]]))))
+      (let [[sql params]
+            (case op
+              :in [(str lval " IN ("
+                        (str/join ", " (repeat (count values) rval)) ")")
+                   (vec values)]
+              :not-in [(str lval " NOT IN ("
+                            (str/join ", " (repeat (count values) rval)) ")")
+                       (vec values)]
+              :set? [(str lval (if value " IS NOT NULL" " IS NULL")) []]
+              :contains [(str lval " ILIKE ? ESCAPE '\\'")
+                         [(str "%" (escape-like value) "%")]]
+              [(str lval " " (or (get cond-ops op)
+                                 (throw (ex-info (str "unknown cond op " op)
+                                                 {:op op})))
+                    " " rval)
+               [value]])]
+        ;; :absent? (the kind's :absent-as): the absent row belongs in
+        ;; this answer — the coalesce, spelled as OR IS NULL so the
+        ;; comparison itself stays the one an index can serve
+        (if absent?
+          [(str "(" sql " OR " lval " IS NULL)") params]
+          [sql params])))))
 
 ;; ── elected singletons (pg_advisory_lock) ───────────────────────────
 ;; Lived in server/coherence.clj until waymark-db9.4. It moved here
@@ -827,9 +836,11 @@
       (mapv row->map (jdbc/execute! tx (into [sql] (mapcat second parts))
                                     jdbc-opts))))
 
-  (facet-counts [_ tx kind field conds array?]
+  (facet-counts [_ tx kind field conds array? absent-as]
     (let [table (table-for tables kind)
           parts (map cond-sql conds)
+          ;; a scalar field's absent rows count under the declared value
+          absent (when-not (or (= :state field) array?) absent-as)
           expr (cond
                  (= :state field) "state"
                  ;; rows without the array carry JSON null (a scalar —
@@ -839,15 +850,21 @@
                           (str "jsonb_array_elements_text(CASE WHEN"
                                " jsonb_typeof(data->'" f "') = 'array'"
                                " THEN data->'" f "' ELSE '[]'::jsonb END)"))
-                 :else (str "data->>'"
-                            (store/definition-checked-name field) "'"))
+                 :else (let [col (str "data->>'"
+                                      (store/definition-checked-name field)
+                                      "'")]
+                         (if (some? absent)
+                           (str "coalesce(" col ", ?)")
+                           col)))
           sql (str "SELECT " expr " AS v, count(*) AS n FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts))))
                    " GROUP BY 1 ORDER BY 1")]
       (into (sorted-map)
             (keep (fn [r] (when (some? (:v r)) [(:v r) (:n r)])))
-            (jdbc/execute! tx (into [sql] (mapcat second parts)) jdbc-opts))))
+            (jdbc/execute! tx (into (cond-> [sql] (some? absent) (conj absent))
+                                    (mapcat second parts))
+                           jdbc-opts))))
 
   (load-draft [_ tx kind id action audience]
     (when-some [r (jdbc/execute-one!

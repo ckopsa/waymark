@@ -109,6 +109,10 @@
    :computed
    ;; collection surface
    :filterable :sortable :faceted :worksheet :default-filters :views
+   ;; {field value}: the value a row with NO stored value filters (and
+   ;; facets) as — field=<value> matches absent rows too, any other
+   ;; value skips them; nothing is stored, nothing is backfilled
+   :absent-as
    ;; edges
    :owns :links :related
    ;; advertisement
