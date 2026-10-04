@@ -881,6 +881,14 @@ key finds its sitting among the open sittings, by hash. The door is
 outside the require-auth gate for a GET, as the transcript door is for
 a POST.
 
+An interactive seat that states no `inbox` has one by default, derived
+and never stored: every action of `ticket`, `change`, `held_call`,
+`approval_request`, `seat` and `sitting`. A fired seat has an inbox
+only when it states one. A sit that reuses the open sitting for the
+same harness `session` mints a new key and leaves the earlier keys
+answering, so a stream is not cut; a new sitting gets a fresh key, and
+the close of a sitting ends every key of it.
+
 - The door reads the transition log after the event `after` names.
   With no `after`, it reads from the sitting's start.
 - It keeps only the transitions whose kind the seat's `inbox.only`

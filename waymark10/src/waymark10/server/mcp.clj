@@ -4815,10 +4815,12 @@
             transcript-key (when sitting
                              (transcripts/issue-key! eng seat sitting))
             ;; g''' · the inbox's key, for a seat that declares an
-            ;; `inbox`: a fresh key at each sit, alive while the
-            ;; sitting is open (seats/issue-inbox-key!)
+            ;; `inbox` and for every interactive seat: a fresh key at
+            ;; each sit, alive while the sitting is open. A re-sit of
+            ;; the same harness session stops no earlier key
+            ;; (seats/issue-inbox-key!)
             inbox-key (when sitting
-                        (seats/issue-inbox-key! eng seat sitting))
+                        (seats/issue-inbox-key! eng seat sitting harness))
             ;; g'''' · the outside feed's token, for a seat that declares
             ;; a `feed_url`: a fresh token at each sit, alive while the
             ;; sitting is open and 35 minutes at most. A re-sit stops
