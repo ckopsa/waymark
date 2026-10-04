@@ -83,7 +83,7 @@
 (deftest a-draft-is-groomed-by-a-person-and-never-by-a-seat
   (testing "a person at a draft meets groom, and the doors that shape it"
     (is (= #{:restate :groom :block :complete :drop :merge_after_draft
-             :reparent_draft}
+             :reparent_draft :move_domain_draft}
            (offers (at :draft) (ctx the-person)))
         "prioritize and defer are absent: a draft is not in the queue,
          so it has no rank there and nothing to park"))
@@ -227,7 +227,7 @@
          and nothing holds it"))
   (testing "a person meets the same doors and the way back to draft"
     (is (= #{:prioritize :block :defer :complete :drop :ungroom :merge_after
-             :reparent}
+             :reparent :move_domain}
            (offers (at :open) (ctx the-person)))
         "what a seat may reach at all is the grant's question, not this
          kind's; ungroom is the one door here that is a person's")))
@@ -235,7 +235,7 @@
 (deftest a-blocked-ticket-is-out-of-the-queue-and-waits
   (let [row (at :blocked {:blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]})]
     (is (= #{:block :unblock :merge_after_blocked :reparent_blocked
-             :restate_blocked}
+             :restate_blocked :move_domain_blocked}
            (offers row (ctx the-person)))
         "restate the blockers, clear them, state what it merges after,
          what it is a piece of or what it asks — nothing else, because

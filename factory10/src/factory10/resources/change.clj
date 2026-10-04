@@ -855,6 +855,33 @@
       (t/allow)
       (t/deny))))
 
+(defguardfn only-its-tickets-move-writes-the-domain
+  {:reads [:within]
+   :hide true
+   :explain "The domain of a change is its ticket's: a move of the ticket into another domain writes it here, inside that move. A person and a model read it."}
+  [_row _inp ctx]
+  ;; ticket 66d080b0: the ticket's five `move_domain` doors, and no hand
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :ticket kind)
+             (contains? #{:move_domain :move_domain_draft :move_domain_blocked
+                          :move_domain_in_review :move_domain_deferred}
+                        action))
+      (t/allow)
+      (t/deny))))
+
+(defhandler write-the-tickets-domain [row inp _ctx]
+  ;; its ticket moved into another domain, and the change goes with it
+  (assoc-in row [:data :domain] (:domain inp)))
+
+(def ^:private take-domain-input
+  [:map
+   [:domain {:not-a-ref "The name of a domain: a word, not a row id."
+             :x-display {:hidden true :raw true :label "The domain"}}
+    [:string {:min 1 :max 64}]]])
+
+(def ^:private take-domain-description
+  "Its ticket moved into another domain, and the change went with it")
+
 (defguardfn only-a-person-closes-a-change
   {:reads [:principal :within]
    :hold true
@@ -1372,14 +1399,15 @@
                      :x-display {:hidden true}}
      [:maybe [:string {:max 500}]]]
     ;; the domain's NAME, taken at birth from the ticket this change
-    ;; was built for (ticket 20fab5f9); no door writes it after
+    ;; was built for (ticket 20fab5f9), and written again by `take_domain`
+    ;; when that ticket is moved (ticket 66d080b0)
     [:domain {:optional true
               :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
               :examples ["factory"]
               :x-display
               {:raw true
                :label "Domain that wants the work"
-               :help "The name of the domain of the ticket this change was built for, written when the change is born. A change that stores none is in factory."}}
+               :help "The name of the domain of the ticket this change was built for, written when the change is born and again when that ticket is moved into another domain. A change that stores none is in factory."}}
      [:maybe [:string {:max 64}]]]]
    ;; THE BIRTH DOOR IS THE MIRROR'S, AND IT IS HIDDEN. A person meets
    ;; no create form for this kind. The source mints the row with what
@@ -1730,6 +1758,50 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Adoption noted" :order 19
                :description "The mirror says a landed pull request is waiting for its row"}}
+
+    ;; THE TICKET'S MOVE (ticket 66d080b0). A ticket that moves into
+    ;; another domain takes its open changes with it, inside its own
+    ;; door. Hidden, and no hand's; one self-loop for each state a
+    ;; change is still live in.
+    :take_domain
+    {:from #{:open} :to :open
+     :guards [only-its-tickets-move-writes-the-domain]
+     :handler write-the-tickets-domain
+     :input take-domain-input
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its ticket" :order 23
+               :description take-domain-description}}
+
+    :take_domain_submitted
+    {:from #{:submitted} :to :submitted
+     :guards [only-its-tickets-move-writes-the-domain]
+     :handler write-the-tickets-domain
+     :input take-domain-input
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its ticket" :order 24
+               :description take-domain-description}}
+
+    :take_domain_failing
+    {:from #{:failing} :to :failing
+     :guards [only-its-tickets-move-writes-the-domain]
+     :handler write-the-tickets-domain
+     :input take-domain-input
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its ticket" :order 25
+               :description take-domain-description}}
+
+    :take_domain_stuck
+    {:from #{:stuck} :to :stuck
+     :guards [only-its-tickets-move-writes-the-domain]
+     :handler write-the-tickets-domain
+     :input take-domain-input
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its ticket" :order 26
+               :description take-domain-description}}
 
     ;; ── THE BRANCH, MINTED AGAIN (bead waymark-fp62.6.3.11) ───────
     ;; A seat-born row writes its head branch at BIRTH, from the
