@@ -1037,6 +1037,18 @@
 
 ;; ── :change — one pull request, mirrored ────────────────────────────
 
+(defn- take-the-tickets-domain
+  "The birth's stamp (ticket 20fab5f9): a change built for a ticket takes
+  the domain that ticket stores. A change the forge mints, and one
+  whose ticket stores none, is left with none and filters as factory."
+  [row ctx]
+  (let [born (str (get-in row [:data :born_from]))
+        domain (when-some [read' (:read ctx)]
+                 (when-some [[_ id] (re-matches #"ticket:(.+)" born)]
+                   (some-> (read' :ticket id)
+                           (get-in [:data :domain]) str not-empty)))]
+    (cond-> row domain (assoc-in [:data :domain] domain))))
+
 (defresource change
   {:kind :change
    :plural "changes"
@@ -1069,7 +1081,10 @@
                 :repository #{:eq}
                 :head_branch #{:eq}
                 :head_sha #{:eq}
-                :author #{:eq}}
+                :author #{:eq}
+                :domain #{:eq :in}}
+   ;; a change born before domains stores none, and is factory's
+   :absent-as {:domain "factory"}
    ;; the collection a reader opens IS the pull requests that are
    ;; still live (inbox_item's spelling) — and a change a seat has
    ;; pushed is still live: the checks run, the review lands, and the
@@ -1355,12 +1370,23 @@
     ;; written by `supersede` and by nothing else. Hidden, as the url is.
     [:superseded_by {:optional true :not-a-ref "The web address (a URL) of the pull request that merged in this one's place, not a row id."
                      :x-display {:hidden true}}
-     [:maybe [:string {:max 500}]]]]
+     [:maybe [:string {:max 500}]]]
+    ;; the domain's NAME, taken at birth from the ticket this change
+    ;; was built for (ticket 20fab5f9); no door writes it after
+    [:domain {:optional true
+              :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
+              :examples ["factory"]
+              :x-display
+              {:raw true
+               :label "Domain that wants the work"
+               :help "The name of the domain of the ticket this change was built for, written when the change is born. A change that stores none is in factory."}}
+     [:maybe [:string {:max 64}]]]]
    ;; THE BIRTH DOOR IS THE MIRROR'S, AND IT IS HIDDEN. A person meets
    ;; no create form for this kind. The source mints the row with what
    ;; GitHub answered; everything but the identity is optional,
    ;; because a first read does not always carry the counts.
    :create-guards [the-mirror-writes-this-row]
+   :on-create take-the-tickets-domain
    :create-schema
    [:map
     ;; github:owner/repo#number from the source, and <kind>:<row id>
