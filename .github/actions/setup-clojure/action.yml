@@ -158,9 +158,23 @@ runs:
         # Pinned by version, not /latest/: a self-hosted runner and a
         # GitHub-hosted one must not end up on different toolchains.
         url="https://github.com/clojure/brew-install/releases/download/${CLI_VERSION}/linux-install.sh"
-        # Retried: one 500 from the release host failed the step before
-        # a single test ran (#811, and main at cc8bb636).
-        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/linux-install.sh "$url"
-        sudo bash /tmp/linux-install.sh
+        # RETRIED, BECAUSE THE RELEASE HOST BLINKS. 2026-10-04: one
+        # test10 shard of nine got a 500 for this script ("curl: (22)")
+        # and turned main red on a commit whose eight siblings passed.
+        # curl's own --retry covers the script; the loop covers the
+        # tarball the script fetches for itself, with the same host
+        # behind it.
+        for attempt in 1 2 3 4; do
+          if curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o /tmp/linux-install.sh "$url" \
+             && sudo bash /tmp/linux-install.sh; then
+            break
+          fi
+          if [ "$attempt" -eq 4 ]; then
+            echo "Clojure CLI ${CLI_VERSION} did not install in 4 attempts" >&2
+            exit 1
+          fi
+          echo "install attempt ${attempt} failed; waiting $((attempt * 5))s" >&2
+          sleep $((attempt * 5))
+        done
         clojure --version
 
