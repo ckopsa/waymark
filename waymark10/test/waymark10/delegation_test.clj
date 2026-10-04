@@ -729,6 +729,40 @@
                                            :charter "Decide something else."})]
         (is (= 202 (:status asked)) (pr-str (json asked)))))))
 
+(deftest a-domains-mayor-opens-a-seat-inside-the-headroom-with-no-tap
+  (let [{:keys [h]} (world)
+        {:keys [mayor as]} (open-mayor! h)
+        house (domain! h "household" {:mayor mayor :budget_usd_per_week 20})
+        garden (domain! h "garden" {:budget_usd_per_week 20})
+        _ (persons-seat! h "house-clerk" {:domain house})]
+    (testing "past the ceiling's per-seat cap, inside the headroom: served, and born parked"
+      (let [made (author! h as "house-cook" {:domain house :budget_usd_per_week 9})
+            row (get-row h "seats" (id-of made) person)]
+        (is (= 201 (:status made)) (pr-str (json made)))
+        (is (= "parked" (:state row)) "the first unpark is still the person's")
+        (is (= mayor (get-in row [:data :authored_by])))
+        (is (nil? (get-in row [:data :approved_by])))
+        (is (== 9 (budget-of h (id-of made))))))
+    (testing "past the headroom: refused, not held, and the sentence names the three numbers"
+      (let [refused (author! h as "house-band" {:domain house :budget_usd_per_week 19})
+            said (pr-str (json refused))]
+        (is (= 409 (:status refused)) said)
+        (is (str/includes? said "come to 21 dollars"))
+        (is (str/includes? said "budget is 20"))
+        (is (str/includes? said "headroom today is 18"))))
+    (testing "the rest of the ceiling still judges the create"
+      (let [wide (author! h as "house-wide"
+                          {:domain house
+                           :budget_usd_per_week 9
+                           :scope [{:kind "dl_ticket" :actions ["finish"]}]})]
+        (is (= 202 (:status wide)) (pr-str (json wide)))
+        (is (str/includes? (str (:why (json wide))) "repo=bench"))))
+    (testing "another domain: the ceiling's cap judges the money as before"
+      (let [rich (author! h as "garden-rich" {:domain garden :budget_usd_per_week 9})]
+        (is (= 202 (:status rich)) (pr-str (json rich)))
+        (is (str/includes? (str (:why (json rich)))
+                           "A ceiling budget_usd_per_week of 9 would have admitted it"))))))
+
 (deftest a-move-takes-from-one-seat-and-gives-to-another
   (let [{:keys [h eng]} (world)
         house (domain! h "household" {})
