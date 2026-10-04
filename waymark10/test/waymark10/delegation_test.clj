@@ -763,6 +763,28 @@
         (is (str/includes? (str (:why (json rich)))
                            "A ceiling budget_usd_per_week of 9 would have admitted it"))))))
 
+(deftest a-mayors-create-that-serves-any-waits-for-the-person
+  (let [{:keys [h eng]} (world)
+        {:keys [mayor as]} (open-mayor! h)
+        house (domain! h "household" {:mayor mayor :budget_usd_per_week 20})]
+    (testing "inside the headroom and under the ceiling, yet held: any is the person's to say"
+      (let [asked (author! h as "house-desk" {:domain house :serves "any"})
+            why (str (:why (json asked)))]
+        (is (= 202 (:status asked)) (pr-str (json asked)))
+        (is (true? (:held (json asked))))
+        (is (str/includes? why "Invariant 2"))
+        (is (str/includes? why "serves any"))
+        (is (nil? (store/with-tx (:storage eng)
+                    (fn [tx] (first (store/query-rows (:storage eng) tx :seat
+                                                      {:name "house-desk"} {})))))
+            "no seat was written")))
+    (testing "own is the mayor's to state with no tap"
+      (let [made (author! h as "house-cook" {:domain house :serves "own"})]
+        (is (= 201 (:status made)) (pr-str (json made)))))
+    (testing "a person's create takes any as before"
+      (let [desk (persons-seat! h "house-service" {:domain house :serves "any"})]
+        (is (= "any" (get-in (get-row h "seats" desk person) [:data :serves])))))))
+
 (deftest a-move-takes-from-one-seat-and-gives-to-another
   (let [{:keys [h eng]} (world)
         house (domain! h "household" {})

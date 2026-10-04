@@ -2716,7 +2716,7 @@
               :x-display
               {:label "Whom it serves"
                :choices serves-choices
-               :help "own: this seat works for its own domain. any: it is a service, and the mayor of a domain that asked for a ticket in this seat's repository grooms and ranks that ticket. Leave it empty for own."}}
+               :help "own: this seat works for its own domain. any: it is a service, and the mayor of a domain that asked for a ticket in this seat's repository grooms and ranks that ticket. A person sets any: when a seat that opens seats for its person asks for any, the call waits for that person's tap. Leave it empty for own."}}
      [:maybe [:enum "own" "any"]]]
     ;; THE DOMAIN THIS SEAT IS IN (epic aff24e84, piece 1). NO DEFAULT
     ;; IS WRITTEN: a seat with nothing here reads as being in
@@ -3076,7 +3076,7 @@
               :x-display
               {:label "Whom it serves"
                :choices serves-choices
-               :help "own: this seat works for its own domain. any: it is a service, and the mayor of a domain that asked for a ticket in this seat's repository grooms and ranks that ticket. Leave it empty for own."}}
+               :help "own: this seat works for its own domain. any: it is a service, and the mayor of a domain that asked for a ticket in this seat's repository grooms and ranks that ticket. A person sets any: when a seat that opens seats for its person asks for any, the call waits for that person's tap. Leave it empty for own."}}
      [:maybe [:enum "own" "any"]]]
     [:wake_on {:optional true
                :examples [wake-on-example]
@@ -3287,7 +3287,7 @@
                        :x-display
                        {:label "Whom it serves"
                         :choices serves-choices
-                        :help "own or any, stated again. Leave it out and the seat serves whom it serves today; clear it and the seat serves its own domain."}}
+                        :help "own or any, stated again. Leave it out and the seat serves whom it serves today; clear it and the seat serves its own domain. A person sets any: from a seat that opens seats for its person, a change to any waits for that person's tap."}}
               [:maybe [:enum "own" "any"]]]
              [:wake_on {:optional true
                         :examples [wake-on-example]
