@@ -252,7 +252,7 @@
   6)
 
 (def ^:private outcome-help
-  (str "Written by the engine at the close; the first that holds. submitted: a change was submitted under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal. cut_short: closed by the hook in under "
+  (str "Written by the engine at the close; the first that holds. submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal. cut_short: closed by the hook in under "
        (:cut-short-turns health-thresholds)
        " turns. idle: none of these; it moved nothing."))
 
@@ -1360,7 +1360,7 @@
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
    :release_grace_seconds :health_window :health_alerts :health_breaker
-   :delegates])
+   :delivers :delegates])
 
 (def ^:private wall-inputs
   "The seat field each wall is judged against, for the walls a person
@@ -1687,12 +1687,30 @@
 ;; Pure over the sitting's document, the transitions made under it and
 ;; the earlier sittings of its seat. No model reads any of it.
 
+(defn- moved?
+  "Do the sitting's transitions hold this action on this kind?"
+  [transitions kind action]
+  (boolean (some #(and (= kind (some-> (:kind %) name))
+                       (= action (some-> (:action %) name)))
+                 transitions)))
+
 (defn- change-moved?
   "Do the sitting's transitions hold this action on a change?"
   [transitions action]
-  (boolean (some #(and (= "change" (some-> (:kind %) name))
-                       (= action (some-> (:action %) name)))
-                 transitions)))
+  (moved? transitions "change" action))
+
+(def default-delivers
+  "What a seat that states no `delivers` delivers: a change's submit."
+  [{:kind "change" :action "submit"}])
+
+(defn- delivered?
+  "Do the sitting's transitions hold one of the seat's deliveries?
+  `delivers` is the seat's field; none stated means `default-delivers`."
+  [transitions delivers]
+  (boolean (some #(moved? transitions
+                          (some-> (:kind %) name)
+                          (some-> (:action %) name))
+                 (or (seq delivers) default-delivers))))
 
 (defn- refused-last?
   "Was the newest refusal the sitting's last write: no transition under
@@ -1733,8 +1751,10 @@
   transitions made under it (`sitting-transitions`' rows) and the
   documents of its seat's earlier sittings. `outcomes` names the order
   the first match is taken in, and `health-thresholds` the numbers.
+  `delivers` is the seat's own field: the kind+action pairs that count
+  as `submitted`, a change's submit when the seat states none.
   → {:outcome str :flags [str …]}."
-  [data transitions earlier]
+  [data transitions earlier & [delivers]]
   (let [{:keys [cut-short-turns test-calls read-bytes dropped-share
                 cost-usd refusals]} health-thresholds
         closed (some-> (:closed_by data) name)
@@ -1742,7 +1762,7 @@
         served (:served data)
         refusal (:last_refusal data)
         outcome (cond
-                  (change-moved? transitions "submit") "submitted"
+                  (delivered? transitions delivers) "submitted"
                   (change-moved? transitions "stall") "stalled"
                   (or (= "missed" closed) (true? (:missed data))
                       (and (zero? turns) (empty? served))) "never_sat"
@@ -1800,13 +1820,16 @@
   "The close's last write: `outcome` and `flags`, judged from the row as
   the close leaves it. The transitions are read by the sitting's grant
   from its start to now, and the seat's earlier sittings through the
-  write's own transaction. A ctx with no such hook judges the row
-  alone."
+  write's own transaction. The seat's `delivers` says what counts as
+  submitted. A ctx with no such hook judges the row alone."
   [row ctx]
   (let [data (:data row)
         grant (some-> (:grant data) str not-empty)
         under (:transitions-under ctx)
         find-rows (:find ctx)
+        read' (:read ctx)
+        seat (when read'
+               (some->> (:seat data) str not-empty (read' :seat)))
         moved (when (and grant under)
                 (under grant (->instant (:started_at data)) nil))
         seat-rows (when find-rows
@@ -1814,7 +1837,8 @@
                                {:limit seat-health-page :newest-first true}))]
     (update row :data merge
             (sitting-health data moved
-                            (earlier-sittings seat-rows (:id row) data)))))
+                            (earlier-sittings seat-rows (:id row) data)
+                            (get-in seat [:data :delivers])))))
 
 (defhandler close-sitting [row inp ctx]
   ;; R-10.4: the model's prices are read AT THIS MOMENT, the cost is
@@ -2330,6 +2354,21 @@
             :help "The id of the walk row this fire's text named. The sit that spends the key hands that row, unless another open sitting of the seat already holds it."}}
      [:string {:min 1 :max 128}]]]])
 
+(def ^:private delivers-help
+  "What counts as this seat's delivery, each entry a kind and an action. A sitting that made one of these transitions closes as submitted, so a seat whose work is not a change is not counted cut short or idle. Leave it out and a change's submit is the delivery.")
+
+(def delivers-schema
+  "SEAT HEALTH: what `sitting-health` calls `submitted` for this seat.
+  Absent means `default-delivers`."
+  [:vector {:min 1 :max 16}
+   [:map
+    [:kind {:examples ["change"]
+            :x-display {:label "The kind it moves"}}
+     [:string {:min 1 :max 64}]]
+    [:action {:examples ["submit"]
+              :x-display {:label "The action that delivers"}}
+     [:string {:min 1 :max 64}]]]])
+
 (def delegates-schema
   "THE CEILING (server/delegation, invariant 2). A seat that carries one
   is a delegating seat: its sitter may open and tune other seats, and
@@ -2843,6 +2882,11 @@
                  {:label "What it may author"
                   :help delegates-field-help}}
      [:maybe delegates-schema]]
+    [:delivers {:optional true
+                :x-display
+                {:label "What counts as its delivery"
+                 :help delivers-help}}
+     [:maybe delivers-schema]]
     ;; ── engine-written from here down (absent from the create door
     ;;    and from restate; see the ns docstring's write fence) ───────
     ;; WHO AUTHORED THIS SEAT, AND FOR WHOM (server/delegation,
@@ -3108,6 +3152,11 @@
                      {:label "Sittings its health is read over"
                       :help "The seat's health is counted over this many of its last closed sittings. Ten is the default."}}
      [:int {:min 1 :max 100}]]
+    [:delivers {:optional true
+                :x-display
+                {:label "What counts as its delivery"
+                 :help delivers-help}}
+     [:maybe delivers-schema]]
     [:health_alerts {:optional true
                      :x-display
                      {:label "When its health is a breach"
@@ -3319,6 +3368,11 @@
                               {:label "Sittings its health is read over"
                                :help "The seat's health is counted over this many of its last closed sittings. The next close counts it over the new window."}}
               [:int {:min 1 :max 100}]]
+             [:delivers {:optional true
+                         :x-display
+                         {:label "What counts as its delivery"
+                          :help delivers-help}}
+              [:maybe delivers-schema]]
              [:health_alerts {:optional true
                               :x-display
                               {:label "When its health is a breach"
@@ -3369,7 +3423,7 @@
                       :judgment :rows_per_firing :wake_on
                       :fire_interval_seconds :max_open_sittings
                       :release_grace_seconds :health_window
-                      :health_alerts :health_breaker :delegates
+                      :health_alerts :health_breaker :delivers :delegates
                       :domain :serves]
             :draft {:shared true :live true}}
      :guards [a-person
@@ -5117,13 +5171,16 @@
                           seat-rows (store/query-rows
                                      st tx :sitting {:seat (str (:seat data))}
                                      {:limit seat-health-page
-                                      :newest-first true})]
+                                      :newest-first true})
+                          seat (some->> (:seat data) str not-empty
+                                        (#(store/load-row st tx :seat % {})))]
                       (store/update-data!
                        st tx :sitting id
                        (merge data
                               (sitting-health
                                data moved
-                               (earlier-sittings seat-rows id data)))
+                               (earlier-sittings seat-rows id data)
+                               (get-in seat [:data :delivers])))
                        nil)
                       true)))))))
         due)))
