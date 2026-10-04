@@ -3651,8 +3651,8 @@
   (str "The bench did not open, because this seat's scope does not "
        "name one repository. A seat that walks something other than a "
        "change reads its repository from its own bench powers: every "
-       "bench entry that writes (bench.edit, bench.pull, bench.feedback, "
-       "bench.rerun) "
+       "bench entry that writes (bench.edit, bench.edit_many, bench.pull, "
+       "bench.feedback, bench.rerun) "
        "must carry a filter with the same one repo, and every bench.find "
        "and bench.read entry must name that repo too, alone or with "
        "others after a comma. Work from the rows, and say what you "
@@ -3672,8 +3672,13 @@
   The reading powers (`bench.find`, `bench.read`) only have to include
   it, and may name other repositories beside it (R-12.32). `bench.rerun`
   re-runs the checks of the branch the seat pushed, so it chooses the
-  repository the way `bench.pull` does."
-  #{"bench.edit" "bench.pull" "bench.feedback" "bench.rerun"})
+  repository the way `bench.pull` does. `bench.edit_many` is many
+  `bench.edit`s in one call: it writes the same worktree, so it chooses
+  the repository the way the single edit does, and a seat that holds
+  the batch and not the single edit still chooses by what it writes
+  with (ticket d4b13a7f)."
+  #{"bench.edit" "bench.edit_many" "bench.pull" "bench.feedback"
+    "bench.rerun"})
 
 (defn- entry-repos
   "The repositories one bench entry's filter names, trimmed and in

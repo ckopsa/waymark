@@ -605,12 +605,17 @@
              (inv/decode-row rdef))))
 
 (defn- bench-edit-admits-repo?
-  "Does this visibility's bench.edit — if it holds any — admit this
-  repository? No entry, or one filtered away from this repository,
-  answers false."
+  "Does this visibility's bench.edit or bench.edit_many — if it holds
+  either — admit this repository? No entry, or only ones filtered away
+  from this repository, answers false. The batch is many bench.edits
+  in one call, so a seat that holds it alone holds a write power on
+  the repository the way a seat that holds the single edit does: the
+  tokens are `protected-edit-tokens`, the two that write a path."
   [vis repo]
-  (let [gentry (grants/capability-entry vis "bench.edit")]
-    (boolean (and gentry (not (:miss (filter-verdict (:filters gentry) {:repo repo})))))))
+  (boolean (some (fn [token]
+                   (when-some [gentry (grants/capability-entry vis token)]
+                     (not (:miss (filter-verdict (:filters gentry) {:repo repo})))))
+                 protected-edit-tokens)))
 
 (defn- protected-branch?
   "Is this branch the repository's base, or one its own branch_pattern
