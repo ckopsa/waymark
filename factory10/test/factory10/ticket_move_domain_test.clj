@@ -15,6 +15,8 @@
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
+            [waymark10.server.store :as store]
+            [waymark10.server.webhooks :as webhooks]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
@@ -106,6 +108,40 @@
         "and so does the open change born from a child")
     (is (= "deferred" (:state (get-row h "tickets" second-child)))
         "the move writes the domain and moves no state")))
+
+(defn- stamp-ticket!
+  "The ticket stores `extra`, as the birth by another domain's mayor
+  leaves it."
+  [eng id extra]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :ticket id {})]
+          (store/save-row! st tx :ticket
+                           (-> (update row :data merge extra)
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))))
+
+(deftest a-change-answers-to-the-domain-that-asked-for-its-ticket
+  ;; ticket a9b3d233: the subscription filter reads the change's own
+  ;; `requested_by`, so the birth copies it from the ticket
+  (let [{:keys [h eng]} (world)
+        asked (new-ticket! h "The pantry import" {})
+        own (new-ticket! h "The chore chart" {})
+        _ (stamp-ticket! eng asked {:domain "household" :requested_by "factory"})
+        _ (stamp-ticket! eng own {:domain "household"})
+        heard? (fn [change]
+                 (webhooks/in-domains? eng #{"factory"}
+                                       {:kind :change :resource-id change}))
+        change (open-change! eng asked)]
+    (is (= "household" (domain-of h "changes" change)))
+    (is (= "factory" (get-in (get-row h "changes" change) [:data :requested_by])))
+    (is (heard? change)
+        "a subscription with domains [factory] hears the change it asked for")
+    (testing "a change of a ticket household filed for itself is not heard"
+      (let [quiet (open-change! eng own)]
+        (is (nil? (get-in (get-row h "changes" quiet) [:data :requested_by])))
+        (is (not (heard? quiet)))))))
 
 (deftest a-move-names-a-domain-that-stands
   (let [{:keys [h]} (world)
