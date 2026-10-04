@@ -86,7 +86,7 @@
                           HttpRequest$BodyPublishers HttpRequest$Builder
                           HttpResponse HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
-           (java.time Duration)
+           (java.time Duration Instant)
            (java.util.concurrent ExecutorService Executors ThreadFactory)
            (javax.crypto Mac)
            (javax.crypto.spec SecretKeySpec)))
@@ -122,6 +122,12 @@
 
 (defhandler record-failure [row inp _ctx]
   (assoc-in row [:data :failure_reason] (:reason inp)))
+
+(defhandler record-deliveries [row inp _ctx]
+  (update row :data merge
+          (into {} (filter (comp some? val))
+                (select-keys inp [:last_delivered_at :skipped_count
+                                  :last_skipped_at]))))
 
 (g/defguard ^:private owner-only
   {:name :owner-revokes
@@ -256,7 +262,25 @@
                               :x-display
                               {:label "Why deliveries stopped"
                                :help "Written by the deliverer when it gives up — the last error it saw. Not yours to fill in."}}
-             [:maybe [:string {:max 200}]]]]
+             [:maybe [:string {:max 200}]]]
+            ;; the deliverer's account of its own work, written at most
+            ;; once a drain pass: a quiet subscription and one whose
+            ;; every delivery is refused differ here
+            [:last_delivered_at {:optional true
+                                 :x-display
+                                 {:label "Last delivered"
+                                  :help "When the endpoint last accepted a delivery. Written by the deliverer. Not yours to fill in."}}
+             [:maybe :waymark/instant]]
+            [:skipped_count {:optional true
+                             :x-display
+                             {:label "Deliveries skipped"
+                              :help "How many deliveries the endpoint refused and the deliverer passed over, under the skip policy. Written by the deliverer. Not yours to fill in."}}
+             [:maybe [:int {:min 0}]]]
+            [:last_skipped_at {:optional true
+                               :x-display
+                               {:label "Last skipped"
+                                :help "When the deliverer last passed over a refused delivery. Written by the deliverer. Not yours to fill in."}}
+             [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in}}
    :on-create conceal-literal
    :actions
@@ -319,7 +343,34 @@
                    :handler record-failure
                    :safety {:idempotent true :reversible false :confirm false
                             :one-way "Bookkeeping the deliverer writes while it waits for a secret's value; it removes the note when the value is there."}
-                   :display {:label "Wait for the secret" :order 10}}}})
+                   :display {:label "Wait for the secret" :order 10}}
+    ;; the deliverer's tally of one drain pass: when the endpoint last
+    ;; accepted a delivery, and how many it has refused under policy
+    ;; skip. The count is the new total, so the door is idempotent.
+    :note_deliveries {:from #{:active} :to :active
+                      :input [:map
+                              [:last_delivered_at {:optional true
+                                                   :x-display
+                                                   {:label "Last delivered"
+                                                    :help "When the endpoint last accepted a delivery in this pass."}}
+                               [:maybe :waymark/instant]]
+                              [:skipped_count {:optional true
+                                               :x-display
+                                               {:label "Deliveries skipped"
+                                                :help "The count of skipped deliveries after this pass."}}
+                               [:maybe [:int {:min 0}]]]
+                              [:last_skipped_at {:optional true
+                                                 :x-display
+                                                 {:label "Last skipped"
+                                                  :help "When this pass last passed over a refused delivery."}}
+                               [:maybe :waymark/instant]]]
+                      :record true
+                      :replay false
+                      :guards [deliverer-only]
+                      :handler record-deliveries
+                      :safety {:idempotent true :reversible false :confirm false
+                               :one-way "Bookkeeping the deliverer writes after a drain pass; the next pass writes over it."}
+                      :display {:label "Note the deliveries" :order 11}}}})
 
 ;; ── the signature ───────────────────────────────────────────────────
 
@@ -469,6 +520,29 @@
       (warn! "could not mark subscription " (:id sub) " failed: "
              (ex-message e)))))
 
+(defn- note-deliveries!
+  "Writes one drain pass's tally on the subscription through the
+  deliverer's own door: when the endpoint last accepted a delivery, and
+  how many deliveries were skipped. A pass that sent nothing writes
+  nothing, so a quiet subscription's log does not grow."
+  [eng sub {:keys [delivered skipped]}]
+  (when (or delivered (pos? (long skipped)))
+    (let [at (str ((:now-fn eng (fn [] (Instant/now)))))]
+      (try
+        (inv/invoke! eng :subscription (:id sub) :note_deliveries
+                     (cond-> {}
+                       delivered (assoc :last_delivered_at at)
+                       (pos? (long skipped))
+                       (assoc :skipped_count
+                              (+ (long skipped)
+                                 (long (or (get-in sub [:data :skipped_count])
+                                           0)))
+                              :last_skipped_at at))
+                     {:principal deliverer-actor})
+        (catch Exception e
+          (warn! "could not note the deliveries on subscription " (:id sub)
+                 ": " (ex-message e)))))))
+
 (defn- actor-name
   "What a person calls the actor of this transition: the head of the
   summary line of the row its address names (`seat:<id>` is the seat's
@@ -510,14 +584,22 @@
   subscription stays active — liveness over completeness, chosen per
   subscription. A delivery whose signing secret is a secret row with no
   value yet is not attempted: the drain stops there, the cursor stays,
-  and the subscription says what it waits for."
+  and the subscription says what it waits for. The pass's tally —
+  whether anything was delivered, how many were skipped — is written on
+  the subscription once, at the end of the pass or before it is marked
+  failed, never once per event."
   [eng client sub opts]
   (let [st (:storage eng)
         consumer (consumer-of sub)
         _ (settle-wait! eng sub)
         skip? (= "skip" (get-in sub [:data :delivery_policy]))
+        tally (atom {:delivered false :skipped 0})
+        note! (fn []
+                (let [[was _] (reset-vals! tally {:delivered false :skipped 0})]
+                  (note-deliveries! eng sub was)))
         cursor (or (store/with-tx st #(store/cursor-get st % consumer))
                    (seed-cursor! eng sub))]
+   (try
     (loop [cursor cursor]
       (let [rows (store/with-tx st
                    (fn [tx] (store/transitions st tx {:since cursor}
@@ -539,7 +621,8 @@
                          (reduced ::failed))
 
                      (deliver-with-retries! client sub secret (:id t) body opts)
-                     (advance! t)
+                     (do (swap! tally assoc :delivered true)
+                         (advance! t))
 
                      skip?
                      (do (warn! "delivery to " (get-in sub [:data :url])
@@ -547,6 +630,7 @@
                                 " attempts at event " (:id t)
                                 "; skipping it (delivery policy: skip) — "
                                 "the subscription stays active")
+                         (swap! tally update :skipped inc)
                          (advance! t))
 
                      :else
@@ -555,6 +639,7 @@
                                 " attempts at event " (:id t)
                                 "; marking the subscription failed — "
                                 "resume replays from here")
+                         (note!)
                          (mark-failed! eng sub
                                        (str "delivery failed after "
                                             (:attempts opts)
@@ -562,7 +647,8 @@
                          (reduced ::failed))))))
              cursor rows)]
         (when (and (not= ::failed outcome) (= 200 (count rows)))
-          (recur outcome))))))
+          (recur outcome))))
+    (finally (note!)))))
 
 (defn- drain-opts [eng opts]
   (merge {:attempts (:webhook-attempts eng 3)
