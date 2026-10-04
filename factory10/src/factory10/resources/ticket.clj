@@ -1623,7 +1623,7 @@
      :x-display
      {:widget "prose"
       :label "How it ended"
-      :help "One sentence for the next reader: what was done, or why this is let go. Say the outcome — merged, superseded by, no longer wanted because — and not the diagnosis."}}
+      :help "One sentence for the next reader: what was done, or why this is let go. Say the outcome — merged, superseded by, no longer wanted because — and not the diagnosis. It is at most 480 characters."}}
     [:string {:min 1 :max 480}]]])
 
 (def ^:private merge-after-input

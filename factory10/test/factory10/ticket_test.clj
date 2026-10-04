@@ -695,6 +695,35 @@
         (is (str/includes? said "512"))
         (is (nil? (sch/closed-errors form {:why (apply str (repeat 480 "x"))})))))))
 
+;; ── every one-sentence door says its limit (ticket 7a4baff9) ────────
+;; The limit a door's help names is the one its schema declares and the
+;; one the door enforces: the last length it takes, and one more refused.
+
+(defn- the-limit-said
+  "The number of characters a help sentence names as its limit."
+  [help]
+  (some-> (re-find #"at most (\d+) characters" help) second parse-long))
+
+(deftest a-one-sentence-door-declares-the-limit-it-enforces
+  (doseq [[kind resource action field]
+          [["change" change :submit :why]
+           ["change" change :stall :why]
+           ["change" change :close_without_pr :why]
+           ["ticket" ticket :complete :close_reason]
+           ["ticket" ticket :drop :close_reason]]]
+    (testing (str kind "." (name action))
+      (let [form (get-in resource [:actions action :input])
+            [_ props schema] (some #(when (and (vector? %) (= field (first %))) %) form)
+            declared (get-in schema [1 :max])
+            sentence #(apply str (repeat % "x"))]
+        (is (= 480 declared))
+        (is (= declared (the-limit-said (get-in props [:x-display :help])))
+            "the help says the limit the schema declares")
+        (is (nil? (sch/closed-errors form {field (sentence declared)}))
+            "a sentence of the declared length is taken")
+        (is (seq (get (sch/closed-errors form {field (sentence (inc declared))}) field))
+            "one character more is refused")))))
+
 ;; ── one domain asks another (ticket 775b6427) ─────────────────────────
 
 (defn- sat [seat domain]
