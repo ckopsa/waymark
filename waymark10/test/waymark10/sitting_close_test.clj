@@ -514,6 +514,29 @@
       (is (= ["refused:guard-refused" "refused_by:still-open"]
              (:flags (health refused [])))))))
 
+(deftest a-seat-names-its-own-delivery
+  (let [judged [{:kind :verdict :action :judge
+                 :at (java.time.Instant/parse "2026-10-01T10:00:00Z")}]
+        sat (assoc a-sat :closed_by "hook" :turns 6)
+        outcome #(:outcome (seats/sitting-health sat judged [] %))]
+    (is (= "submitted" (outcome [{:kind "verdict" :action "judge"}]))
+        "a judge that judged delivered, however few its turns")
+    (is (= "cut_short" (outcome nil))
+        "a seat that states no delivers delivers a change's submit")
+    (is (= "cut_short" (:outcome (seats/sitting-health sat judged [])))
+        "…and so does a caller that passes none")
+    (is (= "cut_short" (outcome [{:kind "verdict" :action "dismiss"}]))
+        "the action is part of the delivery")
+    (is (= "submitted"
+           (:outcome (seats/sitting-health
+                      sat [{:kind :change :action :submit}] []
+                      seats/default-delivers))))
+    (is (= "cut_short"
+           (:outcome (seats/sitting-health
+                      sat [{:kind :change :action :submit}] []
+                      [{:kind "verdict" :action "judge"}])))
+        "a seat that names its delivery is judged by that list alone")))
+
 (deftest the-flags-explain-the-outcome
   (let [flags #(set (:flags (seats/sitting-health %1 [] %2)))
         tests #(assoc-in a-sat [:served :bench__test] {:calls % :bytes 900})
@@ -584,6 +607,47 @@
       (is (= [sitting-id] (ids-of "outcome=cut_short")))
       (is (= [] (ids-of "outcome=idle")))
       (is (= [sitting-id] (ids-of "flags=test_thrash"))))))
+
+(deftest a-close-reads-the-seats-delivers
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        delivers [{:kind "meal" :action "accept"}]
+        _ (store/with-tx (:storage eng)
+            (fn [tx]
+              (store/update-data!
+               (:storage eng) tx :seat seat-id
+               (assoc (:data (row-of eng :seat seat-id)) :delivers delivers)
+               nil)))
+        sid (initialize! h)
+        sitting-id (str (:sitting (sit! h sid)))
+        meal (:row (inv/create! eng :meal {:name "Soup" :themes []}
+                                {:principal person}))]
+    (is (false? (:isError (tool h (with-session sid) "waymark_invoke"
+                                {:kind "meal" :id (:id meal) :action "accept"}))))
+    (is (= 200 (:status (report! h counts))))
+    (is (= "submitted"
+           (some-> (:outcome (:data (row-of eng :sitting sitting-id))) name))
+        "the same hook close is cut_short on a seat that states none")
+
+    (testing "the create door takes delivers"
+      (let [made (:row (inv/create!
+                        eng :seat
+                        {:name "meal-judge"
+                         :charter "Judge whether a meal belongs on the list."
+                         :scope [{:kind "meal" :actions ["accept"]}]
+                         :held_for [(:id model)]
+                         :standing_ttl_seconds 604800
+                         :cadence_seconds 3600
+                         :budget_usd_per_week 5M
+                         :sitting_budget_tokens 60000
+                         :delivers delivers}
+                        {:principal person}))]
+        (is (= [["meal" "accept"]]
+               (mapv (juxt :kind :action)
+                     (get-in (row-of eng :seat (:id made))
+                             [:data :delivers]))))))))
 
 (deftest the-backfill-judges-each-unjudged-sitting-once
   (let [eng (fresh-engine)

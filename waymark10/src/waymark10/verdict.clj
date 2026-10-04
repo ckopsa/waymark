@@ -92,13 +92,41 @@
 
 ;; ── reading the judgment this verdict is written under ──────────────
 
+(defn- seat-judgment
+  "The judgment the calling seat's own row names — nil when the caller
+  is no seat's sitter (a sitter's id is `seat:<the seat's id>`,
+  `seats/sitter-id`), when its seat names none, or when no read is in
+  scope."
+  [ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [sid (some->> (:id (:principal ctx)) str
+                             (re-matches #"seat:(.+)") second)]
+      (some-> (read' :seat sid) (get-in [:data :judgment])
+              str str/trim not-empty))))
+
+(defn- under-the-seats-judgment
+  "The body with its judgment said. A body that names one is returned
+  as it came, and every wall judges it as written. A body that names
+  none takes the calling seat's (`seat-judgment`): a judging seat says
+  ONE judgment, and a uuid copied by hand for every verdict is a
+  verdict one wrong character away from refused. Every wall and the
+  birth hook read the body through this, so they all see one value."
+  [inp ctx]
+  (if (some-> (:judgment inp) str str/trim not-empty)
+    inp
+    (if-some [jid (seat-judgment ctx)]
+      (assoc inp :judgment jid)
+      inp)))
+
 (defn- cited-judgment
   "The judgment row the body names, through the ctx cross-kind read —
   nil when no read is in scope (a storage-free probe, which advertises
-  optimistically) or when the body names no row."
+  optimistically) or when the body names no row and the caller's seat
+  names none either."
   [inp ctx]
   (when-some [read' (:read ctx)]
-    (when-some [jid (some-> (:judgment inp) str str/trim not-empty)]
+    (when-some [jid (some-> (:judgment (under-the-seats-judgment inp ctx))
+                            str str/trim not-empty)]
       (read' judgment/judgment-kind jid))))
 
 (defn- verdict-words
@@ -205,7 +233,8 @@
    :open "One judgment asks one question about one row, so there is one standing answer. A second is not a fuller answer, it is two — and the ledger under R-3 counts corrections, which it cannot do if a seat may quietly write over its own word. What changes an answer is a person's correction, and that is a row of its own citing this one."
    :explain "This judgment has already been answered about {subject}, and that answer stands. Nothing was written and nothing was lost — the verdict is on the record, and a person who disagrees corrects it."}
   [_row inp ctx]
-  (let [find' (:find ctx)]
+  (let [find' (:find ctx)
+        inp (under-the-seats-judgment inp ctx)]
     ;; the storage-free probe advertises optimistically — the write
     ;; path always carries the consult (`verdict_reason`'s own posture)
     (if (nil? find')
@@ -258,7 +287,7 @@
                        " answer that stands can be the one a correction"
                        " replaces.")
                   (not= (str (get-in prior [:data :judgment]))
-                        (str (:judgment inp)))
+                        (str (:judgment (under-the-seats-judgment inp ctx))))
                   "The verdict this cites was written under a different judgment."
                   (not= (str (get-in prior [:data :subject_id]))
                         (str (:subject_id inp)))
@@ -323,7 +352,8 @@
   ;; above does: an app's wall reads rows, and a probe holds none
   (if (nil? (:read ctx))
     (t/allow)
-    (let [jrow (cited-judgment inp ctx)
+    (let [inp (under-the-seats-judgment inp ctx)
+          jrow (cited-judgment inp ctx)
           walls (get (get-in ctx verdict-guards-key)
                      (str (get-in jrow [:data :name])))]
       (if-some [problem (some (fn [wall] (some-> (wall inp ctx) str not-empty))
@@ -527,7 +557,10 @@
   ;; R-3's count of corrections keeps measuring what it measured.
   ;; A third: the head the subject stood at, when it carries one (see
   ;; `subject-head-of`), so a later head can take this answer back.
+  ;; A fourth: the judgment, when the body named none — the seat's own,
+  ;; the same value every wall above judged (`under-the-seats-judgment`).
   (let [allowed (holds/allowed-hold ctx verdict-kind :judge nil)
+        row (update row :data under-the-seats-judgment ctx)
         head (subject-head-of row ctx)
         row (cond-> (assoc-in row [:data :said_by]
                               (or (some-> (get-in allowed [:data :decided_by]) str not-empty)
@@ -703,7 +736,10 @@
    ;; field" is the honest sentence for a field this door never offers.
    :create-schema
    [:map
-    (entry :judgment {:kind :judgment} :waymark/ref)
+    ;; optional at the DOOR and never in the row: a body that names
+    ;; none takes the calling seat's (`under-the-seats-judgment`), and
+    ;; a caller with neither is refused by `judgment-is-promoted`
+    (entry :judgment {:optional true :kind :judgment} [:maybe :waymark/ref])
     (entry :subject_kind {} [:string {:min 1 :max 64}])
     (entry :subject_id {} [:string {:min 1 :max 64}])
     (entry :verdict {:not-a-ref "It holds a word of the judgment's vocabulary, not a verdict's id."}
