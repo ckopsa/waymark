@@ -57,6 +57,15 @@
   addresses whose moves it does not want: such a transition is passed
   over at the drain, the cursor advancing, and is never POSTed.
 
+  WHICH DOMAINS. A subscription's `domains` lists domain NAMES, and
+  none means every domain. The filter judges only a kind that keeps a
+  domain's name: one whose declaration says what an absent `domain`
+  counts as (`:absent-as`), as ticket and change do. Such a row passes
+  when its domain, or that absent value when it stores none, is in the
+  list; it is passed over as a skipped actor's move is. A row of any
+  other kind passes: a seat's `domain` is a row's id and not a name,
+  and most kinds keep none.
+
   Recorded deviations and scope, each a sentence:
   - One deliverer thread drains every subscription's cursor in turn —
     the v10 spelling of a worker per active subscription; delivery is
@@ -172,6 +181,16 @@
                   :help "The addresses of the principals whose own moves this endpoint does not want to hear — seat:… for a seat, as a delivery's actor spells it. Left blank it hears everyone's."}}
    [:maybe [:vector {:max 20} [:string {:min 1 :max 120}]]]])
 
+(def ^:private domains-field
+  "The `domains` field, one spelling for the row and for restate."
+  [:domains {:optional true
+             :examples [["factory"]]
+             :x-display
+             {:raw true
+              :label "Which domains to hear about"
+              :help "The names of the domains whose rows this endpoint wants — factory, household. A row that stores no domain counts as its kind says, which is factory. A kind that keeps no domain name is heard whatever is listed. Left blank it hears every domain."}}
+   [:maybe [:vector {:max 20} [:string {:min 1 :max 120}]]]])
+
 (def ^:private url-field
   [:url {:x-display
          {:label "Where to POST"
@@ -217,6 +236,7 @@
   [(update url-field 1 assoc :optional true)
    kinds-field
    skip-actors-field
+   domains-field
    description-field
    (assoc-in secret-field [1 :x-display :help]
              "A new key to sign with, from the next delivery on: the id of a secret row, bare, or a key typed here, which is shown afterwards only as set. Left blank, the signing stays as it is.")
@@ -224,8 +244,8 @@
 
 (defhandler restate-subscription [row inp ctx]
   (let [row (update row :data merge
-                    (select-keys inp [:url :kinds :skip_actors :description
-                                      :delivery_policy]))]
+                    (select-keys inp [:url :kinds :skip_actors :domains
+                                      :description :delivery_policy]))]
     (if (some? (:secret inp))
       (conceal-literal (assoc-in row [:data :secret] (:secret inp)) ctx)
       row)))
@@ -242,6 +262,7 @@
             url-field
             kinds-field
             skip-actors-field
+            domains-field
             description-field
             ;; the HMAC key for X-Waymark-Signature; absent = unsigned
             secret-field
@@ -297,8 +318,8 @@
     ;; recorded action persists its raw inputs into the log.
     :restate {:from #{:active} :to :active
               :input (into [:map] stated-fields)
-              :edit {:prefill [:url :kinds :skip_actors :description
-                               :delivery_policy]}
+              :edit {:prefill [:url :kinds :skip_actors :domains
+                               :description :delivery_policy]}
               :handler restate-subscription
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Restate" :order 2
@@ -307,8 +328,8 @@
     ;; change does not resume it.
     :restate_paused {:from #{:paused} :to :paused
                      :input (into [:map] stated-fields)
-                     :edit {:prefill [:url :kinds :skip_actors :description
-                                      :delivery_policy]}
+                     :edit {:prefill [:url :kinds :skip_actors :domains
+                                      :description :delivery_policy]}
                      :handler restate-subscription
                      :safety {:idempotent true :reversible true :confirm false}
                      :display {:label "Restate" :order 2
@@ -486,12 +507,31 @@
       id (conj id)
       (and id type (not (str/includes? id ":"))) (conj (str type ":" id)))))
 
-(defn- wants? [sub t]
+(defn- domain-of
+  "The NAME of the domain the transition's row is in, or nil when its
+  kind keeps no domain name. A kind keeps one when its declaration
+  says what an absent `domain` counts as; a row that stores none, or
+  that is gone, is in that one."
+  [eng t]
+  (let [rdef (get (inv/resources eng) (keyword (:kind t)))]
+    (when-some [absent (get (:absent-as rdef) :domain)]
+      (let [st (:storage eng)
+            raw (store/with-tx st
+                  #(store/load-row st % (:kind rdef) (:resource-id t) {}))]
+        (or (some-> (get-in raw [:data :domain]) str not-empty)
+            (if (keyword? absent) (name absent) (str absent)))))))
+
+(defn- wants? [eng sub t]
   (let [kinds (get-in sub [:data :kinds])
-        skip (set (get-in sub [:data :skip_actors]))]
+        skip (set (get-in sub [:data :skip_actors]))
+        domains (set (get-in sub [:data :domains]))]
     (and (or (empty? kinds)
              (boolean (some #(= (name (:kind t)) %) kinds)))
-         (not-any? skip (actor-addresses t)))))
+         (not-any? skip (actor-addresses t))
+         (or (empty? domains)
+             (if-some [d (domain-of eng t)]
+               (contains? domains d)
+               true)))))
 
 (defn- consumer-of [sub] (str "webhook:" (:id sub)))
 
@@ -611,7 +651,7 @@
             outcome
             (reduce
              (fn [_cursor t]
-               (if (or (= :subscription (:kind t)) (not (wants? sub t)))
+               (if (or (= :subscription (:kind t)) (not (wants? eng sub t)))
                  (advance! t)
                  (let [body (wire-body eng t)
                        secret (signing-key eng sub)]
