@@ -826,6 +826,44 @@
                           a-repo))
           "and the single edit stands as it did"))))
 
+;; ── a path-narrowed entry adds a file; it does not shut the bench
+;;    (ticket d30c390f) ─────────────────────────────────────────────
+
+(deftest a-path-narrowed-entry-does-not-shut-the-bench
+  (let [home @#'mcp/walk-home
+        both (str a-repo "," another-repo)
+        entry (fn [kind repos] {:kind kind :actions [] :filter {:repo repos}})
+        narrowed {:kind "bench.edit" :actions []
+                  :filter {:repo another-repo :path ".github/workflows/tests.yml"}}
+        seat (fn [scope] {:data {:scope scope}})
+        row-in (fn [repo] {"data" {"repo" repo}})]
+    (testing "general entries for two repositories and one path entry for the second"
+      (let [s (seat [(entry "bench.read" both) (entry "bench.edit" both) narrowed])]
+        (is (= [a-repo nil] (home s (row-in a-repo)))
+            "the row in the first repository gets its worktree")
+        (is (= [another-repo nil] (home s (row-in another-repo))))
+        (is (true? (@#'mcp/several-repositories? s))
+            "and the path entry does not make the choosers disagree")))
+    (testing "a power that names only the other repository still shuts it"
+      (let [[repo note] (home (seat [(entry "bench.read" another-repo)
+                                     (entry "bench.edit" both)
+                                     narrowed])
+                              (row-in a-repo))]
+        (is (nil? repo))
+        (is (str/includes? (str note) "do not all reach") note)))
+    (testing "a power held only by path entries still chooses by them"
+      (is (= a-repo
+             (:repo (@#'mcp/seat-repositories
+                     (seat [{:kind "bench.edit" :actions []
+                             :filter {:repo a-repo :path "src/**"}}
+                            (entry "bench.read" a-repo)]))))))
+    (testing "a path entry for another repository leaves the one-repository seat its repository"
+      (is (= a-repo
+             (:repo (@#'mcp/seat-repositories
+                     (seat [(entry "bench.edit" a-repo)
+                            narrowed
+                            (entry "bench.read" both)]))))))))
+
 ;; ── the sitting that holds the row writes its branch (ticket d7c854b3) ─
 
 (deftest a-bench-write-from-a-sitting-that-no-longer-holds-the-ticket-is-refused
