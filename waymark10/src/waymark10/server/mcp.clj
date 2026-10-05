@@ -3129,6 +3129,12 @@
                     (get-in judgment [:data :verdicts]))
    "remedy_max" (get-in judgment [:data :remedy_max])})
 
+(def ^:private walk-pages-max
+  "The most pages of its queue one walk reads past the rows it
+  subtracts (ticket f175f8c5). A queue whose first page is all judged,
+  claimed or stuck rows has its free rows on a later one."
+  10)
+
 (defn- walk-of
   "The seat's walk, read AS THE SITTER: the kind `walk` names, through
   the same plural route `waymark_query` takes, under that kind's own
@@ -3150,6 +3156,9 @@
   are subtracted, and the answer carries the `judgment` block beside
   the rows. The subtraction can empty a page, so that read asks for a
   WHOLE page and the cap bites after the minus rather than before it.
+  It can empty that whole page too, so the read goes on to the queue's
+  next pages, `walk-pages-max` at most, until the rows are found or
+  the queue ends (ticket f175f8c5).
 
   nil when the seat walks nothing, when `walk` names a kind this
   engine does not serve, or when the read does not answer 2xx: a
@@ -3219,26 +3228,52 @@
                     (dissoc (str only)))
             subtract? (or judgment (seq claimed) (seq stuck))
             asked (if (or subtract? (seq held) only) coll/page-size-max n)
-            resp (call (request session :get (str "/api/" (:plural rdef))
-                                {:query (query-string
-                                         (cond-> {"page[size]" (str asked)}
-                                           judgment (merge (queue-params
-                                                            judgment))
-                                           walk-filter (merge
-                                                        (filter-params
-                                                         walk-filter))
-                                           only-state (assoc "state"
-                                                             only-state)))}))
-            doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
-        (when (collection-doc? doc)
+            params (cond-> {"page[size]" (str asked)}
+                     judgment (merge (queue-params judgment))
+                     walk-filter (merge (filter-params walk-filter))
+                     only-state (assoc "state" only-state))
+            ;; one page of the queue: the first is the request it has
+            ;; always been, and a later one names its number
+            page (fn [k]
+                   (let [resp (call (request session :get (str "/api/" (:plural rdef))
+                                             {:query (query-string
+                                                      (cond-> params
+                                                        (> k 1) (assoc "page[number]"
+                                                                       (str k))))}))
+                         doc (when (<= 200 (:status resp 500) 299)
+                               (verbatim-json resp))]
+                     (when (collection-doc? doc) doc)))
+            doc (page 1)]
+        (when doc
           (let [id-of #(id-of-self (get % "self"))
                 skip (if subtract?
                        (into (into (set claimed) (keys stuck))
                              (when judgment
                                (judgments/judged-subjects eng (:id judgment))))
                        #{})
-                items (cond->> (remove #(contains? skip (id-of %))
-                                       (get-in doc ["data" "items"]))
+                free? #(not (contains? skip (id-of %)))
+                ;; the subtraction can empty a whole page while free
+                ;; rows wait on the next, so the read goes on until the
+                ;; firing's rows are found or the queue ends (ticket
+                ;; f175f8c5). A named row is looked for on the first
+                ;; page alone, as it always was
+                total (long (or (get-in doc ["data" "total"]) 0))
+                queue (loop [k 1
+                             acc (vec (get-in doc ["data" "items"]))]
+                        (if (or (not subtract?) only
+                                (>= (count (filter free? acc)) n)
+                                (>= k (long walk-pages-max))
+                                (>= (* k (long asked)) total))
+                          acc
+                          (let [more (get-in (page (inc k)) ["data" "items"])
+                                seen (into #{} (map id-of) acc)]
+                            (if (empty? more)
+                              acc
+                              (recur (inc k)
+                                     (into acc
+                                           (remove #(contains? seen (id-of %)))
+                                           more))))))
+                items (cond->> (filter free? queue)
                         only (filter #(= (str only) (id-of %))))
                 ;; the rows this sitting already walks, while they are
                 ;; still in the queue, are kept first and the queue's
@@ -3266,7 +3301,7 @@
                                            (contains? claimed? id)
                                            {"id" id
                                             "reason" "another open sitting of this seat holds it"}))))
-                               (get-in doc ["data" "items"]))]
+                               queue)]
             (cond-> {"kind" walk
                      "charter" (str (get-in seat [:data :charter]))
                      "total" (get-in doc ["data" "total"])
@@ -3383,6 +3418,13 @@
                  (str/join "; " (map #(str (get % "id") " (" (get % "reason") ")")
                                      withheld))
                  ".")
+
+            ;; a judgment's queue keeps the subjects it has judged, so
+            ;; an empty walk over it is the judge having caught up
+            (and (number? total) (pos? total) (get walk "judgment"))
+            (str "The queue held " total " rows under the walk's filter, and "
+                 "each one the walk read already carries a standing verdict "
+                 "of this judgment.")
 
             (and (number? total) (pos? total))
             (str "The queue held " total " rows under the walk's filter, and "

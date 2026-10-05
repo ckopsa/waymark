@@ -985,6 +985,48 @@
           "no slot is left a row to take, so the close is no wake")
       (is (empty? (fires))))))
 
+;; ── 9′ · a page of judged subjects hides no free row (ticket f175f8c5) ─
+
+(declare empty-sit!)
+
+(deftest a-page-of-judged-subjects-does-not-hide-the-free-row-behind-it
+  ;; the queue is read a page at a time and the judged subjects are
+  ;; subtracted after: a first page of nothing but judged rows handed
+  ;; no row while a free one waited on the second
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        at #(format "2026-09-18T07:%02d:%02dZ" (quot % 60) (rem % 60))
+        judged (mapv #(expense! eng (str "Vendor " %) "kitchen" (at %))
+                     (range 100))
+        free (expense! eng "Flour mill" "kitchen" (at 100))
+        _ (doseq [e judged]
+            (say! eng judgment e "keep" "Nothing to do: the amount fits."))
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (= 101 (get-in answer [:walk :total])))
+    (is (= [(str (:id free))] (mapv :id (get-in answer [:walk :rows])))
+        "the one unjudged expense is past the first page, and is handed")
+    (is (nil? why) "a sitting handed a row did not walk nothing")))
+
+(deftest a-queue-of-only-judged-subjects-says-the-judge-has-caught-up
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        _ (doseq [e [knives flour]]
+            (say! eng judgment e "keep" "Nothing to do: the amount fits."))
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (empty? (get-in answer [:walk :rows])))
+    (is (= (str "The queue held 2 rows under the walk's filter, and each one "
+                "the walk read already carries a standing verdict of this "
+                "judgment.")
+           why))))
+
 ;; ── 10 · an empty walk says when its filter emptied it (ticket 6ea8f277) ─
 
 (def ^:private empty-queue-sentence
