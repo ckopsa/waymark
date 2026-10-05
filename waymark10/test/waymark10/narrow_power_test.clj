@@ -678,6 +678,116 @@
             "the tool says what a narrower grant on it could name, in
              the row's own words rather than the sorted union")))))
 
+;; ── a glob on a constrained field the entry names (ticket b9c1b8e4) ─
+
+(def ^:private house-powers
+  "A household server's policy: automation_put says its `entity_id`
+  takes globs, and service_call names the same field and says nothing,
+  so its filter values stay exact words."
+  [{:power "homeassistant.automation_put" :tools ["automation_put"]
+    :why false :constraints ["entity_id"] :glob_constraints ["entity_id"]}
+   {:power "homeassistant.service_call" :tools ["service_call"]
+    :why false :constraints ["entity_id"]}])
+
+(defn- house-world
+  "One engine with a `homeassistant` row over a fake server that logs
+  every call, and the clerk wearing a grant over `scope`."
+  [scope]
+  (let [log (atom [])
+        house (fn [method params]
+                (case method
+                  "tools/list"
+                  {:tools (mapv (fn [nm]
+                                  {:name nm
+                                   :description (str "The house's " nm ".")
+                                   :inputSchema
+                                   {:type "object"
+                                    :properties {:entity_id {:type "string"}}}})
+                                ["automation_put" "service_call"])}
+                  "tools/call"
+                  (do (swap! log conj {:tool (str "homeassistant__"
+                                                  (:name params))
+                                       :arguments (:arguments params)})
+                      {:isError false
+                       :content [{:type "text"
+                                  :text (wire/write-json
+                                         {:ok (str (:name params))})}]})
+                  (throw (ex-info (str "the fake house speaks no " method)
+                                  {}))))
+        eng (doto (engine/engine
+                   {:storage (memory/storage)
+                    :resources [caps/capability ticket-kind]
+                    :now-fn (fn [] clock)
+                    :services {:mcp-servers
+                               {:client-fn
+                                (fn [row]
+                                  (when (= "homeassistant"
+                                           (str (get-in row [:data :name])))
+                                    house))
+                                :gate-rpc (fake-gate)}}})
+              (gate/ensure-gate-row!))
+        _ (inv/create! eng :mcp_server
+                       {:name "homeassistant"
+                        :transport "stdio"
+                        :command "python3"
+                        :args ["-m" "house" "--stdio"]
+                        :powers house-powers
+                        :note "The house, beside the engine."}
+                       {:principal colton})
+        worn (wear! eng scope)]
+    {:eng eng
+     :log log
+     :grant (:id worn)
+     :session {:principal clerk :visibility (:visibility worn)}}))
+
+(deftest a-filter-globs-only-on-a-field-the-entry-says-takes-globs
+  (let [w (house-world
+           [{:kind "homeassistant.automation_put" :actions []
+             :filter {:entity_id "automation.school_*"}}
+            {:kind "homeassistant.service_call" :actions []
+             :filter {:entity_id "media_player.*,media_player.den"}}])]
+
+    (testing "the glob admits an entity it matches, and the server
+              hears the call"
+      (let [r (power! w {:tool "homeassistant__automation_put"
+                         :arguments {:entity_id
+                                     "automation.school_departure"}})]
+        (is (false? (:isError r)) (text-of r))
+        (is (= 1 (count (calls w))))
+        (is (= "automation.school_departure"
+               (:entity_id (last-arguments w))))))
+
+    (testing "…and refuses one it does not, in-process"
+      (let [r (power! w {:tool "homeassistant__automation_put"
+                         :arguments {:entity_id "automation.porch_lights"}})
+            said (text-of r)]
+        (is (true? (:isError r)) said)
+        (is (str/includes? said "entity_id") "the field that failed")
+        (is (str/includes? said "automation.porch_lights")
+            "what this call carried")
+        (is (= 1 (count (calls w))) "nothing reached the server")))
+
+    (testing "an entry that names no glob field still matches exact
+              words: `media_player.*` is a word there, not a glob"
+      (let [r (power! w {:tool "homeassistant__service_call"
+                         :arguments {:entity_id "media_player.kitchen"}})]
+        (is (true? (:isError r)) (text-of r))
+        (is (= 1 (count (calls w)))))
+      (let [r (power! w {:tool "homeassistant__service_call"
+                         :arguments {:entity_id "media_player.den"}})]
+        (is (false? (:isError r)) (text-of r))
+        (is (= 2 (count (calls w))))))
+
+    (testing "discover says which fields take a glob, beside the
+              constraints, and leaves out the token that names none"
+      (let [ask (get-in (discover-doc (:eng w) {:principal colton})
+                        [:doors :ask])]
+        (is (= {:homeassistant.automation_put ["entity_id"]}
+               (:glob_constraints ask)))
+        (is (= ["entity_id"]
+               (:homeassistant.service_call (:constraints ask)))
+            "the constraints map keeps its shape")))))
+
 ;; ── the protected paths: the engine decides allow_protected ─────────
 
 (deftest a-caller-never-sets-allow-protected-the-scope-does
