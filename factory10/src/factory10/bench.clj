@@ -540,6 +540,16 @@
   policy names no `deploy_wait_seconds` (ticket 47217098)."
   1800)
 
+(def default-queued-check-minutes
+  "How long a required check may sit queued before the wait itself is
+  the change's red, when the policy names no `queued_check_minutes`
+  (ticket bc3ff12c)."
+  30)
+
+(defn queued-check-minutes-of [policy]
+  (long (or (get-in policy [:data :queued_check_minutes])
+            default-queued-check-minutes)))
+
 (defn deploy-check-of
   "The check on the base whose success means a commit is deployed, or
   nil when a merge counts as deployed."

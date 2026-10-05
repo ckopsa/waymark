@@ -593,6 +593,16 @@
                         {:label "Rounds for one change"
                          :help "How many times a seat may submit one change before the house stops. At the ceiling the change moves to stuck and waits for a person."}}
     [:int {:min 1 :max 20}]]
+   ;; a required check nobody runs (ticket bc3ff12c). OPTIONAL for the
+   ;; reason merge_wait_seconds is: a row that predates it reads as 30
+   ;; (bench's `queued-check-minutes-of`)
+   [:queued_check_minutes {:optional true
+                           :default 30
+                           :examples [30]
+                           :x-display
+                           {:label "Minutes a check may sit queued"
+                            :help "The longest a required check may stay queued on a submitted change. Past it the change goes back to its seat as failing, because no runner took the check."}}
+    [:int {:min 1 :max 1440}]]
    ;; the merge train (ticket 394d0602, slice a of 3deb06ed). Both
    ;; OPTIONAL for the reason merge_wait_seconds is: a row that
    ;; predates them reads as line / 4 (bench's `merge-strategy-of` and
