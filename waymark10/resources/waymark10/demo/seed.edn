@@ -5,10 +5,10 @@
 ;; Every step is an ordinary create or invoke by the cast member :as
 ;; names, EXCEPT the one :hold step. A held call is minted by the
 ;; engine's own door (held-calls/hold!, the one the power door uses),
-;; because no hand at the wire may create one. And EXCEPT the one
-;; :grant step: the engine mints that grant and accepts it, as an
+;; because no hand at the wire may create one. And EXCEPT the two
+;; :grant steps: the engine mints each grant and accepts it, as an
 ;; approved ask would, because nobody approves an ask at a boot. A step
-;; that names the grant under :wearing is walked with it presented.
+;; that names a grant under :wearing is walked with it presented.
 ;;
 ;; A household is a set of members, not a kind: :household groups the
 ;; cast, and each household's tickets are kept together below.
@@ -87,6 +87,33 @@
   {:as :ben :kind :ticket :on :h-dropped :action "drop"
    :input {:close_reason "No longer wanted: the cat keeps no appointments."}}
 
+  ;; ── the quest ──────────────────────────────────────────────────
+  ;; An epic whose `complete` is the film's goal. It stays a draft:
+  ;; `restate` is a draft's door, and the quest's last step before the
+  ;; goal restates it with the film's link. It has a film showcase and
+  ;; no evidence yet, and two children that are not finished.
+  {:as :ada :kind :ticket :ref :q-epic
+   :create {:title "[epic] The house plans a dinner for its guests"
+            :detail "The guide, the seating plan, and a film of the evening being planned."
+            :showcase {:format "film"
+                       :scene "Ada wants six guests at the table on Saturday and has a guest list on paper. Then she opens the house, and the menu, the seats and the shopping are already one plan."}
+            :type "feature" :priority 1}}
+  ;; the child Ada ends herself
+  {:as :ada :kind :ticket :ref :q-guide
+   :create {:title "Write the guide"
+            :detail "One page that says how a guest dinner is planned in the house."
+            :type "task" :priority 1 :parent [:ref :q-epic]}}
+  {:as :ada :kind :ticket :on :q-guide :action "groom"}
+  ;; the child Planner ends: it is deferred, and `resume` is a door
+  ;; Planner's grant admits and Ada's does not (the two grants below)
+  {:as :plan :kind :ticket :ref :q-seats
+   :create {:title "Draw the seating plan from the guest list"
+            :detail "Six guests, one table. Nobody sits beside the person they came with."
+            :type "task" :priority 2 :parent [:ref :q-epic]}}
+  {:as :ada :kind :ticket :on :q-seats :action "groom"}
+  {:as :ada :kind :ticket :on :q-seats :action "defer"
+   :input {:defer_until [:days 7]}}
+
   ;; ── Orchard Flat ───────────────────────────────────────────────
   {:as :tidy :kind :ticket :ref :o-draft
    :create {:title "Draft a rota for the shared bins"
@@ -144,10 +171,20 @@
   ;; approved ask would. An invitation points at a step its author can
   ;; see and take, so the leash reads the tickets, admits the one door
   ;; the invitation hands over, and admits the invitation's own create.
+  ;; It admits `resume` and `complete` too: the quest's deferred child
+  ;; is Planner's to end.
   {:grant {:audience [:cast :plan]
-           :scope [{:kind "ticket" :actions ["prioritize"]}
+           :scope [{:kind "ticket" :actions ["prioritize" "resume" "complete"]}
                    {:kind "invitation" :actions ["create"]}]}
    :ref :plan-grant}
+
+  ;; ── the person's grant ─────────────────────────────────────────
+  ;; The leash Ada pursues the quest with: she reads every ticket, ends
+  ;; one and restates one. It admits no `resume`, so the deferred child
+  ;; waits on Planner.
+  {:grant {:audience [:cast :ada]
+           :scope [{:kind "ticket" :actions ["complete" "restate"]}]}
+   :ref :ada-grant}
 
   ;; ── the invitation ─────────────────────────────────────────────
   ;; an ordinary create by the household's agent, wearing its grant,
