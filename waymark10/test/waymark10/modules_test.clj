@@ -107,6 +107,9 @@
            ;; ordered run of invitation-shaped steps, core's beside
            ;; the invitation each step is judged as
            :walkthrough
+           ;; …and the quest (docs/spec-quests.md), core's beside the
+           ;; walkthrough: its goal is judged as an invitation's step is
+           :quest
            ;; …and the secret: a value the owner enters once, which a
            ;; power call on core's own mcp_server names by reference
            :secret}
@@ -138,7 +141,7 @@
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
              :domain
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
-             :walkthrough :secret}
+             :walkthrough :quest :secret}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
