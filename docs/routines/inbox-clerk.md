@@ -75,10 +75,11 @@ rows, each with its doors. For each row, invoke the door the charter
 chooses. Do not call discover, schema, query or powers; a refusal names
 its own remedy. When the seat says halted or parked, say why and stop.
 
-The research door reads the message for you: after it, the row's
+The open door reads the message for you: after it, the row's
 body_excerpt holds the first part of the plain text, and body_cut
 says how much was cut. Use waymark_power only when that excerpt is
-not enough to decide, and ask for text_only with max_chars 4000.
+not enough to decide, or when body_read is false, and ask for
+text_only with max_chars 4000.
 
 If a routine-fire-payload block names a row id, walk that row and stop.
 
@@ -124,7 +125,7 @@ present too, and the credential is the person's own.
 | repository | `ckopsa/waymark-seat` | the seat's place: the close hook and nothing to read; the clerk touches no code. One place serves every seat. See "The seat's place". |
 | trigger | Schedule, `0 * * * *` | `cadence_seconds` 3600. Keep the API trigger too: it gives the fire URL. |
 | fire URL | the API trigger's URL | the engine fires the Routine through it. See "The fire link". |
-| connectors | Waymark only | the research door reads the mail through the seat's `email.read` power |
+| connectors | Waymark only | the open door reads the mail through the seat's `email.read` power |
 | instructions | the text below | the key, then the pointer of R-12.3 |
 
 ## The fire link
@@ -209,10 +210,11 @@ doors. For each row, invoke the door the charter chooses. Do not call
 discover, schema, query or powers; a refusal names its own remedy. When
 the seat says halted or parked, say why and stop.
 
-The research door reads the message for you: after it, the row's
+The open door reads the message for you: after it, the row's
 body_excerpt holds the first part of the plain text, and body_cut
 says how much was cut. Use waymark_power only when that excerpt is
-not enough to decide, and ask for text_only with max_chars 4000.
+not enough to decide, or when body_read is false, and ask for
+text_only with max_chars 4000.
 
 If a routine-fire-payload block names a row id, walk that row and stop.
 
@@ -248,19 +250,26 @@ its own reason.
    why and stop. The sitting is open from the bind; the router counts
    each transition and each refusal against it.
 
-   THE RESEARCH DOOR READS THE MESSAGE FOR THE SITTER. The handler
+   THE OPEN DOOR READS THE MESSAGE FOR THE SITTER. A `queued` row
+   offers one door, `open`, and it takes no input. The handler
    calls the `email.read` power itself, under the same grant the
    session wears, and writes the first 4,000 characters of the plain
    text on the row as `body_excerpt`, with `body_cut` to say how much
-   it removed. The session therefore does not open the mail to
-   research it: it says what the message asks, and the words are in
-   the envelope it already has. This is the largest lever on the
+   it removed. The door answers the row, which is now `opened` and
+   offers `research`. The summary is therefore written with the
+   words in front of the session: research is absent at `queued`, so
+   no sentence comes before the reading. This is the largest lever on the
    bill. One mail answer of 179 KB was 80 percent of what a whole
    sitting read, and each turn after it read the same bytes again.
 
    When the engine cannot read the message — no grant, a dark Gate,
-   a rig that says no — the door still opens and the excerpt is
-   empty. Nothing about the walk changes.
+   a rig that says no — the row still lands in `opened`, the excerpt
+   is empty and `body_read` is false. The session then reads the
+   message with `waymark_power`, or says in its summary that it could
+   not.
+
+   The seat's scope must name `open` beside `research`, `yes` and
+   `no`. A seat row written before the open door needs a restate.
 
    A fired run differs here. The engine puts the fire's text into the
    session in a `routine-fire-payload` block. When that block names
