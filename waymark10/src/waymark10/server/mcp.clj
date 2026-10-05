@@ -2499,21 +2499,15 @@
 
 ;; ── waymark_pursue (GRAIL 3/3): a goal in one call ──────────────────
 
-(defn- pursue-session
-  "A waymark10.client session whose transport is this door, wearing the
-  caller's identity exactly as `invoke` does: the resolved principal
-  and visibility, the bound sitting on every request, and
-  `origin-key`'s signature on every POST. So each step the pursuit
-  takes is an ordinary invoke — judged by the caller's grant, counted
-  on the caller's sitting — and nothing the caller could not do by
-  hand."
-  [eng call session]
-  (let [ident (-> (request session :get "/" {})
-                  (assoc :waymark10/sitting
-                         (bound-sitting eng (:mcp-session-id session)))
-                  (select-keys [:waymark10/principal :waymark10/visibility
-                                :waymark10/sitting]))
-        pid (get-in session [:principal :id])]
+(defn- door-session
+  "A waymark10.client session whose transport is this door, wearing
+  `ident` — the resolved `:waymark10/principal`, and the
+  `:waymark10/visibility` and `:waymark10/sitting` when there are any —
+  on every request, and `origin-key`'s signature on every POST. The one
+  builder under `pursue-session` (a request's caller) and `rehearse` (a
+  caller rebuilt from ids), so the two cannot come to differ."
+  [call ident]
+  (let [pid (get-in ident [:waymark10/principal :id])]
     (client/connect
      "mcp:"
      {:presence false
@@ -2523,6 +2517,70 @@
                          (update :headers assoc "idempotency-key"
                                  (origin-key pid (or (get-in req [:headers "idempotency-key"])
                                                      (random-uuid)))))))})))
+
+(defn- pursue-session
+  "The door's session wearing the caller's identity exactly as `invoke`
+  does: the resolved principal and visibility, and the bound sitting on
+  every request. So each step the pursuit takes is an ordinary invoke —
+  judged by the caller's grant, counted on the caller's sitting — and
+  nothing the caller could not do by hand."
+  [eng call session]
+  (door-session
+   call
+   (-> (request session :get "/" {})
+       (assoc :waymark10/sitting
+              (bound-sitting eng (:mcp-session-id session)))
+       (select-keys [:waymark10/principal :waymark10/visibility
+                     :waymark10/sitting]))))
+
+(defn rehearse
+  "GRAIL's rehearsal for a caller named by ids, outside a request: what
+  a durable consumer calls, since it hears a principal id and holds no
+  session. `self` is the href the goal starts from (a row's, or a
+  collection's for a create) and `action` a door it advertises. Answers
+  `client/pursue!`'s `:dry-run true` answer — `{:writes :blocked-on
+  :stack :rehearsal :first-estimate}` — and writes nothing; a start the
+  caller cannot read answers `{:stopped res}` in the same shape.
+
+  The caller is rebuilt as the router would resolve it. The principal
+  is `members/principal-for`'s, so its roles are the member's own, read
+  now. With no grant it wears `grants/unscoped-visibility`, which is
+  `wrap-identity`'s own else-branch: nothing for a person, the worn
+  grant or the bootstrap surface for an agent. With a grant id it wears
+  `grants/visibility` for that grant. The router lets a dead grant
+  through as a scope of nothing; here it is refused by name, because a
+  plan of nothing would read as a goal with no way to it. No sitting
+  rides: a rehearsal counts on nobody's.
+
+  Throws a problem: 404 when nobody named `principal` is a member, 403
+  when the grant is gone, another's, unaccepted, expired or revoked, and
+  the gate's own 403 for a suspended member."
+  [eng {:keys [principal grant]} self action input]
+  (let [who (or (members/principal-for eng principal)
+                (throw (p/problem :rehearse-no-such-member 404 "No such member"
+                                  {:detail (str "Nobody named " (pr-str principal)
+                                                " is a member here, so there is "
+                                                "nobody to rehearse as.")})))
+        gid (some-> grant str not-empty)
+        vis (if gid
+              (let [v (grants/visibility eng gid who)]
+                (when-not (:grant v)
+                  (throw (p/problem :rehearse-grant-not-live 403 "The grant confers nothing"
+                                    {:detail (str "Grant " (pr-str gid) " is gone, is "
+                                                  "not " (:id who) "'s, or is not "
+                                                  "accepted and unexpired now, so "
+                                                  "nothing can be rehearsed under it.")})))
+                v)
+              (grants/unscoped-visibility eng who))
+        cs (door-session (door eng)
+                         (cond-> {:waymark10/principal who}
+                           vis (assoc :waymark10/visibility vis)))
+        start (client/get-doc cs self)]
+    (if-not (client/doc? start)
+      ;; concealed, gone, or never here — the engine's own refusal
+      {:stopped start :writes [] :rehearsal true :first-estimate true}
+      (client/pursue! cs start (wire-action (keyword (name action))) input
+                      {:dry-run true}))))
 
 (defn- pursue
   "waymark_pursue: waymark10.client/pursue! over this door. A remedy
