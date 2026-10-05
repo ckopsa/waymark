@@ -3188,7 +3188,10 @@
 
   `only` is the one row a fire's text named (`seats/fire-key-row`):
   when it is given, the page holds that row alone, or nothing when the
-  row is not in the queue or is claimed. A named OPEN ticket whose
+  row is not in the queue or is claimed. The read goes on through the
+  queue's pages until that row is seen or the queue ends, past
+  `walk-pages-max`: the row a fire named may sit on any page (ticket
+  59582777). A named OPEN ticket whose
   change is submitted is withheld as the plain walk withholds it
   (ticket 6ca380da).
 
@@ -3255,15 +3258,19 @@
                 ;; the subtraction can empty a whole page while free
                 ;; rows wait on the next, so the read goes on until the
                 ;; firing's rows are found or the queue ends (ticket
-                ;; f175f8c5). A named row is looked for on the first
-                ;; page alone, as it always was
+                ;; f175f8c5). A named row is looked for on every page
+                ;; until it is seen: it is one row, and the cap on
+                ;; pages would hide it in a long queue (ticket 59582777)
+                named? #(= (str only) (id-of %))
                 total (long (or (get-in doc ["data" "total"]) 0))
                 queue (loop [k 1
                              acc (vec (get-in doc ["data" "items"]))]
-                        (if (or (not subtract?) only
-                                (>= (count (filter free? acc)) n)
-                                (>= k (long walk-pages-max))
-                                (>= (* k (long asked)) total))
+                        (if (or (>= (* k (long asked)) total)
+                                (if only
+                                  (some named? acc)
+                                  (or (not subtract?)
+                                      (>= (count (filter free? acc)) n)
+                                      (>= k (long walk-pages-max)))))
                           acc
                           (let [more (get-in (page (inc k)) ["data" "items"])
                                 seen (into #{} (map id-of) acc)]
@@ -3274,7 +3281,7 @@
                                            (remove #(contains? seen (id-of %)))
                                            more))))))
                 items (cond->> (filter free? queue)
-                        only (filter #(= (str only) (id-of %))))
+                        only (filter named?))
                 ;; the rows this sitting already walks, while they are
                 ;; still in the queue, are kept first and the queue's
                 ;; next rows fill what room is left: a re-sit is handed
