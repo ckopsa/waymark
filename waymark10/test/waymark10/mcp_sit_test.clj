@@ -1032,7 +1032,22 @@
                            "The week's fuel is spent"))))
     (testing "and so does the seat's schedule"
       (is (= "budget" (get-in (schedules/schedule-for-seat eng (:id seat))
-                              [:data :halted :wall]))))))
+                              [:data :halted :wall]))))
+    ;; Production, 2026-10-05: a seat held at the wall was never marked
+    ;; halted, so its subscribers heard nothing. The sit marks it, once.
+    (testing "and the seat is marked halted once, however often it sits"
+      (sit-walk! h)
+      (let [[log row] (store/with-tx (:storage eng)
+                        (fn [tx]
+                          [(store/transitions (:storage eng) tx
+                                              {:kind :seat
+                                               :resource-id (str (:id seat))}
+                                              {})
+                           (store/load-row (:storage eng) tx :seat
+                                           (str (:id seat)) {})]))]
+        (is (= 1 (count (filter #(= :mark_halted (:action %)) log))))
+        (is (= "budget_reached"
+               (str (get-in row [:data :halt :reason]))))))))
 
 (deftest an-empty-walk-over-graced-rows-says-the-grace-held-them
   ;; Ticket ae64b57c: a walk emptied by a closed sitting's release
