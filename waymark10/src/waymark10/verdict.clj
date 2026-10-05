@@ -226,6 +226,36 @@
           (t/deny {:vars {:kind k :id sid}}))
         (t/allow)))))
 
+(def no-transcript-word
+  "The verdict a judgment of sittings names for a sitting whose
+  transcript was not kept."
+  "no_transcript")
+
+(g/defguard a-sitting-with-no-transcript-says-so
+  {:judges [:verdict :subject_kind :subject_id]
+   :reads [:judgment :storage]
+   :vars [:word :id]
+   :open "A sitting is judged by its transcript, and a sitting that kept none was not read. The judgment names a word for exactly that, so the record never says a sitting nobody read was read and found in order."
+   :explain "Sitting {id} kept no transcript, so nothing of it was read. This judgment names no_transcript for that, and {word} would say it was read."}
+  [_row inp ctx]
+  (let [find' (:find ctx)
+        rdef-of (:rdef-of ctx)
+        inp (under-the-seats-judgment inp ctx)
+        jrow (cited-judgment inp ctx)
+        word (str (:verdict inp))
+        sid (some-> (:subject_id inp) str str/trim not-empty)
+        rdef (when rdef-of (rdef-of "transcript"))]
+    ;; the storage-free probe advertises optimistically, as every wall
+    ;; here does. A judgment that does not name the word is not held
+    ;; to it: its vocabulary is its own closed list
+    (if (or (nil? find') (nil? rdef) (nil? jrow) (nil? sid)
+            (not= "sitting" (str (:subject_kind inp)))
+            (= word no-transcript-word)
+            (not (some #(= no-transcript-word %) (verdict-words jrow)))
+            (seq (find' (:kind rdef) {:sitting sid} {:limit 1})))
+      (t/allow)
+      (t/deny {:vars {:word word :id sid}}))))
+
 (g/defguard one-standing-verdict-per-subject
   {:judges [:judgment :subject_id :corrects]
    :reads [:verdict]
@@ -773,6 +803,7 @@
                    remedy-within-the-ceiling
                    subject-kind-matches
                    subject-is-a-row
+                   a-sitting-with-no-transcript-says-so
                    a-correction-cites-what-stands
                    a-person-corrects
                    one-standing-verdict-per-subject

@@ -876,11 +876,16 @@
   which `mcp/walk-of` subtracts the same way). Without the second, a
   judged subject still open in the queue read as a row to hand: a seat
   of several slots fired again on every sitting's close, and each run
-  sat to an empty walk (ticket 871c8555). → a set of ids."
+  sat to an empty walk (ticket 871c8555). A judge of sittings is also
+  not handed its own sittings nor an unfinished one
+  (`judgments/unjudgeable-sittings`, ticket f508c646). → a set of ids."
   [eng seat-row]
   (let [skip (set (seats/unwalkable-rows eng seat-row nil))]
     (if-some [jid (some-> (get-in seat-row [:data :judgment]) str not-empty)]
-      (into skip (judgments/judged-subjects eng jid))
+      (-> skip
+          (into (judgments/judged-subjects eng jid))
+          (into (judgments/unjudgeable-sittings
+                 eng (raw-row eng :judgment jid) (:id seat-row))))
       skip)))
 
 (defn- slots
@@ -1090,8 +1095,10 @@
   are read, the unjudged being the fresh end of the table; the entry's
   filter is read through `collections/parse-query`, as `count-under`
   reads it — so a comma value is any-of — and its own `state` replaces
-  `sealed`."
-  [eng judgment-id filter-map]
+  `sealed`. `own` is the judging seat's own sittings
+  (`judgments/own-sittings`): the walk never hands one, so a wake never
+  counts one (ticket f508c646)."
+  [eng judgment-id filter-map own]
   (when-some [rdef (when (serves? eng :transcript)
                      (get (inv/resources eng) :transcript))]
     (try
@@ -1100,7 +1107,7 @@
                                 filter-map))
             conds (:conds (collections/parse-query rdef params
                                                    {:defaults? false}))
-            judged (judgments/judged-subjects eng judgment-id)
+            judged (into (judgments/judged-subjects eng judgment-id) own)
             st (:storage eng)]
         (->> (store/with-tx st
                (fn [tx] (store/search-rows st tx :transcript conds
@@ -1136,7 +1143,8 @@
         [walk f] (when seat-row (walk-query eng seat-row))]
     (cond
       (and judgment (= :transcript kind))
-      (unjudged-transcripts eng (:id judgment) (:filter e))
+      (unjudged-transcripts eng (:id judgment) (:filter e)
+                            (judgments/own-sittings eng (:id seat-row)))
 
       (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
       (walk-count eng seat-row)
