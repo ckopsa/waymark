@@ -1079,6 +1079,84 @@
     (when (and (map? answer) (not (bench/refused answer)))
       (:landing answer))))
 
+;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
+;;
+;; A check whose workflow asks for a runner no runner serves stays
+;; `queued` and never concludes, so `check-verdict` answers nil for good
+;; and the change sits at `submitted`. Past the policy's
+;; `queued_check_minutes` the wait itself is the red: one finding for
+;; each such check, among the names. A check that starts after that
+;; brings the row back to `submitted` on the next pass.
+
+(def ^:private queued-finding-mark " has been queued ")
+
+(defn- queued-finding [check-name minutes]
+  (let [tail (str queued-finding-mark minutes
+                  " minutes; no runner took it (check its runs-on)")
+        head (str "check " check-name)]
+    (str (subs head 0 (min (count head) (- 200 (count tail)))) tail)))
+
+(defn- queued-finding? [s]
+  (let [s (str s)]
+    (and (str/starts-with? s "check ")
+         (str/includes? s queued-finding-mark))))
+
+(defn- minutes-since
+  "The whole minutes from `started-at` to `now`, or nil when the check
+  does not say when it was queued."
+  [^java.time.Instant now started-at]
+  (try
+    (.toMinutes (java.time.Duration/between
+                 (java.time.Instant/parse (str started-at)) now))
+    (catch Exception _ nil)))
+
+(defn- required-runs
+  "[name runs] for each required check, the newest run speaking for its
+  name as in `check-verdict`."
+  [required checks]
+  (let [by-name (update-vals (group-by #(str (:check_name %)) checks)
+                             newest-runs)
+        names (if (seq required)
+                (vec (distinct required))
+                (vec (sort (remove str/blank? (keys by-name)))))]
+    (mapv (fn [n] [n (get by-name n)]) names)))
+
+(defn- queued? [check]
+  (= "queued" (str (:status check))))
+
+(defn queued-verdict
+  "{:verdict :red :names [finding …]} when a required check has been
+  `queued` (not `in_progress`) longer than `limit` minutes at `now`,
+  with one finding for each such check; nil otherwise. A check that
+  does not say when it was queued is not judged."
+  [required checks limit now]
+  (let [findings (into []
+                       (keep (fn [[n runs]]
+                               (let [waits (keep #(when (queued? %)
+                                                    (minutes-since now (:started_at %)))
+                                                 runs)]
+                                 (when (and (seq runs)
+                                            (= (count waits) (count runs)))
+                                   (let [m (long (apply min waits))]
+                                     (when (> m (long limit))
+                                       (queued-finding n m)))))))
+                       (required-runs required checks))]
+    (when (seq findings) {:verdict :red :names findings})))
+
+(defn- queue-left?
+  "True when a row that is failing ONLY for queued checks has none of
+  its required checks queued any more: a runner took them."
+  [row required checks]
+  (let [names (get-in row [:data :failing_checks])
+        runs (required-runs required checks)]
+    (boolean (and (seq names)
+                  (every? queued-finding? names)
+                  (seq runs)
+                  (every? (fn [[_ rs]] (and (seq rs) (not-any? queued? rs)))
+                          runs)))))
+
+(declare now-of)
+
 (defn- failing-move
   "The one door the verdict opens on this row, as [door input], or nil.
   A red head under the round ceiling goes to `failing`; a red head on
@@ -1109,6 +1187,8 @@
         (when-not (and train-head
                        (= train-head (str (get-in row [:data :head_sha]))))
           [:recover {}]))
+      ;; a queued check a runner took at last (ticket bc3ff12c)
+      [:failing :started] [:recover {}]
       nil)))
 
 (def ^:private moved-counts
@@ -1170,9 +1250,22 @@
                    landing (when (contains? #{:submitted :failing}
                                             (state-of row))
                              (landing-verdict (landing-of eng row policy)))
+                   required (bench/required-checks-of policy)
+                   checks (when-not landing (read-checks repo head))
                    checked (when-not landing
-                             (check-verdict (bench/required-checks-of policy)
-                                            (read-checks repo head)))
+                             (check-verdict required checks))
+                   ;; a required check nobody runs never concludes, so
+                   ;; the wait past the policy's limit is the red, and
+                   ;; a check that starts after it clears that red
+                   ;; (ticket bc3ff12c)
+                   waited (when (and (not landing) (nil? checked))
+                            (or (queued-verdict
+                                 required checks
+                                 (bench/queued-check-minutes-of policy)
+                                 (now-of eng))
+                                (when (and (= :failing (state-of row))
+                                           (queue-left? row required checks))
+                                  {:verdict :started})))
                    ;; every required check finished on a house change:
                    ;; wake the merge pass (ticket 6e190062)
                    _ (when (and checked (bench/house-pass-merges? policy))
@@ -1187,7 +1280,7 @@
                              :red landing
                              :running (when (conflicted? row)
                                         (with-conflict nil row))
-                             (with-conflict checked row))
+                             (with-conflict (or checked waited) row))
                    ;; the mirror's own read of a submitted head, stamped
                    ;; for the merge line: a rig's red on a head read green
                    ;; here is the failing round's (ticket baf76388)

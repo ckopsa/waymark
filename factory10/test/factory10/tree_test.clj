@@ -463,7 +463,8 @@
           form (into #{} (map first) (rest (:create-schema repo-policy)))]
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
-               :merge_wait_seconds :rounds_per_change :merge_strategy
+               :merge_wait_seconds :rounds_per_change :queued_check_minutes
+               :merge_strategy
                :train_size :formatter :deny
                :test :check :hosted_workflows
                :orientation :enrolled_at :note :source_note

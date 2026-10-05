@@ -2340,6 +2340,56 @@
   (is (= ["tests"] (forge/missing-checks ["gate" "tests" "gate"]
                                          [{:check_name "gate" :status "queued"}]))))
 
+;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
+
+(defn- minutes-ago [n]
+  (str (.minusSeconds (java.time.Instant/now) (* 60 (long n)))))
+
+(deftest a-required-check-queued-past-the-limit-fails-the-change
+  (let [{:keys [state engine] :as r}
+        (missing-world [{:id 41752098900 :name "gate" :status "queued"
+                         :head_sha the-head :started_at (minutes-ago 45)}])]
+    (pass! r)
+    (let [row (the-change engine)
+          names (get-in row [:data :failing_checks])]
+      (is (= "failing" (name (:state row))))
+      (is (= 1 (count names)) "one finding")
+      (is (re-matches
+           #"check gate has been queued \d+ minutes; no runner took it \(check its runs-on\)"
+           (str (first names)))))
+    (testing "a run that starts clears the finding on the next pass"
+      (gh/seed-check! state repo the-head
+                      {:id 41752098901 :name "gate" :status "in_progress"
+                       :head_sha the-head :started_at (minutes-ago 1)})
+      (pass! r)
+      (let [row (the-change engine)]
+        (is (= "submitted" (name (:state row))))
+        (is (empty? (get-in row [:data :failing_checks])))))))
+
+(deftest a-required-check-queued-under-the-limit-stays-submitted
+  (let [{:keys [engine] :as r}
+        (missing-world [{:id 41752098900 :name "gate" :status "queued"
+                         :head_sha the-head :started_at (minutes-ago 10)}])]
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (= "submitted" (name (:state row))))
+      (is (empty? (get-in row [:data :failing_checks]))))))
+
+(deftest the-queued-verdict-reads-the-limit-it-is-given
+  (let [now (java.time.Instant/now)
+        queued {:check_name "gate" :status "queued"
+                :started_at (minutes-ago 45)}]
+    (is (= :red (:verdict (forge/queued-verdict ["gate"] [queued] 30 now))))
+    (is (nil? (forge/queued-verdict ["gate"] [queued] 60 now))
+        "the policy's own limit, not the default")
+    (is (nil? (forge/queued-verdict ["gate"]
+                                    [(assoc queued :status "in_progress")]
+                                    30 now))
+        "a running check is not a queued one")
+    (is (nil? (forge/queued-verdict ["gate"] [(dissoc queued :started_at)]
+                                    30 now))
+        "a check that does not say when it was queued is not judged")))
+
 ;; ── a parent stranded in review by an early merge (ticket 499bcd72) ─
 
 (defn- force!
