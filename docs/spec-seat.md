@@ -124,6 +124,7 @@ work.
 | `mode` | enum `fired`, `interactive`, default `fired` | who opens a sitting here. A schedule, a person or a wake fires a fired seat. A person sits in an interactive seat, and nothing fires it. R-10.8. |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
 | `feed_url` | string, optional, an https URL | an outside inbox that streams this seat's subscription deliveries. The sit answers a short-lived token for it. R-16.7. |
+| `inbox` | map `{only, cues}`, optional | what the engine holds for this seat's sittings to pull. `only` is a map from a kind to the actions on it that count; an empty list is every action. `cues` is a list of at most 20 entries `{kind, actions, filter, note}`: a standing note, from 1 to 280 characters, that the inbox door attaches to each event the entry matches. A cue's kind, actions and filter are judged as a `wake_on` entry's are, and its empty `actions` is every action. An inbox that states `cues` and no `only` keeps the default `only` of an interactive seat. R-12.38. |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
 | `sitting_idle_seconds` | int, 60 to 86400, default 3600 | how long an open interactive sitting can wait with no new tally, or an open fired sitting with no call, before the sweep ends it. R-7.6. |
 | `walk` | kind name, optional | the queue this seat walks, one row at a time, in the order of its default sort. R-12.9. |
@@ -904,6 +905,13 @@ the close of a sitting ends every key of it.
   `event` is the log's own id, the value the next `after` names. The
   header `Waymark-Inbox-After` names the last event the door read,
   matched or not, so a tail whose answer was empty can go on from it.
+- A line carries `cue` when a cue of the seat's `inbox.cues` matches
+  the event. A cue matches by its kind and its action, and an empty
+  list is every action. A cue that states a `filter` matches only when
+  the row, as it stands when the door serves the line, is under that
+  filter. `cue` is the notes of every cue that matches, in the cues'
+  order, joined with ` · `. A line that no cue matches has no `cue`.
+  Cues never change which events the door serves.
 - `wait`, from 0 to 25, holds the request. The door answers as soon
   as a matching event lands, or answers empty when the wait runs out.
 - It answers 401 with `No open sitting answers this inbox key.` when

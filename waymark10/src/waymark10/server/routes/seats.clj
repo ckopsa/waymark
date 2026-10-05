@@ -896,12 +896,48 @@
               (not (webhooks/by-actor? own t))
               (or (nil? domains) (webhooks/in-domains? eng domains t))))))))
 
+(defn- cue-match
+  "A function of a log row: the seat's cue for it, or nil (R-12.38).
+  The cue is the notes of every `inbox.cues` entry that matches, in
+  the cues' order, joined with ` · `.
+
+  A cue matches by its kind and its action (an empty list is every
+  action) and, when it states a `filter`, by the row AS IT STANDS NOW:
+  one read by `resource-id`, made only for an event whose kind and
+  action a filtered cue names, and judged as a grant judges a filter
+  (`grants/row-matches?`). A row that is gone matches no filter."
+  [eng seat]
+  (let [cues (:cues (seats/inbox-of seat))]
+    (fn [t]
+      (let [k (name (:kind t))
+            a (name (:action t))
+            named (filterv (fn [c]
+                             (and (= k (str (:kind c)))
+                                  (or (empty? (:actions c))
+                                      (some #(= a (str %)) (:actions c)))))
+                           cues)]
+        (when (seq named)
+          (let [rdef (get (inv/resources eng) (keyword k))
+                st (:storage eng)
+                row (when (and rdef (some #(seq (:filter %)) named))
+                      (store/with-tx st
+                        #(store/load-row st % (:kind rdef) (str (:resource-id t)) {})))
+                notes (keep (fn [c]
+                              (when (or (empty? (:filter c))
+                                        (and row (grants/row-matches? row [(:filter c)] rdef)))
+                                (:note c)))
+                            named)]
+            (when (seq notes)
+              (str/join " · " notes))))))))
+
 (defn- inbox-line
   "One event as the door answers it (R-12.38). `actor` is the address
   of who made the move, and `actor_name` what a person calls them, as
-  a subscription's delivery names them."
-  [eng t]
-  (let [who (webhooks/actor-name eng t)]
+  a subscription's delivery names them. `cue` is there when a cue of
+  the seat's inbox matches the event (`cue-match`)."
+  [eng cue-of t]
+  (let [who (webhooks/actor-name eng t)
+        cue (cue-of t)]
     (cond-> {:kind (name (:kind t))
              :id (str (:resource-id t))
              :action (name (:action t))
@@ -911,7 +947,8 @@
              :actor (webhooks/actor-address t)
              :at (str (:at t))
              :event (:id t)}
-      who (assoc :actor_name who))))
+      who (assoc :actor_name who)
+      cue (assoc :cue cue))))
 
 (defn- inbox-scan
   "The matching events after `cursor`, read a page at a time until the
@@ -949,6 +986,7 @@
           after (when-not now? (whole-param req "after" 0 nil))
           wait (or (whole-param req "wait" 0 inbox-wait-max) 0)
           match? (inbox-match eng seat sitting)
+          cue-of (cue-match eng seat)
           deadline (+ (System/nanoTime) (* (long wait) 1000000000))]
       (if now?
         {:status 200
@@ -963,7 +1001,7 @@
               {:status 200
                :headers {"Content-Type" "application/x-ndjson"
                          "Waymark-Inbox-After" (str cursor)}
-               :body (apply str (map #(str (wire/write-json (inbox-line eng %)) "\n") hits))})))))))
+               :body (apply str (map #(str (wire/write-json (inbox-line eng cue-of %)) "\n") hits))})))))))
 
 ;; ── the key check door (docs/spec-seat.md § 16) ─────────────────────
 

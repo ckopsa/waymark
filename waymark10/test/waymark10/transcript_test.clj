@@ -1136,6 +1136,65 @@
       (is (= "colton" (:actor (second lines))))
       (is (= "Colton Kopsa" (:actor_name (second lines)))))))
 
+;; ── the inbox's cues (ticket ab77e635) ──────────────────────────────
+
+(defn- cue [note & [more]]
+  (merge {:kind "tr_ask" :actions ["groom"] :note note} more))
+
+(deftest a-cue-naming-what-the-kind-does-not-have-is-refused
+  (let [eng (asks-engine)
+        model (add-model! eng)
+        refused (fn [c] (refusal #(open-seat! eng model {:inbox {:cues [c]}})))]
+    (testing "a kind this engine does not serve"
+      (let [p (refused (cue "n" {:kind "nosuchkind"}))]
+        (is (= :inbox-names-real-kinds (:guard p)))
+        (is (str/includes? (str (:detail p)) "nosuchkind"))))
+    (testing "an action its kind does not have"
+      (let [p (refused (cue "n" {:actions ["explode"]}))]
+        (is (= :inbox-names-real-actions (:guard p)))
+        (is (str/includes? (str (:detail p)) "explode"))))
+    (testing "a filter on a field the kind does not declare filterable"
+      (let [p (refused (cue "n" {:filter {:name "ours"}}))]
+        (is (= :inbox-cues-filter-declared-fields (:guard p)))
+        (is (str/includes? (str (:detail p)) "name"))))
+    (testing "a missing note, and one past 280 characters"
+      (is (some? (refused (dissoc (cue "n") :note))))
+      (is (some? (refused (cue (apply str (repeat 281 "n")))))))
+    (testing "more than 20 cues"
+      (is (some? (refusal #(open-seat! eng model
+                                       {:inbox {:cues (vec (repeat 21 (cue "n")))}})))))))
+
+(deftest the-inbox-door-attaches-the-cues-that-match
+  (testing "the notes of every matching cue, in the cues' order"
+    (let [eng (asks-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng)
+                        (assoc-in hears-asks [:inbox :cues]
+                                  [(cue "A factory ask: groom it." {:filter {:domain "factory"}})
+                                   (cue "A household ask." {:filter {:domain "household"}})
+                                   (cue "Every move of an ask." {:actions []})
+                                   {:kind "meal" :actions [] :note "A meal moved."}]))
+          key (get-in (sit! h) [:inbox :key])
+          stamped (groomed! eng {:name "stamped" :domain "factory"} person)
+          unstamped (groomed! eng {:name "unstamped"} person)
+          lines (lines-of (tail! h key))]
+      (is (= [stamped unstamped] (mapv :id lines))
+          "the cues do not change what the door serves")
+      (is (= "A factory ask: groom it. · Every move of an ask." (:cue (first lines))))
+      (is (= "Every move of an ask." (:cue (second lines)))
+          "a row that stores no domain is under no domain filter")))
+  (testing "a line that no cue matches has no cue"
+    (let [eng (asks-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng)
+                        (assoc-in hears-asks [:inbox :cues]
+                                  [(cue "A factory ask: groom it." {:filter {:domain "factory"}})]))
+          key (get-in (sit! h) [:inbox :key])
+          unstamped (groomed! eng {:name "unstamped"} person)
+          lines (lines-of (tail! h key))]
+      (is (= [unstamped] (mapv :id lines)))
+      (is (not (contains? (first lines) :cue))))))
+
 ;; ── the default inbox, and the keys a re-sit keeps (epic 3ad250ef) ──
 
 (def ^:private reads-seats
@@ -1178,6 +1237,20 @@
           sat (sit! h)]
       (is (= "fired" (:mode sat)))
       (is (nil? (:inbox sat))))))
+
+(deftest cues-alone-keep-the-default-inbox
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        cues [{:kind "seat" :actions [] :note "A seat moved."}]
+        seat (open-seat! eng (add-model! eng) {:mode "interactive" :scope reads-seats
+                                               :inbox {:cues cues}})
+        key (get-in (sit! h) [:inbox :key])
+        lines (lines-of (tail! h key {:after 0}))
+        ours (filter #(and (= "seat" (:kind %)) (= (str (:id seat)) (:id %))) lines)]
+    (is (= {:cues cues} (get-in (row-of eng :seat (:id seat)) [:data :inbox]))
+        "the default `only` is derived, nothing is stored")
+    (is (seq ours) "the default kinds are still served")
+    (is (every? #(= "A seat moved." (:cue %)) ours))))
 
 (deftest a-same-session-re-sit-keeps-the-earlier-inbox-key
   (let [eng (fresh-engine)

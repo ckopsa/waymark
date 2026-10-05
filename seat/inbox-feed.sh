@@ -13,7 +13,9 @@
 # prints when it holds N events, or SECONDS after its first event,
 # whichever comes first. An urgent event prints the batch at once.
 # Each event reads `kind id8 action from->to by actor_name: summary`;
-# `by actor_name` is there when the door's line carries the name.
+# `by actor_name` is there when the door's line carries the name. A
+# line that carries a `cue` ends with ` ⇒ cue`: the seat's standing
+# note for that event. A cue does not make an event urgent.
 #
 # THE CURSOR IS A FILE, so a restart resumes. It is `.inbox-feed.after`
 # beside this script, or the path in WAYMARK_INBOX_CURSOR. It names the
@@ -97,6 +99,8 @@ for raw in sys.stdin:
     if e.get("actor_name"):
         text += " by %s" % e["actor_name"]
     text += ": %s" % (e.get("summary") or "")
+    if e.get("cue"):
+        text += " ⇒ %s" % e["cue"]
     text = re.sub(r"\s+", " ", text).strip()
     event = e.get("event")
     flag = "!" if kind in urgent or kind + ":" + action in urgent else "."

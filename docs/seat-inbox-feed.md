@@ -22,6 +22,12 @@ Each line the Monitor reads is one batch:
 An event reads `kind id8 action from->to by actor_name: summary`. The
 `by actor_name` part is there when the door's line carries the name.
 
+An event ends with ` ⇒ cue` when the door's line carries a `cue`. A
+cue is a standing note that the seat's `inbox.cues` attaches to the
+events it matches, and it says what the seat does about the event
+(spec-seat.md R-12.38). A cue does not make an event urgent:
+`--urgent` decides that.
+
 ## Options
 
 | option | default | meaning |

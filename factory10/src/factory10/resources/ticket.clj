@@ -1716,6 +1716,9 @@
                 :found_in #{:eq}
                 :repo #{:eq :in}
                 :domain #{:eq :in}
+                ;; ticket ab77e635: a seat's inbox cue names the domain
+                ;; that asked, and a query may too
+                :requested_by #{:eq}
                 :bead_id #{:eq :set}}
    ;; a ticket born before domains stores none, and is factory's
    :absent-as {:domain "factory"}
