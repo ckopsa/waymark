@@ -3,17 +3,31 @@
   and the three moves that decide it (docs/spec-seat.md § 13.8).
 
   THE DECISION TREE IS A KIND. A seat walks a tree: for each message,
-  research opens it, and then yes states the action item or no
-  dismisses it. A tree with branches is a state machine with two doors
-  from one state, which is an ordinary declaration and not a
-  `:process` — a process has no branches by design. The tree lives
+  open reads it, research says what it asks, and then yes states the
+  action item or no dismisses it. A tree with branches is a state
+  machine with two doors from one state, which is an ordinary
+  declaration and not a `:process` — a process has no branches by
+  design. The tree lives
   here, in code, BECAUSE IT IS LAW; the seat that walks it lives in a
   row, because a seat is fluid. Nothing about the shape of the walk is
-  in the prompt: at `queued` the envelope offers one door, at
-  `researched` it offers two, at a leaf it offers none. A model cannot
-  skip research, because the `yes` door is ABSENT until research is
-  done — not discouraged, absent — and it cannot make a task except
-  through `yes`, which demands the action item in one sentence.
+  in the prompt: at `queued` the envelope offers one door, at `opened`
+  one, at `researched` two, at a leaf none. A model cannot skip
+  research, because the `yes` door is ABSENT until research is done —
+  not discouraged, absent — and it cannot make a task except through
+  `yes`, which demands the action item in one sentence.
+
+  READING COMES BEFORE SAYING. Research once read the message and took
+  the summary in one call, so the engine read the body only AFTER the
+  model had written the sentence that was meant to come from it: four
+  summaries on 2026-10-05 said \"judged from subject and sender only\",
+  and one missed a deadline the excerpt carried. So the walk has two
+  doors where it had one. `open` takes no input, reads the message and
+  answers the row with the excerpt on it; `research` departs `opened`
+  and writes the summary only. The `research` door is ABSENT at
+  `queued`, exactly as `yes` is absent before research, so the
+  excerpt is in front of the sitter before there is a door to write a
+  summary through. A row that was `researched` before this stays as it
+  is.
 
   THE QUEUE IS THE COLLECTION UNDER ITS DEFAULT FILTER. Week one's
   seat rebuilt its worklist from the inbox on every wake, because
@@ -22,9 +36,11 @@
   already turned into one. `message_id` is the address in the inbox,
   declared `:unique`, so the second minting of a handled message is
   refused by an index rather than by a sentence in a charter; and a
-  row at a leaf is simply not in `?state=queued` any more, so it is
-  never offered twice. `:default-filters {:state \"queued\"}` is
-  outcome's own spelling of the same idea — the collection a walker
+  row at a leaf is simply not in the queue any more, so it is never
+  offered twice. `:default-filters {:state \"queued,opened\"}` is
+  outcome's own spelling of the same idea, with `opened` beside
+  `queued` so that a row one sitting opened and left is offered to
+  the next — the collection a walker
   opens IS the work waiting for it.
 
   WHAT IS STORED, AND WHAT IS NEVER STORED. Headers: the address, the
@@ -40,7 +56,7 @@
   waymark-fp62.7.16). The clerk's first sitting on the cheaper model
   read one power answer of 179 KB for three messages. That was 80
   percent of everything it read, and each turn after it read the same
-  bytes again. So the research door fetches the message itself: the
+  bytes again. So the `open` door fetches the message itself: the
   handler calls the `email.read` power through the ctx `:power` hook
   — the sitter's own leash, and a call the model does not make — and
   writes `body_excerpt`, up to 4,000 characters of plain text, with
@@ -49,10 +65,12 @@
 
   THE FETCH NEVER REFUSES THE DOOR. A request with no `:power` hook,
   a Gate that is dark, a rig that says no: each one writes no
-  excerpt, and the transition commits. Research is a verdict about a
-  message, and the engine's own reach is not a reason to refuse it.
-  The model can still read the whole message with `waymark_power`,
-  which is what it did before this door could read.
+  excerpt, and the transition commits: the row lands in `opened` all
+  the same, with `body_read` false, which is the door saying in its
+  own answer that the engine read nothing. The engine's own reach is
+  not a reason to refuse the walk. The sitter then reads the whole
+  message with `waymark_power`, or says in its summary that it could
+  not.
 
   THE TASK IS BORN INSIDE `yes`, UNDER THE OUTER PRINCIPAL. The seat's
   scope does not name `task.create` at all: the queue row is written
@@ -165,17 +183,23 @@
                                  (text/excerpt answer excerpt-chars))]
         (when (seq text) {:text text :cut cut})))))
 
-(defhandler write-the-summary [row inp ctx]
-  ;; TWO WRITES, AND ONLY ONE OF THEM IS THE MODEL'S. The summary is
-  ;; the sentence the door collected; the excerpt is what the engine
-  ;; read for itself, so the next turn does not pay for the message
-  ;; again.
-  (let [row (assoc-in row [:data :summary] (:summary inp))]
-    (if-some [found (read-the-message row ctx)]
-      (-> row
-          (assoc-in [:data :body_excerpt] (:text found))
-          (assoc-in [:data :body_cut] (:cut found)))
-      row)))
+(defhandler open-the-message [row _inp ctx]
+  ;; THE ENGINE'S HALF, AND IT COMES FIRST. No input: the door reads
+  ;; the message and the answer is the row, so the excerpt is in front
+  ;; of the sitter before `research` is there to invoke. `body_read`
+  ;; says which of the two happened, because an absent excerpt alone
+  ;; does not tell a sitter that it has to go and read.
+  (if-some [found (read-the-message row ctx)]
+    (-> row
+        (assoc-in [:data :body_excerpt] (:text found))
+        (assoc-in [:data :body_cut] (:cut found))
+        (assoc-in [:data :body_read] true))
+    (assoc-in row [:data :body_read] false)))
+
+(defhandler write-the-summary [row inp _ctx]
+  ;; THE MODEL'S HALF: the sentence the door collected, written beside
+  ;; the excerpt `open` already left. This handler reads nothing.
+  (assoc-in row [:data :summary] (:summary inp)))
 
 (defhandler write-the-reason [row inp _ctx]
   ;; `reason` is optional: a `no` with nothing to say is a whole
@@ -246,7 +270,7 @@
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
-;; All three are CHECK-TIER — no `:given` rows, and the only guard in
+;; All four are CHECK-TIER — no `:given` rows, and the only guard in
 ;; the tree reads `:principal`, and `:within` only when a replay names
 ;; one, which no scenario does — so `make check-queue`
 ;; judges them with no database, in the same breath as the usability
@@ -280,7 +304,7 @@
    :expect  {:allowed true}})
 
 (defscenario the-tree-has-no-shortcut-past-research
-  "The model cannot say yes to a message it has not opened — not
+  "The model cannot say yes to a message it has not researched — not
    because the charter asks it not to, but because the door is not
    there. The machine refuses it with no guard behind the refusal,
    which is the strongest way a tree can be enforced."
@@ -294,6 +318,21 @@
    :expect  {:refused :out-of-state
              :because "Researched"}})
 
+(defscenario the-tree-has-no-shortcut-past-open
+  "Nor can it say what a message asks before the engine has read the
+   message to it. Research is absent at `queued`, refused by the same
+   machine with no guard behind it, so a summary is only ever written
+   with the excerpt already on the row."
+  {:kind    :inbox_item
+   :attempt :research
+   :row     {:state :queued
+             :data {:message_id "19b2f0c4d5e6a7ba"
+                    :subject "Deck estimate — can you confirm Thursday?"
+                    :sender "jen@contractor.example"}}
+   :as      {:id "inbox-clerk" :type :agent}
+   :expect  {:refused :out-of-state
+             :because "Opened"}})
+
 ;; ── :inbox_item — the queue, and the tree over it ───────────────────
 
 (defresource inbox-item
@@ -301,7 +340,7 @@
    :plural "inbox_items"
    ;; not a thing the FAMILY does — see the ns docstring
    :nav :secondary
-   :states [:queued :researched :action_item :dismissed]
+   :states [:queued :opened :researched :action_item :dismissed]
    :initial :queued
    ;; ONE TOMB, NOT TWO — see :deviations
    :terminal #{:action_item}
@@ -330,7 +369,9 @@
    ;; spelling): a walker opens /api/inbox_items and gets exactly the
    ;; messages nobody has decided about, oldest first.
    :filterable {:state #{:eq :in} :message_id #{:eq}}
-   :default-filters {:state "queued"}
+   ;; `opened` rides beside `queued`: a row one sitting opened and left
+   ;; is still nobody's decision, and the next walker has to meet it.
+   :default-filters {:state "queued,opened"}
    :sortable {:fields [:received_at] :default "received_at"}
    ;; ONE ROW PER MESSAGE, enforced by an index rather than by a
    ;; sentence in a charter — week one's nine duplicate refusals, as
@@ -366,16 +407,16 @@
                     :help "The mailbox's own timestamp. The queue is walked oldest first, so this is the order the house answers its mail in."}}
      :waymark/instant]
     ;; WRITTEN BY RESEARCH, and the only thing the body leaves behind.
-    ;; The message itself is read through a power at research time and
-    ;; never stored; this is the sentence that survives it.
+    ;; The message itself is read through a power by `open` and never
+    ;; stored; this is the sentence that survives it.
     [:summary {:optional true
                :x-display
                {:widget "prose"
                 :label "What the message actually says"
                 :help "What is in the message and what, if anything, it asks of this house — in the words a person would use out loud. The body is never kept, so this is the whole of what the next reader has."}}
      [:maybe [:string {:max 480}]]]
-    ;; WRITTEN BY RESEARCH TOO, and by the ENGINE rather than by the
-    ;; model (waymark-fp62.7.16). The handler reads the message
+    ;; WRITTEN BY OPEN, and by the ENGINE rather than by the model
+    ;; (waymark-fp62.7.16). The handler reads the message
     ;; through the sitter's own `email.read` power and keeps the first
     ;; part of the words. A person never writes it: it is on no door
     ;; and on no input, exactly as the sitting's `served` is.
@@ -383,7 +424,7 @@
                     :x-display
                     {:widget "prose"
                      :label "The first part of the message"
-                     :help "The plain words of the message, as the engine read them at research time, up to 4,000 characters. The tags, the scripts and the styles are gone. The whole message is not kept; read it with waymark_power when this is not enough."}}
+                     :help "The plain words of the message, as the engine read them when the row was opened, up to 4,000 characters. The tags, the scripts and the styles are gone. The whole message is not kept; read it with waymark_power when this is not enough."}}
      [:maybe [:string {:max 4000}]]]
     ;; …AND WHAT THE CAP REMOVED, said out loud. A reader who cannot
     ;; tell a whole message from the first page of one will trust the
@@ -393,6 +434,14 @@
                 {:label "Characters the cap removed"
                  :help "How many characters of the message the cap left out. It is 0 when the excerpt is the whole message, and empty when the engine read nothing."}}
      [:maybe [:int {:min 0}]]]
+    ;; …AND WHETHER THE ENGINE READ AT ALL. `open` lands in `opened`
+    ;; when its read answered nothing, so the row has to say which
+    ;; `opened` this is: this is how the door says so in its answer.
+    [:body_read {:optional true
+                 :x-display
+                 {:label "The engine read the message"
+                  :help "True when the open door read the message and kept the first part of it. False when it could not — the grant holds no mail power, or the mail rig did not answer: read the message with waymark_power before you research it, or say in the summary that you could not. Empty on a row researched before the open door was there."}}
+     [:maybe :boolean]]
     ;; STAMPED BY YES: the task this message became, as a row and not a
     ;; sentence. The ref is what makes "which of these turned into
     ;; work" answerable without reading prose.
@@ -453,11 +502,23 @@
                          :help "True when the message carried a list-unsubscribe header. Leave it unset when it did not; a source that declines to queue bulk mail at all never sends it."}}
      [:maybe :boolean]]]
    :actions
-   {;; ONE DOOR AT `queued`, AND IT IS THE ONE THAT COSTS TOKENS.
-    ;; Research is where the body is read — through a power, outside
-    ;; this row — and the summary is the receipt for having read it.
+   {;; ONE DOOR AT `queued`, AND IT TAKES NOTHING. The engine reads
+    ;; the message through the sitter's own `email.read` power and the
+    ;; answer is the row, so the excerpt is in front of the sitter
+    ;; before any door asks it for a sentence.
+    :open
+    {:from #{:queued} :to :opened
+     :handler open-the-message
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Nothing is decided here and nothing is sent. The engine reads the message and keeps the first part of it on the row, and the research door appears. When body_read comes back false the engine could not read it: read the message with waymark_power, or say in your summary that you could not. There is no way back to unopened."}
+     :display {:label "Open" :order 1
+               :description "Have the engine read the message — the first part of it lands on the row in front of you, and the research door appears"}}
+
+    ;; ONE DOOR AT `opened`, AND IT IS THE ONE THAT COSTS TOKENS. The
+    ;; summary is the receipt for having read what `open` put on the
+    ;; row, which is why this door is not there at `queued`.
     :research
-    {:from #{:queued} :to :researched
+    {:from #{:opened} :to :researched
      :handler write-the-summary
      :input [:map
              [:summary
@@ -465,7 +526,7 @@
                :x-display
                {:widget "prose"
                 :label "What the message actually says"
-                :help "Read the message, then say what is in it and what it asks of this house — in the words you would use out loud. The whole body is never stored: the engine keeps the first part of the message beside your sentence, so say what it MEANS rather than copy it. If nothing is being asked, say that; it is what the no door is for."}}
+                :help "Read body_excerpt on this row first — when body_read is false the engine could not read the message, so read it with waymark_power or say that you could not — then say what is in it and what it asks of this house — in the words you would use out loud. The whole body is never stored: the engine keeps the first part of the message beside your sentence, so say what it MEANS rather than copy it. If nothing is being asked, say that; it is what the no door is for."}}
               [:string {:min 1 :max 480}]]]
      ;; :edit-shape — a first summary onto a blank row is not an edit
      ;; of one. There is no earlier value to prefill from and no
@@ -477,9 +538,9 @@
      ;; neither see nor lose is scaffolding for nobody.
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "Nothing is decided here and nothing is sent — this records what the message says, and opens the two doors that answer it. The engine reads the message itself as it goes and keeps the first part of it on the row. There is no way back to unread, which is honest: you have read it."}
-     :display {:label "Research" :order 1
-               :description "Open the message and say what it asks — the engine keeps the first part of it beside your sentence, and the yes and no doors appear"}}
+              :one-way "Nothing is decided here and nothing is sent — this records what the message says, and opens the two doors that answer it. There is no way back to unread, which is honest: you have read it."}
+     :display {:label "Research" :order 2
+               :description "Say what the opened message asks — your sentence is kept beside the first part of it, and the yes and no doors appear"}}
 
     ;; THE FIRST OF THE TWO ANSWERS. It is the only way a task is made
     ;; from this queue, and it demands the action item in one sentence
@@ -507,7 +568,7 @@
      :touches [{:kind :task :action :create}]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This writes a real task into the family's queue, under your name, and marks the message answered. The way back is the task's own doors — complete it or let the authority drop it; the message itself does not come back to the queue."}
-     :display {:label "Yes, action item" :style :primary :order 2
+     :display {:label "Yes, action item" :style :primary :order 3
                :description "Something is being asked of this house — say what it is, in one line, and it lands in the queue"}}
 
     ;; THE SECOND ANSWER, and it is a real one. A seat that could only
@@ -527,7 +588,7 @@
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The message leaves the queue and stays on record with whatever you said about it. It is not deleted and the mailbox is not touched — if this was the wrong call, the person whose inbox it is can reopen it."}
-     :display {:label "No" :order 3
+     :display {:label "No" :order 4
                :description "Nothing is being asked of this house — set it aside, and say why if it is worth saying"}}
 
     ;; THE PERSON'S OWN DOOR. Every reopen is a correction on the
@@ -538,10 +599,11 @@
      :guards [the-correction-is-a-persons]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The message comes back to the two answers with its research intact — the summary stands, and the reason you are overruling stands beside it on the record. Nothing about the dismissal is erased; this adds the correction to it."}
-     :display {:label "Reopen" :order 4
+     :display {:label "Reopen" :order 5
                :description "It was dismissed and it should not have been — hand it back the yes and no doors"}}}
    :scenarios [an-agent-may-not-reopen-its-own-dismissal
                the-person-reopens-what-the-clerk-dismissed
-               the-tree-has-no-shortcut-past-research]
+               the-tree-has-no-shortcut-past-research
+               the-tree-has-no-shortcut-past-open]
    :deviations
    ["The spec's declaration made `dismissed` terminal AND put a `reopen` door out of it. The framework refuses that pair by name — checks/check-terminal-no-exit: no action departs a tomb, and the one waiver (:allow-undo) is held to the undo shape, which is the same hand within minutes, never a person overruling an agent days later. So `dismissed` is declared in :over :let-go instead: every reader that asks whether this row's work is over gets the same yes it would have got from :terminal, and the person's correction keeps its door."]})

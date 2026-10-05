@@ -2042,11 +2042,11 @@ law. The seat lives in a row, because it is fluid.
 ```clojure
 (defresource inbox_item
   {:kind :inbox_item
-   :states [:queued :researched :action_item :dismissed]
+   :states [:queued :opened :researched :action_item :dismissed]
    :initial :queued
    :terminal #{:action_item}                   ; dismissed keeps the person's door open
    :over {:accomplished #{:action_item} :let-go #{:dismissed}}
-   :default-filters {:state "queued"}          ; the queue is the collection
+   :default-filters {:state "queued,opened"}   ; the queue is the collection
    :sortable {:fields [:received_at] :default "received_at"}
    :schema [:map
             [:message_id  [:string]]           ; the address in the inbox
@@ -2054,25 +2054,29 @@ law. The seat lives in a row, because it is fluid.
             [:sender      [:string]]
             [:received_at :waymark/instant]
             [:summary     {:optional true} [:maybe [:string {:max 480}]]] ; written by research
-            [:body_excerpt {:optional true} [:maybe [:string {:max 4000}]]] ; read by research, for the model
+            [:body_excerpt {:optional true} [:maybe [:string {:max 4000}]]] ; read by open, for the model
             [:body_cut    {:optional true} [:maybe [:int {:min 0}]]]        ; what the cap removed
+            [:body_read   {:optional true} [:maybe :boolean]]               ; false when open read nothing
             [:task        {:optional true :kind :task} [:maybe :waymark/ref]] ; stamped by yes
             [:reason      {:optional true} [:maybe [:string {:max 240}]]]]  ; written by no
    :actions
-   {:research {:from #{:queued} :to :researched
+   {:open     {:from #{:queued} :to :opened               ; no input: the engine reads
+               :handler open-the-message
+               :display {:label "Open" :order 1}}
+    :research {:from #{:opened} :to :researched
                :input [:map [:summary [:string {:min 1 :max 480}]]]
-               :display {:label "Research" :order 1}}
+               :display {:label "Research" :order 2}}
     :yes      {:from #{:researched} :to :action_item
                :input [:map [:action_item [:string {:min 1 :max 200}]]
                              [:due_at {:optional true} [:maybe :waymark/instant]]]
                :touches [{:kind :task :action :create}]   ; the task is born here
                :handler yes->task                         ; ctx :create, outer principal
-               :display {:label "Yes, action item" :order 2}}
+               :display {:label "Yes, action item" :order 3}}
     :no       {:from #{:researched} :to :dismissed
                :input [:map [:reason {:optional true} [:maybe [:string {:max 240}]]]]
-               :display {:label "No" :order 3}}
+               :display {:label "No" :order 4}}
     :reopen   {:from #{:dismissed} :to :researched         ; the person's correction
-               :display {:label "Reopen" :order 4}}}})
+               :display {:label "Reopen" :order 5}}}})
 ```
 
 As built (commit 4d9b05f): the framework refuses a door out of a
@@ -2083,10 +2087,13 @@ whether the work is over gets the same answer. The deviation is
 recorded on the kind in `:deviations`.
 
 The tree is enforced by the machine, not by the prompt. At `queued`,
-the envelope offers one door: research. At `researched`, it offers
-two: yes and no. At a leaf, it offers none to the sitter. The model
-cannot skip research, because the yes door is absent until it is
-done. It cannot make a task except through yes, which demands the
+the envelope offers one door: open. It takes no input, the engine
+reads the message, and the answer is the row with the excerpt on it.
+At `opened`, the envelope offers one door: research. At `researched`,
+it offers two: yes and no. At a leaf, it offers none to the sitter.
+The model cannot write a summary before the message is read, because
+the research door is absent until open is done. It cannot skip
+research, because the yes door is absent until it is done. It cannot make a task except through yes, which demands the
 action item in one sentence. `:touches` advertises the task birth,
 and the conformance library checks that it fired. `reopen` is the
 person's door: a reopen after a `no` is a correction, and the query
@@ -2106,7 +2113,7 @@ inbox headers through the `email.read` power at the cadence and
 mints one `inbox_item` per new message id, and none for a message
 with a list-unsubscribe header. Headers only.
 
-The WHOLE body is still never stored. The research door reads the
+The WHOLE body is still never stored. The open door reads the
 message itself, through the sitter's own `email.read` power, and
 keeps the first 4,000 characters of the plain text in `body_excerpt`
 with `body_cut` beside it (section 17, "Research is an engine
@@ -2121,10 +2128,10 @@ The person restates the seat. No deploy.
 
 ```json
 {
-  "charter": "You triage Colton's inbox. For each message the queue offers, take the one door the envelope shows. Research first. Then say yes with the action item in one sentence, or no. A request that names Colton and asks for something is a yes.",
+  "charter": "You triage Colton's inbox. For each message the queue offers, take the one door the envelope shows. Open first, then research. Then say yes with the action item in one sentence, or no. A request that names Colton and asks for something is a yes.",
   "scope": [
     {"kind": "email.read", "actions": []},
-    {"kind": "inbox_item", "actions": ["research", "yes", "no"]}
+    {"kind": "inbox_item", "actions": ["open", "research", "yes", "no"]}
   ],
   "held_for": ["<model row id for Sonnet 5>"],
   "walk": "inbox_item",
@@ -2158,13 +2165,16 @@ change.
 **One firing, row by row.** The session opens one sitting, reads the
 seat row, then reads the queue:
 
-1. The envelope of the first row offers one door, research. The
-   model reads the message through `waymark_power`, then invokes
-   research with a summary.
-2. The envelope now carries the summary and offers yes and no. The
+1. The envelope of the first row offers one door, open. The model
+   invokes it with no input. The engine reads the message, and the
+   answer carries the excerpt.
+2. The envelope now offers one door, research. The model reads the
+   excerpt, then invokes research with a summary. When `body_read`
+   is false, it reads the message through `waymark_power` first.
+3. The envelope now carries the summary and offers yes and no. The
    model takes one.
-3. The row is at a leaf. The model moves to the next row.
-4. After twenty rows, or an empty queue, the session says so and
+4. The row is at a leaf. The model moves to the next row.
+5. After twenty rows, or an empty queue, the session says so and
    ends. The hook closes the sitting.
 
 The envelope holds one row at a time, never the queue. The rows
@@ -2436,7 +2446,8 @@ above. The cases:
     (R-5.2, R-7.4)
 16. A sitting left open past two cadences is marked abandoned by the
     boot sweep. (R-7.6)
-17. On a walk seat, a `queued` row's envelope offers only research,
+17. On a walk seat, a `queued` row's envelope offers only open, an
+    `opened` row's offers only research,
     a `researched` row's offers only yes and no, and a leaf offers
     none to the sitter. A `yes` births exactly one task and stamps
     it. (R-12.9, section 13.8)
@@ -2823,7 +2834,7 @@ trusts.
   same bytes again — 1.79M cache-read tokens over 25 turns, 62
   percent of the 0.58 USD. The bill is the sum, over the turns, of
   everything read before, so the largest early answer is the lever.
-  The research handler therefore reads the message itself, through
+  The open handler therefore reads the message itself, through
   the Gate proxy under the sitter's own `email.read` grant (the ctx
   `:power` hook), and writes `body_excerpt` — 4,000 characters of
   plain text — with `body_cut` beside it. One fetch for each row
