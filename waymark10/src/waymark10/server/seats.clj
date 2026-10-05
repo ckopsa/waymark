@@ -5781,6 +5781,42 @@
           true)
       false)))
 
+(defn seat-halt-at-the-wall!
+  "The week's fuel wall met by a wake it held or by a sit it halted,
+  and not by a request: `seat-halt!` with `budget_reached` and the
+  wall's own sentence, cut to the door's 240. A seat whose wakes are
+  all held never makes a request, so without this the router never
+  writes its halt and nobody subscribed to `mark_halted` hears it.
+  Once per wall, as `seat-halt!` is. Best effort: the hold or the sit
+  is still itself when the seat moved under it. → true when written."
+  [eng seat-id detail]
+  (try
+    (seat-halt! eng seat-id "budget_reached"
+                (some-> detail str not-empty
+                        (as-> d (subs d 0 (min 240 (count d))))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 seats: seat" seat-id
+                 "could not record its fuel wall -" (ex-message e)))
+      false)))
+
+(defn seat-clear-budget-halt!
+  "Lift a `budget_reached` halt, and only that one, for a caller that
+  has just seen the week's fuel wall no longer holds. A halt of any
+  other wall is the router's to lift. Best effort, as above. → true
+  when a halt was cleared."
+  [eng seat-id]
+  (try
+    (if (= "budget_reached"
+           (str (get-in (seat-row eng seat-id) [:data :halt :reason])))
+      (seat-clear-halt! eng seat-id)
+      false)
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 seats: seat" seat-id
+                 "could not lift its fuel wall -" (ex-message e)))
+      false)))
+
 (defn mark-stale!
   "Write the scope entries that stopped resolving, through the
   concealed `mark_stale` — system actor, logged, the guard's own

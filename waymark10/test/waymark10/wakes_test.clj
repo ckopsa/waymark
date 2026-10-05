@@ -2561,6 +2561,53 @@
 
     (seat-do! seat :retire)))
 
+;; Production, 2026-10-05: qa's week of fuel ran out and every later
+;; wake was held at the wall. The hold stamped the schedule, but the
+;; seat was never marked halted, because only a request meeting the
+;; router's wall wrote that — and a seat whose wakes are all held makes
+;; none. So nobody subscribed to `mark_halted` heard it. The hold marks
+;; the seat itself, once per wall, and a restate that lifts the wall
+;; clears it.
+
+(deftest a-wake-held-at-the-wall-marks-the-seat-halted-once
+  (let [wn :wake-wall-marks
+        fn' :wake-wall-marks-fires
+        wake-on [{:kind "wake_task" :actions ["complete"]}]
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "markclerk"
+                      {:budget_usd_per_week 0.001M :wake_on wake-on}
+                      fn')
+        ;; one closed sitting spends more than the week holds
+        _ (close-sitting! (sitting! seat))
+        _ (drain-wakes! wn)
+        of-action (fn [a] (filterv #(= a (:action %)) (log-of :seat seat)))]
+
+    (testing "the first wake held at the wall marks the seat halted, naming the wall"
+      (task-do! (task! "a thing the wall holds first") :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (= 1 (count (of-action :mark_halted))))
+      (is (= "budget_reached"
+             (str (get-in (first (of-action :mark_halted)) [:inputs :reason]))))
+      (is (re-find #"The week's fuel is spent"
+                   (str (get-in (raw :seat seat) [:data :halt :detail])))))
+
+    (testing "a second held wake marks nothing more"
+      (task-do! (task! "a thing the wall holds again") :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (= 1 (count (of-action :mark_halted)))))
+
+    (testing "a restate that raises the budget clears the halt, once"
+      (restate! seat {:budget_usd_per_week 500M :wake_on wake-on})
+      (drain-wakes! wn)
+      (is (= 1 (count (of-action :clear_halt))))
+      (is (nil? (get-in (raw :seat seat) [:data :halt]))))
+
+    (seat-do! seat :retire)))
+
 ;; ── a wake the fire door refuses waits ───────────────────────────────
 ;;
 ;; A halt line other than the budget's is judged by the `fire` door

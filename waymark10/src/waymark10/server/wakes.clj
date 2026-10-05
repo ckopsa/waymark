@@ -704,17 +704,35 @@
   sentence (`wall-mark`), so a person reading the schedule row can see
   why the seat stayed quiet. The first fire that goes out takes
   `halted` off (`stamp-fired!`). One maintenance write, for
-  `write-pending!`'s reason."
+  `write-pending!`'s reason.
+
+  The seat itself is marked halted too (`seats/seat-halt-at-the-wall!`),
+  once per wall: a seat whose wakes are all held never sits, so no
+  request of its own meets the router's wall, and without the mark its
+  subscribers would never hear that it went quiet."
   [eng schedule-row seat-row ^Instant at]
-  (store/with-tx (:storage eng)
-    (fn [tx]
-      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (assoc (schedules/keep-textless (:data schedule-row))
-                                 :wake_pending true
-                                 :last_halted_wake (str at)
-                                 :halted (wall-mark eng seat-row at))
-                          (:next-flip-at schedule-row))))
+  (let [mark (wall-mark eng seat-row at)]
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                            (assoc (schedules/keep-textless (:data schedule-row))
+                                   :wake_pending true
+                                   :last_halted_wake (str at)
+                                   :halted mark)
+                            (:next-flip-at schedule-row))))
+    (seats/seat-halt-at-the-wall! eng (:id seat-row) (:detail mark)))
   nil)
+
+(defn- lift-a-spent-wall!
+  "A seat whose `budget_reached` halt the week's fuel wall no longer
+  holds — a restate raised its budget — is cleared at once, so one
+  transition says it runs again. The wall's own arithmetic
+  (`at-the-fuel-wall?`) decides; a halt of any other wall is left."
+  [eng seat-row ^Instant at]
+  (when (and seat-row
+             (= "budget_reached" (str (get-in seat-row [:data :halt :reason])))
+             (not (at-the-fuel-wall? eng seat-row at)))
+    (seats/seat-clear-budget-halt! eng (:id seat-row))))
 
 (defn- stamp-withheld!
   "A match withheld by name (ticket 80a8e60b): NOT pending, since the
@@ -1545,7 +1563,9 @@
 (defn handle-transition!
   "One transition → the wake it implies, or nothing.
 
-      seat <anything>          the active-seat cache is stale; drop it
+      seat <anything>          the active-seat cache is stale; drop it,
+                               and lift a fuel-wall halt the seat's
+                               budget no longer holds
       sitting close, abandon   release that seat's pending wake, and
                                judge its count wakes once more
       seat, sitting, schedule,
@@ -1563,7 +1583,10 @@
   (try
     (let [kind (:kind t)]
       (cond
-        (= :seat kind) (reset! cache nil)
+        (= :seat kind)
+        (do (reset! cache nil)
+            (lift-a-spent-wall! eng (raw-row eng :seat (:resource-id t))
+                                (now eng)))
 
         (and (= :sitting kind)
              (contains? #{:close :abandon} (:action t)))
