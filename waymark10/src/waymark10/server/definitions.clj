@@ -1269,7 +1269,10 @@
         transcripts (transcripts/sweep! eng)
         ;; a fired run that never sat: a closed `missed` sitting says
         ;; so, and the count wake its fire spent is armed again
-        missed (wakes/sweep-missed! eng)]
+        missed (+ (long (wakes/sweep-missed! eng))
+                  ;; and a fire nobody carried out, which holds no key
+                  ;; to miss (ticket cc2a7754)
+                  (long (wakes/sweep-unsent! eng)))]
     {:missed missed
      :abandoned (:abandoned sittings)
      ;; R-12.25's half of the same pass: an interactive sitting

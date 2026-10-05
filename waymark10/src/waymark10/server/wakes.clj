@@ -1540,6 +1540,151 @@
         (concat (rows-where eng :seat {:state :active} missed-seat-page)
                 (rows-where eng :seat {:state :parked} missed-seat-page)))))))
 
+;; ── the fire nobody carried out (ticket cc2a7754) ───────────────────
+;;
+;; The key above is minted by the schedules consumer, at the moment it
+;; carries the seat's `fire` out. A fire that consumer never carried
+;; out holds no key, so the pass above cannot see it: the wake stamped
+;; `wake_fired_at` and cleared its flag, `last_fired_at` stayed where
+;; it was, no run sat, and nothing was written down. This pass reads
+;; the log instead, so a silent seat is never unexplained.
+
+(def ^:private unsent-lookback-seconds
+  "How far back a fire nobody carried out is still written down. One
+  day: an older one is history, and its queue has been fired since."
+  86400)
+
+(defn- born-at
+  "When a sitting row was born, on the clock the log's `at` is written
+  by (`flying-fires`' reading)."
+  [sitting]
+  (instant-of (or (:created-at sitting) (get-in sitting [:data :started_at]))))
+
+(defn- newest-sitting [st tx seat-id]
+  (first (store/query-rows st tx :sitting {:seat (str seat-id)}
+                           {:limit 1 :newest-first true})))
+
+(defn- unsent-fire
+  "The instant of this seat's newest `fire` when nobody carried it out
+  and nothing on the schedule row says why. It is older than `deadline`
+  seconds and younger than `unsent-lookback-seconds`; `last_fired_at`,
+  which a fire that went out stamps with the fire's own instant, is
+  before it; no sitting was born since, a missed one included; and no
+  wake waits for a moment still ahead (`wake_due_at`, a deferred
+  fire's). → an Instant, or nil."
+  [eng seat-row schedule ^Instant now deadline]
+  (let [st (:storage eng)
+        seat-id (str (:id seat-row))
+        [fired sitting]
+        (store/with-tx st
+          (fn [tx]
+            [(->> (store/transitions st tx {:kind :seat :resource-id seat-id}
+                                     {:limit in-flight-page :newest-first true})
+                  (filter #(= "fire" (some-> (:action %) name)))
+                  (keep #(instant-of (:at %)))
+                  (sort)
+                  (last))
+             (newest-sitting st tx seat-id)]))
+        stamped (instant-of (get-in schedule [:data :last_fired_at]))
+        due (instant-of (get-in schedule [:data :wake_due_at]))
+        born (some-> sitting born-at)]
+    (when (and fired
+               (.isBefore ^Instant fired (.minusSeconds now (long deadline)))
+               (.isAfter ^Instant fired
+                         (.minusSeconds now (long unsent-lookback-seconds)))
+               ;; a millisecond's room, for a stamp the row keeps shorter
+               ;; than the log keeps its own
+               (not (and stamped
+                         (not (.isBefore ^Instant stamped
+                                         (.minusMillis ^Instant fired 1)))))
+               (not (and born (not (.isBefore ^Instant born ^Instant fired))))
+               (not (and due (.isAfter ^Instant due now))))
+      fired)))
+
+(defn- record-unsent!
+  "One fire nobody carried out, written down in ONE transaction as
+  `record-missed!` writes an unspent key: a closed sitting that says
+  the run never sat and why, and, unless the seat's last sitting was
+  missed too, `wake_pending` on the schedule row, so `release!` fires
+  the queue again under the usual damper. The seat row is read FOR
+  UPDATE and the newest sitting is read again under it, so two passes
+  write one row. → true when this call wrote the sitting."
+  [eng seat-row schedule ^Instant fired ^Instant now deadline]
+  (let [st (:storage eng)
+        seat-id (str (:id seat-row))
+        model (or (seats/chair-of seat-row)
+                  (some-> (get-in schedule [:data :model]) str not-empty))]
+    (boolean
+     (store/with-tx st
+       (fn [tx]
+         (when (store/load-row st tx :seat seat-id {:for-update true})
+           (let [newest (newest-sitting st tx seat-id)
+                 born (some-> newest born-at)]
+             (when-not (and born (not (.isBefore ^Instant born fired)))
+               (inv/insert-quiet!
+                eng tx :sitting
+                (cond-> {:seat seat-id
+                         :member (seats/sitter-id seat-row)
+                         :mode seats/default-mode
+                         :started_at fired
+                         :ended_at now
+                         :input_tokens 0 :output_tokens 0
+                         :cache_read_tokens 0 :cache_write_tokens 0
+                         :turns 0 :transitions 0 :refusals 0
+                         :served {}
+                         :missed true
+                         :closed_by "missed"
+                         :outcome "never_sat"
+                         :flags []
+                         :note (str "Fired at " fired "; the fire was never"
+                                    " sent to a runner, and no session sat"
+                                    " within " deadline "s.")}
+                  model (assoc :model model))
+                {:principal seats/seats-actor :state :closed})
+               (when-not (true? (get-in newest [:data :missed]))
+                 (store/update-data! st tx :schedule (str (:id schedule))
+                                     (assoc (:data schedule) :wake_pending true)
+                                     (:next-flip-at schedule)))
+               true))))))))
+
+(defn sweep-unsent!
+  "Every active seat whose newest fire nobody carried out
+  (`unsent-fire`), written down as a closed `missed` sitting, and its
+  wake armed again. The clock sweep's pass, after `sweep-missed!`, so a
+  fire that pass just wrote down is not written twice. A schedule that
+  is broken or throttled already says why on its own row, and is left
+  alone. A second pass over the same state writes nothing, because the
+  first left a sitting born after the fire.
+  → the number of missed sittings written."
+  ([eng] (sweep-unsent! eng default-sit-deadline-seconds))
+  ([eng deadline]
+   (if-not (and (serves? eng :seat) (serves? eng :sitting)
+                (serves? eng :schedule))
+     0
+     (let [at (now eng)]
+       (reduce
+        (fn [n seat-row]
+          (if (try
+                (when-some [schedule (when-not (seats/interactive-seat? seat-row)
+                                       (schedules/schedule-for-seat
+                                        eng (:id seat-row)))]
+                  (when (and (schedules/fires-out? eng schedule)
+                             (not (schedules/held? eng schedule seat-row))
+                             (not (throttled? schedule at)))
+                    (when-some [fired (unsent-fire eng seat-row schedule
+                                                   at deadline)]
+                      (record-unsent! eng seat-row schedule fired at
+                                      deadline))))
+                (catch Exception e
+                  (warn! "seat " (:id seat-row)
+                         " unsent fire not recorded — " (ex-message e))
+                  false))
+            (do (seats/roll-health! eng (:id seat-row))
+                (inc n))
+            n))
+        0
+        (rows-where eng :seat {:state :active} missed-seat-page))))))
+
 ;; ── the consumer ────────────────────────────────────────────────────
 
 (defn handle-transition!
