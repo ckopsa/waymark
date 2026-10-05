@@ -3251,8 +3251,12 @@
           (let [id-of #(id-of-self (get % "self"))
                 skip (if subtract?
                        (into (into (set claimed) (keys stuck))
+                             ;; and, for a judge of sittings, its own
+                             ;; and the unfinished ones (ticket f508c646)
                              (when judgment
-                               (judgments/judged-subjects eng (:id judgment))))
+                               (into (judgments/judged-subjects eng (:id judgment))
+                                     (judgments/unjudgeable-sittings
+                                      eng judgment (:id seat)))))
                        #{})
                 free? #(not (contains? skip (id-of %)))
                 ;; the subtraction can empty a whole page while free

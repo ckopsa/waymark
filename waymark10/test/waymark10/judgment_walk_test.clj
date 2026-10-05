@@ -645,6 +645,104 @@
         (is (= 5 (#'wakes/entry-count eng (raw-of eng :seat (:id judge)) either))
             "open,sealed counts the four unjudged sealed and the open one")))))
 
+;; ── a judge of sittings is handed only what it can read (ticket f508c646) ──
+
+(def ^:private no-transcript-sentence
+  "Nothing of the sitting was kept, so nothing of it was read.")
+
+(def ^:private spent
+  {:input_tokens 1000 :output_tokens 100
+   :cache_read_tokens 0 :cache_write_tokens 0 :turns 1})
+
+(defn- sitting-of!
+  "One open sitting of `seat`, with no transcript → its id."
+  [eng seat model grant]
+  (str (:id (:row (inv/create! eng :sitting
+                               {:seat (str seat)
+                                :model (str model)
+                                :grant (str grant)}
+                               {:principal worker-sitter})))))
+
+(deftest a-sitting-judge-is-handed-neither-its-own-sitting-nor-an-open-one
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (let [row (:row (inv/create!
+                                  eng :judgment
+                                  {:name "read-sittings"
+                                   :subject_kind "sitting"
+                                   ;; the queue itself admits an open
+                                   ;; sitting: the walk is what leaves it out
+                                   :queue {:state "open,closed"}
+                                   :verdicts [{:name "keep" :sentence keep-sentence}
+                                              {:name "no_transcript"
+                                               :sentence no-transcript-sentence}]
+                                   :remedy_max 200
+                                   :notes "The sitting judge's own judgment."}
+                                  {:principal person}))]
+                   (inv/invoke! eng :judgment (str (:id row)) :promote {}
+                                {:principal person})
+                   row)
+        judge (open-judge-seat!
+               eng judgment
+               {:name "sitting-judge"
+                :walk "sitting"
+                :scope [{:kind "sitting" :actions []}
+                        {:kind "transcript" :actions []}
+                        {:kind "verdict" :actions ["judge"]}]})
+        model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
+        worker (:id (:row (inv/create!
+                           eng :seat
+                           {:name "worker"
+                            :charter charter
+                            :scope [{:kind "expense" :actions []}]
+                            :walk "expense"
+                            :held_for [(str model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           {:principal person})))
+        grant (:id (:row (inv/create! eng :grant
+                                      {:audience "worker"
+                                       :scope [{:kind "expense" :actions []}]}
+                                      {:principal person})))
+        close! #(inv/invoke! eng :sitting % :close spent {:principal worker-sitter})
+        sealed (sealed-sitting! eng worker model grant)
+        bare (doto (sitting-of! eng worker model grant) close!)
+        still-open (sitting-of! eng worker model grant)
+        own (doto (sitting-of! eng (:id judge) model grant) close!)
+        say (fn [sid word]
+              (try
+                (inv/create! eng :verdict
+                             {:judgment (str (:id judgment))
+                              :subject_kind "sitting"
+                              :subject_id (str sid)
+                              :verdict word
+                              :remedy "Nothing to do."}
+                             {:principal (t/principal {:id "expense-sitter"
+                                                       :type :agent})})
+                nil
+                (catch Exception e e)))]
+
+    (testing "the wake counts the two sittings the judge can read"
+      (is (= 2 (#'wakes/walk-count eng (raw-of eng :seat (:id judge))))))
+
+    (testing "the sit hands the closed sittings of other seats and no other"
+      (let [[_ r answer] (sit! h)
+            handed (set (mapv :id (:rows (:walk answer))))]
+        (is (false? (:isError r)) (text-of r))
+        (is (= #{sealed bare} handed)
+            "its own sitting, closed or open, and an open one are left out")
+        (is (not (contains? handed own)))
+        (is (not (contains? handed still-open)))))
+
+    (testing "a closed sitting that kept no transcript is no_transcript"
+      (is (some? (say bare "keep")) "keep would say it was read")
+      (is (nil? (say bare "no_transcript"))))
+
+    (testing "a sealed transcript is judged by the judgment's other words"
+      (is (nil? (say sealed "keep"))))))
+
 ;; ── 5 · a listed verdict files one draft ticket ───────────────────────
 
 (def ^:private groomers-ticket

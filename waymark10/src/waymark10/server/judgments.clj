@@ -99,6 +99,47 @@
                                        {:limit judged-page}))))
     #{}))
 
+(defn own-sittings
+  "The sitting ids of this seat, the newest `judged-page` of them. A
+  seat judging its own sitting is no judgment, so a judge of sittings
+  is never handed one of these and never wakes for one (ticket
+  f508c646)."
+  [eng seat-id]
+  (if (and seat-id (serves? eng :sitting))
+    (into #{}
+          (map #(str (:id %)))
+          (store/with-tx (:storage eng)
+            (fn [tx] (store/query-rows (:storage eng) tx :sitting
+                                       {:seat (str seat-id)}
+                                       {:limit judged-page
+                                        :newest-first true}))))
+    #{}))
+
+(defn unjudgeable-sittings
+  "The sitting ids a walk of this judgment by this seat leaves out,
+  whatever its `queue` says: the seat's own (`own-sittings`), every
+  sitting still open, and every sitting whose transcript is still being
+  written. What is left is a closed sitting with a sealed transcript,
+  or with none kept. Empty for a judgment about any other kind.
+
+  One home for the sit's walk (`mcp/walk-of`) and the wake's
+  (`wakes/withheld-rows`), as `judged-subjects` is (ticket f508c646)."
+  [eng judgment-row seat-id]
+  (if (and (= "sitting" (str (get-in judgment-row [:data :subject_kind])))
+           (serves? eng :sitting))
+    (let [st (:storage eng)
+          page {:limit judged-page :newest-first true}]
+      (into (own-sittings eng seat-id)
+            (store/with-tx st
+              (fn [tx]
+                (into (mapv #(str (:id %))
+                            (store/query-rows st tx :sitting {:state :open} page))
+                      (when (serves? eng :transcript)
+                        (keep #(some-> (get-in % [:data :sitting]) str not-empty)
+                              (store/query-rows st tx :transcript
+                                                {:state :open} page))))))))
+    #{}))
+
 (defn serving?
   "Does this engine have the two kinds to hear at all? The module's
   hook asks it, `schedules/serving?`'s precedent: a consumer thread
