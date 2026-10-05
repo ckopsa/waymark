@@ -945,15 +945,37 @@
                         :interrupted)
       :else nil)))
 
+(defn- job-instant [job k]
+  (try (Instant/parse (str (get job k))) (catch Exception _ nil)))
+
+(defn- aggregator?
+  "A red job that only reports the others (the `gate` of tests.yml,
+  ticket 2f8a03cd): it began after every interrupted job had ended, so
+  its own red step read their result and ran no test. It is known by
+  the run's own times and by no name. A red test job beside fail-fast
+  siblings began before they were cancelled, so it is no aggregator;
+  neither is a job whose times the forge did not say."
+  [job interrupted]
+  (let [began (job-instant job :started_at)
+        ended (map #(job-instant % :completed_at) interrupted)]
+    (boolean (and began
+                  (seq ended)
+                  (every? some? ended)
+                  (not-any? #(.isAfter ^Instant % began) ended)))))
+
 (defn interrupted-run?
   "A finished run with at least one interrupted job and no red one. A
   run with a failing test step is red, not interrupted — and so is a
-  fail-fast matrix, whose siblings a red job cancelled."
+  fail-fast matrix, whose siblings a red job cancelled. A red
+  aggregator is not counted: it is red because the others died."
   [run]
-  (let [verdicts (mapv job-verdict (:jobs run))]
+  (let [jobs (vec (:jobs run))
+        verdicts (mapv job-verdict jobs)
+        of (fn [v] (keep-indexed #(when (= v (nth verdicts %1)) %2) jobs))
+        interrupted (of :interrupted)]
     (boolean (and (= "completed" (str (:status run)))
-                  (some #{:interrupted} verdicts)
-                  (not-any? #{:red} verdicts)))))
+                  (seq interrupted)
+                  (every? #(aggregator? % interrupted) (of :red))))))
 
 (defn- short-head [head]
   (subs head 0 (min (count head) 12)))

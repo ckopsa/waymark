@@ -2126,29 +2126,32 @@
   [{:name "Set up job" :conclusion "success"}
    {:name "Run the tests" :conclusion "failure"}])
 
-(defn- interrupted-world
-  "One change at `submitted`, whose one required check ended with
-  `conclusion`, on a head whose one workflow run ended with one job at
-  `job-conclusion` and `steps`."
-  [conclusion job-conclusion steps]
+(def ^:private the-gate-decided
+  [{:name "Set up job" :conclusion "success"}
+   {:name "Decide" :conclusion "failure"}])
+
+(defn- run-world
+  "One change at `submitted`, whose one required check `check` ended
+  with `conclusion`, on a head whose one workflow run ended with
+  `run-conclusion` and `jobs`."
+  [check conclusion run-conclusion jobs]
   (let [state (gh/fake-state)
         engine (boot)
         r {:state state :source (gh/fake-source state) :engine engine}]
     (gh/seed-pull! state repo a-pull-request
                    {:files the-files :reviews the-reviews})
     (gh/seed-check! state repo the-head
-                    {:id 41752098700 :name "test10 (shard 3)"
+                    {:id 41752098700 :name check
                      :status "completed" :conclusion conclusion
                      :head_sha the-head})
     (gh/seed-run! state repo the-head
                   {:id 900 :workflow_id 11 :head_sha the-head
-                   :status "completed" :conclusion job-conclusion})
-    (gh/seed-job! state repo 900
-                  {:id 7001 :run_id 900 :name "test10 (shard 3)"
-                   :status "completed" :conclusion job-conclusion
-                   :steps steps})
+                   :status "completed" :conclusion run-conclusion})
+    (doseq [job jobs]
+      (gh/seed-job! state repo 900
+                    (assoc job :run_id 900 :status "completed")))
     (inv/create! engine :repo_policy
-                 {:repository repo :required_checks ["test10 (shard 3)"]}
+                 {:repository repo :required_checks [check]}
                  {:principal a-person})
     (pass! r)
     (let [id (str (:id (the-change engine)))
@@ -2163,6 +2166,15 @@
                                  (assoc-in [:data :rounds] 1))
                              (:version row))))))
     r))
+
+(defn- interrupted-world
+  "One change at `submitted`, whose one required check ended with
+  `conclusion`, on a head whose one workflow run ended with one job at
+  `job-conclusion` and `steps`."
+  [conclusion job-conclusion steps]
+  (run-world "test10 (shard 3)" conclusion job-conclusion
+             [{:id 7001 :name "test10 (shard 3)"
+               :conclusion job-conclusion :steps steps}]))
 
 (deftest an-interrupted-run-is-re-run-once-per-head
   (let [{:keys [state engine] :as r}
@@ -2225,6 +2237,59 @@
     (is (not (forge/interrupted-run?
               {:status "in_progress" :jobs [{:conclusion "cancelled"}]}))
         "a run still running is not judged")))
+
+;; the gate beside cancelled suites (ticket 2f8a03cd)
+
+(def ^:private a-cancelled-suite
+  {:name "test10 (shard 3)" :conclusion "cancelled" :steps []
+   :started_at "2026-10-05T12:00:00Z" :completed_at "2026-10-05T12:04:00Z"})
+
+(def ^:private the-red-gate
+  {:name "gate" :conclusion "failure" :steps the-gate-decided
+   :started_at "2026-10-05T12:04:05Z" :completed_at "2026-10-05T12:04:10Z"})
+
+(deftest a-run-red-only-by-its-gate-is-re-run-once-per-head
+  (let [{:keys [state engine] :as r}
+        (run-world "gate" "failure" "failure"
+                   [(assoc a-cancelled-suite :id 7001)
+                    (assoc a-cancelled-suite :id 7002
+                           :name "test-queue (shard 1)")
+                    (assoc the-red-gate :id 7003)])
+        census (pass! r)
+        row (the-change engine)]
+    (is (= [{:repository repo :run 900}] (gh/reruns state))
+        "the gate's red step is no test: the cancelled suites run again")
+    (is (= 1 (:rerun census)))
+    (is (= the-head (get-in row [:data :rerun_head])))
+    (is (= :submitted (:state row)) "no test failed, so the change is not red")
+    (testing "the same head is not re-run a second time"
+      (let [census (pass! r)]
+        (is (= 1 (count (gh/reruns state))))
+        (is (= 0 (:rerun census)))
+        (is (= 1 (:rerun-noted census)))))))
+
+(deftest an-aggregator-is-red-only-beside-a-red-test
+  (let [run (fn [& jobs] {:status "completed" :jobs (vec jobs)})
+        a-red-test {:name "test10 (shard 1)" :conclusion "failure"
+                    :steps died-in-a-test
+                    :started_at "2026-10-05T12:00:00Z"
+                    :completed_at "2026-10-05T12:03:50Z"}]
+    (is (forge/interrupted-run?
+         (run a-cancelled-suite {:name "quick" :conclusion "success"}
+              the-red-gate))
+        "a gate that began after the suites were cancelled reports them")
+    (is (not (forge/interrupted-run? (run a-red-test a-cancelled-suite)))
+        "a fail-fast sibling cancelled beside a real red test stays red")
+    (is (not (forge/interrupted-run?
+              (run a-red-test a-cancelled-suite the-red-gate)))
+        "and so does the run when the gate is red beside that red test")
+    (is (not (forge/interrupted-run?
+              (run a-cancelled-suite
+                   (dissoc the-red-gate :started_at))))
+        "a red job whose times the forge did not say is read as a test")
+    (is (not (forge/interrupted-run?
+              (run {:name "quick" :conclusion "success"} the-red-gate)))
+        "a red job with no interrupted job beside it is red")))
 
 ;; ── commit statuses and late reds (ticket 3aca3ae8) ─────────────────
 
