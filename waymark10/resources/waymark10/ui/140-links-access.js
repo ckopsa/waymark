@@ -562,7 +562,7 @@ function blockedNotes(blocked, doc) {
         : null);
     if (entry.becomes_available?.at)
       li.append(countdownEl(entry.becomes_available.at));
-    const chips = remedyChips(entry.remedies, doc);
+    const chips = remedyChips(entry.remedies, doc, null, entry.resolved_remedies);
     if (chips) li.append(chips);
     box.append(li);
   }
@@ -577,7 +577,7 @@ function notNowFooter(grouped, gated, doc) {
     box.append(el("div", {class:"item"},
       el("b", {}, g.map(([nm, e]) => label(nm, e)).join(", ")),
       el("div", {class:"why"}, g[0][1].reason || ""),
-      remedyChips(g[0][1].remedies, doc)));
+      remedyChips(g[0][1].remedies, doc, null, g[0][1].resolved_remedies)));
   const byStates = new Map();       // state gates: one line per destination
   for (const [nm, e] of gated) {
     const k = e.becomes_available.in_states.join(", ");
@@ -593,7 +593,10 @@ function notNowFooter(grouped, gated, doc) {
 }
 
 /* ── remedies: the wire names the way out as "kind.action" tokens ── */
-function remedyChips(remedies, doc, onAct) {
+/* `resolved` is the refusal's resolved_remedies, {door, id?, input?}:
+   a remedy that bound an input opens its door's form prefilled with
+   it, still the person's to edit and send. */
+function remedyChips(remedies, doc, onAct, resolved) {
   if (!remedies || !remedies.length) return null;
   const docKind = (doc.kind || "").replace(/_collection$/, "");
   const box = el("span", {class:"remedies"});
@@ -601,10 +604,16 @@ function remedyChips(remedies, doc, onAct) {
     const dot = String(token).indexOf(".");
     const kind = dot > 0 ? token.slice(0, dot) : "";
     const action = dot > 0 ? String(token).slice(dot + 1) : String(token);
+    const prefill = (resolved || []).find(r => r.door === String(token))?.input;
     if (kind === docKind && doc.actions?.[action]) {
       box.append(el("button", {type:"button", class:"chip remedy",
         title: `${token} — this action is on this page`,
-        onclick: () => { onAct && onAct(); pulseAction(action); }},
+        onclick: () => {
+          onAct && onAct();
+          if (prefill) actionDialog({name: action, entry: doc.actions[action],
+                                     doc, prefill});
+          else pulseAction(action);
+        }},
         "→ " + label(action, doc.actions[action])));
     } else if (action === "create") {
       const chip = el("span", {class:"chip",
@@ -613,7 +622,10 @@ function remedyChips(remedies, doc, onAct) {
       wellKnown().then(w => {
         const col = collectionHref(w, kind);
         if (col) chip.replaceWith(el("a", {class:"chip remedy",
-          href: "#"+col, onclick: () => { onAct && onAct(); },
+          href: "#"+col, onclick: (e) => {
+            onAct && onAct();
+            if (prefill) { e.preventDefault(); remedyCreate(col, prefill); }
+          },
           title: `${token} — opens the ${pretty(kind)}s page`},
           `+ new ${pretty(kind)}`));
       }).catch(() => {});
@@ -624,6 +636,16 @@ function remedyChips(remedies, doc, onAct) {
     }
   }
   return box;
+}
+/* a create remedy with a bound input opens the create modal over this
+   page, prefilled; a collection that does not afford create to this
+   person is the page it always opened */
+async function remedyCreate(col, prefill) {
+  const {ok, body} = await api(col);
+  if (ok && body.actions?.create)
+    return actionDialog({name: "create", entry: body.actions.create,
+                         doc: body, prefill});
+  location.hash = "#" + col;
 }
 function pulseAction(name) {
   const btn = $(`#view button[data-action="${CSS.escape(name)}"]`);

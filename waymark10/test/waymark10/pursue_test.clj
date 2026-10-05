@@ -218,6 +218,25 @@
            :explain "The crate wants its key."
            :remedies [{:door :latch/lift :id '(input :latch_id)}]}))
 
+;; a create remedy on another kind, its input bound off the refused
+;; row: the refusal carries the value, so the form opens filled
+(def crate-tagged
+  (g/expr {:name :crate-tagged
+           :when '(= (data :tagged) true)
+           :explain "The crate wants a shipping tag."
+           :remedies [{:door :tag/create :input {:label '(data :latch_id)}}]}))
+
+(def tag
+  (r/resource
+   {:kind :tag
+    :states [:hung :gone]
+    :initial :hung
+    :summary "Tag · {data.label}"
+    :schema [:map [:label [:string {:max 80}]]]
+    :actions
+    {:remove {:from #{:hung} :to :gone :safety fx/routine}
+     :rehang {:from #{:gone} :to :hung :safety fx/routine}}}))
+
 (def crate
   (r/resource
    {:kind :crate
@@ -228,7 +247,8 @@
              [:latch_id {:not-a-ref "pursue fixture: crate-unlatched binds its remedy to it"}
               [:string {:max 80}]]
              [:unlatched {:optional true} [:maybe :boolean]]
-             [:keyed {:optional true} [:maybe :boolean]]]
+             [:keyed {:optional true} [:maybe :boolean]]
+             [:tagged {:optional true} [:maybe :boolean]]]
     :actions
     {:pry {:from #{:shut} :to :open
            :guards [crate-unlatched]
@@ -238,9 +258,12 @@
                             [:string {:min 1 :max 80}]]]
               :guards [crate-keyed]
               :safety fx/routine}
+     :ship {:from #{:shut} :to :open
+            :guards [crate-tagged]
+            :safety fx/routine}
      :close {:from #{:open} :to :shut :safety fx/routine}}}))
 
-(def resources [fx/meal plan-day plan grocery-list latch hatch gate crate])
+(def resources [fx/meal plan-day plan grocery-list latch hatch gate crate tag])
 
 (def ^:dynamic *session* nil)
 
@@ -388,6 +411,35 @@
     (is (= [{:door "latch.lift"}]
            (get-in doc [:unavailable :unlock :resolved_remedies]))
         "no :id — a probe has no input to read it from")))
+
+;; ── a remedy's :input rides its resolution, evaluated
+
+(deftest a-bound-input-rides-the-probe-and-the-refusal
+  (let [cr (crate! (make! :latch {:free true}))
+        doc (c/get-doc *session* (:self cr))
+        want [{:door "tag.create" :input {:label (get-in doc [:data :latch_id])}}]]
+    (is (= want (get-in doc [:unavailable :ship :resolved_remedies])) (pr-str doc))
+    (let [res (c/act! *session* doc :ship nil)]
+      (is (= want (get-in res [:problem :resolved_remedies])) (pr-str res)))))
+
+(deftest pursue-creates-with-the-bound-input
+  (let [cr (crate! (make! :latch {:free true}))
+        latch-id (get-in (c/get-doc *session* (:self cr)) [:data :latch_id])
+        res (c/pursue! *session* cr :ship nil {:dry-run true})
+        made (first (:writes res))]
+    (is (= "tag.create" (:door made)) (pr-str res))
+    (is (= {:label latch-id} (:input made))
+        "nobody was asked: the refusal's binding filled the form")))
+
+(deftest a-pick-lies-beneath-the-bound-input
+  (let [cr (crate! (make! :latch {:free true}))
+        latch-id (get-in (c/get-doc *session* (:self cr)) [:data :latch_id])
+        res (c/pursue! *session* cr :ship nil
+                       {:dry-run true
+                        :resolve (fn [door _]
+                                   (when (= "tag.create" door)
+                                     {:input {:label "overwritten"}}))})]
+    (is (= {:label latch-id} (:input (first (:writes res)))) (pr-str res))))
 
 (deftest pursue-follows-the-probe's-bound-remedy-without-resolve
   (let [lt (make! :latch {:free true})
