@@ -103,6 +103,12 @@
   doors.ask.constraints lists beside the powers."
   servers/power-constraints)
 
+(def power-glob-constraints
+  "Token → the constraint fields whose filter values are GLOBS and not
+  exact words, for the tokens that name any. What discover's
+  doors.ask.glob_constraints lists beside the constraints."
+  servers/power-glob-constraints)
+
 ;; ── the bench, as this door knows it (waymark-fp62.6.3.2) ───────────
 
 (def bench-rig
@@ -275,10 +281,17 @@
     (or (str/blank? p) (= "." p))))
 
 (defn- field-admits?
-  [fname want got]
-  (if (= path-filter-field fname)
-    (boolean (some #(path-glob-matches? % got) (comma-values want)))
-    (boolean (some #(= (str got) %) (comma-values want)))))
+  "Does the filter's `want` admit the call's `got` on this field? The
+  path field, and every field in `globs` — the names the power's own
+  entry lists in `glob_constraints` — read each wanted value as a glob
+  in path's grammar. Every other field matches a wanted value exactly,
+  so a grant on an entry that names no glob field means what it meant
+  before."
+  ([fname want got] (field-admits? fname want got nil))
+  ([fname want got globs]
+   (if (or (= path-filter-field fname) (contains? globs fname))
+     (boolean (some #(path-glob-matches? % got) (comma-values want)))
+     (boolean (some #(= (str got) %) (comma-values want))))))
 
 (defn- entry-verdict
   "One filter map against one call's arguments → {:allow globs|nil}
@@ -287,8 +300,11 @@
 
   A path filter judges a move's `move_to` too: a move writes the file
   it names, so the destination must match one of the same globs as the
-  source, or the call misses on `move_to`."
-  [fm args]
+  source, or the call misses on `move_to`.
+
+  `globs` is the set of field names the power's entry says take globs
+  (`glob_constraints`); left out, only the path does."
+  [fm args & [globs]]
   (reduce
    (fn [acc [f want]]
      (let [fname (name f)
@@ -307,7 +323,7 @@
          (nil? got)
          (reduced {:miss {:field fname :got nil :want (str want)}})
 
-         (field-admits? fname want got) acc
+         (field-admits? fname want got globs) acc
 
          :else (reduced {:miss {:field fname :got (str got)
                                 :want (str want)}}))))
@@ -325,10 +341,10 @@
   a sibling's narrowing here as it does everywhere else in the
   surface, because a caller admitted by an unnarrowed entry is not
   narrowed at all."
-  [filters args]
+  [filters args & [globs]]
   (if (empty? filters)
     {:allow nil}
-    (let [verdicts (mapv #(entry-verdict % args) filters)
+    (let [verdicts (mapv #(entry-verdict % args globs) filters)
           ok (remove :miss verdicts)]
       (cond
         (empty? ok) {:miss (:miss (first verdicts))}
@@ -509,6 +525,10 @@
     ;; rather than asking for the whole rig and being told no
     (seq (:constraints entry))
     (assoc :constraints (vec (:constraints entry)))
+
+    ;; and which of them a filter may name a glob on
+    (seq (:glob_constraints entry))
+    (assoc :glob_constraints (vec (:glob_constraints entry)))
 
     why
     (assoc :why {:required true
@@ -1168,7 +1188,8 @@
            shape (seq (call-shape-errors schema args))
            protected (protected-verdict vis tname gentry args)
            args (bench-protected tname args protected)
-           verdict (when gentry (filter-verdict (:filters gentry) args))
+           verdict (when gentry (filter-verdict (:filters gentry) args
+                                                (servers/glob-fields entry)))
            prepare-block (bench-prepare-block eng vis tname args)
            hold-block (bench-hold-block eng tname args opts)
            ;; the person said yes when this call was scheduled, so its
@@ -1263,7 +1284,8 @@
               gentry (when token (grants/capability-entry vis token))
               protected (protected-verdict vis tname gentry args)
               args (bench-protected tname args protected)
-              verdict (when gentry (filter-verdict (:filters gentry) args))
+              verdict (when gentry (filter-verdict (:filters gentry) args
+                                                   (servers/glob-fields entry)))
               prepare-block (bench-prepare-block eng vis tname args)]
           (when (and entry gentry (not (:miss verdict)) (not prepare-block)
                      (not (:refuse protected)))
