@@ -1786,7 +1786,7 @@
                    (str/split raw #",")))]
     (if (seq vs) vs [raw])))
 
-(defn- row-matches?
+(defn row-matches?
   "Does this decoded row sit inside one of the entry's filter maps?
   Exact text comparison against the data field — the same value the
   collection's :eq cond compares in SQL, so the row check and the

@@ -135,6 +135,23 @@
         (is (= #{a-key} (set (map :key @seen)))))
       (finally (.stop server 0)))))
 
+(deftest a-cued-event-prints-its-cue
+  (let [[server url _] (stub-door! [(answer 3
+                                            (event 1 "ticket" "claim"
+                                                   {:cue "An ask from household: groom it."})
+                                            (event 2 "ticket" "claim")
+                                            (event 3 "ticket" "claim"))])]
+    (try
+      (let [{:keys [lines]} (run-feed! url (cursor-file) "--batch" "3" "--every" "600")]
+        (is (= [(str "3 events: ticket 00000001 claim open->done: row 1"
+                     " ⇒ An ask from household: groom it."
+                     " | ticket 00000002 claim open->done: row 2"
+                     " | ticket 00000003 claim open->done: row 3")
+                lapsed]
+               lines)
+            "the cue follows the summary, and a cued event waits for its batch"))
+      (finally (.stop server 0)))))
+
 (deftest an-urgent-event-prints-the-batch-at-once
   (let [[server url _] (stub-door! [(answer 3
                                             (event 1 "ticket" "claim")

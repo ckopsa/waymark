@@ -944,10 +944,14 @@
 ;; judges the one field it names.
 
 (defn- inbox-entries
-  "The seat's `inbox` `only` as `wake_on`-shaped entries."
+  "The seat's `inbox` as `wake_on`-shaped entries: each kind of its
+  `only`, then each of its `cues`, so the two guards below judge a
+  cue's kind and actions as they judge the `only`."
   [inbox]
-  (for [[k actions] (:only inbox)]
-    {:kind (name k) :actions actions}))
+  (concat (for [[k actions] (:only inbox)]
+            {:kind (name k) :actions actions})
+          (for [c (:cues inbox)]
+            {:kind (str (:kind c)) :actions (:actions c)})))
 
 (g/defguard inbox-names-real-kinds
   {:judges [:inbox]
@@ -973,6 +977,36 @@
     (if-some [bad (wake-on-unknown-action names-of (inbox-entries (:inbox inp)))]
       (t/deny {:vars bad})
       (t/allow))
+    (t/allow)))
+
+;; A cue's `filter` is matched against the row when the inbox door
+;; serves its event (`routes.seats/cue-match`), by equality on `state`
+;; or on a data field. A field the kind does not declare filterable is
+;; a cue that never matches and never says why, so it is refused here.
+
+(g/defguard inbox-cues-filter-declared-fields
+  {:judges [:inbox]
+   :reads [:services]
+   :vars [:kind :field :fields]
+   :open "A kind's filterable fields and their ops are its collection grammar, one GET away; the refusal spells them when a cue misses."
+   :explain "A cue on {kind} cannot filter by {field}: a cue's filter names `state`, or a field the kind declares filterable (eq), and a comma-separated value (any of) only on a field it declares filterable with in. The filterable fields of {kind} are: {fields}."}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (if-some [bad (first (for [c (:cues (:inbox inp))
+                               :let [rdef (rdef-of (:kind c))]
+                               :when rdef
+                               [f v] (:filter c)
+                               :let [fname (name f)
+                                     ops (get (:filterable rdef) (keyword fname))]
+                               :when (and (not= "state" fname)
+                                          (or (not-any? #(contains? ops %) [:eq :in])
+                                              (and (str/includes? (str v) ",")
+                                                   (not (contains? ops :in)))))]
+                           {:kind (str (:kind c)) :field fname
+                            :fields (str/join ", " (sort (map name (keys (:filterable rdef)))))}))]
+      (t/deny {:vars bad})
+      (t/allow))
+    ;; the pure render probe carries no registry — decline to guess
     (t/allow)))
 
 (defn- field-moved?
@@ -2060,7 +2094,31 @@
    [:int {:min 1 :max 3650}]])
 
 (def ^:private inbox-help
-  "What the engine holds for this seat's sittings to pull, said the way a subscriber's `only` is: a kind, and the actions on it that count, or an empty list for every action. Leave it empty for a seat with no inbox; an interactive seat left empty hears its tickets, changes, held calls, approval requests, seats and sittings.")
+  "What the engine holds for this seat's sittings to pull, said the way a subscriber's `only` is: a kind, and the actions on it that count, or an empty list for every action. Leave it empty for a seat with no inbox; an interactive seat left empty hears its tickets, changes, held calls, approval requests, seats and sittings. A cue is a standing note: the inbox attaches it to each event the cue matches, so the seat reads what to do beside the event.")
+
+(def ^:private inbox-cue-schema
+  "One cue of a seat's inbox (ticket ab77e635): a `wake_on`-shaped
+  entry, and the note the inbox door attaches to each event the entry
+  matches. An empty `actions` is every action of the kind, as it is in
+  `only`."
+  [:map
+   [:kind {:x-options {:from :kinds}
+           :x-display {:label "Kind"
+                       :help "The collection whose events carry this note — one kind name this engine serves."}}
+    [:string {:min 1 :max 64}]]
+   [:actions {:x-options {:from :actions :of :kind :each true}
+              :x-display {:label "Actions"
+                          :help "Which transitions of that kind carry this note, by name. An empty list is every action of the kind."}}
+    [:vector [:string {:min 1 :max 64}]]]
+   [:filter {:optional true
+             :x-display {:label "Only rows matching"
+                         :spelled-by-hand grants/filter-spelled-by-hand
+                         :help "Which rows this cue is about: field=value pairs in the shape of that kind's own query, the collection grammar's eq. The row is read as it stands when the inbox serves the event. Omit it and every row of the kind matches."}}
+    [:maybe grants/filter-map-schema]]
+   [:note {:examples ["An ask from household: groom it."]
+           :x-display {:label "Note"
+                       :help "What this seat does about such an event, in one line. The inbox attaches it to each event this cue matches."}}
+    [:string {:min 1 :max 280}]]])
 
 (def inbox-field
   "THE SEAT'S INBOX. A cloud session cannot run a local receiver, so
@@ -2075,18 +2133,28 @@
   the keys of `only`, and the chips beside the box offer them. `only`
   itself is a map-of, whose keys no form can list, so it wears the
   reason it is typed (`:spelled-by-hand`), as the scope's `filter`
-  does."
+  does.
+
+  `cues` are standing notes (`inbox-cue-schema`). They never widen or
+  narrow what the door serves: `only` decides that. An inbox that
+  states `cues` and no `only` keeps the `only` it would have had with
+  no inbox stated (`inbox-of`)."
   [:inbox {:optional true
            :examples [{:only {:seat ["restate" "park"]}}]
            :x-options {:from :kinds}
            :x-display {:label "Its inbox"
                        :help inbox-help}}
    [:maybe [:map
-            [:only {:x-options {:from :kinds}
+            [:only {:optional true
+                    :x-options {:from :kinds}
                     :x-display {:label "Kinds and their actions"
                                 :spelled-by-hand "A kind → actions map, the shape of a subscriber's `only`, and a form cannot list its keys, so each pair is typed: a kind name, then the list of its actions that count, or an empty list for every action. The chips beside the box offer every kind name."
                                 :help "Which transitions the engine holds for this seat's sittings: each kind by name, and the actions on it that count. An empty list counts every action of that kind."}}
-             [:map-of :keyword [:vector [:string {:min 1 :max 64}]]]]]]])
+             [:map-of :keyword [:vector [:string {:min 1 :max 64}]]]]
+            [:cues {:optional true
+                    :x-display {:label "Cues"
+                                :help "Standing notes for the events this seat hears. Each cue names a kind, its actions and, when it needs one, a filter on the row; the inbox attaches the cue's note to each event it matches. A cue does not change which events the inbox holds. At most 20."}}
+             [:vector {:max 20} inbox-cue-schema]]]]])
 
 (def feed-url-field
   "THE SEAT'S OUTSIDE FEED. An inbox outside the engine streams this
@@ -3223,6 +3291,7 @@
                    wake-on-any-of-needs-in
                    inbox-names-real-kinds
                    inbox-names-real-actions
+                   inbox-cues-filter-declared-fields
                    budget-fits-the-domain
                    ;; LAST, so a hold is a call every other wall passed
                    delegation/authors-within-the-ceiling]
@@ -3446,6 +3515,7 @@
               wake-on-any-of-needs-in
               inbox-names-real-kinds
               inbox-names-real-actions
+              inbox-cues-filter-declared-fields
               step-carries-a-note
               budget-fits-the-domain
               delegation/authors-within-the-ceiling]
@@ -6101,10 +6171,18 @@
 (defn inbox-of
   "The inbox this seat's sittings pull: the one it states, else
   `default-inbox` for an interactive seat, else nil. A fired seat has
-  an inbox only when it states one."
+  an inbox only when it states one.
+
+  An inbox that states `cues` and no `only` keeps the default `only`,
+  so an interactive seat adds cues without restating every kind it
+  hears."
   [seat-row]
-  (or (get-in seat-row [:data :inbox])
-      (when (interactive-seat? seat-row) default-inbox)))
+  (let [stated (get-in seat-row [:data :inbox])
+        default (when (interactive-seat? seat-row) default-inbox)]
+    (cond
+      (nil? stated) default
+      (some? (:only stated)) stated
+      :else (merge default (dissoc stated :only)))))
 
 (def inbox-keys-max
   "How many inbox keys of one sitting answer at one time. A same-session
