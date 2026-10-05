@@ -1522,7 +1522,9 @@
         ;; the powers a scope entry may NARROW, and by which fields
         ;; (waymark-fp62.6.3.5). A token absent from this map takes no
         ;; filter at all, so an agent asks for it whole or not at all.
-        constraints (gate/power-constraints eng)]
+        constraints (gate/power-constraints eng)
+        ;; and the fields among them whose filter values are globs
+        globs (gate/power-glob-constraints eng)]
     (cond-> {:posture (str "When something your task needs is absent, file "
                            "an approval_request now — anchored, for "
                            "everything at once — rather than reporting "
@@ -1543,6 +1545,15 @@
                                     "the whole rig, and add one entry per "
                                     "narrowing you need; a power absent here "
                                     "takes no filter at all"))
+      (seq globs)
+      (assoc :glob_constraints globs
+             :glob_constraints_note (str "the constraint fields whose "
+                                         "`filter` value may be a glob "
+                                         "(automation.school_*), in the "
+                                         "path's own grammar; `path` "
+                                         "always takes globs, and every "
+                                         "other field matches exact "
+                                         "comma-separated values"))
       (and vis (:grant vis))
       (assoc :anchor {:grant_id (:grant-id vis)
                       :note (str "the grant you are wearing — pass it as "

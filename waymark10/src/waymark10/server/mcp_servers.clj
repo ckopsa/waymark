@@ -551,6 +551,31 @@
         (keep (fn [[tk fields]] (when (seq fields) [tk (vec (sort fields))])))
         (constraints-of-rows (rows eng))))
 
+(defn glob-fields
+  "The constraint fields this powers entry says take GLOBS, as a set of
+  names. A filter value on one of them is read in the path's own glob
+  grammar; on every other field it is an exact word. An entry that
+  names none answers the empty set, so no grant on it widens."
+  [entry]
+  (into #{} (comp (map str) (remove str/blank?)) (:glob_constraints entry)))
+
+(defn power-glob-constraints
+  "Every power token with a constraint field that takes globs, and
+  those fields, sorted → {token [field …]}. A token that names none is
+  ABSENT, as in `power-constraints`: discover publishes this map beside
+  that one, and a field missing from it is a field to name exact values
+  on."
+  [eng]
+  (into (sorted-map)
+        (keep (fn [[tk fields]] (when (seq fields) [tk (vec (sort fields))])))
+        (reduce (fn [m [tk fields]] (update m tk (fnil into #{}) fields))
+                {}
+                (for [row (rows eng)
+                      e (get-in row [:data :powers])
+                      :let [tk (str (:power e))]
+                      :when (not (str/blank? tk))]
+                  [tk (glob-fields e)]))))
+
 ;; ── the registry beside the rows (waymark-fp62.10.4) ────────────────
 ;;
 ;; Since this leg the powers list is the FIRST vocabulary: a dotted
@@ -1062,6 +1087,14 @@
                   :examples [["repo" "path"]]
                   :x-display {:label "Constraints"
                               :help "The tool input fields a grant's filter may name for this power — repo, path. Leave it empty and no grant may filter this power at all."}}
+    [:maybe [:vector [:string {:min 1 :max 60}]]]]
+   ;; ticket b9c1b8e4: which of those fields take a GLOB. The door
+   ;; matches a filter value exactly on every field but path unless
+   ;; the entry names the field here, so no existing grant widens.
+   [:glob_constraints {:optional true
+                       :examples [["entity_id"]]
+                       :x-display {:label "Glob constraints"
+                                   :help "The constraints whose filter values are globs, such as automation.school_* on entity_id. A field left out matches exact values only. The path field always takes globs."}}
     [:maybe [:vector [:string {:min 1 :max 60}]]]]])
 
 (defn entry-approval-agrees?
