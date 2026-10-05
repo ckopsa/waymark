@@ -126,7 +126,10 @@
             "domain"
             "grant" "held_call" "invitation" "job" "judgment" "mcp_server" "meal"
             "member" "model" "notice_rule" "notifier"
-            "plan" "role" "runner_link" "runner_provider" "schedule"
+            "plan"
+            ;; docs/spec-quests.md: a goal a person accepted, and its plan
+            "quest"
+            "role" "runner_link" "runner_provider" "schedule"
             ;; docs/spec-scheduled-actions.md R-1: a call stored for a time
             "scheduled_action" "seat"
             ;; and the secret: a value the owner enters once and a door
