@@ -1832,6 +1832,32 @@
         (is (empty? (get-in third [:walk :rows])))
         (is (str/includes? (str (:note third)) "nothing for you to walk"))))))
 
+(deftest a-fire-that-names-a-row-past-the-first-page-walks-that-row
+  ;; Ticket 59582777: the named row was looked for on the queue's first
+  ;; page of 100 alone, so a row behind it was not found and the queue's
+  ;; oldest row was handed in its place.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        seat (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3
+                                   :instructions fired-instructions})
+        at #(format "2026-09-18T07:%02d:%02dZ" (quot % 60) (rem % 60))
+        _ (doseq [i (range 100)]
+            (post! eng (str "Bill " i) "house" (at i)))
+        note (post! eng "The school note" "house" (at 100))
+        k (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                ((:now-fn eng))
+                                (wire/write-json {:kind "post" :id (str (:id note))
+                                                  :action "file" :from "queued"
+                                                  :to "queued"}))
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit"
+                {:key k :seat "post-clerk" :session "run-far"})
+        answer (doc-of r)]
+    (is (false? (:isError r)) (text-of r))
+    (is (= 101 (get-in answer [:walk :total])))
+    (is (= [(str (:id note))] (mapv :id (get-in answer [:walk :rows])))
+        "the named row is past the first page, and is handed alone")))
+
 (deftest a-fires-prose-names-a-row-by-its-short-id
   ;; Ticket 26c7967a: a person's prose names a row by the first 8 hex of
   ;; its id. The key keeps that row when exactly one row's id opens with
