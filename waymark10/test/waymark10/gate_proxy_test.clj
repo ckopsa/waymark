@@ -29,10 +29,14 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
+            [waymark10.server.grants :as grants]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
             [waymark10.wire :as wire]))
 
 ;; ── the stubbed Gate ────────────────────────────────────────────────
@@ -651,3 +655,134 @@
           (is (= before (count (gate-calls log)))
               "identical enforcement underneath — neither surface let
                the call touch the wire"))))))
+
+;; ── a server whose own tool asks for the why (ticket ad0847ec) ──────
+
+(def ^:private home-tools
+  "A server that is not Gate. `label_set` and `helper_put` name `why`
+  as their own REQUIRED input, because the server writes the sentence
+  to its logbook; `scene_run` names none."
+  [{:name "label_set" :description "Set one label."
+    :inputSchema {:type "object"
+                  :properties {:label {:type "string"}
+                               :why {:type "string"}}
+                  :required ["label" "why"]}}
+   {:name "helper_put" :description "Write one helper."
+    :inputSchema {:type "object"
+                  :properties {:name {:type "string"}
+                               :why {:type "string"}}
+                  :required ["name" "why"]}}
+   {:name "scene_run" :description "Run one scene."
+    :inputSchema {:type "object"
+                  :properties {:name {:type "string"}}}}])
+
+(def ^:private home-owner (t/principal {:id "colton" :display "Colton"}))
+
+(def ^:private home-approver
+  (t/principal {:id "mom" :display "Mom" :roles #{"approver"}}))
+
+(def ^:private home-clerk
+  (t/principal {:id "home-clerk" :type :agent :display "Clerk"
+                :model "gate-proxy-test-model"}))
+
+(defn- home-world
+  "One engine whose one server row is `home`, not passthrough, and
+  the clerk wearing its three powers. → {:eng :log :session}."
+  []
+  (let [log (atom [])
+        client (fn [method params]
+                 (swap! log conj {:method method :params params})
+                 (case method
+                   "tools/list" {:tools home-tools}
+                   "tools/call" {:content [{:type "text" :text "home answered"}]
+                                 :isError false}))
+        eng (engine/engine {:storage (memory/storage)
+                            :resources [caps/capability]
+                            :services {:mcp-servers
+                                       {:client-fn
+                                        (fn [row]
+                                          (when (= "home"
+                                                   (get-in row [:data :name]))
+                                            client))}}})
+        tokens ["home.label" "home.helper" "home.scene"]]
+    (doseq [token tokens]
+      (inv/create! eng :capability
+                   {:token token
+                    :description (str token " through a server row.")
+                    :enforced_by "this engine's own power door"}
+                   {:principal home-owner}))
+    (inv/create! eng :mcp_server
+                 {:name "home" :transport "http"
+                  :url "http://fake.invalid/mcp/"
+                  :powers [{:power "home.label" :tools ["label_set"]
+                            :approval "why"}
+                           {:power "home.helper" :tools ["helper_put"]
+                            :approval "person"}
+                           {:power "home.scene" :tools ["scene_run"]
+                            :approval "why"}]}
+                 {:principal home-owner})
+    (let [gid (str (:id (:row (inv/create!
+                               eng :grant
+                               {:audience (:id home-clerk)
+                                :scope (mapv #(hash-map :kind % :actions [])
+                                             tokens)}
+                               {:principal home-owner}))))]
+      (inv/invoke! eng :grant gid :accept {} {:principal home-clerk})
+      {:eng eng :log log
+       :session {:principal home-clerk
+                 :visibility (grants/visibility eng gid home-clerk)}})))
+
+(defn- home-power!
+  "One waymark_power call through the whole message layer → the result."
+  [{:keys [eng session]} tool args]
+  (get-in (mcp/message eng (mcp/door eng) (gate/rpc-of eng) session
+                       {:jsonrpc "2.0" :id 1 :method "tools/call"
+                        :params {:name "waymark_power"
+                                 :arguments {:tool tool :arguments args}}})
+          [:result]))
+
+(deftest a-servers-own-why-reaches-it-and-a-server-that-names-none-gets-none
+  ;; the passthrough half — Gate's row still receives `__why` — is
+  ;; a-granted-read-and-a-granted-send-reach-the-forward-path above
+  (let [{:keys [eng log] :as w} (home-world)
+        sentence "The owner asked for it."
+        sent #(get-in (last (gate-calls log)) [:params :arguments])]
+
+    (testing "a tool whose schema names `why` receives it, called directly"
+      (let [out (home-power! w "home__label_set"
+                             {:label "porch" :why sentence})]
+        (is (false? (:isError out)) (pr-str out))
+        (is (= {:label "porch" :why sentence} (sent))
+            "the server asked for the sentence, so it is forwarded")))
+
+    (testing "a tool whose schema names none does not, though the entry
+              demands a why of the caller"
+      (let [out (home-power! w "home__scene_run"
+                             {:name "dusk" :why sentence})]
+        (is (false? (:isError out)) (pr-str out))
+        (is (= {:name "dusk"} (sent))
+            "this door's own why is not the server's argument")))
+
+    (testing "a held call keeps the server's `why` through the allow"
+      (let [before (count (gate-calls log))
+            out (home-power! w "home__helper_put"
+                             {:name "away" :why sentence})
+            id (str (:held_call (wire/read-json
+                                 (str (get-in out [:content 0 :text])))))
+            row #(inv/decode-row
+                  (get (inv/resources eng) :held_call)
+                  (store/with-tx (:storage eng)
+                    (fn [tx] (store/load-row (:storage eng) tx :held_call
+                                             id {}))))]
+        (is (false? (:isError out)) (pr-str out))
+        (is (= before (count (gate-calls log)))
+            "held: the server heard nothing before the tap")
+        (is (= {:name "away" :why sentence} (get-in (row) [:data :forward]))
+            "the forward written at birth carries the why")
+        (held/after-allow!
+         eng (get (inv/resources eng) :held_call) :allow
+         (inv/invoke! eng :held_call id :allow {} {:principal home-approver}))
+        (is (= (inc before) (count (gate-calls log))) "once, after the tap")
+        (is (= "helper_put" (get-in (last (gate-calls log)) [:params :name])))
+        (is (= {:name "away" :why sentence} (sent))
+            "and the allow forwards what the server requires")))))

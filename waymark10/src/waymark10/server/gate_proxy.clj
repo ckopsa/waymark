@@ -1067,12 +1067,37 @@
       (-> args (dissoc :why) (assoc :__why (:why args)))
       (dissoc args :why))))
 
+(defn- tool-schema
+  "The mirrored input schema of the row's tool `bare`, or nil."
+  [row bare]
+  (some #(when (= (str bare) (str (:name %)))
+           (:input_schema %))
+        (get-in row [:data :tools])))
+
+(defn- names-why?
+  "True when the tool's own schema names `why` among its properties:
+  the server asks for the sentence itself."
+  [schema]
+  (let [props (:properties schema)]
+    (and (map? props)
+         (or (contains? props :why) (contains? props "why")))))
+
 (defn- forward-args
   "What the row's server receives: Gate's spelling on a passthrough
-  row, and neither spelling on a server that never asked for one."
-  [row args]
-  (if (true? (get-in row [:data :passthrough]))
+  row, the caller's sentence as `why` on a server whose tool names
+  `why` in its own schema, and neither spelling on a server that
+  never asked for one."
+  [row schema args]
+  (cond
+    (true? (get-in row [:data :passthrough]))
     (gate-args args)
+
+    (names-why? schema)
+    (let [why (why-of args)]
+      (cond-> (dissoc (or args {}) :why :__why)
+        why (assoc :why why)))
+
+    :else
     (dissoc (or args {}) :why :__why)))
 
 (defn- stored
@@ -1159,9 +1184,7 @@
      (let [gentry (grants/capability-entry vis token)
            ;; the caller's own arguments against the tool's mirrored
            ;; schema, read before this door adds anything to them
-           schema (some #(when (= (str (:bare hit)) (str (:name %)))
-                           (:input_schema %))
-                        (get-in row [:data :tools]))
+           schema (tool-schema row (:bare hit))
            shape (seq (call-shape-errors schema args))
            protected (protected-verdict vis tname gentry args)
            args (bench-protected tname args protected)
@@ -1214,7 +1237,8 @@
                       :tool tname
                       :entry entry
                       :input (or args {})
-                      :forward (forward-args row (with-allow args (:allow verdict)))
+                      :forward (forward-args row schema
+                                             (with-allow args (:allow verdict)))
                       :why (why-of args)
                       :caller (:caller opts)
                       :sitting (:sitting opts)})))
@@ -1229,7 +1253,8 @@
            (teach-shape
             tname schema why
             (servers/call! eng tname
-                           (forward-args row (with-allow args (:allow verdict)))))))))))
+                           (forward-args row schema
+                                         (with-allow args (:allow verdict)))))))))))
 
 ;; ── the engine's own hand (the write path) ──────────────────────────
 
@@ -1255,7 +1280,7 @@
     (when (and eng vis (seq (admitted-tokens eng vis)))
       (fn power [tool args]
         (let [tname (str tool)
-              {:keys [row entry token]} (servers/resolve-tool eng tname)
+              {:keys [row bare entry token]} (servers/resolve-tool eng tname)
               gentry (when token (grants/capability-entry vis token))
               protected (protected-verdict vis tname gentry args)
               args (bench-protected tname args protected)
@@ -1266,7 +1291,8 @@
                      (not (:refuse protected)))
             (try
               (servers/call! eng tname
-                             (forward-args row (with-allow args (:allow verdict))))
+                             (forward-args row (tool-schema row bare)
+                                           (with-allow args (:allow verdict))))
               (catch Exception e
                 (binding [*out* *err*]
                   (println "waymark10 power" tname "failed -"
