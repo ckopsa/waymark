@@ -569,19 +569,25 @@
   itself bound (its resolved remedies), with the :input :choices gives
   that door beneath the bound input; else the :choices pick, :resolve's
   pick, or, when neither names one, the refused call's own row when the
-  remedy is on its kind. nil means nobody said — a choice for a person;
+  remedy is on its kind, or the collection when it is a create the
+  refusal bound an :input for. A bound :input rides every pick, over
+  the pick's own. nil means nobody said — a choice for a person;
   {:unseen reason} means the pick did not read back (gone, or outside
   the caller's grant), so the remedy is blocked, never attempted."
   [session door refused resolve choices]
   (let [same-kind? (= (door-kind door) (door-kind (:door refused)))
         bound (some #(when (= door (:door %)) %) (:bound refused))
         chosen (or (get choices door) (get choices (keyword door)))
+        bound-in (:input bound)
         pick (if (some? (:id bound))
                (cond-> (select-keys bound [:id :input])
                  (seq (:input chosen)) (update :input #(merge (:input chosen) %)))
-               (or chosen
-                   (when resolve (resolve door refused))
-                   (when same-kind? (select-keys bound [:input]))))
+               (if-some [p (or chosen (when resolve (resolve door refused)))]
+                 (cond-> p (seq bound-in) (update :input merge bound-in))
+                 (cond
+                   same-kind? (select-keys bound [:input])
+                   (and (seq bound-in) (= "create" (door-action door)))
+                   {:input bound-in})))
         target (when pick
                  (let [d (remedy-doc session (door-kind door) (door-action door) pick)]
                    (if (and (nil? d) same-kind?) (:doc refused) d)))]
