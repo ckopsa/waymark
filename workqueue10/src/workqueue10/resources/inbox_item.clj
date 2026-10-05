@@ -36,12 +36,12 @@
   already turned into one. `message_id` is the address in the inbox,
   declared `:unique`, so the second minting of a handled message is
   refused by an index rather than by a sentence in a charter; and a
-  row at a leaf is simply not in the queue any more, so it is never
-  offered twice. `:default-filters {:state \"queued,opened\"}` is
-  outcome's own spelling of the same idea, with `opened` beside
-  `queued` so that a row one sitting opened and left is offered to
-  the next — the collection a walker
-  opens IS the work waiting for it.
+  row at a leaf is simply not under the default filter any more, so
+  an answered row is never offered again. A row that one sitting
+  opened or researched and left is offered until it is answered,
+  because it still waits on yes or no. `:default-filters {:state
+  \"queued,opened,researched\"}` is outcome's own spelling of the same
+  idea — the collection a walker opens IS the work waiting for it.
 
   WHAT IS STORED, AND WHAT IS NEVER STORED. Headers: the address, the
   subject, who sent it, when it arrived. The source lists headers and
@@ -367,11 +367,13 @@
    :display {:title "{data.subject}"}
    ;; THE QUEUE IS THE COLLECTION UNDER ITS DEFAULT FILTER (outcome's
    ;; spelling): a walker opens /api/inbox_items and gets exactly the
-   ;; messages nobody has decided about, oldest first.
+   ;; messages nobody has decided about, oldest first. A researched row
+   ;; still waits on yes or no, so it is in the queue until it is
+   ;; answered.
    :filterable {:state #{:eq :in} :message_id #{:eq}}
    ;; `opened` rides beside `queued`: a row one sitting opened and left
    ;; is still nobody's decision, and the next walker has to meet it.
-   :default-filters {:state "queued,opened"}
+   :default-filters {:state "queued,opened,researched"}
    :sortable {:fields [:received_at] :default "received_at"}
    ;; ONE ROW PER MESSAGE, enforced by an index rather than by a
    ;; sentence in a charter — week one's nine duplicate refusals, as

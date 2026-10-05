@@ -5399,8 +5399,9 @@
 
 (defn- hidden-waiting
   "The rows of the kind this seat walks that wait where its grant does
-  not reach: in the state its walk reads — the filter's own, or the
-  kind's default, or any state that is not terminal — and outside the
+  not reach: in the states its walk reads — the filter's own, or the
+  kind's default, either of which may name several with commas, or
+  any state that is not terminal — and outside the
   other fields of its scope entry's filter (`walk-filter`). Read
   through the store and not through the seat's grant. A seat whose
   entry filters by no field hides none, and a judgment seat walks the
@@ -5419,6 +5420,10 @@
         (let [state (or (not-empty (get flt "state"))
                         (some-> (get-in rdef [:default-filters :state])
                                 hidden-str not-empty))
+              states (when state
+                       (into []
+                             (comp (map str/trim) (remove str/blank?))
+                             (str/split state #",")))
               terminal (into #{} (map hidden-str) (:terminal rdef))
               waits? (fn [row]
                        (or (some? state)
@@ -5428,13 +5433,16 @@
                                     (= v (some-> (get-in row [:data (keyword f)])
                                                  hidden-str)))
                                   fields))
+              rows-in (fn [where]
+                        (store/query-rows (:storage eng) tx kind where
+                                          {:limit hidden-scan-limit}))
               n (count (filter #(and (waits? %) (not (admitted? %)))
-                               (store/query-rows (:storage eng) tx kind
-                                                 (if state {:state (keyword state)} {})
-                                                 {:limit hidden-scan-limit})))]
+                               (if (seq states)
+                                 (mapcat #(rows-in {:state (keyword %)}) states)
+                                 (rows-in {}))))]
           (when (pos? n)
             {:count n
-             :state state
+             :state (some->> (seq states) (str/join " or "))
              :plural (:plural rdef)
              :fields (vec (sort (keys fields)))}))))
     (catch Exception _ nil)))

@@ -1039,17 +1039,47 @@
             :safety {:idempotent true :reversible false :confirm false
                      :one-way "A filed post keeps its history."}}}}))
 
+(def ^:private slip
+  "A queue with a middle state: a slip that was opened and not yet
+  filed still waits, so its default filter names both states with a
+  comma."
+  (r/resource
+   {:kind :slip
+    :plural "slips"
+    :states [:queued :opened :filed]
+    :initial :queued
+    :terminal #{:filed}
+    :summary "{data.subject} · {state}"
+    :schema
+    [:map
+     [:subject {:x-display {:label "What it is about"}}
+      [:string {:min 1 :max 120}]]
+     [:box {:x-display {:label "Which box"}} [:string {:min 1 :max 40}]]
+     [:received_at {:x-display {:label "When it arrived"}} :waymark/instant]]
+    :filterable {:state #{:eq :in} :box #{:eq}}
+    :default-filters {:state "queued,opened"}
+    :sortable {:fields [:received_at] :default "received_at"}
+    :actions
+    {:open {:from #{:queued} :to :opened
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "An opened slip keeps its history."}}
+     :file {:from #{:queued :opened} :to :filed
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A filed slip keeps its history."}}}}))
+
 (defn- post-engine []
   (engine/engine {:storage (memory/storage)
-                  :resources [fx/meal groomers-ticket post]
+                  :resources [fx/meal groomers-ticket post slip]
                   :oidc {:issuer issuer :audience audience :jwks jwks
                          :app-url "https://app.test/"
                          :delegate-clients {"connector" "Claude"}}}))
 
 (defn- open-post-seat!
   "A seat that walks the post queue under its scope entry's filter: the
-  house's own box and no other. Its key is offered."
-  [eng]
+  house's own box and no other. Its key is offered. `kind` and
+  `actions` name another queue of the same shape."
+  ([eng] (open-post-seat! eng "post" ["file"]))
+  ([eng kind actions]
   (let [model (:row (inv/create! eng :model
                                  {:name "close-test-model" :display "Close 1"
                                   :vendor "anthropic" :tier "strong"
@@ -1062,9 +1092,9 @@
                     eng :seat
                     {:name "post-clerk"
                      :charter "Read each post and file it."
-                     :scope [{:kind "post" :actions ["file"]
+                     :scope [{:kind kind :actions actions
                               :filter {:box "house"}}]
-                     :walk "post"
+                     :walk kind
                      :held_for [(:id model)]
                      :standing_ttl_seconds 604800
                      :cadence_seconds 3600
@@ -1074,7 +1104,17 @@
     (schedules/ensure-schedule! eng seat)
     (inv/invoke! eng :seat (:id seat) :offer_key {:key a-key}
                  {:principal person})
-    {:seat seat :model model}))
+    {:seat seat :model model})))
+
+(defn- slip!
+  "One slip in a box, moved through `doors` in order."
+  [eng subject box & doors]
+  (let [row (:row (inv/create! eng :slip {:subject subject :box box
+                                          :received_at "2026-09-18T07:00:00Z"}
+                               {:principal person}))]
+    (doseq [door doors]
+      (inv/invoke! eng :slip (str (:id row)) door nil {:principal person}))
+    row))
 
 (defn- post! [eng subject box]
   (:row (inv/create! eng :post {:subject subject :box box
@@ -1161,6 +1201,36 @@
       (close-as! eng seat model minutes-ago "idle" {:walked_nothing true}))
     (is (nil? (get-in (row-of eng :seat seat-id) [:data :health :breach])))
     (is (empty? (tickets eng)))))
+
+;; A default filter that names two states with a comma (ticket a45c5830).
+
+(deftest a-row-left-in-a-middle-state-is-offered-by-the-next-walk
+  (let [eng (post-engine)
+        h (engine/handler eng)
+        _ (open-post-seat! eng "slip" ["open" "file"])]
+    (slip! eng "Opened and left" "house" :open)
+    (slip! eng "Answered" "house" :open :file)
+    (let [sat (sit! h (initialize! h))]
+      (is (= ["opened"] (mapv :state (get-in sat [:walk :rows])))
+          "the row still waits on a decision, and the filed one does not"))))
+
+(deftest hidden-rows-are-counted-in-every-state-a-comma-filter-names
+  (let [eng (post-engine)
+        {:keys [seat model]} (open-post-seat! eng "slip" ["open" "file"])]
+    (slip! eng "Street, queued" "street")
+    (slip! eng "Street, opened" "street" :open)
+    (slip! eng "Street, filed" "street" :open :file)
+    (doseq [minutes-ago [40 30 20]]
+      (close-as! eng seat model minutes-ago "idle" {:walked_nothing true}))
+    (let [[ticket :as filed] (tickets eng)]
+      (is (= "walked_nothing_run"
+             (get-in (row-of eng :seat (str (:id seat)))
+                     [:data :health :breach :rule])))
+      (is (= 1 (count filed)))
+      (is (str/starts-with?
+           (str (get-in ticket [:data :detail]))
+           "post-clerk walked nothing 3 times while 2 queued or opened slips sat outside its grant (box filter or scope).")
+          "a comma value names two states, and the filed slip waits for nobody"))))
 
 ;; ── the key check door (docs/spec-seat.md § 16) ─────────────────────
 

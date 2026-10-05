@@ -261,9 +261,9 @@
          the house did and one is what it let go"))
 
   (testing "the queue IS the collection under its default filter"
-    (is (= {:state "queued,opened"} (:default-filters inbox-item))
-        "a row one sitting opened and left is still waiting, so the
-         next walker is offered it")
+    (is (= {:state "queued,opened,researched"} (:default-filters inbox-item))
+        "a row one sitting opened or researched and left still waits
+         on yes or no, so the next walk is offered it")
     (is (= "received_at" (get-in inbox-item [:sortable :default]))
         "oldest first: the house answers its mail in the order it
          arrived"))
