@@ -504,17 +504,50 @@
           (t/deny {:vars {:parent parent}})
           :else (t/allow))))))
 
+;; THE REFUSAL NAMES ONE CHILD (ticket 20ee6b97): the oldest unfinished
+;; child by `created_at`, as evidence, and both remedies bind its id.
+;; A bare remedy on the ticket's own kind falls back to the refused row,
+;; so a pursuit of a parent's `complete` tried the parent again and met
+;; nothing but cycles. One child is enough: a re-plan after each move
+;; finds the next. The count is over every child, as it was; the child
+;; named is one the CALLER can see — the grant on the ctx is the judge,
+;; and a ctx with no grant sees them all — so a refusal never names a
+;; row its reader could not open.
+
+(defn- oldest-first
+  "Rows by `created_at`, the id breaking a tie or standing in where a
+  row carries no timestamp."
+  [rows]
+  (sort (fn [a b]
+          (let [ca (:created-at a)
+                cb (:created-at b)
+                c (if (and ca cb) (compare ca cb) 0)]
+            (if (zero? c) (compare (str (:id a)) (str (:id b))) c)))
+        rows))
+
 (defguardfn children-are-finished
-  {:reads [:ticket]
-   :vars [:count]
-   :remedies [:ticket/complete :ticket/drop]
-   :explain "{count} of this ticket's children are not finished. A parent ends after its children: complete or drop each one first, and then this door opens."}
+  {:reads [:ticket :grant]
+   :vars [:count :which]
+   :evidence [:child_id]
+   :remedies [{:door :ticket/complete :id '(evidence :child_id)}
+              {:door :ticket/drop :id '(evidence :child_id)}]
+   :explain "{count} of this ticket's children are not finished.{which} A parent ends after its children: complete or drop each one first, and then this door opens."}
   [row _inp ctx]
   (if-some [find' (:find ctx)]
-    (let [children (find' :ticket {:parent (str (:id row))} {:limit 500})
-          waiting (count (filter (comp unfinished state-of) children))]
-      (if (pos? waiting)
-        (t/deny {:vars {:count waiting}})
+    (let [waiting (filter (comp unfinished state-of)
+                          (find' :ticket {:parent (str (:id row))} {:limit 500}))
+          row? (:row? (:grant ctx))
+          child (first (oldest-first
+                        (cond->> waiting
+                          row? (filter #(row? :ticket (:id %))))))]
+      (if (seq waiting)
+        (t/deny (cond-> {:vars {:count (count waiting)
+                                :which (if child
+                                         (str " The oldest is \""
+                                              (get-in child [:data :title])
+                                              "\".")
+                                         " They are outside what you can see.")}}
+                  child (assoc :evidence {:child_id (str (:id child))})))
         (t/allow)))
     (t/allow)))
 

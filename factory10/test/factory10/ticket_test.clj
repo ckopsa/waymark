@@ -17,16 +17,21 @@
   Run: cd factory10 && clojure -M:test"
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [factory10.main :as main]
             [factory10.resources.change :refer [change]]
             [factory10.resources.ticket :as tk :refer [ticket]]
+            [waymark10.client :as c]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
             [waymark10.dashboard :as dash]
             [waymark10.schema :as sch]
             [waymark10.server.collections :as collections]
+            [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.seats :as seats]
-            [waymark10.server.store.memory :as memory])
+            [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t])
   (:import (java.time Instant)))
 
 (def ^:private now (Instant/parse "2026-09-26T14:00:00Z"))
@@ -337,6 +342,105 @@
       (is (= :available (:status (refusal parent (ctx the-person) :complete)))
           "the render probe carries no store; the door judges again
            with a real one behind it"))))
+
+;; ── the refusal names one child (ticket 20ee6b97) ───────────────────
+
+(def ^:private a-family
+  "A parent over two open children. The id order is the reverse of the
+  birth order, so the child named is the oldest and not the first id."
+  (let [born (fn [row at'] (assoc row :created-at (Instant/parse at')))]
+    {"P" (at :open {} "P")
+     "A" (born (at :open {:parent "P" :title "The younger child"} "A")
+               "2026-09-26T12:00:00Z")
+     "B" (born (at :open {:parent "P" :title "The older child"} "B")
+               "2026-09-25T12:00:00Z")}))
+
+(defn- seeing
+  "The ctx of a hand whose grant admits only these ticket ids."
+  [ids]
+  (assoc (ctx the-person a-family)
+         :grant {:id "G"
+                 :action? (constantly true)
+                 :row? (fn [_kind id] (contains? ids (str id)))}))
+
+(defn- bound
+  "What the refusing guard found and the remedies it binds, as the door
+  resolves them: the availability answer carries the denier and its
+  sentence, and the evidence is the denier's own verdict."
+  [shut row c]
+  (let [deny ((:check (:denier shut)) row nil c)]
+    {:evidence (:evidence deny)
+     :remedies (g/resolve-remedies (:denier shut) row nil (:evidence deny))}))
+
+(deftest the-refusal-binds-the-oldest-unfinished-child-and-names-it
+  (let [parent (get a-family "P")]
+    (doseq [door [:complete :drop]]
+      (let [c (ctx the-person a-family)
+            shut (refusal parent c door)]
+        (is (= :children-are-finished (:name (:denier shut))))
+        (is (= [{:door :ticket/complete :id "B"} {:door :ticket/drop :id "B"}]
+               (:remedies (bound shut parent c)))
+            "complete and drop both act on the older child")
+        (is (re-find #"2 of this ticket's children are not finished. The oldest is \"The older child\"\."
+                     (str (:reason shut)))
+            "a person reading the refusal learns which child")))
+    (testing "a hand that sees one child is bound to that one"
+      (let [c (seeing #{"P" "A"})
+            shut (refusal parent c :complete)]
+        (is (= ["A" "A"] (mapv :id (:remedies (bound shut parent c)))))
+        (is (re-find #"The oldest is \"The younger child\"" (str (:reason shut))))))))
+
+(deftest a-caller-who-sees-no-child-is-bound-to-none
+  (let [parent (get a-family "P")
+        c (seeing #{"P"})
+        shut (refusal parent c :complete)]
+    (is (= :unavailable (:status shut)))
+    (is (= :children-are-finished (:name (:denier shut))))
+    (is (= [{:door :ticket/complete} {:door :ticket/drop}]
+           (:remedies (bound shut parent c)))
+        "no remedy names a row the caller could not open")
+    (is (nil? (:evidence (bound shut parent c))))
+    (is (re-find #"2 of this ticket's children are not finished. They are outside what you can see\."
+                 (str (:reason shut)))
+        "the count is over every child, and the sentence says why none is named")
+    (is (not (re-find #"child\"" (str (:reason shut))))
+        "and no title rides the sentence")))
+
+(deftest a-rehearsal-of-a-parent's-complete-plans-the-older-child-first
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        colton (t/principal {:id "colton" :display "Colton"})
+        ticket! (fn [input]
+                  (let [id (str (:id (:row (inv/create! eng :ticket
+                                                        (merge {:type "task"
+                                                                :repo "ckopsa/waymark"}
+                                                               input)
+                                                        {:principal colton}))))]
+                    (inv/invoke! eng :ticket id :groom {} {:principal colton})
+                    id))
+        _ (inv/create! eng :repo_policy {:repository "ckopsa/waymark"}
+                       {:principal colton})
+        parent (ticket! {:title "A parent over two children"})
+        older (ticket! {:title "The older child" :parent parent})
+        ;; the memory store stamps a birth with the wall clock
+        _ (Thread/sleep 5)
+        younger (ticket! {:title "The younger child" :parent parent})
+        session (c/connect "http://test" {:principal "colton"
+                                          :handler (engine/handler eng)})
+        href (get-in (c/index session) [:resources :ticket :href])
+        res (c/pursue! session (c/get-doc session (str href "/" parent))
+                       :complete {:close_reason "Both children are done."}
+                       {:dry-run true
+                        :choices {"ticket.complete"
+                                  {:input {:close_reason "Done as asked."}}}})
+        step (first (:writes res))]
+    (is (:rehearsal res) (pr-str res))
+    (is (= "ticket.complete" (:door step)) (pr-str res))
+    (is (str/ends-with? (str (:row step)) (str "/" older))
+        "the first write is the older child's complete")
+    (is (not (str/ends-with? (str (:row step)) (str "/" younger))))
+    (is (not-any? #(= :cycle (:reason %)) (:blocked-on res))
+        "and the plan is not a cycle on the parent")))
 
 (deftest a-ticket-waits-on-open-work-and-never-on-itself
   (let [row (at :open {} "T")
