@@ -703,11 +703,13 @@
           runs)))
 
 (defn- run-job
-  "One Actions job, as the re-run judgment reads it: its conclusion and
-  the name and conclusion of each step."
+  "One Actions job, as the re-run judgment reads it: its conclusion,
+  when it began and ended, and the name and conclusion of each step."
   [job]
   {:name (word (:name job))
    :conclusion (word (:conclusion job))
+   :started_at (word (:started_at job))
+   :completed_at (word (:completed_at job))
    :steps (mapv (fn [s] {:name (word (:name s))
                          :conclusion (word (:conclusion s))})
                 (:steps job))})
