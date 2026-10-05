@@ -2075,6 +2075,76 @@
 
         (seat-do! seat :retire)))))
 
+;; ── the fire nobody carried out ─────────────────────────────────────
+;;
+;; Production, 2026-10-04 and 2026-10-05: code-seat's wake stamped
+;; `wake_fired_at`, `last_fired_at` stayed where it was, no run sat and
+;; no missed sitting was written. The key the missed sweep reads is
+;; minted where the fire is carried out, so a fire nobody carried out
+;; had nothing to miss (ticket cc2a7754).
+
+(deftest a-wake-fire-nobody-carried-out-leaves-a-missed-sitting-and-its-wake-comes-back
+  (let [wn :wake-unsent
+        fn' :wake-unsent-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "unsentclerk"
+                          {:instructions "Read the fire text and do what it says."
+                           :wake_on [{:kind "wake_task" :actions ["complete"]}]}
+                          fn')
+            missed #(store/with-tx (:storage *eng*)
+                      (fn [tx]
+                        (store/query-rows (:storage *eng*) tx :sitting
+                                          {:seat (str seat) :missed true}
+                                          {:limit 50})))
+            row-id (task! "the thing nobody ran")]
+        (task-do! row-id :complete)
+        (drain-wakes! wn)
+
+        (testing "the wake stamped its own clock, and the fire was not
+                  carried out: no stamp of a run, no key, no POST"
+          (is (= 1 (count (seat-fires seat))))
+          (is (some? (get-in (sched-of seat) [:data :wake_fired_at])))
+          (is (nil? (get-in (sched-of seat) [:data :last_fired_at])))
+          (is (empty? (get-in (raw :seat seat) [:data :fire_keys])))
+          (is (empty? (fires-of token)))
+          (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+        (testing "five minutes on, the fire may still be on its way"
+          (at 300)
+          (wakes/sweep-missed! *eng*)
+          (wakes/sweep-unsent! *eng*)
+          (is (empty? (missed))))
+
+        (testing "past the deadline it is one closed missed sitting that
+                  says why, and the wake is armed again"
+          (at 900)
+          (is (= 0 (count (filter #(= (str seat) (str (get-in % [:data :seat])))
+                                  (missed)))))
+          (wakes/sweep-missed! *eng*)
+          (is (empty? (missed)) "the key sweep has no key to miss")
+          (is (<= 1 (wakes/sweep-unsent! *eng*)))
+          (let [rows (missed)
+                d (:data (first rows))]
+            (is (= 1 (count rows)))
+            (is (= :closed (:state (first rows))))
+            (is (= "missed" (some-> (:closed_by d) name)))
+            (is (= "never_sat" (some-> (:outcome d) name)))
+            (is (str/includes? (str (:note d)) "never sent to a runner")))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+              "so the queue fires again under the usual damper"))
+
+        (testing "the sweep over the same state makes no second row"
+          (wakes/sweep-unsent! *eng*)
+          (is (= 1 (count (missed)))))
+
+        (seat-do! seat :retire)))))
+
 ;; ── the release into an empty queue ──────────────────────────────────
 ;;
 ;; A wake that arrived during a sitting, often from that sitting's own
