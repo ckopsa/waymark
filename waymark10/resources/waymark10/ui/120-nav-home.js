@@ -77,7 +77,7 @@ async function renderNav(current) {
   /* the active domain's primary kinds (a domainless primary always) */
   for (const [kind, r] of entries)
     if (navTier(r) === "primary" && (!r.domain || r.domain === active))
-      nav.append(el("a", {href: "#" + r.href,
+      nav.append(el("a", {href: "#" + r.href, "data-surface": "nav." + kind,
         style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
   if (w.resources && w.resources.member && askKind(w))
@@ -89,7 +89,7 @@ async function renderNav(current) {
     const r = w.resources[kind];
     if (kind === askKind(w) || navTier(r) === "primary") continue;
     if (r.domain && r.domain !== active) continue;
-    nav.append(el("a", {href: "#" + r.href,
+    nav.append(el("a", {href: "#" + r.href, "data-surface": "nav." + kind,
       style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
   }
   /* secondary and system kinds fold behind ⋯ — domainless (the
@@ -508,6 +508,7 @@ function questTracker() {
    quest that has just finished, shown in its place */
 function questDraw(doc, finished) {
   const bar = $("#questbar");
+  bar.setAttribute("data-surface", "tracker");
   bar.textContent = "";
   if (finished != null) {
     bar.hidden = false;
@@ -547,7 +548,7 @@ function questDraw(doc, finished) {
          for, both in words. The note keeps the line's width, and the
          words beside it give way first (020-base.css). */
       const line = el("span", {class: "quest-line quest-head"},
-        el("span", {"data-quest-note": ""},
+        el("span", {"data-quest-note": "", "data-surface": "tracker.next"},
            head ? head.note || head.door_label || pretty(head.door) : ""));
       const needs = head
         ? head.needs_labels || (head.needs || []).flat().map(pretty) : [];
@@ -561,6 +562,7 @@ function questDraw(doc, finished) {
     }
     if (head && !d.blocked_reason)
       bar.append(el("button", {class: "primary", "data-tracker-go": "",
+                               "data-surface": "tracker.go",
                                disabled: waiting ? "" : null, onclick: questHeadGo},
                     "Go"));
   }

@@ -80,7 +80,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   const kind = (doc.kind || "").replace("_collection", "");
   const form = input ? buildForm(input, initialValues, kind) : el("div", {});
 
-  const errBox = el("div", {});
+  const errBox = el("div", {"data-surface": "refusal"});
   /* "Do this later" (docs/spec-scheduled-actions.md R-7.3): a row's own
      door, in the person's own hand. A bulk write and a create have no
      one row to hold a rule against, and a scheduled action's own doors
@@ -108,7 +108,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   if (entry.effort && entry.effort !== "assent")
     h3.append(el("span", {class:"effort-chip",
       title: `effort: ${entry.effort}`}, entry.effort));
-  const dlg = el("dialog", {},
+  const dlg = el("dialog", {"data-surface": "dialog", "data-action": name,
+                            "data-self": (doc.self || "").split("?")[0] || null},
     el("div", {class: "dlghead"},
       h3,
       el("p", {class: "metaline"},
@@ -149,13 +150,14 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         : null,
       led ? el("button", {"data-walk-stop": "", onclick: () => stopLed()}, "Stop")
           : null,
-      el("button", {onclick: () => closeDlg()}, "Cancel"),
+      el("button", {"data-surface": "dialog.cancel", onclick: () => closeDlg()},
+         "Cancel"),
       laterable
         ? el("button", {"data-later": "", onclick: () => openLater()},
             "Do this later")
         : null,
       el("button", {class: safety.confirm ? "danger" : "primary",
-                    onclick: () => submit()},
+                    "data-surface": "dialog.submit", onclick: () => submit()},
         safety.confirm
           ? "Confirm & " + (entry.display?.label || title(name))
           : (entry.display?.label || title(name)))));
@@ -710,7 +712,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
        write shows it before its form closes (200-events-follow.js). */
     dlg.guidedWrite = () => {
       const lit = el("button", {class: write.className + " invited",
-                               type: "button", "data-guided-write": ""},
+                               type: "button", "data-guided-write": "",
+                               "data-surface": "dialog.submit"},
         write.textContent);
       foot.append(lit);
       return lit;
