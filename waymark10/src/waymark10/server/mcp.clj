@@ -1775,9 +1775,7 @@
                         :body {:preview
                                (cond-> (assoc (select-keys p [:goal :blocked_reason
                                                               :plan_is_estimate])
-                                              :plan (mapv #(select-keys % [:door :self :whose
-                                                                           :waiting_on :needs
-                                                                           :note])
+                                              :plan (mapv presence/sheet-step
                                                           (filter map? (:plan p))))
                                  shut (assoc :shut_reason shut))}}
                        {:ok false :body (select-keys body [:title :detail])})]
