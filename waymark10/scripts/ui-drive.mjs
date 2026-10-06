@@ -3444,6 +3444,18 @@ async function questPhoneStory() {
   ok("a long title ends in an ellipsis",
      says.ellipsis && (says.title.length < 60 || says.clipped));
   const go = await checkTarget("Go", "#questbar [data-tracker-go]");
+  await checkTarget("the tracker's title", "#questbar [data-quest-title]");
+  /* the title's 44px box overlaps its neighbours: the tracker is still
+     the count's line, the gap and the row of Go, and no taller */
+  const tall = await evaljs(`(() => {
+    const b = ${bar}, cs = getComputedStyle(b);
+    const h = sel => b.querySelector(sel).getBoundingClientRect().height;
+    return {bar: b.getBoundingClientRect().height,
+            rows: h("[data-quest-count]") + h("[data-tracker-go]") +
+                  [cs.rowGap, cs.paddingTop, cs.paddingBottom, cs.borderTopWidth,
+                   cs.borderBottomWidth].reduce((n, v) => n + (parseFloat(v) || 0), 0)}; })()`);
+  console.log("  the tracker's height: " + JSON.stringify(tall));
+  ok("the title's 44px box makes the tracker no taller", tall.bar <= tall.rows + 1);
   await noOverflow("under the tracker");
   await shot("phone-quest-tracker");
   const menu = await checkTarget("the tracker's menu", "#questbar .quest-menu summary");
