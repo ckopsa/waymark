@@ -1992,6 +1992,8 @@ function replayGesture(r) {
   /* a beat equal to the one before it is on screen already: no click */
   const to = replayStill(r.frames, r.at) ? null : replayGestureTarget(f);
   if (!to) return;
+  /* the frame before this one has had its hold: a film says its beat */
+  filmBeatSay();
   r.gesture = {at: r.at, until: performance.now()
                  + (REPLAY_GLIDE_MS + REPLAY_PRESS_MS) / r.speed,
                walk,
@@ -2112,12 +2114,18 @@ function replayStep() {
     r.timer = setTimeout(replayStep, wait);
     return;
   }
+  /* a frame with no gesture: the one before it has had its hold */
+  filmBeatSay();
   /* no jump: the pressed navigation entry draws its list first */
   if (r.gesture && r.gesture.hop) { replayHop(r); return; }
   /* nor for a frame on another row: the pressed link draws its row first */
   if (r.gesture && r.gesture.walk) { replayArrive(r); return; }
   const shows = replayShows(r.frames, r.at);
+  /* a film's beat for this frame (filmBeatSay): the press is read now,
+     before the frame draws over the button it was made on */
+  const owed = film ? {i: r.at, f: r.frames[r.at], pressed: filmPressed()} : null;
   applyReplayFrame(r.frames[r.at++]);
+  if (replay === r) filmBeatOwed = owed;
   /* the stillness a change is owed is counted from here, or from the
      end of its draw when that is later (replayDrawn) */
   if (shows) r.drawn = performance.now();
@@ -2307,7 +2315,103 @@ function filmWalkOf(raw) {
 function filmState(s) { document.documentElement.setAttribute("data-film", s); }
 /* the last frame is applied: the screen holds, then the page says so */
 function filmEnd() {
+  /* the last frame's beat is said before the page says it has ended */
+  setTimeout(filmBeatSay, FILM_HOLD_MS);
   setTimeout(() => filmState("ended"), FILM_HOLD_MS);
+}
+/* ── film beats (docs/spec-agent-demo-walks.md §8b): what a take showed,
+   for a reader that cannot watch it. In film mode each frame the replay
+   steps to is said one time: a `waymark:film-beat` CustomEvent on
+   `document` whose detail is the beat, and every beat of the take is
+   kept, in order, on window.wmFilmBeats. A beat is read from the page
+   as drawn and not from the frame, when the frame has had its hold:
+   just before the next frame's gesture or act, and before `ended` for
+   the last. Outside film mode nothing is said. ─────────────────────── */
+/* the frame whose beat is not said yet: {i, f, pressed}, or null */
+let filmBeatOwed = null;
+const filmText = e => e ? e.textContent.replace(/\s+/g, " ").trim() : "";
+/* the button the pointer has lit for the frame at the playhead, as
+   {label, target}, or null. `label` is the button's own text; `target`
+   is a stable name where there is one. A click on a form's field is no
+   press. */
+function filmPressed() {
+  const e = $("[data-replay-press]");
+  if (!e) return null;
+  const target = e.hasAttribute("data-quest-accept")
+      ? (e.closest("dialog[data-quest-sheet]") ? "sheet.accept" : "dialog.accept")
+    : e.hasAttribute("data-quest-decline") ? "sheet.decline"
+    : e.hasAttribute("data-tracker-go") ? "tracker.go"
+    : e.hasAttribute("data-replay-write") ? "dialog.submit"
+    : e.dataset.action ? "door:" + e.dataset.action
+    : e.dataset.questDoor ? "door:" + e.dataset.questDoor
+    : null;
+  return {label: filmText(e), target};
+}
+/* the open form: its row, its door and the fields that are lit */
+function filmDialog() {
+  const g = $("dialog[open][data-guided]");
+  if (!g) return null;
+  const key = g.getAttribute("data-guided") || "", cut = key.lastIndexOf(" ");
+  const lit = [...g.querySelectorAll("form .invited, form [data-typed]")]
+    .map(s => s.matches("[name]") ? s : s.querySelector("[name]"))
+    .map(n => n && n.getAttribute("name")).filter(Boolean);
+  return {self: key.slice(0, cut), action: key.slice(cut + 1), lit: [...new Set(lit)]};
+}
+/* the open quest's sheet (questSheet, 140-links-access.js), in its own
+   words. A step's label is its door and its row; the sheet draws no
+   state for a step, so `state` is null there. */
+function filmSheet() {
+  const s = $("dialog[open][data-quest-sheet]");
+  if (!s) return null;
+  const say = q => filmText(s.querySelector(q)) || null;
+  return {goal: say("[data-quest-sheet-goal]"),
+          steps: [...s.querySelectorAll("[data-quest-steps] > li")].map((li, n) => ({
+            n: n + 1,
+            label: [li.querySelector("b"), li.querySelector("b + span")]
+              .map(filmText).filter(Boolean).join(" "),
+            whose: filmText(li.querySelector("[data-quest-turn]")) || null,
+            state: li.getAttribute("data-quest-step")})),
+          shut_reason: (say("[data-quest-why]") || "").replace(/^Not yet:\s*/, "") || null,
+          refused: say("[data-quest-refused]")};
+}
+/* the tracker (questDraw, 120-nav-home.js), without its menu */
+function filmTracker() {
+  const bar = $("#questbar");
+  if (!bar || bar.hidden) return null;
+  const say = q => filmText(bar.querySelector(q)) || null;
+  return {title: say("[data-quest-title]") || say("[data-quest-complete] + .quest-line"),
+          next: say("[data-quest-note]"),
+          waiting_on: (say("[data-quest-waiting]") || "").replace(/^waiting on\s*/, "") || null,
+          progress: say("[data-quest-count]"),
+          text: [...bar.children].filter(c => !c.matches(".quest-menu"))
+            .map(filmText).filter(Boolean).join(" · ")};
+}
+/* the caption band's text when it is shown, or the caption drawn beside
+   a field (filmBeside) */
+function filmCaption() {
+  const band = $("#replaycaption");
+  return (band && band.style.display !== "none" && band.textContent.trim()) ||
+    filmText($("dialog[open] [data-caption-note]")) || null;
+}
+/* the refusal on screen (replayRefuse): the form's box, the sheet's
+   line, or the band's line for a refusal no form was open for */
+function filmRefusal() {
+  const band = $("#replaycaption[data-replay-notice]");
+  return filmText($("dialog[open] .problem")) ||
+    filmText($("dialog[open] [data-quest-refused]")) ||
+    (band && band.textContent.split("\n").find(l => l.startsWith("Refused: "))) || null;
+}
+function filmBeatSay() {
+  const o = filmBeatOwed;
+  filmBeatOwed = null;
+  if (!o || !film) return;
+  const f = o.f, beat = {i: o.i, t: f.t == null ? null : f.t, type: f.type};
+  for (const k of ["who", "self", "action", "kind"]) if (f[k] != null) beat[k] = f[k];
+  Object.assign(beat, {pressed: o.pressed, screen: hereHref() || null,
+                       dialog: filmDialog(), sheet: filmSheet(), tracker: filmTracker(),
+                       caption: filmCaption(), refusal: filmRefusal()});
+  (window.wmFilmBeats = window.wmFilmBeats || []).push(beat);
+  document.dispatchEvent(new CustomEvent("waymark:film-beat", {detail: beat}));
 }
 /* a caption that names a field is drawn beside that field and not in
    the band, as an invitation's note is, once its form is open */
@@ -2321,6 +2425,7 @@ async function filmBoot() {
   const self = filmWalkOf(location.hash.slice(1));
   if (!self || film) return;
   film = self;
+  window.wmFilmBeats = [];
   /* the chrome is gone before the walk is read; a walk that cannot be
      read never says `ready` */
   filmState("");
