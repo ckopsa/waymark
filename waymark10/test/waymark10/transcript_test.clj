@@ -1007,7 +1007,15 @@
             _ (move! eng stew :accept)]
         (is (= [(str (:id stew))] (mapv :id (lines-of (tail! h key {:after newest})))))))
     (testing "no `after` still reads from the sitting's start"
-      (is (= (str (:id soup)) (:id (first (lines-of (tail! h key)))))))))
+      (is (= (str (:id soup)) (:id (first (lines-of (tail! h key)))))))
+    (testing "a log that does not settle is 503 and names no cursor, never 0"
+      (with-redefs [store/settled-transitions (fn [& _] nil)]
+        (let [resp (tail! h key {:after "now"})]
+          (is (= 503 (:status resp)))
+          (is (not-any? #(= "waymark-inbox-after" (str/lower-case (name %)))
+                        (keys (:headers resp)))))
+        (is (= 200 (:status (tail! h key)))
+            "the sitting's own start needs no settled read")))))
 
 (deftest the-inbox-door-waits-for-an-event
   (let [[eng h key] (tailing!)

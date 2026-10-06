@@ -144,6 +144,16 @@
 ;; asserted is a count. Readers that take no lock (:settled false) are
 ;; the log as it was before the order lock.
 
+(defn- to-job-log!
+  "Print line on the process's own stdout. The runner captures *out*
+  and System/out and shows them for a failing test only; these lines
+  are read from a passing one."
+  [line]
+  ;; never closed: closing it closes the descriptor
+  (doto (java.io.PrintStream.
+         (java.io.FileOutputStream. java.io.FileDescriptor/out) true)
+    (.println (str line))))
+
 (defn- append-latencies!
   "For hold-ms, `drains` threads read the log (:settled as given) and
   `writers` threads append, each append in a transaction of its own;
@@ -196,10 +206,10 @@
                                                      :settled settled
                                                      :long-writer? long-writer?})
                     at #(nth ms (min (dec (count ms)) (long (* % (count ms)))))]
-                (println (format (str "log-order-lock settled=%s long-writer=%s"
-                                      " appends=%d p50=%.1fms p99=%.1fms max=%.1fms")
-                                 settled long-writer? (count ms)
-                                 (at 0.5) (at 0.99) (peek ms)))
+                (to-job-log! (format (str "log-order-lock settled=%s long-writer=%s"
+                                          " appends=%d p50=%.1fms p99=%.1fms max=%.1fms")
+                                     settled long-writer? (count ms)
+                                     (at 0.5) (at 0.99) (peek ms)))
                 ms))]
     (run false false)
     (run true false)
