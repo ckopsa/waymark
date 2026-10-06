@@ -437,8 +437,12 @@ function questWaits(step) {
 function questHeadGo() {
   const head = questDoc && questHead(questDoc);
   if (!head || questWaits(head)) return;
+  /* the goal's own step: what the quest stored is in the form already */
+  const d = questDoc.data || {};
+  const goal = head.self === d.self && head.door === d.action;
   openDoor({self: head.self, action: head.door, fields: head.needs || [],
-            note: head.note}, "The step's row");
+            note: head.note, suggest: goal ? d.input || {} : {}},
+           "The step's row");
 }
 /* the owner's own step moves the quest a moment later, in the engine's
    consumer, and the stream alone would have to say so: a frame that is

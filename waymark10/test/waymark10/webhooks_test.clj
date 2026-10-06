@@ -175,6 +175,45 @@
                               [:headers "x-waymark-signature"]))))
           (finally (engine/stop! (:server rcv))))))))
 
+;; ── 2a. a subscription that leaves active in the middle of a drain ──
+
+(deftest a-drain-stops-when-the-subscription-is-no-longer-active
+  (fresh!)
+  (with-eng {:webhook-attempts 2 :webhook-backoff-ms 5}
+    (fn [eng]
+      (let [hits (atom [])
+            sub-id (promise)
+            ;; the owner pauses the subscription while the first delivery
+            ;; is still being answered: the drain has read both events
+            server (http/run-server
+                    (fn [req]
+                      (swap! hits conj (slurp (:body req)))
+                      (when (= 1 (count @hits))
+                        (inv/invoke! eng :subscription @sub-id :pause nil
+                                     {:principal elena}))
+                      {:status 200 :headers {} :body ""})
+                    {:port 0 :legacy-return-value? false})
+            url (str "http://127.0.0.1:" (http/server-port server) "/hook")]
+        (try
+          (let [{sub :row} (inv/create! eng :subscription
+                                        {:url url :kinds ["wh_gizmo"]}
+                                        {:principal elena})
+                _ (deliver sub-id (:id sub))
+                {g :row} (inv/create! eng :wh_gizmo {:name "twice"}
+                                      {:principal elena})]
+            (inv/invoke! eng :wh_gizmo (:id g) :spin nil {:principal elena})
+            (webhooks/drain! eng)
+            (testing "the event read before the pause is not sent after it"
+              (is (= ["create"] (mapv #(:action (wire/read-json %)) @hits)))
+              (is (= :paused (sub-state eng (:id sub)))))
+            (testing "the cursor stayed: a resume delivers it"
+              (inv/invoke! eng :subscription (:id sub) :resume nil
+                           {:principal elena})
+              (webhooks/drain! eng)
+              (is (= ["create" "spin"]
+                     (mapv #(:action (wire/read-json %)) @hits)))))
+          (finally (engine/stop! server)))))))
+
 ;; ── 2b. skip_actors, and who made the move ──────────────────────────
 
 (deftest skip-actors-and-the-actor-name

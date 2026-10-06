@@ -605,7 +605,8 @@
       (loop-reason entry) []
 
       confirm
-      [(assoc base :whose "confirm" :note (clip (or consequence reason) 240))]
+      [(cond-> (assoc base :whose "confirm" :note (clip (or consequence reason) 240))
+         (seq needs) (assoc :needs (needs-of needs)))]
 
       (or held hold)
       [(assoc base :whose "held" :waiting_on your-tap)]
@@ -825,9 +826,16 @@
 
 (defn- invitation-of
   "The invitation a step becomes: the step's row, door and needs,
-  addressed to the quest's owner, with the step's note."
+  addressed to the quest's owner, with the step's note. The goal's own
+  step carries the quest's stored `input` as `suggest`, so the form
+  opens with what was already given."
   [row step]
-  (let [fields (into [] (take 8) (:needs step))]
+  (let [fields (into [] (take 8) (:needs step))
+        {:keys [self action input]} (:data row)
+        goal? (and (= (str/trim (str self)) (:self step))
+                   (= (str/trim (str action)) (some-> (:door step) name)))
+        stored (when (and goal? (map? input))
+                 (into {} (map (fn [[k v]] [(keyword (name k)) v])) input))]
     (cond-> {:subject (get-in row [:data :owner])
              :self (:self step)
              :action (:door step)
@@ -835,7 +843,8 @@
                        (clip (str "The next step of your quest: "
                                   (get-in row [:data :title]))
                              240))}
-      (seq fields) (assoc :fields fields))))
+      (seq fields) (assoc :fields fields)
+      (seq stored) (assoc :suggest stored))))
 
 (defn- open-invitation
   "The quest's invitation, when it is still open; else nil."
@@ -873,7 +882,9 @@
   is kept. Any other is withdrawn, and the step to hand over opens a
   new one. The key is made from `t`, so a replay opens no second one.
   A create the invitation's own guards refuse is a warning: the plan
-  still lands, with no invitation."
+  still lands, with no invitation. A create refused with the stored
+  input as `suggest` is tried once more without it, so a key the
+  invitation may not show costs the pre-fill and not the step."
   [eng row plan t]
   (when (contains? (inv/resources eng) invitations/kind)
     (let [open (open-invitation eng row)
@@ -883,15 +894,21 @@
         (do
           (when open (withdraw! eng (:id open)))
           (when want
-            (try
-              (some-> (inv/create! eng invitations/kind want
-                                   {:principal engine-actor
-                                    :idempotency-key (str "quest-open:" (:id row) ":" (:id t))})
-                      :row :id str)
-              (catch Exception e
-                (warn! "quest " (:id row) " could not open an invitation ("
-                       (or (inv/problem-reason e) (ex-message e)) ")")
-                nil))))))))
+            (let [key (str "quest-open:" (:id row) ":" (:id t))
+                  create! (fn [want key]
+                            (some-> (inv/create! eng invitations/kind want
+                                                 {:principal engine-actor
+                                                  :idempotency-key key})
+                                    :row :id str))]
+              (try
+                (create! want key)
+                (catch Exception e
+                  (or (when (:suggest want)
+                        (try (create! (dissoc want :suggest) (str key ":plain"))
+                             (catch Exception _ nil)))
+                      (do (warn! "quest " (:id row) " could not open an invitation ("
+                                 (or (inv/problem-reason e) (ex-message e)) ")")
+                          nil)))))))))))
 
 (defn- plan!
   "Plan one quest for the transition `t` that asked. A paused, finished
