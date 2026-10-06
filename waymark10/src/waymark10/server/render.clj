@@ -387,14 +387,25 @@
          :evidence (not-empty (:evidence deny))
          :becomes-available (g/becomes-available denier deny row)}))
 
-(defn- out-of-state-entry [defn' state]
-  (let [states (sort (:from defn'))]
+(defn- out-of-state-entry [rdef defn' state]
+  (let [states (sort (:from defn'))
+        ;; the way there: the kind's own doors that leave the row's
+        ;; state and land in one this door opens from, in the machine's
+        ;; deterministic (name) order. They act on this same row, so a
+        ;; pursuit binds them without being told which
+        roads (into []
+                    (comp (remove :bulk)
+                          (filter #(and (contains? (:from %) state)
+                                        (contains? (:from defn') (:to %))))
+                          (map #(keyword (name (:kind rdef)) (name (:name %)))))
+                    (machine/actions-seq rdef))]
     ;; humanized state labels: reasons are prose, not tokens; the
     ;; machine-readable states ride becomes_available
-    {:reason (str "Available in state(s) "
-                  (str/join ", " (map summary/state-label states))
-                  "; the resource is " (summary/state-label state) ".")
-     :becomes-available {:in-states (mapv name states)}}))
+    (cond-> {:reason (str "Available in state(s) "
+                          (str/join ", " (map summary/state-label states))
+                          "; the resource is " (summary/state-label state) ".")
+             :becomes-available {:in-states (mapv name states)}}
+      (seq roads) (assoc :remedies roads))))
 
 (defn action-availability
   "Is one named action OPEN on this row right now, for the principal
@@ -409,7 +420,10 @@
 
   → `{:status :available}`, `{:status :unavailable :reason \"…\"
   :denier <the guard that said so, or nil>}`, `{:status :hidden}`, or
-  nil when this kind declares no such non-bulk action.
+  nil when this kind declares no such non-bulk action. An unavailable
+  answer carries `:remedies` when the refusal names a way out: the
+  denier's own, or, out of state, the row's doors that lead to a state
+  where this one opens.
 
   THE DENIER RIDES ALONG because a caller may need to know WHAT KIND
   of shut it is, and a guard's own `:reads` is the honest way to ask:
@@ -447,14 +461,17 @@
                            {:status :unavailable
                             :reason (:reason (no-admissible-entry defn' field))}
                            {:status :available})
-              :unavailable {:status :unavailable
-                            :reason (g/render-reason denier deny row)
-                            :denier denier}
+              :unavailable (cond-> {:status :unavailable
+                                    :reason (g/render-reason denier deny row)
+                                    :denier denier}
+                             (seq (g/remedy-doors denier))
+                             (assoc :remedies (g/remedy-doors denier)))
               :hidden {:status :hidden}))
           (if (probe-hidden-only? defn' row ctx)
             {:status :hidden}
-            {:status :unavailable
-             :reason (:reason (out-of-state-entry defn' state))}))))))
+            (let [entry (out-of-state-entry rdef defn' state)]
+              (cond-> {:status :unavailable :reason (:reason entry)}
+                (:remedies entry) (assoc :remedies (:remedies entry))))))))))
 
 ;; ── parts: placed actions re-rendered per data item ─────────────────
 
@@ -1100,7 +1117,7 @@
              (if (probe-hidden-only? defn' row ctx)
                acc
                (assoc-in acc [:unavailable (:name defn')]
-                         (out-of-state-entry defn' state)))))
+                         (out-of-state-entry rdef defn' state)))))
          {:actions {} :unavailable {}}
          resolved)
         ;; the engine-injected adopt (phase 5): a row living under an
